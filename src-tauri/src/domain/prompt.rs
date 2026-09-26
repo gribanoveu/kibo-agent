@@ -131,7 +131,9 @@ pub fn mode_instructions(mode: ConversationMode) -> &'static str {
     match mode {
         ConversationMode::Agent => "## This conversation: Agent
 
-You can research, change the repository and run commands. Handle the request rather than describing how it could be handled.",
+You can research, change the repository and run commands. Handle the request rather than describing how it could be handled.
+
+When the work has an obvious next step, end your reply with one concrete question offering it — \"Commit this?\", \"Move on to the parser?\" — naming the thing, not \"Anything else?\".",
         // Written against the failure the mode exists to prevent: an agent
         // that answers "here is the plan" and has already applied half of it.
         ConversationMode::Plan => "## This conversation: Plan
