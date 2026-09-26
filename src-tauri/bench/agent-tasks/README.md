@@ -24,6 +24,7 @@ Files here are byte-exact (`-text` in `.gitattributes`): `crlf-edit` depends on 
 | `flaky-counter` | a thread race the test shows in `hit`, and the same race in `take` it does not |
 | `migrate-records` | a written spec with a dozen edge cases, checked against a reference on hidden input |
 | `log-forensics` | 1 MB of logs, two causes of 500s — one of them three lines in one file; tests required |
+| `mixed-endings` | a file half LF, half CRLF; the line to fix repeats, so one line cannot anchor it and two cross a CRLF `editFile` refuses — the route has to change (the loop guard's case) |
 
 Every check was run three ways when written: on the untouched repo (fails), with a
 reference fix (passes), and with a plausible wrong fix (fails).
