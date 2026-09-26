@@ -421,6 +421,20 @@ describe("hooks", () => {
   });
 });
 
+describe("the loop guard", () => {
+  test("a reminder to the model is a notice naming the tool and what it kept doing", () => {
+    const state = run([
+      ev({ type: "loopReminded", seq: 1, payload: { tool: "editFile", failing: true } }),
+      ev({ type: "loopReminded", seq: 2, payload: { tool: "readFile", failing: false } }),
+    ]);
+    expect(kinds(state)).toEqual(["notice", "notice"]);
+    expect(text(state, "notice")).toEqual([
+      "editFile kept failing the same way — the agent was told to find the cause or change route",
+      "readFile kept returning the same result — the agent was told to stop repeating it",
+    ]);
+  });
+});
+
 describe("background processes", () => {
   /// The model was told at the start of its round; the reader sees the same.
   test("each ended process is a block of its own, carrying the process", () => {

@@ -21,6 +21,7 @@ use crate::domain::llm::{
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
 use crate::domain::result_clearing;
+use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
@@ -434,6 +435,11 @@ fn run(
     let mut stop_blocks = 0;
     // Empty replies answered with a note this turn; see `MAX_EMPTY_NUDGES`.
     let mut empty_nudges = 0;
+    // Rounds going in circles; see `domain::loop_guard`. Not in the
+    // checkpoint either, for the same reason as `stop_blocks`.
+    let mut guard = LoopGuard::default();
+    // The calls of the round before, for the guard.
+    let mut settled: Vec<Settled> = Vec::new();
 
     loop {
         // Checkpoint one. Before the ceiling check as well, so a turn the user
@@ -462,7 +468,19 @@ fn run(
             (calls, decisions)
         } else {
             // Before the round is announced, so the notes and the boundary
-            // land in the transcript in the order the history has them.
+            // land in the transcript in the order the history has them. A
+            // round that ran nothing hands in nothing, which ends the streaks.
+            if let Some(found) = guard.observe(&std::mem::take(&mut settled)) {
+                state.history.push(LlmMessage::user(found.note()));
+                events.emit(
+                    round,
+                    Some(format!("loop:{round}")),
+                    ChatEventPayload::LoopReminded {
+                        tool: found.tool().to_string(),
+                        failing: matches!(found, Loop::SameError { .. }),
+                    },
+                );
+            }
             apply_steering(&events, round, &mut state.history, (turn.take_steering)());
             report_ended_processes(turn, &events, round, &mut state.history);
             clear_stale_results(turn.scope, &mut state, &mut seen_results);
@@ -598,6 +616,12 @@ fn run(
                         let args = parse_tool_call(call).map_or(serde_json::Value::Null, |p| tool_call_log::redact_args(&p));
                         log_call(turn, round, call, args, CallStatus::Error, Some(tool_call_log::redact_error(&e)), None, Instant::now());
                         let message = format!("Error: {e}");
+                        settled.push(Settled {
+                            tool: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            content: message.clone(),
+                            error: Some(loop_guard::error_kind(&e)),
+                        });
                         report_result(&events, round, &call.id, None, Some(&message));
                         state.history.push(tool_message(
                             &call.id,
@@ -659,6 +683,7 @@ fn run(
             // they have parsed, the error before it is flattened to text.
             let mut logged_args = serde_json::Value::Null;
             let mut logged_error = None;
+            let mut error_kind = None;
             let denied = matches!(decision, Some(d) if !d.approved);
             let outcome = match decision {
                 Some(d) if !d.approved => Err(denial(d)),
@@ -696,6 +721,7 @@ fn run(
                     })
                     .map_err(|e| {
                         logged_error = Some(tool_call_log::redact_error(&e));
+                        error_kind = Some(loop_guard::error_kind(&e));
                         format!("Error: {e}")
                     }),
             };
@@ -735,6 +761,16 @@ fn run(
                 Ok(result) => for_model(result),
                 Err(message) => message.clone(),
             };
+            // What came back, before any note is added to it. A denial is the
+            // user's answer, not the model going round.
+            if !denied {
+                settled.push(Settled {
+                    tool: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    content: content.clone(),
+                    error: error_kind,
+                });
+            }
             let content = truncated_round_note(round_truncated, outcome.is_err(), content);
             let content =
                 dedupe_repeat_result(&mut seen_results, call, outcome.as_ref().ok(), content);
@@ -1499,6 +1535,7 @@ mod tests {
                 ChatEventPayload::HistoryCompacting => "compacting".to_string(),
                 ChatEventPayload::HookFeedback { event, blocked, .. } => format!("hook:{event}:{blocked}"),
                 ChatEventPayload::ProcessesEnded { processes } => format!("ended:{}", processes.len()),
+                ChatEventPayload::LoopReminded { tool, failing } => format!("loop:{tool}:{failing}"),
             })
             .collect()
     }
@@ -2148,6 +2185,85 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    // ---------------------------------------------------------- loop guard
+
+    fn loop_notes(request: &ChatRequest) -> Vec<String> {
+        request
+            .messages
+            .iter()
+            .filter(|m| m.role == LlmRole::User)
+            .filter_map(|m| m.content.clone())
+            .filter(|c| c.starts_with("[Loop guard]"))
+            .collect()
+    }
+
+    fn loop_events(h: &Harness) -> Vec<String> {
+        payloads(&h.events()).into_iter().filter(|p| p.starts_with("loop:")).collect()
+    }
+
+    /// The same listing three rounds running: the fourth request carries the
+    /// note, once, and the reader is told too.
+    #[test]
+    fn the_same_call_three_rounds_running_is_pointed_out_once() {
+        let steps = (1..=5).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", "{}")])).chain([text("done")]).collect();
+        let h = harness("loop-guard-same", steps);
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("look")], vec![])).expect("turn");
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        let requests = h.provider.requests();
+        assert!(loop_notes(&requests[2]).is_empty(), "two rounds are not a loop");
+        assert_eq!(last_message(&requests[3]).content.as_deref(), Some(Loop::SameCall { tool: "listFiles".into() }.note().as_str()));
+        assert_eq!(loop_notes(requests.last().unwrap()).len(), 1, "once a turn");
+        assert_eq!(loop_events(&h), vec!["loop:listFiles:false"]);
+    }
+
+    /// The same failure with other arguments each time — a regex that never
+    /// compiles fails in the tool itself, a file never read is refused before
+    /// the call runs; both are the route, not the details.
+    #[test]
+    fn the_same_failure_three_rounds_running_is_pointed_out() {
+        for (label, tool, args) in [
+            ("loop-guard-regex", "grep", [r#"{"pattern":"("}"#, r#"{"pattern":"(a"}"#, r#"{"pattern":"(b"}"#]),
+            ("loop-guard-unread", "writeFile", [
+                r#"{"path":"a.rs","content":"x"}"#,
+                r#"{"path":"a.rs","content":"y"}"#,
+                r#"{"path":"a.rs","content":"z"}"#,
+            ]),
+        ] {
+            let steps = args.iter().enumerate().map(|(n, a)| asks(vec![wants(&format!("c{n}"), tool, a)])).chain([text("done")]).collect();
+            let h = harness(label, steps);
+            if tool == "writeFile" {
+                std::fs::write(h.root.join("a.rs"), "old").unwrap();
+            }
+
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+            assert_eq!(told_errors(&h).len(), 3, "{label}: every call failed");
+            let last = h.provider.requests().last().unwrap().clone();
+            assert_eq!(loop_notes(&last), vec![Loop::SameError { tool: tool.into() }.note()], "{label}");
+            assert_eq!(loop_events(&h), vec![format!("loop:{tool}:true")], "{label}");
+        }
+    }
+
+    /// Calls the user denied are their answer, not the model going round.
+    #[test]
+    fn denied_calls_are_not_counted() {
+        let write = r#"{"path":"a.rs","content":"x"}"#;
+        let mut h = harness(
+            "loop-guard-denied",
+            vec![asks(vec![wants("w1", "writeFile", write), wants("w2", "writeFile", write), wants("w3", "writeFile", write)]), text("ok")],
+        );
+        h.approval = asking();
+
+        let paused = h.run(|turn| stream(turn, vec![LlmMessage::user("write")], vec![]));
+        let Ok(ChatStreamOutcome::PendingApproval(pending)) = paused else { panic!("expected a pause") };
+        let no = |id: &str| ToolCallDecision { id: id.to_string(), approved: false, reason: None };
+        h.run(|turn| resume(turn, pending, vec![no("w1"), no("w2"), no("w3")])).expect("finishes");
+
+        assert!(loop_notes(h.provider.requests().last().unwrap()).is_empty());
     }
 
     // ------------------------------------------------------------- the loop

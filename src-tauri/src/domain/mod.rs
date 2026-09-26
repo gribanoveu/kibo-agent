@@ -9,6 +9,7 @@ pub mod chat_record;
 pub mod chat_export;
 pub mod compaction;
 pub mod result_clearing;
+pub mod loop_guard;
 pub mod conversation_mode;
 pub mod embeddings;
 pub mod prompt;

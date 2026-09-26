@@ -206,6 +206,9 @@ struct Run {
     repeats: usize,
     /// Old results the turn replaced with stubs (`domain::result_clearing`).
     cleared: usize,
+    /// Whether the loop guard told the model it was going round in circles
+    /// (`domain::loop_guard`) — at most once a turn.
+    loop_reminded: bool,
     tokens_in: u64,
     /// The part of `tokens_in` the provider served from its prompt cache —
     /// billed at a fraction, so `tokens_in` alone overstates the cost.
@@ -249,6 +252,7 @@ impl Run {
             })).collect::<Vec<_>>(),
             "repeats": self.repeats,
             "cleared": self.cleared,
+            "loopReminded": self.loop_reminded,
             "tokensIn": self.tokens_in,
             "tokensCached": self.tokens_cached,
             "tokensOut": self.tokens_out,
@@ -349,6 +353,9 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
                 entry.insert("cached".into(), json!(u.cached_tokens));
                 entry.insert("out".into(), json!(u.completion_tokens));
             }
+            ChatEventPayload::LoopReminded { tool, failing } => {
+                entry.insert("loopReminded".into(), json!({ "tool": tool, "failing": failing }));
+            }
             ChatEventPayload::RoundCompleted { text, reasoning, truncated } => {
                 entry.insert("text".into(), json!(clip(text)));
                 entry.insert("reasoning".into(), json!(clip(reasoning)));
@@ -366,6 +373,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
             serde_json::Value::Object(entry)
         })
         .collect();
+    let loop_reminded = events.iter().any(|e| matches!(e.event, ChatEventPayload::LoopReminded { .. }));
     let calls = std::mem::take(&mut *calls.lock().unwrap());
     let mut seen = HashSet::new();
     let repeats = calls.iter().filter(|c| !seen.insert((c.tool.clone(), c.args.to_string()))).count();
@@ -380,6 +388,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         calls,
         repeats,
         cleared,
+        loop_reminded,
         tokens_in,
         tokens_cached,
         tokens_out,
@@ -419,7 +428,7 @@ fn agent_bench() {
         for n in 0..runs {
             let run = run_task(&session, &model, task, n, limit);
             println!(
-                "{:<22} #{n} {:<4} {:<9} rounds {:>2}  calls {:>2}  errors {:>2}  repeats {:>2}  cleared {:>2}  tokens {:>7} ({:>3}% cached)/{:<6} {:>5.0}s",
+                "{:<22} #{n} {:<4} {:<9} rounds {:>2}  calls {:>2}  errors {:>2}  repeats {:>2}  cleared {:>2}{}  tokens {:>7} ({:>3}% cached)/{:<6} {:>5.0}s",
                 run.task,
                 if run.passed { "PASS" } else { "FAIL" },
                 run.ended,
@@ -428,6 +437,7 @@ fn agent_bench() {
                 run.errors().count(),
                 run.repeats,
                 run.cleared,
+                if run.loop_reminded { "  loop" } else { "" },
                 run.tokens_in,
                 cached_percent(run.tokens_cached, run.tokens_in),
                 run.tokens_out,
@@ -454,12 +464,13 @@ fn agent_bench() {
     let passed = all.iter().filter(|r| r.passed).count();
     let mean = |f: &dyn Fn(&Run) -> f64| all.iter().map(f).sum::<f64>() / all.len() as f64;
     println!(
-        "\nPASS {passed}/{}  ·  mean rounds {:.1}, calls {:.1}, tool errors {:.1}, repeats {:.1}, tokens in {:.0} ({}% cached), {:.0}s",
+        "\nPASS {passed}/{}  ·  mean rounds {:.1}, calls {:.1}, tool errors {:.1}, repeats {:.1}, loop reminders {}, tokens in {:.0} ({}% cached), {:.0}s",
         all.len(),
         mean(&|r| r.rounds as f64),
         mean(&|r| r.calls.len() as f64),
         mean(&|r| r.errors().count() as f64),
         mean(&|r| r.repeats as f64),
+        all.iter().filter(|r| r.loop_reminded).count(),
         mean(&|r| r.tokens_in as f64),
         cached_percent(all.iter().map(|r| r.tokens_cached).sum(), all.iter().map(|r| r.tokens_in).sum()),
         mean(&|r| r.seconds),

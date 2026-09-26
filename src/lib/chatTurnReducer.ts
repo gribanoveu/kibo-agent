@@ -297,6 +297,16 @@ function applyEvent(state: TurnState, event: TurnEvent): TurnState {
     case "hookFeedback":
       return appendNotice(state, hookNotice(event.payload));
 
+    case "loopReminded":
+      // The model was told it is going round in circles; the reader sees why
+      // the next round changes course, or why it should have.
+      return appendNotice(
+        state,
+        event.payload.failing
+          ? `${event.payload.tool} kept failing the same way — the agent was told to find the cause or change route`
+          : `${event.payload.tool} kept returning the same result — the agent was told to stop repeating it`,
+      );
+
     case "processesEnded":
       // What the model was just told, said to the reader too.
       return {

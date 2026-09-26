@@ -304,6 +304,11 @@ pub enum ChatEventPayload {
     ProcessesEnded {
         processes: Vec<crate::domain::background::ProcessInfo>,
     },
+    /// The model was told it is going round in circles
+    /// (`domain::loop_guard`): the same call and result, or the same failure,
+    /// several rounds running. Said to the reader too, since the note is in
+    /// the history the model reads. `failing` tells the two apart.
+    LoopReminded { tool: String, failing: bool },
     /// Token usage as of the round that just finished. Since every request
     /// resends the whole history, this is the authoritative context size, not
     /// a per-round statistic.

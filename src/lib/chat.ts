@@ -84,6 +84,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "historyCompacted"; payload: { folded: number } }
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
   | { type: "processesEnded"; payload: { processes: ProcessInfo[] } }
+  | { type: "loopReminded"; payload: { tool: string; failing: boolean } }
   | { type: "roundStarted" }
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }
