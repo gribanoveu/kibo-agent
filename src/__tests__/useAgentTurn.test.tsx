@@ -781,3 +781,64 @@ describe("the queue", () => {
     expect(result.current.queued).toEqual([]);
   });
 });
+
+describe("the next-prompt journal", () => {
+  const journal = () => calls.filter((call) => call.command === "next_prompt_log" || call.command === "next_prompt_sent");
+
+  /// The input is paired with what the user really sent next, as they typed
+  /// it — the command, not the prompt it stands for.
+  test("a finished turn is journaled, and the next message answers it", async () => {
+    results.chat_start = done("Готово. Закоммитить?");
+    results.next_prompt_log = "row-1";
+    const { result } = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await result.current.send("/init", "Study this repository");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(1));
+    const chatId = result.current.chatId;
+    const turnIds = () => calls.filter((call) => call.command === "chat_start").map((call) => call.args.turnId);
+    expect(journal()[0].args).toEqual({ chatId, turnId: turnIds()[0], user: "/init" });
+
+    await act(async () => {
+      await result.current.send("да");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(3));
+    expect(journal()[1]).toEqual({ command: "next_prompt_sent", args: { id: "row-1", text: "да" } });
+    expect(journal()[2].args).toEqual({ chatId, turnId: turnIds()[1], user: "да" });
+  });
+
+  /// What is typed into another chat is not an answer to this one.
+  test("a new chat leaves the last turn unanswered", async () => {
+    results.chat_start = done("ok");
+    results.next_prompt_log = "row-1";
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(1));
+
+    act(() => result.current.reset());
+    await act(async () => {
+      await result.current.send("something else");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(2));
+    expect(calls.some((call) => call.command === "next_prompt_sent")).toBe(false);
+  });
+
+  /// Nothing to journal comes back as `null`, and then nothing is answered.
+  test("a turn the backend did not journal is not answered", async () => {
+    results.chat_start = done("ok");
+    results.next_prompt_log = null;
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(1));
+    await act(async () => {
+      await result.current.send("second");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(2));
+    expect(calls.some((call) => call.command === "next_prompt_sent")).toBe(false);
+  });
+});

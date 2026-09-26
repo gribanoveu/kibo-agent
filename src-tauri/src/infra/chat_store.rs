@@ -48,13 +48,24 @@ CREATE TABLE IF NOT EXISTS chats (
   archived       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS chats_workspace ON chats(workspace, updated_at DESC);
+CREATE TABLE IF NOT EXISTS suggestions (
+  id          TEXT PRIMARY KEY,
+  chat_id     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  model       TEXT NOT NULL,
+  input       TEXT NOT NULL,
+  suggestion  TEXT NOT NULL,
+  shown       INTEGER NOT NULL,
+  used        INTEGER NOT NULL DEFAULT 0,
+  sent        TEXT
+);
 ";
 
-fn store(e: rusqlite::Error) -> ChatError {
+pub(crate) fn store(e: rusqlite::Error) -> ChatError {
     ChatError::Store(e.to_string())
 }
 
-fn open() -> Result<Connection, ChatError> {
+pub(crate) fn open() -> Result<Connection, ChatError> {
     let path = app_dir::ensure().map_err(ChatError::AppDir)?.join(FILE);
     let conn = Connection::open(&path).map_err(store)?;
     #[cfg(unix)]
@@ -80,7 +91,7 @@ fn open() -> Result<Connection, ChatError> {
     Ok(conn)
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

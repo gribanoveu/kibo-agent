@@ -28,8 +28,9 @@ use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::settings::RememberScope;
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::tools::{ApprovalPolicy, CodeSearchFn, Task, ToolPreview, ToolScope};
+use crate::domain::next_prompt::{self, FinishedTurn, TurnFeatures};
 use crate::domain::turn::{
-    ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, SteeringNote,
+    ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, SteeringNote,
     ToolCallDecision,
 };
 use crate::services::ai_tools::preview;
@@ -65,6 +66,14 @@ pub struct AgentState {
     /// by the caller at the one moment it is easiest to forget. Not persisted
     /// — a mode is a decision about this conversation, not about the app.
     mode: Mutex<ConversationMode>,
+    /// The running turn's signals for the next-prompt journal. Resident
+    /// because a turn outlives one command: what came before a pause for
+    /// approval still counts after the resume.
+    next_prompt: Mutex<TurnFeatures>,
+    /// The last turn that ended, by id, until the window journals it. Apart
+    /// from the running one, so a queued message that starts the next turn
+    /// before that call arrives does not wipe it.
+    finished_turn: Mutex<Option<(String, FinishedTurn)>>,
 }
 
 impl AgentState {
@@ -84,6 +93,39 @@ impl AgentState {
         self.mode
             .lock()
             .map_or(ConversationMode::default(), |mode| *mode)
+    }
+
+    // The next-prompt journal's side of a turn. A poisoned lock costs the
+    // journal one row, never the turn.
+
+    /// A fresh turn, in the mode it starts in. A resume is not one.
+    fn begin_turn(&self) {
+        if let Ok(mut features) = self.next_prompt.lock() {
+            *features = TurnFeatures::new(self.mode());
+        }
+    }
+
+    fn observe(&self, event: &ChatEventPayload) {
+        if let Ok(mut features) = self.next_prompt.lock() {
+            features.observe(event);
+        }
+    }
+
+    fn end_turn(&self, turn_id: String, outcome: &ChatStreamOutcome) {
+        let finished = self.next_prompt.lock().ok().and_then(|features| features.finish(outcome));
+        if let (Some(finished), Ok(mut slot)) = (finished, self.finished_turn.lock()) {
+            *slot = Some((turn_id, finished));
+        }
+    }
+
+    /// The finished turn if it is `turn_id`, once; another turn's stays put.
+    fn take_finished(&self, turn_id: &str) -> Option<FinishedTurn> {
+        let mut slot = self.finished_turn.lock().ok()?;
+        if slot.as_ref().is_some_and(|(id, _)| id == turn_id) {
+            slot.take().map(|(_, finished)| finished)
+        } else {
+            None
+        }
     }
 
     fn approval(&self) -> Result<ApprovalPolicy, String> {
@@ -242,6 +284,7 @@ pub async fn chat_start<R: Runtime>(
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     state.cancel.store(false, Ordering::SeqCst);
+    state.begin_turn();
     run_off_the_event_loop(app, state, turn_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
@@ -394,6 +437,34 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
         },
         &mcp,
     )
+}
+
+/// Journals the turn `turn_id` for the next-prompt model: its input, built
+/// from what the turn did and `user`, the message that started it as the
+/// transcript shows it. `None` when there is nothing to journal — the turn is
+/// not the last one that ended, was journaled already, or said nothing.
+#[tauri::command]
+pub fn next_prompt_log(
+    chat_id: String,
+    turn_id: String,
+    user: String,
+    state: State<'_, Arc<AgentState>>,
+) -> Result<Option<String>, String> {
+    let Some(finished) = state.take_finished(&turn_id) else {
+        return Ok(None);
+    };
+    let input = finished.model_input(&user, &home());
+    crate::infra::next_prompt_log::record(&chat_id, &input).map(Some).map_err(|e| e.to_string())
+}
+
+/// What the user sent after the journaled turn `id`.
+#[tauri::command]
+pub fn next_prompt_sent(id: String, text: String) -> Result<(), String> {
+    crate::infra::next_prompt_log::record_sent(&id, &next_prompt::clean(&text, &home())).map_err(|e| e.to_string())
+}
+
+fn home() -> String {
+    dirs::home_dir().map(|home| home.display().to_string()).unwrap_or_default()
 }
 
 /// Asks the running turn to stop. Returns at once: the turn notices at its
@@ -575,7 +646,12 @@ where
         .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let events = chat_event_sink(&app, turn_id);
+        let emit = chat_event_sink(&app, turn_id.clone());
+        let observed = Arc::clone(&state);
+        let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
+            observed.observe(&event.event);
+            emit(event)
+        });
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
         let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
         let cancelled = || state.cancel.load(Ordering::SeqCst);
@@ -626,7 +702,9 @@ where
             processes,
             terminals,
         };
-        run(&turn).map_err(|e| e.to_string())
+        let outcome = run(&turn).map_err(|e| e.to_string())?;
+        state.end_turn(turn_id, &outcome);
+        Ok(outcome)
     })
     .await
     .map_err(|e| format!("the turn thread failed: {e}"))?
@@ -642,6 +720,45 @@ mod tests {
     /// checks about behaviour rather than about Tauri.
     fn state() -> Arc<AgentState> {
         Arc::new(AgentState::default())
+    }
+
+    fn next_prompt_turn(state: &AgentState, id: &str, events: &[ChatEventPayload]) {
+        events.iter().for_each(|event| state.observe(event));
+        let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new() };
+        state.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
+    }
+
+    fn said(text: &str) -> ChatEventPayload {
+        ChatEventPayload::RoundCompleted { text: text.into(), reasoning: String::new(), truncated: false }
+    }
+
+    /// A late call for an older turn must not take the newer one's place in
+    /// the journal, and a turn is journaled once.
+    #[test]
+    fn the_next_prompt_journal_takes_a_finished_turn_once_and_only_by_its_id() {
+        let state = state();
+        state.begin_turn();
+        next_prompt_turn(&state, "turn-2", &[said("ok")]);
+
+        assert!(state.take_finished("turn-1").is_none());
+        assert!(state.take_finished("turn-2").is_some(), "another turn's is left where it was");
+        assert!(state.take_finished("turn-2").is_none());
+    }
+
+    /// A new turn starts from nothing, in the mode it starts in — and does
+    /// not wipe the last one before the window has journaled it.
+    #[test]
+    fn a_new_turn_starts_the_next_prompt_signals_afresh() {
+        let state = state();
+        state.begin_turn();
+        next_prompt_turn(&state, "turn-1", &[said("first")]);
+        *state.mode.lock().unwrap() = ConversationMode::Plan;
+        state.begin_turn();
+        next_prompt_turn(&state, "turn-2", &[said("second")]);
+
+        let input = state.take_finished("turn-2").expect("journaled").model_input("u", "");
+        assert!(input.starts_with("<mode>plan"), "{input}");
+        assert!(input.ends_with("<agent>second"), "{input}");
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod process_runner;
 pub mod command_output_store;
 pub mod repository_identity;
 pub mod chat_store;
+pub mod next_prompt_log;
 pub mod file_watcher;
 pub mod skills_store;
 pub mod slash_commands_store;

@@ -147,6 +147,8 @@ pub fn run() {
             commands::chat::approval_remember_get,
             commands::chat::approval_remember_set,
             commands::chat::chat_set_mode,
+            commands::chat::next_prompt_log,
+            commands::chat::next_prompt_sent,
             commands::chat::chat_context_usage,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load,

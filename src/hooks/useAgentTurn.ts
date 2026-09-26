@@ -6,6 +6,8 @@ import {
   compactHistory,
   contextUsage,
   loadChat,
+  logNextPrompt,
+  nextPromptSent,
   onTurnEvent,
   resumeChat,
   saveChat,
@@ -99,6 +101,11 @@ export function useAgentTurn({
   const compacting = useRef(false);
   const [queued, setQueued] = useState<Queued[]>([]);
   const queueSeq = useRef(0);
+  // The next-prompt journal: the turn started by `send` and what started it,
+  // then the row it was journaled as — a promise, since a queued message can
+  // be sent before the row is written.
+  const lastTurn = useRef<{ id: string; user: string } | null>(null);
+  const journaled = useRef<Promise<string | null> | null>(null);
   const giveBackRef = useRef(onGiveBack);
   giveBackRef.current = onGiveBack;
 
@@ -144,6 +151,11 @@ export function useAgentTurn({
     if (written !== null && turn.status === "done") setPlanWritten((n) => n + 1);
     const id = chatId ?? crypto.randomUUID();
     setChatId(id);
+    if (lastTurn.current) {
+      // A journal that cannot be written is not the user's problem.
+      journaled.current = logNextPrompt(id, lastTurn.current.id, lastTurn.current.user).catch(() => null);
+      lastTurn.current = null;
+    }
     saveChat(id, history.current, turn.blocks, todos.current, written ?? planRef.current, branchedFrom.current)
       .then(() => onSaved?.())
       .catch((e) => setError(String(e)));
@@ -226,6 +238,9 @@ export function useAgentTurn({
       }
 
       setError(null);
+      const answered = journaled.current;
+      journaled.current = null;
+      void answered?.then((row) => (row ? nextPromptSent(row, trimmed) : undefined)).catch(() => {});
       unsaved.current = true;
       turnStart.current = turn.blocks.length;
       setTurn((state) => appendUserMessage(state, trimmed, Date.now(), content));
@@ -235,6 +250,7 @@ export function useAgentTurn({
       await makeRoom(false);
 
       const id = `turn-${++turnId.current}`;
+      lastTurn.current = { id, user: trimmed };
       try {
         await listen(id);
         finish(await startChat(id, history.current, todos.current, planRef.current));
@@ -312,6 +328,7 @@ export function useAgentTurn({
   /** Reopens a saved conversation, transcript and model history both. */
   const open = useCallback(async (id: string) => {
     giveBackQueue();
+    journaled.current = null;
     try {
       const record = await loadChat(id);
       subscribed.current?.();
@@ -332,6 +349,7 @@ export function useAgentTurn({
   /** Starts over. What was said is already on disk; this only stops pointing at it. */
   const reset = useCallback(() => {
     giveBackQueue();
+    journaled.current = null;
     subscribed.current?.();
     subscribed.current = null;
     history.current = [];
@@ -377,6 +395,7 @@ export function useAgentTurn({
       if (!cut || (whole && cut.blocks.length === 0)) return;
       subscribed.current?.();
       subscribed.current = null;
+      journaled.current = null;
       branchedFrom.current = chatId;
       history.current = cut.history;
       keepTodos(whole ? todos.current : []);

@@ -511,6 +511,23 @@ export async function saveChat(
   return invoke<ChatSummary>("chat_save", { id, messages, blocks, todos, plan, branchedFrom });
 }
 
+/**
+ * Journals the turn `turnId` of chat `chatId` for the next-prompt model
+ * (docs/20-next-prompt-suggestions.md). `user` is the message that started it
+ * as the transcript shows it. Returns the row's id, or `null` when there was
+ * nothing to journal.
+ */
+export async function logNextPrompt(chatId: string, turnId: string, user: string): Promise<string | null> {
+  requireBackend();
+  return invoke<string | null>("next_prompt_log", { chatId, turnId, user });
+}
+
+/** What the user sent after the journaled turn `id`. */
+export async function nextPromptSent(id: string, text: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("next_prompt_sent", { id, text });
+}
+
 /** Writes the saved chat to `path` as Markdown — a transcript to read or analyse elsewhere. */
 export async function exportChat(id: string, path: string): Promise<void> {
   requireBackend();
