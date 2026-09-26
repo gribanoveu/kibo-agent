@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { Settings } from "../components/Settings";
 import type { SkillsView } from "../lib/chat";
+import { DEFAULT_ALERTS, type AlertPrefs } from "../lib/attention";
 
 // The dialog's own rules: one section at a time, and the request log — which
 // writes whole conversations to disk — stays off until someone turns it on.
@@ -19,6 +20,7 @@ const dialog = (debugLogging = false) => {
   const modes: string[] = [];
   const palettes: string[] = [];
   const wraps: boolean[] = [];
+  const alerts: AlertPrefs[] = [];
   const sources: [string, boolean][] = [];
   let logOpened = 0;
   render(
@@ -45,11 +47,13 @@ const dialog = (debugLogging = false) => {
       onFontSize={(size) => sizes.push(size)}
       wrapLines
       onWrapLines={(wrap) => wraps.push(wrap)}
+      alerts={DEFAULT_ALERTS}
+      onAlerts={(next) => alerts.push(next)}
       onOpenLog={() => logOpened++}
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
     />,
   );
-  return { logging, sizes, wraps, sources, modes, palettes, logOpened: () => logOpened };
+  return { logging, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
 };
 
 describe("the settings dialog", () => {
@@ -111,6 +115,23 @@ describe("the settings dialog", () => {
     expect(group.querySelector('[aria-checked="true"]')?.textContent).toBe("wrap");
     fireEvent.click(screen.getByRole("radio", { name: "scroll sideways" }));
     expect(wraps).toEqual([false]);
+  });
+
+  test("under Notifications each moment's sound and notification have a switch of their own", () => {
+    const { alerts } = dialog();
+    fireEvent.click(screen.getByText("Notifications"));
+    expect(screen.getAllByRole("switch").every((s) => s.getAttribute("aria-checked") === "true")).toBe(true);
+    // A card has no sound to switch: in Ask one comes with every step that writes.
+    expect(screen.queryByRole("switch", { name: "Waiting for approval: sound" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Finished: sound" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Failed: sound" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Waiting for approval: notification" }));
+    expect(alerts).toEqual([
+      { ...DEFAULT_ALERTS, sound: { done: false, failed: true } },
+      { ...DEFAULT_ALERTS, sound: { done: true, failed: false } },
+      { ...DEFAULT_ALERTS, notify: { done: true, failed: true, approval: false } },
+    ]);
   });
 
   test("the request log is off unless it was turned on", () => {

@@ -34,6 +34,9 @@ import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
+import { useTurnAlerts } from "./hooks/useTurnAlerts";
+import { playSound } from "./lib/sounds";
+import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
@@ -161,6 +164,18 @@ export default function App() {
   const changeTotals = useChangeTotals(workspace.path);
   // An archived chat is not where the user left off, even when it was touched last.
   useFolderConversation(workspace.path, workspace.resumed, history.chats.find((one) => !one.archived)?.id, agent);
+  // Sounds and notifications when the agent finishes or asks, each switched in Settings.
+  const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
+  useTurnAlerts({
+    status: agent.turn.status,
+    failed: agent.error !== null,
+    // A chat's first turn ends before it is saved and named: its first message is its name.
+    chatTitle:
+      history.chats.find((one) => one.id === agent.chatId)?.title ??
+      agent.turn.blocks.find((block) => block.kind === "user")?.text ??
+      null,
+    prefs: alerts,
+  });
   // Servers start with an Agent turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || mcpEditing || settingsOpen, agent.turn.status);
@@ -625,6 +640,13 @@ export default function App() {
           onFontSize={fontSize.setSize}
           wrapLines={wrapLines}
           onWrapLines={setWrapLines}
+          alerts={alerts}
+          onAlerts={(next) => {
+            // A sound is heard as it is turned on, so the user knows what to listen for.
+            const turnedOn = (["done", "failed"] as const).find((kind) => next.sound[kind] && !alerts.sound[kind]);
+            if (turnedOn) playSound(turnedOn === "done" ? "done" : "attention").catch(() => {});
+            setAlerts(next);
+          }}
           onOpenLog={() => {
             setSettingsOpen(false);
             setLogOpen(true);

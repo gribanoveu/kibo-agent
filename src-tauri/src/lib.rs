@@ -66,6 +66,8 @@ pub fn run() {
         // The folder picker. A file chooser is the platform's dialog, not one
         // this app should draw.
         .plugin(tauri_plugin_dialog::init())
+        // "Done" and "waiting for you" when the window is in the background.
+        .plugin(tauri_plugin_notification::init())
         // One resident piece of state, shared by every command that has to
         // reach a turn while it runs. `Arc` because a turn runs on a blocking
         // thread that outlives the command call that started it.

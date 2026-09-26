@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-26 Hear a sound when the agent finishes or fails, and get a system notification when Kibo is in the background — finished, failed or waiting for your approval; each sound and each notification is switched on its own in Settings → Notifications
 - 2026-09-26 Commits the agent makes carry a Co-authored-by: Kibo trailer
 - 2026-09-26 A / command shows in the chat as you typed it, and names the chat that way, while the agent gets the full prompt behind it
 - 2026-09-26 Run /init to have the agent write AGENTS.md and CLAUDE.md for the open repository, or propose edits to the ones it already has

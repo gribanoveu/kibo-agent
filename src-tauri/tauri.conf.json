@@ -18,7 +18,8 @@
         "width": 1340,
         "height": 760,
         "minWidth": 940,
-        "minHeight": 520
+        "minHeight": 520,
+        "backgroundThrottling": "throttle"
       }
     ],
     "security": {

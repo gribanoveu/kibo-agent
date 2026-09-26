@@ -1,5 +1,5 @@
 import { useState, type ComponentProps } from "react";
-import { Bot, Check, Palette, Shield, ShieldCheck, Sparkles } from "lucide-react";
+import { Bell, Bot, Check, Palette, Shield, ShieldCheck, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
@@ -7,6 +7,7 @@ import type { RememberScope, SkillSourceItem, SkillsView } from "../lib/chat";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
+import type { AlertPrefs, Attention } from "../lib/attention";
 import "./Settings.css";
 
 // The settings dialog: one subject per section, picked on the left, so the
@@ -15,6 +16,7 @@ import "./Settings.css";
 const SECTIONS = [
   { id: "models", label: "Models", icon: Bot },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "notifications", label: "Notifications", icon: Bell },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Shield },
@@ -74,6 +76,9 @@ type Props = {
   /** The file viewer's long lines: wrapped, or scrolled sideways. */
   wrapLines: boolean;
   onWrapLines: (wrap: boolean) => void;
+  /** Which moments call the user back, by sound and by system notification. */
+  alerts: AlertPrefs;
+  onAlerts: (next: AlertPrefs) => void;
   onOpenLog: () => void;
   policy: ComponentProps<typeof DataPolicy>;
 };
@@ -92,6 +97,8 @@ export function Settings({
   onFontSize,
   wrapLines,
   onWrapLines,
+  alerts,
+  onAlerts,
   onOpenLog,
   policy,
 }: Props) {
@@ -215,6 +222,52 @@ export function Settings({
           </>
         )}
 
+        {section === "notifications" && (
+          <>
+            <h3 className="settings-title">Notifications</h3>
+            <table className="alert-table">
+              <thead>
+                <tr>
+                  <th />
+                  <th scope="col">Sound</th>
+                  <th scope="col">Notification</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ALERT_ROWS.map(({ attention, label }) => (
+                  <tr key={attention}>
+                    <th scope="row">{label}</th>
+                    <td>
+                      {attention === "approval" ? (
+                        <span className="alert-none" title="In Ask a card comes with every step that writes">
+                          —
+                        </span>
+                      ) : (
+                        <AlertSwitch
+                          label={`${label}: sound`}
+                          on={alerts.sound[attention]}
+                          onChange={(on) => onAlerts({ ...alerts, sound: { ...alerts.sound, [attention]: on } })}
+                        />
+                      )}
+                    </td>
+                    <td>
+                      <AlertSwitch
+                        label={`${label}: notification`}
+                        on={alerts.notify[attention]}
+                        onChange={(on) => onAlerts({ ...alerts, notify: { ...alerts.notify, [attention]: on } })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="modal-note settings-list-note">
+              A card has no sound: in Ask one comes with every step that writes. Notifications come only while Kibo is
+              in the background; the system&apos;s notification settings can silence them all.
+            </p>
+          </>
+        )}
+
         {section === "skills" && (
           <>
             <h3 className="settings-title">Skills</h3>
@@ -296,6 +349,25 @@ export function Settings({
         )}
       </div>
     </div>
+  );
+}
+
+const ALERT_ROWS: { attention: Attention; label: string }[] = [
+  { attention: "done", label: "Finished" },
+  { attention: "failed", label: "Failed" },
+  { attention: "approval", label: "Waiting for approval" },
+];
+
+function AlertSwitch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      className={`alert-switch${on ? " on" : ""}`}
+      onClick={() => onChange(!on)}
+    />
   );
 }
 
