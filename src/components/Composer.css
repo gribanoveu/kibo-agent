@@ -91,3 +91,42 @@
   display: flex;
   flex-direction: column;
 }
+/* Messages waiting for the turn to end, oldest first, just above the box. */
+.composer-queue {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.composer-queue li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-panel-soft);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.composer-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-queue button {
+  display: flex;
+  padding: 2px;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.composer-queue button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}

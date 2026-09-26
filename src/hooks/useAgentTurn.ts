@@ -43,7 +43,17 @@ import {
 // conversation outlive the window. Not before it ends: a transcript saved
 // mid-turn has a tool call in it with no result.
 
-export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
+/** A message waiting for the running turn to end, to be sent as the next one. */
+export type Queued = { id: number; text: string };
+
+export function useAgentTurn({
+  onSaved,
+  onGiveBack,
+}: {
+  onSaved?: () => void;
+  /** Queued text that will not be sent after all, for the composer to take back. */
+  onGiveBack?: (text: string) => void;
+} = {}) {
   const [turn, setTurn] = useState<TurnState>(emptyTurn);
   const [chatId, setChatId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +97,10 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
   const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
   const subscribed = useRef<(() => void) | null>(null);
   const compacting = useRef(false);
+  const [queued, setQueued] = useState<Queued[]>([]);
+  const queueSeq = useRef(0);
+  const giveBackRef = useRef(onGiveBack);
+  giveBackRef.current = onGiveBack;
 
   useEffect(() => () => subscribed.current?.(), []);
 
@@ -234,6 +248,42 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
     [turn.status, turn.blocks.length, listen, finish, makeRoom],
   );
 
+  /** Holds `text` until the running turn ends, to be sent as the next message. */
+  const queue = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (trimmed) setQueued((list) => [...list, { id: ++queueSeq.current, text: trimmed }]);
+  }, []);
+
+  /** Takes a message out of the queue and hands it back to the composer. */
+  const unqueue = useCallback(
+    (id: number) => {
+      const item = queued.find((q) => q.id === id);
+      if (!item) return;
+      setQueued(queued.filter((q) => q !== item));
+      giveBackRef.current?.(item.text);
+    },
+    [queued],
+  );
+
+  const giveBackQueue = useCallback(() => {
+    if (queued.length === 0) return;
+    setQueued([]);
+    giveBackRef.current?.(queued.map((q) => q.text).join("\n\n"));
+  }, [queued]);
+
+  // A turn that finished sends the next queued message. One that was stopped
+  // or failed gives the queue back instead: what was meant to follow it may
+  // no longer be what the user wants, and starting it unasked is worse than
+  // an extra Enter. After the save effect above, which it would otherwise
+  // find already marked unsaved.
+  useEffect(() => {
+    if (queued.length === 0 || (turn.status !== "done" && turn.status !== "cancelled")) return;
+    if (turn.status === "cancelled" || error !== null) return giveBackQueue();
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    void send(next.text);
+  }, [turn.status, error, queued, send, giveBackQueue]);
+
   /** Answers the approval card. `always` widens the policy before continuing. */
   const decide = useCallback(
     async (decisions: ToolCallDecision[], always: string[] = []) => {
@@ -261,6 +311,7 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
 
   /** Reopens a saved conversation, transcript and model history both. */
   const open = useCallback(async (id: string) => {
+    giveBackQueue();
     try {
       const record = await loadChat(id);
       subscribed.current?.();
@@ -276,10 +327,11 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
     } catch (e) {
       setError(String(e));
     }
-  }, [keepTodos, keepPlan]);
+  }, [keepTodos, keepPlan, giveBackQueue]);
 
   /** Starts over. What was said is already on disk; this only stops pointing at it. */
   const reset = useCallback(() => {
+    giveBackQueue();
     subscribed.current?.();
     subscribed.current = null;
     history.current = [];
@@ -290,7 +342,7 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
     setChatId(null);
     setError(null);
     setTurn(emptyTurn());
-  }, [keepTodos, keepPlan]);
+  }, [keepTodos, keepPlan, giveBackQueue]);
 
   // Bubbles a branch can start at; `null` while a turn is under way, when
   // none can. Recomputed with the transcript: the history only changes when
@@ -372,6 +424,9 @@ export function useAgentTurn({ onSaved }: { onSaved?: () => void } = {}) {
     error,
     context,
     send,
+    queued,
+    queue,
+    unqueue,
     decide,
     cancel,
     open,

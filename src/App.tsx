@@ -155,7 +155,11 @@ export default function App() {
   const history = useChatHistory(workspace.path);
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
-  const agent = useAgentTurn({ onSaved: history.refresh });
+  // Queued messages that will not be sent after all go back to the box.
+  const agent = useAgentTurn({
+    onSaved: history.refresh,
+    onGiveBack: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
+  });
   const approval = useApprovalMemory(agent.chatId, workspace.path, () =>
     toast.show("Auto is on here — the agent will change files without asking"),
   );
@@ -169,6 +173,7 @@ export default function App() {
   useTurnAlerts({
     status: agent.turn.status,
     failed: agent.error !== null,
+    queued: agent.queued.length,
     // A chat's first turn ends before it is saved and named: its first message is its name.
     chatTitle:
       history.chats.find((one) => one.id === agent.chatId)?.title ??
@@ -512,6 +517,9 @@ export default function App() {
               />
             }
             onSend={send}
+            onQueue={agent.queue}
+            queued={agent.queued}
+            onUnqueue={agent.unqueue}
             focus={composerFocus}
             onStop={agent.cancel}
             running={agent.turn.status === "running"}

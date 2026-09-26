@@ -154,3 +154,17 @@ describe("the stored preferences", () => {
     expect(soundFor("failed", DEFAULT_ALERTS)).toBe("attention");
   });
 });
+
+describe("with messages queued", () => {
+  test("a turn that finished with the next one waiting is not the end: no alert", async () => {
+    run([{ status: "done", queued: 1 }]);
+    await settle();
+    expect(played).toEqual([]);
+    expect(shown).toEqual([]);
+  });
+
+  test("a failure is still told", async () => {
+    run([{ status: "done", failed: true, queued: 1 }]);
+    expect(played).toEqual(["attention"]);
+  });
+});

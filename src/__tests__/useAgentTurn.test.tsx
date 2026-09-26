@@ -691,3 +691,93 @@ describe("what the next message is sent with", () => {
     ]);
   });
 });
+
+describe("the queue", () => {
+  /** A turn held open until `end` is called with how it ended. */
+  function heldTurn() {
+    let end: (outcome: unknown) => void = () => {};
+    let first = true;
+    results.chat_start = (args: Record<string, unknown>) => {
+      if (!first) return done("next")(args);
+      first = false;
+      return new Promise((resolve) => {
+        end = (status) => resolve({ ...done("first")(args), status });
+      });
+    };
+    return { end: (status: string) => end(status) };
+  }
+
+  const started = () => calls.filter((call) => call.command === "chat_start");
+
+  test("a message queued mid-turn is sent as the next turn once this one is done, not steered", async () => {
+    const turn = heldTurn();
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+
+    act(() => result.current.queue("then update the docs"));
+    expect(result.current.queued.map((q) => q.text)).toEqual(["then update the docs"]);
+    expect(calls.some((call) => call.command === "chat_steer")).toBe(false);
+
+    await act(async () => turn.end("done"));
+    await waitFor(() => expect(started()).toHaveLength(2));
+    expect((started()[1].args.messages as { content: string }[]).at(-1)).toEqual({ role: "user", content: "then update the docs" });
+    await waitFor(() => expect(result.current.queued).toEqual([]));
+  });
+
+  test("a stopped turn gives the queue back instead of starting it", async () => {
+    const turn = heldTurn();
+    const given: string[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    act(() => result.current.queue("one"));
+    act(() => result.current.queue("two"));
+
+    await act(async () => turn.end("cancelled"));
+    await waitFor(() => expect(result.current.queued).toEqual([]));
+    expect(given).toEqual(["one\n\ntwo"]);
+    expect(started()).toHaveLength(1);
+  });
+
+  test("a failed turn gives the queue back too", async () => {
+    let fail: (reason: string) => void = () => {};
+    results.chat_start = () => new Promise((_, reject) => (fail = reject));
+    const given: string[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    act(() => result.current.queue("one"));
+
+    await act(async () => fail("provider said 500"));
+    await waitFor(() => expect(given).toEqual(["one"]));
+    expect(started()).toHaveLength(1);
+  });
+
+  test("a row taken out goes back, and the rest stays", async () => {
+    heldTurn();
+    const given: string[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    act(() => result.current.queue("one"));
+    act(() => result.current.queue("two"));
+
+    act(() => result.current.unqueue(result.current.queued[0].id));
+    expect(given).toEqual(["one"]);
+    expect(result.current.queued.map((q) => q.text)).toEqual(["two"]);
+  });
+
+  test("a new chat takes the queue back rather than sending it there", async () => {
+    heldTurn();
+    const given: string[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    act(() => result.current.queue("one"));
+
+    act(() => result.current.reset());
+    expect(given).toEqual(["one"]);
+    expect(result.current.queued).toEqual([]);
+  });
+});

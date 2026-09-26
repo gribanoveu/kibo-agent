@@ -39,6 +39,7 @@ export const SHORTCUTS = {
   focusInput: { label: "Go to the message box", group: "Chat", combos: [{ code: "KeyL", mod: true }] },
   send: { label: "Send the message", group: "Chat", combos: [{ code: "Enter" }] },
   newLine: { label: "New line in the message", group: "Chat", combos: [{ code: "Enter", shift: true }] },
+  queue: { label: "Send the message after the current turn", group: "Chat", combos: [{ code: "Enter", alt: true }] },
   commandNext: { label: "Next command in the / menu", group: "Chat", combos: [{ code: "ArrowDown" }] },
   commandPrev: { label: "Previous command in the / menu", group: "Chat", combos: [{ code: "ArrowUp" }] },
   commandComplete: { label: "Complete the command's name", group: "Chat", combos: [{ code: "Tab" }] },

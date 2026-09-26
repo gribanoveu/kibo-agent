@@ -12,12 +12,15 @@ import { playSound, preloadSounds } from "../lib/sounds";
 export function useTurnAlerts({
   status,
   failed,
+  queued = 0,
   chatTitle,
   prefs,
 }: {
   status: TurnStatus;
   /** Whether the turn that just ended ended in an error. */
   failed: boolean;
+  /** Messages waiting to be sent: a turn that ends with one is not the end of the work. */
+  queued?: number;
   chatTitle: string | null;
   prefs: AlertPrefs;
 }) {
@@ -31,11 +34,11 @@ export function useTurnAlerts({
   useEffect(() => {
     const attention = attentionFor(last.current, status, failed);
     last.current = status;
-    if (!attention) return;
+    if (!attention || (attention === "done" && queued > 0)) return;
     // Neither may break the chat: no audio device, or no notification
     // permission, only means the user is not told this way.
     const sound = soundFor(attention, prefs);
     if (sound) playSound(sound).catch(() => {});
     if (prefs.notify[attention]) notifyInBackground(chatTitle || "Kibo Agent", ATTENTION_TEXT[attention]).catch(() => {});
-  }, [status, failed, chatTitle, prefs]);
+  }, [status, failed, queued, chatTitle, prefs]);
 }

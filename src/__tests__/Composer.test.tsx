@@ -508,3 +508,73 @@ describe("the box's focus", () => {
     expect(document.activeElement).toBe(box);
   });
 });
+
+describe("the queue", () => {
+  function queueing(running: boolean, queued: { id: number; text: string }[] = []) {
+    const sent: string[] = [];
+    const held: string[] = [];
+    const taken: number[] = [];
+    const ran: string[] = [];
+    render(
+      <Composer
+        onSend={(text) => sent.push(text)}
+        onQueue={(text) => held.push(text)}
+        queued={queued}
+        onUnqueue={(id) => taken.push(id)}
+        onStop={() => {}}
+        running={running}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+        commands={[{ name: "compact", hint: "Fold", run: (args: string) => ran.push(args) }]}
+      />,
+    );
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const altEnter = (text: string) => {
+      fireEvent.change(box, { target: { value: text } });
+      fireEvent.keyDown(box, { code: "Enter", key: "Enter", altKey: true });
+    };
+    return { sent, held, taken, ran, box, altEnter };
+  }
+
+  test("Alt+Enter during a turn holds the message instead of steering with it", () => {
+    const { sent, held, box, altEnter } = queueing(true);
+    altEnter("then update the docs");
+    expect(held).toEqual(["then update the docs"]);
+    expect(sent).toEqual([]);
+    expect(box.value).toBe("");
+  });
+
+  test("with nothing running there is nothing to wait for: it is sent", () => {
+    const { sent, held, altEnter } = queueing(false);
+    altEnter("hello");
+    expect(sent).toEqual(["hello"]);
+    expect(held).toEqual([]);
+  });
+
+  test("a command is run, not queued", () => {
+    const { held, ran, altEnter } = queueing(true);
+    altEnter("/compact now");
+    expect(ran).toEqual(["now"]);
+    expect(held).toEqual([]);
+  });
+
+  test("what waits is listed, and a row can be taken back", () => {
+    const { taken } = queueing(true, [
+      { id: 1, text: "first" },
+      { id: 2, text: "second" },
+    ]);
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect([...list.querySelectorAll(".composer-queue-text")].map((el) => el.textContent)).toEqual(["first", "second"]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Back to the message box" })[1]);
+    expect(taken).toEqual([2]);
+  });
+});

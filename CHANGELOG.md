@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-26 Press ⌥Enter (Alt+Enter) while the agent works to queue a message as the next turn; it is sent once the turn finishes, and a stopped or failed turn puts it back in the message box
 - 2026-09-26 An agent that repeats the same call to the same result, or fails the same way three rounds running, is told once to change course, and the chat shows that it was
 - 2026-09-26 Hear a sound when the agent finishes or fails, and get a system notification when Kibo is in the background — finished, failed or waiting for your approval; each sound and each notification is switched on its own in Settings → Notifications
 - 2026-09-26 Commits the agent makes carry a Co-authored-by: Kibo trailer

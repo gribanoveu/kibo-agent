@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SendHorizontal, Square, ShieldCheck, Bot, Brain } from "lucide-react";
+import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
 import { commandFor, suggestCommands, type SlashCommand } from "../lib/slashCommands";
-import { matches } from "../lib/shortcuts";
+import { matches, shortcutText } from "../lib/shortcuts";
 import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
@@ -33,6 +33,11 @@ type Props = {
   tab?: ReactNode;
   /** Sends the box. While a turn is running the same box steers it instead. */
   onSend: (text: string) => void;
+  /** Holds the box until the running turn ends, to be sent as the next message. */
+  onQueue?: (text: string) => void;
+  /** What is waiting for the turn to end; a row taken out goes back to the box. */
+  queued?: { id: number; text: string }[];
+  onUnqueue?: (id: number) => void;
   onStop: () => void;
   running: boolean;
   /** Both chips live above this component: the backend has to be told, and a
@@ -70,6 +75,9 @@ type Props = {
 export function Composer({
   tab,
   onSend,
+  onQueue,
+  queued = [],
+  onUnqueue,
   onStop,
   running,
   conversation,
@@ -158,6 +166,15 @@ export function Composer({
     clear();
   };
 
+  // A `/` command is not queued: it runs now, as with Enter — the queue holds
+  // text for the model, and a command's expansion belongs to the moment it runs.
+  const queue = () => {
+    if (!running || !onQueue || commandFor(commands, text)) return send();
+    if (!text.trim()) return;
+    onQueue(text);
+    clear();
+  };
+
   const complete = (command: SlashCommand) => {
     setText(`/${command.name} `);
     area.current?.focus();
@@ -165,6 +182,20 @@ export function Composer({
 
   return (
     <div className="composer-wrap">
+      {/* Above the folder tab, which sits on the box's edge. */}
+      {queued.length > 0 && (
+        <ul className="composer-queue" aria-label="Queued messages">
+          {queued.map((item) => (
+            <li key={item.id}>
+              <CornerDownRight size={13} />
+              <span className="composer-queue-text">{item.text}</span>
+              <button type="button" title="Back to the message box" aria-label="Back to the message box" onClick={() => onUnqueue?.(item.id)}>
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {tab}
       <section className="composer" ref={box}>
         {menuOpen && <SlashMenu commands={offered} active={at} onPick={(c) => run(c)} />}
@@ -172,7 +203,11 @@ export function Composer({
           className="chat-text"
           ref={area}
           rows={2}
-          placeholder={running ? "Add something while it works…" : "Describe your task…"}
+          placeholder={
+            running
+              ? `Add something while it works — ${shortcutText("queue")} to send it after`
+              : "Describe your task…"
+          }
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -206,7 +241,10 @@ export function Composer({
                 return;
               }
             }
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (matches(e, "queue")) {
+              e.preventDefault();
+              queue();
+            } else if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
             }
