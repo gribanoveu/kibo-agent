@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-27 A new chat shows up in the sidebar as soon as its first message or /review is sent, not when the agent finishes
 - 2026-09-27 Pick the language the agent answers in — Auto, English or Russian — in Settings → Language; it covers chat answers, plans and /review
 - 2026-09-27 A chat with a turn under way is no longer left behind unsaved by New chat or another chat: it says to stop the turn first
 - 2026-09-27 Type /review to have the agent review your uncommitted changes: it reads the code it needs and runs checks, but changes no files; each finding shows as a card on the line it is about, with Fix to have the agent fix it, and a review that runs long is asked to wrap up

@@ -1021,6 +1021,26 @@ describe("reviewing", () => {
     expect(result.current.turn.status).toBe("done");
   });
 
+  /// A review runs for minutes; the chat is in the sidebar from the start.
+  test("a new chat is saved as the review starts, with its message only, and again under the same id at the end", async () => {
+    let finish: (value: unknown) => void = () => {};
+    results.review_start = new Promise((resolve) => (finish = resolve));
+    const { result } = renderHook(() => useAgentTurn());
+    let running: Promise<void> = Promise.resolve();
+    act(() => {
+      running = result.current.review();
+    });
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args.blocks).toEqual([expect.objectContaining({ kind: "user", text: "/review" })]);
+    expect(result.current.chatId).toBe(saved()[0].args.id as string);
+    await act(async () => {
+      finish(reviewed("done")({ messages: [] }));
+      await running;
+    });
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    expect(saved()[1].args.id).toBe(saved()[0].args.id);
+  });
+
   test("a review that fails says why, and its bubble keeps a message in the history", async () => {
     results.review_start = new Error("nothing to review: the working tree matches HEAD");
     const { result } = renderHook(() => useAgentTurn());

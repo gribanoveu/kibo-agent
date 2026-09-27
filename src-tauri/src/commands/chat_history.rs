@@ -32,7 +32,7 @@ pub fn chat_load(id: String) -> Result<ChatRecord, String> {
 
 /// Writes the conversation as it now stands. Called once a turn has ended —
 /// saving mid-turn would store a transcript whose last tool call has no
-/// result yet.
+/// result yet — and as a new chat's first turn starts, with its message only.
 #[tauri::command]
 pub fn chat_save(
     state: State<'_, Arc<AgentState>>,

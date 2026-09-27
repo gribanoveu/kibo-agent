@@ -48,7 +48,8 @@ import {
 //
 // Both halves are written to disk when a turn ends, which is what makes the
 // conversation outlive the window. Not before it ends: a transcript saved
-// mid-turn has a tool call in it with no result.
+// mid-turn has a tool call in it with no result. A new chat's first message
+// is the one exception — written as the turn starts, so the chat has its row.
 
 /** A message waiting for the running turn to end, to be sent as the next one. */
 export type Queued = { id: number; text: string };
@@ -141,6 +142,18 @@ export function useAgentTurn({
     const live = writtenChecklist(turn.blocks.slice(turnStart.current));
     if (live) setChecklist(live);
   }, [turn.status, turn.blocks]);
+
+  // A new chat is in the sidebar from its first message, not from the end of
+  // its first turn — which a review can take minutes to reach. Only the
+  // message is written: the turn's own blocks may hold a call with no result.
+  useEffect(() => {
+    if (chatId !== null || !unsaved.current || turn.status !== "running") return;
+    const id = crypto.randomUUID();
+    setChatId(id);
+    saveChat(id, history.current, turn.blocks.slice(0, turnStart.current + 1), todos.current, planRef.current, branchedFrom.current)
+      .then(() => onSaved?.())
+      .catch((e) => setError(String(e)));
+  }, [turn.status, turn.blocks, chatId, onSaved]);
 
   // Saved once the turn has come to rest, from the render that has the last
   // block in it — which is why this is an effect and not the tail of `finish`,
