@@ -341,17 +341,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
 
     let events = events_seen.lock().unwrap();
     let rounds = events.iter().filter(|e| matches!(e.event, ChatEventPayload::RoundCompleted { .. })).count();
-    // The helpers' too: delegating is not free because the chat's meter
-    // does not show it.
-    let helpers = agents.list().iter().fold((0u64, 0u64, 0u64), |(i, c, o), run| {
-        (i + run.tokens.prompt, c + run.tokens.cached, o + run.tokens.completion)
-    });
-    let (tokens_in, tokens_cached, tokens_out) = events.iter().fold(helpers, |(i, c, o), e| match &e.event {
-        ChatEventPayload::ContextUsage(u) => {
-            (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens))
-        }
-        _ => (i, c, o),
-    });
+    let (tokens_in, tokens_cached, tokens_out) = tokens_spent(&events, &agents.list());
     let mut by_round: BTreeMap<u32, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
     let clip = |s: &str| s.chars().take(300).collect::<String>();
     for e in events.iter() {
@@ -405,6 +395,50 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         seconds,
         workspace: work,
     }
+}
+
+/// What a run cost — in, of it cached, out: every request the turn made,
+/// and its helpers' too. Delegating is not free because the chat's meter
+/// does not show it.
+fn tokens_spent(events: &[ChatTurnEvent], helpers: &[crate::domain::agents::AgentInfo]) -> (u64, u64, u64) {
+    let helped = helpers.iter().fold((0u64, 0u64, 0u64), |(i, c, o), run| {
+        (i + run.tokens.prompt, c + run.tokens.cached, o + run.tokens.completion)
+    });
+    events.iter().fold(helped, |(i, c, o), e| match &e.event {
+        ChatEventPayload::ContextUsage(u) => {
+            (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens))
+        }
+        _ => (i, c, o),
+    })
+}
+
+/// A run that delegated is charged for its helpers.
+#[test]
+fn a_run_costs_its_own_requests_and_its_helpers() {
+    use crate::domain::agents::{AgentInfo, AgentState, AgentTokens};
+    use crate::domain::llm::ChatUsage;
+    let usage = |prompt: u32, cached: u32, completion: u32| ChatTurnEvent {
+        seq: 0,
+        round: 1,
+        target_id: None,
+        event: ChatEventPayload::ContextUsage(ChatUsage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+            cached_tokens: cached,
+        }),
+    };
+    let helper = AgentInfo {
+        id: 1,
+        task: "t".into(),
+        state: AgentState::Done,
+        steps: vec![],
+        tokens: AgentTokens { prompt: 5000, cached: 4000, completion: 300 },
+        answer: None,
+    };
+    let events = [usage(1000, 800, 50), usage(1200, 1000, 70)];
+    assert_eq!(tokens_spent(&events, &[]), (2200, 1800, 120));
+    assert_eq!(tokens_spent(&events, &[helper]), (7200, 5800, 420));
 }
 
 /// `0` when nothing was sent — and when the provider does not report its

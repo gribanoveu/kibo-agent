@@ -4361,7 +4361,8 @@ mod tests {
         let requests = h.provider.requests();
         assert_eq!(requests.len(), 4, "the refused call ran no third turn");
         let refused = tool_contents(&requests[2]);
-        assert!(refused[0].contains("`explore` is not available in this conversation mode"), "{refused:?}");
+        assert!(refused[0].contains("`explore` is not available to a helper"), "{refused:?}");
+        assert!(!refused[0].contains("the user chose"), "{refused:?}");
         assert_eq!(tool_contents(&requests[3]), vec!["could not look deeper".to_string()]);
     }
 

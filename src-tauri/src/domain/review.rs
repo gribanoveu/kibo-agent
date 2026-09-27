@@ -170,8 +170,10 @@ fn generated(name: &str, dirs: &[&str]) -> bool {
 pub const MESSAGE_DIFF_CHARS: usize = 120_000;
 
 /// The opening message of a review: the diffs that fit, in path order, the
-/// rest of the change by name, and what was left out and why.
-pub fn review_message(files: &[FileDiff], excluded: &[Excluded]) -> String {
+/// rest of the change by name, and what was left out and why — and the reply
+/// language, when the user chose one: nothing the user typed is in a review's
+/// conversation to say it for them.
+pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Option<&str>) -> String {
     let mut out = String::from("Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>\n");
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
@@ -200,7 +202,7 @@ pub fn review_message(files: &[FileDiff], excluded: &[Excluded]) -> String {
         let lines: Vec<String> = excluded.iter().map(|e| format!("{} — {}", e.path, e.reason.reason())).collect();
         out.push_str(&format!("\nLeft out of the review:\n{}\n", lines.join("\n")));
     }
-    out
+    crate::domain::prompt::with_language_reminder(out, language)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -436,19 +438,27 @@ mod tests {
         renamed.patch = "@@ -1 +1 @@\n-a\n+b\n".into();
         let big = sized("src/big.rs", MESSAGE_DIFF_CHARS);
         let excluded = [Excluded { path: ".env".into(), reason: Exclusion::Secret }];
-        let text = review_message(&[renamed, big], &excluded);
+        let text = review_message(&[renamed, big], &excluded, None);
         assert!(text.contains("<changes>\n=== src/new.rs (renamed from src/old.rs) ===\n@@ -1 +1 @@\n-a\n+b\n</changes>"), "{text}");
         assert!(text.contains("diff not included for its size — read it with gitDiff or readFile where it matters:\nsrc/big.rs\n"), "{text}");
         assert!(text.contains("Left out of the review:\n.env — may hold secrets — do not read it\n"), "{text}");
-        let plain = review_message(&[sized("a.rs", 10)], &[]);
+        let plain = review_message(&[sized("a.rs", 10)], &[], None);
         assert!(!plain.contains("Also changed") && !plain.contains("Left out"), "{plain}");
+        assert!(!plain.contains("[Reply in"), "{plain}");
+    }
+
+    /// The last thing the opening message says is the language to reply in.
+    #[test]
+    fn the_message_ends_with_the_chosen_reply_language() {
+        let text = review_message(&[sized("a.rs", 10)], &[], Some("Russian"));
+        assert!(text.ends_with("</changes>\n\n\n[Reply in Russian.]"), "{text:?}");
     }
 
     /// The room is shared: a file that does not fit is named, and a smaller
     /// one after it still goes in.
     #[test]
     fn the_diffs_that_fit_go_in_whatever_their_order() {
-        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &[]);
+        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &[], None);
         assert!(text.contains("=== a.rs") && text.contains("=== c.rs"), "{text}");
         assert!(!text.contains("=== b.rs") && text.contains("where it matters:\nb.rs\n"), "{text}");
     }

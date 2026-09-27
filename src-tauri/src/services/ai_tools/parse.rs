@@ -76,9 +76,15 @@ pub fn preflight_tool_call(
     // earlier round — and an error it can read is what corrects that, where a
     // sentence in the prompt did not.
     if !conversation_mode::offers(mode, parsed.name()) {
-        return Err(ToolError::NotOfferedInMode(
-            parsed.name().wire_name().to_string(),
-        ));
+        let tool = parsed.name().wire_name().to_string();
+        // A helper's limits are not a choice the user made, and "say what
+        // would need to be done" is advice for the chat, not for a helper.
+        if mode == ConversationMode::Explore {
+            return Err(ToolError::Explore(format!(
+                "`{tool}` is not available to a helper, which only reads and searches. Answer from what you have found, and say what is left to check."
+            )));
+        }
+        return Err(ToolError::NotOfferedInMode(tool));
     }
 
     // Containment, checked here as well as inside each tool. The duplication is
