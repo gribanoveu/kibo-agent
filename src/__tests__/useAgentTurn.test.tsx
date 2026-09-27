@@ -819,7 +819,7 @@ describe("the next-prompt journal", () => {
   test("a review answers the turn journaled before it", async () => {
     results.chat_start = done("ok");
     results.next_prompt_log = "row-1";
-    results.review_start = { report: { reviewed: [], excluded: [], findings: [], failed: [], summaries: [] }, forModel: "[Code review]" };
+    results.review_start = done("reviewed");
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
       await result.current.send("first");
@@ -828,8 +828,10 @@ describe("the next-prompt journal", () => {
     await act(async () => {
       await result.current.review();
     });
-    await waitFor(() => expect(journal()).toHaveLength(2));
+    await waitFor(() => expect(journal()).toHaveLength(3));
     expect(journal()[1]).toEqual({ command: "next_prompt_sent", args: { id: "row-1", text: "/review" } });
+    // A review is a turn, journaled like one.
+    expect(journal()[2]).toMatchObject({ command: "next_prompt_log", args: { user: "/review" } });
   });
 
   /// What is typed into another chat is not an answer to this one.
@@ -961,35 +963,41 @@ describe("rewinding", () => {
 });
 
 describe("reviewing", () => {
-  const done = {
-    report: { reviewed: ["a.rs"], excluded: [], findings: [], failed: [] },
-    forModel: "[Code review of the working tree: 1 files reviewed]\nNo findings.\n",
-  };
+  /// The backend adds the change to the history as the message the
+  /// bubble stands for; the outcome brings it back like any turn's.
+  const reviewed = (answer: string) => (args: Record<string, unknown>) => ({
+    status: "done",
+    value: {
+      text: answer,
+      truncated: false,
+      todos: [],
+      history: [...(args.messages as unknown[]), { role: "user", content: "Review the uncommitted changes…" }, { role: "assistant", content: answer }],
+    },
+  });
 
-  /// The report is the answer to /review in the history, so "fix 2" next
-  /// has something to refer to — and the chat is saved with it.
-  test("the report joins the history as the answer to /review", async () => {
-    results.review_start = done;
+  test("a review is a turn: it is sent the history, and keeps the one it ends with", async () => {
+    results.review_start = reviewed("Nothing wrong.");
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
       await result.current.review();
     });
-    expect(calls.find((call) => call.command === "review_start")?.args).toEqual({ turnId: expect.stringMatching(/^turn-/) });
+    const call = calls.find((c) => c.command === "review_start");
+    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), messages: [], todos: [], plan: null });
     expect(result.current.turn.status).toBe("done");
-    expect(result.current.turn.blocks.map((b) => b.kind)).toEqual(["user", "review"]);
+    expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
     await waitFor(() => expect(saved()).toHaveLength(1));
-    expect(saved()[0].args.messages).toEqual([
-      { role: "user", content: "/review" },
-      { role: "assistant", content: done.forModel },
+    expect((saved()[0].args.messages as { content: string }[]).map((m) => m.content)).toEqual([
+      "Review the uncommitted changes…",
+      "Nothing wrong.",
     ]);
   });
 
-  /// The workers take no notes: what is typed during a review waits for it,
-  /// and leaving the chat waits too — the report would land in the next one.
-  test("while a review runs, a message is queued and the chat cannot be left", async () => {
+  /// It is a turn like any other: what is typed steers it, and leaving
+  /// waits for it, as it would for a message's turn.
+  test("while a review runs, a message steers it and the chat cannot be left", async () => {
     let finish: (value: unknown) => void = () => {};
     results.review_start = new Promise((resolve) => (finish = resolve));
-    results.chat_start = () => new Promise(() => {});
+    results.chat_steer = "note-1";
     const { result } = renderHook(() => useAgentTurn());
     let running: Promise<void> = Promise.resolve();
     act(() => {
@@ -998,14 +1006,8 @@ describe("reviewing", () => {
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     await act(async () => {
       await result.current.send("and check the tests");
-      await result.current.send("/init", "Study this repository");
     });
-    expect(calls.some((call) => call.command === "chat_steer")).toBe(false);
-    // A command keeps its prompt in the queue: the transcript shows one, the model gets the other.
-    expect(result.current.queued.map((q) => [q.text, q.sent])).toEqual([
-      ["and check the tests", undefined],
-      ["/init", "Study this repository"],
-    ]);
+    expect(calls.find((c) => c.command === "chat_steer")?.args).toMatchObject({ text: "and check the tests" });
     let left: boolean | undefined;
     act(() => {
       left = result.current.reset();
@@ -1013,21 +1015,24 @@ describe("reviewing", () => {
     expect(left).toBe(false);
     expect(await result.current.open("other")).toBe(false);
     await act(async () => {
-      finish(done);
+      finish(reviewed("done")({ messages: [] }));
       await running;
     });
-    expect(result.current.turn.blocks.map((b) => b.kind)).toContain("review");
+    expect(result.current.turn.status).toBe("done");
   });
 
-  test("a review that fails says why and leaves no card under way", async () => {
-    results.review_start = new Error("not a git repository");
+  test("a review that fails says why, and its bubble keeps a message in the history", async () => {
+    results.review_start = new Error("nothing to review: the working tree matches HEAD");
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
       await result.current.review();
     });
     expect(result.current.turn.blocks.map((b) => b.kind)).toEqual(["user", "notice"]);
-    expect(result.current.error).toBe("not a git repository");
+    expect(result.current.error).toBe("nothing to review: the working tree matches HEAD");
     await waitFor(() => expect(saved()).toHaveLength(1));
-    expect((saved()[0].args.messages as { content: string }[])[1].content).toBe("[The review failed: not a git repository]");
+    expect((saved()[0].args.messages as { content: string }[]).map((m) => m.content)).toEqual([
+      "/review",
+      "[The review failed: nothing to review: the working tree matches HEAD]",
+    ]);
   });
 });

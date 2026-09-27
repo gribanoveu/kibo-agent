@@ -444,6 +444,10 @@ fn run(
     let mut guard = LoopGuard::default();
     // The calls of the round before, for the guard.
     let mut settled: Vec<Settled> = Vec::new();
+    // Tokens this pass has spent, every request's prompt and reply: what a
+    // review is asked to wrap up at. Not in the checkpoint — a resume counts
+    // anew, and the note itself, in the history, is what keeps it to once.
+    let mut spent: u64 = 0;
 
     loop {
         // Checkpoint one. Before the ceiling check as well, so a turn the user
@@ -451,13 +455,7 @@ fn run(
         if (turn.cancelled)() {
             return Ok(ChatStreamOutcome::Cancelled(ended(state, ChatStreamResult::default())));
         }
-        // A review worker reads one group and reports; past its own ceiling
-        // more reading costs more than it finds.
-        let max_rounds = match turn.mode {
-            ConversationMode::Review => crate::domain::review::MAX_ROUNDS,
-            _ => MAX_TOOL_ITERATIONS as u32,
-        };
-        if state.round >= max_rounds || state.budget_used >= MAX_TOOL_BUDGET {
+        if state.round >= MAX_TOOL_ITERATIONS as u32 || state.budget_used >= MAX_TOOL_BUDGET {
             return Err(TurnError::Exhausted {
                 rounds: state.round,
             });
@@ -491,6 +489,16 @@ fn run(
                     },
                 );
             }
+            if turn.mode == ConversationMode::Review {
+                if let Some(note) = crate::domain::review::wrap_up(round - 1, spent, &state.history) {
+                    state.history.push(LlmMessage::user(note));
+                    events.emit(
+                        round,
+                        Some(format!("wrap-up:{round}")),
+                        ChatEventPayload::WrapUpReminded { rounds: round - 1, tokens: spent },
+                    );
+                }
+            }
             apply_steering(&events, round, &mut state.history, (turn.take_steering)());
             report_ended_processes(turn, &events, round, &mut state.history);
             clear_stale_results(turn.scope, &mut state, &mut seen_results);
@@ -512,6 +520,9 @@ fn run(
             };
 
             round_truncated = result.truncated;
+            if let Some(usage) = &result.usage {
+                spent += u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+            }
             if let Some(usage) = result.usage {
                 events.emit(
                     round,
@@ -1567,7 +1578,7 @@ mod tests {
                 ChatEventPayload::HookFeedback { event, blocked, .. } => format!("hook:{event}:{blocked}"),
                 ChatEventPayload::ProcessesEnded { processes } => format!("ended:{}", processes.len()),
                 ChatEventPayload::LoopReminded { tool, failing } => format!("loop:{tool}:{failing}"),
-                ChatEventPayload::ReviewGroup(group) => format!("review:{}", group.group),
+                ChatEventPayload::WrapUpReminded { rounds, .. } => format!("wrap-up:{rounds}"),
             })
             .collect()
     }
@@ -3116,9 +3127,9 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one but a review's two; MCP tools come from
+        // Every built-in one but a review's own; MCP tools come from
         // servers, and none is connected.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 3);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 2);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -4060,5 +4071,45 @@ mod tests {
             .iter()
             .any(|m| m.content.as_deref().is_some_and(|c| c.contains("Write everything you say in Russian")));
         assert!(told, "the language block is in the request");
+    }
+
+    /// A review that goes on is asked once to wrap up — at its tenth round
+    /// here, the provider reporting no usage — and an agent's turn never is.
+    #[test]
+    fn a_long_review_is_asked_once_to_wrap_up_and_an_agent_turn_never() {
+        let steps = |label: &str| {
+            let mut steps: Vec<Step> = (0..12).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))])).collect();
+            steps.push(text("done"));
+            harness(label, steps)
+        };
+        let mut review = steps("chat-wrap-up-review");
+        review.mode = ConversationMode::Review;
+        review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
+        let said: Vec<String> = payloads(&review.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect();
+        assert_eq!(said, ["wrap-up:10"], "once, after the tenth round");
+        let notes = review.provider.requests().last().unwrap().messages.iter().filter(|m| m.content.as_deref().is_some_and(|c| c.starts_with("[Review budget]"))).count();
+        assert_eq!(notes, 1, "in the history the model reads");
+
+        let agent = steps("chat-wrap-up-agent");
+        agent.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert!(!payloads(&agent.log.lock().unwrap()).iter().any(|p| p.starts_with("wrap-up")));
+    }
+
+    /// Tokens count as well as rounds: a review whose requests are heavy is
+    /// asked sooner — after its second round here, 400k spent by then.
+    #[test]
+    fn a_heavy_review_is_asked_to_wrap_up_by_its_tokens() {
+        let heavy = |n: u32| {
+            Step::Reply(ChatStreamResult {
+                tool_calls: vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))],
+                usage: Some(ChatUsage { prompt_tokens: 180_000, completion_tokens: 20_000, total_tokens: 200_000, cached_tokens: 0 }),
+                ..Default::default()
+            })
+        };
+        let mut h = harness("chat-wrap-up-tokens", vec![heavy(0), heavy(1), heavy(2), text("done")]);
+        h.mode = ConversationMode::Review;
+        h.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
+        let said: Vec<String> = payloads(&h.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect();
+        assert_eq!(said, ["wrap-up:2"]);
     }
 }

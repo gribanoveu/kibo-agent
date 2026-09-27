@@ -24,7 +24,8 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
-import { ReviewCard } from "./ReviewCard";
+import { FindingCard } from "./ReviewCard";
+import { findingOf } from "../lib/finding";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
 import { PANES } from "./panes";
@@ -452,13 +453,14 @@ type Run = { kind: "run"; id: string; blocks: Block[] };
 /**
  * An agent's calls and thinking between two things it said, folded into one
  * line — the answer is what the reader came for, the work behind it is a click
- * away. Approvals stay out: they wait for an answer and must be seen.
+ * away. Approvals stay out: they wait for an answer and must be seen. So do a
+ * review's findings: they are what the work was for.
  */
 function fold(blocks: Block[]): (Block | Run)[] {
   const out: (Block | Run)[] = [];
   for (const block of blocks) {
     const last = out[out.length - 1];
-    if (block.kind !== "tool" && block.kind !== "reasoning") {
+    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block)) {
       out.push(block);
     } else if (last?.kind === "run") {
       last.blocks.push(block);
@@ -829,8 +831,6 @@ function renderBlock(
   onFix?: (text: string) => void,
 ) {
   switch (block.kind) {
-    case "review":
-      return <ReviewCard key={block.id} block={block} onOpenFile={onOpenFile} onFix={onFix} />;
     case "user":
       return (
         <div className="bubble" key={block.id}>
@@ -882,12 +882,16 @@ function renderBlock(
           <p className="tool-detail reasoning-text">{block.text}</p>
         </details>
       );
-    case "tool":
+    case "tool": {
+      // A review's finding is the work's result, not a step of it.
+      const finding = findingOf(block);
+      if (finding) return <FindingCard key={block.id} finding={finding} onOpenFile={onOpenFile} onFix={onFix} />;
       return (
         <div className="tools" key={block.id}>
           <ToolRow block={block} onOpenProcess={onOpenProcess} />
         </div>
       );
+    }
     case "approval":
       return (
         <div className="tools" key={block.id}>

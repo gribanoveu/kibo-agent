@@ -35,8 +35,6 @@ import {
   endTurn,
   emptyTurn,
   restoredTurn,
-  reviewEnded,
-  reviewStarted,
   type TurnState,
 } from "../lib/chatTurnReducer";
 
@@ -52,11 +50,8 @@ import {
 // conversation outlive the window. Not before it ends: a transcript saved
 // mid-turn has a tool call in it with no result.
 
-/**
- * A message waiting for the running turn to end, to be sent as the next one.
- * `sent`, as in `send`: a `/` command's prompt, when `text` is the command.
- */
-export type Queued = { id: number; text: string; sent?: string };
+/** A message waiting for the running turn to end, to be sent as the next one. */
+export type Queued = { id: number; text: string };
 
 export function useAgentTurn({
   onSaved,
@@ -232,9 +227,9 @@ export function useAgentTurn({
   }, [refreshContext]);
 
   /** Holds `text` until the running turn ends, to be sent as the next message. */
-  const queue = useCallback((text: string, sent?: string) => {
+  const queue = useCallback((text: string) => {
     const trimmed = text.trim();
-    if (trimmed) setQueued((list) => [...list, { id: ++queueSeq.current, text: trimmed, sent }]);
+    if (trimmed) setQueued((list) => [...list, { id: ++queueSeq.current, text: trimmed }]);
   }, []);
 
   /**
@@ -249,10 +244,7 @@ export function useAgentTurn({
       if (!trimmed) return;
 
       if (turn.status === "running") {
-        // A review's workers take no notes: what is typed during one waits
-        // for it, as the next message.
-        if (turn.blocks.some((block) => block.kind === "review" && block.report === null)) queue(trimmed, sent);
-        else await steerCommand(content, content === trimmed ? undefined : trimmed);
+        await steerCommand(content, content === trimmed ? undefined : trimmed);
         return;
       }
 
@@ -280,13 +272,14 @@ export function useAgentTurn({
         setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
       }
     },
-    [turn.status, turn.blocks, listen, finish, makeRoom, queue],
+    [turn.status, turn.blocks.length, listen, finish, makeRoom],
   );
 
   /**
-   * `/review`: the working tree's changes reviewed by the backend's workers,
-   * as a card in the chat. The report joins the history as the answer to
-   * `/review`, so the next message can say "fix 2".
+   * `/review`: a turn in Review mode over the uncommitted change — the agent
+   * reads and runs what it needs, reports findings, and answers. Otherwise a
+   * turn like `send`'s: steered, stopped, paused and continued the same way,
+   * and the next message can say "fix the first one".
    */
   const review = useCallback(async () => {
     if (turn.status === "running" || turn.status === "awaitingApproval") return;
@@ -297,29 +290,24 @@ export function useAgentTurn({
     void answered?.then((row) => (row ? nextPromptSent(row, "/review") : undefined)).catch(() => {});
     unsaved.current = true;
     turnStart.current = turn.blocks.length;
-    setTurn((state) => reviewStarted(appendUserMessage(state, "/review", Date.now())));
+    setTurn((state) => appendUserMessage(state, "/review", Date.now()));
+    await makeRoom(false);
+
     const id = `turn-${++turnId.current}`;
+    lastTurn.current = { id, user: "/review" };
     try {
       await listen(id);
-      const done = await reviewStart(id);
-      history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: done.forModel }];
-      setTurn((state) => reviewEnded(state, done.report));
+      // The change is added to the history by the backend, as the message
+      // this bubble stands for; the outcome's history carries it.
+      finish(await reviewStart(id, history.current, todos.current, planRef.current));
     } catch (e) {
       setError(String(e));
       // In the history too: the bubble has to have its message, or every
       // bubble before it stops being one a branch can start at.
       history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: `[The review failed: ${e}]` }];
-      setTurn((state) =>
-        appendNotice(
-          endTurn({ ...state, blocks: state.blocks.filter((block) => block.kind !== "review" || block.report !== null) }),
-          `The review failed: ${e}`,
-        ),
-      );
-    } finally {
-      subscribed.current?.();
-      subscribed.current = null;
+      setTurn((state) => appendNotice(endTurn(state), `The review failed: ${e}`));
     }
-  }, [turn.status, turn.blocks.length, listen]);
+  }, [turn.status, turn.blocks.length, listen, finish, makeRoom]);
 
   /** Takes a message out of the queue and hands it back to the composer. */
   const unqueue = useCallback(
@@ -348,7 +336,7 @@ export function useAgentTurn({
     if (turn.status === "cancelled" || error !== null) return giveBackQueue();
     const [next, ...rest] = queued;
     setQueued(rest);
-    void send(next.text, next.sent);
+    void send(next.text);
   }, [turn.status, error, queued, send, giveBackQueue]);
 
   /** Answers the approval card. `always` widens the policy before continuing. */

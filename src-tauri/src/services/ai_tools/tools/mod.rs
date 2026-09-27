@@ -30,7 +30,6 @@ pub mod grep;
 pub mod list_files;
 pub mod move_path;
 pub mod report_finding;
-pub mod finish_review;
 pub mod todo;
 pub mod write_file;
 pub mod read_file;
@@ -67,7 +66,6 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Move, move_path::definition),
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
-    (ToolName::FinishReview, finish_review::definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RunCommand, run_command::definition),
     (ToolName::Skill, skill::definition),
@@ -116,7 +114,6 @@ pub fn execute_tool(
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
-        ToolCall::FinishReview(args) => finish_review::finish_review(args, deps),
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
@@ -310,14 +307,6 @@ mod definition_tests {
                     severity: Some(crate::domain::review::Severity::High),
                     category: Some(crate::domain::review::Category::Bug),
                     suggestion: Some("y".to_string()),
-                })],
-            ),
-            ToolName::FinishReview => (
-                r#"{"summary":"s","checked":[]}"#,
-                vec![ToolCall::FinishReview(crate::domain::review::SummaryArgs {
-                    summary: "s".to_string(),
-                    checked: vec!["c".to_string()],
-                    worth_a_look: vec![crate::domain::review::Concern { path: path(), note: "n".to_string() }],
                 })],
             ),
             ToolName::Skill => (

@@ -92,7 +92,6 @@ pub fn for_model(result: &ToolResult) -> String {
             format!("Noted at {path}:{start_line}.")
         }
         ToolResult::FindingNoted { path, start_line, end_line } => format!("Noted at {path}:{start_line}-{end_line}."),
-        ToolResult::SummaryNoted => "Summary noted.".to_string(),
         ToolResult::ProcessOutput(output) => process_output(output),
         // Ended by itself before the call: saying only "exited with code 0"
         // leaves open whether this call stopped it.

@@ -52,8 +52,6 @@ pub enum ToolName {
     RunInTerminal,
     /// A problem found in a review, placed on the change — review workers only.
     ReportFinding,
-    /// A review worker's closing summary of its group — review workers only.
-    FinishReview,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -92,7 +90,6 @@ impl ToolName {
         ToolName::ReadTerminal,
         ToolName::RunInTerminal,
         ToolName::ReportFinding,
-        ToolName::FinishReview,
         ToolName::Mcp,
     ];
 
@@ -123,7 +120,6 @@ impl ToolName {
             ToolName::ReadTerminal => "readTerminal",
             ToolName::RunInTerminal => "runInTerminal",
             ToolName::ReportFinding => "reportFinding",
-            ToolName::FinishReview => "finishReview",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -194,8 +190,7 @@ impl ToolName {
             | ToolName::ReadTerminal
             | ToolName::RunInTerminal
             // Checked against a diff in memory.
-            | ToolName::ReportFinding
-            | ToolName::FinishReview => 1,
+            | ToolName::ReportFinding => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.
@@ -370,7 +365,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            25,
+            24,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -956,7 +951,6 @@ pub enum ToolCall {
     ReadTerminal(ReadTerminalArgs),
     RunInTerminal(RunInTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
-    FinishReview(crate::domain::review::SummaryArgs),
     Mcp(McpCallArgs),
 }
 
@@ -986,7 +980,6 @@ impl ToolCall {
             ToolCall::ReadTerminal(_) => ToolName::ReadTerminal,
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
-            ToolCall::FinishReview(_) => ToolName::FinishReview,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1169,8 +1162,6 @@ pub enum ToolResult {
         start_line: u32,
         end_line: u32,
     },
-    /// A review group's summary, kept.
-    SummaryNoted,
     /// `runCommand` with `background`: it runs on, and this is its number.
     ProcessStarted(crate::domain::background::ProcessInfo),
     /// `runCommand` still running at its timeout: not killed, it runs on as

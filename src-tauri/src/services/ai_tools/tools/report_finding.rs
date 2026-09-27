@@ -1,9 +1,9 @@
-//! `reportFinding` — a review worker's one way to say something is wrong.
+//! `reportFinding` — how a review says something is wrong.
 //!
-//! Checked here, at once, against the worker's own diffs
-//! (`domain::review::ReviewDesk`): a finding on a file it was not given, or
-//! quoting code the change did not add, comes back to it as an error it can
-//! correct, rather than reaching the user misplaced.
+//! Checked here, at once, against the change under review
+//! (`domain::review::ReviewDesk`): a finding on a file the change did not
+//! touch, or quoting code it did not add, comes back as an error the agent
+//! can correct, rather than reaching the user misplaced.
 
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::review::FindingArgs;
@@ -56,7 +56,6 @@ mod tests {
             binary: false,
             patch: String::new(),
             lines: vec![NewLine { hunk: 0, number: 7, added: true, text: "let x = y / 0;".into() }],
-            whole: false,
         };
         ToolDeps { review: Some(Arc::new(ReviewDesk::new(vec![file]))), ..ToolDeps::default() }
     }
@@ -70,7 +69,9 @@ mod tests {
         let deps = deps();
         let noted = report_finding(&finding("let x = y / 0;"), &deps).unwrap();
         assert_eq!(noted, ToolResult::FindingNoted { path: "a.rs".into(), start_line: 7, end_line: 7 });
-        assert_eq!(deps.review.unwrap().take_findings().len(), 1);
+        // Kept: the same report again is refused as a duplicate.
+        let again = report_finding(&finding("let x = y / 0;"), &deps).unwrap_err();
+        assert!(again.to_string().contains("already reported at a.rs:7"), "{again}");
     }
 
     #[test]

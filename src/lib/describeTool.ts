@@ -50,6 +50,7 @@ export const LABELS: Record<string, string> = {
   stopProcess: "Stop",
   readTerminal: "Screen",
   runInTerminal: "Terminal",
+  reportFinding: "Finding",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -375,6 +376,11 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // A review's finding: the one refused is what shows here, a kept one
+    // stands on its own card (`lib/finding.ts`).
+    case "reportFinding":
+      return { name, arg: str(args.title) ?? "", meta: str(args.path), detail: str(args.body) ?? "" };
+
     case "skill": {
       // A skill's files are listed after its instructions, as the model got them.
       const files = Array.isArray(result.files) ? (result.files as string[]) : [];
@@ -485,6 +491,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Bash: "Running",
   Todo: "Updating the checklist",
   Plan: "Writing the plan",
+  Finding: "Reporting",
   Status: "Checking git status",
   Diff: "Reading the diff",
   Blame: "Reading the blame of",
@@ -513,6 +520,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Bash: (n) => `ran ${n === 1 ? "a command" : `${n} commands`}`,
   Todo: () => "updated the checklist",
   Plan: () => "wrote the plan",
+  Finding: (n) => `reported ${n === 1 ? "a finding" : `${n} findings`}`,
 };
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {

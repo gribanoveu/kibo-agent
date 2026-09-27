@@ -4,7 +4,7 @@
 
 - 2026-09-27 Pick the language the agent answers in — Auto, English or Russian — in Settings → Language; it covers chat answers, plans and /review
 - 2026-09-27 A chat with a turn under way is no longer left behind unsaved by New chat or another chat: it says to stop the turn first
-- 2026-09-27 Type /review to have your uncommitted changes checked for bugs: files are reviewed in groups side by side, the card shows each group's progress, what it cost in tokens and what is slowing it, each finding is placed on the line it is about, and Fix asks the agent to fix it; every group closes with a summary — what the change does, what was checked, and what is worth a look — shown also when nothing is found; each group costs one request, documentation is left out, and what you type meanwhile waits in the queue
+- 2026-09-27 Type /review to have the agent review your uncommitted changes: it reads the code it needs and runs checks, but changes no files; each finding shows as a card on the line it is about, with Fix to have the agent fix it, and a review that runs long is asked to wrap up
 - 2026-09-27 Rewind a chat to before one of your messages: the files the agent changed since go back to how they were — never over a change made after it — and the message returns to the box to change and send again
 - 2026-09-27 See how many background processes are still running beside "Working…" and "Worked for"; a click opens the newest in the Terminal tab
 - 2026-09-27 A command the agent runs is no longer killed at its timeout: it goes on as a background process, shown in the Terminal tab, and the agent reads it from there instead of running it again

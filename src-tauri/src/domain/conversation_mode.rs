@@ -34,8 +34,8 @@ pub enum ConversationMode {
     /// Questions about the code, answered from the code. The leanest set:
     /// no checklist, nothing to change.
     Ask,
-    /// A review worker reading one group of a change (`services::review`).
-    /// Not a mode the user picks: `/review` starts its workers in it.
+    /// `/review`: the uncommitted change read, checked and reported on.
+    /// Not a mode the user picks: the command starts its turn in it.
     Review,
 }
 
@@ -113,10 +113,12 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
             tools.extend([ToolName::Todo, ToolName::WritePlan]);
         }
         ConversationMode::Ask => {}
-        // Saying what is wrong, in one reply: the diffs come with the code
-        // around them, and reading more is what made a review cost a million
-        // tokens a group (`domain::review::MAX_ROUNDS`).
-        ConversationMode::Review => return HashSet::from([ToolName::ReportFinding, ToolName::FinishReview]),
+        // Reading, running what proves something — a build, the tests — and
+        // saying what is wrong. Nothing that writes a file: a review that
+        // fixes as it goes is no longer a review of the change.
+        ConversationMode::Review => {
+            tools.extend([ToolName::RunCommand, ToolName::StopProcess, ToolName::ReportFinding]);
+        }
     }
     tools
 }
@@ -201,18 +203,25 @@ mod tests {
         }
     }
 
-    /// Every tool but a review's own: a finding or a summary needs a review to be about.
+    /// Every tool but a review's own: a finding needs a review to be about.
     #[test]
     fn agent_mode_offers_every_tool_there_is() {
         let agent = tools(ConversationMode::Agent);
-        assert_eq!(agent.len(), ToolName::ALL.len() - 2);
-        assert!(!agent.contains(&ToolName::ReportFinding) && !agent.contains(&ToolName::FinishReview));
+        assert_eq!(agent.len(), ToolName::ALL.len() - 1);
+        assert!(!agent.contains(&ToolName::ReportFinding));
     }
 
-    /// A reviewer reports and nothing else: one reply, from the diffs it is given.
+    /// A reviewer reads everything, runs commands to prove a point, and
+    /// reports; nothing it has writes a file.
     #[test]
-    fn a_review_only_reports() {
-        assert_eq!(tools(ConversationMode::Review), HashSet::from([ToolName::ReportFinding, ToolName::FinishReview]));
+    fn a_review_reads_runs_and_reports_but_writes_nothing() {
+        let review = tools(ConversationMode::Review);
+        for tool in [ToolName::ReadFile, ToolName::Grep, ToolName::SemanticSearch, ToolName::GitDiff, ToolName::RunCommand, ToolName::ReportFinding] {
+            assert!(review.contains(&tool), "{tool:?}");
+        }
+        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::CreateDirectory, ToolName::DeleteDirectory, ToolName::Move];
+        assert!(writes.iter().all(|tool| !review.contains(tool)));
+        assert!(!review.contains(&ToolName::WritePlan) && !review.contains(&ToolName::Todo));
     }
 
 

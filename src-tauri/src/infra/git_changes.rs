@@ -49,38 +49,25 @@ pub fn totals(root: &Path) -> Result<ChangeTotals, GitChangesError> {
     Ok(ChangeTotals { files: stats.files_changed(), add: stats.insertions(), del: stats.deletions() })
 }
 
-/// Unchanged lines shown on each side of a change, in a file too long to be
-/// shown whole (`domain::review::WHOLE_FILE_LINES`).
+/// Unchanged lines shown on each side of a change. The agent reads more with
+/// its tools where it needs to.
 pub const REVIEW_CONTEXT_LINES: u32 = 10;
-
-/// Context wide enough that a file's only hunk is the whole file.
-const WHOLE_FILE_CONTEXT: u32 = 1_000_000;
 
 /// What a review reads: the working tree against HEAD, the index in between,
 /// new files included, renames found — each file with its patch from the
-/// first hunk on and the new side of every hunk. A file short enough is
-/// given whole, every line as context; a longer one the code near each
-/// change. Paths are relative to the open folder, as the agent's tools name
-/// them, and only its changes count.
+/// first hunk on and the new side of every hunk. Paths are relative to the
+/// open folder, as the agent's tools name them, and only its changes count.
 pub fn review_diffs(root: &Path) -> Result<Vec<FileDiff>, GitChangesError> {
     let repo = open(root)?;
     let head = head_tree(&repo)?;
     let folder = folder_in_repo(&repo, root).filter(|folder| !folder.as_os_str().is_empty());
-    // The worker reads nothing beyond what it is given: the code around a
-    // change is what it judges the change against. The same diff twice —
-    // the files come out in the same order — once whole, once near.
-    let diff_with = |context: u32| -> Result<Diff<'_>, GitChangesError> {
-        let mut options = DiffOptions::new();
-        options.show_untracked_content(true).recurse_untracked_dirs(true).context_lines(context);
-        if let Some(folder) = &folder {
-            options.pathspec(folder);
-        }
-        let mut diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options)).map_err(git)?;
-        diff.find_similar(Some(git2::DiffFindOptions::new().renames(true))).map_err(git)?;
-        Ok(diff)
-    };
-    let whole = diff_with(WHOLE_FILE_CONTEXT)?;
-    let near = diff_with(REVIEW_CONTEXT_LINES)?;
+    let mut options = DiffOptions::new();
+    options.show_untracked_content(true).recurse_untracked_dirs(true).context_lines(REVIEW_CONTEXT_LINES);
+    if let Some(folder) = &folder {
+        options.pathspec(folder);
+    }
+    let mut diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options)).map_err(git)?;
+    diff.find_similar(Some(git2::DiffFindOptions::new().renames(true))).map_err(git)?;
     let prefix = folder.as_ref().map(|f| format!("{}/", f.to_string_lossy().replace('\\', "/"))).unwrap_or_default();
     let shown = |path: Option<&Path>| {
         let path = path.map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
@@ -88,9 +75,9 @@ pub fn review_diffs(root: &Path) -> Result<Vec<FileDiff>, GitChangesError> {
     };
 
     let mut files = Vec::new();
-    for index in 0..whole.deltas().len() {
-        let Some((patch, lines)) = review_patch(&whole, index)? else { continue };
-        let Some(delta) = whole.get_delta(index) else { continue };
+    for index in 0..diff.deltas().len() {
+        let Some((patch, lines)) = review_patch(&diff, index)? else { continue };
+        let Some(delta) = diff.get_delta(index) else { continue };
         let path = shown(delta.new_file().path().or_else(|| delta.old_file().path()));
         let status = match delta.status() {
             git2::Delta::Added | git2::Delta::Untracked => FileStatus::Added,
@@ -98,13 +85,7 @@ pub fn review_diffs(root: &Path) -> Result<Vec<FileDiff>, GitChangesError> {
             git2::Delta::Renamed => FileStatus::Renamed { from: shown(delta.old_file().path()) },
             _ => FileStatus::Modified,
         };
-        let binary = delta.flags().is_binary();
-        let is_whole = lines.len() <= crate::domain::review::WHOLE_FILE_LINES;
-        let (patch, lines) = match is_whole {
-            true => (patch, lines),
-            false => review_patch(&near, index)?.unwrap_or((patch, lines)),
-        };
-        files.push(FileDiff { path, status, binary, patch, lines, whole: is_whole && !binary });
+        files.push(FileDiff { path, status, binary: delta.flags().is_binary(), patch, lines });
     }
     Ok(files)
 }
@@ -753,30 +734,19 @@ mod tests {
         assert!(a.lines.iter().any(|l| !l.added && l.text == "one"), "context lines too");
     }
 
-    /// The worker has nothing to read but what it is given: a short file
-    /// whole, a long one ten lines each side of a change.
+    /// The code around each change comes with it: ten lines each side.
     #[test]
-    fn a_review_sees_a_short_file_whole_and_a_long_one_near_its_change() {
+    fn a_review_sees_ten_lines_around_a_change() {
         let (dir, _repo) = repo();
-        let text = |lines: u32, changed: &str| {
-            (1..=lines).map(|n| if n == 15 { changed.to_string() } else { format!("line {n}") }).collect::<Vec<_>>().join("\n") + "\n"
-        };
-        let long = crate::domain::review::WHOLE_FILE_LINES as u32 + 1;
-        fs::write(dir.join("short.rs"), text(30, "line 15")).unwrap();
-        fs::write(dir.join("long.rs"), text(long, "line 15")).unwrap();
-        stage(&dir, &["short.rs".into(), "long.rs".into()]).unwrap();
+        let text = |changed: &str| (1..=40).map(|n| if n == 15 { changed.to_string() } else { format!("line {n}") }).collect::<Vec<_>>().join("\n") + "\n";
+        fs::write(dir.join("a.rs"), text("line 15")).unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
         commit(&dir, "first").unwrap();
-        fs::write(dir.join("short.rs"), text(30, "changed")).unwrap();
-        fs::write(dir.join("long.rs"), text(long, "changed")).unwrap();
+        fs::write(dir.join("a.rs"), text("changed")).unwrap();
 
         let files = review_diffs(&dir).unwrap();
-        let numbers = |path: &str| files.iter().find(|f| f.path == path).unwrap().lines.iter().map(|l| l.number).collect::<Vec<_>>();
-        assert_eq!(numbers("short.rs"), (1..=30).collect::<Vec<_>>());
-        assert_eq!(numbers("long.rs"), (5..=25).collect::<Vec<_>>());
-        let whole: Vec<(&str, bool)> = files.iter().map(|f| (f.path.as_str(), f.whole)).collect();
-        assert_eq!(whole, [("long.rs", false), ("short.rs", true)]);
-        let short = files.iter().find(|f| f.path == "short.rs").unwrap();
-        assert!(short.patch.contains(" line 1\n") && short.patch.contains(" line 30\n") && short.patch.contains("-line 15\n+changed\n"), "{}", short.patch);
+        let numbers: Vec<u32> = files[0].lines.iter().map(|l| l.number).collect();
+        assert_eq!(numbers, (5..=25).collect::<Vec<_>>());
     }
 
     #[test]

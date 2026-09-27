@@ -85,7 +85,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
   | { type: "processesEnded"; payload: { processes: ProcessInfo[] } }
   | { type: "loopReminded"; payload: { tool: string; failing: boolean } }
-  | { type: "reviewGroup"; payload: GroupProgress }
+  | { type: "wrapUpReminded"; payload: { rounds: number; tokens: number } }
   | { type: "roundStarted" }
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }
@@ -668,63 +668,19 @@ export async function setMcpServerEnabled(name: string, enabled: boolean): Promi
 
 // ---------------------------------------------------------------- review
 
-/** Mirrors `domain::review`: why a changed file was left out of a review. */
-export type ReviewExclusion = "binary" | "deleted" | "secret" | "generated" | "documentation" | "tooLarge";
-export type Severity = "critical" | "high" | "medium" | "low";
-/** A problem a review found, placed on the new side of the file. */
-export type Finding = {
-  id: number;
-  path: string;
-  startLine: number;
-  endLine: number;
-  severity: Severity;
-  category: "bug" | "security" | "performance" | "maintainability" | "other";
-  title: string;
-  body: string;
-  suggestion?: string;
-};
-/** Mirrors `domain::review::GroupProgress`: where one group's worker has got to. */
-export type GroupProgress = {
-  group: number;
-  total: number;
-  files: string[];
-  state: "waiting" | "working" | "done" | "failed";
-  /** Findings the check refused: code not in the change, or in more than one place. */
-  failedCalls: number;
-  findings: number;
-  /** What the provider counted, once it has: the request, and the reply with its thinking. */
-  input: number;
-  output: number;
-  /** The reply stopped at the provider's length limit. */
-  truncated: boolean;
-  /** What its request weighs by the backend's own count, known before it is sent. */
-  estimate: number;
-  /** What is slowing it right now: a retry, a failed call, a loop note. */
-  note?: string;
-  error?: string;
-};
-/** Mirrors `domain::review::GroupSummary`: what a group's change does, what was checked, what is worth a look. */
-export type GroupSummary = {
-  files: string[];
-  summary: string;
-  checked: string[];
-  worthALook: { path: string; note: string }[];
-};
-export type ReviewReport = {
-  reviewed: string[];
-  excluded: { path: string; reason: ReviewExclusion }[];
-  findings: Finding[];
-  failed: { files: string[]; error: string }[];
-  summaries: GroupSummary[];
-};
-
 /**
- * Reviews the working tree against HEAD; progress arrives on the turn channel
- * under `turnId`. `forModel` is the report as the conversation keeps it.
+ * `/review`: a turn in Review mode over the working tree against HEAD. The
+ * backend adds the change to `messages` as the turn's message, so the
+ * outcome's history carries it; otherwise it is `startChat`.
  */
-export async function reviewStart(turnId: string): Promise<{ report: ReviewReport; forModel: string }> {
+export async function reviewStart(
+  turnId: string,
+  messages: LlmMessage[],
+  todos: Task[] = [],
+  plan: string | null = null,
+): Promise<Outcome> {
   requireBackend();
-  return invoke<{ report: ReviewReport; forModel: string }>("review_start", { turnId });
+  return invoke<Outcome>("review_start", { turnId, messages, todos, plan });
 }
 
 // ---------------------------------------------------------------- rewind
