@@ -84,6 +84,10 @@
   align-items: center;
   gap: 5px;
 }
+/* Agents beside Processes, not pushed apart from it. */
+.terminal-processes-tab + .terminal-processes-tab {
+  margin-left: 0;
+}
 .terminal-processes-tab:hover,
 .terminal-processes-tab.selected {
   background: var(--bg-hover);

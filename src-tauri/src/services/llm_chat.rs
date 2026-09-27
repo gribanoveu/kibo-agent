@@ -228,6 +228,8 @@ pub struct Turn<'a> {
     pub terminals: Option<Arc<dyn crate::domain::terminal::UserTerminals>>,
     /// A review worker's files and findings; `None` outside a review.
     pub review: Option<Arc<crate::domain::review::ReviewDesk>>,
+    /// The Agents tab's record of `explore` runs; `None` keeps a throwaway one.
+    pub agents: Option<Arc<crate::domain::agents::Agents>>,
 }
 
 
@@ -574,7 +576,9 @@ fn run(
                 // Only a turn that is really ending asks its Stop hooks; they
                 // run every time — one may be a notification — but past the
                 // cap a refusal no longer keeps the turn going.
-                let refused = if waiting.is_empty() {
+                // A helper's answer is not the turn ending: that is the
+                // calling turn's, and its Stop hooks run then.
+                let refused = if waiting.is_empty() && turn.mode != ConversationMode::Explore {
                     let fields = serde_json::json!({ "stop_hook_active": stop_blocks > 0 });
                     match fire_hook(turn, &events, round, HookEvent::Stop, None, fields) {
                         Some(_) if stop_blocks >= MAX_STOP_BLOCKS => {
@@ -723,9 +727,11 @@ fn run(
                         // Built per call, because the id is what pairs a line
                         // of output with the call that produced it — a round
                         // may have started more than one.
+                        let output = command_output_sink(turn.events, round, &call.id);
+                        let explore = |task: &str| run_explore(turn, task, &output);
                         let deps = ToolDeps {
                             shell: turn.shell.clone(),
-                            output: Some(command_output_sink(turn.events, round, &call.id)),
+                            output: Some(output.clone()),
                             search: turn.search.clone(),
                             skills: turn.skills.to_vec(),
                             mcp: turn.mcp.clone(),
@@ -733,6 +739,7 @@ fn run(
                             processes: turn.processes.clone(),
                             terminals: turn.terminals.clone(),
                             review: turn.review.clone(),
+                            explore: Some(&explore),
                         };
                         // Around the call, not inside the tool: one place sees
                         // every write, and no tool has to remember to report.
@@ -809,6 +816,105 @@ fn run(
             };
             state.history.push(tool_message(&call.id, content));
         }
+    }
+}
+
+/// `explore`: `task` as a turn of its own in `ConversationMode::Explore`,
+/// from an empty history, returning its closing answer.
+///
+/// It shares what the calling turn has — the model, the folder, the stop
+/// button, the hooks, the log — and nothing of its conversation. Of its
+/// events only the calls go out, as lines of the calling card's output, and
+/// its usage goes to its record: its text is the result, and its tokens are
+/// not this chat's context.
+///
+/// Recorded in the Agents tab from start to end, and stopped from there too:
+/// a helper the user stops is an error the calling turn reads and carries on
+/// from, while the chat's own Stop ends both.
+///
+/// Nothing it is offered asks for approval, so it never pauses; if it did,
+/// there would be no card to answer, and it ends as an error instead.
+fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    use crate::domain::agents::AgentState;
+    use crate::domain::tools::ToolError;
+    // A throwaway record where the app keeps none, so a run is counted the
+    // same way either way.
+    let agents = turn.agents.clone().unwrap_or_default();
+    let id = agents.start(task);
+    let events: ChatEventSink = {
+        let agents = Arc::clone(&agents);
+        let progress = progress.clone();
+        Arc::new(move |event: ChatTurnEvent| match event.event {
+            ChatEventPayload::ToolCall(call) => {
+                let step = explore_step(&call.name, &call.arguments);
+                progress(CommandEvent {
+                    stream: crate::domain::command_exec::OutputStream::Stdout,
+                    chunk: format!("{step}\n"),
+                });
+                agents.step(id, step);
+            }
+            ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage),
+            _ => {}
+        })
+    };
+    let stopped = || (turn.cancelled)() || agents.stop_asked(id);
+    let no_steering = Vec::new;
+    let helper = Turn {
+        events: &events,
+        session: turn.session,
+        scope: turn.scope,
+        approval: &ApprovalPolicy::default(),
+        mode: ConversationMode::Explore,
+        cancelled: &stopped,
+        sleep: turn.sleep,
+        shell: turn.shell,
+        shell_described: turn.shell_described,
+        take_steering: &no_steering,
+        search: turn.search.clone(),
+        skills: turn.skills,
+        rules: turn.rules,
+        log_call: turn.log_call,
+        plan: None,
+        worktree_of: turn.worktree_of,
+        mcp: &McpTools::default(),
+        hooks: turn.hooks,
+        // The calling turn's to report when they end.
+        processes: None,
+        terminals: turn.terminals.clone(),
+        review: None,
+        agents: None,
+    };
+    let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
+    let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
+        Ok(ChatStreamOutcome::Done(done)) if !done.result.text.trim().is_empty() => (AgentState::Done, Ok(done.result.text)),
+        Ok(ChatStreamOutcome::Done(_)) => failed("the helper finished without an answer".to_string()),
+        Ok(ChatStreamOutcome::Cancelled(_)) if (turn.cancelled)() => {
+            (AgentState::Stopped, Err("stopped before it answered".to_string()))
+        }
+        Ok(ChatStreamOutcome::Cancelled(_)) => (
+            AgentState::Stopped,
+            Err("the user stopped the helper before it answered. Carry on without it; do not start it again for the same question unless the user asks".to_string()),
+        ),
+        Ok(ChatStreamOutcome::PendingApproval(_)) => failed("the helper asked for a call that needs approval".to_string()),
+        Err(TurnError::Exhausted { rounds }) => failed(format!(
+            "the helper used up its {rounds} rounds without answering. Give it a narrower task, or look yourself."
+        )),
+        Err(e) => failed(e.to_string()),
+    };
+    agents.finish(id, state, answer.as_ref().ok().cloned());
+    let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
+    answer.map(|text| ToolResult::Explored { text, agent: id, tokens }).map_err(ToolError::Explore)
+}
+
+/// One line of a helper's progress: the tool, and what it was pointed at.
+fn explore_step(name: &str, arguments: &str) -> String {
+    let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let target = ["path", "pattern", "query"]
+        .iter()
+        .find_map(|key| args.get(key).and_then(|v| v.as_str()));
+    match target {
+        Some(target) => format!("{name} {target}"),
+        None => name.to_string(),
     }
 }
 
@@ -1457,6 +1563,7 @@ mod tests {
         processes: Option<Arc<dyn BackgroundProcesses>>,
         terminals: Option<Arc<dyn crate::domain::terminal::UserTerminals>>,
         shell_described: String,
+        agents: Option<Arc<crate::domain::agents::Agents>>,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -1502,6 +1609,7 @@ mod tests {
             processes: None,
             terminals: None,
             shell_described: "/bin/sh".to_string(),
+            agents: None,
         }
     }
 
@@ -1553,6 +1661,7 @@ mod tests {
                 processes: self.processes.clone(),
                 terminals: self.terminals.clone(),
                 review: None,
+                agents: self.agents.clone(),
             };
             f(&turn)
         }
@@ -4111,5 +4220,210 @@ mod tests {
         h.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
         let said: Vec<String> = payloads(&h.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect();
         assert_eq!(said, ["wrap-up:2"]);
+    }
+
+    // -------------------------------------------------------------- explore
+
+    fn tool_names(request: &ChatRequest) -> Vec<String> {
+        request.tools.iter().map(|t| t.name.clone()).collect()
+    }
+
+    /// The helper works in a conversation of its own, and the calling turn
+    /// gets its answer — not the file it read to find it.
+    #[test]
+    fn explore_runs_a_helper_turn_and_hands_back_only_its_answer() {
+        let h = harness(
+            "explore-helper",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                asks(vec![wants("r1", "readFile", r#"{"path":"a.rs"}"#)]),
+                text("X is in a.rs:1"),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.rs"), "let x = SECRET_LINE;").unwrap();
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "done");
+
+        let requests = h.provider.requests();
+        // The helper's first request: its own brief, reading tools only.
+        let helper = &requests[1];
+        let said: Vec<_> = helper.messages.iter().filter(|m| m.role != LlmRole::System).collect();
+        assert_eq!(said.len(), 1);
+        assert_eq!(said[0].content.as_deref(), Some("where is X"));
+        assert!(helper.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("This conversation: Explore"))));
+        let tools = tool_names(helper);
+        assert!(tools.contains(&"readFile".to_string()));
+        assert!(!tools.contains(&"explore".to_string()) && !tools.contains(&"writeFile".to_string()), "{tools:?}");
+        // The caller was offered it, and gets the answer back and nothing else.
+        assert!(tool_names(&requests[0]).contains(&"explore".to_string()));
+        let back = tool_contents(&requests[3]);
+        assert_eq!(back, vec!["X is in a.rs:1".to_string()]);
+        assert!(requests[3].messages.iter().all(|m| !m.content.as_deref().unwrap_or("").contains("SECRET_LINE")));
+
+        // What the user sees: the parent's call, with the helper's reads as
+        // its output — not the helper's text or cards of its own.
+        let events = h.events();
+        let lines: Vec<String> = events
+            .iter()
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "e1" => Some(chunk.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, vec!["readFile a.rs\n".to_string()]);
+        let shown = payloads(&events);
+        assert!(shown.contains(&"toolCall:e1".to_string()));
+        assert!(!shown.contains(&"toolCall:r1".to_string()), "{shown:?}");
+        assert!(events.iter().all(|e| !matches!(&e.event, ChatEventPayload::Delta { delta } if delta.contains("X is in"))));
+    }
+
+    /// A helper cannot send a helper: asked from memory, it is refused.
+    #[test]
+    fn a_helper_asking_to_explore_is_refused() {
+        let h = harness(
+            "explore-nested",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                asks(vec![wants("e2", "explore", r#"{"task":"deeper"}"#)]),
+                text("could not look deeper"),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 4, "the refused call ran no third turn");
+        let refused = tool_contents(&requests[2]);
+        assert!(refused[0].contains("`explore` is not available in this conversation mode"), "{refused:?}");
+        assert_eq!(tool_contents(&requests[3]), vec!["could not look deeper".to_string()]);
+    }
+
+    /// The Stop hooks are the calling turn's: a helper finishing is not the
+    /// turn ending, and a hook that refused it would steer the wrong model.
+    #[test]
+    fn a_helper_finishing_does_not_run_the_stop_hooks() {
+        let (h, inputs) = hooked(
+            harness(
+                "explore-stop",
+                vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is here"), text("done")],
+            ),
+            hook("Stop", "", "check"),
+            |_, _| (0, ""),
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(inputs.lock().unwrap().len(), 1);
+    }
+
+    /// A helper that says nothing, or runs out of rounds, is an error the
+    /// caller can act on — not an empty answer taken for "nothing there".
+    #[test]
+    fn a_helper_without_an_answer_is_an_error() {
+        let h = harness(
+            "explore-blank",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                text(""),
+                text(""),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let back = tool_contents(&h.provider.requests()[3]);
+        assert_eq!(back, vec!["Error: explore: the helper finished without an answer".to_string()]);
+    }
+
+    fn costing(step: Step, prompt: u32, cached: u32, completion: u32) -> Step {
+        let Step::Reply(mut result) = step else { unreachable!() };
+        result.usage = Some(ChatUsage { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion, cached_tokens: cached });
+        Step::Reply(result)
+    }
+
+    /// The run is in the Agents tab from start to answer, with what it cost;
+    /// the cost is on the card, and never on the chat's own context meter.
+    #[test]
+    fn a_helper_run_is_recorded_with_its_steps_answer_and_tokens() {
+        use crate::domain::agents::{AgentState, AgentTokens, Agents};
+        let mut h = harness(
+            "explore-record",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                costing(asks(vec![wants("g1", "grep", r#"{"pattern":"X"}"#)]), 1000, 600, 40),
+                costing(text("X is in a.rs:1"), 1500, 1000, 20),
+                text("done"),
+            ],
+        );
+        let agents = Arc::new(Agents::default());
+        h.agents = Some(Arc::clone(&agents));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        let run = &agents.list()[0];
+        assert_eq!((run.task.as_str(), &run.state, run.answer.as_deref()), ("where is X", &AgentState::Done, Some("X is in a.rs:1")));
+        assert_eq!(run.steps, ["grep X"]);
+        let spent = AgentTokens { prompt: 2500, cached: 1600, completion: 60 };
+        assert_eq!(run.tokens, spent);
+        let card = h.events().into_iter().find_map(|e| match e.event {
+            ChatEventPayload::ToolResult(r) if r.id == "e1" => r.result,
+            _ => None,
+        });
+        assert_eq!(card, Some(ToolResult::Explored { text: "X is in a.rs:1".into(), agent: run.id, tokens: spent }));
+        assert!(!payloads(&h.events()).contains(&"contextUsage".to_string()), "the helper's usage is not the chat's");
+    }
+
+    /// Stop in the Agents tab ends the helper, not the turn: the caller is
+    /// told why, and goes on.
+    #[test]
+    fn a_helper_stopped_from_the_tab_is_an_error_the_turn_carries_on_from() {
+        use crate::domain::agents::{AgentChanged, AgentState, Agents};
+        use std::sync::OnceLock;
+        let mut h = harness(
+            "explore-tab-stop",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("done without it")],
+        );
+        // The user presses Stop as soon as the run shows up in the tab.
+        let registry: Arc<OnceLock<Arc<Agents>>> = Arc::default();
+        let reach = Arc::clone(&registry);
+        let pressed = Arc::new(Mutex::new(false));
+        let agents = Arc::new(Agents::new(Arc::new(move |event: AgentChanged| {
+            let mut pressed = pressed.lock().unwrap();
+            if !*pressed {
+                *pressed = true;
+                drop(pressed);
+                reach.get().unwrap().stop(event.id).unwrap();
+            }
+        })));
+        registry.set(Arc::clone(&agents)).ok();
+        h.agents = Some(Arc::clone(&agents));
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("the turn goes on") };
+        assert_eq!(done.result.text, "done without it");
+        let back = tool_contents(&h.provider.requests()[1]);
+        assert!(back[0].starts_with("Error: explore: the user stopped the helper"), "{back:?}");
+        assert_eq!(agents.list()[0].state, AgentState::Stopped);
+    }
+
+    /// Stop pressed while the helper works stops both, and the call says it
+    /// was stopped — not an empty answer the model would take for "nothing
+    /// there" when the chat is continued.
+    #[test]
+    fn a_stop_during_the_helper_ends_the_turn_and_says_so() {
+        let h = harness("explore-stop-button", vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)])]);
+        // Polls 1–3 are the calling turn's, up to its call; 4 is the helper's first.
+        h.cancel_at_poll(4);
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let ChatStreamOutcome::Cancelled(done) = outcome else { panic!("expected cancelled") };
+        assert_eq!(h.provider.requests().len(), 1, "the helper never asked the model");
+        let answer = done.history.iter().find(|m| m.tool_call_id.as_deref() == Some("e1")).unwrap();
+        assert_eq!(answer.content.as_deref(), Some("Error: explore: stopped before it answered"));
+    }
+
+    #[test]
+    fn a_helper_step_names_what_it_was_pointed_at() {
+        assert_eq!(explore_step("grep", r#"{"pattern":"fn main","path":"src"}"#), "grep src");
+        assert_eq!(explore_step("semanticSearch", r#"{"query":"where tokens refresh"}"#), "semanticSearch where tokens refresh");
+        assert_eq!(explore_step("gitStatus", "{}"), "gitStatus");
+        assert_eq!(explore_step("readFile", "{broken"), "readFile");
     }
 }

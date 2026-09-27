@@ -25,6 +25,7 @@ pub mod create_directory;
 pub mod delete_directory;
 pub mod delete_file;
 pub mod edit_file;
+pub mod explore;
 pub mod git;
 pub mod grep;
 pub mod list_files;
@@ -66,6 +67,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Move, move_path::definition),
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
+    (ToolName::Explore, explore::definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RunCommand, run_command::definition),
     (ToolName::Skill, skill::definition),
@@ -114,6 +116,7 @@ pub fn execute_tool(
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
+        ToolCall::Explore(args) => explore::explore(args, deps),
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
@@ -308,6 +311,10 @@ mod definition_tests {
                     category: Some(crate::domain::review::Category::Bug),
                     suggestion: Some("y".to_string()),
                 })],
+            ),
+            ToolName::Explore => (
+                r#"{"task":"where is X"}"#,
+                vec![ToolCall::Explore(crate::domain::tools::ExploreArgs { task: "where is X".to_string() })],
             ),
             ToolName::Skill => (
                 r#"{"name":"release"}"#,

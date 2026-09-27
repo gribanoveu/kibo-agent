@@ -289,6 +289,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let approval = ApprovalPolicy { skip_all: true, ..ApprovalPolicy::default() };
     let mcp = McpTools::default();
     let hooks = Hooks::default();
+    let agents = Arc::new(crate::domain::agents::Agents::default());
 
     let turn = Turn {
         events: &events,
@@ -312,6 +313,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         processes: None,
         terminals: None,
         review: None,
+        agents: Some(Arc::clone(&agents)),
     };
     let outcome = llm_chat::stream(&turn, vec![LlmMessage::user(task.prompt.clone())], Vec::new());
     let seconds = started.elapsed().as_secs_f64();
@@ -339,7 +341,12 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
 
     let events = events_seen.lock().unwrap();
     let rounds = events.iter().filter(|e| matches!(e.event, ChatEventPayload::RoundCompleted { .. })).count();
-    let (tokens_in, tokens_cached, tokens_out) = events.iter().fold((0u64, 0u64, 0u64), |(i, c, o), e| match &e.event {
+    // The helpers' too: delegating is not free because the chat's meter
+    // does not show it.
+    let helpers = agents.list().iter().fold((0u64, 0u64, 0u64), |(i, c, o), run| {
+        (i + run.tokens.prompt, c + run.tokens.cached, o + run.tokens.completion)
+    });
+    let (tokens_in, tokens_cached, tokens_out) = events.iter().fold(helpers, |(i, c, o), e| match &e.event {
         ChatEventPayload::ContextUsage(u) => {
             (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens))
         }

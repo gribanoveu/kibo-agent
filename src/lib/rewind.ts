@@ -25,6 +25,8 @@ const ACCOUNTED = new Set([
   "readOutput",
   "stopProcess",
   "readTerminal",
+  // Reads only, in a turn of its own.
+  "explore",
 ]);
 
 /**

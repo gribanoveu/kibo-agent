@@ -63,6 +63,23 @@ describe("what each call shows", () => {
     expect(killed.meta).toBe("killed by a signal");
   });
 
+  test("a helper's research shows its question, its steps while it runs, then its answer", () => {
+    const args = '{"task":"Where is the token refreshed?\\nReport paths and lines."}';
+    const running = describeTool(tool({ name: "explore", arguments: args, status: "running", output: "grep refresh\nreadFile src/auth.rs\n" }));
+    expect(running).toMatchObject({ name: "Explore", arg: "Where is the token refreshed?", meta: "2 steps", detail: "grep refresh\nreadFile src/auth.rs\n" });
+    const done = describeTool(
+      tool({
+        name: "explore",
+        arguments: args,
+        output: "grep refresh\n",
+        result: { text: "src/auth.rs:42", agent: 3, tokens: { prompt: 12000, cached: 9000, completion: 400 } },
+      }),
+    );
+    expect(done).toMatchObject({ meta: "1 step · 12k tokens · 75% cached · agent #3", detail: "src/auth.rs:42" });
+    const failed = describeTool(tool({ name: "explore", arguments: args, error: "explore: stopped before it answered" }));
+    expect(failed).toMatchObject({ arg: "Where is the token refreshed?", meta: "failed" });
+  });
+
   test("the user's terminal: which one and what it showed; a typed line and where it went", () => {
     const read = describeTool(
       tool({

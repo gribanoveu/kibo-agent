@@ -1,5 +1,5 @@
 import type { Block } from "./chatTurnReducer";
-import { processStatus, type ProcessState } from "./chat";
+import { processStatus, tokensSpent, type AgentTokens, type ProcessState } from "./chat";
 
 // One tool call, as a row in the transcript: what it did, to what, and the
 // body you get when you expand it.
@@ -51,6 +51,7 @@ export const LABELS: Record<string, string> = {
   readTerminal: "Screen",
   runInTerminal: "Terminal",
   reportFinding: "Finding",
+  explore: "Explore",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -376,6 +377,23 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // A helper's research: the brief, what it looked at while it ran, and
+    // then its answer.
+    case "explore": {
+      const steps = block.output.split("\n").filter(Boolean).length;
+      const spent = result.tokens ? tokensSpent(result.tokens as AgentTokens) : "";
+      const agent = num(result.agent);
+      return {
+        name,
+        arg: primaryArgument(block.name, args),
+        meta:
+          [steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : "", spent, agent === undefined ? "" : `agent #${agent}`]
+            .filter(Boolean)
+            .join(" · ") || undefined,
+        detail: str(result.text) ?? block.output,
+      };
+    }
+
     // A review's finding: the one refused is what shows here, a kept one
     // stands on its own card (`lib/finding.ts`).
     case "reportFinding":
@@ -465,6 +483,8 @@ function primaryArgument(wireName: string, args: Json): string {
     str(args.command) ??
     str(args.pattern) ??
     str(args.query) ??
+    // `explore`'s brief: its first line is the question.
+    str(args.task)?.split("\n")[0] ??
     (wireName === "gitStatus" ? "" : "")
   );
 }
@@ -497,6 +517,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Blame: "Reading the blame of",
   Output: "Reading the output of",
   Stop: "Stopping",
+  Explore: "Exploring",
 };
 
 export function describeActive(block: Extract<Block, { kind: "tool" }>): string {
@@ -521,6 +542,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Todo: () => "updated the checklist",
   Plan: () => "wrote the plan",
   Finding: (n) => `reported ${n === 1 ? "a finding" : `${n} findings`}`,
+  Explore: (n) => `explored ${n === 1 ? "a question" : `${n} questions`}`,
 };
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {

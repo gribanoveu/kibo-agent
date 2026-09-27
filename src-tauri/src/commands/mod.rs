@@ -16,6 +16,7 @@ pub mod tool_log;
 pub mod mcp;
 pub mod hooks;
 pub mod processes;
+pub mod agents;
 pub mod terminal;
 pub mod git;
 pub mod files;

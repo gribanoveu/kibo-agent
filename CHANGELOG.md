@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-27 See every helper agent in Terminal → Agents: its question, steps, tokens spent and answer, with Stop for one still running — the agent carries on without it; the explore card shows the tokens too
+- 2026-09-27 The agent can hand a research question to a read-only helper (`explore`): the helper searches and reads in a context of its own, its steps show on the call's card, and only its answer comes back into the chat
 - 2026-09-27 A new chat shows up in the sidebar as soon as its first message or /review is sent, not when the agent finishes
 - 2026-09-27 Pick the language the agent answers in — Auto, English or Russian — in Settings → Language; it covers chat answers, plans and /review
 - 2026-09-27 A chat with a turn under way is no longer left behind unsaved by New chat or another chat: it says to stop the turn first

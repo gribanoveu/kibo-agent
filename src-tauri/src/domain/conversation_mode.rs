@@ -37,6 +37,9 @@ pub enum ConversationMode {
     /// `/review`: the uncommitted change read, checked and reported on.
     /// Not a mode the user picks: the command starts its turn in it.
     Review,
+    /// The helper turn `explore` runs: reading only, and no `explore` of its
+    /// own, so a helper never sends another. Not a mode the user picks.
+    Explore,
 }
 
 impl ConversationMode {
@@ -45,6 +48,7 @@ impl ConversationMode {
         ConversationMode::Plan,
         ConversationMode::Ask,
         ConversationMode::Review,
+        ConversationMode::Explore,
     ];
 }
 
@@ -104,21 +108,26 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::WritePlan,
                 // Agent only: nothing says a foreign tool changes nothing.
                 ToolName::Mcp,
+                ToolName::Explore,
             ]);
         }
         // `writePlan` is chat state, not the working tree: writing the plan
         // is the one thing Plan mode is for. Agent has it too, so a plan
         // that meets reality can be corrected where the user reads it.
         ConversationMode::Plan => {
-            tools.extend([ToolName::Todo, ToolName::WritePlan]);
+            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore]);
         }
-        ConversationMode::Ask => {}
+        // Research handed off reads the same files, only somewhere else.
+        ConversationMode::Ask => {
+            tools.insert(ToolName::Explore);
+        }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
         // fixes as it goes is no longer a review of the change.
         ConversationMode::Review => {
             tools.extend([ToolName::RunCommand, ToolName::StopProcess, ToolName::ReportFinding]);
         }
+        ConversationMode::Explore => {}
     }
     tools
 }
@@ -139,7 +148,7 @@ mod tests {
     /// this test.
     #[test]
     fn nothing_that_changes_the_tree_is_offered_outside_agent_mode() {
-        for mode in [ConversationMode::Plan, ConversationMode::Ask] {
+        for mode in [ConversationMode::Plan, ConversationMode::Ask, ConversationMode::Explore] {
             for &tool in ToolName::ALL {
                 if tool.is_mutating() {
                     assert!(
@@ -153,9 +162,23 @@ mod tests {
     }
 
     /// The modes the user picks. A review worker's set is its own, pinned by
-    /// `a_review_reads_and_reports_and_changes_nothing`.
+    /// `a_review_reads_and_reports_and_changes_nothing`, and so is a helper's.
     fn picked() -> impl Iterator<Item = &'static ConversationMode> {
-        ConversationMode::ALL.iter().filter(|mode| **mode != ConversationMode::Review)
+        ConversationMode::ALL
+            .iter()
+            .filter(|mode| !matches!(mode, ConversationMode::Review | ConversationMode::Explore))
+    }
+
+    /// A helper reads what every mode reads, and nothing more: no checklist,
+    /// and no `explore` — one helper sending another has no floor.
+    #[test]
+    fn a_helper_reads_and_cannot_hand_off_again() {
+        assert_eq!(tools(ConversationMode::Explore), base_tools());
+        assert!(!offers(ConversationMode::Explore, ToolName::Explore));
+        for mode in picked() {
+            assert!(offers(*mode, ToolName::Explore), "{mode:?}");
+        }
+        assert!(!offers(ConversationMode::Review, ToolName::Explore));
     }
 
     /// Looking at the user's terminal is reading; typing into it is not.

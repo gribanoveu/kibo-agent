@@ -296,6 +296,12 @@ mod tests {
                 None,
                 ToolResult::FindingNoted { path: path(), start_line: 3, end_line: 4 },
             ),
+            // The task is the model's own brief and stays, as a command line
+            // does; the answer quotes code, and goes as `text`.
+            ToolName::Explore => (
+                Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
+                ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
+            ),
             ToolName::Skill => (
                 Some(ToolCall::Skill(SkillArgs { name: "release".into(), path: None })),
                 ToolResult::Skill { name: "release".into(), instructions: LEAK.into(), files: vec![], from: String::new() },

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
+import { AgentList } from "./AgentList";
 import { ProcessList } from "./ProcessList";
+import { useAgents } from "../hooks/useAgents";
 import { useProcesses } from "../hooks/useProcesses";
 import { useTerminals } from "../hooks/useTerminals";
 import { useTerminalScreen } from "../hooks/useTerminalScreen";
@@ -21,8 +23,8 @@ type Props = {
   onAddToChat: (text: string) => void;
 };
 
-/** What the pane shows: one of the user's shells, or the agent's background processes. */
-type Shown = number | "processes";
+/** What the pane shows: one of the user's shells, the agent's background processes, or its helpers. */
+type Shown = number | "processes" | "agents";
 
 /** One shell's screen, and "Add to chat" over it while something is selected. */
 function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAddToChat: (text: string) => void }) {
@@ -51,11 +53,12 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
 
 /**
  * The Terminal tab: the user's own shells, a tab each, and the agent's
- * background processes as the last tab. Opening the pane gives a shell, as a
+ * background processes and helper agents as the last two tabs. Opening the pane gives a shell, as a
  * terminal window does — once per folder, not again after the last is closed.
  */
 export function TerminalPanel({ active, workspace, processFocus, terminalPaste, onTerminalPasted, onAddToChat }: Props) {
   const { processes, error: processError, stop } = useProcesses(active);
+  const { agents, error: agentError, stop: stopAgent } = useAgents(active);
   const shells = useTerminals(active);
   const [picked, setPicked] = useState<Shown | null>(null);
   const openedFor = useRef<string | null>(null);
@@ -92,9 +95,11 @@ export function TerminalPanel({ active, workspace, processFocus, terminalPaste, 
 
   // A picked shell that was closed falls back to the newest one left.
   const newest = shells.terminals[shells.terminals.length - 1];
-  const drawn = picked === "processes" ? undefined : (shells.terminals.find((t) => t.id === picked) ?? newest);
-  const shown: Shown = drawn?.id ?? "processes";
+  const listed = picked === "processes" || picked === "agents" ? picked : null;
+  const drawn = listed ? undefined : (shells.terminals.find((t) => t.id === picked) ?? newest);
+  const shown: Shown = drawn?.id ?? listed ?? "processes";
   const running = processes.filter((p) => p.state.state === "running").length;
+  const helping = agents.filter((a) => a.state.state === "running").length;
   const newShell = () => void shells.open().then((t) => t && setPicked(t.id));
 
   return (
@@ -141,10 +146,23 @@ export function TerminalPanel({ active, workspace, processFocus, terminalPaste, 
         >
           Processes{running > 0 && <span className="terminal-running">{running}</span>}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={shown === "agents"}
+          className={`terminal-tab-name terminal-processes-tab${shown === "agents" ? " selected" : ""}`}
+          onClick={() => setPicked("agents")}
+        >
+          Agents{helping > 0 && <span className="terminal-running">{helping}</span>}
+        </button>
       </div>
       {shells.error && <div className="terminal-error">{shells.error}</div>}
       {drawn ? (
         <TerminalView key={drawn.id} terminal={drawn} onAddToChat={onAddToChat} />
+      ) : shown === "agents" ? (
+        <div className="terminal-processes">
+          <AgentList agents={agents} error={agentError} onStop={stopAgent} />
+        </div>
       ) : (
         <div className="terminal-processes">
           <ProcessList processes={processes} error={processError} onStop={stop} focus={processFocus} />

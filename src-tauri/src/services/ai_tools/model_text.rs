@@ -110,6 +110,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::PlanWritten { lines } => format!("Plan saved ({lines} lines). The user sees it in the Plan tab."),
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
+        ToolResult::Explored { text, .. } => text.clone(),
     }
 }
 

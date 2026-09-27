@@ -25,6 +25,7 @@ mock.module("@tauri-apps/api/core", () => ({
     calls.push({ command, args });
     if (command === "terminal_list") return Promise.resolve(structuredClone(listed));
     if (command === "processes_list") return Promise.resolve([]);
+    if (command === "agents_list") return Promise.resolve([]);
     if (command === "terminal_open") {
       const opened: TerminalInfo = { id: nextId++, shell: "zsh", state: { state: "running" } };
       listed.push(opened);
@@ -168,6 +169,17 @@ describe("TerminalPanel", () => {
     await settle();
     expect(asked("terminal_open")).toHaveLength(1);
     expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("the helper agents have a tab of their own beside the processes", async () => {
+    render(panel());
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(/No helper agents yet/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Processes" }));
+    expect(screen.getByText(/No background processes/)).toBeTruthy();
   });
 
   test("with no folder open there is nothing to open one in", async () => {

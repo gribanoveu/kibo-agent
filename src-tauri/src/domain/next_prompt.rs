@@ -263,7 +263,9 @@ impl FinishedTurn {
         let mode = match self.mode {
             ConversationMode::Agent => "agent",
             ConversationMode::Plan => "plan",
-            ConversationMode::Ask => "ask",
+            // A helper's turn is never one the user finishes; if one got here,
+            // reading-only is what it was.
+            ConversationMode::Ask | ConversationMode::Explore => "ask",
             ConversationMode::Review => "review",
         };
         let outcome = if self.cancelled { "cancelled" } else { "done" };

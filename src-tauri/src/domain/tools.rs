@@ -52,6 +52,9 @@ pub enum ToolName {
     RunInTerminal,
     /// A problem found in a review, placed on the change — review workers only.
     ReportFinding,
+    /// A research task handed to a read-only helper turn with a context of
+    /// its own; only its answer comes back.
+    Explore,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -90,6 +93,7 @@ impl ToolName {
         ToolName::ReadTerminal,
         ToolName::RunInTerminal,
         ToolName::ReportFinding,
+        ToolName::Explore,
         ToolName::Mcp,
     ];
 
@@ -120,6 +124,7 @@ impl ToolName {
             ToolName::ReadTerminal => "readTerminal",
             ToolName::RunInTerminal => "runInTerminal",
             ToolName::ReportFinding => "reportFinding",
+            ToolName::Explore => "explore",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -212,6 +217,9 @@ impl ToolName {
             // a download. Weighted so a turn cannot spend itself entirely on
             // re-running things.
             ToolName::RunCommand => 5,
+            // A whole turn of its own. That turn has its own ceiling, so this
+            // only keeps a turn from delegating without end.
+            ToolName::Explore => 5,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -365,7 +373,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            24,
+            25,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -753,6 +761,9 @@ pub struct ToolDeps<'a> {
     /// A review worker's files and findings, for `reportFinding`; `None`
     /// outside a review.
     pub review: Option<std::sync::Arc<crate::domain::review::ReviewDesk>>,
+    /// Runs `explore`'s task as a helper turn; `None` where there is no model
+    /// to run it with.
+    pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
 }
 
 /// Why a tool call could not be carried out.
@@ -905,6 +916,9 @@ pub enum ToolError {
     /// A skill that could not be loaded — unknown, or its `SKILL.md` broken.
     #[error("{0}")]
     Skill(String),
+    /// The helper turn ended without an answer.
+    #[error("explore: {0}")]
+    Explore(String),
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -951,6 +965,7 @@ pub enum ToolCall {
     ReadTerminal(ReadTerminalArgs),
     RunInTerminal(RunInTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
+    Explore(ExploreArgs),
     Mcp(McpCallArgs),
 }
 
@@ -980,6 +995,7 @@ impl ToolCall {
             ToolCall::ReadTerminal(_) => ToolName::ReadTerminal,
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
+            ToolCall::Explore(_) => ToolName::Explore,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1209,6 +1225,13 @@ pub enum ToolResult {
     PlanWritten { lines: u32 },
     /// An MCP tool's answer, already text.
     Mcp { text: String },
+    /// The helper turn's closing answer, which run it was — its number in
+    /// the Agents tab — and what it cost.
+    Explored {
+        text: String,
+        agent: u32,
+        tokens: crate::domain::agents::AgentTokens,
+    },
 }
 
 /// A call to an MCP tool: the full name the model used, and whatever it
@@ -1250,6 +1273,14 @@ pub struct RunInTerminalArgs {
     pub command: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub id: Option<u32>,
+}
+
+/// `explore`: what to find out. The helper sees nothing else of the
+/// conversation, so this is the whole brief.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExploreArgs {
+    pub task: String,
 }
 
 /// `writePlan` arguments: the whole plan.

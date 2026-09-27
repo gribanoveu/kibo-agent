@@ -697,6 +697,7 @@ where
     let processes = app
         .try_state::<Arc<Processes>>()
         .map(|processes| Arc::clone(&processes) as Arc<dyn crate::domain::background::BackgroundProcesses>);
+    let agents = app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents));
     let terminals = app
         .try_state::<Arc<crate::infra::terminal::Terminals>>()
         .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>);
@@ -758,6 +759,7 @@ where
             processes,
             terminals,
             review,
+            agents,
         };
         let outcome = run(&turn).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);
