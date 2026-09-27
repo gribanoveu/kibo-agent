@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-27 With a reply language chosen in Settings, a long /review no longer drifts into another language: the app's own notes to the agent repeat it
 - 2026-09-27 See every helper agent in Terminal → Agents: its question, steps, tokens spent and answer, with Stop for one still running — the agent carries on without it; the explore card shows the tokens too
 - 2026-09-27 The agent can hand a research question to a read-only helper (`explore`): the helper searches and reads in a context of its own, its steps show on the call's card, and only its answer comes back into the chat
 - 2026-09-27 A new chat shows up in the sidebar as soon as its first message or /review is sent, not when the agent finishes

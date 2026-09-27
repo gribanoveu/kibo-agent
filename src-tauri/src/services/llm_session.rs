@@ -62,6 +62,12 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
     })
 }
 
+/// The language the user chose for replies, for a message built before the
+/// turn has a session — `/review`'s. Settings that cannot be read say none.
+pub fn reply_language() -> Option<&'static str> {
+    settings_store::load().ok()?.llm.reply_language.name()
+}
+
 /// The model to send: the pin when there is one, otherwise whatever the
 /// provider lists first — which is then written back as the pin.
 ///

@@ -481,7 +481,7 @@ fn run(
             // land in the transcript in the order the history has them. A
             // round that ran nothing hands in nothing, which ends the streaks.
             if let Some(found) = guard.observe(&std::mem::take(&mut settled)) {
-                state.history.push(LlmMessage::user(found.note()));
+                state.history.push(note(turn, found.note()));
                 events.emit(
                     round,
                     Some(format!("loop:{round}")),
@@ -492,8 +492,8 @@ fn run(
                 );
             }
             if turn.mode == ConversationMode::Review {
-                if let Some(note) = crate::domain::review::wrap_up(round - 1, spent, &state.history) {
-                    state.history.push(LlmMessage::user(note));
+                if let Some(said) = crate::domain::review::wrap_up(round - 1, spent, &state.history) {
+                    state.history.push(note(turn, said));
                     events.emit(
                         round,
                         Some(format!("wrap-up:{round}")),
@@ -567,8 +567,8 @@ fn run(
                 if result.text.trim().is_empty() && (!waiting.is_empty() || empty_nudges < MAX_EMPTY_NUDGES) {
                     if waiting.is_empty() {
                         empty_nudges += 1;
-                        let note = if result.truncated { EMPTY_TRUNCATED_NOTE } else { EMPTY_REPLY_NOTE };
-                        state.history.push(LlmMessage::user(note));
+                        let said = if result.truncated { EMPTY_TRUNCATED_NOTE } else { EMPTY_REPLY_NOTE };
+                        state.history.push(note(turn, said.to_string()));
                     }
                     apply_steering(&events, round, &mut state.history, waiting);
                     continue;
@@ -604,7 +604,7 @@ fn run(
                 });
                 if let Some(reason) = refused {
                     stop_blocks += 1;
-                    state.history.push(LlmMessage::user(format!(
+                    state.history.push(note(turn, format!(
                         "[A Stop hook did not let the turn end yet. It said:]\n{reason}"
                     )));
                 }
@@ -1315,6 +1315,13 @@ fn tool_message(call_id: &str, content: String) -> LlmMessage {
     }
 }
 
+/// A note of the loop's own, into the history as the user's turn — with the
+/// reply language said again, see `prompt::with_language_reminder`. Not for
+/// what the user typed: that is theirs, in their words.
+fn note(turn: &Turn, text: String) -> LlmMessage {
+    LlmMessage::user(prompt::with_language_reminder(text, turn.session.reply_language))
+}
+
 /// Tells the model which background processes ended since it last looked —
 /// a dev server that died is otherwise invisible until something fails
 /// against its port. Into the history rather than a tail note: a retried
@@ -1322,8 +1329,8 @@ fn tool_message(call_id: &str, content: String) -> LlmMessage {
 fn report_ended_processes(turn: &Turn, events: &Events, round: u32, history: &mut Vec<LlmMessage>) {
     let Some(processes) = &turn.processes else { return };
     let ended = processes.take_ended();
-    let Some(note) = background::ended_note(&ended) else { return };
-    history.push(LlmMessage::user(note));
+    let Some(said) = background::ended_note(&ended) else { return };
+    history.push(note(turn, said));
     events.emit(round, None, ChatEventPayload::ProcessesEnded { processes: ended });
 }
 
@@ -4180,6 +4187,64 @@ mod tests {
             .iter()
             .any(|m| m.content.as_deref().is_some_and(|c| c.contains("Write everything you say in Russian")));
         assert!(told, "the language block is in the request");
+    }
+
+    /// Every note the loop adds ends by saying the language again: the
+    /// model reads it just before it replies, where the system prompt at the
+    /// top of a long English history no longer held (`/review`, Chinese).
+    #[test]
+    fn each_note_of_the_loop_repeats_the_reply_language() {
+        const SAID: &str = "\n\n[Reply in Russian.]";
+        let russian = |mut h: Harness| {
+            h.session.reply_language = Some("Russian");
+            h
+        };
+        let notes_in = |h: &Harness, starts: &str| -> Vec<String> {
+            h.provider.requests().last().unwrap().messages.iter()
+                .filter(|m| m.role == LlmRole::User)
+                .filter_map(|m| m.content.clone())
+                .filter(|c| c.starts_with(starts))
+                .collect()
+        };
+
+        let empty = russian(harness("lang-empty", vec![text(""), text("ok")]));
+        empty.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(notes_in(&empty, "[Your last reply was empty"), [format!("{EMPTY_REPLY_NOTE}{SAID}")]);
+
+        let circling = (1..=5).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", "{}")])).chain([text("done")]).collect();
+        let circling = russian(harness("lang-loop", circling));
+        circling.run(|turn| stream(turn, vec![LlmMessage::user("look")], vec![])).expect("turn");
+        let loop_notes = notes_in(&circling, "");
+        assert!(loop_notes.iter().any(|c| c.ends_with(SAID) && c.contains("listFiles")), "{loop_notes:?}");
+
+        let mut ended = russian(harness("lang-ended", vec![text("I see")]));
+        ended.processes = Some(Arc::new(EndedOnce(Mutex::new(vec![crate::domain::background::ProcessInfo {
+            id: 2,
+            command: "npm run dev".into(),
+            cwd: ".".into(),
+            state: crate::domain::background::ProcessState::Exited { code: Some(1) },
+        }]))));
+        ended.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert!(notes_in(&ended, "[Background processes")[0].ends_with(SAID));
+
+        let reviewing = (0..11).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))])).chain([text("done")]).collect();
+        let mut review = russian(harness("lang-wrap-up", reviewing));
+        review.mode = ConversationMode::Review;
+        review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
+        assert!(notes_in(&review, "[Review budget]")[0].ends_with(SAID));
+
+        let (stopping, _) = hooked(
+            russian(harness("lang-stop-hook", vec![text("done"), text("tests pass, done")])),
+            hook("Stop", "", "check"),
+            |_, input| if input["stop_hook_active"] == true { (0, "") } else { (2, "run the tests first") },
+        );
+        stopping.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert!(notes_in(&stopping, "[A Stop hook")[0].ends_with(SAID));
+
+        // Auto says nothing more than the note itself.
+        let auto = harness("lang-auto", vec![text(""), text("ok")]);
+        auto.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(notes_in(&auto, "[Your last reply was empty"), [EMPTY_REPLY_NOTE.to_string()]);
     }
 
     /// A review that goes on is asked once to wrap up — at its tenth round

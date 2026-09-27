@@ -343,6 +343,21 @@ fn language_block(language: &str) -> String {
     )
 }
 
+/// A note the app adds to the conversation, with the reply language said
+/// again at its end when the user chose one.
+///
+/// The system prompt says it once, at the top. That holds while the user's
+/// own messages are in the conversation; it did not in a `/review`, where
+/// everything the model read was English — the diffs, the tool results, the
+/// app's notes — and deepseek-flash, 34 messages in, answered in Chinese.
+/// Said in the note just before the reply, it is where the model looks.
+pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
+    match language {
+        Some(language) => format!("{text}\n\n[Reply in {language}.]"),
+        None => text,
+    }
+}
+
 /// What goes in front of the conversation on every request.
 ///
 /// Built here and prepended at request time rather than stored in the history:
@@ -694,6 +709,12 @@ mod tests {
     }
 
     /// The language setting is said once, after the rules, and Auto says nothing.
+    #[test]
+    fn a_note_repeats_the_chosen_language_at_its_end_and_auto_adds_nothing() {
+        assert_eq!(with_language_reminder("Wrap up now.".into(), Some("Russian")), "Wrap up now.\n\n[Reply in Russian.]");
+        assert_eq!(with_language_reminder("Wrap up now.".into(), None), "Wrap up now.");
+    }
+
     #[test]
     fn the_reply_language_comes_after_the_rules_and_auto_adds_nothing() {
         let workspace = PathBuf::from("/tmp/p");

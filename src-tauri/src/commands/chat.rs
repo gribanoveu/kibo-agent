@@ -667,7 +667,10 @@ pub async fn review_start<R: Runtime>(
         });
     }
     let mut messages = messages;
-    messages.push(LlmMessage::user(crate::domain::review::review_message(&kept, &excluded)));
+    messages.push(LlmMessage::user(crate::domain::prompt::with_language_reminder(
+        crate::domain::review::review_message(&kept, &excluded),
+        llm_session::reply_language(),
+    )));
     state.cancel.store(false, Ordering::SeqCst);
     state.begin_turn(Some(Arc::new(ReviewDesk::new(kept))));
     run_off_the_event_loop(app, state, turn_id, plan, move |turn| llm_chat::stream(turn, messages, todos)).await
