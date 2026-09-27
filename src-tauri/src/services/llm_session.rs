@@ -10,7 +10,7 @@ use std::sync::Arc;
 use secrecy::SecretString;
 
 use crate::domain::llm::{LlmError, LlmProvider};
-use crate::domain::settings::{ProviderConfig, SettingsError, DEFAULT_CONTEXT_LIMIT};
+use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, DEFAULT_CONTEXT_LIMIT};
 use crate::infra::{llm_credentials_store, llm_providers, settings_store};
 
 pub struct LlmSession {
@@ -26,6 +26,9 @@ pub struct LlmSession {
     /// The model's context window, when it is known. See
     /// `domain::compaction`.
     pub context_limit: Option<u32>,
+    /// What the model is told to write in; `None` tells it nothing. See
+    /// `domain::settings::ReplyLanguage`.
+    pub reply_language: Option<&'static str>,
 }
 
 /// The session for `provider_id`, or for the active provider when `None`.
@@ -55,6 +58,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
         model,
         debug_logging: settings.debug_logging,
         context_limit: Some(config.context_limit.unwrap_or(DEFAULT_CONTEXT_LIMIT)),
+        reply_language: settings.reply_language.name(),
     })
 }
 
@@ -147,6 +151,12 @@ pub fn set_debug_logging(enabled: bool) -> Result<(), SettingsError> {
     settings_store::save(&settings)
 }
 
+pub fn set_reply_language(language: ReplyLanguage) -> Result<(), SettingsError> {
+    let mut settings = settings_store::load()?;
+    settings.llm.reply_language = language;
+    settings_store::save(&settings)
+}
+
 /// Stores `model` as `provider_id`'s pin, leaving its other fields alone.
 pub fn pin_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
     let mut settings = settings_store::load()?;
@@ -206,7 +216,7 @@ mod tests {
             llm: LlmSettings {
                 active_provider_id: active.map(|s| s.to_string()),
                 providers,
-                debug_logging: false,
+                ..Default::default()
             },
             ..Default::default()
         })
@@ -273,6 +283,20 @@ mod tests {
             llm_credentials_store::save_api_key("local", "sk").unwrap();
 
             assert!(resolve(None).unwrap().debug_logging);
+        });
+    }
+
+    #[test]
+    fn the_reply_language_comes_from_settings_and_auto_says_nothing() {
+        with_app_dir("session-language", || {
+            configure(vec![provider("local", Some("qwen"))], None);
+            llm_credentials_store::save_api_key("local", "sk").unwrap();
+            assert_eq!(resolve(None).unwrap().reply_language, None, "Auto by default");
+
+            let mut settings = settings_store::load().unwrap();
+            settings.llm.reply_language = ReplyLanguage::Russian;
+            settings_store::save(&settings).unwrap();
+            assert_eq!(resolve(None).unwrap().reply_language, Some("Russian"));
         });
     }
 

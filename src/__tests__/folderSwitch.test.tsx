@@ -86,7 +86,7 @@ describe("switching folders", () => {
     });
     expect([went, cancelled]).toEqual([1, 1]);
 
-    const busy = renderHook(() => useFolderSwitch(true));
+    const busy = renderHook(() => useFolderSwitch("running"));
     await act(() => busy.result.current.guard(() => went++, () => cancelled++));
     expect([went, cancelled]).toEqual([1, 2]);
   });
@@ -94,10 +94,19 @@ describe("switching folders", () => {
   /// The turn's chat is saved into whatever folder is open when it ends.
   test("while the agent works it is refused, whatever runs", async () => {
     let went = 0;
-    const { result } = renderHook(() => useFolderSwitch(true));
+    const { result } = renderHook(() => useFolderSwitch("running"));
     await act(() => result.current.guard(() => went++));
     expect(went).toBe(0);
-    expect(result.current.blocked).toEqual({ kind: "agent" });
+    expect(result.current.blocked).toEqual({ kind: "agent", waiting: false });
+  });
+
+  /// A turn paused on an approval card is a turn too: leaving would drop the card.
+  test("a turn waiting on a card is refused as well, and said to be waiting", async () => {
+    let went = 0;
+    const { result } = renderHook(() => useFolderSwitch("waiting"));
+    await act(() => result.current.guard(() => went++));
+    expect(went).toBe(0);
+    expect(result.current.blocked).toEqual({ kind: "agent", waiting: true });
   });
 });
 
@@ -127,11 +136,18 @@ describe("the dialog", () => {
   test("offers to stop the agent, not to switch", () => {
     let stopped = 0;
     render(
-      <FolderSwitchDialog blocked={{ kind: "agent" }} folder="/work/kibo" onStopAgent={() => stopped++} onClose={() => {}} />,
+      <FolderSwitchDialog blocked={{ kind: "agent", waiting: false }} folder="/work/kibo" onStopAgent={() => stopped++} onClose={() => {}} />,
     );
     expect(screen.getByRole("dialog").textContent).toContain("kibo");
     fireEvent.click(screen.getByText("Stop the agent"));
     expect(stopped).toBe(1);
+  });
+
+  /// Stop does not end a paused turn — an answer does — so it is not offered.
+  test("a turn waiting on a card is told to be answered, with no Stop", () => {
+    render(<FolderSwitchDialog blocked={{ kind: "agent", waiting: true }} folder="/work/kibo" onStopAgent={() => {}} onClose={() => {}} />);
+    expect(screen.getByRole("dialog").textContent).toContain("Answer the card");
+    expect(screen.queryByText("Stop the agent")).toBeNull();
   });
 
   test("nothing blocked, nothing shown", () => {

@@ -226,6 +226,8 @@ pub struct Turn<'a> {
     pub processes: Option<Arc<dyn BackgroundProcesses>>,
     /// The user's own terminals; `None` has none.
     pub terminals: Option<Arc<dyn crate::domain::terminal::UserTerminals>>,
+    /// A review worker's files and findings; `None` outside a review.
+    pub review: Option<Arc<crate::domain::review::ReviewDesk>>,
 }
 
 
@@ -449,7 +451,13 @@ fn run(
         if (turn.cancelled)() {
             return Ok(ChatStreamOutcome::Cancelled(ended(state, ChatStreamResult::default())));
         }
-        if state.round >= MAX_TOOL_ITERATIONS as u32 || state.budget_used >= MAX_TOOL_BUDGET {
+        // A review worker reads one group and reports; past its own ceiling
+        // more reading costs more than it finds.
+        let max_rounds = match turn.mode {
+            ConversationMode::Review => crate::domain::review::MAX_ROUNDS,
+            _ => MAX_TOOL_ITERATIONS as u32,
+        };
+        if state.round >= max_rounds || state.budget_used >= MAX_TOOL_BUDGET {
             return Err(TurnError::Exhausted {
                 rounds: state.round,
             });
@@ -713,6 +721,7 @@ fn run(
                             cancelled: Some(turn.cancelled),
                             processes: turn.processes.clone(),
                             terminals: turn.terminals.clone(),
+                            review: turn.review.clone(),
                         };
                         // Around the call, not inside the tool: one place sees
                         // every write, and no tool has to remember to report.
@@ -940,6 +949,14 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools) -> Ve
         .collect()
 }
 
+/// What a request of `turn` with `history` weighs, by the estimate the
+/// compaction pass uses — for a caller that shows a cost before the provider
+/// reports one.
+pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
+    compaction::estimate_tokens(&request_messages(turn, history))
+        + compaction::estimate_tool_schema_tokens(&tool_definitions_for(turn.mode, turn.mcp))
+}
+
 /// The request's messages: what the model is told, then the conversation.
 /// Nothing after it — the checklist lives in the history
 /// ([`restore_checklist`]), so each request extends the last.
@@ -959,6 +976,7 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
         rules: turn.rules,
         plan: turn.plan,
         worktree_of: turn.worktree_of,
+        language: turn.session.reply_language,
     };
     let mut messages = prompt::system_messages(&context);
     messages.extend_from_slice(history);
@@ -1444,6 +1462,7 @@ mod tests {
                 model: "m".to_string(),
                 debug_logging: false,
                 context_limit: None,
+                reply_language: None,
             },
             provider,
             scope: ToolScope::new(&root).expect("a scope over the temp root"),
@@ -1522,6 +1541,7 @@ mod tests {
                 hooks: &self.hooks,
                 processes: self.processes.clone(),
                 terminals: self.terminals.clone(),
+                review: None,
             };
             f(&turn)
         }
@@ -1547,6 +1567,7 @@ mod tests {
                 ChatEventPayload::HookFeedback { event, blocked, .. } => format!("hook:{event}:{blocked}"),
                 ChatEventPayload::ProcessesEnded { processes } => format!("ended:{}", processes.len()),
                 ChatEventPayload::LoopReminded { tool, failing } => format!("loop:{tool}:{failing}"),
+                ChatEventPayload::ReviewGroup(group) => format!("review:{}", group.group),
             })
             .collect()
     }
@@ -3095,8 +3116,9 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one; MCP tools come from servers, and none is connected.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 1);
+        // Every built-in one but a review's two; MCP tools come from
+        // servers, and none is connected.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 3);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -4024,5 +4046,19 @@ mod tests {
         };
         assert!(pending.calls[0].requires_confirmation);
         assert!(h.root.join("keep.txt").exists(), "nothing ran");
+    }
+
+    /// The language setting reaches the model with the session: every
+    /// request of the turn is told it.
+    #[test]
+    fn the_session_s_reply_language_is_in_the_request() {
+        let mut h = harness("chat-language", vec![text("готово")]);
+        h.session.reply_language = Some("Russian");
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let told = h.provider.requests()[0]
+            .messages
+            .iter()
+            .any(|m| m.content.as_deref().is_some_and(|c| c.contains("Write everything you say in Russian")));
+        assert!(told, "the language block is in the request");
     }
 }

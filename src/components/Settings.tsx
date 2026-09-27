@@ -1,9 +1,9 @@
 import { useState, type ComponentProps } from "react";
-import { Bell, Bot, Check, Palette, Shield, ShieldCheck, Sparkles } from "lucide-react";
+import { Bell, Bot, Check, Languages, Palette, Shield, ShieldCheck, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
-import type { RememberScope, SkillSourceItem, SkillsView } from "../lib/chat";
+import type { RememberScope, ReplyLanguage, SkillSourceItem, SkillsView } from "../lib/chat";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
@@ -15,6 +15,7 @@ import "./Settings.css";
 
 const SECTIONS = [
   { id: "models", label: "Models", icon: Bot },
+  { id: "language", label: "Language", icon: Languages },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "skills", label: "Skills", icon: Sparkles },
@@ -35,6 +36,16 @@ const REMEMBER: { value: RememberScope; label: string; hint: string }[] = [
     label: "Per repository",
     hint: "One choice for every chat in the open folder, new ones included. Other folders keep their own.",
   },
+];
+
+const LANGUAGES: { value: ReplyLanguage; label: string; hint: string }[] = [
+  {
+    value: "auto",
+    label: "Auto",
+    hint: "The language you write in. /review has nothing you wrote to go by and answers in English.",
+  },
+  { value: "english", label: "English", hint: "Every answer, plan and review in English, whatever you write in." },
+  { value: "russian", label: "Русский", hint: "Every answer, plan and review in Russian, whatever you write in. Code stays as it is." },
 ];
 
 /** What each skills folder is called here, and what reading it means. */
@@ -68,6 +79,9 @@ type Props = {
   onRemember: (remember: RememberScope) => void;
   debugLogging: boolean;
   onDebugLogging: (enabled: boolean) => void;
+  /** What the model writes its replies in. */
+  replyLanguage: ReplyLanguage;
+  onReplyLanguage: (language: ReplyLanguage) => void;
   theme: ThemeChoice;
   onThemeMode: (mode: Mode) => void;
   onThemePalette: (theme: Theme) => void;
@@ -90,6 +104,8 @@ export function Settings({
   onRemember,
   debugLogging,
   onDebugLogging,
+  replyLanguage,
+  onReplyLanguage,
   theme,
   onThemeMode,
   onThemePalette,
@@ -126,6 +142,30 @@ export function Settings({
           <>
             <h3 className="settings-title">Model provider</h3>
             <ProviderSettings {...provider} />
+          </>
+        )}
+
+        {section === "language" && (
+          <>
+            <h3 className="settings-title">Language</h3>
+            <div className="modal-field">
+              <label>Reply language</label>
+              <div className="segmented" role="radiogroup" aria-label="Reply language">
+                {LANGUAGES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={replyLanguage === value}
+                    className={`segment${replyLanguage === value ? " active" : ""}`}
+                    onClick={() => onReplyLanguage(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="modal-note settings-hint">{LANGUAGES.find((l) => l.value === replyLanguage)?.hint}</p>
           </>
         )}
 

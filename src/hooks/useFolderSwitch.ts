@@ -6,7 +6,8 @@ import { terminalList, type TerminalInfo } from "../lib/terminal";
 export type SwitchBlock =
   // The turn saves its chat into the folder open when it ends: switching
   // under it would file the chat in the other one. So this one is refused.
-  | { kind: "agent" }
+  // `waiting`: paused on an approval card, which only an answer ends.
+  | { kind: "agent"; waiting: boolean }
   // `workspace_open` stops every background process and closes every
   // terminal the user has open; asked, not refused.
   | { kind: "processes"; processes: ProcessView[]; terminals: TerminalInfo[]; go: () => void };
@@ -15,7 +16,7 @@ export type SwitchBlock =
  * Switching folders ends what runs in the open one. Before it does, the user
  * is told — and the processes and terminals are read then, once, from the backend.
  */
-export function useFolderSwitch(agentRunning: boolean) {
+export function useFolderSwitch(agent: "running" | "waiting" | null) {
   const [blocked, setBlocked] = useState<SwitchBlock | null>(null);
   // What to do if the dialog closes without the switch: a message on its way
   // to the other folder goes back to the box. Cleared by the switch itself.
@@ -23,9 +24,9 @@ export function useFolderSwitch(agentRunning: boolean) {
 
   const guard = useCallback(
     async (go: () => void, onCancel?: () => void) => {
-      if (agentRunning) {
+      if (agent) {
         onCancel?.();
-        return setBlocked({ kind: "agent" });
+        return setBlocked({ kind: "agent", waiting: agent === "waiting" });
       }
       const [processes, terminals] = await Promise.all([
         processesList().catch(() => []),
@@ -41,7 +42,7 @@ export function useFolderSwitch(agentRunning: boolean) {
       };
       setBlocked({ kind: "processes", processes: running, terminals: shells, go: proceed });
     },
-    [agentRunning],
+    [agent],
   );
 
   const close = useCallback(() => {

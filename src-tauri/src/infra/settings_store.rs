@@ -50,6 +50,7 @@ mod tests {
                     ..Default::default()
                 }],
                 debug_logging: true,
+                reply_language: crate::domain::settings::ReplyLanguage::Russian,
             },
             skills: crate::domain::settings::OptOut { disabled: vec!["release".to_string()] },
             skill_sources: crate::domain::settings::OptOut { disabled: vec!["agents".to_string()] },

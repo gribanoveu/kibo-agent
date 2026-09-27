@@ -101,6 +101,31 @@ pub struct LlmSettings {
     /// the agent read, and that is not something to write to disk unasked.
     /// See `infra::llm_debug_log`.
     pub debug_logging: bool,
+    /// What the model writes its replies in.
+    pub reply_language: ReplyLanguage,
+}
+
+/// The language the model is told to write in — answers, plans, findings,
+/// summaries. `Auto` tells it nothing: it answers in the language it is
+/// written to, and in English where nothing was written, as in `/review`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReplyLanguage {
+    #[default]
+    Auto,
+    English,
+    Russian,
+}
+
+impl ReplyLanguage {
+    /// The language's name as the prompt says it; `None` for `Auto`.
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            ReplyLanguage::Auto => None,
+            ReplyLanguage::English => Some("English"),
+            ReplyLanguage::Russian => Some("Russian"),
+        }
+    }
 }
 
 impl LlmSettings {

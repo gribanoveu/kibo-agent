@@ -36,6 +36,8 @@ use crate::domain::turn::{
 use crate::services::ai_tools::preview;
 use crate::services::llm_chat::{self, SteeringQueue, Turn, TurnError};
 use crate::services::context_compaction;
+use crate::services::review;
+use crate::domain::review::{ReviewDone, ReviewSink};
 use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpTools;
 use crate::domain::hooks::Hooks;
@@ -434,6 +436,8 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             rules: &rules,
             plan,
             worktree_of: worktree_of.as_deref(),
+            // Read like the rest of the frame: as the next turn will read it.
+            language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
         },
         &mcp,
     )
@@ -617,6 +621,43 @@ fn with_git_aliases(mut policy: ApprovalPolicy, workspace: &std::path::Path) -> 
     policy
 }
 
+/// `/review`: the open folder's working tree against `HEAD`, reviewed by
+/// read-only workers — see `services::review`. Progress goes out on the turn
+/// channel under `turn_id`; the Stop button stops it like a turn.
+#[tauri::command]
+pub async fn review_start<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<AgentState>>,
+    turn_id: String,
+) -> Result<ReviewDone, String> {
+    let state = state.inner().clone();
+    state.cancel.store(false, Ordering::SeqCst);
+    let workspace = state.workspace()?;
+    let search = searcher_of(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = crate::infra::git_changes::review_diffs(&workspace).map_err(|e| e.to_string())?;
+        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
+        let rules = crate::services::project_rules::load(&workspace);
+        let cancelled = || state.cancel.load(Ordering::SeqCst);
+        let emit = chat_event_sink(&app, turn_id);
+        // Workers report side by side; one counter keeps the window's order.
+        let seq = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let progress: ReviewSink = Arc::new(move |group| {
+            emit(ChatTurnEvent {
+                seq: seq.fetch_add(1, Ordering::SeqCst) + 1,
+                round: 0,
+                target_id: Some(format!("review:{}", group.group)),
+                event: ChatEventPayload::ReviewGroup(group),
+            })
+        });
+        let reviewer = review::Reviewer { session: &session, scope: &scope, rules: &rules, search, cancelled: &cancelled, progress };
+        Ok(ReviewDone::new(review::review(&reviewer, files)))
+    })
+    .await
+    .map_err(|e| format!("the review thread failed: {e}"))?
+}
+
 /// Assembles a turn and runs it on a blocking thread.
 ///
 /// Off the event loop because the whole turn is synchronous — provider calls,
@@ -701,6 +742,7 @@ where
             hooks: &hooks,
             processes,
             terminals,
+            review: None,
         };
         let outcome = run(&turn).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);

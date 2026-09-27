@@ -768,7 +768,9 @@ describe("the queue", () => {
     expect(result.current.queued.map((q) => q.text)).toEqual(["two"]);
   });
 
-  test("a new chat takes the queue back rather than sending it there", async () => {
+  /// The turn, its answer and its queue belong to the chat on screen: a new
+  /// chat would take them over, so it waits for the turn to stop.
+  test("a new chat is refused while the turn runs, and the queue stays", async () => {
     heldTurn();
     const given: string[] = [];
     const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
@@ -776,9 +778,14 @@ describe("the queue", () => {
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     act(() => result.current.queue("one"));
 
-    act(() => result.current.reset());
-    expect(given).toEqual(["one"]);
-    expect(result.current.queued).toEqual([]);
+    let left: boolean | undefined;
+    act(() => {
+      left = result.current.reset();
+    });
+    expect(left).toBe(false);
+    expect(result.current.turn.status).toBe("running");
+    expect(given).toEqual([]);
+    expect(result.current.queued.map((q) => q.text)).toEqual(["one"]);
   });
 });
 
@@ -806,6 +813,23 @@ describe("the next-prompt journal", () => {
     await waitFor(() => expect(journal()).toHaveLength(3));
     expect(journal()[1]).toEqual({ command: "next_prompt_sent", args: { id: "row-1", text: "да" } });
     expect(journal()[2].args).toEqual({ chatId, turnId: turnIds()[1], user: "да" });
+  });
+
+  /// `/review` is what the user sent next, as much as a message is.
+  test("a review answers the turn journaled before it", async () => {
+    results.chat_start = done("ok");
+    results.next_prompt_log = "row-1";
+    results.review_start = { report: { reviewed: [], excluded: [], findings: [], failed: [], summaries: [] }, forModel: "[Code review]" };
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await waitFor(() => expect(journal()).toHaveLength(1));
+    await act(async () => {
+      await result.current.review();
+    });
+    await waitFor(() => expect(journal()).toHaveLength(2));
+    expect(journal()[1]).toEqual({ command: "next_prompt_sent", args: { id: "row-1", text: "/review" } });
   });
 
   /// What is typed into another chat is not an answer to this one.
@@ -933,5 +957,77 @@ describe("rewinding", () => {
     expect(rewoundNotice([file(null), file("expired"), file("changedSince")])).toBe(
       "Rewound to before this message — 1 file put back, 2 files left as they are",
     );
+  });
+});
+
+describe("reviewing", () => {
+  const done = {
+    report: { reviewed: ["a.rs"], excluded: [], findings: [], failed: [] },
+    forModel: "[Code review of the working tree: 1 files reviewed]\nNo findings.\n",
+  };
+
+  /// The report is the answer to /review in the history, so "fix 2" next
+  /// has something to refer to — and the chat is saved with it.
+  test("the report joins the history as the answer to /review", async () => {
+    results.review_start = done;
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.review();
+    });
+    expect(calls.find((call) => call.command === "review_start")?.args).toEqual({ turnId: expect.stringMatching(/^turn-/) });
+    expect(result.current.turn.status).toBe("done");
+    expect(result.current.turn.blocks.map((b) => b.kind)).toEqual(["user", "review"]);
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args.messages).toEqual([
+      { role: "user", content: "/review" },
+      { role: "assistant", content: done.forModel },
+    ]);
+  });
+
+  /// The workers take no notes: what is typed during a review waits for it,
+  /// and leaving the chat waits too — the report would land in the next one.
+  test("while a review runs, a message is queued and the chat cannot be left", async () => {
+    let finish: (value: unknown) => void = () => {};
+    results.review_start = new Promise((resolve) => (finish = resolve));
+    results.chat_start = () => new Promise(() => {});
+    const { result } = renderHook(() => useAgentTurn());
+    let running: Promise<void> = Promise.resolve();
+    act(() => {
+      running = result.current.review();
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    await act(async () => {
+      await result.current.send("and check the tests");
+      await result.current.send("/init", "Study this repository");
+    });
+    expect(calls.some((call) => call.command === "chat_steer")).toBe(false);
+    // A command keeps its prompt in the queue: the transcript shows one, the model gets the other.
+    expect(result.current.queued.map((q) => [q.text, q.sent])).toEqual([
+      ["and check the tests", undefined],
+      ["/init", "Study this repository"],
+    ]);
+    let left: boolean | undefined;
+    act(() => {
+      left = result.current.reset();
+    });
+    expect(left).toBe(false);
+    expect(await result.current.open("other")).toBe(false);
+    await act(async () => {
+      finish(done);
+      await running;
+    });
+    expect(result.current.turn.blocks.map((b) => b.kind)).toContain("review");
+  });
+
+  test("a review that fails says why and leaves no card under way", async () => {
+    results.review_start = new Error("not a git repository");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.review();
+    });
+    expect(result.current.turn.blocks.map((b) => b.kind)).toEqual(["user", "notice"]);
+    expect(result.current.error).toBe("not a git repository");
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect((saved()[0].args.messages as { content: string }[])[1].content).toBe("[The review failed: not a git repository]");
   });
 });

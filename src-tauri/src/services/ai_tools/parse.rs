@@ -45,6 +45,8 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "semanticSearch" => ToolCall::SemanticSearch(args(call)?),
         "skill" => ToolCall::Skill(args(call)?),
         "writePlan" => ToolCall::WritePlan(args(call)?),
+        "reportFinding" => ToolCall::ReportFinding(args(call)?),
+        "finishReview" => ToolCall::FinishReview(args(call)?),
         "readOutput" => ToolCall::ReadOutput(args(call)?),
         "stopProcess" => ToolCall::StopProcess(args(call)?),
         "readTerminal" => ToolCall::ReadTerminal(args(call)?),

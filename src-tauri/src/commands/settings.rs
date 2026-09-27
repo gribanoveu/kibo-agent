@@ -11,7 +11,7 @@ use secrecy::SecretString;
 use serde::Serialize;
 use tauri::State;
 
-use crate::domain::settings::ProviderConfig;
+use crate::domain::settings::{ProviderConfig, ReplyLanguage};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::llm_session;
 
@@ -32,6 +32,7 @@ pub struct LlmSettingsView {
     providers: Vec<ProviderView>,
     active_provider_id: Option<String>,
     debug_logging: bool,
+    reply_language: ReplyLanguage,
 }
 
 #[tauri::command]
@@ -48,6 +49,7 @@ pub fn llm_settings_get() -> Result<LlmSettingsView, String> {
             .collect(),
         active_provider_id: settings.active_provider_id,
         debug_logging: settings.debug_logging,
+        reply_language: settings.reply_language,
     })
 }
 
@@ -97,6 +99,12 @@ pub fn llm_active_provider_set(id: Option<String>) -> Result<(), String> {
 #[tauri::command]
 pub fn llm_debug_logging_set(enabled: bool) -> Result<(), String> {
     llm_session::set_debug_logging(enabled).map_err(|e| e.to_string())
+}
+
+/// The language replies are asked in, from the next turn on.
+#[tauri::command]
+pub fn llm_reply_language_set(language: ReplyLanguage) -> Result<(), String> {
+    llm_session::set_reply_language(language).map_err(|e| e.to_string())
 }
 
 /// Asks the provider what it serves. A live call, so it is also the one thing

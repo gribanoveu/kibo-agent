@@ -10,6 +10,7 @@ use std::path::{Component, Path};
 use git2::{Diff, DiffFormat, DiffOptions, ErrorCode, Repository, Signature};
 
 use crate::domain::commit_message::StagedPatch;
+use crate::domain::review::{FileDiff, FileStatus, NewLine};
 use crate::domain::git_changes::{
     ChangeTotals, ChangedFile, CommitSummary, FileSide, FileView, GitChangesError, GitHistory, Unviewable, WorkingChanges,
 };
@@ -46,6 +47,90 @@ pub fn totals(root: &Path) -> Result<ChangeTotals, GitChangesError> {
     let diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options)).map_err(git)?;
     let stats = diff.stats().map_err(git)?;
     Ok(ChangeTotals { files: stats.files_changed(), add: stats.insertions(), del: stats.deletions() })
+}
+
+/// Unchanged lines shown on each side of a change, in a file too long to be
+/// shown whole (`domain::review::WHOLE_FILE_LINES`).
+pub const REVIEW_CONTEXT_LINES: u32 = 10;
+
+/// Context wide enough that a file's only hunk is the whole file.
+const WHOLE_FILE_CONTEXT: u32 = 1_000_000;
+
+/// What a review reads: the working tree against HEAD, the index in between,
+/// new files included, renames found — each file with its patch from the
+/// first hunk on and the new side of every hunk. A file short enough is
+/// given whole, every line as context; a longer one the code near each
+/// change. Paths are relative to the open folder, as the agent's tools name
+/// them, and only its changes count.
+pub fn review_diffs(root: &Path) -> Result<Vec<FileDiff>, GitChangesError> {
+    let repo = open(root)?;
+    let head = head_tree(&repo)?;
+    let folder = folder_in_repo(&repo, root).filter(|folder| !folder.as_os_str().is_empty());
+    // The worker reads nothing beyond what it is given: the code around a
+    // change is what it judges the change against. The same diff twice —
+    // the files come out in the same order — once whole, once near.
+    let diff_with = |context: u32| -> Result<Diff<'_>, GitChangesError> {
+        let mut options = DiffOptions::new();
+        options.show_untracked_content(true).recurse_untracked_dirs(true).context_lines(context);
+        if let Some(folder) = &folder {
+            options.pathspec(folder);
+        }
+        let mut diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options)).map_err(git)?;
+        diff.find_similar(Some(git2::DiffFindOptions::new().renames(true))).map_err(git)?;
+        Ok(diff)
+    };
+    let whole = diff_with(WHOLE_FILE_CONTEXT)?;
+    let near = diff_with(REVIEW_CONTEXT_LINES)?;
+    let prefix = folder.as_ref().map(|f| format!("{}/", f.to_string_lossy().replace('\\', "/"))).unwrap_or_default();
+    let shown = |path: Option<&Path>| {
+        let path = path.map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        path.strip_prefix(&prefix).map(String::from).unwrap_or(path)
+    };
+
+    let mut files = Vec::new();
+    for index in 0..whole.deltas().len() {
+        let Some((patch, lines)) = review_patch(&whole, index)? else { continue };
+        let Some(delta) = whole.get_delta(index) else { continue };
+        let path = shown(delta.new_file().path().or_else(|| delta.old_file().path()));
+        let status = match delta.status() {
+            git2::Delta::Added | git2::Delta::Untracked => FileStatus::Added,
+            git2::Delta::Deleted => FileStatus::Deleted,
+            git2::Delta::Renamed => FileStatus::Renamed { from: shown(delta.old_file().path()) },
+            _ => FileStatus::Modified,
+        };
+        let binary = delta.flags().is_binary();
+        let is_whole = lines.len() <= crate::domain::review::WHOLE_FILE_LINES;
+        let (patch, lines) = match is_whole {
+            true => (patch, lines),
+            false => review_patch(&near, index)?.unwrap_or((patch, lines)),
+        };
+        files.push(FileDiff { path, status, binary, patch, lines, whole: is_whole && !binary });
+    }
+    Ok(files)
+}
+
+/// One file of `diff`: its hunks as text, without the file's own header,
+/// and the new side of every hunk.
+fn review_patch(diff: &Diff, index: usize) -> Result<Option<(String, Vec<NewLine>)>, GitChangesError> {
+    let Some(mut patch) = git2::Patch::from_diff(diff, index).map_err(git)? else { return Ok(None) };
+    let mut lines = Vec::new();
+    for hunk in 0..patch.num_hunks() {
+        for at in 0..patch.num_lines_in_hunk(hunk).map_err(git)? {
+            let line = patch.line_in_hunk(hunk, at).map_err(git)?;
+            if let (origin @ ('+' | ' '), Some(number)) = (line.origin(), line.new_lineno()) {
+                lines.push(NewLine {
+                    hunk: hunk as u32,
+                    number,
+                    added: origin == '+',
+                    text: String::from_utf8_lossy(line.content()).trim_end_matches(['\n', '\r']).to_string(),
+                });
+            }
+        }
+    }
+    let text = patch.to_buf().map_err(git)?;
+    let text = String::from_utf8_lossy(&text);
+    // The file's own header is the prompt's; the hunks are the diff.
+    Ok(Some((text.find("\n@@").map_or(String::new(), |at| text[at + 1..].to_string()), lines)))
 }
 
 /// A path that is gone from disk stages its deletion.
@@ -628,5 +713,80 @@ mod tests {
         }
         let plain = temp_dir("git-changes-plain");
         assert_eq!(changes(&plain), Err(GitChangesError::NotARepository));
+    }
+
+    #[test]
+    fn a_review_reads_every_change_against_head_with_its_new_lines() {
+        let (dir, _repo) = repo();
+        fs::write(dir.join("a.rs"), "one\ntwo\nthree\n").unwrap();
+        fs::write(dir.join("gone.rs"), "bye\n").unwrap();
+        fs::write(dir.join("moved.rs"), "a long enough line to be found as the same file\nand another\n").unwrap();
+        stage(&dir, &["a.rs".into(), "gone.rs".into(), "moved.rs".into()]).unwrap();
+        commit(&dir, "first").unwrap();
+
+        fs::write(dir.join("a.rs"), "one\n2\nthree\nfour\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        fs::write(dir.join("a.rs"), "one\n2\nthree\nfour\nfive\n").unwrap();
+        fs::remove_file(dir.join("gone.rs")).unwrap();
+        fs::rename(dir.join("moved.rs"), dir.join("renamed.rs")).unwrap();
+        stage(&dir, &["gone.rs".into(), "moved.rs".into(), "renamed.rs".into()]).unwrap();
+        fs::create_dir(dir.join("new")).unwrap();
+        fs::write(dir.join("new/b.rs"), "fresh\n").unwrap();
+        fs::write(dir.join("logo.bin"), [0u8, 1, 2, 0]).unwrap();
+
+        let files = review_diffs(&dir).unwrap();
+        let summary: Vec<(&str, &FileStatus, bool)> = files.iter().map(|f| (f.path.as_str(), &f.status, f.binary)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("a.rs", &FileStatus::Modified, false),
+                ("gone.rs", &FileStatus::Deleted, false),
+                ("logo.bin", &FileStatus::Added, true),
+                ("new/b.rs", &FileStatus::Added, false),
+                ("renamed.rs", &FileStatus::Renamed { from: "moved.rs".into() }, false),
+            ]
+        );
+        let a = &files[0];
+        let added: Vec<(u32, &str)> = a.lines.iter().filter(|l| l.added).map(|l| (l.number, l.text.as_str())).collect();
+        assert_eq!(added, [(2, "2"), (4, "four"), (5, "five")], "staged and unstaged, against HEAD");
+        assert!(a.patch.starts_with("@@ ") && a.patch.contains("+five\n"), "{}", a.patch);
+        assert!(a.lines.iter().any(|l| !l.added && l.text == "one"), "context lines too");
+    }
+
+    /// The worker has nothing to read but what it is given: a short file
+    /// whole, a long one ten lines each side of a change.
+    #[test]
+    fn a_review_sees_a_short_file_whole_and_a_long_one_near_its_change() {
+        let (dir, _repo) = repo();
+        let text = |lines: u32, changed: &str| {
+            (1..=lines).map(|n| if n == 15 { changed.to_string() } else { format!("line {n}") }).collect::<Vec<_>>().join("\n") + "\n"
+        };
+        let long = crate::domain::review::WHOLE_FILE_LINES as u32 + 1;
+        fs::write(dir.join("short.rs"), text(30, "line 15")).unwrap();
+        fs::write(dir.join("long.rs"), text(long, "line 15")).unwrap();
+        stage(&dir, &["short.rs".into(), "long.rs".into()]).unwrap();
+        commit(&dir, "first").unwrap();
+        fs::write(dir.join("short.rs"), text(30, "changed")).unwrap();
+        fs::write(dir.join("long.rs"), text(long, "changed")).unwrap();
+
+        let files = review_diffs(&dir).unwrap();
+        let numbers = |path: &str| files.iter().find(|f| f.path == path).unwrap().lines.iter().map(|l| l.number).collect::<Vec<_>>();
+        assert_eq!(numbers("short.rs"), (1..=30).collect::<Vec<_>>());
+        assert_eq!(numbers("long.rs"), (5..=25).collect::<Vec<_>>());
+        let whole: Vec<(&str, bool)> = files.iter().map(|f| (f.path.as_str(), f.whole)).collect();
+        assert_eq!(whole, [("long.rs", false), ("short.rs", true)]);
+        let short = files.iter().find(|f| f.path == "short.rs").unwrap();
+        assert!(short.patch.contains(" line 1\n") && short.patch.contains(" line 30\n") && short.patch.contains("-line 15\n+changed\n"), "{}", short.patch);
+    }
+
+    #[test]
+    fn a_review_of_a_subfolder_reads_its_own_changes_by_its_own_paths() {
+        let (dir, _repo) = repo();
+        fs::create_dir(dir.join("app")).unwrap();
+        fs::write(dir.join("app/x.rs"), "x\n").unwrap();
+        fs::write(dir.join("root.rs"), "r\n").unwrap();
+        let files = review_diffs(&dir.join("app")).unwrap();
+        assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["x.rs"]);
+        assert_eq!(review_diffs(&temp_dir("git-review-plain")), Err(GitChangesError::NotARepository));
     }
 }

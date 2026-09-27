@@ -264,6 +264,7 @@ impl FinishedTurn {
             ConversationMode::Agent => "agent",
             ConversationMode::Plan => "plan",
             ConversationMode::Ask => "ask",
+            ConversationMode::Review => "review",
         };
         let outcome = if self.cancelled { "cancelled" } else { "done" };
         model_input(mode, outcome, self.commit, self.tests.as_str(), &self.todo, &clean(user, home), &clean(&self.reply, home))

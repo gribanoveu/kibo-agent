@@ -14,10 +14,12 @@ type Props = {
 export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Props) {
   const name = folder?.split(/[\\/]/).filter(Boolean).pop() ?? "this folder";
   const agent = blocked?.kind === "agent";
+  // A paused turn is ended by answering its card, not by Stop.
+  const waiting = blocked?.kind === "agent" && blocked.waiting;
 
   return (
     <Modal
-      title={agent ? "The agent is still working" : "Stop what runs here?"}
+      title={waiting ? "The agent is waiting for you" : agent ? "The agent is still working" : "Stop what runs here?"}
       open={blocked !== null}
       onClose={onClose}
       footer={
@@ -25,21 +27,28 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              if (blocked?.kind === "agent") onStopAgent();
-              else blocked?.go();
-              onClose();
-            }}
-          >
-            {agent ? "Stop the agent" : "Stop them and switch"}
-          </button>
+          {!waiting && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (blocked?.kind === "agent") onStopAgent();
+                else blocked?.go();
+                onClose();
+              }}
+            >
+              {agent ? "Stop the agent" : "Stop them and switch"}
+            </button>
+          )}
         </>
       }
     >
-      {blocked?.kind === "agent" ? (
+      {waiting ? (
+        <p className="switch-text">
+          It is waiting for your answer on a card in <b>{name}</b>, and its chat is saved there when the turn ends.
+          Answer the card, then open the other folder.
+        </p>
+      ) : blocked?.kind === "agent" ? (
         <p className="switch-text">
           It is working in <b>{name}</b>, and its chat is saved there when it finishes. Stop it first, then open the
           other folder.

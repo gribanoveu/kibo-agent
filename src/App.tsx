@@ -85,6 +85,9 @@ type EntryDialog<K> = "json" | { entry: K | null } | null;
 /** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
 const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
 
+/** Why the open chat cannot be left: its turn would land in the next one. */
+const STAY = "Stop the running turn before leaving this chat";
+
 export default function App() {
   // Laid out as it was left.
   const [collapsed, setCollapsed] = useStoredState("atlas-sidebar-collapsed", false, isBoolean);
@@ -255,7 +258,7 @@ export default function App() {
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
   const newChat = () => {
-    agent.reset();
+    if (!agent.reset()) return toast.show(STAY);
     focusComposer();
   };
 
@@ -285,6 +288,12 @@ export default function App() {
           ? "Nothing to fork yet"
           : undefined,
       run: () => agent.branch(),
+    },
+    {
+      name: "review",
+      hint: "Review the uncommitted changes for bugs, and list what it finds",
+      unavailable: busy ? "Not while a turn is running" : !workspace.path ? "Open a folder first" : undefined,
+      run: () => void agent.review(),
     },
     {
       name: "init",
@@ -322,7 +331,9 @@ export default function App() {
   }, [workspace.error]);
 
   // Leaving the folder ends what runs in it: the user is told first.
-  const folderSwitch = useFolderSwitch(agent.turn.status === "running");
+  const folderSwitch = useFolderSwitch(
+    agent.turn.status === "running" ? "running" : agent.turn.status === "awaitingApproval" ? "waiting" : null,
+  );
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
   // Offered only before the first message: a chat that has started is about
@@ -451,12 +462,12 @@ export default function App() {
         <Sidebar
           chats={history.chats}
           activeChat={agent.chatId}
-          onSelectChat={agent.open}
+          onSelectChat={(id) => void agent.open(id).then((opened) => opened || toast.show(STAY))}
           onNewChat={newChat}
           onArchiveChat={(id, archived) => history.archive(id, archived).catch((e) => toast.show(String(e)))}
           onDeleteChat={(id) => {
             // The open chat goes first: left on screen, its next save would write it back.
-            if (id === agent.chatId) agent.reset();
+            if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
             history.remove(id).catch((e) => toast.show(String(e)));
           }}
           onToggleCollapse={toggleSidebar}
@@ -496,6 +507,7 @@ export default function App() {
             branchable={agent.branchable}
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
+            onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
           />
           <Composer
             tab={
@@ -650,6 +662,8 @@ export default function App() {
           }}
           debugLogging={llm.settings?.debugLogging ?? false}
           onDebugLogging={llm.debugLogging}
+          replyLanguage={llm.settings?.replyLanguage ?? "auto"}
+          onReplyLanguage={llm.replyLanguage}
           theme={theme.choice}
           onThemeMode={theme.setMode}
           onThemePalette={theme.setPalette}

@@ -34,6 +34,9 @@ pub enum ConversationMode {
     /// Questions about the code, answered from the code. The leanest set:
     /// no checklist, nothing to change.
     Ask,
+    /// A review worker reading one group of a change (`services::review`).
+    /// Not a mode the user picks: `/review` starts its workers in it.
+    Review,
 }
 
 impl ConversationMode {
@@ -41,6 +44,7 @@ impl ConversationMode {
         ConversationMode::Agent,
         ConversationMode::Plan,
         ConversationMode::Ask,
+        ConversationMode::Review,
     ];
 }
 
@@ -109,6 +113,10 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
             tools.extend([ToolName::Todo, ToolName::WritePlan]);
         }
         ConversationMode::Ask => {}
+        // Saying what is wrong, in one reply: the diffs come with the code
+        // around them, and reading more is what made a review cost a million
+        // tokens a group (`domain::review::MAX_ROUNDS`).
+        ConversationMode::Review => return HashSet::from([ToolName::ReportFinding, ToolName::FinishReview]),
     }
     tools
 }
@@ -142,10 +150,16 @@ mod tests {
         }
     }
 
+    /// The modes the user picks. A review worker's set is its own, pinned by
+    /// `a_review_reads_and_reports_and_changes_nothing`.
+    fn picked() -> impl Iterator<Item = &'static ConversationMode> {
+        ConversationMode::ALL.iter().filter(|mode| **mode != ConversationMode::Review)
+    }
+
     /// Looking at the user's terminal is reading; typing into it is not.
     #[test]
     fn the_terminal_is_read_in_every_mode_and_typed_into_in_agent_alone() {
-        for mode in ConversationMode::ALL {
+        for mode in picked() {
             assert!(offers(*mode, ToolName::ReadTerminal), "{mode:?}");
             assert_eq!(offers(*mode, ToolName::RunInTerminal), *mode == ConversationMode::Agent, "{mode:?}");
         }
@@ -158,7 +172,7 @@ mod tests {
     fn no_mode_but_agent_can_run_a_command() {
         assert!(offers(ConversationMode::Agent, ToolName::RunCommand));
         // Reading a process's output changes nothing; stopping one does.
-        for mode in ConversationMode::ALL {
+        for mode in picked() {
             assert!(offers(*mode, ToolName::ReadOutput), "{mode:?}");
         }
         assert!(offers(ConversationMode::Agent, ToolName::StopProcess));
@@ -171,7 +185,7 @@ mod tests {
     /// A mode that cannot read the repository has nothing to be a mode about.
     #[test]
     fn every_mode_can_look_at_the_repository() {
-        for &mode in ConversationMode::ALL {
+        for &mode in picked() {
             for tool in [
                 ToolName::ReadFile,
                 ToolName::Grep,
@@ -187,10 +201,20 @@ mod tests {
         }
     }
 
+    /// Every tool but a review's own: a finding or a summary needs a review to be about.
     #[test]
     fn agent_mode_offers_every_tool_there_is() {
-        assert_eq!(tools(ConversationMode::Agent).len(), ToolName::ALL.len());
+        let agent = tools(ConversationMode::Agent);
+        assert_eq!(agent.len(), ToolName::ALL.len() - 2);
+        assert!(!agent.contains(&ToolName::ReportFinding) && !agent.contains(&ToolName::FinishReview));
     }
+
+    /// A reviewer reports and nothing else: one reply, from the diffs it is given.
+    #[test]
+    fn a_review_only_reports() {
+        assert_eq!(tools(ConversationMode::Review), HashSet::from([ToolName::ReportFinding, ToolName::FinishReview]));
+    }
+
 
     /// A plan is a document and a list of steps; a question needs neither.
     #[test]

@@ -5,6 +5,8 @@ import {
   type Outcome,
   type PendingToolCall,
   type ProcessInfo,
+  type GroupProgress,
+  type ReviewReport,
   type TurnEvent,
 } from "./chat";
 
@@ -38,6 +40,8 @@ export type Block =
   | { kind: "notice"; id: string; text: string }
   /** A pass folding older history into a summary: under way, done, or given up on. */
   | { kind: "compaction"; id: string; status: "running" | "done" | "failed"; folded?: number }
+  /** `/review`: its groups as their workers go, then its report. */
+  | { kind: "review"; id: string; groups: GroupProgress[]; report: ReviewReport | null }
   /** A background process ended — what the model was told at its round, drawn as a card. */
   | { kind: "processEnded"; id: string; process: ProcessInfo }
   | {
@@ -159,6 +163,20 @@ export function appendUserMessage(state: TurnState, text: string, now = Date.now
       ...state.blocks,
       { kind: "user", id: `user:${state.blocks.length}`, text, ...(sent !== undefined && sent !== text && { sent }) },
     ],
+  };
+}
+
+/** `/review` under way: its card, with nothing reviewed yet. */
+export function reviewStarted(state: TurnState): TurnState {
+  return { ...state, blocks: [...state.blocks, { kind: "review", id: `review:${state.blocks.length}`, groups: [], report: null }] };
+}
+
+/** The review's end: the card under way takes its report, and the turn is over. */
+export function reviewEnded(state: TurnState, report: ReviewReport, now = Date.now()): TurnState {
+  const ended = endTurn(state, now);
+  return {
+    ...ended,
+    blocks: ended.blocks.map((block) => (block.kind === "review" && block.report === null ? { ...block, report } : block)),
   };
 }
 
@@ -299,6 +317,19 @@ function applyEvent(state: TurnState, event: TurnEvent): TurnState {
 
     case "hookFeedback":
       return appendNotice(state, hookNotice(event.payload));
+
+    case "reviewGroup": {
+      // Each report is the group whole: it replaces that group's line.
+      const group = event.payload;
+      return {
+        ...state,
+        blocks: state.blocks.map((block) =>
+          block.kind === "review" && block.report === null
+            ? { ...block, groups: [...block.groups.filter((g) => g.group !== group.group), group].sort((a, b) => a.group - b.group) }
+            : block,
+        ),
+      };
+    }
 
     case "loopReminded":
       // The model was told it is going round in circles; the reader sees why

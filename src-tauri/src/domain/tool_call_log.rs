@@ -292,6 +292,11 @@ mod tests {
                 Some(ToolCall::WritePlan(WritePlanArgs { content: LEAK.into() })),
                 ToolResult::PlanWritten { lines: 3 },
             ),
+            ToolName::ReportFinding => (
+                None,
+                ToolResult::FindingNoted { path: path(), start_line: 3, end_line: 4 },
+            ),
+            ToolName::FinishReview => (None, ToolResult::SummaryNoted),
             ToolName::Skill => (
                 Some(ToolCall::Skill(SkillArgs { name: "release".into(), path: None })),
                 ToolResult::Skill { name: "release".into(), instructions: LEAK.into(), files: vec![], from: String::new() },

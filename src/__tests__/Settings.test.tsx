@@ -16,6 +16,7 @@ const SOURCES: SkillsView["sources"] = [
 
 const dialog = (debugLogging = false) => {
   const logging: boolean[] = [];
+  const languages: string[] = [];
   const sizes: string[] = [];
   const modes: string[] = [];
   const palettes: string[] = [];
@@ -31,7 +32,7 @@ const dialog = (debugLogging = false) => {
         onToggle: (id, on) => sources.push([id, on]),
       }}
       provider={{
-        settings: { providers: [], activeProviderId: null, debugLogging },
+        settings: { providers: [], activeProviderId: null, debugLogging, replyLanguage: "auto" },
         busy: false,
         error: null,
         onSave: () => {},
@@ -40,6 +41,8 @@ const dialog = (debugLogging = false) => {
       }}
       debugLogging={debugLogging}
       onDebugLogging={(enabled) => logging.push(enabled)}
+      replyLanguage="auto"
+      onReplyLanguage={(language) => languages.push(language)}
       theme={{ mode: "system", light: "light", dark: "one-dark" }}
       onThemeMode={(mode) => modes.push(mode)}
       onThemePalette={(theme) => palettes.push(theme)}
@@ -53,7 +56,7 @@ const dialog = (debugLogging = false) => {
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
     />,
   );
-  return { logging, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
+  return { logging, languages, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
 };
 
 describe("the settings dialog", () => {
@@ -65,6 +68,18 @@ describe("the settings dialog", () => {
     fireEvent.click(screen.getByText("Appearance"));
     expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeDefined();
     expect(screen.queryByText("Model provider")).toBeNull();
+  });
+
+  /// Auto leaves /review in English, and the hint says so: that is the case
+  /// the setting exists for.
+  test("the reply language has its own section, and Auto says what it does to /review", () => {
+    const { languages } = dialog();
+    fireEvent.click(screen.getByText("Language"));
+    const group = screen.getByRole("radiogroup", { name: "Reply language" });
+    expect(within(group).getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/\/review has nothing you wrote to go by/)).toBeDefined();
+    fireEvent.click(within(group).getByRole("radio", { name: "Русский" }));
+    expect(languages).toEqual(["russian"]);
   });
 
   test("a theme is a mode, and a palette for each side, each card drawn in its own", () => {

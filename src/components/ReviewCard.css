@@ -1,0 +1,404 @@
+.review-card {
+  width: 100%;
+  margin: 6px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+}
+.review-title {
+  color: var(--text);
+}
+.review-meta {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.review-link {
+  align-self: flex-start;
+  text-align: left;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.review-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.review-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+.review-left-out {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.review-findings {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-finding {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.review-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.review-finding-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+.review-severity {
+  --state: var(--text-faint);
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--state) 16%, transparent);
+  color: var(--state);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.review-severity.critical,
+.review-severity.high {
+  --state: var(--red);
+}
+.review-severity.medium {
+  --state: var(--amber);
+}
+.review-body {
+  margin: 0;
+  line-height: 1.5;
+}
+.review-suggestion {
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--bg-panel-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-fix {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.review-fix:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.review-failed {
+  margin: 8px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}
+
+/* Under way: a spinner, a bar of groups ended, and a light running along it
+   so a long group still reads as alive. */
+.review-spin {
+  flex: none;
+  color: var(--accent);
+  animation: review-spin 0.9s linear infinite;
+}
+@keyframes review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.review-bar {
+  position: relative;
+  height: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border-soft);
+}
+.review-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+.review-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+  animation: review-run 1.6s ease-in-out infinite;
+}
+@keyframes review-run {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+/* A tile a group, so neighbours do not run together; the one working is
+   marked on its left edge, the ones waiting step back. */
+.review-groups {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-xs);
+}
+.review-group {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+.review-group.working {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.review-group.waiting {
+  background: none;
+  border-style: dashed;
+}
+.review-group.failed {
+  box-shadow: inset 2px 0 0 var(--red);
+}
+.review-group-icon {
+  flex: none;
+  display: inline-flex;
+  width: 12px;
+  margin-top: 2px;
+  color: var(--text-faint);
+}
+.review-group.done .review-group-icon {
+  color: var(--green);
+}
+.review-group.failed .review-group-icon,
+.review-group.failed .review-group-status {
+  color: var(--red);
+}
+.review-group-main {
+  flex: 1;
+  min-width: 0;
+}
+.review-group-name {
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.review-group.waiting .review-group-name {
+  color: var(--text-faint);
+}
+.review-group-status {
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.review-group-status.live {
+  background: linear-gradient(
+      90deg,
+      var(--text-faint) 0%,
+      var(--text-faint) 40%,
+      var(--text) 50%,
+      var(--text-faint) 60%,
+      var(--text-faint) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: review-shimmer 2s linear infinite;
+}
+@keyframes review-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+.review-group-cost {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.review-group-note {
+  color: var(--amber);
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-spin,
+  .review-group-status.live,
+  .review-bar::after {
+    animation: none;
+  }
+}
+
+/* The finished card: a small label over each part, then a panel a group. */
+.review-section {
+  margin: 14px 0 6px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.review-section + .review-findings,
+.review-section + .review-summaries {
+  margin-top: 0;
+}
+.review-summaries {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.review-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.review-summary-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.review-chip {
+  --state: var(--green);
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--state) 14%, transparent);
+  color: var(--state);
+  font-size: var(--fs-2xs);
+}
+.review-chip.found {
+  --state: var(--amber);
+}
+.review-muted {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.review-worth {
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.review-worth-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+  color: var(--amber);
+}
+.review-worth ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* One doubt a block, a line between them. */
+.review-worth li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  line-height: 1.5;
+}
+.review-worth li + li {
+  border-top: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
+}
+.review-worth li:last-child {
+  padding-bottom: 0;
+}
+.review-checked {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.review-checked > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+}
+.review-checked > summary::-webkit-details-marker {
+  display: none;
+}
+.review-checked > summary:hover {
+  color: var(--text-dim);
+}
+.review-checked .chev {
+  transition: transform 0.15s ease-out;
+}
+.review-checked[open] .chev {
+  transform: rotate(90deg);
+}
+.review-checked ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.5;
+}
+.review-card code {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}

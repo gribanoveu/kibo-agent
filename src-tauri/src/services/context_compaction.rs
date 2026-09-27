@@ -165,6 +165,7 @@ mod tests {
                 rules,
                 plan: None,
                 worktree_of: None,
+                language: None,
             },
             mcp,
         )
@@ -281,12 +282,14 @@ mod tests {
             model: "m".to_string(),
             debug_logging: false,
             context_limit: None,
+            reply_language: None,
         }
     }
 
     fn session_with_window(provider: Arc<Summarizer>, tokens: u32) -> LlmSession {
         LlmSession {
             context_limit: Some(tokens),
+            reply_language: None,
             ..session(provider)
         }
     }

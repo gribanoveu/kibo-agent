@@ -85,6 +85,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
   | { type: "processesEnded"; payload: { processes: ProcessInfo[] } }
   | { type: "loopReminded"; payload: { tool: string; failing: boolean } }
+  | { type: "reviewGroup"; payload: GroupProgress }
   | { type: "roundStarted" }
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }
@@ -365,17 +366,21 @@ export type ProviderConfig = {
 /** A provider as the window sees it: the configuration, plus whether a key is stored. */
 export type ProviderView = ProviderConfig & { hasApiKey: boolean };
 
+/** Mirrors `domain::settings::ReplyLanguage`: what the model writes in; `auto` asks nothing. */
+export type ReplyLanguage = "auto" | "english" | "russian";
+
 export type LlmSettings = {
   providers: ProviderView[];
   activeProviderId: string | null;
   debugLogging: boolean;
+  replyLanguage: ReplyLanguage;
 };
 
 /** What a turn still needs before it can start. Asked before sending, not discovered by failing. */
 export type Readiness = { workspace: string | null; provider: string | null; hasKey: boolean };
 
 export async function llmSettings(): Promise<LlmSettings> {
-  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false };
+  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto" };
   return invoke<LlmSettings>("llm_settings_get");
 }
 
@@ -406,6 +411,11 @@ export async function setActiveProvider(id: string | null): Promise<void> {
 export async function setDebugLogging(enabled: boolean): Promise<void> {
   requireBackend();
   return invoke<void>("llm_debug_logging_set", { enabled });
+}
+
+export async function setReplyLanguage(language: ReplyLanguage): Promise<void> {
+  requireBackend();
+  return invoke<void>("llm_reply_language_set", { language });
 }
 
 /** A live call, so it is also what proves the URL and the key are both right. */
@@ -654,6 +664,67 @@ export async function connectMcpServer(name: string): Promise<McpView> {
 export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpView> {
   requireBackend();
   return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
+}
+
+// ---------------------------------------------------------------- review
+
+/** Mirrors `domain::review`: why a changed file was left out of a review. */
+export type ReviewExclusion = "binary" | "deleted" | "secret" | "generated" | "documentation" | "tooLarge";
+export type Severity = "critical" | "high" | "medium" | "low";
+/** A problem a review found, placed on the new side of the file. */
+export type Finding = {
+  id: number;
+  path: string;
+  startLine: number;
+  endLine: number;
+  severity: Severity;
+  category: "bug" | "security" | "performance" | "maintainability" | "other";
+  title: string;
+  body: string;
+  suggestion?: string;
+};
+/** Mirrors `domain::review::GroupProgress`: where one group's worker has got to. */
+export type GroupProgress = {
+  group: number;
+  total: number;
+  files: string[];
+  state: "waiting" | "working" | "done" | "failed";
+  /** Findings the check refused: code not in the change, or in more than one place. */
+  failedCalls: number;
+  findings: number;
+  /** What the provider counted, once it has: the request, and the reply with its thinking. */
+  input: number;
+  output: number;
+  /** The reply stopped at the provider's length limit. */
+  truncated: boolean;
+  /** What its request weighs by the backend's own count, known before it is sent. */
+  estimate: number;
+  /** What is slowing it right now: a retry, a failed call, a loop note. */
+  note?: string;
+  error?: string;
+};
+/** Mirrors `domain::review::GroupSummary`: what a group's change does, what was checked, what is worth a look. */
+export type GroupSummary = {
+  files: string[];
+  summary: string;
+  checked: string[];
+  worthALook: { path: string; note: string }[];
+};
+export type ReviewReport = {
+  reviewed: string[];
+  excluded: { path: string; reason: ReviewExclusion }[];
+  findings: Finding[];
+  failed: { files: string[]; error: string }[];
+  summaries: GroupSummary[];
+};
+
+/**
+ * Reviews the working tree against HEAD; progress arrives on the turn channel
+ * under `turnId`. `forModel` is the report as the conversation keeps it.
+ */
+export async function reviewStart(turnId: string): Promise<{ report: ReviewReport; forModel: string }> {
+  requireBackend();
+  return invoke<{ report: ReviewReport; forModel: string }>("review_start", { turnId });
 }
 
 // ---------------------------------------------------------------- rewind

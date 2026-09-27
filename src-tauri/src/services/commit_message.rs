@@ -89,6 +89,7 @@ mod tests {
             model: "m".to_string(),
             debug_logging: false,
             context_limit: None,
+            reply_language: None,
         };
         (session, writer)
     }

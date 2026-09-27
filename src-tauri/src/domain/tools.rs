@@ -50,6 +50,10 @@ pub enum ToolName {
     ReadTerminal,
     /// A command typed into the user's terminal, for them to see and use.
     RunInTerminal,
+    /// A problem found in a review, placed on the change — review workers only.
+    ReportFinding,
+    /// A review worker's closing summary of its group — review workers only.
+    FinishReview,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -87,6 +91,8 @@ impl ToolName {
         ToolName::StopProcess,
         ToolName::ReadTerminal,
         ToolName::RunInTerminal,
+        ToolName::ReportFinding,
+        ToolName::FinishReview,
         ToolName::Mcp,
     ];
 
@@ -116,6 +122,8 @@ impl ToolName {
             ToolName::StopProcess => "stopProcess",
             ToolName::ReadTerminal => "readTerminal",
             ToolName::RunInTerminal => "runInTerminal",
+            ToolName::ReportFinding => "reportFinding",
+            ToolName::FinishReview => "finishReview",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -184,7 +192,10 @@ impl ToolName {
             // A screen in memory; a line typed — it returns before the
             // command has run, so it costs the loop nothing more.
             | ToolName::ReadTerminal
-            | ToolName::RunInTerminal => 1,
+            | ToolName::RunInTerminal
+            // Checked against a diff in memory.
+            | ToolName::ReportFinding
+            | ToolName::FinishReview => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.
@@ -359,7 +370,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            23,
+            25,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -744,6 +755,9 @@ pub struct ToolDeps<'a> {
     pub processes: Option<std::sync::Arc<dyn crate::domain::background::BackgroundProcesses>>,
     /// The user's own terminals; `None` where there are none to have.
     pub terminals: Option<std::sync::Arc<dyn crate::domain::terminal::UserTerminals>>,
+    /// A review worker's files and findings, for `reportFinding`; `None`
+    /// outside a review.
+    pub review: Option<std::sync::Arc<crate::domain::review::ReviewDesk>>,
 }
 
 /// Why a tool call could not be carried out.
@@ -891,6 +905,8 @@ pub enum ToolError {
     Background(#[from] crate::domain::background::BackgroundError),
     #[error(transparent)]
     Terminal(#[from] crate::domain::terminal::TerminalError),
+    #[error(transparent)]
+    Finding(#[from] crate::domain::review::FindingError),
     /// A skill that could not be loaded — unknown, or its `SKILL.md` broken.
     #[error("{0}")]
     Skill(String),
@@ -939,6 +955,8 @@ pub enum ToolCall {
     StopProcess(ProcessArgs),
     ReadTerminal(ReadTerminalArgs),
     RunInTerminal(RunInTerminalArgs),
+    ReportFinding(crate::domain::review::FindingArgs),
+    FinishReview(crate::domain::review::SummaryArgs),
     Mcp(McpCallArgs),
 }
 
@@ -967,6 +985,8 @@ impl ToolCall {
             ToolCall::StopProcess(_) => ToolName::StopProcess,
             ToolCall::ReadTerminal(_) => ToolName::ReadTerminal,
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
+            ToolCall::ReportFinding(_) => ToolName::ReportFinding,
+            ToolCall::FinishReview(_) => ToolName::FinishReview,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1142,6 +1162,15 @@ pub enum ToolResult {
     /// A command that ran. "Ran" is not "succeeded": the exit code is the
     /// answer, and a failing build is a perfectly good result.
     CommandRan(crate::domain::command_exec::CommandOutput),
+    /// A finding kept, where it was placed.
+    #[serde(rename_all = "camelCase")]
+    FindingNoted {
+        path: String,
+        start_line: u32,
+        end_line: u32,
+    },
+    /// A review group's summary, kept.
+    SummaryNoted,
     /// `runCommand` with `background`: it runs on, and this is its number.
     ProcessStarted(crate::domain::background::ProcessInfo),
     /// `runCommand` still running at its timeout: not killed, it runs on as

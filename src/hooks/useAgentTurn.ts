@@ -15,6 +15,7 @@ import {
   startChat,
   steer as steerCommand,
   alwaysAllow,
+  reviewStart,
   rewindApply,
   rewindPreview,
   type ContextUsage,
@@ -34,6 +35,8 @@ import {
   endTurn,
   emptyTurn,
   restoredTurn,
+  reviewEnded,
+  reviewStarted,
   type TurnState,
 } from "../lib/chatTurnReducer";
 
@@ -49,8 +52,11 @@ import {
 // conversation outlive the window. Not before it ends: a transcript saved
 // mid-turn has a tool call in it with no result.
 
-/** A message waiting for the running turn to end, to be sent as the next one. */
-export type Queued = { id: number; text: string };
+/**
+ * A message waiting for the running turn to end, to be sent as the next one.
+ * `sent`, as in `send`: a `/` command's prompt, when `text` is the command.
+ */
+export type Queued = { id: number; text: string; sent?: string };
 
 export function useAgentTurn({
   onSaved,
@@ -225,6 +231,12 @@ export function useAgentTurn({
     }
   }, [refreshContext]);
 
+  /** Holds `text` until the running turn ends, to be sent as the next message. */
+  const queue = useCallback((text: string, sent?: string) => {
+    const trimmed = text.trim();
+    if (trimmed) setQueued((list) => [...list, { id: ++queueSeq.current, text: trimmed, sent }]);
+  }, []);
+
   /**
    * Sends what the user typed. While a turn is running the same text steers it.
    * `sent`, when given, is what the model gets instead — a `/` command's prompt,
@@ -237,7 +249,10 @@ export function useAgentTurn({
       if (!trimmed) return;
 
       if (turn.status === "running") {
-        await steerCommand(content, content === trimmed ? undefined : trimmed);
+        // A review's workers take no notes: what is typed during one waits
+        // for it, as the next message.
+        if (turn.blocks.some((block) => block.kind === "review" && block.report === null)) queue(trimmed, sent);
+        else await steerCommand(content, content === trimmed ? undefined : trimmed);
         return;
       }
 
@@ -265,14 +280,46 @@ export function useAgentTurn({
         setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
       }
     },
-    [turn.status, turn.blocks.length, listen, finish, makeRoom],
+    [turn.status, turn.blocks, listen, finish, makeRoom, queue],
   );
 
-  /** Holds `text` until the running turn ends, to be sent as the next message. */
-  const queue = useCallback((text: string) => {
-    const trimmed = text.trim();
-    if (trimmed) setQueued((list) => [...list, { id: ++queueSeq.current, text: trimmed }]);
-  }, []);
+  /**
+   * `/review`: the working tree's changes reviewed by the backend's workers,
+   * as a card in the chat. The report joins the history as the answer to
+   * `/review`, so the next message can say "fix 2".
+   */
+  const review = useCallback(async () => {
+    if (turn.status === "running" || turn.status === "awaitingApproval") return;
+    setError(null);
+    // `/review` is the user's next message after the turn journaled last.
+    const answered = journaled.current;
+    journaled.current = null;
+    void answered?.then((row) => (row ? nextPromptSent(row, "/review") : undefined)).catch(() => {});
+    unsaved.current = true;
+    turnStart.current = turn.blocks.length;
+    setTurn((state) => reviewStarted(appendUserMessage(state, "/review", Date.now())));
+    const id = `turn-${++turnId.current}`;
+    try {
+      await listen(id);
+      const done = await reviewStart(id);
+      history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: done.forModel }];
+      setTurn((state) => reviewEnded(state, done.report));
+    } catch (e) {
+      setError(String(e));
+      // In the history too: the bubble has to have its message, or every
+      // bubble before it stops being one a branch can start at.
+      history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: `[The review failed: ${e}]` }];
+      setTurn((state) =>
+        appendNotice(
+          endTurn({ ...state, blocks: state.blocks.filter((block) => block.kind !== "review" || block.report !== null) }),
+          `The review failed: ${e}`,
+        ),
+      );
+    } finally {
+      subscribed.current?.();
+      subscribed.current = null;
+    }
+  }, [turn.status, turn.blocks.length, listen]);
 
   /** Takes a message out of the queue and hands it back to the composer. */
   const unqueue = useCallback(
@@ -301,7 +348,7 @@ export function useAgentTurn({
     if (turn.status === "cancelled" || error !== null) return giveBackQueue();
     const [next, ...rest] = queued;
     setQueued(rest);
-    void send(next.text);
+    void send(next.text, next.sent);
   }, [turn.status, error, queued, send, giveBackQueue]);
 
   /** Answers the approval card. `always` widens the policy before continuing. */
@@ -329,9 +376,17 @@ export function useAgentTurn({
     await cancelChat();
   }, []);
 
-  /** Reopens a saved conversation, transcript and model history both. */
+  // A turn under way belongs to the chat on screen: its answer, its approval
+  // card and its first save all land here. Leaving would hand them to the
+  // next chat and drop this one, so leaving waits for it to stop.
+  const busy = turn.status === "running" || turn.status === "awaitingApproval";
+
+  /**
+   * Reopens a saved conversation, transcript and model history both. `false`
+   * when it cannot, because a turn is under way here.
+   */
   const open = useCallback(async (id: string) => {
-    giveBackQueue();
+    if (busy) return false;
     journaled.current = null;
     try {
       const record = await loadChat(id);
@@ -348,11 +403,15 @@ export function useAgentTurn({
     } catch (e) {
       setError(String(e));
     }
-  }, [keepTodos, keepPlan, giveBackQueue]);
+    return true;
+  }, [busy, keepTodos, keepPlan]);
 
-  /** Starts over. What was said is already on disk; this only stops pointing at it. */
+  /**
+   * Starts over. What was said is already on disk; this only stops pointing
+   * at it. `false` while a turn is under way, which has not been.
+   */
   const reset = useCallback(() => {
-    giveBackQueue();
+    if (busy) return false;
     journaled.current = null;
     subscribed.current?.();
     subscribed.current = null;
@@ -364,7 +423,8 @@ export function useAgentTurn({
     setChatId(null);
     setError(null);
     setTurn(emptyTurn());
-  }, [keepTodos, keepPlan, giveBackQueue]);
+    return true;
+  }, [busy, keepTodos, keepPlan]);
 
   // Bubbles a branch can start at; `null` while a turn is under way, when
   // none can. Recomputed with the transcript: the history only changes when
@@ -499,6 +559,7 @@ export function useAgentTurn({
     error,
     context,
     send,
+    review,
     queued,
     queue,
     unqueue,

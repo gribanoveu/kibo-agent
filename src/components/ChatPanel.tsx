@@ -24,6 +24,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
+import { ReviewCard } from "./ReviewCard";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
 import { PANES } from "./panes";
@@ -555,6 +556,8 @@ type Props = {
   onBranch?: (bubbleId: string) => void;
   /** Asks to take this chat, and the files, back to before a bubble — at the same points as a branch. */
   onRewind?: (bubbleId: string) => void;
+  /** Puts a request to fix a review's finding into the message box. */
+  onFix?: (text: string) => void;
 };
 
 export function ChatPanel({
@@ -579,6 +582,7 @@ export function ChatPanel({
   branchable = null,
   onBranch,
   onRewind,
+  onFix,
 }: Props) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -690,7 +694,7 @@ export function ChatPanel({
                   ) : block.kind === "user" ? (
                     <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
                   ) : (
-                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile)
+                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix)
                   ),
                 )}
                 {workedFooter(
@@ -822,8 +826,11 @@ function renderBlock(
   onOpenProcess?: OpenProcess,
   onPasteCommand?: (command: string) => void,
   onOpenFile?: (link: string) => void,
+  onFix?: (text: string) => void,
 ) {
   switch (block.kind) {
+    case "review":
+      return <ReviewCard key={block.id} block={block} onOpenFile={onOpenFile} onFix={onFix} />;
     case "user":
       return (
         <div className="bubble" key={block.id}>

@@ -12,7 +12,7 @@ import "./ContextMeter.css";
 // This is the backend's estimate; the provider's own count for the last
 // request goes next to it rather than implying the two agree.
 
-const compact = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+export const compact = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 
 // Zero is also what a provider that reports nothing sends, so it is not
 // called a miss.

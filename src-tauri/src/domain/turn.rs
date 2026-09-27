@@ -309,6 +309,9 @@ pub enum ChatEventPayload {
     /// several rounds running. Said to the reader too, since the note is in
     /// the history the model reads. `failing` tells the two apart.
     LoopReminded { tool: String, failing: bool },
+    /// `/review`: where one group's worker has got to, whole — the card
+    /// replaces that group's line with it.
+    ReviewGroup(crate::domain::review::GroupProgress),
     /// Token usage as of the round that just finished. Since every request
     /// resends the whole history, this is the authoritative context size, not
     /// a per-round statistic.
