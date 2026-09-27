@@ -25,7 +25,13 @@ export type ToolDisplay = {
   diff?: boolean;
   /** A background process this call started: the row opens it in the Terminal tab. */
   process?: number;
+  /** The helper run an `explore` call was: the open row offers it in the Agents tab. */
+  agent?: AgentFocus;
 };
+
+/** A helper run to show in the Agents tab. The task as well as the number:
+ * numbers start again when the app does, and an old chat's #3 is not today's. */
+export type AgentFocus = { id: number; task: string };
 
 export const LABELS: Record<string, string> = {
   readFile: "Read",
@@ -391,6 +397,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
             .filter(Boolean)
             .join(" · ") || undefined,
         detail: str(result.text) ?? block.output,
+        agent: agent === undefined ? undefined : { id: agent, task: str(args.task) ?? "" },
       };
     }
 

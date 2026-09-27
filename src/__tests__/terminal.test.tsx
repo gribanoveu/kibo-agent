@@ -182,6 +182,14 @@ describe("TerminalPanel", () => {
     expect(screen.getByText(/No background processes/)).toBeTruthy();
   });
 
+  test("a helper run asked for from the chat shows the Agents tab", async () => {
+    const { rerender } = render(panel());
+    await settle();
+    await settle();
+    rerender(panel({ agentFocus: { id: 1, task: "t" } }));
+    expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   test("with no folder open there is nothing to open one in", async () => {
     render(panel({ workspace: null }));
     await settle();

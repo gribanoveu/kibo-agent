@@ -19,6 +19,7 @@ import { useSkills } from "../hooks/useSkills";
 import type { FileTarget, HooksView, McpServerState, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
 import type { AsideTab, PanelItem } from "../types";
 import type { Block } from "../lib/chatTurnReducer";
+import type { AgentFocus } from "../lib/describeTool";
 
 /**
  * What every pane is drawn from. A pane that only it needs reads its own data
@@ -35,6 +36,8 @@ export type PaneContext = {
   commitDraft: { message: string; onMessage: (message: string) => void };
   /** The background process a chat row asked to see; a new object each ask. */
   processFocus: { id: number } | null;
+  /** The helper run a chat row asked to see; a new object each ask. */
+  agentFocus: AgentFocus | null;
   /** A command an answer asked to put in a shell; a new object each ask. */
   terminalPaste: { command: string } | null;
   /** The Terminal took it: not again when the pane is drawn anew. */

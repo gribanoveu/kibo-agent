@@ -32,7 +32,7 @@ import { PANES } from "./panes";
 import { shortcutText } from "../lib/shortcuts";
 import type { AsideTab } from "../types";
 import { Markdown } from "./Markdown";
-import { describeActive, describeRun, describeTool } from "../lib/describeTool";
+import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import type { Block, TurnState } from "../lib/chatTurnReducer";
@@ -64,6 +64,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
 
 /** Opens a background process in the Terminal tab. */
 type OpenProcess = (id: number) => void;
+type OpenAgent = (agent: AgentFocus) => void;
 
 /**
  * A background process that ended, as the model was told of it: how it
@@ -130,7 +131,15 @@ function CompactionCard({ block }: { block: Extract<Block, { kind: "compaction" 
   );
 }
 
-function ToolRow({ block, onOpenProcess }: { block: Extract<Block, { kind: "tool" }>; onOpenProcess?: OpenProcess }) {
+function ToolRow({
+  block,
+  onOpenProcess,
+  onOpenAgent,
+}: {
+  block: Extract<Block, { kind: "tool" }>;
+  onOpenProcess?: OpenProcess;
+  onOpenAgent?: OpenAgent;
+}) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
   const Icon = TOOL_ICON[shown.name] ?? Terminal;
@@ -159,6 +168,14 @@ function ToolRow({ block, onOpenProcess }: { block: Extract<Block, { kind: "tool
           shown.detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
+      {/* Unfolded rather than instead of it, as a process row does: the
+          answer stays readable here after the Agents tab has forgotten the run. */}
+      {open && shown.agent && onOpenAgent && (
+        <button type="button" className="tool-open-agent" onClick={() => onOpenAgent(shown.agent!)}>
+          Show in Agents
+          <ArrowUpRight size={12} aria-hidden />
+        </button>
+      )}
       {open &&
         shown.detail &&
         (shown.diff ? (
@@ -484,7 +501,17 @@ function activity(run: Run): string {
   return last.kind === "tool" ? describeActive(last) : "Thinking";
 }
 
-function ToolRun({ run, live, onOpenProcess }: { run: Run; live: boolean; onOpenProcess?: OpenProcess }) {
+function ToolRun({
+  run,
+  live,
+  onOpenProcess,
+  onOpenAgent,
+}: {
+  run: Run;
+  live: boolean;
+  onOpenProcess?: OpenProcess;
+  onOpenAgent?: OpenAgent;
+}) {
   const tools = run.blocks.filter((b): b is Tool => b.kind === "tool");
   const failed = tools.filter((t) => t.status === "failed").length;
   // Held for a moment each, so quick calls do not flicker past unread.
@@ -512,7 +539,7 @@ function ToolRun({ run, live, onOpenProcess }: { run: Run; live: boolean; onOpen
       <div className="tools">
         {run.blocks.map((block) =>
           block.kind === "tool" ? (
-            <ToolRow key={block.id} block={block} onOpenProcess={onOpenProcess} />
+            <ToolRow key={block.id} block={block} onOpenProcess={onOpenProcess} onOpenAgent={onOpenAgent} />
           ) : (
             renderBlock(block, () => {}, false)
           ),
@@ -547,6 +574,8 @@ type Props = {
   onOpenPlan?: () => void;
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
+  /** Opens the Agents tab on the helper run an `explore` call was. */
+  onOpenAgent?: OpenAgent;
   /** Background processes still running, newest first — counted beside the turn's clock. */
   runningProcesses?: number[];
   /** Puts a shell block from an answer at a prompt in the Terminal tab, not run. Kept stable: every answer re-renders when it changes. */
@@ -578,6 +607,7 @@ export function ChatPanel({
   onImplement,
   onOpenPlan,
   onOpenProcess,
+  onOpenAgent,
   runningProcesses = [],
   onPasteCommand,
   onOpenFile,
@@ -692,11 +722,12 @@ export function ChatPanel({
                       // agent has already written past is finished.
                       live={turn.status === "running" && index === groups.length - 1 && at === items.length - 1}
                       onOpenProcess={onOpenProcess}
+                      onOpenAgent={onOpenAgent}
                     />
                   ) : block.kind === "user" ? (
                     <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
                   ) : (
-                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix)
+                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent)
                   ),
                 )}
                 {workedFooter(
@@ -829,6 +860,7 @@ function renderBlock(
   onPasteCommand?: (command: string) => void,
   onOpenFile?: (link: string) => void,
   onFix?: (text: string) => void,
+  onOpenAgent?: OpenAgent,
 ) {
   switch (block.kind) {
     case "user":
@@ -888,7 +920,7 @@ function renderBlock(
       if (finding) return <FindingCard key={block.id} finding={finding} onOpenFile={onOpenFile} onFix={onFix} />;
       return (
         <div className="tools" key={block.id}>
-          <ToolRow block={block} onOpenProcess={onOpenProcess} />
+          <ToolRow block={block} onOpenProcess={onOpenProcess} onOpenAgent={onOpenAgent} />
         </div>
       );
     }

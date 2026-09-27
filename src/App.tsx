@@ -44,7 +44,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { exportChat, setConversationMode, type ConversationMode } from "./lib/chat";
+import { exportChat, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAsideTab, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -59,6 +59,7 @@ import { expandTemplate, fileCommands, typedCommand, type SlashCommand } from ".
 import initPrompt from "./prompts/init.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import "./App.css";
+import type { AgentFocus } from "./lib/describeTool";
 
 // Titlebar drag: single press drags the window, double press zooms it — the macOS
 // titlebar contract, driven explicitly so clicks on the controls stay clicks.
@@ -103,6 +104,7 @@ export default function App() {
   // Which background process a chat row asked the Terminal tab to show. The
   // row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number } | null>(null);
+  const [agentFocus, setAgentFocus] = useState<AgentFocus | null>(null);
   // A shell block an answer asked to put in a shell, until the Terminal tab
   // takes it. Kept only till then: an ask still held when the tab is drawn
   // again would be pasted again. `pasteInTerminal` is stable, so the answers'
@@ -355,8 +357,10 @@ export default function App() {
   // Asking before the first message rather than refusing it — and then sending
   // it: the composer has already cleared the box, so anything not sent here is
   // typed twice.
-  // `sent` is what the model gets in place of `text` — a `/` command's prompt.
-  const send = async (text: string, sent?: string) => {
+  // `command`, when given, is what the model gets in place of `text` — a `/`
+  // command's prompt — with the reply language said at its end.
+  const send = async (text: string, command?: string) => {
+    const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
     if (!workspace.path && !(await workspace.pick())) return;
     // With Worktree ticked the first message is where the worktree is made:
     // sent here, it would be worked on in the folder the user meant to keep out of.
@@ -400,6 +404,7 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
+    agentFocus,
     terminalPaste,
     onTerminalPasted: terminalPasted,
     onAddToChat: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
@@ -500,6 +505,10 @@ export default function App() {
             onOpenProcess={(id) => {
               openTab("terminal");
               setProcessFocus({ id });
+            }}
+            onOpenAgent={(agent) => {
+              openTab("terminal");
+              setAgentFocus({ ...agent });
             }}
             runningProcesses={runningProcesses.map((process) => process.id)}
             onPasteCommand={workspace.path ? pasteInTerminal : undefined}

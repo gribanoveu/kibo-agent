@@ -690,6 +690,38 @@ describe("a background process started from the chat", () => {
   });
 });
 
+describe("a helper's explore row", () => {
+  const explored = {
+    kind: "tool",
+    id: "e1",
+    round: 1,
+    name: "explore",
+    arguments: '{"task":"Where is X?"}',
+    status: "done",
+    result: { text: "X is in a.rs:1", agent: 4, tokens: { prompt: 1000, cached: 0, completion: 10 } },
+    output: "grep X\n",
+  } as Block;
+
+  test("unfolds to its answer, with its run in the Agents tab a click away", () => {
+    const opened: unknown[] = [];
+    render(
+      <ChatPanel workspace="/tmp/project" turn={state([explored])} onDecide={() => {}} onOpenRepo={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
+    );
+    expect(screen.queryByText("Show in Agents")).toBeNull();
+    fireEvent.click(screen.getByText("Where is X?"));
+    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
+    fireEvent.click(screen.getByText("Show in Agents"));
+    expect(opened).toEqual([{ id: 4, task: "Where is X?" }]);
+  });
+
+  test("with nowhere to open it, the answer is all there is", () => {
+    panel(state([explored]));
+    fireEvent.click(screen.getByText("Where is X?"));
+    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
+    expect(screen.queryByText("Show in Agents")).toBeNull();
+  });
+});
+
 describe("a background process that ended", () => {
   const ended = (code: number) =>
     ({

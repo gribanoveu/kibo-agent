@@ -76,6 +76,8 @@ describe("what each call shows", () => {
       }),
     );
     expect(done).toMatchObject({ meta: "1 step · 12k tokens · 75% cached · agent #3", detail: "src/auth.rs:42" });
+    expect(done.agent).toEqual({ id: 3, task: "Where is the token refreshed?\nReport paths and lines." });
+    expect(running.agent).toBeUndefined();
     const failed = describeTool(tool({ name: "explore", arguments: args, error: "explore: stopped before it answered" }));
     expect(failed).toMatchObject({ arg: "Where is the token refreshed?", meta: "failed" });
   });

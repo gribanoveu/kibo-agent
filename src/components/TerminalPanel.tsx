@@ -9,12 +9,15 @@ import { useTerminalScreen } from "../hooks/useTerminalScreen";
 import { queuePaste } from "../lib/pasteAtPrompt";
 import { terminalQuote, terminalTitle, type TerminalInfo } from "../lib/terminal";
 import "./TerminalPanel.css";
+import type { AgentFocus } from "../lib/describeTool";
 
 type Props = {
   active: boolean;
   workspace: string | null;
   /** The background process a chat row asked to see; a new object each ask. */
   processFocus: { id: number } | null;
+  /** The helper run a chat row asked to see; a new object each ask. */
+  agentFocus: AgentFocus | null;
   /** A command an answer asked to put in a shell; a new object each ask. */
   terminalPaste: { command: string } | null;
   /** Says the ask was taken, so it is not taken again when the pane is drawn anew. */
@@ -56,7 +59,7 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
  * background processes and helper agents as the last two tabs. Opening the pane gives a shell, as a
  * terminal window does — once per folder, not again after the last is closed.
  */
-export function TerminalPanel({ active, workspace, processFocus, terminalPaste, onTerminalPasted, onAddToChat }: Props) {
+export function TerminalPanel({ active, workspace, processFocus, agentFocus, terminalPaste, onTerminalPasted, onAddToChat }: Props) {
   const { processes, error: processError, stop } = useProcesses(active);
   const { agents, error: agentError, stop: stopAgent } = useAgents(active);
   const shells = useTerminals(active);
@@ -92,6 +95,10 @@ export function TerminalPanel({ active, workspace, processFocus, terminalPaste, 
   useEffect(() => {
     if (processFocus) setPicked("processes");
   }, [processFocus]);
+
+  useEffect(() => {
+    if (agentFocus) setPicked("agents");
+  }, [agentFocus]);
 
   // A picked shell that was closed falls back to the newest one left.
   const newest = shells.terminals[shells.terminals.length - 1];
@@ -161,7 +168,7 @@ export function TerminalPanel({ active, workspace, processFocus, terminalPaste, 
         <TerminalView key={drawn.id} terminal={drawn} onAddToChat={onAddToChat} />
       ) : shown === "agents" ? (
         <div className="terminal-processes">
-          <AgentList agents={agents} error={agentError} onStop={stopAgent} />
+          <AgentList agents={agents} error={agentError} onStop={stopAgent} focus={agentFocus} />
         </div>
       ) : (
         <div className="terminal-processes">

@@ -369,6 +369,18 @@ export type ProviderView = ProviderConfig & { hasApiKey: boolean };
 /** Mirrors `domain::settings::ReplyLanguage`: what the model writes in; `auto` asks nothing. */
 export type ReplyLanguage = "auto" | "english" | "russian";
 
+/**
+ * A `/` command's prompt with the reply language said at its end, as
+ * `domain::prompt::with_language_reminder` does for the app's own notes: the
+ * prompt is the app's words, usually English, and what the user typed — the
+ * one thing in their language — is not what the model gets.
+ */
+export function withLanguageReminder(prompt: string, language: ReplyLanguage): string {
+  if (language === "auto") return prompt;
+  const name = language === "english" ? "English" : "Russian";
+  return `${prompt}\n\n[Reply in ${name}.]`;
+}
+
 export type LlmSettings = {
   providers: ProviderView[];
   activeProviderId: string | null;

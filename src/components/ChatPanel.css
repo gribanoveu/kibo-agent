@@ -471,6 +471,24 @@ button.turn-processes:hover {
 .tool-item.open .tool .chev {
   transform: rotate(90deg);
 }
+/* An explore row, unfolded: its run in the Agents tab, above its answer. */
+.tool-open-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 4px 8px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.tool-open-agent:hover {
+  color: var(--text);
+}
 .tool-detail {
   margin: 0 0 4px 8px;
   padding: 7px 9px;

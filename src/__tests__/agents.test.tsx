@@ -114,6 +114,20 @@ describe("the agent list", () => {
     expect(screen.queryByText(/readFile src\/auth\.rs/)).toBeNull();
   });
 
+  test("a run asked for from the chat opens once it is listed, and only if it is still that run", () => {
+    // One ask, one object: the list is what changes, read after the tab opened for it.
+    const focus = { id: 1, task: "Which tests cover the parser?" };
+    const { rerender } = render(<AgentList agents={[]} error={null} onStop={() => {}} focus={focus} />);
+    rerender(<AgentList agents={listed} error={null} onStop={() => {}} focus={focus} />);
+    expect(screen.getByText("tests/parser.rs:12")).toBeTruthy();
+  });
+
+  test("a number from before a restart is not today's run with that number", () => {
+    render(<AgentList agents={listed} error={null} onStop={() => {}} focus={{ id: 1, task: "something asked yesterday" }} />);
+    expect(screen.queryByText("tests/parser.rs:12")).toBeNull();
+    expect(screen.getByText(/readFile src\/auth\.rs/)).toBeTruthy();
+  });
+
   test("a failed run says why", () => {
     render(
       <AgentList

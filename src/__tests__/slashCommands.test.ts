@@ -99,3 +99,14 @@ describe("the /init prompt", () => {
     expect(expandTemplate(initPrompt, "the IPC layer")).toContain("(may be empty): the IPC layer\n");
   });
 });
+
+describe("a command's prompt and the reply language", () => {
+  // The prompt is the app's words; what the user typed — the one thing in
+  // their language — is not what the model gets, so the prompt says it.
+  test("ends by naming the chosen language, and auto adds nothing", async () => {
+    const { withLanguageReminder } = await import("../lib/chat");
+    expect(withLanguageReminder("Write AGENTS.md.", "russian")).toBe("Write AGENTS.md.\n\n[Reply in Russian.]");
+    expect(withLanguageReminder("Write AGENTS.md.", "english")).toBe("Write AGENTS.md.\n\n[Reply in English.]");
+    expect(withLanguageReminder("Write AGENTS.md.", "auto")).toBe("Write AGENTS.md.");
+  });
+});
