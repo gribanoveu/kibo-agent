@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::domain::background::{BackgroundProcesses, Feed, ProcessInfo};
 use crate::domain::command_exec::{
     CommandError, CommandEvent, CommandOutput, CommandRequest, CommandSink, OutputStream,
     MAX_OUTPUT_CHARS, Shell, ShellFound, collapse_redraws, truncate_output,
@@ -54,6 +55,36 @@ pub fn run(
     run_with(shell, request, cwd, events, None, &[])
 }
 
+/// How a command run by [`run_or_move`] came back.
+#[derive(Debug)]
+pub enum Ran {
+    Finished(CommandOutput),
+    /// Still running at its timeout, it went on as this background process
+    /// — after `after_ms` in the foreground.
+    Moved { process: ProcessInfo, after_ms: u64 },
+}
+
+/// [`run`], except that a command still running at its timeout is not
+/// killed but handed to `processes`, output so far and all: a build that
+/// needed longer, or a server started without `background`, goes on instead
+/// of being lost with everything it did. Killed after all when `processes`
+/// is full.
+pub fn run_or_move(
+    shell: &Shell,
+    request: &CommandRequest,
+    cwd: &Path,
+    shown_cwd: &str,
+    events: Option<&CommandSink>,
+    processes: &dyn BackgroundProcesses,
+) -> Result<Ran, CommandError> {
+    let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, shown_cwd, backlog).ok();
+    run_inner(shell, request, cwd, events, None, &[], Some(&adopt))
+}
+
+/// Takes a child at its deadline, with what it wrote so far; `None` when it
+/// was refused, and the child ended.
+type Adopt<'a> = &'a dyn Fn(Child, &str) -> Option<(ProcessInfo, [Feed; 2])>;
+
 /// [`run`], with `input` written to the command's stdin and closed, and
 /// `env` added to its environment — what a hook is given.
 pub fn run_with(
@@ -64,6 +95,21 @@ pub fn run_with(
     input: Option<&str>,
     env: &[(&str, &str)],
 ) -> Result<CommandOutput, CommandError> {
+    match run_inner(shell, request, cwd, events, input, env, None)? {
+        Ran::Finished(output) => Ok(output),
+        Ran::Moved { .. } => unreachable!("nothing to move to without `adopt`"),
+    }
+}
+
+fn run_inner(
+    shell: &Shell,
+    request: &CommandRequest,
+    cwd: &Path,
+    events: Option<&CommandSink>,
+    input: Option<&str>,
+    env: &[(&str, &str)],
+    adopt: Option<Adopt>,
+) -> Result<Ran, CommandError> {
     if !cwd.is_dir() {
         return Err(CommandError::Cwd(format!(
             "{} is not a directory",
@@ -99,14 +145,16 @@ pub fn run_with(
         });
     }
 
-    let stdout = collect(child.stdout.take(), OutputStream::Stdout, events.cloned());
-    let stderr = collect(child.stderr.take(), OutputStream::Stderr, events.cloned());
+    let (stdout_to, stdout) = collect(child.stdout.take(), OutputStream::Stdout, events.cloned());
+    let (stderr_to, stderr) = collect(child.stderr.take(), OutputStream::Stderr, events.cloned());
 
     let started = Instant::now();
     let deadline = started + request.timeout();
     let mut timed_out = false;
+    let mut child = Some(child);
     let status = loop {
-        match child.try_wait() {
+        let Some(running) = child.as_mut() else { break None };
+        match running.try_wait() {
             Ok(Some(status)) => {
                 // Killed even though it exited by itself. A command is allowed
                 // to leave something running — `sh -c 'server & exit 0'` — and
@@ -115,7 +163,7 @@ pub fn run_with(
                 // timeout already behind us. A background process that outlives
                 // its turn is CA-4.5 and is not this tool; here it is a call
                 // that never returns.
-                kill_tree(&mut child);
+                kill_tree(running);
                 break Some(status);
             }
             Ok(None) => {}
@@ -123,10 +171,26 @@ pub fn run_with(
         }
         if Instant::now() >= deadline {
             timed_out = true;
-            kill_tree(&mut child);
+            if let Some(adopt) = adopt {
+                // Both streams held while it changes hands, so no chunk falls
+                // between the backlog and the feeds.
+                let mut out = lock(&stdout_to);
+                let mut err = lock(&stderr_to);
+                let backlog = format!("{}{}", out.kept(), err.kept());
+                let Some(taken) = child.take() else { break None };
+                if let Some((process, [out_feed, err_feed])) = adopt(taken, &backlog) {
+                    *out = Target::Feed(out_feed);
+                    *err = Target::Feed(err_feed);
+                    let after_ms = started.elapsed().as_millis() as u64;
+                    return Ok(Ran::Moved { process, after_ms });
+                }
+                // Refused and ended: reported as a timeout, as before.
+                break None;
+            }
+            kill_tree(running);
             // Reaped so the process does not linger as a zombie; whatever it
             // exited with is not an answer to anything now.
-            let _ = child.wait();
+            let _ = running.wait();
             break None;
         }
         thread::sleep(POLL);
@@ -134,8 +198,10 @@ pub fn run_with(
 
     // After the kill either way, so the readers see EOF and finish instead of
     // holding the call open for as long as whatever inherited the pipe runs.
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr = stderr.join().unwrap_or_default();
+    let _ = stdout.join();
+    let _ = stderr.join();
+    let stdout = lock(&stdout_to).take();
+    let stderr = lock(&stderr_to).take();
 
     let (shown_out, stdout_cut) = truncate_output(&stdout, MAX_OUTPUT_CHARS);
     let (shown_err, stderr_cut) = truncate_output(&stderr, MAX_OUTPUT_CHARS);
@@ -145,7 +211,7 @@ pub fn run_with(
         .flatten()
         .map(|path| path.display().to_string());
 
-    Ok(CommandOutput {
+    Ok(Ran::Finished(CommandOutput {
         stdout: shown_out,
         stderr: shown_err,
         exit_code: status.and_then(|s| s.code()),
@@ -153,22 +219,48 @@ pub fn run_with(
         truncated,
         duration_ms: started.elapsed().as_millis() as u64,
         full_output,
-    })
+    }))
 }
 
-/// Reads one stream to EOF on its own thread, reporting as it goes.
+/// Where a reader puts what it reads: kept for the result, or — once the
+/// command has moved to the background — fed to the process it became.
+enum Target {
+    Keep(String),
+    Feed(Feed),
+}
+
+impl Target {
+    fn kept(&self) -> &str {
+        match self {
+            Target::Keep(text) => text,
+            Target::Feed(_) => "",
+        }
+    }
+
+    fn take(&mut self) -> String {
+        match self {
+            Target::Keep(text) => std::mem::take(text),
+            Target::Feed(_) => String::new(),
+        }
+    }
+}
+
+fn lock(target: &Mutex<Target>) -> std::sync::MutexGuard<'_, Target> {
+    target.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Reads one stream to EOF on its own thread, reporting as it goes — into
+/// the target it returns, which a move to the background redirects.
 fn collect(
-    pipe: Option<impl Read + Send + 'static>,
+    mut pipe: Option<impl Read + Send + 'static>,
     stream: OutputStream,
     events: Option<CommandSink>,
-) -> thread::JoinHandle<String> {
-    thread::spawn(move || {
-        let Some(mut pipe) = pipe else {
-            return String::new();
-        };
-        let collected = Arc::new(Mutex::new(String::new()));
+) -> (Arc<Mutex<Target>>, thread::JoinHandle<()>) {
+    let target = Arc::new(Mutex::new(Target::Keep(String::new())));
+    let to = Arc::clone(&target);
+    let reader = thread::spawn(move || {
         let mut buffer = [0u8; 8192];
-        loop {
+        while let Some(pipe) = pipe.as_mut() {
             match pipe.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
@@ -176,16 +268,23 @@ fn collect(
                     // multi-byte character, and losing one character is better
                     // than losing the run.
                     let chunk = String::from_utf8_lossy(&buffer[..n]).into_owned();
-                    collected.lock().expect("not shared across a panic").push_str(&chunk);
-                    if let Some(events) = &events {
-                        events(CommandEvent { stream, chunk });
+                    match &mut *lock(&to) {
+                        Target::Keep(text) => {
+                            text.push_str(&chunk);
+                            if let Some(events) = &events {
+                                events(CommandEvent { stream, chunk });
+                            }
+                        }
+                        Target::Feed(feed) => feed(Some(&chunk)),
                     }
                 }
             }
         }
-        let out = collected.lock().expect("not shared across a panic").clone();
-        out
-    })
+        if let Target::Feed(feed) = &mut *lock(&to) {
+            feed(None);
+        }
+    });
+    (target, reader)
 }
 
 /// Asks the shell what it really is — see `domain::command_exec::describe_shell`.
@@ -264,6 +363,40 @@ mod tests {
             timeout_seconds,
             background: None,
         }
+    }
+
+    /// After a move the readers feed the process it became, to the end: its
+    /// output, then each pipe's close — without which its watch never ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_command_feeds_its_streams_to_their_close() {
+        use crate::domain::background::ProcessState;
+        let fed = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+        let adopted = Arc::new(Mutex::new(None::<(Child, String)>));
+        let (sink, keep) = (Arc::clone(&fed), Arc::clone(&adopted));
+        let adopt = move |child: Child, backlog: &str| {
+            *keep.lock().unwrap() = Some((child, backlog.to_string()));
+            let feed = || {
+                let sink = Arc::clone(&sink);
+                Box::new(move |text: Option<&str>| sink.lock().unwrap().push(text.map(String::from))) as Feed
+            };
+            let info = ProcessInfo { id: 1, command: String::new(), cwd: ".".into(), state: ProcessState::Running };
+            Some((info, [feed(), feed()]))
+        };
+
+        let ran = run_inner(&Shell::default(), &ask("echo before; sleep 1.3; echo after", Some(1)), &temp_dir("run-move"), None, None, &[], Some(&adopt))
+            .unwrap();
+        assert!(matches!(ran, Ran::Moved { .. }), "{ran:?}");
+        let (mut child, backlog) = adopted.lock().unwrap().take().unwrap();
+        assert_eq!(backlog, "before\n");
+        child.wait().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fed.lock().unwrap().iter().filter(|f| f.is_none()).count() < 2 {
+            assert!(Instant::now() < deadline, "{:?}", fed.lock().unwrap());
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(fed.lock().unwrap().iter().flatten().cloned().collect::<String>(), "after\n");
     }
 
     fn run_in(dir: &Path, command: &str) -> CommandOutput {

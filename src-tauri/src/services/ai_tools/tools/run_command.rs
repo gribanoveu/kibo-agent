@@ -3,7 +3,7 @@
 use crate::domain::command_exec::{CommandError, CommandRequest, MAX_OUTPUT_CHARS};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{ToolDeps, ToolError, ToolResult, ToolScope};
-use crate::infra::process_runner;
+use crate::infra::process_runner::{self, Ran};
 
 use super::super::resolve::resolve_existing;
 
@@ -33,9 +33,19 @@ pub fn run_command(
         return Ok(ToolResult::ProcessStarted(processes.start(&deps.shell, &request.command, &cwd, shown)?));
     }
 
-    process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref())
-        .map(ToolResult::CommandRan)
-        .map_err(|e| match e {
+    // With nowhere to move to — a hook, a test — the timeout kills as it always did.
+    let ran = match deps.processes.as_deref() {
+        Some(processes) => {
+            let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
+            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes)
+        }
+        None => process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished),
+    };
+    ran.map(|ran| match ran {
+        Ran::Finished(output) => ToolResult::CommandRan(output),
+        Ran::Moved { process, after_ms } => ToolResult::CommandMoved { process, after_ms },
+    })
+    .map_err(|e| match e {
             CommandError::Cwd(message) => ToolError::InvalidArguments {
                 tool: "runCommand".to_string(),
                 reason: message,
@@ -48,7 +58,7 @@ pub fn run_command(
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "runCommand".to_string(),
-        description: format!("Run a shell command in the workspace — build, test, lint, inspect. It runs under `/bin/sh -c` (`cmd.exe /C` on Windows), not the user's shell; what that sh really is here, the prompt says under \"Shell for commands\". A line that works here is not thereby portable: a script meant to run elsewhere is checked with a linter, not by running it here. The exit code, stdout and stderr all come back; a non-zero exit is an ordinary answer, not a failure of the call. The exit code is the whole line's — in `a; b` it is `b`'s, so use `&&` when an earlier failure matters. Output is streamed as it is produced; stdout and stderr are cut separately: past {MAX_OUTPUT_CHARS} characters, a stream keeps its first and its last {half} characters and drops the middle, and the mark there says how many lines (or characters, when a long line was cut) went. Both streams are then saved whole, outside the workspace, for {days} days: the result names the file — grep, head or tail it for what the cut left out instead of running the command again. The command runs to completion or is killed at its timeout, together with everything it started. For something that has to keep running — a dev server, a watcher — set background: the call returns at once with a process number, readOutput reads what it writes, stopProcess ends it, and you are told when one ends on its own.", half = MAX_OUTPUT_CHARS / 2, days = crate::infra::command_output_store::RETENTION_DAYS),
+        description: format!("Run a shell command in the workspace — build, test, lint, inspect. It runs under `/bin/sh -c` (`cmd.exe /C` on Windows), not the user's shell; what that sh really is here, the prompt says under \"Shell for commands\". A line that works here is not thereby portable: a script meant to run elsewhere is checked with a linter, not by running it here. The exit code, stdout and stderr all come back; a non-zero exit is an ordinary answer, not a failure of the call. The exit code is the whole line's — in `a; b` it is `b`'s, so use `&&` when an earlier failure matters. Output is streamed as it is produced; stdout and stderr are cut separately: past {MAX_OUTPUT_CHARS} characters, a stream keeps its first and its last {half} characters and drops the middle, and the mark there says how many lines (or characters, when a long line was cut) went. Both streams are then saved whole, outside the workspace, for {days} days: the result names the file — grep, head or tail it for what the cut left out instead of running the command again. A command still running at its timeout is not killed: the call returns and the command goes on as a background process — do not run it again, read it with readOutput. For something that has to keep running — a dev server, a watcher — set background: the call returns at once with a process number, readOutput reads what it writes, stopProcess ends it, and you are told when one ends on its own.", half = MAX_OUTPUT_CHARS / 2, days = crate::infra::command_output_store::RETENTION_DAYS),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
@@ -67,7 +77,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                 "timeoutSeconds": {
                     "type": ["integer", "null"],
                     "minimum": 0,
-                    "description": "How long to allow, up to 600. Omit for 120. A command still running then is killed, and the result says so — raise this for a slow build rather than re-running it in pieces."
+                    "description": "How long to wait for it, up to 600. Omit for 120. A command still running then moves to the background, where it runs on — raise this for a slow build you want the result of in this call."
                 }
             },
             "required": ["command"]

@@ -1144,6 +1144,14 @@ pub enum ToolResult {
     CommandRan(crate::domain::command_exec::CommandOutput),
     /// `runCommand` with `background`: it runs on, and this is its number.
     ProcessStarted(crate::domain::background::ProcessInfo),
+    /// `runCommand` still running at its timeout: not killed, it runs on as
+    /// this background process.
+    #[serde(rename_all = "camelCase")]
+    CommandMoved {
+        #[serde(flatten)]
+        process: crate::domain::background::ProcessInfo,
+        after_ms: u64,
+    },
     ProcessOutput(crate::domain::background::ProcessOutput),
     ProcessStopped(crate::domain::background::ProcessInfo),
     TerminalScreen(crate::domain::terminal::TerminalScreen),

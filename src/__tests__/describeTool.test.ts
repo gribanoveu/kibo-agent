@@ -31,6 +31,19 @@ describe("what each call shows", () => {
     expect(started.meta).toBe("background #3");
   });
 
+  test("a command moved to the background at its timeout shows its number and what it wrote till then", () => {
+    const moved = describeTool(
+      tool({
+        name: "runCommand",
+        arguments: '{"command":"cargo test"}',
+        output: "Compiling kibo\n",
+        result: { result: "commandMoved", id: 4, command: "cargo test", cwd: ".", state: { state: "running" }, afterMs: 120000 },
+      }),
+    );
+    expect(moved).toMatchObject({ name: "Bash", arg: "cargo test", detail: "Compiling kibo\n", process: 4 });
+    expect(moved.meta).toStartWith("moved to background #4 · ");
+  });
+
   test("reading a process shows what it wrote and how it stands", () => {
     const read = describeTool(
       tool({

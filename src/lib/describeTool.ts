@@ -304,6 +304,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         };
       }
       const streamed = block.output;
+      // Still running at its timeout, it went on in the background: what
+      // streamed in so far is all the call saw.
+      if (result.result === "commandMoved") {
+        const id = num(result.id);
+        return {
+          name,
+          arg: str(args.command) ?? "",
+          meta: [id === undefined ? "background" : `moved to background #${id}`, took(num(result.afterMs))].filter(Boolean).join(" · "),
+          detail: collapseRedraws(streamed),
+          process: id,
+        };
+      }
       const settled = `${str(result.stdout) ?? ""}${str(result.stderr) ?? ""}`;
       const code = num(result.exitCode);
       return {

@@ -65,7 +65,7 @@ pub(super) fn stop_definition() -> LlmToolDefinition {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::domain::background::{BackgroundError, ProcessState};
+    use crate::domain::background::{BackgroundError, ProcessOutput, ProcessState};
     use crate::domain::command_exec::CommandRequest;
     use crate::domain::tools::{ReadFiles, ToolCall, ToolScope};
     use crate::infra::background::Processes;
@@ -120,6 +120,65 @@ mod tests {
             panic!()
         };
         assert_eq!(stopped.state, ProcessState::Stopped);
+    }
+
+    fn read_until(root: &std::path::Path, deps: &ToolDeps, id: u32, done: impl Fn(&ProcessOutput) -> bool) -> String {
+        let mut seen = String::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let ToolResult::ProcessOutput(out) = run(root, deps, ToolCall::ReadOutput(ProcessArgs { id: Some(id) })).unwrap() else {
+                panic!()
+            };
+            seen.push_str(&out.output);
+            if done(&out) {
+                return seen;
+            }
+            assert!(Instant::now() < deadline, "not yet: {seen:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// A command still running at its timeout goes on in the background:
+    /// nothing it wrote before or after the move is lost, and it ends as it
+    /// would have.
+    #[test]
+    fn a_command_that_outlasts_its_timeout_moves_to_the_background() {
+        let root = temp_dir("tool-move");
+        let deps = ToolDeps { processes: Some(Arc::new(Processes::default())), ..ToolDeps::default() };
+        let mut call = background("echo before; echo oops >&2; sleep 1.5; echo after; echo late >&2; exit 4", None);
+        let ToolCall::RunCommand(request) = &mut call else { unreachable!() };
+        request.background = None;
+
+        let ToolResult::CommandMoved { process, after_ms } = run(&root, &deps, call).unwrap() else {
+            panic!("expected a move");
+        };
+        assert_eq!((process.id, process.state), (1, ProcessState::Running));
+        assert!((1000..1500).contains(&after_ms), "{after_ms}");
+
+        let seen = read_until(&root, &deps, 1, |out| !out.process.running());
+        assert!(seen.contains("before\n") && seen.contains("oops\n") && seen.contains("after\n") && seen.contains("late\n"), "{seen:?}");
+        let ToolResult::ProcessOutput(end) = run(&root, &deps, ToolCall::ReadOutput(ProcessArgs { id: Some(1) })).unwrap() else {
+            panic!()
+        };
+        assert_eq!(end.process.state, ProcessState::Exited { code: Some(4) });
+    }
+
+    /// No room in the background: killed at its timeout, as before.
+    #[test]
+    fn with_the_background_full_a_command_is_killed_at_its_timeout() {
+        let root = temp_dir("tool-move-full");
+        let processes = Arc::new(Processes::default());
+        for _ in 0..crate::domain::background::MAX_RUNNING {
+            processes.start(&Default::default(), "sleep 30", &root, ".").unwrap();
+        }
+        let deps = ToolDeps { processes: Some(processes), ..ToolDeps::default() };
+        let mut call = background("echo before; sleep 30", None);
+        let ToolCall::RunCommand(request) = &mut call else { unreachable!() };
+        request.background = None;
+
+        let ToolResult::CommandRan(out) = run(&root, &deps, call).unwrap() else { panic!("expected a kill") };
+        assert!(out.timed_out && out.exit_code.is_none());
+        assert_eq!(out.stdout, "before\n");
     }
 
     #[test]

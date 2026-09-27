@@ -90,6 +90,10 @@ pub struct ProcessChanged {
 
 pub type ProcessEventSink = Arc<dyn Fn(ProcessChanged) + Send + Sync>;
 
+/// One of a process's streams, fed by whoever reads its pipe: `Some` for text
+/// read, `None` once the pipe is closed.
+pub type Feed = Box<dyn FnMut(Option<&str>) + Send>;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BackgroundError {
     #[error("{MAX_RUNNING} background processes are already running ({0}). Stop one with stopProcess before starting another.")]
@@ -102,6 +106,18 @@ pub enum BackgroundError {
 
 pub trait BackgroundProcesses: Send + Sync {
     fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError>;
+
+    /// Takes over a `runCommand` still running at its timeout: it goes on as
+    /// one of these, `backlog` — what it wrote so far — unread in its output.
+    /// The caller's readers feed its two streams from then on, one [`Feed`]
+    /// each. Refused when too many run; the child is then ended here.
+    fn adopt(
+        &self,
+        child: std::process::Child,
+        command: &str,
+        shown_cwd: &str,
+        backlog: &str,
+    ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError>;
 
     /// Moves the model's place to the end: the same output is not read twice.
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError>;

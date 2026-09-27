@@ -3108,6 +3108,15 @@ mod tests {
         fn take_ended(&self) -> Vec<crate::domain::background::ProcessInfo> {
             std::mem::take(&mut self.0.lock().unwrap())
         }
+        fn adopt(
+            &self,
+            _: std::process::Child,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(crate::domain::background::ProcessInfo, [crate::domain::background::Feed; 2]), crate::domain::background::BackgroundError> {
+            unreachable!()
+        }
     }
 
     /// The turn hands its processes to the tools: a background start in the

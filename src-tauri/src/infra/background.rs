@@ -15,8 +15,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::domain::background::{
-    BackgroundError, BackgroundProcesses, OutputBuffer, ProcessChanged, ProcessEventSink, ProcessInfo, ProcessOutput,
-    ProcessState, MAX_FINISHED, MAX_RUNNING,
+    BackgroundError, BackgroundProcesses, Feed, OutputBuffer, ProcessChanged, ProcessEventSink, ProcessInfo,
+    ProcessOutput, ProcessState, MAX_FINISHED, MAX_RUNNING,
 };
 use crate::domain::command_exec::{truncate_output, Shell, MAX_OUTPUT_CHARS};
 
@@ -127,6 +127,50 @@ impl Processes {
     }
 }
 
+/// Refused past [`MAX_RUNNING`], naming what runs.
+fn room(registry: &Registry) -> Result<(), BackgroundError> {
+    let running: Vec<String> =
+        registry.entries.iter().filter(|e| e.info.running()).map(|e| e.info.describe()).collect();
+    if running.len() >= MAX_RUNNING {
+        return Err(BackgroundError::TooMany(running.join("; ")));
+    }
+    Ok(())
+}
+
+impl Processes {
+    /// Enters a running child under the next number, with `backlog` unread
+    /// and two streams still to drain, and starts watching it. The feeds are
+    /// the streams' way in.
+    fn register(
+        &self,
+        registry: &mut Registry,
+        child: Child,
+        command: &str,
+        shown_cwd: &str,
+        backlog: &str,
+    ) -> (ProcessInfo, [Feed; 2]) {
+        registry.next_id += 1;
+        let id = registry.next_id;
+        let info = ProcessInfo { id, command: command.to_string(), cwd: shown_cwd.to_string(), state: ProcessState::Running };
+        let mut buffer = OutputBuffer::default();
+        buffer.push(backlog);
+        registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false });
+        watch(&self.registry, &self.changed, id);
+
+        // Forget the oldest finished ones past the limit.
+        let finished = registry.entries.iter().filter(|e| !e.info.running()).count();
+        let mut excess = finished.saturating_sub(MAX_FINISHED);
+        registry.entries.retain(|e| {
+            let drop = excess > 0 && !e.info.running();
+            if drop {
+                excess -= 1;
+            }
+            !drop
+        });
+        (info, [feed(&self.registry, id), feed(&self.registry, id)])
+    }
+}
+
 impl Drop for Processes {
     fn drop(&mut self) {
         self.stop_all();
@@ -142,11 +186,7 @@ fn end(child: &mut Child) {
 impl BackgroundProcesses for Processes {
     fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
         let mut registry = lock(&self.registry);
-        let running: Vec<String> =
-            registry.entries.iter().filter(|e| e.info.running()).map(|e| e.info.describe()).collect();
-        if running.len() >= MAX_RUNNING {
-            return Err(BackgroundError::TooMany(running.join("; ")));
-        }
+        room(&registry)?;
 
         let mut process = Command::new(&shell.program);
         process
@@ -160,33 +200,32 @@ impl BackgroundProcesses for Processes {
         super::login_path::apply(&mut process);
         let mut child = process.spawn().map_err(|e| BackgroundError::NotStarted(format!("{}: {e}", shell.program)))?;
 
-        registry.next_id += 1;
-        let id = registry.next_id;
-        let streams = usize::from(read_into(&self.registry, id, child.stdout.take()))
-            + usize::from(read_into(&self.registry, id, child.stderr.take()));
-        let info = ProcessInfo { id, command: command.to_string(), cwd: shown_cwd.to_string(), state: ProcessState::Running };
-        registry.entries.push(Entry {
-            info: info.clone(),
-            child: Some(child),
-            buffer: OutputBuffer::default(),
-            streams,
-            reported: false,
-        });
-        watch(&self.registry, &self.changed, id);
-
-        // Forget the oldest finished ones past the limit.
-        let finished = registry.entries.iter().filter(|e| !e.info.running()).count();
-        let mut excess = finished.saturating_sub(MAX_FINISHED);
-        registry.entries.retain(|e| {
-            let drop = excess > 0 && !e.info.running();
-            if drop {
-                excess -= 1;
-            }
-            !drop
-        });
+        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+        let (info, [out, err]) = self.register(&mut registry, child, command, shown_cwd, "");
+        // Under the lock still: a reader's first chunk waits for the entry.
+        read_into(stdout, out);
+        read_into(stderr, err);
         drop(registry);
-        (self.changed)(ProcessChanged { id });
+        (self.changed)(ProcessChanged { id: info.id });
         Ok(info)
+    }
+
+    fn adopt(
+        &self,
+        mut child: Child,
+        command: &str,
+        shown_cwd: &str,
+        backlog: &str,
+    ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
+        let mut registry = lock(&self.registry);
+        if let Err(full) = room(&registry) {
+            end(&mut child);
+            return Err(full);
+        }
+        let adopted = self.register(&mut registry, child, command, shown_cwd, backlog);
+        drop(registry);
+        (self.changed)(ProcessChanged { id: adopted.0.id });
+        Ok(adopted)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
@@ -219,31 +258,35 @@ impl BackgroundProcesses for Processes {
     }
 }
 
-/// Lossy on a chunk boundary, like `process_runner`'s reader: one broken
-/// character is better than a lost stream. Whether a reader was started —
-/// there is none without a pipe. Signalling is `watch`'s, on its tick.
-fn read_into(registry: &Arc<Mutex<Registry>>, id: u32, pipe: Option<impl Read + Send + 'static>) -> bool {
-    let Some(mut pipe) = pipe else { return false };
+/// Where one stream of process `id` goes: into its buffer, and its close
+/// counted. Signalling is `watch`'s, on its tick. A process already
+/// forgotten takes nothing.
+fn feed(registry: &Arc<Mutex<Registry>>, id: u32) -> Feed {
     let registry = Arc::clone(registry);
-    thread::spawn(move || {
-        let mut chunk = [0u8; 8192];
-        loop {
-            match pipe.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let text = String::from_utf8_lossy(&chunk[..n]);
-                    match lock(&registry).entry(id) {
-                        Ok(entry) => entry.buffer.push(&text),
-                        Err(_) => return,
-                    }
-                }
+    Box::new(move |text| {
+        if let Ok(entry) = lock(&registry).entry(id) {
+            match text {
+                Some(text) => entry.buffer.push(text),
+                None => entry.streams -= 1,
             }
         }
-        if let Ok(entry) = lock(&registry).entry(id) {
-            entry.streams -= 1;
+    })
+}
+
+/// Lossy on a chunk boundary, like `process_runner`'s reader: one broken
+/// character is better than a lost stream. No pipe is a stream already closed —
+/// on its thread even then: `start` calls this holding the registry.
+fn read_into(mut pipe: Option<impl Read + Send + 'static>, mut feed: Feed) {
+    thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        while let Some(pipe) = pipe.as_mut() {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => feed(Some(&String::from_utf8_lossy(&chunk[..n]))),
+            }
         }
+        feed(None);
     });
-    true
 }
 
 /// Each tick: has it exited, and has it written anything since the last one.

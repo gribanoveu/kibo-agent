@@ -79,6 +79,15 @@ pub fn for_model(result: &ToolResult) -> String {
             "Started background process #{} in `{}`: `{}`. Read what it writes with readOutput.",
             process.id, process.cwd, process.command
         ),
+        // "Do not run it again" first: a model that took this for a failure
+        // would start a second copy beside the first.
+        ToolResult::CommandMoved { process, after_ms } => format!(
+            "Still running{} — not killed: it goes on as background process #{}. Do not run it again. readOutput #{} \
+             has everything it wrote so far and what it writes next; you are told when it ends; stopProcess ends it.",
+            took(*after_ms),
+            process.id,
+            process.id
+        ),
         ToolResult::ProcessOutput(output) => process_output(output),
         // Ended by itself before the call: saying only "exited with code 0"
         // leaves open whether this call stopped it.
@@ -641,6 +650,24 @@ mod tests {
         assert!(ran(2345, false, Some(0)).starts_with("Exit code 0 after 2.3 s\n"));
         assert!(ran(40, false, Some(1)).starts_with("Exit code 1 after 40 ms\n"));
         assert!(ran(600_000, true, None).starts_with("Timed out after 600.0 s and was killed"));
+    }
+
+    #[test]
+    fn a_moved_command_says_it_runs_on_and_is_not_to_be_run_again() {
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let text = for_model(&ToolResult::CommandMoved { process, after_ms: 120_000 });
+        assert!(text.starts_with("Still running after 120.0 s — not killed: it goes on as background process #2. Do not run it again."), "{text}");
+        assert!(text.contains("readOutput #2"), "{text}");
+    }
+
+    /// What the chat reads: the process's fields at the top, as a start has them.
+    #[test]
+    fn a_moved_command_is_sent_to_the_window_with_its_number() {
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let json = serde_json::to_value(ToolResult::CommandMoved { process, after_ms: 5 }).unwrap();
+        assert_eq!(json["result"], "commandMoved");
+        assert_eq!((json["id"].as_u64(), json["afterMs"].as_u64()), (Some(2), Some(5)));
+        assert_eq!(json["state"]["state"], "running");
     }
 
     /// `is running in ..` read as a typo: the folder is not last any more.
