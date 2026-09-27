@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
+import { changesFrom } from "../lib/rewind";
 import {
   cancelChat,
   compactHistory,
@@ -14,7 +15,10 @@ import {
   startChat,
   steer as steerCommand,
   alwaysAllow,
+  rewindApply,
+  rewindPreview,
   type ContextUsage,
+  type FileRewind,
   type LlmMessage,
   type Task,
   type ToolCallDecision,
@@ -423,6 +427,58 @@ export function useAgentTurn({
   );
 
   /**
+   * What rewinding to before `bubbleId` would do to files, and how many calls
+   * ran whose changes were not recorded. `null` where a rewind cannot start —
+   * the same places a branch cannot.
+   */
+  const previewRewind = useCallback(
+    async (bubbleId: string) => {
+      if (!branchable?.has(bubbleId)) return null;
+      const { changes, unrecorded } = changesFrom(turn.blocks, bubbleId);
+      return { files: changes.length ? await rewindPreview(changes) : [], unrecorded };
+    },
+    [branchable, turn.blocks],
+  );
+
+  /**
+   * Takes this chat back to just before `bubbleId`: the files the agent
+   * changed from there on are put back where nobody changed them since, the
+   * messages from there on are gone, and that message is handed back to the
+   * composer. Files first — a rewind that could not reach them leaves the
+   * conversation as it was. Returns how each file went, or `null` when
+   * nothing was done.
+   */
+  const rewind = useCallback(
+    async (bubbleId: string) => {
+      if (turn.status !== "done" && turn.status !== "cancelled") return null;
+      const cut = branchAt(turn.blocks, history.current, bubbleId);
+      if (!cut) return null;
+      const { changes } = changesFrom(turn.blocks, bubbleId);
+      let files: FileRewind[] = [];
+      try {
+        if (changes.length) files = await rewindApply(changes);
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+      subscribed.current?.();
+      subscribed.current = null;
+      history.current = cut.history;
+      keepTodos([]);
+      keepPlan(writtenPlan(cut.blocks));
+      unsaved.current = true;
+      turnStart.current = cut.blocks.length;
+      setError(null);
+      setTurn(appendNotice(restoredTurn(cut.blocks), rewoundNotice(files)));
+      const text = cut.text;
+      setDraft((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
+      refreshContext();
+      return files;
+    },
+    [turn.status, turn.blocks, keepTodos, keepPlan, refreshContext],
+  );
+
+  /**
    * The user's own edit to the plan. Saved at once when the chat exists —
    * the next turn is sent this version, and so is the file. A plan typed
    * into a chat that has not started yet is saved with its first turn.
@@ -457,6 +513,18 @@ export function useAgentTurn({
     checklist,
     branch,
     branchable,
+    previewRewind,
+    rewind,
     draft,
   };
+}
+
+/** What the transcript says where a rewind cut it. */
+export function rewoundNotice(files: FileRewind[]): string {
+  const back = files.filter((file) => file.skip === null).length;
+  const left = files.length - back;
+  const plural = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+  if (files.length === 0) return "Rewound to before this message — no files to put back";
+  if (left === 0) return `Rewound to before this message — ${plural(back)} put back`;
+  return `Rewound to before this message — ${plural(back)} put back, ${plural(left)} left as ${left === 1 ? "it is" : "they are"}`;
 }

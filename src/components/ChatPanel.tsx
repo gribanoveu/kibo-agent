@@ -21,6 +21,7 @@ import {
   Terminal,
   TerminalSquare,
   Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
@@ -552,6 +553,8 @@ type Props = {
   /** Bubbles a branch can start at; `null` while a turn runs. */
   branchable?: ReadonlySet<string> | null;
   onBranch?: (bubbleId: string) => void;
+  /** Asks to take this chat, and the files, back to before a bubble — at the same points as a branch. */
+  onRewind?: (bubbleId: string) => void;
 };
 
 export function ChatPanel({
@@ -575,6 +578,7 @@ export function ChatPanel({
   onOpenFile,
   branchable = null,
   onBranch,
+  onRewind,
 }: Props) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -684,7 +688,7 @@ export function ChatPanel({
                       onOpenProcess={onOpenProcess}
                     />
                   ) : block.kind === "user" ? (
-                    <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} />
+                    <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
                   ) : (
                     renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile)
                   ),
@@ -734,10 +738,12 @@ function UserBubble({
   block,
   branchable,
   onBranch,
+  onRewind,
 }: {
   block: Extract<Block, { kind: "user" }>;
   branchable: ReadonlySet<string> | null;
   onBranch?: (bubbleId: string) => void;
+  onRewind?: (bubbleId: string) => void;
 }) {
   const offered = branchable !== null && onBranch !== undefined;
   const can = branchable?.has(block.id) ?? false;
@@ -762,6 +768,22 @@ function UserBubble({
           >
             <GitBranch size={12} />
             Branch from here
+          </button>
+        )}
+        {branchable !== null && onRewind && (
+          <button
+            type="button"
+            className="bubble-action"
+            disabled={!can}
+            title={
+              can
+                ? "Take this chat back to before this message, and the files the agent changed since, to change it and send again"
+                : "Folded into the summary of earlier conversation — the chat cannot be taken back to here"
+            }
+            onClick={() => onRewind(block.id)}
+          >
+            <RotateCcw size={12} />
+            Rewind
           </button>
         )}
       </div>

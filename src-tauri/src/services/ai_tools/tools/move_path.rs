@@ -44,7 +44,7 @@ pub(super) fn count_files(dir: &std::path::Path) -> usize {
 }
 
 /// Every file under `dir`, not following links, in path order.
-pub(super) fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub(crate) fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     let mut files: Vec<std::path::PathBuf> = entries
         .flatten()

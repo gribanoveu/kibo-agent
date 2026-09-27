@@ -842,3 +842,96 @@ describe("the next-prompt journal", () => {
     expect(calls.some((call) => call.command === "next_prompt_sent")).toBe(false);
   });
 });
+
+describe("rewinding", () => {
+  const stored = (hash: string) => ({ kind: "stored", hash });
+  const aChange = { path: "a.rs", before: stored("a0"), after: stored("a1") };
+  const bChange = { path: "b.rs", before: { kind: "absent" }, after: stored("b1") };
+  const record = {
+    schemaVersion: 1,
+    id: "kept",
+    workspace: "/repo",
+    title: "fix",
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "done a" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: "done b" },
+    ],
+    blocks: [
+      { kind: "user", id: "user:0", text: "first" },
+      { kind: "tool", id: "t1", round: 1, name: "writeFile", arguments: "{}", status: "done", output: "", changes: [aChange] },
+      { kind: "message", id: "m1", round: 2, text: "done a" },
+      { kind: "user", id: "user:1", text: "second" },
+      { kind: "tool", id: "t2", round: 1, name: "writeFile", arguments: "{}", status: "done", output: "", changes: [bChange] },
+      { kind: "tool", id: "t3", round: 2, name: "runCommand", arguments: "{}", status: "done", output: "" },
+      { kind: "message", id: "m2", round: 3, text: "done b" },
+    ],
+    todos: [],
+  };
+
+  async function opened() {
+    results.chat_load = record;
+    const hook = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await hook.result.current.open("kept");
+    });
+    return hook;
+  }
+
+  test("a preview asks about the changes from that message on, and counts the commands", async () => {
+    results.rewind_preview = [{ path: "b.rs", action: "created", expected: stored("b1"), target: { kind: "absent" }, skip: null }];
+    const { result } = await opened();
+    let preview: Awaited<ReturnType<typeof result.current.previewRewind>> = null;
+    await act(async () => {
+      preview = await result.current.previewRewind("user:1");
+    });
+    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
+    expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
+  });
+
+  /// In place: the same chat, cut before the message, which comes back to
+  /// the box; the files first.
+  test("puts the files back, cuts this chat before the message and hands it back", async () => {
+    results.rewind_apply = [
+      { path: "a.rs", action: "modified", expected: stored("a1"), target: stored("a0"), skip: null },
+      { path: "b.rs", action: "created", expected: stored("b1"), target: { kind: "absent" }, skip: "changedSince" },
+    ];
+    const { result } = await opened();
+    await act(async () => {
+      await result.current.rewind("user:0");
+    });
+
+    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange] });
+    expect(result.current.chatId).toBe("kept");
+    expect(result.current.draft?.text).toBe("first");
+    expect(result.current.turn.blocks).toMatchObject([
+      { kind: "notice", text: "Rewound to before this message — 1 file put back, 1 file left as it is" },
+    ]);
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args).toMatchObject({ id: "kept", messages: [] });
+  });
+
+  test("a rewind that could not reach the files leaves the chat as it was", async () => {
+    results.rewind_apply = new Error("no folder is open");
+    const { result } = await opened();
+    await act(async () => {
+      await result.current.rewind("user:1");
+    });
+    expect(result.current.error).toBe("no folder is open");
+    expect(result.current.turn.blocks).toHaveLength(record.blocks.length);
+    expect(saved()).toHaveLength(0);
+  });
+
+  test("the transcript says how the files went", async () => {
+    const { rewoundNotice } = await import("../hooks/useAgentTurn");
+    const file = (skip: string | null) => ({ path: "a", action: "modified", expected: stored("1"), target: stored("0"), skip }) as never;
+    expect(rewoundNotice([])).toBe("Rewound to before this message — no files to put back");
+    expect(rewoundNotice([file(null), file(null)])).toBe("Rewound to before this message — 2 files put back");
+    expect(rewoundNotice([file(null), file("expired"), file("changedSince")])).toBe(
+      "Rewound to before this message — 1 file put back, 2 files left as they are",
+    );
+  });
+});

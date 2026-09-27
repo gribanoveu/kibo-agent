@@ -138,6 +138,8 @@ pub fn run() {
             commands::chat::chat_resume,
             commands::chat::chat_cancel,
             commands::chat::chat_preview,
+            commands::rewind::rewind_preview,
+            commands::rewind::rewind_apply,
             commands::chat::chat_compact,
             commands::chat::chat_steer,
             commands::chat::chat_cancel_steer,

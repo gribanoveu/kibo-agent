@@ -337,6 +337,10 @@ pub struct ToolResultEvent {
     /// `Some` on failure — the same text the model receives.
     #[serde(default)]
     pub error: Option<String>,
+    /// What the call did to files, for a later rewind to undo. Kept by the
+    /// window with the call's block; the backend remembers none of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<crate::domain::rewind::FileChange>,
 }
 
 /// Where a turn's events go.
@@ -523,6 +527,7 @@ mod tests {
             id: "call_1".into(),
             result: None,
             error: Some("not found: a".into()),
+            changes: Vec::new(),
         });
 
         let (a, b) = (

@@ -77,7 +77,7 @@ pub struct AgentState {
 }
 
 impl AgentState {
-    pub(super) fn workspace(&self) -> Result<PathBuf, String> {
+    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
         self.workspace
             .lock()
             .map_err(|_| "workspace lock poisoned".to_string())?

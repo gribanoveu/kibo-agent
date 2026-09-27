@@ -10,6 +10,7 @@ pub mod chat_export;
 pub mod compaction;
 pub mod result_clearing;
 pub mod loop_guard;
+pub mod rewind;
 pub mod next_prompt;
 pub mod conversation_mode;
 pub mod embeddings;

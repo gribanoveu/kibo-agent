@@ -1,0 +1,47 @@
+.rewind-text {
+  margin: 0 0 10px;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.rewind-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.rewind-files {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.rewind-files li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--bg-panel-soft);
+  font-size: var(--fs-sm);
+}
+.rewind-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.rewind-action {
+  flex: none;
+  color: var(--text-faint);
+}
+.rewind-status {
+  flex: none;
+  color: var(--green);
+}
+.rewind-files li.skipped .rewind-status {
+  color: var(--amber);
+}

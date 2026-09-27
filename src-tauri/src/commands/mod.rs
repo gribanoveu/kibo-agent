@@ -19,3 +19,4 @@ pub mod processes;
 pub mod terminal;
 pub mod git;
 pub mod files;
+pub mod rewind;

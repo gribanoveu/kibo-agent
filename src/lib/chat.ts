@@ -89,7 +89,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }
   | { type: "toolCall"; payload: LlmToolCall }
-  | { type: "toolResult"; payload: { id: string; result?: unknown; error?: string | null } }
+  | { type: "toolResult"; payload: { id: string; result?: unknown; error?: string | null; changes?: FileChange[] } }
   | { type: "commandOutput"; payload: { id: string; stream: OutputStream; chunk: string } }
   | { type: "contextUsage"; payload: ChatUsage }
 );
@@ -654,6 +654,35 @@ export async function connectMcpServer(name: string): Promise<McpView> {
 export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpView> {
   requireBackend();
   return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
+}
+
+// ---------------------------------------------------------------- rewind
+
+/** Mirrors `domain::rewind::FileState`: a file's content at one moment, by hash. */
+export type FileState = { kind: "absent" } | { kind: "stored"; hash: string } | { kind: "unstored" };
+/** Mirrors `domain::rewind::FileChange`: what one call did to one file. */
+export type FileChange = { path: string; before: FileState; after: FileState };
+/** Why a file is left as it is — `domain::rewind::Skip`. */
+export type RewindSkip = "notKept" | "expired" | "changedBetween" | "changedSince" | "unsafePath" | "writeFailed";
+/** One file's part of a rewind — `domain::rewind::FileRewind`. */
+export type FileRewind = {
+  path: string;
+  action: "created" | "modified" | "deleted";
+  expected: FileState;
+  target: FileState;
+  skip: RewindSkip | null;
+};
+
+/** What putting `changes` back would do, file by file. Touches nothing. */
+export async function rewindPreview(changes: FileChange[]): Promise<FileRewind[]> {
+  requireBackend();
+  return invoke<FileRewind[]>("rewind_preview", { changes });
+}
+
+/** Puts them back, each file checked again right before it is written. */
+export async function rewindApply(changes: FileChange[]): Promise<FileRewind[]> {
+  requireBackend();
+  return invoke<FileRewind[]>("rewind_apply", { changes });
 }
 
 // ---------------------------------------------------------------- background processes

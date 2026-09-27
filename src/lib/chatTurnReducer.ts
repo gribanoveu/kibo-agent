@@ -1,6 +1,7 @@
 import {
   type ChatUsage,
   type Checkpoint,
+  type FileChange,
   type Outcome,
   type PendingToolCall,
   type ProcessInfo,
@@ -51,6 +52,8 @@ export type Block =
       error?: string;
       /** Live output of a running command, appended as it arrives. */
       output: string;
+      /** What the call did to files, kept for a rewind — absent when nothing. */
+      changes?: FileChange[];
     }
   | {
       kind: "approval";
@@ -344,6 +347,7 @@ function applyEvent(state: TurnState, event: TurnEvent): TurnState {
         status: event.payload.error ? "failed" : "done",
         result: event.payload.result ?? undefined,
         error: event.payload.error ?? undefined,
+        ...(event.payload.changes?.length ? { changes: event.payload.changes } : {}),
       }));
 
     case "commandOutput":

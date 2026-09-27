@@ -421,6 +421,22 @@ describe("hooks", () => {
   });
 });
 
+describe("file changes", () => {
+  /// Kept on the block, so the chat saves them and a rewind can find them.
+  test("what a call did to files stays on its block; nothing is kept when nothing changed", () => {
+    const change = { path: "a.rs", before: { kind: "absent" as const }, after: { kind: "stored" as const, hash: "h" } };
+    const state = run([
+      ev({ type: "toolCall", seq: 1, payload: { id: "w", name: "writeFile", arguments: "{}" } }),
+      ev({ type: "toolResult", seq: 2, payload: { id: "w", result: {}, changes: [change] } }),
+      ev({ type: "toolCall", seq: 3, payload: { id: "r", name: "readFile", arguments: "{}" } }),
+      ev({ type: "toolResult", seq: 4, payload: { id: "r", result: {}, changes: [] } }),
+    ]);
+    const [written, read] = state.blocks as Extract<Block, { kind: "tool" }>[];
+    expect(written.changes).toEqual([change]);
+    expect("changes" in read).toBe(false);
+  });
+});
+
 describe("the loop guard", () => {
   test("a reminder to the model is a notice naming the tool and what it kept doing", () => {
     const state = run([

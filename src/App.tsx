@@ -53,6 +53,8 @@ import { useBranchPicker } from "./hooks/useBranchPicker";
 import { BranchConflictDialog } from "./components/BranchConflictDialog";
 import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
+import { RewindDialog } from "./components/RewindDialog";
+import { useRewind } from "./hooks/useRewind";
 import { expandTemplate, fileCommands, typedCommand, type SlashCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
@@ -334,6 +336,7 @@ export default function App() {
   });
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
+  const rewinding = useRewind({ preview: agent.previewRewind, rewind: agent.rewind, notify: toast.show });
   // The composer cleared the box when the message went; one that is not sent
   // after all is put back rather than typed again.
   const giveBack = (text: string) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
@@ -492,6 +495,7 @@ export default function App() {
             onOpenFile={workspace.path ? openFileLink : undefined}
             branchable={agent.branchable}
             onBranch={agent.branch}
+            onRewind={(id) => void rewinding.ask(id)}
           />
           <Composer
             tab={
@@ -614,6 +618,7 @@ export default function App() {
         onStopAgent={agent.cancel}
         onClose={folderSwitch.close}
       />
+      <RewindDialog asked={rewinding.asked} onConfirm={() => void rewinding.confirm()} onClose={rewinding.close} />
       <WorktreeRemoveDialog
         asked={worktreeRemoval.asked}
         onConfirm={() => void worktreeRemoval.confirm()}

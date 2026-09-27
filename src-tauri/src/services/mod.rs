@@ -17,3 +17,4 @@ mod agent_bench;
 pub mod skills;
 pub mod project_rules;
 pub mod mcp_servers;
+pub mod rewind;

@@ -377,6 +377,7 @@ mod tests {
                 ..CommandOutput::default()
             })),
             error: None,
+            changes: Vec::new(),
         })
     }
 
@@ -417,6 +418,7 @@ mod tests {
                 ..CommandOutput::default()
             })),
             error: None,
+            changes: Vec::new(),
         });
         let input = input_after(&[call("a", "bun test | tail"), result, said("x")]);
         assert!(head(&input).contains("<tests>fail"), "{input}");
@@ -442,7 +444,7 @@ mod tests {
     fn a_commit_counts_only_when_it_succeeded() {
         let failed = input_after(&[call("a", "git commit -m x"), ran("a", Some(1), ""), said("x")]);
         assert!(head(&failed).contains("<commit>0"), "{failed}");
-        let refused = ChatEventPayload::ToolResult(ToolResultEvent { id: "a".into(), result: None, error: Some("denied".into()) });
+        let refused = ChatEventPayload::ToolResult(ToolResultEvent { id: "a".into(), result: None, error: Some("denied".into()), changes: Vec::new() });
         let denied = input_after(&[call("a", "git commit -m x"), refused, said("x")]);
         assert!(head(&denied).contains("<commit>0"), "{denied}");
         let made = input_after(&[call("a", "git add -A && git commit -m x"), ran("a", Some(0), ""), said("x")]);

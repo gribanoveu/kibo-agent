@@ -43,6 +43,8 @@ use crate::infra::llm_debug_log;
 use crate::services::ai_tools::parse::{parse_tool_call, preflight_tool_call};
 use crate::services::ai_tools::model_text::for_model;
 use crate::services::ai_tools::resolve::{relative_to_root, resolve_existing};
+use crate::domain::rewind::FileChange;
+use crate::services::ai_tools::file_changes;
 use crate::services::ai_tools::tools::{execute_tool, tool_definitions};
 use crate::services::context_compaction;
 use crate::services::llm_session::LlmSession;
@@ -622,7 +624,7 @@ fn run(
                             content: message.clone(),
                             error: Some(loop_guard::error_kind(&e)),
                         });
-                        report_result(&events, round, &call.id, None, Some(&message));
+                        report_result(&events, round, &call.id, None, Some(&message), Vec::new());
                         state.history.push(tool_message(
                             &call.id,
                             truncated_round_note(round_truncated, true, message),
@@ -684,6 +686,7 @@ fn run(
             let mut logged_args = serde_json::Value::Null;
             let mut logged_error = None;
             let mut error_kind = None;
+            let mut changes = Vec::new();
             let denied = matches!(decision, Some(d) if !d.approved);
             let outcome = match decision {
                 Some(d) if !d.approved => Err(denial(d)),
@@ -711,13 +714,18 @@ fn run(
                             processes: turn.processes.clone(),
                             terminals: turn.terminals.clone(),
                         };
-                        execute_tool(
+                        // Around the call, not inside the tool: one place sees
+                        // every write, and no tool has to remember to report.
+                        let watched = file_changes::before(turn.scope, &parsed);
+                        let result = execute_tool(
                             turn.scope,
                             &parsed,
                             &mut state.reads,
                             &mut state.todos,
                             &deps,
-                        )
+                        );
+                        changes = watched.map(file_changes::after).unwrap_or_default();
+                        result
                     })
                     .map_err(|e| {
                         logged_error = Some(tool_call_log::redact_error(&e));
@@ -752,6 +760,7 @@ fn run(
                 &call.id,
                 outcome.as_ref().ok(),
                 outcome.as_ref().err().map(String::as_str),
+                changes,
             );
 
             // What the model reads, as opposed to what the UI was given:
@@ -1229,6 +1238,7 @@ fn report_result(
     call_id: &str,
     result: Option<&ToolResult>,
     error: Option<&str>,
+    changes: Vec<FileChange>,
 ) {
     events.emit(
         round,
@@ -1237,6 +1247,7 @@ fn report_result(
             id: call_id.to_string(),
             result: result.cloned(),
             error: error.map(str::to_string),
+            changes,
         }),
     );
 }
@@ -3086,6 +3097,37 @@ mod tests {
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one; MCP tools come from servers, and none is connected.
         assert_eq!(offered.len(), ToolName::ALL.len() - 1);
+    }
+
+    /// A write in the loop says what it did to the file, for a rewind; a
+    /// read says nothing.
+    #[test]
+    fn a_write_in_the_loop_reports_what_it_changed() {
+        crate::testing::with_app_dir("chat-changes", || {
+            let h = harness(
+                "chat-changes",
+                vec![
+                    asks(vec![wants("r", "readFile", r#"{"path":"a.rs"}"#)]),
+                    asks(vec![wants("w", "writeFile", r#"{"path":"a.rs","content":"new"}"#)]),
+                    text("done"),
+                ],
+            );
+            std::fs::write(h.root.join("a.rs"), "old").unwrap();
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+            let log = h.log.lock().unwrap();
+            let changes = |id: &str| {
+                log.iter()
+                    .find_map(|e| match &e.event {
+                        ChatEventPayload::ToolResult(r) if r.id == id => Some(r.changes.clone()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert!(changes("r").is_empty());
+            let stored = |content: &[u8]| crate::domain::rewind::FileState::Stored { hash: crate::infra::file_history::hash(content) };
+            assert_eq!(changes("w"), [FileChange { path: "a.rs".into(), before: stored(b"old"), after: stored(b"new") }]);
+        });
     }
 
     // --------------------------------------------------- background processes

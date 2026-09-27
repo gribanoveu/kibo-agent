@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-27 Rewind a chat to before one of your messages: the files the agent changed since go back to how they were — never over a change made after it — and the message returns to the box to change and send again
 - 2026-09-27 See how many background processes are still running beside "Working…" and "Worked for"; a click opens the newest in the Terminal tab
 - 2026-09-27 A command the agent runs is no longer killed at its timeout: it goes on as a background process, shown in the Terminal tab, and the agent reads it from there instead of running it again
 - 2026-09-26 The agent ends a reply with a concrete question offering the next step when there is an obvious one; each finished turn and the message you sent after it are kept locally in chats.db, to train the upcoming next-message suggestions

@@ -12,6 +12,7 @@ pub mod language_indexers;
 pub mod local_embeddings;
 pub mod process_runner;
 pub mod command_output_store;
+pub mod file_history;
 pub mod repository_identity;
 pub mod chat_store;
 pub mod next_prompt_log;
