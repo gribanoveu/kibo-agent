@@ -174,6 +174,7 @@ pub fn run() {
             commands::hooks::hooks_config_get,
             commands::hooks::hooks_config_save,
             commands::processes::processes_list,
+            commands::processes::processes_running,
             commands::processes::process_stop,
             commands::terminal::terminal_open,
             commands::terminal::terminal_list,

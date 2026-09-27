@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-27 See how many background processes are still running beside "Working…" and "Worked for"; a click opens the newest in the Terminal tab
 - 2026-09-27 A command the agent runs is no longer killed at its timeout: it goes on as a background process, shown in the Terminal tab, and the agent reads it from there instead of running it again
 - 2026-09-26 The agent ends a reply with a concrete question offering the next step when there is an obvious one; each finished turn and the message you sent after it are kept locally in chats.db, to train the upcoming next-message suggestions
 - 2026-09-26 Press ⌥Enter (Alt+Enter) while the agent works to queue a message as the next turn; it is sent once the turn finishes, and a stopped or failed turn puts it back in the message box

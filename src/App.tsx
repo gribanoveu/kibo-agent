@@ -35,6 +35,7 @@ import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
 import { useTurnAlerts } from "./hooks/useTurnAlerts";
+import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
@@ -156,6 +157,8 @@ export default function App() {
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
+  // Counted in the chat beside the turn's clock: they outlive the turn.
+  const runningProcesses = useRunningProcesses();
   const agent = useAgentTurn({
     onSaved: history.refresh,
     onGiveBack: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
@@ -484,6 +487,7 @@ export default function App() {
               openTab("terminal");
               setProcessFocus({ id });
             }}
+            runningProcesses={runningProcesses.map((process) => process.id)}
             onPasteCommand={workspace.path ? pasteInTerminal : undefined}
             onOpenFile={workspace.path ? openFileLink : undefined}
             branchable={agent.branchable}

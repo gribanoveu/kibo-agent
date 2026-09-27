@@ -268,6 +268,23 @@
 .turn-clock-time {
   color: var(--text-faint);
 }
+.turn-clock-sep {
+  color: var(--text-faint);
+}
+.turn-processes {
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--text-dim);
+}
+button.turn-processes {
+  cursor: pointer;
+}
+button.turn-processes:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 .role {
   font-size: var(--fs-xs);
   color: var(--text-faint);

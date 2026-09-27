@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { onProcessChanged, processesList, stopProcess, type ProcessView } from "../lib/chat";
+import { onProcessChanged, processesList, processesRunning, stopProcess, type ProcessInfo, type ProcessView } from "../lib/chat";
 
 /**
  * The background processes, read while the Terminal tab is open: when it
@@ -41,4 +41,27 @@ export function useProcesses(visible: boolean) {
   }, []);
 
   return { processes, error, stop };
+}
+
+/**
+ * The background processes still running, for the chat to count. Listened to
+ * for as long as the window is open — the chat always is — and read once when
+ * it starts listening.
+ */
+export function useRunningProcesses() {
+  const [running, setRunning] = useState<ProcessInfo[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    const load = () => processesRunning().then((list) => live && setRunning(list), () => {});
+    load();
+    let unlisten: (() => void) | undefined;
+    onProcessChanged(() => void load()).then((off) => (live ? (unlisten = off) : off()));
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  return running;
 }

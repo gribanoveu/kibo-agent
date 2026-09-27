@@ -52,6 +52,17 @@ pub fn processes_list(processes: State<'_, Arc<Processes>>) -> Vec<ProcessView> 
     views(&processes)
 }
 
+/// The ones still running, newest first and without their output: the chat's
+/// count, read on each [`PROCESS_EVENT`] — a tick of output costs no tails.
+#[tauri::command]
+pub fn processes_running(processes: State<'_, Arc<Processes>>) -> Vec<ProcessInfo> {
+    running(&processes)
+}
+
+fn running(processes: &Processes) -> Vec<ProcessInfo> {
+    processes.list().into_iter().rev().filter(ProcessInfo::running).collect()
+}
+
 /// The model is told at its next round that the user stopped it.
 #[tauri::command]
 pub fn process_stop(id: u32, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
@@ -105,6 +116,17 @@ mod tests {
         assert_eq!(shown[0].info.cwd, "sub");
         let json = serde_json::to_value(&shown[1]).unwrap();
         assert_eq!((json["id"].clone(), json["tail"].clone()), (serde_json::json!(1), serde_json::json!("first\n")));
+    }
+
+    #[test]
+    fn the_chat_counts_only_what_still_runs() {
+        let processes = Processes::default();
+        let dir = crate::testing::temp_dir("cmd-processes-running");
+        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.stop(2).unwrap();
+        assert_eq!(running(&processes).iter().map(|p| p.id).collect::<Vec<_>>(), [3, 1]);
     }
 
     /// The tab's Stop is the user's: the model hears of it at its next round.

@@ -329,6 +329,27 @@ describe("how long the agent worked", () => {
     expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
     expect(screen.queryByText(/Worked for/)).toBeNull();
   });
+
+  /// Background processes outlive the turn: counted beside the clock, and a
+  /// click opens the newest.
+  test("counts the background processes still running, and opens the newest", () => {
+    const opened: number[] = [];
+    const running = (turnState: TurnState, ids: number[]) =>
+      render(<ChatPanel workspace="/tmp/p" turn={turnState} onDecide={() => {}} onOpenRepo={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
+
+    const live = running(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }), [3]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process running");
+    live.unmount();
+
+    running(state(turn, { status: "done" }), [4, 2]);
+    fireEvent.click(screen.getByRole("button", { name: "2 processes running" }));
+    expect(opened).toEqual([4]);
+  });
+
+  test("says nothing of processes when none runs", () => {
+    panel(state(turn, { status: "done" }));
+    expect(screen.queryByText(/running/)).toBeNull();
+  });
 });
 
 describe("the header", () => {

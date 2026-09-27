@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   Brain,
@@ -348,8 +348,30 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+/**
+ * "· 2 processes running" beside the clock: background processes outlive the
+ * turn, and without this a server left running is out of sight. A click
+ * opens the newest in the Terminal tab.
+ */
+function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number) => void }) {
+  if (ids.length === 0) return null;
+  const label = `${ids.length} ${ids.length === 1 ? "process" : "processes"} running`;
+  return (
+    <>
+      <span className="turn-clock-sep">·</span>
+      {onOpen ? (
+        <button type="button" className="turn-processes" title="Show in the Terminal tab" onClick={() => onOpen(ids[0])}>
+          {label}
+        </button>
+      ) : (
+        <span className="turn-processes">{label}</span>
+      )}
+    </>
+  );
+}
+
 /** The time the agent has spent on the turn under way, ticking. */
-function WorkingClock({ since, before }: { since: number; before: number }) {
+function WorkingClock({ since, before, children }: { since: number; before: number; children?: ReactNode }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
@@ -360,6 +382,7 @@ function WorkingClock({ since, before }: { since: number; before: number }) {
       <PawLoader />
       <span className="turn-clock-text">Working…</span>{" "}
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
+      {children}
     </div>
   );
 }
@@ -407,13 +430,18 @@ function turnMessage(groups: Group[], index: number) {
  * "Worked for 1m 23s" under the last group of a finished turn's answer. The
  * turn under way shows its ticking clock at the end of the thread instead.
  */
-function workedFooter(groups: Group[], index: number, turn: TurnState) {
+function workedFooter(groups: Group[], index: number, turn: TurnState, extra?: ReactNode) {
   const next = groups[index + 1];
   if (groups[index].role !== "agent" || (next && next.role !== "user")) return null;
   const live = !next && (turn.status === "running" || turn.status === "awaitingApproval");
   const worked = turnMessage(groups, index)?.workedMs;
   if (live || !worked) return null;
-  return <div className="turn-clock">Worked for {formatDuration(worked)}</div>;
+  return (
+    <div className="turn-clock">
+      <span>Worked for {formatDuration(worked)}</span>
+      {extra}
+    </div>
+  );
 }
 
 type Tool = Extract<Block, { kind: "tool" }>;
@@ -515,6 +543,8 @@ type Props = {
   onOpenPlan?: () => void;
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
+  /** Background processes still running, newest first — counted beside the turn's clock. */
+  runningProcesses?: number[];
   /** Puts a shell block from an answer at a prompt in the Terminal tab, not run. Kept stable: every answer re-renders when it changes. */
   onPasteCommand?: (command: string) => void;
   /** Opens a file an answer links to in the viewer. Kept stable, as `onPasteCommand`. */
@@ -540,6 +570,7 @@ export function ChatPanel({
   onImplement,
   onOpenPlan,
   onOpenProcess,
+  runningProcesses = [],
   onPasteCommand,
   onOpenFile,
   branchable = null,
@@ -658,11 +689,18 @@ export function ChatPanel({
                     renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile)
                   ),
                 )}
-                {workedFooter(groups, index, turn)}
+                {workedFooter(
+                  groups,
+                  index,
+                  turn,
+                  index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
+                )}
               </div>
             ))}
             {turn.status === "running" && turn.runningSince !== null && (
-              <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} />
+              <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
+                <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
+              </WorkingClock>
             )}
             {planReady && (
               <div className="plan-handoff">

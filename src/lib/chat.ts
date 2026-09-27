@@ -681,6 +681,12 @@ export async function processesList(): Promise<ProcessView[]> {
   return invoke<ProcessView[]>("processes_list");
 }
 
+/** The running ones, newest first, without output — cheap to read on every change. */
+export async function processesRunning(): Promise<ProcessInfo[]> {
+  if (!inTauri()) return [];
+  return invoke<ProcessInfo[]>("processes_running");
+}
+
 /** The model is told at its next round that the user stopped it. */
 export async function stopProcess(id: number): Promise<ProcessView[]> {
   requireBackend();
