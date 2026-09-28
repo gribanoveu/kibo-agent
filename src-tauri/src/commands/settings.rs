@@ -12,6 +12,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::domain::settings::{ProviderConfig, ReplyLanguage};
+use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::llm_session;
 
@@ -33,6 +34,8 @@ pub struct LlmSettingsView {
     active_provider_id: Option<String>,
     debug_logging: bool,
     reply_language: ReplyLanguage,
+    /// Where the key the API keys are sealed under is kept.
+    key_store: KeyStore,
 }
 
 #[tauri::command]
@@ -50,6 +53,7 @@ pub fn llm_settings_get() -> Result<LlmSettingsView, String> {
         active_provider_id: settings.active_provider_id,
         debug_logging: settings.debug_logging,
         reply_language: settings.reply_language,
+        key_store: master_key::store(),
     })
 }
 
@@ -89,6 +93,15 @@ pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
         return llm_credentials_store::delete_api_key(&id);
     }
     llm_credentials_store::save_api_key(&id, key.trim())
+}
+
+/// Moves the master key between the key file and the OS keychain. Off the
+/// main thread: the keychain may put up a prompt and wait for the user.
+#[tauri::command]
+pub async fn llm_key_store_set(store: KeyStore) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || master_key::move_to(store))
+        .await
+        .map_err(|e| format!("the key thread failed: {e}"))?
 }
 
 #[tauri::command]
