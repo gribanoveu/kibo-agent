@@ -16,7 +16,10 @@ import {
 } from "../lib/chat";
 import { useStoredState } from "./useStoredState";
 
-export type PlainMessage = { role: "user" | "assistant"; text: string };
+/** One bubble. `reasoning` is the model's thinking before an answer: drawn, never sent back to it. */
+export type PlainMessage = { role: "user" | "assistant"; text: string; reasoning?: string };
+/** The reply being written: its thinking, then its text. */
+export type PlainReply = { text: string; reasoning: string };
 
 const isId = (value: unknown): value is string | null => value === null || typeof value === "string";
 
@@ -25,11 +28,19 @@ const fromWire = (messages: LlmMessage[]): PlainMessage[] =>
   messages.flatMap((m) =>
     (m.role === "user" || m.role === "assistant") && m.content ? [{ role: m.role, text: m.content }] : [],
   );
+const isShown = (value: unknown): value is PlainMessage[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every(
+    (m) =>
+      (m?.role === "user" || m?.role === "assistant") &&
+      typeof m?.text === "string" &&
+      (m.reasoning === undefined || typeof m.reasoning === "string"),
+  );
 
 /**
  * Chat mode: its conversations, stored by the backend, and the one open. The
- * model reads the same list the reader does — a plain chat has no tool calls
- * to keep apart from what is shown.
+ * model is sent the same list the reader sees, less its own thinking.
  */
 export function usePlainChat() {
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -39,7 +50,7 @@ export function usePlainChat() {
   const [roles, setRoles] = useState<ChatRoleView[]>([]);
   const [role, setRole] = useState<ChatRoleId>("assistant");
   // The reply being written; null when none is.
-  const [streaming, setStreaming] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState<PlainReply | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped whenever another conversation takes the screen: a reply that lands
   // after it belongs to one that is no longer shown. It is saved all the same.
@@ -67,7 +78,8 @@ export function usePlainChat() {
   const open = async (id: string) => {
     try {
       const record = await loadChat(id);
-      show(id, fromWire(record.messages), record.role ?? "assistant");
+      // A chat saved before its transcript was kept is drawn from what the model was sent.
+      show(id, isShown(record.blocks) ? record.blocks : fromWire(record.messages), record.role ?? "assistant");
     } catch (e) {
       // A chat deleted since it was left open is simply not reopened.
       show(null, [], "assistant");
@@ -84,21 +96,25 @@ export function usePlainChat() {
     const history: PlainMessage[] = [...messages, { role: "user", text }];
     setChatId(id);
     setMessages(history);
-    setStreaming("");
+    setStreaming({ text: "", reasoning: "" });
     setError(null);
     const current = () => epoch.current === asked;
     const turnId = crypto.randomUUID();
     const unlisten = await onTurnEvent(turnId, (event) => {
-      if (event.type === "delta" && current()) setStreaming((s) => (s ?? "") + event.payload.delta);
+      if (!current()) return;
+      if (event.type === "delta") setStreaming((s) => s && { ...s, text: s.text + event.payload.delta });
+      if (event.type === "reasoning") setStreaming((s) => s && { ...s, reasoning: s.reasoning + event.payload.delta });
     });
     try {
       // Saved before the reply: a reply that fails leaves what the user said to retry, not retype.
-      await plainChatSave(id, role, toWire(history));
+      await plainChatSave(id, role, toWire(history), history);
       void refresh();
       const reply = await plainChatSend(turnId, role, toWire(history));
       if (reply.text) {
-        const answered: PlainMessage[] = [...history, { role: "assistant", text: reply.text }];
-        await plainChatSave(id, role, toWire(answered));
+        const answer: PlainMessage = { role: "assistant", text: reply.text };
+        if (reply.reasoning) answer.reasoning = reply.reasoning;
+        const answered = [...history, answer];
+        await plainChatSave(id, role, toWire(answered), answered);
         if (current()) setMessages(answered);
         void refresh();
       }

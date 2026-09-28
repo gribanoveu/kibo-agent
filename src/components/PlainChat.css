@@ -17,14 +17,16 @@
   border-bottom: 1px solid var(--border-soft);
 }
 .plain-head h1 {
+  /* As tall as the agent's header buttons, so the thread below starts where
+     the agent's does and nothing moves when the mode is switched. */
+  line-height: 30px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--fs-lg);
   font-weight: 600;
   letter-spacing: -0.01em;
-}
-.plain-sub {
-  margin-top: 3px;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
 }
 
 .plain-thread {
@@ -66,7 +68,7 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 7px;
-  margin-top: 16px;
+  margin-top: 28px;
 }
 .plain-suggest button {
   padding: 7px 11px;
@@ -106,6 +108,60 @@
   word-break: break-word;
 }
 
+/* The model's thinking: a folded row, as in the agent's chat. */
+.plain-reasoning {
+  margin-bottom: 6px;
+}
+.plain-reasoning > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-faint);
+}
+.plain-reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+.plain-reasoning > summary:hover {
+  background: var(--bg-hover);
+}
+.plain-reasoning-name {
+  flex: none;
+  min-width: 56px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+.plain-reasoning-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plain-reasoning-chev {
+  flex: none;
+  transition: transform 0.15s;
+}
+.plain-reasoning[open] .plain-reasoning-chev {
+  transform: rotate(90deg);
+}
+.plain-reasoning-text {
+  margin: 0 0 4px 8px;
+  padding: 7px 9px;
+  background: var(--bg-bubble);
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
 .plain-typing {
   display: flex;
   gap: 4px;
@@ -140,6 +196,30 @@
   color: var(--red);
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* The box and the strip on its top edge — the agent's folder tab, measured the
+   same, so the thread above is as tall in either mode. */
+.plain-composer-wrap {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+.plain-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 24px;
+  padding: 3px 11px 3px 7px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  min-width: 0;
+}
+/* As the folder tab's: a flex label, which is what sets the strip's height. */
+.plain-tab .chip-label {
+  display: flex;
 }
 
 /* Laid out as the agent's box: the text, then a bar of chips with send at its end. */

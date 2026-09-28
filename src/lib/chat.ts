@@ -700,7 +700,7 @@ export async function plainChatSend(
   turnId: string,
   role: ChatRoleId,
   messages: LlmMessage[],
-): Promise<{ text: string; truncated?: boolean }> {
+): Promise<{ text: string; reasoning?: string; truncated?: boolean }> {
   requireBackend();
   return invoke("plain_chat_send", { turnId, role, messages });
 }
@@ -711,9 +711,15 @@ export async function plainChatList(): Promise<ChatSummary[]> {
   return invoke<ChatSummary[]>("plain_chat_list");
 }
 
-export async function plainChatSave(id: string, role: ChatRoleId, messages: LlmMessage[]): Promise<ChatSummary> {
+/** `messages` is what the model is sent again; `blocks` the transcript as drawn, thinking included. */
+export async function plainChatSave(
+  id: string,
+  role: ChatRoleId,
+  messages: LlmMessage[],
+  blocks: unknown,
+): Promise<ChatSummary> {
   requireBackend();
-  return invoke<ChatSummary>("plain_chat_save", { id, role, messages });
+  return invoke<ChatSummary>("plain_chat_save", { id, role, messages, blocks });
 }
 
 export async function plainChatCancel(): Promise<void> {
