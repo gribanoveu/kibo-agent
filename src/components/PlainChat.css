@@ -44,6 +44,8 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
+  /* The agent's empty chat's rhythm: the title and the text sit where its do. */
+  gap: 10px;
   text-align: center;
 }
 /* As large as the agent's on its empty chat. */
@@ -51,24 +53,26 @@
   display: block;
   width: 112px;
   height: 112px;
-  margin: 0 auto 4px;
+  margin: 0 auto 2px;
 }
 .plain-welcome h2 {
   font-size: var(--fs-lg);
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .plain-welcome p {
-  margin-top: 7px;
   font-size: var(--fs-sm);
   line-height: 1.6;
   color: var(--text-faint);
 }
+/* One per row, whatever their length: the block's height is what keeps Kibo in place. */
 .plain-suggest {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   gap: 7px;
-  margin-top: 28px;
+  /* Makes the block as tall as the agent's, so Kibo stays put across modes. */
+  margin-top: 7px;
 }
 .plain-suggest button {
   padding: 7px 11px;
