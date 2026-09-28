@@ -446,9 +446,8 @@ fn run(
     let mut guard = LoopGuard::default();
     // The calls of the round before, for the guard.
     let mut settled: Vec<Settled> = Vec::new();
-    // Tokens this pass has spent, every request's prompt and reply: what a
-    // review is asked to wrap up at. Not in the checkpoint — a resume counts
-    // anew, and the note itself, in the history, is what keeps it to once.
+    // Tokens this pass has spent, every request's prompt and reply: said
+    // with a review's wrap-up. Not in the checkpoint — a resume counts anew.
     let mut spent: u64 = 0;
 
     loop {
@@ -492,7 +491,9 @@ fn run(
                 );
             }
             if turn.mode == ConversationMode::Review {
-                if let Some(said) = crate::domain::review::wrap_up(round - 1, spent, &state.history) {
+                let used = crate::domain::review::Budget { rounds: round - 1, weight: state.budget_used };
+                let limit = crate::domain::review::Budget { rounds: MAX_TOOL_ITERATIONS as u32, weight: MAX_TOOL_BUDGET };
+                if let Some(said) = crate::domain::review::wrap_up(used, limit, &state.history) {
                     state.history.push(note(turn, said));
                     events.emit(
                         round,
@@ -4227,8 +4228,7 @@ mod tests {
         ended.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
         assert!(notes_in(&ended, "[Background processes")[0].ends_with(SAID));
 
-        let reviewing = (0..11).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))])).chain([text("done")]).collect();
-        let mut review = russian(harness("lang-wrap-up", reviewing));
+        let mut review = russian(weighing("lang-wrap-up", 2));
         review.mode = ConversationMode::Review;
         review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
         assert!(notes_in(&review, "[Review budget]")[0].ends_with(SAID));
@@ -4247,44 +4247,58 @@ mod tests {
         assert_eq!(notes_in(&auto, "[Your last reply was empty"), [EMPTY_REPLY_NOTE.to_string()]);
     }
 
-    /// A review that goes on is asked once to wrap up — at its tenth round
-    /// here, the provider reporting no usage — and an agent's turn never is.
+    /// Rounds of distinct cheap reads, and then an answer.
+    fn reading(label: &str, rounds: u32) -> Harness {
+        let mut steps: Vec<Step> =
+            (0..rounds).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))])).collect();
+        steps.push(text("done"));
+        harness(label, steps)
+    }
+
+    /// Rounds whose calls weigh 102 each: two use four fifths of the budget.
+    fn weighing(label: &str, rounds: u32) -> Harness {
+        let heavy = |n: u32| asks((0..34).map(|i| wants(&format!("g{n}-{i}"), "grep", &format!(r#"{{"pattern":"p{n}x{i}"}}"#))).collect());
+        let mut steps: Vec<Step> = (0..rounds).map(heavy).collect();
+        steps.push(text("done"));
+        harness(label, steps)
+    }
+
+    fn wrap_ups(h: &Harness) -> Vec<String> {
+        payloads(&h.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect()
+    }
+
+    /// A review has an ordinary turn's ceilings, and is asked once to wrap up
+    /// with a fifth of the rounds left — after its 48th of 60 — and an
+    /// agent's turn never is.
     #[test]
     fn a_long_review_is_asked_once_to_wrap_up_and_an_agent_turn_never() {
-        let steps = |label: &str| {
-            let mut steps: Vec<Step> = (0..12).map(|n| asks(vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))])).collect();
-            steps.push(text("done"));
-            harness(label, steps)
-        };
-        let mut review = steps("chat-wrap-up-review");
+        let limit = MAX_TOOL_ITERATIONS as u32 * crate::domain::review::WRAP_UP_AT_PERCENT / 100;
+        let mut review = reading("chat-wrap-up-review", limit + 2);
         review.mode = ConversationMode::Review;
         review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
-        let said: Vec<String> = payloads(&review.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect();
-        assert_eq!(said, ["wrap-up:10"], "once, after the tenth round");
+        assert_eq!(wrap_ups(&review), [format!("wrap-up:{limit}")], "once, after the 48th round");
         let notes = review.provider.requests().last().unwrap().messages.iter().filter(|m| m.content.as_deref().is_some_and(|c| c.starts_with("[Review budget]"))).count();
         assert_eq!(notes, 1, "in the history the model reads");
 
-        let agent = steps("chat-wrap-up-agent");
+        let agent = reading("chat-wrap-up-agent", limit + 2);
         agent.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        assert!(!payloads(&agent.log.lock().unwrap()).iter().any(|p| p.starts_with("wrap-up")));
+        assert!(wrap_ups(&agent).is_empty());
     }
 
-    /// Tokens count as well as rounds: a review whose requests are heavy is
-    /// asked sooner — after its second round here, 400k spent by then.
+    /// The weighted budget counts as well as rounds: a review of expensive
+    /// calls is asked sooner — after its second round here, 204 of 250 used.
+    /// Tokens alone no longer do: an ordinary turn has no token ceiling.
     #[test]
-    fn a_heavy_review_is_asked_to_wrap_up_by_its_tokens() {
-        let heavy = |n: u32| {
-            Step::Reply(ChatStreamResult {
-                tool_calls: vec![wants(&format!("l{n}"), "listFiles", &format!(r#"{{"path":"d{n}"}}"#))],
-                usage: Some(ChatUsage { prompt_tokens: 180_000, completion_tokens: 20_000, total_tokens: 200_000, cached_tokens: 0 }),
-                ..Default::default()
-            })
-        };
-        let mut h = harness("chat-wrap-up-tokens", vec![heavy(0), heavy(1), heavy(2), text("done")]);
+    fn a_heavy_review_is_asked_to_wrap_up_by_its_budget() {
+        let mut h = weighing("chat-wrap-up-weight", 2);
         h.mode = ConversationMode::Review;
         h.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
-        let said: Vec<String> = payloads(&h.log.lock().unwrap()).into_iter().filter(|p| p.starts_with("wrap-up")).collect();
-        assert_eq!(said, ["wrap-up:2"]);
+        assert_eq!(wrap_ups(&h), ["wrap-up:2"]);
+
+        let mut one = weighing("chat-wrap-up-weight-one", 1);
+        one.mode = ConversationMode::Review;
+        one.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
+        assert!(wrap_ups(&one).is_empty(), "102 of 250 is not yet");
     }
 
     // -------------------------------------------------------------- explore

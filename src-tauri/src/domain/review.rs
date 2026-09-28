@@ -344,31 +344,39 @@ impl ReviewDesk {
     }
 }
 
-/// Rounds after which a review is asked to wrap up.
-pub const WRAP_UP_ROUNDS: u32 = 10;
-/// Tokens — every request's prompt and reply, added up — after which a review
-/// is asked to wrap up, whichever comes first. A review that reads on resends
-/// everything it has read with every request; a million tokens for one file
-/// was the measured price of not asking.
-pub const WRAP_UP_TOKENS: u64 = 300_000;
+/// How much of the turn's budget a review uses before it is asked to wrap
+/// up: the last fifth is for reporting what it verified, rather than for a
+/// turn that runs out mid-read and reports nothing.
+pub const WRAP_UP_AT_PERCENT: u32 = 80;
+
+/// A turn's two ceilings — rounds, and calls weighted by cost — or how much
+/// of them is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub rounds: u32,
+    pub weight: u32,
+}
 
 /// What the note starts with — how it is recognised in the history, so it is
 /// given once a turn, a pause and a resume included.
 const WRAP_UP_MARK: &str = "[Review budget]";
 
-/// The note asking a review to wrap up, when it has gone on long enough and
-/// has not been asked yet. The agent's own ceiling stays the turn's: this
-/// only asks.
-pub fn wrap_up(rounds_done: u32, spent: u64, history: &[LlmMessage]) -> Option<String> {
-    if rounds_done < WRAP_UP_ROUNDS && spent < WRAP_UP_TOKENS {
+/// The note asking a review to wrap up, once it has used
+/// [`WRAP_UP_AT_PERCENT`] of either of the turn's ceilings and has not been
+/// asked yet. The ceilings are an ordinary turn's: a review is not cut
+/// shorter, only told in time that the end is near.
+pub fn wrap_up(used: Budget, limit: Budget, history: &[LlmMessage]) -> Option<String> {
+    let percent = |used: u32, limit: u32| (u64::from(used) * 100).checked_div(u64::from(limit)).unwrap_or(100);
+    let most = percent(used.rounds, limit.rounds).max(percent(used.weight, limit.weight));
+    if most < u64::from(WRAP_UP_AT_PERCENT) {
         return None;
     }
     if history.iter().any(|m| m.content.as_deref().is_some_and(|text| text.starts_with(WRAP_UP_MARK))) {
         return None;
     }
     Some(format!(
-        "{WRAP_UP_MARK} You have spent {rounds_done} rounds and about {}k tokens on this review. Wrap up now: report with reportFinding what you have already verified, name what you could not settle in your closing answer as worth a look, and open nothing new unless it proves a finding you already have.",
-        spent / 1000
+        "{WRAP_UP_MARK} This review has used {most}% of its budget ({} of {} rounds); at 100% the turn stops, whatever is unreported. Wrap up now: report with reportFinding what you have already verified, name what you could not settle in your closing answer as worth a look, and open nothing new unless it proves a finding you already have.",
+        used.rounds, limit.rounds
     ))
 }
 
@@ -539,15 +547,17 @@ mod tests {
         assert!(lines_apart.note(&args("src/pay.rs", "charge(fee);")).is_ok(), "the same kind on other lines");
     }
 
-    /// Asked once, at whichever limit comes first; never before either.
+    /// Asked once, at 80% of whichever ceiling comes first; never before.
     #[test]
-    fn a_review_is_asked_to_wrap_up_once_at_the_first_limit() {
-        assert_eq!(wrap_up(WRAP_UP_ROUNDS - 1, WRAP_UP_TOKENS - 1, &[]), None);
-        let by_rounds = wrap_up(WRAP_UP_ROUNDS, 1_000, &[]).expect("at the round limit");
-        assert!(by_rounds.starts_with("[Review budget] You have spent 10 rounds and about 1k tokens"), "{by_rounds}");
-        let by_tokens = wrap_up(3, WRAP_UP_TOKENS, &[]).expect("at the token limit");
-        assert!(by_tokens.contains("3 rounds and about 300k tokens") && by_tokens.contains("reportFinding"), "{by_tokens}");
+    fn a_review_is_asked_to_wrap_up_once_with_a_fifth_of_either_ceiling_left() {
+        let limit = Budget { rounds: 60, weight: 250 };
+        let used = |rounds, weight| Budget { rounds, weight };
+        assert_eq!(wrap_up(used(47, 199), limit, &[]), None);
+        let by_rounds = wrap_up(used(48, 10), limit, &[]).expect("at 80% of the rounds");
+        assert!(by_rounds.starts_with("[Review budget] This review has used 80% of its budget (48 of 60 rounds)"), "{by_rounds}");
+        let by_weight = wrap_up(used(5, 225), limit, &[]).expect("at 80% of the weighted budget");
+        assert!(by_weight.contains("used 90% of its budget (5 of 60 rounds)") && by_weight.contains("reportFinding"), "{by_weight}");
         let asked = [LlmMessage::user("go"), LlmMessage::user(by_rounds)];
-        assert_eq!(wrap_up(WRAP_UP_ROUNDS + 5, WRAP_UP_TOKENS * 2, &asked), None, "once a turn");
+        assert_eq!(wrap_up(used(55, 240), limit, &asked), None, "once a turn");
     }
 }
