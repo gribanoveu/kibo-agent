@@ -25,8 +25,9 @@ use serde_json::Value;
 use crate::domain::chat_export;
 use crate::domain::compaction::SUMMARY_PREFIX;
 use crate::domain::chat_record::{
-    self, ChatError, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION,
+    self, ChatError, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
+use crate::domain::chat_role::ChatRole;
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::app_dir;
@@ -185,29 +186,54 @@ pub fn save(
     plan: Option<&str>,
     branched_from: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
-    chat_record::check_id(id)?;
-    let conn = open()?;
-    let stored: Option<(i64, bool)> = conn
-        .query_row("SELECT created_at, archived FROM chats WHERE id = ?1", params![id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
-        .optional()
-        .map_err(store)?;
-    let (created_at, archived) = (stored.map(|s| s.0), stored.is_some_and(|s| s.1));
-
-    let record = ChatRecord {
+    upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
         workspace: workspace.to_string(),
         title: chat_record::derive_title(messages, blocks),
-        created_at: created_at.unwrap_or_else(now),
-        updated_at: now(),
+        created_at: 0,
+        updated_at: 0,
         messages: messages.to_vec(),
         blocks: blocks.clone(),
         todos: todos.to_vec(),
         plan: plan.map(str::to_string),
         branched_from: branched_from.map(str::to_string),
-    };
+        role: None,
+    })
+}
+
+/// A Chat mode conversation, filed under no folder. Its messages are its
+/// transcript too: a plain chat has no tool calls to keep apart from what is shown.
+pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage]) -> Result<ChatSummary, ChatError> {
+    upsert(ChatRecord {
+        schema_version: CHAT_SCHEMA_VERSION,
+        id: id.to_string(),
+        workspace: NO_FOLDER.to_string(),
+        title: chat_record::derive_title(messages, &Value::Null),
+        created_at: 0,
+        updated_at: 0,
+        messages: messages.to_vec(),
+        blocks: Value::Array(Vec::new()),
+        todos: Vec::new(),
+        plan: None,
+        branched_from: None,
+        role: Some(role),
+    })
+}
+
+/// Writes `record`, stamped now and keeping the moment it was first saved.
+fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
+    chat_record::check_id(&record.id)?;
+    let conn = open()?;
+    let stored: Option<(i64, bool)> = conn
+        .query_row("SELECT created_at, archived FROM chats WHERE id = ?1", params![record.id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(store)?;
+    let archived = stored.is_some_and(|s| s.1);
+    record.updated_at = now();
+    record.created_at = stored.map_or(record.updated_at, |s| s.0);
 
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
     // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`.
@@ -577,6 +603,25 @@ mod tests {
             assert!(!listed[0].archived);
             set_archived("old", true).unwrap();
             assert!(list("/repo").unwrap()[0].archived);
+        });
+    }
+
+    /// Chat mode's conversations are listed together, apart from every
+    /// folder's, and keep their role.
+    #[test]
+    fn a_plain_chat_is_filed_under_no_folder_with_its_role() {
+        with_app_dir("chat-store-plain", || {
+            save_one("agent", "/repo", "fix it");
+            let said = [LlmMessage::user("what is a monad?"), LlmMessage::assistant("a monoid in…")];
+            let saved = save_plain("plain", ChatRole::Assistant, &said).unwrap();
+
+            assert_eq!(saved.title, "what is a monad?");
+            let ids = |folder: &str| list(folder).unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
+            assert_eq!(ids(NO_FOLDER), ["plain"]);
+            assert_eq!(ids("/repo"), ["agent"]);
+            let record = load("plain").unwrap();
+            assert_eq!((record.role, record.messages), (Some(ChatRole::Assistant), said.to_vec()));
+            assert_eq!(load("agent").unwrap().role, None);
         });
     }
 

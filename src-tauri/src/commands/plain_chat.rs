@@ -1,5 +1,7 @@
 //! Chat mode, reachable from the window. The conversation is the window's,
-//! as with an agent turn: each reply is sent the whole of it.
+//! as with an agent turn: each reply is sent the whole of it, and the window
+//! saves it. A saved one opens, archives and goes with `chat_load`,
+//! `chat_set_archived` and `chat_delete`, as the agent's do.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -7,8 +9,10 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Runtime, State};
 
+use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::llm::{ChatStreamResult, LlmMessage};
+use crate::infra::chat_store;
 use crate::services::{llm_session, plain_chat};
 
 use super::chat_events::chat_event_sink;
@@ -52,6 +56,19 @@ pub async fn plain_chat_send<R: Runtime>(
     })
     .await
     .map_err(|e| format!("the chat thread failed: {e}"))?
+}
+
+/// Chat mode's conversations, newest first — whatever folder is open.
+#[tauri::command]
+pub fn plain_chat_list() -> Result<Vec<ChatSummary>, String> {
+    chat_store::list(NO_FOLDER).map_err(|e| e.to_string())
+}
+
+/// Writes the conversation as it now stands: as a message is sent, and again
+/// with the reply.
+#[tauri::command]
+pub fn plain_chat_save(id: String, role: ChatRole, messages: Vec<LlmMessage>) -> Result<ChatSummary, String> {
+    chat_store::save_plain(&id, role, &messages).map_err(|e| e.to_string())
 }
 
 /// Returns at once; the reply stops at its next chunk.

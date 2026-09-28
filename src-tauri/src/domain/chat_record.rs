@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use super::chat_role::ChatRole;
 use super::compaction::SUMMARY_PREFIX;
 use super::llm::{LlmMessage, LlmRole};
 use super::tools::Task;
@@ -23,6 +24,10 @@ use super::tools::Task;
 /// Bumped when a field this build reads stops meaning what it meant. Adding a
 /// field with `#[serde(default)]` is not that: an older record still loads.
 pub const CHAT_SCHEMA_VERSION: u32 = 1;
+
+/// Where Chat mode's conversations are filed: they are about no folder, and
+/// no open folder's listing reaches them — a folder's path is never empty.
+pub const NO_FOLDER: &str = "";
 
 /// Longest title derived from a first message. Past this the sidebar elides it
 /// anyway, and the rest is only weight in every listing.
@@ -76,6 +81,9 @@ pub struct ChatRecord {
     /// the original may since have been deleted.
     #[serde(default)]
     pub branched_from: Option<String>,
+    /// Who the model was in a Chat mode conversation; `None` for the agent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<ChatRole>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -202,6 +210,7 @@ mod tests {
             todos: Vec::new(),
             plan: None,
             branched_from: None,
+            role: None,
         }
     }
 

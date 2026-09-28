@@ -108,6 +108,7 @@ mod tests {
             todos: Vec::new(),
             plan: None,
             branched_from: None,
+            role: None,
         }
     }
 
