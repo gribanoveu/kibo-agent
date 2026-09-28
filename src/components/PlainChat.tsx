@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, ChevronRight, SendHorizontal, Square, UserRound } from "lucide-react";
+import { Brain, ChevronRight, MessagesSquare, SendHorizontal, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import logo from "../assets/kibo-chat-logo.png";
@@ -27,6 +27,34 @@ function Thinking({ text }: { text: string }) {
   );
 }
 
+/** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
+const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
+  assistant: MessagesSquare,
+  kubernetes: ShipWheel,
+};
+
+// A thought cloud: overlapping circles, then the bubbles trailing to the head.
+const CLOUD = [
+  [24, 24, 13],
+  [38, 17, 15],
+  [53, 25, 12],
+  [31, 35, 10],
+  [46, 36, 10],
+  [12, 47, 4.5],
+  [5, 54, 2.5],
+] as const;
+
+/** Drawn twice — outlines, then fills over them — so only the outer edge shows. */
+function Cloud() {
+  const circles = CLOUD.map(([cx, cy, r]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} />);
+  return (
+    <svg className="plain-cloud-shape" viewBox="0 0 72 58">
+      <g className="plain-cloud-edge">{circles}</g>
+      <g className="plain-cloud-fill">{circles}</g>
+    </svg>
+  );
+}
+
 type Props = {
   chat: PlainChatState;
   /** Each change puts the cursor in the box. */
@@ -43,6 +71,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.streaming !== null;
+  const RoleIcon = ROLE_ICONS[chat.role];
   const empty = chat.messages.length === 0;
   // Two of the set, picked again each time an empty chat opens.
   const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
@@ -75,7 +104,13 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
         <div ref={scrollRef} className="plain-thread chat-text">
           {chat.messages.length === 0 && !running ? (
             <div className="plain-welcome">
-              <img className="plain-welcome-logo" src={logo} alt="" />
+              <div className="plain-welcome-mascot">
+                <img className="plain-welcome-logo" src={logo} alt="" />
+                <span className="plain-welcome-cloud" aria-hidden>
+                  <Cloud />
+                  <RoleIcon size={22} />
+                </span>
+              </div>
               <h2>How can I help?</h2>
               <p>The model answers in text here: it does not read your files, run commands or change anything.</p>
               <div className="plain-suggest">
@@ -138,7 +173,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             heading="Role"
             label={
               <span className="plain-chip-label">
-                <UserRound size={13} />
+                <RoleIcon size={13} />
                 {roleName}
               </span>
             }

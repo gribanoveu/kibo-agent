@@ -49,11 +49,47 @@
   text-align: center;
 }
 /* As large as the agent's on its empty chat. */
-.plain-welcome-logo {
-  display: block;
+.plain-welcome-mascot {
+  position: relative;
   width: 112px;
   height: 112px;
   margin: 0 auto 2px;
+}
+.plain-welcome-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* The role's icon in a thought cloud over Kibo's head; out of the flow, so
+   Kibo stays exactly where the agent's is. */
+.plain-welcome-cloud {
+  position: absolute;
+  top: -44px;
+  left: calc(100% - 22px);
+  width: 72px;
+  height: 58px;
+  color: var(--accent);
+}
+.plain-cloud-shape {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+/* A 2px stroke under the fill leaves a 1px edge round the whole cloud. */
+.plain-cloud-edge {
+  fill: var(--border);
+  stroke: var(--border);
+  stroke-width: 2px;
+}
+.plain-cloud-fill {
+  fill: var(--bg-panel-soft);
+}
+/* Centred on the cloud's body, not on its box with the trail in it. */
+.plain-welcome-cloud > .lucide {
+  position: absolute;
+  left: 38px;
+  top: 25px;
+  transform: translate(-50%, -50%);
 }
 .plain-welcome h2 {
   font-size: var(--fs-lg);
