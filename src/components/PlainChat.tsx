@@ -1,19 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, ChevronRight, SendHorizontal, Square, UserRound } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
+import { pickSuggestions } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/chat";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import "./PlainChat.css";
-
-const SUGGESTIONS = [
-  "Explain the difference between a process and a thread",
-  "Write a regex that matches an ISO 8601 date",
-];
 
 /** The model's thinking before an answer, folded until asked — as the agent's chat draws it. */
 function Thinking({ text }: { text: string }) {
@@ -47,6 +43,9 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
   const input = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
   const running = chat.streaming !== null;
+  const empty = chat.messages.length === 0;
+  // Two of the set, picked again each time an empty chat opens.
+  const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
   // Kept at the newest line while it is written.
@@ -77,7 +76,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               <h2>How can I help?</h2>
               <p>The model answers in text here: it does not read your files, run commands or change anything.</p>
               <div className="plain-suggest">
-                {SUGGESTIONS.map((text) => (
+                {suggestions.map((text) => (
                   <button
                     key={text}
                     type="button"
