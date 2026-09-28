@@ -3,9 +3,7 @@ import {
   ArrowUpRight,
   Brain,
   Loader2,
-  Check,
   ChevronRight,
-  Copy,
   FileText,
   Folder,
   FileDiff,
@@ -31,6 +29,7 @@ import { DiffView } from "./DiffView";
 import { PANES } from "./panes";
 import { shortcutText } from "../lib/shortcuts";
 import type { AsideTab } from "../types";
+import { CopyAction } from "./CopyAction";
 import { Markdown } from "./Markdown";
 import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { useFollowBottom } from "../hooks/useFollowBottom";
@@ -825,30 +824,6 @@ function UserBubble({
         )}
       </div>
     </div>
-  );
-}
-
-/** Copies a message's text as written — Markdown source for the agent's, not the rendered page. */
-function CopyAction({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <button
-      type="button"
-      className="bubble-action"
-      onClick={() => {
-        // A clipboard that refuses loses nothing: the text is on screen.
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), 1500);
-        }, () => {});
-      }}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? "Copied" : "Copy"}
-    </button>
   );
 }
 

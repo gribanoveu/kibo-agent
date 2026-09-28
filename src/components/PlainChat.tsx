@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, ChevronRight, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
+import { CopyAction } from "./CopyAction";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
 import { pickSuggestions } from "../lib/chatSuggestions";
@@ -142,11 +143,17 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 message.role === "user" ? (
                   <div key={i} className="plain-msg me">
                     <div className="plain-text">{message.text}</div>
+                    <div className="plain-foot">
+                      <CopyAction text={message.text} />
+                    </div>
                   </div>
                 ) : (
                   <div key={i} className="plain-msg">
                     {message.reasoning && <Thinking text={message.reasoning} />}
                     <Markdown text={message.text} streaming={false} />
+                    <div className="plain-foot">
+                      <CopyAction text={message.text} />
+                    </div>
                   </div>
                 ),
               )}
@@ -164,6 +171,8 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                       </div>
                     )
                   )}
+                  {/* Room kept while it streams, so Copy appears without the thread moving. */}
+                  <div className="plain-foot" />
                 </div>
               )}
               {chat.error && <div className="plain-error">{chat.error}</div>}

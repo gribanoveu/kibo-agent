@@ -127,7 +127,8 @@
 }
 
 .plain-msg {
-  margin-bottom: 16px;
+  /* The footer under each message is most of the gap to the next. */
+  margin-bottom: 4px;
   font-size: var(--fs-md);
   line-height: 1.6;
   color: var(--text);
@@ -136,7 +137,26 @@
 }
 .plain-msg.me {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+}
+/* Under a message, shown on hover in room kept for it, as in the agent's chat. */
+.plain-foot {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.plain-msg:hover > .plain-foot,
+.plain-foot:focus-within {
+  opacity: 1;
+}
+/* On the right under the user's bubble, its icon lined up with the bubble's edge. */
+.plain-msg.me .copy-action {
+  margin: 0 -6px 0 0;
 }
 .plain-text {
   max-width: min(78%, 560px);
