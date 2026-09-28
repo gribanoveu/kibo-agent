@@ -14,6 +14,7 @@ pub mod rewind;
 pub mod review;
 pub mod next_prompt;
 pub mod conversation_mode;
+pub mod chat_role;
 pub mod embeddings;
 pub mod prompt;
 pub mod chunk_index;

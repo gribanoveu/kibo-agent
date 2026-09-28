@@ -72,6 +72,7 @@ pub fn run() {
         // reach a turn while it runs. `Arc` because a turn runs on a blocking
         // thread that outlives the command call that started it.
         .manage(std::sync::Arc::new(commands::chat::AgentState::default()))
+        .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
         .manage(commands::git::GitWatch::default())
         // The MCP servers, kept running between turns.
         .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
@@ -157,6 +158,9 @@ pub fn run() {
             commands::chat::next_prompt_log,
             commands::chat::next_prompt_sent,
             commands::chat::chat_context_usage,
+            commands::plain_chat::plain_chat_roles,
+            commands::plain_chat::plain_chat_send,
+            commands::plain_chat::plain_chat_cancel,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load,
             commands::chat_history::chat_save,
