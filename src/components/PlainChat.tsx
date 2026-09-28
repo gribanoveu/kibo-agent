@@ -9,6 +9,7 @@ import type { ChatRoleId } from "../lib/chat";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
+import { useFollowBottom } from "../hooks/useFollowBottom";
 import "./PlainChat.css";
 
 /** The model's thinking before an answer, folded until asked — as the agent's chat draws it. */
@@ -41,17 +42,19 @@ type Props = {
 export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels }: Props) {
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
-  const thread = useRef<HTMLDivElement>(null);
   const running = chat.streaming !== null;
   const empty = chat.messages.length === 0;
   // Two of the set, picked again each time an empty chat opens.
   const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
-  // Kept at the newest line while it is written.
+  // Kept at the newest line while it is written, until the user scrolls up to
+  // read; a message they send, or another chat, follows the end again.
+  const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
+  const sent = chat.messages.filter((m) => m.role === "user").length;
   useEffect(() => {
-    thread.current?.scrollTo({ top: thread.current.scrollHeight });
-  }, [chat.messages, chat.streaming]);
+    scrollToBottom();
+  }, [chat.chatId, sent, scrollToBottom]);
 
   const send = () => {
     if (running || !draft.trim()) return;
@@ -69,7 +72,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
           <h1>{chat.chats.find((c) => c.id === chat.chatId)?.title ?? "New chat"}</h1>
         </header>
 
-        <div ref={thread} className="plain-thread chat-text">
+        <div ref={scrollRef} className="plain-thread chat-text">
           {chat.messages.length === 0 && !running ? (
             <div className="plain-welcome">
               <img className="plain-welcome-logo" src={logo} alt="" />
@@ -91,7 +94,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               </div>
             </div>
           ) : (
-            <>
+            <div ref={contentRef}>
               {chat.messages.map((message, i) =>
                 message.role === "user" ? (
                   <div key={i} className="plain-msg me">
@@ -121,7 +124,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 </div>
               )}
               {chat.error && <div className="plain-error">{chat.error}</div>}
-            </>
+            </div>
           )}
         </div>
       </section>

@@ -69,6 +69,24 @@ describe("following the end of the thread", () => {
     expect(box.scrollTop).toBe(1300);
   });
 
+  test("a wheel turned up lets go before the scroll event arrives", () => {
+    const { box, grow } = setup();
+    grow(0);
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+    // WebKit's scroll event still reads where the stick left the box.
+    box.dispatchEvent(new Event("scroll"));
+    grow(200);
+    expect(box.scrollTop).toBe(1000);
+  });
+
+  test("a wheel turned down does not let go", () => {
+    const { box, grow } = setup();
+    grow(0);
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
+    grow(200);
+    expect(box.scrollTop).toBe(1200);
+  });
+
   test("scrollToBottom follows again even from far up", () => {
     const { box, grow, userScrollsTo, api } = setup();
     grow(0);
