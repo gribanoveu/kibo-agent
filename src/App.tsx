@@ -694,6 +694,7 @@ export default function App() {
             onSave: llm.save,
             onRemove: llm.remove,
             onSelect: llm.select,
+            onKeyStore: llm.keyStore,
             onProbe: llm.probe,
             served: llm.served,
           }}

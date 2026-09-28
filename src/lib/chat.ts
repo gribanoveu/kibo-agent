@@ -381,18 +381,22 @@ export function withLanguageReminder(prompt: string, language: ReplyLanguage): s
   return `${prompt}\n\n[Reply in ${name}.]`;
 }
 
+/** Mirrors `infra::master_key::KeyStore`: where the key the API keys are sealed under is kept. */
+export type KeyStore = "file" | "keychain";
+
 export type LlmSettings = {
   providers: ProviderView[];
   activeProviderId: string | null;
   debugLogging: boolean;
   replyLanguage: ReplyLanguage;
+  keyStore: KeyStore;
 };
 
 /** What a turn still needs before it can start. Asked before sending, not discovered by failing. */
 export type Readiness = { workspace: string | null; provider: string | null; hasKey: boolean };
 
 export async function llmSettings(): Promise<LlmSettings> {
-  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto" };
+  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", keyStore: "file" };
   return invoke<LlmSettings>("llm_settings_get");
 }
 
@@ -413,6 +417,12 @@ export async function removeProvider(id: string): Promise<void> {
 export async function saveApiKey(id: string, key: string): Promise<void> {
   requireBackend();
   return invoke<void>("llm_api_key_save", { id, key });
+}
+
+/** Moves the master key to `store`. The system may ask the user before the keychain answers. */
+export async function setKeyStore(store: KeyStore): Promise<void> {
+  requireBackend();
+  return invoke<void>("llm_key_store_set", { store });
 }
 
 export async function setActiveProvider(id: string | null): Promise<void> {
