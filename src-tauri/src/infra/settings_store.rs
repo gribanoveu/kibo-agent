@@ -61,6 +61,13 @@ mod tests {
                 auto_chats: vec!["c1".to_string()],
                 auto_folders: vec!["/repo".to_string()],
             },
+            kube: crate::domain::settings::KubeSettings {
+                configs: vec![crate::domain::settings::Kubeconfig {
+                    name: "prod".to_string(),
+                    path: "/home/me/.kube/prod".to_string(),
+                }],
+                active: Some("prod".to_string()),
+            },
         }
     }
 

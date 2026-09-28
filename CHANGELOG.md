@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-28 Add your kubeconfig files in Settings → Kubernetes and pick one on the Kubernetes role's tab in Chat mode: the commands the model gives name that file; with none set up, it says where to add one
 - 2026-09-28 Chat mode's empty chat shows the role's icon in a thought cloud over Kibo, and the role's tab carries the same icon
 - 2026-09-28 Pick the Kubernetes role in Chat mode: the model answers as a Kubernetes engineer — manifests, Helm, why a pod fails — asks for the kubectl output it needs and marks commands that change the cluster
 - 2026-09-28 Scroll up to read while an answer is still arriving: the thread no longer drags you back to the end, in the agent and in Chat mode; scrolling back down follows it again

@@ -1,0 +1,72 @@
+.kube-intro {
+  margin-bottom: 14px;
+}
+
+.kube-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+}
+.kube-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px 7px 11px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kube-row:last-child {
+  border-bottom: 0;
+}
+.kube-row-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+.kube-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kube-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.kube-row-badge {
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--bg-active);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.kube-row-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+/* The path and its Browse button share the field's control column. */
+.kube-path {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.kube-path input {
+  flex: 1;
+  min-width: 0;
+}
+.kube-path .btn {
+  flex: none;
+}
+/* Under the controls, where the fields' inputs start. */
+.kube-actions {
+  margin-left: 144px;
+}

@@ -161,6 +161,55 @@ pub struct AppSettings {
     pub rules: OptOut,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
+    /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
+    pub kube: KubeSettings,
+}
+
+/// The kubeconfig files the Kubernetes role can be pointed at — by path, never
+/// by contents. The file stays where kubectl keeps it, with its credentials and
+/// whatever refreshes them, and this file stays free of secrets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KubeSettings {
+    pub configs: Vec<Kubeconfig>,
+    /// Picked on the chat's tab, by name. `None` falls back to the first, as
+    /// the active provider does.
+    pub active: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Kubeconfig {
+    /// What the user calls the cluster: `prod`, `staging`.
+    pub name: String,
+    pub path: String,
+}
+
+impl KubeSettings {
+    /// The one in use: the picked one, or the first when none is picked. A pick
+    /// naming a removed file is none, not some other cluster.
+    pub fn active(&self) -> Option<&Kubeconfig> {
+        match &self.active {
+            Some(name) => self.configs.iter().find(|c| &c.name == name),
+            None => self.configs.first(),
+        }
+    }
+
+    /// Adds `config`, or replaces the one of that name where it stands.
+    pub fn upsert(&mut self, config: Kubeconfig) {
+        match self.configs.iter_mut().find(|c| c.name == config.name) {
+            Some(existing) => *existing = config,
+            None => self.configs.push(config),
+        }
+    }
+
+    /// Removes it, and the pick with it: the next falls back to the first.
+    pub fn remove(&mut self, name: &str) {
+        self.configs.retain(|c| c.name != name);
+        if self.active.as_deref() == Some(name) {
+            self.active = None;
+        }
+    }
 }
 
 /// Where the composer's Ask/Auto is remembered. A chat or folder not listed
@@ -392,5 +441,40 @@ mod tests {
         let anthropic: ProviderConfig =
             serde_json::from_str(r#"{"id":"a","baseUrl":"https://x/v1","kind":"anthropic"}"#).unwrap();
         assert_eq!(anthropic.kind, ProviderKind::Anthropic);
+    }
+
+    fn config(name: &str) -> Kubeconfig {
+        Kubeconfig { name: name.to_string(), path: format!("/home/me/.kube/{name}") }
+    }
+
+    #[test]
+    fn the_first_kubeconfig_is_in_use_until_another_is_picked() {
+        let mut kube = KubeSettings::default();
+        assert_eq!(kube.active(), None);
+        kube.upsert(config("prod"));
+        kube.upsert(config("staging"));
+        assert_eq!(kube.active().map(|c| c.name.as_str()), Some("prod"));
+        kube.active = Some("staging".to_string());
+        assert_eq!(kube.active().map(|c| c.name.as_str()), Some("staging"));
+        kube.active = Some("gone".to_string());
+        assert_eq!(kube.active(), None, "a pick naming a removed file is not some other cluster");
+    }
+
+    #[test]
+    fn saving_a_kubeconfig_under_its_name_replaces_it_in_place() {
+        let mut kube = KubeSettings { configs: vec![config("prod"), config("staging")], active: None };
+        kube.upsert(Kubeconfig { name: "prod".to_string(), path: "/elsewhere".to_string() });
+        assert_eq!(kube.configs.len(), 2);
+        assert_eq!(kube.configs[0].path, "/elsewhere");
+    }
+
+    #[test]
+    fn removing_the_picked_kubeconfig_drops_the_pick() {
+        let mut kube = KubeSettings { configs: vec![config("prod"), config("staging")], active: Some("staging".to_string()) };
+        kube.remove("prod");
+        assert_eq!(kube.active.as_deref(), Some("staging"), "another's removal keeps the pick");
+        kube.remove("staging");
+        assert!(kube.configs.is_empty());
+        assert_eq!(kube.active, None);
     }
 }

@@ -313,6 +313,10 @@
   align-items: center;
   gap: 5px;
 }
+/* Nothing to point the role at yet: said quietly, the menu offers the way. */
+.plain-chip-label.unset {
+  color: var(--text-faint);
+}
 .plain-send {
   margin-left: auto;
   width: 30px;

@@ -1,6 +1,7 @@
 import { useState, type ComponentProps } from "react";
-import { Bell, Bot, Check, Languages, Palette, Shield, ShieldCheck, Sparkles } from "lucide-react";
+import { Bell, Bot, Check, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
+import { KubeSettings } from "./KubeSettings";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
 import type { RememberScope, ReplyLanguage, SkillSourceItem, SkillsView } from "../lib/chat";
@@ -19,11 +20,12 @@ const SECTIONS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "kubernetes", label: "Kubernetes", icon: ShipWheel },
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Shield },
 ] as const;
 
-type Section = (typeof SECTIONS)[number]["id"];
+export type SettingsSection = (typeof SECTIONS)[number]["id"];
 
 const REMEMBER: { value: RememberScope; label: string; hint: string }[] = [
   {
@@ -71,7 +73,10 @@ function sourceItems(sources: SkillSourceItem[]): PanelItem[] {
 }
 
 type Props = {
+  /** Where it opens; Models unless something sent the user to another. */
+  section?: SettingsSection;
   provider: ComponentProps<typeof ProviderSettings>;
+  kube: ComponentProps<typeof KubeSettings>["kube"];
   /** The skills folders: which of them are read at all. */
   skills: { view: SkillsView | null; error: string | null; onToggle: (id: SkillSourceItem["id"], enabled: boolean) => void };
   /** Where the composer's Ask/Auto is remembered. */
@@ -98,7 +103,9 @@ type Props = {
 };
 
 export function Settings({
+  section: opening = "models",
   provider,
+  kube,
   skills,
   remember,
   onRemember,
@@ -118,7 +125,7 @@ export function Settings({
   onOpenLog,
   policy,
 }: Props) {
-  const [section, setSection] = useState<Section>("models");
+  const [section, setSection] = useState<SettingsSection>(opening);
 
   return (
     <div className="settings">
@@ -325,6 +332,8 @@ export function Settings({
             </p>
           </>
         )}
+
+        {section === "kubernetes" && <KubeSettings kube={kube} />}
 
         {section === "permissions" && (
           <>

@@ -11,9 +11,11 @@ use secrecy::SecretString;
 use serde::Serialize;
 use tauri::State;
 
-use crate::domain::settings::{ProviderConfig, ReplyLanguage};
+use std::path::{Path, PathBuf};
+
+use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
-use crate::services::llm_session;
+use crate::services::{kubeconfigs, llm_session};
 
 use super::chat::AgentState;
 
@@ -105,6 +107,52 @@ pub fn llm_debug_logging_set(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn llm_reply_language_set(language: ReplyLanguage) -> Result<(), String> {
     llm_session::set_reply_language(language).map_err(|e| e.to_string())
+}
+
+/// The kubeconfig files Chat mode's Kubernetes role knows of, and the one picked.
+#[tauri::command]
+pub fn kube_settings_get() -> Result<KubeSettings, String> {
+    kubeconfigs::list().map_err(|e| e.to_string())
+}
+
+/// Adds a kubeconfig, or replaces the one of that name. Refused unless a file is
+/// there now: a typo found here beats one found as a command the model wrote fails.
+#[tauri::command]
+pub fn kubeconfig_save(name: String, path: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a kubeconfig needs a name".to_string());
+    }
+    let path = expand_home(path.trim()).ok_or("the path starts with ~, and there is no home folder")?;
+    if !path.is_absolute() {
+        return Err("give the whole path, from / or ~".to_string());
+    }
+    if !path.is_file() {
+        return Err(format!("there is no file at {}", path.display()));
+    }
+    let config = Kubeconfig { name: name.to_string(), path: path.to_string_lossy().into_owned() };
+    kubeconfigs::save(config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn kubeconfig_remove(name: String) -> Result<(), String> {
+    kubeconfigs::remove(&name).map_err(|e| e.to_string())
+}
+
+/// The one the Kubernetes role works with, from its next reply on.
+#[tauri::command]
+pub fn kubeconfig_pick(name: Option<String>) -> Result<(), String> {
+    kubeconfigs::pick(name).map_err(|e| e.to_string())
+}
+
+/// `~/.kube/config` as the shell would read it; any other path as it is.
+fn expand_home(path: &str) -> Option<PathBuf> {
+    match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => {
+            Some(dirs::home_dir()?.join(rest.trim_start_matches(['/', '\\'])))
+        }
+        _ => Some(Path::new(path).to_path_buf()),
+    }
 }
 
 /// Asks the provider what it serves. A live call, so it is also the one thing
@@ -265,5 +313,31 @@ mod tests {
             })
             .is_err());
         });
+    }
+
+    #[test]
+    fn a_kubeconfig_is_saved_only_where_a_file_is() {
+        with_app_dir("cmd-kubeconfig", || {
+            let file = crate::infra::app_dir::dir().unwrap().join("prod.yaml");
+            let path = file.to_string_lossy().into_owned();
+            let err = kubeconfig_save("prod".to_string(), path.clone()).unwrap_err();
+            assert!(err.contains("no file"), "{err}");
+            assert!(kubeconfig_save("prod".to_string(), "kube/config".to_string()).unwrap_err().contains("whole path"));
+
+            std::fs::write(&file, "apiVersion: v1\n").unwrap();
+            assert!(kubeconfig_save("  ".to_string(), path.clone()).unwrap_err().contains("name"));
+            kubeconfig_save(" prod ".to_string(), path.clone()).unwrap();
+            let kube = kube_settings_get().unwrap();
+            assert_eq!(kube.configs, vec![Kubeconfig { name: "prod".to_string(), path }]);
+        });
+    }
+
+    #[test]
+    fn a_tilde_is_the_home_folder() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_home("~/.kube/config"), Some(home.join(".kube/config")));
+        assert_eq!(expand_home("~"), Some(home));
+        assert_eq!(expand_home("~bob/config"), Some(PathBuf::from("~bob/config")), "another user's home is not ours");
+        assert_eq!(expand_home("/etc/kube"), Some(PathBuf::from("/etc/kube")));
     }
 }

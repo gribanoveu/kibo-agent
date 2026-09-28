@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use crate::domain::chat_role::ChatRole;
+use crate::domain::chat_role::{ChatRole, KubeSetup};
 use crate::domain::llm::{ChatRequest, ChatStreamResult, LlmError, LlmMessage, LlmToolDefinition};
 use crate::domain::tools::ToolName;
 use crate::domain::turn::{ChatEventPayload, ChatEventSink, ChatTurnEvent};
@@ -16,12 +16,13 @@ use crate::services::llm_session::LlmSession;
 pub fn reply(
     session: &LlmSession,
     role: ChatRole,
+    kube: &KubeSetup,
     messages: Vec<LlmMessage>,
     events: &ChatEventSink,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ChatStreamResult, LlmError> {
     let request = ChatRequest {
-        messages: std::iter::once(LlmMessage::system(system_prompt(role, session.reply_language)))
+        messages: std::iter::once(LlmMessage::system(system_prompt(role, role.setup_note(kube), session.reply_language)))
             .chain(messages)
             .collect(),
         tools: definitions(role),
@@ -48,11 +49,19 @@ pub fn reply(
     Ok(result)
 }
 
-fn system_prompt(role: ChatRole, language: Option<&str>) -> String {
-    match language {
-        Some(language) => format!("{}\n\nReply in {language}.", role.prompt()),
-        None => role.prompt().to_string(),
+/// The role, what it is told of the user's setup, the language — all settled
+/// before the conversation, so the system prompt is the same every turn and the
+/// request is the last one plus the new messages: what a prompt cache matches.
+fn system_prompt(role: ChatRole, note: Option<String>, language: Option<&str>) -> String {
+    let mut prompt = role.prompt().to_string();
+    if let Some(note) = note {
+        prompt.push_str("\n\n");
+        prompt.push_str(&note);
     }
+    if let Some(language) = language {
+        prompt.push_str(&format!("\n\nReply in {language}."));
+    }
+    prompt
 }
 
 /// The role's tools as the model sees them — its own set, nothing from the agent's.
@@ -124,7 +133,7 @@ mod tests {
         let heard = seen.clone();
         let events: ChatEventSink = Arc::new(move |event| heard.lock().unwrap().push(event));
 
-        let result = reply(&session, ChatRole::Assistant, vec![LlmMessage::user("hi")], &events, &|| false).unwrap();
+        let result = reply(&session, ChatRole::Assistant, &KubeSetup::NotSet, vec![LlmMessage::user("hi")], &events, &|| false).unwrap();
 
         assert_eq!(result.text, "hello");
         let asked = talker.asked.lock().unwrap();
@@ -148,7 +157,7 @@ mod tests {
 
     #[test]
     fn auto_language_adds_nothing_to_the_prompt() {
-        assert_eq!(system_prompt(ChatRole::Assistant, None), ChatRole::Assistant.prompt());
+        assert_eq!(system_prompt(ChatRole::Assistant, None, None), ChatRole::Assistant.prompt());
     }
 
     /// A call nobody runs must not pass for an answer.
@@ -159,8 +168,37 @@ mod tests {
             ..said("")
         };
         let (session, _) = session(answer, None);
-        let err = reply(&session, ChatRole::Assistant, Vec::new(), &(Arc::new(|_| {}) as ChatEventSink), &|| false)
+        let err = reply(&session, ChatRole::Assistant, &KubeSetup::NotSet, Vec::new(), &(Arc::new(|_| {}) as ChatEventSink), &|| false)
             .unwrap_err();
         assert!(err.to_string().contains("readFile"), "{err}");
+    }
+
+    /// The Kubernetes role hears its setup between its prompt and the language.
+    #[test]
+    fn the_setup_note_follows_the_role_before_the_language() {
+        let note = ChatRole::Kubernetes.setup_note(&KubeSetup::NotSet);
+        let prompt = system_prompt(ChatRole::Kubernetes, note.clone(), Some("Russian"));
+        assert_eq!(prompt, format!("{}\n\n{}\n\nReply in Russian.", ChatRole::Kubernetes.prompt(), note.unwrap()));
+    }
+
+    /// The second turn's request is the first's plus what was said since — the
+    /// prefix a provider's prompt cache reuses. Anything rebuilt per turn (a
+    /// date, a reordered note) would break it at the system prompt.
+    #[test]
+    fn a_second_turn_extends_the_first_request() {
+        let (session, talker) = session(said("hello"), Some("Russian"));
+        let quiet: ChatEventSink = Arc::new(|_| {});
+        let kube = KubeSetup::NotSet;
+        let first = vec![LlmMessage::user("hi")];
+        reply(&session, ChatRole::Kubernetes, &kube, first.clone(), &quiet, &|| false).unwrap();
+        let second = [first, vec![LlmMessage::assistant("hello"), LlmMessage::user("and?")]].concat();
+        reply(&session, ChatRole::Kubernetes, &kube, second, &quiet, &|| false).unwrap();
+
+        let asked = talker.asked.lock().unwrap();
+        let (a, b) = (&asked[0].messages, &asked[1].messages);
+        assert_eq!(&b[..a.len()], &a[..], "the second request does not start with the first");
+        let system = a[0].content.as_deref().unwrap();
+        assert!(system.contains(&ChatRole::Kubernetes.setup_note(&kube).unwrap()), "the setup was not told: {system}");
+        assert_eq!(asked[0].tools, asked[1].tools);
     }
 }

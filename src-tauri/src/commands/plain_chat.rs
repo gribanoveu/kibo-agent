@@ -13,7 +13,7 @@ use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::llm::{ChatStreamResult, LlmMessage};
 use crate::infra::chat_store;
-use crate::services::{llm_session, plain_chat};
+use crate::services::{kubeconfigs, llm_session, plain_chat};
 
 use super::chat_events::chat_event_sink;
 
@@ -52,7 +52,8 @@ pub async fn plain_chat_send<R: Runtime>(
     let events = chat_event_sink(&app, turn_id);
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        plain_chat::reply(&session, role, messages, &events, &|| state.cancel.load(Ordering::SeqCst))
+        let kube = kubeconfigs::setup().map_err(|e| e.to_string())?;
+        plain_chat::reply(&session, role, &kube, messages, &events, &|| state.cancel.load(Ordering::SeqCst))
             .map_err(|e| e.to_string())
     })
     .await

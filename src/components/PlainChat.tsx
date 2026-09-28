@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, ChevronRight, MessagesSquare, SendHorizontal, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { Brain, ChevronRight, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import logo from "../assets/kibo-chat-logo.png";
@@ -10,6 +10,7 @@ import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
 
 /** The model's thinking before an answer, folded until asked — as the agent's chat draws it. */
@@ -64,10 +65,17 @@ type Props = {
   onModel: (choice: ModelChoice) => void;
   onEffort: (effort: string | null) => void;
   onLoadModels: () => void;
+  /** The Kubernetes role's cluster, picked on the tab beside the role. */
+  kube: KubeconfigsState;
+  /** Opens Settings → Kubernetes. */
+  onSetUpKube: () => void;
 };
 
+// Not a kubeconfig's name: the menu's last row, which opens Settings instead.
+const MANAGE_KUBECONFIGS = "\u0000manage";
+
 /** Chat mode: the conversation and its message box, the two panels of `.main`. No folder, no tools — the role says what the model is. */
-export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels }: Props) {
+export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels, kube, onSetUpKube }: Props) {
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.streaming !== null;
@@ -181,6 +189,24 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
             onPick={(value) => chat.setRole(value as ChatRoleId)}
           />
+          {chat.role === "kubernetes" && (
+            <Dropdown
+              title="The cluster the model's commands are for"
+              heading="Kubeconfig"
+              label={
+                <span className={`plain-chip-label${kube.active ? "" : " unset"}`}>
+                  <Server size={13} />
+                  {kube.active?.name ?? "No kubeconfig"}
+                </span>
+              }
+              value={kube.active?.name ?? ""}
+              options={[
+                ...kube.configs.map((c) => ({ value: c.name, hint: c.path })),
+                { value: MANAGE_KUBECONFIGS, label: kube.configs.length ? "Manage kubeconfigs…" : "Add a kubeconfig…" },
+              ]}
+              onPick={(value) => (value === MANAGE_KUBECONFIGS ? onSetUpKube() : kube.pick(value))}
+            />
+          )}
         </div>
         <section className="plain-composer">
           <textarea

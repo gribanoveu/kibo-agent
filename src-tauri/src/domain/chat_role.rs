@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::settings::Kubeconfig;
 use super::tools::ToolName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -55,6 +56,32 @@ impl ChatRole {
         }
     }
 
+    /// What the role is told about the user's own setup, after its prompt —
+    /// `None` for a role that needs none. Settled before the conversation and the
+    /// same every turn until the setup changes, so a provider's prompt cache keeps it.
+    pub fn setup_note(self, kube: &KubeSetup) -> Option<String> {
+        match self {
+            ChatRole::Assistant => None,
+            ChatRole::Kubernetes => Some(match kube {
+                KubeSetup::NotSet => "No kubeconfig is set up in Kibo yet. When the user asks about their own cluster, \
+                    say once that they can add their kubeconfig file in Settings → Kubernetes and pick it on the tab above \
+                    the message box; general Kubernetes questions need none of that."
+                    .to_string(),
+                KubeSetup::Missing(config) => format!(
+                    "The user picked the kubeconfig \"{}\", but there is no file at {} any more. When they ask about \
+                     their cluster, tell them to fix the path in Settings → Kubernetes.",
+                    config.name, config.path
+                ),
+                KubeSetup::Ready(config) => format!(
+                    "The user's cluster is \"{}\", its kubeconfig at {}. Commands you give for it name that file — \
+                     `kubectl --kubeconfig {} …`, `helm --kubeconfig {} …` — so they reach this cluster and not \
+                     whichever context is current. You still cannot run them yourself.",
+                    config.name, config.path, config.path, config.path
+                ),
+            }),
+        }
+    }
+
     /// The tools this role may call. None yet: a plain chat only talks.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
@@ -62,6 +89,15 @@ impl ChatRole {
             ChatRole::Assistant | ChatRole::Kubernetes => &[],
         }
     }
+}
+
+/// The kubeconfig the Kubernetes role works with, as far as the app can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KubeSetup {
+    NotSet,
+    /// Picked, but its file is gone.
+    Missing(Kubeconfig),
+    Ready(Kubeconfig),
 }
 
 const KUBERNETES_PROMPT: &str = "\
@@ -111,5 +147,26 @@ mod tests {
         assert_eq!(serde_json::to_string(&ChatRole::Assistant).unwrap(), "\"assistant\"");
         assert_eq!(serde_json::to_string(&ChatRole::Kubernetes).unwrap(), "\"kubernetes\"");
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
+    }
+
+    fn prod() -> Kubeconfig {
+        Kubeconfig { name: "prod".to_string(), path: "/home/me/.kube/prod".to_string() }
+    }
+
+    #[test]
+    fn only_the_kubernetes_role_is_told_about_the_kubeconfig() {
+        assert_eq!(ChatRole::Assistant.setup_note(&KubeSetup::Ready(prod())), None);
+        let ready = ChatRole::Kubernetes.setup_note(&KubeSetup::Ready(prod())).unwrap();
+        assert!(ready.contains("\"prod\"") && ready.contains("--kubeconfig /home/me/.kube/prod"), "{ready}");
+    }
+
+    /// Each state tells the model something different to say — the one thing
+    /// an unconfigured role is there for.
+    #[test]
+    fn a_missing_or_absent_kubeconfig_sends_the_user_to_settings() {
+        let not_set = ChatRole::Kubernetes.setup_note(&KubeSetup::NotSet).unwrap();
+        assert!(not_set.contains("No kubeconfig") && not_set.contains("Settings → Kubernetes"), "{not_set}");
+        let missing = ChatRole::Kubernetes.setup_note(&KubeSetup::Missing(prod())).unwrap();
+        assert!(missing.contains("no file at /home/me/.kube/prod") && missing.contains("Settings → Kubernetes"), "{missing}");
     }
 }
