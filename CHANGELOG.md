@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-28 An MCP server that refuses with HTTP 405 now says why: an address ending in /sse is the old SSE transport, and names the Streamable HTTP address to use instead
 - 2026-09-28 Add a Chat mode, switched in the sidebar: a plain conversation with the model, with no folder, files or tools; its chats are saved and listed in the sidebar, the role is picked on a tab above its message box, the model and the thinking level in the box; the model's thinking is shown folded above each answer
 
 ## v0.2.0-alfa — 2026-09-28

@@ -247,7 +247,7 @@ pub enum McpError {
     Exited { code: Option<i32>, stderr: String },
     /// An HTTP server's non-2xx answer, with the start of its body — the
     /// explanation is usually there.
-    #[error("the MCP server answered HTTP {status}{}{}", sign_in(*status), last_output(body))]
+    #[error("the MCP server answered HTTP {status}{}{}", status_hint(*status), last_output(body))]
     Http { status: u16, body: String },
     #[error("could not reach the MCP server: {0}")]
     Unreachable(String),
@@ -267,11 +267,13 @@ pub enum McpError {
 
 /// 401 is how a server says it wants OAuth, which is not built yet
 /// (`docs/17-mcp-http.md`); a token in `headers` is what works today.
-fn sign_in(status: u16) -> &'static str {
-    if status == 401 {
-        " — it wants a sign-in (OAuth), which this app does not do yet; a token in the entry's \"headers\" works if the server accepts one"
-    } else {
-        ""
+/// 405 to a POST is almost always the old HTTP+SSE transport's `/sse`
+/// endpoint, which takes only GET and is not supported.
+fn status_hint(status: u16) -> &'static str {
+    match status {
+        401 => " — it wants a sign-in (OAuth), which this app does not do yet; a token in the entry's \"headers\" works if the server accepts one",
+        405 => " — the url does not take POST; an address ending in /sse is the old SSE transport, which this app does not speak: use the server's Streamable HTTP address instead (for Gradio, /gradio_api/mcp/http/)",
+        _ => "",
     }
 }
 
@@ -693,6 +695,8 @@ mod tests {
         let err = McpError::Http { status: 401, body: String::new() };
         assert!(err.to_string().starts_with("the MCP server answered HTTP 401 — it wants a sign-in (OAuth)"), "{err}");
         assert!(err.to_string().contains("\"headers\""), "{err}");
+        let err = McpError::Http { status: 405, body: "Method Not Allowed".into() };
+        assert!(err.to_string().starts_with("the MCP server answered HTTP 405 — the url does not take POST; an address ending in /sse"), "{err}");
     }
 
     #[test]
