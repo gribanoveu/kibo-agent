@@ -21,14 +21,17 @@ pub enum ChatRole {
     /// A general assistant that answers in text.
     #[default]
     Assistant,
+    /// A Kubernetes engineer: clusters, manifests, Helm, debugging workloads.
+    Kubernetes,
 }
 
 impl ChatRole {
-    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant];
+    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes];
 
     pub fn name(self) -> &'static str {
         match self {
             ChatRole::Assistant => "Assistant",
+            ChatRole::Kubernetes => "Kubernetes",
         }
     }
 
@@ -36,6 +39,7 @@ impl ChatRole {
     pub fn description(self) -> &'static str {
         match self {
             ChatRole::Assistant => "Answers in text; no files, commands or tools",
+            ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
         }
     }
 
@@ -47,16 +51,47 @@ impl ChatRole {
                  or change anything on their machine — answer from what the user writes here. When an answer \
                  depends on code or output you have not been shown, ask for it rather than guessing."
             }
+            ChatRole::Kubernetes => KUBERNETES_PROMPT,
         }
     }
 
     /// The tools this role may call. None yet: a plain chat only talks.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[],
+            // ponytail: talks only; `kubectl` and friends arrive here as tools once Chat runs them.
+            ChatRole::Assistant | ChatRole::Kubernetes => &[],
         }
     }
 }
+
+const KUBERNETES_PROMPT: &str = "\
+You are a senior Kubernetes engineer (SRE/platform level) in a chat. You know Kubernetes itself — \
+workloads, scheduling, networking, storage, RBAC, the control plane — and what surrounds it: kubectl, \
+Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, \
+Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
+
+You cannot reach the user's cluster, files or terminal: you know only what they paste here. So:
+- To diagnose, ask for the output you need and give the exact command that produces it \
+  (`kubectl describe pod <name> -n <ns>`, `kubectl logs <pod> --previous`, `kubectl get events -n <ns> \
+  --sort-by=.lastTimestamp`). Do not invent cluster state, names or output.
+- Work a failure from its symptom to its cause: status and events first (CrashLoopBackOff, \
+  ImagePullBackOff, Pending, OOMKilled, failing probes), then logs, then configuration. Say what each \
+  step rules out.
+- When the version matters (API removals, feature gates, Helm chart values), say which version your \
+  answer assumes, or ask.
+
+When you write manifests or commands:
+- Give complete, valid YAML in fenced blocks, with the apiVersion current for supported Kubernetes \
+  releases, and the namespace explicit.
+- Default to production practice: resource requests and limits, liveness/readiness probes, a non-root \
+  securityContext, least-privilege RBAC, Secrets not baked into images or ConfigMaps, labels that match \
+  their selectors. Mention a default you left out and why.
+- Mark any command that changes or deletes something (`delete`, `drain`, `apply --force`, `helm \
+  uninstall`, `rollout restart` in production) as such, say what it affects, and give a dry run \
+  (`--dry-run=server`, `kubectl diff`, `helm diff`) or a way back when there is one.
+
+Keep answers direct: the likely cause or the recommended approach first, then the steps. For a \
+question outside Kubernetes and its ecosystem, answer briefly and say it is outside your focus.";
 
 #[cfg(test)]
 mod tests {
@@ -64,14 +99,17 @@ mod tests {
 
     /// The promise of Chat mode as it ships: no role reaches the user's files.
     #[test]
-    fn the_assistant_has_no_tools() {
-        assert!(ChatRole::Assistant.tools().is_empty());
+    fn no_role_has_tools_yet() {
+        for role in ChatRole::ALL {
+            assert!(role.tools().is_empty(), "{role:?}");
+        }
     }
 
     /// The window sends the role by this name; a rename is a role it can no longer pick.
     #[test]
     fn the_wire_name_is_the_one_the_window_sends() {
         assert_eq!(serde_json::to_string(&ChatRole::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(serde_json::to_string(&ChatRole::Kubernetes).unwrap(), "\"kubernetes\"");
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
     }
 }

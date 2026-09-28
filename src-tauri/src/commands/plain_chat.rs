@@ -95,6 +95,10 @@ mod tests {
             "id": "assistant",
             "name": "Assistant",
             "description": ChatRole::Assistant.description(),
+        }, {
+            "id": "kubernetes",
+            "name": "Kubernetes",
+            "description": ChatRole::Kubernetes.description(),
         }]));
     }
 }
