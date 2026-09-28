@@ -508,6 +508,8 @@ export type ChatRecord = {
   /** Absent in chats saved before plans existed. */
   plan?: string | null;
   branchedFrom?: string | null;
+  /** Who the model was, in a Chat mode conversation; absent in the agent's. */
+  role?: ChatRoleId | null;
 };
 
 /** Chats of the open folder, newest first. No folder, no backend: no rows. */
@@ -701,6 +703,17 @@ export async function plainChatSend(
 ): Promise<{ text: string; truncated?: boolean }> {
   requireBackend();
   return invoke("plain_chat_send", { turnId, role, messages });
+}
+
+/** Chat mode's conversations, newest first, whatever folder is open. They open with `loadChat`. */
+export async function plainChatList(): Promise<ChatSummary[]> {
+  if (!inTauri()) return [];
+  return invoke<ChatSummary[]>("plain_chat_list");
+}
+
+export async function plainChatSave(id: string, role: ChatRoleId, messages: LlmMessage[]): Promise<ChatSummary> {
+  requireBackend();
+  return invoke<ChatSummary>("plain_chat_save", { id, role, messages });
 }
 
 export async function plainChatCancel(): Promise<void> {

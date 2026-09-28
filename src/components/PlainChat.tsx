@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { MessagesSquare, SendHorizontal, Square } from "lucide-react";
+import { SendHorizontal, Square } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
+import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
 import type { ChatRoleId } from "../lib/chat";
 import type { PlainChatState } from "../hooks/usePlainChat";
@@ -38,7 +39,7 @@ export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number
       <section className="plain-panel">
         <header className="plain-head">
           <div>
-            <h1>Chat</h1>
+            <h1>{chat.chats.find((c) => c.id === chat.chatId)?.title ?? "New chat"}</h1>
             <p className="plain-sub">Talks with the model — no files, commands or tools</p>
           </div>
           <div className="plain-head-right">
@@ -55,20 +56,13 @@ export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number
             ) : (
               <span className="plain-role">{roleName}</span>
             )}
-            {chat.messages.length > 0 && (
-              <button type="button" className="link-btn" onClick={chat.clear}>
-                Clear
-              </button>
-            )}
           </div>
         </header>
 
         <div ref={thread} className="plain-thread chat-text">
           {chat.messages.length === 0 && !running ? (
             <div className="plain-welcome">
-              <div className="plain-welcome-ico">
-                <MessagesSquare size={18} />
-              </div>
+              <img className="plain-welcome-logo" src={logo} alt="" />
               <h2>How can I help?</h2>
               <p>The model answers in text here: it does not read your files, run commands or change anything.</p>
               <div className="plain-suggest">

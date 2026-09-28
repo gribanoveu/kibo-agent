@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-09-28 Add a Chat mode, switched in the sidebar: a plain conversation with the model, with no folder, files or tools
+- 2026-09-28 Add a Chat mode, switched in the sidebar: a plain conversation with the model, with no folder, files or tools; its chats are saved and listed in the sidebar
 
 ## v0.2.0-alfa — 2026-09-28
 

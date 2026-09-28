@@ -47,21 +47,22 @@
   padding: 16px 18px 24px;
 }
 
+/* In the middle of the empty thread, as the agent's empty chat is. */
 .plain-welcome {
+  min-height: 100%;
   max-width: 420px;
-  margin: 26px auto 0;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   text-align: center;
 }
-.plain-welcome-ico {
-  width: 38px;
-  height: 38px;
-  margin: 0 auto 12px;
-  border-radius: 11px;
-  display: grid;
-  place-items: center;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border-soft);
-  color: var(--text-dim);
+/* As large as the agent's on its empty chat. */
+.plain-welcome-logo {
+  display: block;
+  width: 112px;
+  height: 112px;
+  margin: 0 auto 4px;
 }
 .plain-welcome h2 {
   font-size: var(--fs-lg);

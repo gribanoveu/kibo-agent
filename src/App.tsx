@@ -94,8 +94,9 @@ const STAY = "Stop the running turn before leaving this chat";
 export default function App() {
   // Laid out as it was left.
   const [collapsed, setCollapsed] = useStoredState("atlas-sidebar-collapsed", false, isBoolean);
-  // Agent works in the open folder; Chat only talks. Chat's conversation lives
-  // here rather than in its panel, so a reply keeps arriving while Agent is shown.
+  // Agent works in the open folder; Chat only talks. Chat's conversations live
+  // here rather than in its panel: the sidebar lists them, and a reply keeps
+  // arriving while Agent is shown.
   const [mode, setMode] = useStoredState<AppMode>("atlas-mode", "agent", isAppMode);
   const agentMode = mode === "agent";
   const plain = usePlainChat();
@@ -269,7 +270,7 @@ export default function App() {
   // this only stops pointing at it.
   const newChat = () => {
     if (!agentMode) {
-      plain.clear();
+      plain.newChat();
       return focusComposer();
     }
     if (!agent.reset()) return toast.show(STAY);
@@ -479,15 +480,17 @@ export default function App() {
         <Sidebar
           mode={mode}
           onMode={setMode}
-          chats={history.chats}
-          activeChat={agentMode ? agent.chatId : null}
-          onSelectChat={(id) => {
-            setMode("agent");
-            void agent.open(id).then((opened) => opened || toast.show(STAY));
-          }}
+          chats={agentMode ? history.chats : plain.chats}
+          activeChat={agentMode ? agent.chatId : plain.chatId}
+          onSelectChat={(id) =>
+            agentMode ? void agent.open(id).then((opened) => opened || toast.show(STAY)) : void plain.open(id)
+          }
           onNewChat={newChat}
-          onArchiveChat={(id, archived) => history.archive(id, archived).catch((e) => toast.show(String(e)))}
+          onArchiveChat={(id, archived) =>
+            agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
+          }
           onDeleteChat={(id) => {
+            if (!agentMode) return void plain.remove(id);
             // The open chat goes first: left on screen, its next save would write it back.
             if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
             history.remove(id).catch((e) => toast.show(String(e)));
