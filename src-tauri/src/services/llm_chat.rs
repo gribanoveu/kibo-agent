@@ -182,10 +182,10 @@ pub struct Turn<'a> {
     pub mode: ConversationMode,
     /// Polled between rounds, after a round streams, between individual calls,
     /// and during a retry wait.
-    pub cancelled: &'a dyn Fn() -> bool,
+    pub cancelled: &'a (dyn Fn() -> bool + Sync),
     /// Called in one-second slices while waiting to retry, so a stop takes
     /// effect during the wait rather than after it.
-    pub sleep: &'a dyn Fn(Duration),
+    pub sleep: &'a (dyn Fn(Duration) + Sync),
     /// Which shell runs a command line. A setting, not a search of `PATH` —
     /// see `domain::command_exec`.
     pub shell: &'a Shell,
@@ -195,7 +195,7 @@ pub struct Turn<'a> {
     /// rather than reading is deliberate: a note handed to the model must
     /// leave the queue in the same step, or a round that is retried or
     /// interrupted can deliver it twice.
-    pub take_steering: &'a dyn Fn() -> Vec<SteeringNote>,
+    pub take_steering: &'a (dyn Fn() -> Vec<SteeringNote> + Sync),
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
@@ -209,7 +209,7 @@ pub struct Turn<'a> {
     /// the app, a list in a test. A port rather than a direct write so that
     /// a turn under test never touches whatever app directory another test
     /// has installed.
-    pub log_call: &'a dyn Fn(ToolCallLogEntry),
+    pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
     /// The chat's plan as the window holds it — the user's edits included.
     /// Read at the start of the turn: a `writePlan` in this turn reaches the
     /// model through its own call in the history until the next one.
@@ -693,7 +693,13 @@ fn run(
             (runnable, Vec::new())
         };
 
-        for call in &calls {
+        // `explore` calls asked one after another run side by side when the
+        // round reaches the first of them; the loop then takes their results
+        // in turn, so the history, the log and the loop guard see one call
+        // after another as ever.
+        let mut early: HashMap<String, Early> = HashMap::new();
+
+        for (at, call) in calls.iter().enumerate() {
             // The "stopped between two calls of one round" case. Breaking
             // rather than returning here lets checkpoint one build the outcome,
             // so there is one place that decides what a cancelled turn looks
@@ -701,10 +707,16 @@ fn run(
             if (turn.cancelled)() {
                 break;
             }
-            report_call(&events, round, call);
+            if !early.contains_key(&call.id) {
+                early.extend(explore_side_by_side(turn, &events, round, &calls[at..], &decisions));
+            }
+            let ran = early.remove(&call.id);
+            if ran.is_none() {
+                report_call(&events, round, call);
+            }
 
             let decision = decisions.iter().find(|d| d.id == call.id);
-            let started = Instant::now();
+            let started = ran.as_ref().map_or_else(Instant::now, |ran| ran.started);
             // What the log may keep, gathered on the way: the arguments once
             // they have parsed, the error before it is flattened to text.
             let mut logged_args = serde_json::Value::Null;
@@ -717,41 +729,17 @@ fn run(
                 _ => parse_tool_call(call)
                     .and_then(|parsed| {
                         logged_args = tool_call_log::redact_args(&parsed);
-                        let fields = serde_json::json!({
-                            "tool_name": call.name,
-                            "tool_input": serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap_or_default(),
-                            "tool_use_id": call.id,
-                        });
-                        if let Some(reason) = fire_hook(turn, &events, round, HookEvent::PreToolUse, Some(&call.name), fields) {
+                        // Its hook already asked, and it has already run.
+                        if let Some(ran) = ran {
+                            return ran.result;
+                        }
+                        if let Some(reason) = pre_tool_use(turn, &events, round, call) {
                             return Err(crate::domain::tools::ToolError::BlockedByHook(reason));
                         }
-                        // Built per call, because the id is what pairs a line
-                        // of output with the call that produced it — a round
-                        // may have started more than one.
-                        let output = command_output_sink(turn.events, round, &call.id);
-                        let explore = |task: &str| run_explore(turn, task, &output);
-                        let deps = ToolDeps {
-                            shell: turn.shell.clone(),
-                            output: Some(output.clone()),
-                            search: turn.search.clone(),
-                            skills: turn.skills.to_vec(),
-                            mcp: turn.mcp.clone(),
-                            cancelled: Some(turn.cancelled),
-                            processes: turn.processes.clone(),
-                            terminals: turn.terminals.clone(),
-                            review: turn.review.clone(),
-                            explore: Some(&explore),
-                        };
                         // Around the call, not inside the tool: one place sees
                         // every write, and no tool has to remember to report.
                         let watched = file_changes::before(turn.scope, &parsed);
-                        let result = execute_tool(
-                            turn.scope,
-                            &parsed,
-                            &mut state.reads,
-                            &mut state.todos,
-                            &deps,
-                        );
+                        let result = execute_call(turn, round, call, &parsed, &mut state.reads, &mut state.todos);
                         changes = watched.map(file_changes::after).unwrap_or_default();
                         result
                     })
@@ -818,6 +806,127 @@ fn run(
             state.history.push(tool_message(&call.id, content));
         }
     }
+}
+
+/// Asks the PreToolUse hooks about `call`; the reason, when one refused it.
+fn pre_tool_use(turn: &Turn, events: &Events, round: u32, call: &LlmToolCall) -> Option<String> {
+    let fields = serde_json::json!({
+        "tool_name": call.name,
+        "tool_input": serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap_or_default(),
+        "tool_use_id": call.id,
+    });
+    fire_hook(turn, events, round, HookEvent::PreToolUse, Some(&call.name), fields)
+}
+
+/// Runs one parsed call with what the turn has.
+fn execute_call(
+    turn: &Turn,
+    round: u32,
+    call: &LlmToolCall,
+    parsed: &crate::domain::tools::ToolCall,
+    reads: &mut ReadFiles,
+    todos: &mut Vec<Task>,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    // Built per call, because the id is what pairs a line of output with the
+    // call that produced it — a round may have started more than one.
+    let output = command_output_sink(turn.events, round, &call.id);
+    let explore = |task: &str| run_explore(turn, task, &output);
+    let deps = ToolDeps {
+        shell: turn.shell.clone(),
+        output: Some(output.clone()),
+        search: turn.search.clone(),
+        skills: turn.skills.to_vec(),
+        mcp: turn.mcp.clone(),
+        cancelled: Some(turn.cancelled),
+        processes: turn.processes.clone(),
+        terminals: turn.terminals.clone(),
+        review: turn.review.clone(),
+        explore: Some(&explore),
+    };
+    execute_tool(turn.scope, parsed, reads, todos, &deps)
+}
+
+/// How many helpers run at once. More would be as many streams to one
+/// provider, and a model that asks for ten gets them four at a time.
+// ponytail: fixed batches, not a pool — a slow helper holds its batch back;
+// a pool if rounds with more than four turn out to be common.
+pub const MAX_PARALLEL_EXPLORES: usize = 4;
+
+/// A call already run, for the round's loop to take in its turn.
+struct Early {
+    result: Result<ToolResult, crate::domain::tools::ToolError>,
+    started: Instant,
+}
+
+/// The `explore` calls `calls` starts with, run side by side when there are
+/// two or more in a row.
+///
+/// In a row, and from where the round has got to: a call asked before them
+/// has run, and one asked after them has not — "write the file, then have a
+/// helper check it" must find the file written. Each is shown as started and
+/// asked of the PreToolUse hooks here, in order, before any runs; a refused
+/// one is kept as refused. They read and never write, and each reports to
+/// its own card — its call id — and its own record, so nothing they touch is
+/// shared but the stop button. Anything else, and a lone `explore`, is left
+/// to the loop.
+fn explore_side_by_side(
+    turn: &Turn,
+    events: &Events,
+    round: u32,
+    calls: &[LlmToolCall],
+    decisions: &[ToolCallDecision],
+) -> HashMap<String, Early> {
+    let mut early = HashMap::new();
+    let explores: Vec<(&LlmToolCall, crate::domain::tools::ToolCall)> = calls
+        .iter()
+        .map_while(|call| match parse_tool_call(call) {
+            _ if decisions.iter().any(|d| d.id == call.id && !d.approved) => None,
+            Ok(parsed @ crate::domain::tools::ToolCall::Explore(_)) => Some((call, parsed)),
+            _ => None,
+        })
+        .collect();
+    if explores.len() < 2 || (turn.cancelled)() {
+        return early;
+    }
+    let mut runnable = Vec::new();
+    for (call, parsed) in explores {
+        report_call(events, round, call);
+        let started = Instant::now();
+        match pre_tool_use(turn, events, round, call) {
+            Some(reason) => {
+                let result = Err(crate::domain::tools::ToolError::BlockedByHook(reason));
+                early.insert(call.id.clone(), Early { result, started });
+            }
+            None => runnable.push((call, parsed, started)),
+        }
+    }
+    for batch in runnable.chunks(MAX_PARALLEL_EXPLORES) {
+        let done: Vec<(String, Early)> = std::thread::scope(|scope| {
+            let running: Vec<_> = batch
+                .iter()
+                .map(|(call, parsed, started)| {
+                    scope.spawn(move || {
+                        // Neither is touched by `explore`; the round's own
+                        // stay with the loop.
+                        let result = execute_call(turn, round, call, parsed, &mut ReadFiles::default(), &mut Vec::new());
+                        (call.id.clone(), Early { result, started: *started })
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .zip(batch)
+                .map(|(handle, (call, _, started))| {
+                    handle.join().unwrap_or_else(|_| {
+                        let result = Err(crate::domain::tools::ToolError::Explore("the helper failed".to_string()));
+                        (call.id.clone(), Early { result, started: *started })
+                    })
+                })
+                .collect()
+        });
+        early.extend(done);
+    }
+    early
 }
 
 /// `explore`: `task` as a turn of its own in `ConversationMode::Explore`,
@@ -4505,5 +4614,173 @@ mod tests {
         assert_eq!(explore_step("semanticSearch", r#"{"query":"where tokens refresh"}"#), "semanticSearch where tokens refresh");
         assert_eq!(explore_step("gitStatus", "{}"), "gitStatus");
         assert_eq!(explore_step("readFile", "{broken"), "readFile");
+    }
+
+    // ------------------------------------------------------ parallel explore
+
+    /// A provider for helpers running side by side: the calling turn gets
+    /// its script, each helper an answer made from its own task — whichever
+    /// order they arrive in — and every helper's request waits a moment for
+    /// others, so the most in flight at once is what the test reads.
+    struct SideBySide {
+        script: Mutex<VecDeque<ChatStreamResult>>,
+        in_flight: Mutex<usize>,
+        arrived: std::sync::Condvar,
+        most: Mutex<usize>,
+        helper_tasks: Mutex<Vec<String>>,
+        /// A file each helper looks for as it starts: `(task, found)`.
+        watch: Mutex<Option<PathBuf>>,
+        saw: Mutex<Vec<(String, bool)>>,
+    }
+
+    impl SideBySide {
+        fn new(script: Vec<ChatStreamResult>) -> Arc<Self> {
+            Arc::new(Self {
+                script: Mutex::new(script.into()),
+                in_flight: Mutex::new(0),
+                arrived: std::sync::Condvar::new(),
+                most: Mutex::new(0),
+                helper_tasks: Mutex::new(Vec::new()),
+                watch: Mutex::new(None),
+                saw: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl LlmProvider for SideBySide {
+        fn chat(&self, _: ChatRequest) -> Result<ChatResponse, LlmError> {
+            unreachable!("no compaction here")
+        }
+
+        fn chat_stream(
+            &self,
+            request: ChatRequest,
+            _: &dyn Fn(&str),
+            _: &dyn Fn(&str),
+            _: &dyn Fn(&str, &str, &str),
+            _: &dyn Fn() -> bool,
+        ) -> Result<ChatStreamResult, LlmError> {
+            if request.tools.iter().any(|t| t.name == "explore") {
+                return Ok(self.script.lock().unwrap().pop_front().expect("the calling turn's script ran out"));
+            }
+            let task = request.messages.iter().find(|m| m.role == LlmRole::User).and_then(|m| m.content.clone()).unwrap_or_default();
+            self.helper_tasks.lock().unwrap().push(task.clone());
+            if let Some(file) = self.watch.lock().unwrap().as_ref() {
+                self.saw.lock().unwrap().push((task.clone(), file.exists()));
+            }
+            let mut in_flight = self.in_flight.lock().unwrap();
+            *in_flight += 1;
+            let mut most = self.most.lock().unwrap();
+            *most = (*most).max(*in_flight);
+            drop(most);
+            self.arrived.notify_all();
+            // Held for one more than the limit, so a helper past it is caught
+            // in flight; the timeout is what lets a right-sized batch go.
+            let (mut in_flight, _) = self
+                .arrived
+                .wait_timeout_while(in_flight, Duration::from_millis(400), |n| *n <= MAX_PARALLEL_EXPLORES)
+                .unwrap();
+            *in_flight -= 1;
+            Ok(ChatStreamResult { text: format!("answer to {task}"), ..Default::default() })
+        }
+
+        fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+            unreachable!()
+        }
+    }
+
+    fn side_by_side(label: &str, asked: Vec<LlmToolCall>) -> (Harness, Arc<SideBySide>) {
+        let provider = SideBySide::new(vec![
+            ChatStreamResult { tool_calls: asked, ..Default::default() },
+            ChatStreamResult { text: "done".into(), ..Default::default() },
+        ]);
+        let mut h = harness(label, vec![]);
+        h.session.provider = provider.clone();
+        (h, provider)
+    }
+
+    fn explore(id: &str, task: &str) -> LlmToolCall {
+        wants(id, "explore", &serde_json::json!({ "task": task }).to_string())
+    }
+
+    /// Two helpers asked one after another run at once, and their answers
+    /// come back in the order they were asked, before the call after them.
+    #[test]
+    fn explores_in_one_reply_run_at_once_and_answer_in_order() {
+        let (h, provider) = side_by_side(
+            "explore-parallel",
+            vec![explore("e1", "A"), explore("e2", "B"), wants("r1", "readFile", r#"{"path":"a.rs"}"#)],
+        );
+        std::fs::write(h.root.join("a.rs"), "fn a() {}").unwrap();
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+
+        assert_eq!(*provider.most.lock().unwrap(), 2, "both helpers were in flight together");
+        let results: Vec<(String, String)> = done
+            .history
+            .iter()
+            .filter(|m| m.role == LlmRole::Tool)
+            .map(|m| (m.tool_call_id.clone().unwrap(), m.content.clone().unwrap()))
+            .collect();
+        assert_eq!(results.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["e1", "e2", "r1"]);
+        assert_eq!(results[0].1, "answer to A");
+        assert_eq!(results[1].1, "answer to B");
+        assert!(results[2].1.contains("fn a() {}"), "{:?}", results[2]);
+        // Each card started once, not again when the loop took its result.
+        let shown = payloads(&h.events());
+        for id in ["e1", "e2", "r1"] {
+            assert_eq!(shown.iter().filter(|p| **p == format!("toolCall:{id}")).count(), 1, "{id}: {shown:?}");
+        }
+    }
+
+    /// The round keeps its order: helpers asked after a write find it
+    /// written, one asked before it does not, and a write between two
+    /// helpers keeps them apart.
+    #[test]
+    fn helpers_run_where_the_round_asked_for_them() {
+        let write = |id: &str| wants(id, "writeFile", r#"{"path":"a.txt","content":"x"}"#);
+
+        let (after, provider) = side_by_side("explore-after-write", vec![write("w1"), explore("e1", "A"), explore("e2", "B")]);
+        *provider.watch.lock().unwrap() = Some(after.root.join("a.txt"));
+        after.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let mut saw = provider.saw.lock().unwrap().clone();
+        saw.sort();
+        assert_eq!(saw, [("A".to_string(), true), ("B".to_string(), true)]);
+        assert_eq!(*provider.most.lock().unwrap(), 2);
+
+        let (around, provider) = side_by_side("explore-around-write", vec![explore("e1", "A"), write("w1"), explore("e2", "B")]);
+        *provider.watch.lock().unwrap() = Some(around.root.join("a.txt"));
+        around.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(*provider.saw.lock().unwrap(), [("A".to_string(), false), ("B".to_string(), true)]);
+        assert_eq!(*provider.most.lock().unwrap(), 1, "not in a row, so one at a time");
+    }
+
+    /// Past the limit they go in batches: never more at once than that.
+    #[test]
+    fn no_more_helpers_run_at_once_than_the_limit() {
+        let asked = (0..=MAX_PARALLEL_EXPLORES).map(|n| explore(&format!("e{n}"), &format!("T{n}"))).collect();
+        let (h, provider) = side_by_side("explore-batches", asked);
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(*provider.most.lock().unwrap(), MAX_PARALLEL_EXPLORES);
+        assert_eq!(provider.helper_tasks.lock().unwrap().len(), MAX_PARALLEL_EXPLORES + 1, "every one ran");
+    }
+
+    /// The hooks are asked once for each, before any runs; the one refused
+    /// never starts, and the other still answers.
+    #[test]
+    fn a_hook_refusing_one_of_them_stops_that_one_only() {
+        let (h, provider) = side_by_side("explore-parallel-hook", vec![explore("e1", "A"), explore("e2", "B")]);
+        let (h, inputs) = hooked(h, hook("PreToolUse", "explore", "guard"), |_, input| {
+            if input["tool_input"]["task"] == "B" { (2, "not that one") } else { (0, "") }
+        });
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+
+        assert_eq!(inputs.lock().unwrap().len(), 2, "asked once each");
+        assert_eq!(*provider.helper_tasks.lock().unwrap(), ["A"]);
+        let results: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).filter_map(|m| m.content.clone()).collect();
+        assert_eq!(results[0], "answer to A");
+        assert!(results[1].contains("not that one"), "{results:?}");
     }
 }

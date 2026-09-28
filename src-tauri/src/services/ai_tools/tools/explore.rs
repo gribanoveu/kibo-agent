@@ -19,7 +19,7 @@ pub fn explore(args: &ExploreArgs, deps: &ToolDeps) -> Result<ToolResult, ToolEr
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "explore".to_string(),
-        description: "Hand a research task to a helper agent with a fresh context. It searches and reads the repository on its own and returns only its answer, so the reading does not fill this conversation. Use it for open questions that take many searches and reads: how a flow works across files, where something is decided, every place a pattern is used. Not for a file or a name you can find in one or two calls. The helper sees nothing of this conversation: the task must say what to find out, what you already know, and what to report (paths and line numbers, not whole files). It can only read; it cannot change files or run commands."
+        description: "Hand a research task to a helper agent with a fresh context. It searches and reads the repository on its own and returns only its answer, so the reading does not fill this conversation. Use it for open questions that take many searches and reads: how a flow works across files, where something is decided, every place a pattern is used. Not for a file or a name you can find in one or two calls. The helper sees nothing of this conversation: the task must say what to find out, what you already know, and what to report (paths and line numbers, not whole files). It can only read; it cannot change files or run commands. Several explore calls in one reply run at the same time: when there are questions that do not depend on each other's answers, ask them together, one task each."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
