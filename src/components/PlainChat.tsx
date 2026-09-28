@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { SendHorizontal, Square } from "lucide-react";
+import { Brain, SendHorizontal, Square, UserRound } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
 import type { ChatRoleId } from "../lib/chat";
 import type { PlainChatState } from "../hooks/usePlainChat";
+import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
+import { effortOptions } from "../lib/providerForm";
 import "./PlainChat.css";
 
 const SUGGESTIONS = [
@@ -14,8 +16,19 @@ const SUGGESTIONS = [
   "Make this commit message clearer for a reviewer",
 ];
 
+type Props = {
+  chat: PlainChatState;
+  /** Each change puts the cursor in the box. */
+  focus: number;
+  /** The same models as the agent's box: the provider is the app's, not the mode's. */
+  models: { choices: ModelChoice[]; current: ModelChoice | null; effort?: string | null };
+  onModel: (choice: ModelChoice) => void;
+  onEffort: (effort: string | null) => void;
+  onLoadModels: () => void;
+};
+
 /** Chat mode: the conversation and its message box, the two panels of `.main`. No folder, no tools — the role says what the model is. */
-export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number }) {
+export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels }: Props) {
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -33,6 +46,8 @@ export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number
     setDraft("");
   };
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
+  const effort = models.effort ?? "";
+  const efforts = effortOptions(effort);
 
   return (
     <>
@@ -41,21 +56,6 @@ export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number
           <div>
             <h1>{chat.chats.find((c) => c.id === chat.chatId)?.title ?? "New chat"}</h1>
             <p className="plain-sub">Talks with the model — no files, commands or tools</p>
-          </div>
-          <div className="plain-head-right">
-            {chat.roles.length > 1 ? (
-              <Dropdown
-                label={roleName}
-                title="Who the model is in this chat"
-                options={chat.roles.map((r) => ({ value: r.id, label: r.name }))}
-                value={chat.role}
-                onPick={(value) => chat.setRole(value as ChatRoleId)}
-                below
-                right
-              />
-            ) : (
-              <span className="plain-role">{roleName}</span>
-            )}
           </div>
         </header>
 
@@ -128,12 +128,58 @@ export function PlainChat({ chat, focus }: { chat: PlainChatState; focus: number
           }}
         />
         <div className="plain-composer-bar">
+          {/* Where the agent's box asks who has to agree, this one asks who the model is. */}
+          <Dropdown
+            title="Who the model is in this chat"
+            heading="Role"
+            label={
+              <span className="plain-chip-label">
+                <UserRound size={13} />
+                {roleName}
+              </span>
+            }
+            value={chat.role}
+            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
+            onPick={(value) => chat.setRole(value as ChatRoleId)}
+          />
+          <Dropdown
+            title="Model"
+            heading="Model"
+            label={<span className="plain-model-label">{models.current?.label ?? "no model"}</span>}
+            value={models.current ? choiceKey(models.current) : ""}
+            options={models.choices.map((choice) => ({
+              value: choiceKey(choice),
+              label: choice.label,
+              hint: choice.model ? undefined : "The first model the provider lists",
+            }))}
+            emptyLabel="No provider yet — add one in Settings → Models"
+            onOpen={onLoadModels}
+            onPick={(key) => {
+              const choice = models.choices.find((c) => choiceKey(c) === key);
+              if (choice) onModel(choice);
+            }}
+          />
+          {models.current && (
+            <Dropdown
+              title="Thinking level"
+              heading="Thinking"
+              label={
+                <span className="plain-chip-label">
+                  <Brain size={13} />
+                  {efforts.find((e) => e.value === effort)?.label}
+                </span>
+              }
+              value={effort}
+              options={efforts}
+              onPick={(v) => onEffort(v || null)}
+            />
+          )}
           {running ? (
-            <button type="button" className="iconbtn" title="Stop" onClick={chat.stop}>
+            <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
               <Square size={14} />
             </button>
           ) : (
-            <button type="button" className="iconbtn plain-send" title="Send" disabled={!draft.trim()} onClick={send}>
+            <button type="button" className="plain-send" title="Send" disabled={!draft.trim()} onClick={send}>
               <SendHorizontal size={16} />
             </button>
           )}

@@ -592,7 +592,14 @@ export default function App() {
               />
             </>
           ) : (
-            <PlainChat chat={plain} focus={composerFocus} />
+            <PlainChat
+              chat={plain}
+              focus={composerFocus}
+              models={llm.models}
+              onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
+              onEffort={llm.pickEffort}
+              onLoadModels={llm.loadModels}
+            />
           )}
         </main>
 

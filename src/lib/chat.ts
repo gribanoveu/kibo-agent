@@ -684,7 +684,7 @@ export async function setMcpServerEnabled(name: string, enabled: boolean): Promi
 
 /** Mirrors `domain::chat_role::ChatRole`: who the model is in Chat mode, and which tools it has. */
 export type ChatRoleId = "assistant";
-export type ChatRoleView = { id: ChatRoleId; name: string };
+export type ChatRoleView = { id: ChatRoleId; name: string; description: string };
 
 export async function plainChatRoles(): Promise<ChatRoleView[]> {
   if (!inTauri()) return [];

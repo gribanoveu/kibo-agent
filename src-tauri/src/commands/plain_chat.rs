@@ -29,11 +29,12 @@ pub struct PlainChatState {
 pub struct RoleView {
     id: ChatRole,
     name: &'static str,
+    description: &'static str,
 }
 
 #[tauri::command]
 pub fn plain_chat_roles() -> Vec<RoleView> {
-    ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name() }).collect()
+    ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
 }
 
 /// The model's reply to `messages` in `role`. Its text arrives on
@@ -84,6 +85,10 @@ mod tests {
     #[test]
     fn every_role_is_listed_by_its_wire_name() {
         let roles = serde_json::to_value(plain_chat_roles()).unwrap();
-        assert_eq!(roles, serde_json::json!([{ "id": "assistant", "name": "Assistant" }]));
+        assert_eq!(roles, serde_json::json!([{
+            "id": "assistant",
+            "name": "Assistant",
+            "description": ChatRole::Assistant.description(),
+        }]));
     }
 }

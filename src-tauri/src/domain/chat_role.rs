@@ -8,8 +8,8 @@
 //! derived from the agent's: a DevOps role that works with Kubernetes gets
 //! `kubectl`, not `readFile`.
 //!
-//! Adding a role is a variant here, its name, its prompt and its tools; the
-//! window lists what [`ChatRole::ALL`] holds.
+//! Adding a role is a variant here, its name, description, prompt and tools;
+//! the window's role menu lists what [`ChatRole::ALL`] holds.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,13 @@ impl ChatRole {
     pub fn name(self) -> &'static str {
         match self {
             ChatRole::Assistant => "Assistant",
+        }
+    }
+
+    /// One line for the role's menu: what the model does in it.
+    pub fn description(self) -> &'static str {
+        match self {
+            ChatRole::Assistant => "Answers in text; no files, commands or tools",
         }
     }
 

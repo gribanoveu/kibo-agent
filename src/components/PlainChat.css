@@ -26,19 +26,6 @@
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
-.plain-head-right {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.plain-role {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--bg-active);
-  color: var(--text-dim);
-  font-size: var(--fs-2xs);
-}
 
 .plain-thread {
   flex: 1;
@@ -155,17 +142,15 @@
   user-select: text;
 }
 
+/* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
 .plain-composer {
   flex: none;
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
   background: var(--bg-panel);
   border-radius: var(--radius);
-  padding: 12px 12px 10px 16px;
+  padding: 14px 16px 11px;
 }
 .plain-composer textarea {
-  flex: 1;
+  width: 100%;
   min-height: 48px;
   max-height: 160px;
   resize: none;
@@ -180,10 +165,55 @@
 .plain-composer textarea::placeholder {
   color: var(--text-faint);
 }
+.plain-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.plain-composer-bar > * {
+  flex: none;
+}
+/* A long provider/model ellipsises rather than pushing send off the bar. */
+.plain-composer-bar > .dropdown-wrap:has(.plain-model-label) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.plain-composer-bar > .dropdown-wrap:has(.plain-model-label) .chip {
+  max-width: 100%;
+}
+.plain-model-label {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plain-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.plain-send {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
 .plain-send:hover:not(:disabled) {
+  background: var(--bg-hover);
   color: var(--accent);
 }
 .plain-send:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.plain-send.stop {
+  background: var(--bg-active);
+  color: var(--text);
 }
