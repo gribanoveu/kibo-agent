@@ -20,7 +20,6 @@
 //! A server that never sent reasoning never gets any back.
 
 use std::collections::HashMap;
-use std::io::BufRead;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -164,7 +163,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         on_tool_call_delta: &dyn Fn(&str, &str, &str),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
-        let body = self.body(&request, true);
+        let body = serde_json::to_value(self.body(&request, true)).map_err(|e| LlmError::Message(e.to_string()))?;
         let mut post = self
             .agent
             .post(self.url("chat/completions"))
@@ -172,25 +171,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         for (name, value) in self.extra_headers() {
             post = post.header(name, value);
         }
-        let response = post
-            .send_json(&body)
-            .map_err(|e| LlmError::Http(e.to_string()))?;
-        let response = ok_or_status_error(response)?;
-
-        let reader = std::io::BufReader::new(response.into_body().into_reader());
+        let lines = super::StreamLines::send(post, body);
         let mut result = ChatStreamResult::default();
         let mut calls = ToolCallAccumulator::default();
         let mut echo_reasoning: Option<&'static str> = None;
 
-        for line in reader.lines() {
-            // Polled once per line rather than only before the loop: a long
-            // answer takes many seconds, and this is what makes a stop land
-            // within roughly one chunk. The read for the *next* line still
-            // blocks, so a connection that stalls outright is not helped.
-            if cancelled() {
-                break;
-            }
-            let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
+        while let Some(line) = lines.next(cancelled)? {
             match parse_sse_line(&line)? {
                 SseLine::Ignore => {}
                 SseLine::Done => break,

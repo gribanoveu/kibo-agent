@@ -27,7 +27,6 @@
 //! provider: `https://api.anthropic.com/v1`.
 
 use std::collections::HashMap;
-use std::io::BufRead;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -133,10 +132,7 @@ impl LlmProvider for AnthropicProvider {
         for (name, value) in self.headers() {
             post = post.header(name, value);
         }
-        let response = post.send_json(&body).map_err(|e| LlmError::Http(e.to_string()))?;
-        let response = ok_or_status_error(response)?;
-
-        let reader = std::io::BufReader::new(response.into_body().into_reader());
+        let lines = super::StreamLines::send(post, body);
         let mut result = ChatStreamResult::default();
         let mut usage = Usage::default();
         let mut saw_usage = false;
@@ -144,11 +140,7 @@ impl LlmProvider for AnthropicProvider {
         let mut calls: Vec<(usize, LlmToolCall)> = Vec::new();
         let mut blocks: Vec<(usize, Value)> = Vec::new();
 
-        for line in reader.lines() {
-            if cancelled() {
-                break;
-            }
-            let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
+        while let Some(line) = lines.next(cancelled)? {
             let Some(event) = parse_sse_line(&line)? else { continue };
             match event {
                 StreamEvent::MessageStart { message } => {
