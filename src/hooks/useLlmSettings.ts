@@ -8,7 +8,9 @@ import {
   saveProvider,
   setActiveProvider,
   setDebugLogging,
+  setKeyStore,
   setReplyLanguage,
+  type KeyStore,
   type ReplyLanguage,
   type LlmSettings,
   type ProviderConfig,
@@ -64,6 +66,7 @@ export function useLlmSettings() {
 
   const remove = useCallback((id: string) => guard(() => removeProvider(id)), [guard]);
   const select = useCallback((id: string) => guard(() => setActiveProvider(id)), [guard]);
+  const keyStore = useCallback((store: KeyStore) => guard(() => setKeyStore(store)), [guard]);
   const debugLogging = useCallback(
     (enabled: boolean) => guard(() => setDebugLogging(enabled)),
     [guard],
@@ -122,6 +125,7 @@ export function useLlmSettings() {
     save,
     remove,
     select,
+    keyStore,
     debugLogging,
     replyLanguage,
     models: modelChoices(settings, served),

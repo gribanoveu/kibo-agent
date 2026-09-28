@@ -512,3 +512,36 @@ describe("the certificate", () => {
     expect(saved[0]?.provider.trustedCertPem).toBeNull();
   });
 });
+
+describe("where the keys are kept", () => {
+  const withStore = (keyStore: LlmSettings["keyStore"]) => {
+    const moved: string[] = [];
+    render(
+      <ProviderSettings
+        settings={settings({ keyStore })}
+        busy={false}
+        error={null}
+        onSave={() => {}}
+        onRemove={() => {}}
+        onSelect={() => {}}
+        onKeyStore={(store) => moved.push(store)}
+      />,
+    );
+    return moved;
+  };
+
+  test("the file is the default, and the keychain is offered", () => {
+    const moved = withStore("file");
+
+    expect(screen.getByText(/sealed in ~\/\.kibo/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move to keychain" }));
+    expect(moved).toEqual(["keychain"]);
+  });
+
+  test("keys in the keychain can be moved back", () => {
+    const moved = withStore("keychain");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to ~/.kibo" }));
+    expect(moved).toEqual(["file"]);
+  });
+});

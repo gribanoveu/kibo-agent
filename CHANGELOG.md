@@ -7,6 +7,7 @@
 - 2026-09-28 Chat mode's empty chat shows the role's icon in a thought cloud over Kibo, and the role's tab carries the same icon
 - 2026-09-28 Pick the Kubernetes role in Chat mode: the model answers as a Kubernetes engineer — manifests, Helm, why a pod fails — asks for the kubectl output it needs and marks commands that change the cluster
 - 2026-09-28 Scroll up to read while an answer is still arriving: the thread no longer drags you back to the end, in the agent and in Chat mode; scrolling back down follows it again
+- 2026-09-28 Save an API key without a keychain prompt: keys are kept in ~/.kibo, readable only by your account, and Settings → Provider can move them into the system keychain and back
 - 2026-09-28 Stop a request while the model has not answered yet: the Stop button now works within a moment in both the agent and Chat mode, even before the first word arrives
 - 2026-09-28 An MCP server that refuses with HTTP 405 now says why: an address ending in /sse is the old SSE transport, and names the Streamable HTTP address to use instead
 - 2026-09-28 Add a Chat mode, switched in the sidebar: a plain conversation with the model, with no folder, files or tools; its chats are saved and listed in the sidebar, the role is picked on a tab above its message box, the model and the thinking level in the box; the model's thinking is shown folded above each answer

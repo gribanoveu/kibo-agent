@@ -173,6 +173,7 @@ pub fn run() {
             commands::settings::llm_provider_save,
             commands::settings::llm_provider_remove,
             commands::settings::llm_api_key_save,
+            commands::settings::llm_key_store_set,
             commands::settings::llm_active_provider_set,
             commands::settings::llm_debug_logging_set,
             commands::settings::llm_reply_language_set,

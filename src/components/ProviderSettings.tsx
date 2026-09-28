@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
-import type { LlmSettings, ProviderConfig, ProviderKind } from "../lib/chat";
+import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/chat";
 import { certificateCount, EFFORTS, filterModels, pemFromBytes } from "../lib/providerForm";
 import "./ProviderSettings.css";
 
@@ -43,6 +43,8 @@ type Props = {
   onSave: (provider: ProviderConfig, apiKey: string | null) => void | Promise<boolean>;
   onRemove: (id: string) => void;
   onSelect: (id: string) => void;
+  /** Moves the key the API keys are sealed under between `~/.kibo` and the system keychain. */
+  onKeyStore?: (store: KeyStore) => void;
   /** Asks the provider, as the form has it now, what it serves. */
   onProbe?: (provider: ProviderConfig, apiKey: string | null) => Promise<string[]>;
   /** What each provider was last seen to serve, by id. */
@@ -73,6 +75,7 @@ export function ProviderSettings({
   onSave,
   onRemove,
   onSelect,
+  onKeyStore,
   onProbe,
   served = {},
 }: Props) {
@@ -272,9 +275,7 @@ export function ProviderSettings({
               }}
             />
           </div>
-          <p className="modal-note settings-hint">
-            The key is sealed on disk and never leaves the backend — nothing here can read it back.
-          </p>
+          <KeyStorage store={settings?.keyStore ?? "file"} busy={busy} onMove={onKeyStore} />
         </section>
 
         <section className="provider-card">
@@ -392,6 +393,43 @@ export function ProviderSettings({
           )}
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * Where the keys are kept, and the offer to move them into the keychain.
+ * Opt-in: the keychain asks the user for access, which on a first launch reads
+ * as distrust — and after every update, for an ad-hoc signed build.
+ */
+function KeyStorage({
+  store,
+  busy,
+  onMove,
+}: {
+  store: KeyStore;
+  busy: boolean;
+  onMove?: (store: KeyStore) => void;
+}) {
+  const inKeychain = store === "keychain";
+  return (
+    <div className="provider-key-store">
+      <p className="modal-note">
+        {inKeychain
+          ? "Keys are sealed on disk, under a key held in the system keychain."
+          : "Keys are sealed in ~/.kibo, readable only by your account. The system keychain also keeps them out of backups and synced folders."}
+      </p>
+      {onMove && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={busy}
+          title={inKeychain ? undefined : "The system will ask to allow access"}
+          onClick={() => onMove(inKeychain ? "file" : "keychain")}
+        >
+          {inKeychain ? "Move to ~/.kibo" : "Move to keychain"}
+        </button>
+      )}
     </div>
   );
 }
