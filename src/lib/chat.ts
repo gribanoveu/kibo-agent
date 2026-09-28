@@ -678,6 +678,36 @@ export async function setMcpServerEnabled(name: string, enabled: boolean): Promi
   return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
 }
 
+// ---------------------------------------------------------------- plain chat
+
+/** Mirrors `domain::chat_role::ChatRole`: who the model is in Chat mode, and which tools it has. */
+export type ChatRoleId = "assistant";
+export type ChatRoleView = { id: ChatRoleId; name: string };
+
+export async function plainChatRoles(): Promise<ChatRoleView[]> {
+  if (!inTauri()) return [];
+  return invoke<ChatRoleView[]>("plain_chat_roles");
+}
+
+/**
+ * The model's reply to `messages`, outside any folder. Its text arrives on
+ * `onTurnEvent(turnId)` as `delta` events while it is written; this resolves
+ * with all of it — what was said so far, after a stop.
+ */
+export async function plainChatSend(
+  turnId: string,
+  role: ChatRoleId,
+  messages: LlmMessage[],
+): Promise<{ text: string; truncated?: boolean }> {
+  requireBackend();
+  return invoke("plain_chat_send", { turnId, role, messages });
+}
+
+export async function plainChatCancel(): Promise<void> {
+  requireBackend();
+  return invoke<void>("plain_chat_cancel");
+}
+
 // ---------------------------------------------------------------- review
 
 /**

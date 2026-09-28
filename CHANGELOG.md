@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-28 Add a Chat mode, switched in the sidebar: a plain conversation with the model, with no folder, files or tools
+
 ## v0.2.0-alfa — 2026-09-28
 
 - 2026-09-27 /review has an ordinary turn's budget, 60 rounds, and is asked to wrap up with a fifth of it left, not after 10 rounds

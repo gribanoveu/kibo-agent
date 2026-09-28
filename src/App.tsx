@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { Composer } from "./components/Composer";
+import { PlainChat } from "./components/PlainChat";
 import { FolderTab } from "./components/FolderTab";
 import { AsidePanel } from "./components/AsidePanel";
 import { FileViewer } from "./components/FileViewer";
@@ -14,6 +15,7 @@ import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Toast } from "./components/Toast";
 import { WindowControls } from "./components/WindowControls";
 import { useAgentTurn } from "./hooks/useAgentTurn";
+import { usePlainChat } from "./hooks/usePlainChat";
 import { useChatHistory } from "./hooks/useChatHistory";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useLlmSettings } from "./hooks/useLlmSettings";
@@ -45,7 +47,7 @@ import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { exportChat, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
-import { isAsideTab, type AsideTab } from "./types";
+import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
@@ -92,6 +94,11 @@ const STAY = "Stop the running turn before leaving this chat";
 export default function App() {
   // Laid out as it was left.
   const [collapsed, setCollapsed] = useStoredState("atlas-sidebar-collapsed", false, isBoolean);
+  // Agent works in the open folder; Chat only talks. Chat's conversation lives
+  // here rather than in its panel, so a reply keeps arriving while Agent is shown.
+  const [mode, setMode] = useStoredState<AppMode>("atlas-mode", "agent", isAppMode);
+  const agentMode = mode === "agent";
+  const plain = usePlainChat();
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
   const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
@@ -149,11 +156,12 @@ export default function App() {
   // falls back to its rail first, then the column right of the viewer hides.
   // Neither is stored — wider again, both come back as they were left.
   const frame = nativeFrame ? 0 : 2;
-  const viewerOpen = viewer.active !== null;
+  // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
+  const viewerOpen = agentMode && viewer.active !== null;
   const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame })}px)`);
   // What the column shows: what was opened, while it fits.
-  const topHidden = asideHidden || !dockFits;
-  const bottomShown = dockFits ? bottomTab : null;
+  const topHidden = asideHidden || !dockFits || !agentMode;
+  const bottomShown = dockFits && agentMode ? bottomTab : null;
   const dockShown = !topHidden || bottomShown !== null;
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame })}px)`);
   const rail = collapsed || !sidebarFits;
@@ -260,6 +268,10 @@ export default function App() {
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
   const newChat = () => {
+    if (!agentMode) {
+      plain.clear();
+      return focusComposer();
+    }
     if (!agent.reset()) return toast.show(STAY);
     focusComposer();
   };
@@ -465,9 +477,14 @@ export default function App() {
 
       <div className="body">
         <Sidebar
+          mode={mode}
+          onMode={setMode}
           chats={history.chats}
-          activeChat={agent.chatId}
-          onSelectChat={(id) => void agent.open(id).then((opened) => opened || toast.show(STAY))}
+          activeChat={agentMode ? agent.chatId : null}
+          onSelectChat={(id) => {
+            setMode("agent");
+            void agent.open(id).then((opened) => opened || toast.show(STAY));
+          }}
           onNewChat={newChat}
           onArchiveChat={(id, archived) => history.archive(id, archived).catch((e) => toast.show(String(e)))}
           onDeleteChat={(id) => {
@@ -487,90 +504,96 @@ export default function App() {
         />
 
         <main className="main">
-          <ChatPanel
-            title={openChat?.title ?? null}
-            branched={Boolean(openChat?.branchedFrom)}
-            workspace={workspace.path}
-            turn={agent.turn}
-            onDecide={agent.decide}
-            onOpenRepo={chooseFolder}
-            asideOpen={changesShown(docks)}
-            onToggleAside={() => setDocks(toggleChanges(docks))}
-            terminalOpen={bottomShown === "terminal"}
-            onToggleTerminal={() => setDocks(toggleTerminal(docks))}
-            onOpenPanel={openTab}
-            onExport={exportOpenChat}
-            onImplement={conversation.value === "plan" ? implement : undefined}
-            onOpenPlan={() => openTab("plan")}
-            onOpenProcess={(id) => {
-              openTab("terminal");
-              setProcessFocus({ id });
-            }}
-            onOpenAgent={(agent) => {
-              openTab("terminal");
-              setAgentFocus({ ...agent });
-            }}
-            runningProcesses={runningProcesses.map((process) => process.id)}
-            onPasteCommand={workspace.path ? pasteInTerminal : undefined}
-            onOpenFile={workspace.path ? openFileLink : undefined}
-            branchable={agent.branchable}
-            onBranch={agent.branch}
-            onRewind={(id) => void rewinding.ask(id)}
-            onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
-          />
-          <Composer
-            tab={
-              <FolderTab
-                path={workspace.path}
-                recent={workspace.recent}
-                onOpenFolder={openFolder}
-                onPickFolder={chooseFolder}
-                onRemoveWorktree={worktreeRemoval.ask}
-                branch={branch}
-                worktreeOf={worktreeOf}
-                index={index}
-                changes={changeTotals}
-                onOpenChanges={() => openTab("changes")}
-                branchPicker={
-                  unstarted
-                    ? {
-                        branches: branchPicker.branches,
-                        onOpen: branchPicker.load,
-                        onPick: (name) => void branchPicker.pick(name),
-                        worktree: branchPicker.worktree,
-                        base: branchPicker.base,
-                        onWorktree: branchPicker.setWorktree,
-                      }
-                    : undefined
-                }
+          {agentMode ? (
+            <>
+              <ChatPanel
+                title={openChat?.title ?? null}
+                branched={Boolean(openChat?.branchedFrom)}
+                workspace={workspace.path}
+                turn={agent.turn}
+                onDecide={agent.decide}
+                onOpenRepo={chooseFolder}
+                asideOpen={changesShown(docks)}
+                onToggleAside={() => setDocks(toggleChanges(docks))}
+                terminalOpen={bottomShown === "terminal"}
+                onToggleTerminal={() => setDocks(toggleTerminal(docks))}
+                onOpenPanel={openTab}
+                onExport={exportOpenChat}
+                onImplement={conversation.value === "plan" ? implement : undefined}
+                onOpenPlan={() => openTab("plan")}
+                onOpenProcess={(id) => {
+                  openTab("terminal");
+                  setProcessFocus({ id });
+                }}
+                onOpenAgent={(agent) => {
+                  openTab("terminal");
+                  setAgentFocus({ ...agent });
+                }}
+                runningProcesses={runningProcesses.map((process) => process.id)}
+                onPasteCommand={workspace.path ? pasteInTerminal : undefined}
+                onOpenFile={workspace.path ? openFileLink : undefined}
+                branchable={agent.branchable}
+                onBranch={agent.branch}
+                onRewind={(id) => void rewinding.ask(id)}
+                onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
               />
-            }
-            onSend={send}
-            onQueue={agent.queue}
-            queued={agent.queued}
-            onUnqueue={agent.unqueue}
-            focus={composerFocus}
-            onStop={agent.cancel}
-            running={agent.turn.status === "running"}
-            conversation={conversation.value}
-            onConversation={pickConversation}
-            unattended={approval.unattended}
-            onUnattended={pickUnattended}
-            draft={agent.draft}
-            quote={quote}
-            models={llm.models}
-            onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
-            onEffort={llm.pickEffort}
-            onLoadModels={llm.loadModels}
-            context={agent.context}
-            usage={agent.turn.usage}
-            onCompact={compactNow}
-            commands={commands}
-            onCommandsOpen={commandFiles.reload}
-          />
+              <Composer
+                tab={
+                  <FolderTab
+                    path={workspace.path}
+                    recent={workspace.recent}
+                    onOpenFolder={openFolder}
+                    onPickFolder={chooseFolder}
+                    onRemoveWorktree={worktreeRemoval.ask}
+                    branch={branch}
+                    worktreeOf={worktreeOf}
+                    index={index}
+                    changes={changeTotals}
+                    onOpenChanges={() => openTab("changes")}
+                    branchPicker={
+                      unstarted
+                        ? {
+                            branches: branchPicker.branches,
+                            onOpen: branchPicker.load,
+                            onPick: (name) => void branchPicker.pick(name),
+                            worktree: branchPicker.worktree,
+                            base: branchPicker.base,
+                            onWorktree: branchPicker.setWorktree,
+                          }
+                        : undefined
+                    }
+                  />
+                }
+                onSend={send}
+                onQueue={agent.queue}
+                queued={agent.queued}
+                onUnqueue={agent.unqueue}
+                focus={composerFocus}
+                onStop={agent.cancel}
+                running={agent.turn.status === "running"}
+                conversation={conversation.value}
+                onConversation={pickConversation}
+                unattended={approval.unattended}
+                onUnattended={pickUnattended}
+                draft={agent.draft}
+                quote={quote}
+                models={llm.models}
+                onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
+                onEffort={llm.pickEffort}
+                onLoadModels={llm.loadModels}
+                context={agent.context}
+                usage={agent.turn.usage}
+                onCompact={compactNow}
+                commands={commands}
+                onCommandsOpen={commandFiles.reload}
+              />
+            </>
+          ) : (
+            <PlainChat chat={plain} focus={composerFocus} />
+          )}
         </main>
 
-        {viewer.active && (
+        {agentMode && viewer.active && (
           <>
             <PanelResizeHandle
               invert

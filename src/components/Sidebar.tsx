@@ -4,9 +4,11 @@ import {
   ArchiveRestore,
   ChevronRight,
   Clock,
+  CodeXml,
   GitBranch,
   Keyboard,
   MessageSquare,
+  MessagesSquare,
   PanelLeft,
   Plus,
   Settings,
@@ -20,7 +22,7 @@ import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/chat";
-import type { AsideTab } from "../types";
+import type { AppMode, AsideTab } from "../types";
 import "./Sidebar.css";
 
 type Filter = "active" | "archived" | "all";
@@ -40,6 +42,11 @@ const SHORTCUT_GROUPS = Object.entries(SHORTCUTS).reduce<Record<string, Listed[]
   return groups;
 }, {});
 
+const MODES: { value: AppMode; label: string; title: string; icon: React.ReactNode }[] = [
+  { value: "agent", label: "Agent", title: "Agent — works in the open folder with tools", icon: <CodeXml size={14} /> },
+  { value: "chat", label: "Chat", title: "Chat — talks with the model, no files or tools", icon: <MessagesSquare size={14} /> },
+];
+
 const EMPTY: Record<Filter, string> = {
   active: "Every chat here is archived.",
   archived: "No archived chats.",
@@ -47,6 +54,8 @@ const EMPTY: Record<Filter, string> = {
 };
 
 type Props = {
+  mode: AppMode;
+  onMode: (mode: AppMode) => void;
   chats: ChatSummary[];
   activeChat: string | null;
   onSelectChat: (id: string) => void;
@@ -59,6 +68,8 @@ type Props = {
 };
 
 export function Sidebar({
+  mode,
+  onMode,
   chats,
   activeChat,
   onSelectChat,
@@ -101,6 +112,22 @@ export function Sidebar({
         <button className="iconbtn" type="button" title="Collapse panel" onClick={onToggleCollapse}>
           <PanelLeft size={15} />
         </button>
+        <div className="mode-switch" role="tablist" aria-label="Mode">
+          {MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.value}
+              className={`mode-opt${mode === m.value ? " active" : ""}`}
+              title={m.title}
+              onClick={() => onMode(m.value)}
+            >
+              {m.icon}
+              <span>{m.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="group">

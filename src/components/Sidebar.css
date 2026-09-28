@@ -23,6 +23,7 @@
 .sidebar-top {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 12px 10px 10px;
@@ -59,6 +60,58 @@
   padding: 7px;
 }
 .window.collapsed .newchat .label {
+  display: none;
+}
+
+/* Agent | Chat: a segmented control on its own row; on the rail, a column of icons. */
+.mode-switch {
+  flex: 0 0 100%;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+}
+.window.collapsed .mode-switch {
+  flex: none;
+  flex-direction: column;
+}
+.mode-opt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-opt:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.mode-opt.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.mode-opt svg {
+  flex: none;
+}
+.window.collapsed .mode-opt {
+  flex: none;
+  width: 26px;
+  padding: 0;
+}
+.window.collapsed .mode-opt span {
   display: none;
 }
 
