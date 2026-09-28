@@ -66,10 +66,16 @@ pub fn plain_chat_list() -> Result<Vec<ChatSummary>, String> {
 }
 
 /// Writes the conversation as it now stands: as a message is sent, and again
-/// with the reply.
+/// with the reply. `messages` is what the model is sent; `blocks` what the
+/// window draws, thinking included — opaque here, as the agent's are.
 #[tauri::command]
-pub fn plain_chat_save(id: String, role: ChatRole, messages: Vec<LlmMessage>) -> Result<ChatSummary, String> {
-    chat_store::save_plain(&id, role, &messages).map_err(|e| e.to_string())
+pub fn plain_chat_save(
+    id: String,
+    role: ChatRole,
+    messages: Vec<LlmMessage>,
+    blocks: serde_json::Value,
+) -> Result<ChatSummary, String> {
+    chat_store::save_plain(&id, role, &messages, &blocks).map_err(|e| e.to_string())
 }
 
 /// Returns at once; the reply stops at its next chunk.

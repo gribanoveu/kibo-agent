@@ -202,9 +202,10 @@ pub fn save(
     })
 }
 
-/// A Chat mode conversation, filed under no folder. Its messages are its
-/// transcript too: a plain chat has no tool calls to keep apart from what is shown.
-pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage]) -> Result<ChatSummary, ChatError> {
+/// A Chat mode conversation, filed under no folder. `blocks` is its
+/// transcript as the window draws it — the model's thinking with each answer,
+/// which `messages`, what the model is sent again, leaves out.
+pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage], blocks: &Value) -> Result<ChatSummary, ChatError> {
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
@@ -213,7 +214,7 @@ pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage]) -> Result<C
         created_at: 0,
         updated_at: 0,
         messages: messages.to_vec(),
-        blocks: Value::Array(Vec::new()),
+        blocks: blocks.clone(),
         todos: Vec::new(),
         plan: None,
         branched_from: None,
@@ -613,14 +614,15 @@ mod tests {
         with_app_dir("chat-store-plain", || {
             save_one("agent", "/repo", "fix it");
             let said = [LlmMessage::user("what is a monad?"), LlmMessage::assistant("a monoid in…")];
-            let saved = save_plain("plain", ChatRole::Assistant, &said).unwrap();
+            let shown = serde_json::json!([{ "role": "assistant", "text": "a monoid in…", "reasoning": "hm" }]);
+            let saved = save_plain("plain", ChatRole::Assistant, &said, &shown).unwrap();
 
             assert_eq!(saved.title, "what is a monad?");
             let ids = |folder: &str| list(folder).unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
             assert_eq!(ids(NO_FOLDER), ["plain"]);
             assert_eq!(ids("/repo"), ["agent"]);
             let record = load("plain").unwrap();
-            assert_eq!((record.role, record.messages), (Some(ChatRole::Assistant), said.to_vec()));
+            assert_eq!((record.role, record.messages, record.blocks), (Some(ChatRole::Assistant), said.to_vec(), shown));
             assert_eq!(load("agent").unwrap().role, None);
         });
     }
