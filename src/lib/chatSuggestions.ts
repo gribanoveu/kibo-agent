@@ -1,28 +1,40 @@
 /**
- * What Chat mode's empty chat offers to ask. Short enough for one line each:
- * two rows is what keeps Kibo where the agent's empty chat has it.
+ * What Chat mode's empty chat offers to ask — the questions of a Spring
+ * developer at a bank, and of system and API design. Short enough for one
+ * line each: two rows is what keeps Kibo where the agent's empty chat has it.
  */
 export const CHAT_SUGGESTIONS = [
-  "Explain the difference between a process and a thread",
-  "Write a regex that matches an ISO 8601 date",
-  "Make this commit message clearer for a reviewer",
-  "What does CAP theorem mean in practice?",
-  "Compare REST and gRPC for internal services",
-  "Explain Rust lifetimes with a small example",
-  "How does a B-tree index speed up a query?",
-  "Write a bash one-liner to find large files",
-  "What is the difference between TCP and UDP?",
-  "Explain how HTTPS keeps a connection private",
-  "Suggest names for a CLI that syncs dotfiles",
-  "Turn these notes into a short status update",
-  "How do I undo the last git commit safely?",
-  "Explain eventual consistency to a new teammate",
-  "What makes a good code review comment?",
-  "Write a SQL query for the top 5 customers by spend",
-  "Explain async/await in JavaScript simply",
-  "When should I use a queue instead of a direct call?",
-  "Review this error message for clarity",
-  "Summarize the SOLID principles in one line each",
+  "Why is my @Transactional method not rolling back?",
+  "Explain @Transactional propagation with examples",
+  "Design an idempotent payment API in Spring Boot",
+  "Optimistic vs pessimistic locking in JPA",
+  "How do I fix the N+1 problem in Hibernate?",
+  "BigDecimal for money: which pitfalls to avoid?",
+  "Outbox pattern with Spring and Kafka, step by step",
+  "Set up a Resilience4j circuit breaker in Spring",
+  "Secure a REST API with Spring Security and JWT",
+  "Mask card numbers and PII in Spring Boot logs",
+  "Test a JPA repository with Testcontainers",
+  "Liquibase or Flyway for a banking schema?",
+  "Audit entity changes with Hibernate Envers",
+  "Tune HikariCP for a high-load banking service",
+  "Kafka consumer retries and a dead letter topic",
+  "Saga or 2PC for transfers between services?",
+  "Validate an IBAN with Bean Validation",
+  "Run a @Scheduled job once across instances",
+  "Migrate a Spring Boot 2 app to Spring Boot 3",
+  "Virtual threads in Spring Boot: when do they help?",
+  // System and API design.
+  "Design a rate limiter for a public banking API",
+  "How should I version a REST API without breaking clients?",
+  "Cursor or offset pagination for transaction history?",
+  "Design error responses with RFC 7807 problem details",
+  "Sync REST or async events between two services?",
+  "Design a ledger that never loses a cent",
+  "How do I shard a table of accounts?",
+  "Where should a cache sit in a card payment flow?",
+  "Design webhooks that clients can trust and retry",
+  "Idempotency keys: how long to keep them, and where?",
 ];
 
 /** `count` different suggestions, in random order. `random` is `Math.random` outside a test. */

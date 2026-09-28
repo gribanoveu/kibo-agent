@@ -4,8 +4,9 @@ import { CHAT_SUGGESTIONS, pickSuggestions } from "../lib/chatSuggestions";
 // Chat mode's empty chat shows two of the set, different each time it opens.
 
 describe("pickSuggestions", () => {
-  test("the set has twenty, none twice", () => {
-    expect(new Set(CHAT_SUGGESTIONS).size).toBe(20);
+  test("the set has thirty, none twice", () => {
+    expect(CHAT_SUGGESTIONS.length).toBe(30);
+    expect(new Set(CHAT_SUGGESTIONS).size).toBe(30);
   });
 
   test("two different ones from the set", () => {
@@ -19,7 +20,7 @@ describe("pickSuggestions", () => {
 
   test("any of the set can come up, the last included", () => {
     expect(pickSuggestions(2, () => 0)).toEqual([CHAT_SUGGESTIONS[0], CHAT_SUGGESTIONS[1]]);
-    expect(pickSuggestions(1, () => 0.999)).toEqual([CHAT_SUGGESTIONS[19]]);
+    expect(pickSuggestions(1, () => 0.999)).toEqual([CHAT_SUGGESTIONS[29]]);
   });
 
   test("the set is left as it was", () => {
