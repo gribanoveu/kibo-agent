@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.0-alfa — 2026-09-28
+
 - 2026-09-27 /review has an ordinary turn's budget, 60 rounds, and is asked to wrap up with a fifth of it left, not after 10 rounds
 - 2026-09-27 Helpers the agent asks for one after another in a reply run at the same time, up to four at once
 - 2026-09-27 An explore row in the chat, unfolded, has Show in Agents to open that run in the Agents tab; / commands such as /init now also ask for replies in the language chosen in Settings
