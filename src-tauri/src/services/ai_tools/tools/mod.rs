@@ -82,6 +82,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeLogs, cluster::logs_definition),
     (ToolName::KubeTop, cluster::top_definition),
     (ToolName::KubeFieldHistory, cluster::field_history_definition),
+    (ToolName::KubeDiagnose, cluster::diagnose_definition),
 ];
 
 /// What the model is offered for a turn.
@@ -149,6 +150,7 @@ pub fn dispatch(
         ToolCall::KubeLogs(args) => cluster::kube_logs(deps.kube, args),
         ToolCall::KubeTop(args) => cluster::kube_top(deps.kube, args),
         ToolCall::KubeFieldHistory(args) => cluster::kube_field_history(deps.kube, args),
+        ToolCall::KubeDiagnose(args) => cluster::kube_diagnose(deps.kube, args),
     }
 }
 
@@ -161,7 +163,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
-        KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
+        KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -433,6 +435,14 @@ mod definition_tests {
                     name: "api".into(),
                     namespace: Some("orders".into()),
                     paths: Some(vec!["metadata.annotations".into()]),
+                })],
+            ),
+            ToolName::KubeDiagnose => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeDiagnose(KubeDiagnoseArgs {
+                    kind: "Deployment".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
                 })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),

@@ -63,6 +63,8 @@ pub enum ToolName {
     KubeLogs,
     KubeTop,
     KubeFieldHistory,
+    /// A workload's state, pods, events and the telling log in one call (K-4).
+    KubeDiagnose,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -108,6 +110,7 @@ impl ToolName {
         ToolName::KubeLogs,
         ToolName::KubeTop,
         ToolName::KubeFieldHistory,
+        ToolName::KubeDiagnose,
         ToolName::Mcp,
     ];
 
@@ -145,6 +148,7 @@ impl ToolName {
             ToolName::KubeLogs => "kubeLogs",
             ToolName::KubeTop => "kubeTop",
             ToolName::KubeFieldHistory => "kubeFieldHistory",
+            ToolName::KubeDiagnose => "kubeDiagnose",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -247,6 +251,8 @@ impl ToolName {
             | ToolName::KubeTop
             | ToolName::KubeFieldHistory => 2,
             ToolName::KubeLogs => 3,
+            // Five or six reads of the cluster — the rounds it saves.
+            ToolName::KubeDiagnose => 4,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -400,7 +406,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            31,
+            32,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1020,6 +1026,7 @@ pub enum ToolCall {
     KubeLogs(KubeLogsArgs),
     KubeTop(KubeTopArgs),
     KubeFieldHistory(KubeFieldHistoryArgs),
+    KubeDiagnose(KubeDiagnoseArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1056,6 +1063,7 @@ impl ToolCall {
             ToolCall::KubeLogs(_) => ToolName::KubeLogs,
             ToolCall::KubeTop(_) => ToolName::KubeTop,
             ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
+            ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1430,6 +1438,16 @@ pub struct KubeFieldHistoryArgs {
     pub namespace: Option<String>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
     pub paths: Option<Vec<String>>,
+}
+
+/// `kubeDiagnose`: a workload, or one pod.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeDiagnoseArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the

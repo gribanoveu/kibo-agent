@@ -64,6 +64,7 @@ export const LABELS: Record<string, string> = {
   kubeLogs: "Logs",
   kubeTop: "Top",
   kubeFieldHistory: "Field history",
+  kubeDiagnose: "Diagnose",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -573,6 +574,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   "Kube get": (n) => `read ${n === 1 ? "an object" : `${n} objects`}`,
   Events: () => "read events",
   Logs: (n) => `read ${n === 1 ? "a log" : `${n} logs`}`,
+  Diagnose: (n) => `diagnosed ${n === 1 ? "a workload" : `${n} workloads`}`,
 };
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {

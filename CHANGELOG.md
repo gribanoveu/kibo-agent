@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-29 Ask the Kubernetes role why something is failing and it diagnoses it in one step: the workload's status, what is wrong with each pod, the events of it and its ReplicaSets, and the log of the crash from before its last restart — or, for a pending pod, what it asked for and which volume claim waits
+
 - 2026-09-29 A chat keeps the role it started with: the role is picked before the first message and fixed after it
 - 2026-09-29 Chat mode shows the context meter beside the send button, as the agent does: how full the model's window is, what it is spent on, what the last request cost, and "Compact now" — and folds the older part of a long chat on its own before the next message
 - 2026-09-29 The Kubernetes role reads your cluster itself: lists as `kubectl get` tables (with any fields as extra columns), objects as YAML without the noise, events, logs of a pod or of every pod of a Deployment merged by time, CPU and memory, and who set each field — only in the chat's pinned cluster, never changing it, and never seeing a Secret's values

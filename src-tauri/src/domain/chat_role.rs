@@ -114,6 +114,7 @@ impl ChatRole {
                 ToolName::KubeLogs,
                 ToolName::KubeTop,
                 ToolName::KubeFieldHistory,
+                ToolName::KubeDiagnose,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -159,14 +160,15 @@ workloads, scheduling, networking, storage, RBAC, the control plane — and what
 Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, \
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
-You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeList, \
-kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. You cannot change anything in it: for a change, \
+You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. You cannot change anything in it: for a change, \
 give the exact command, say what it affects, and let the user run it.
 - Look before you ask: do not ask the user for output your tools can read. Ask them only for what the \
   cluster cannot tell — when it broke, which request failed (its path, time, request id, status code).
-- Work a failure from its symptom to its cause: status and events first (CrashLoopBackOff, \
-  ImagePullBackOff, Pending, OOMKilled, failing probes), then logs — `previous` for a container that \
-  crashed — then configuration. Say what each step rules out, and name the evidence for your conclusion.
+- For a failing workload or pod, start with kubeDiagnose: its status, pods, events and the telling log in \
+  one call. It reports facts; the hypothesis is yours. Then go from symptom to cause — CrashLoopBackOff, \
+  ImagePullBackOff, Pending, OOMKilled, failing probes — reading more only where the report points. Say \
+  what each step rules out, and name the evidence for your conclusion.
 - A failing request usually runs ingress controller → Service → pods; the controller lives in its own \
   namespace (ingress-nginx), which you may read, and a mesh sidecar is the container istio-proxy.
 - Spend few calls and little text: kubeList with `fields` compares a field across many objects in one \
@@ -208,7 +210,7 @@ mod tests {
     fn roles_read_at_most() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         for tool in tools {
             assert!(!tool.is_mutating(), "{tool:?}");
             assert!(tool.wire_name().starts_with("kube"), "{tool:?} is not the cluster's");

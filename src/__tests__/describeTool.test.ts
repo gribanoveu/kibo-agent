@@ -498,6 +498,10 @@ describe("the Kubernetes role's reads", () => {
     expect(describeRun([tool({ name: "kubeGet" }), tool({ name: "kubeGet" }), tool({ name: "kubeEvents" })])).toBe(
       "Read 2 objects, read events",
     );
+    const diagnosed = describeTool(
+      tool({ name: "kubeDiagnose", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "2 pods, 1 with problems" } }),
+    );
+    expect(diagnosed).toMatchObject({ name: "Diagnose", arg: "Deployment api", meta: "2 pods, 1 with problems" });
   });
 });
 

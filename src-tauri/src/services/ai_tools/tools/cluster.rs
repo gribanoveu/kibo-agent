@@ -11,7 +11,7 @@ use crate::domain::kube::{resolve_kind, KubeKind, ListQuery, LogQuery, PinnedClu
 use crate::domain::kube_view::{self, cap, FieldPath, PodLog};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
-    KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs, ToolError, ToolResult,
+    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs, ToolError, ToolResult,
 };
 
 /// A page of a list when the model asks for none; the most it may ask for.
@@ -24,6 +24,10 @@ const LOG_GREP_WINDOW: i64 = 5_000;
 /// Pods one `kubeLogs` reads; a selector matching more says how many it left.
 const LOG_PODS: usize = 10;
 const EVENT_ROWS: usize = 100;
+/// `kubeDiagnose`'s share of each: a report, not every row there is.
+const DIAGNOSE_PODS: usize = 10;
+const DIAGNOSE_EVENTS: usize = 30;
+const DIAGNOSE_LOG_TAIL: usize = 40;
 
 fn cluster(kube: Option<PinnedCluster>) -> Result<PinnedCluster, ToolError> {
     kube.ok_or(ToolError::NoCluster)
@@ -341,6 +345,127 @@ pub fn kube_field_history(kube: Option<PinnedCluster>, args: &KubeFieldHistoryAr
     result(text, summary, "narrow with paths")
 }
 
+/// A workload's state in one call (`docs/21-kubernetes-mode.md`, K-4): its
+/// own status, its pods and what is wrong with each, the events of it, its
+/// ReplicaSets and pods, and the log of the container that explains it — the
+/// crash before the last restart where there was one. Facts only; and what
+/// the cluster no longer shows, said. Only the object itself must be read:
+/// events or a log the identity may not read are named, not fatal.
+pub fn kube_diagnose(kube: Option<PinnedCluster>, args: &KubeDiagnoseArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    let kind = kind(&cluster, &args.kind)?;
+    let namespace = namespace("kubeDiagnose", args.namespace.as_deref(), &cluster, false)?.unwrap_or_default();
+    let owner = cluster.api.get(&kind, &namespace, &args.name)?;
+    let now = Utc::now();
+    let list = |kind: &KubeKind, selector: &str| -> Result<Vec<Value>, ToolError> {
+        let query = ListQuery { namespace: Some(namespace.clone()), label_selector: Some(selector.to_string()), ..Default::default() };
+        Ok(cluster.api.list(kind, &query)?.items)
+    };
+    let name_of = |object: &Value| object.pointer("/metadata/name").and_then(Value::as_str).unwrap_or_default().to_string();
+
+    let mut out = vec![format!("{}/{} in namespace {namespace}", kind.kind, args.name)];
+    let mut involved = vec![args.name.clone()];
+    let pods = if kind.kind == "Pod" {
+        vec![owner.clone()]
+    } else {
+        out.extend(kube_view::owner_status(&kind.kind, &owner));
+        let selector = selector_of(&owner).ok_or_else(|| {
+            invalid("kubeDiagnose", format!("{}/{} has no pods of its own — diagnose what it runs: a CronJob's latest Job, a Service's Deployment", kind.kind, args.name))
+        })?;
+        // A Deployment's ReplicaSets carry what stopped pods being made: a
+        // quota, an admission webhook (FailedCreate).
+        if kind.kind == "Deployment" {
+            let sets = KubeKind { group: "apps".into(), version: "v1".into(), kind: "ReplicaSet".into(), plural: "replicasets".into(), namespaced: true };
+            involved.extend(list(&sets, &selector).unwrap_or_default().iter().map(name_of));
+        }
+        list(&KubeKind::core("Pod", "pods"), &selector)?
+    };
+    involved.extend(pods.iter().map(name_of));
+
+    let troubled: Vec<(&Value, Vec<String>)> =
+        pods.iter().map(|pod| (pod, kube_view::pod_findings(pod, now))).filter(|(_, found)| !found.is_empty()).collect();
+    out.push(String::new());
+    if pods.is_empty() {
+        out.push("No pods: none were made, or they are gone — the events below say which.".to_string());
+    } else {
+        out.push(format!("Pods: {}, {} with problems.", pods.len(), troubled.len()));
+        let shown: Vec<Value> = if troubled.is_empty() {
+            pods.iter().take(DIAGNOSE_PODS).cloned().collect()
+        } else {
+            troubled.iter().take(DIAGNOSE_PODS).map(|(pod, _)| (*pod).clone()).collect()
+        };
+        out.push(kube_view::table("Pod", &shown, false, &[], now));
+        for (pod, found) in troubled.iter().take(DIAGNOSE_PODS) {
+            let name = name_of(pod);
+            out.extend(found.iter().map(|fact| format!("{name}: {fact}")));
+            if pod.pointer("/status/phase").and_then(Value::as_str) == Some("Pending") {
+                out.push(format!("{name}: {}", kube_view::requests_of(pod)));
+                if let Some(selector) = pod.pointer("/spec/nodeSelector").filter(|s| s.as_object().is_some_and(|m| !m.is_empty())) {
+                    out.push(format!("{name}: nodeSelector {selector}"));
+                }
+                for claim in kube_view::claims_of(pod) {
+                    let claims = KubeKind::core("PersistentVolumeClaim", "persistentvolumeclaims");
+                    let phase = match cluster.api.get(&claims, &namespace, &claim) {
+                        Ok(pvc) => pvc.pointer("/status/phase").and_then(Value::as_str).unwrap_or("unknown").to_string(),
+                        Err(e) => format!("not read: {e}"),
+                    };
+                    if phase != "Bound" {
+                        out.push(format!("{name}: claim {claim} is {phase}"));
+                    }
+                }
+            }
+        }
+    }
+
+    out.push(String::new());
+    let events = KubeKind::core("Event", "events");
+    let query = ListQuery { namespace: Some(namespace.clone()), limit: Some(LIST_MOST), ..Default::default() };
+    match cluster.api.list(&events, &query) {
+        Ok(page) => {
+            let about: Vec<Value> = page
+                .items
+                .into_iter()
+                .filter(|e| e.pointer("/involvedObject/name").and_then(Value::as_str).is_some_and(|n| involved.iter().any(|i| i == n)))
+                .collect();
+            if about.is_empty() {
+                out.push("No events of it or its pods.".to_string());
+            } else {
+                out.push(format!("Events of it and its pods:\n{}", kube_view::events(&about, now, DIAGNOSE_EVENTS)));
+            }
+        }
+        Err(e) => out.push(format!("Events not read: {e}")),
+    }
+
+    let telling = troubled.iter().find_map(|(pod, _)| kube_view::problem_container(pod).map(|c| (*pod, c)));
+    if let Some((pod, (container, previous))) = telling {
+        let name = name_of(pod);
+        let query = LogQuery { container: Some(container.clone()), previous, tail: Some(DIAGNOSE_LOG_TAIL as i64), since_seconds: None };
+        let before = if previous { ", before its last restart" } else { "" };
+        out.push(String::new());
+        match cluster.api.logs(&namespace, &name, &query) {
+            Ok(text) => {
+                let lines = kube_view::merge_logs(&[PodLog { pod: name.clone(), text }], DIAGNOSE_LOG_TAIL, None, false);
+                let body = if lines.is_empty() { " empty.".to_string() } else { format!(" last {} lines, UTC:\n{}", lines.len(), lines.join("\n")) };
+                out.push(format!("Log of {name}, container {container}{before}:{body}"));
+            }
+            Err(e) => out.push(format!("Log of {name}, container {container}{before}, not read: {e}")),
+        }
+        let more = troubled.iter().filter(|(p, _)| kube_view::problem_container(p).is_some()).count() - 1;
+        if more > 0 {
+            out.push(format!("{more} more pods have a container in trouble — kubeLogs reads them."));
+        }
+    }
+
+    out.push(String::new());
+    out.push(
+        "Not visible here: events older than about an hour, logs from before the last restart, past CPU and memory. \
+         A cause outside the cluster — a database, an external API — shows only as connection errors in the logs."
+            .to_string(),
+    );
+    let summary = format!("{} pods, {} with problems", pods.len(), troubled.len());
+    result(out.join("\n"), summary, "diagnose one pod, or read events and logs on their own")
+}
+
 /// How every Kubernetes tool is told where it reads.
 const WHERE: &str = "Reads the cluster, context and namespace this chat is pinned to — you cannot pick another cluster.";
 
@@ -481,6 +606,28 @@ pub(super) fn field_history_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn diagnose_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeDiagnose".to_string(),
+        description: format!(
+            "Why a workload or pod is unhealthy, in one call instead of five: the object's status and conditions, its \
+             pods and what is wrong with each (waiting reasons, restarts, how the last run ended, why one is not \
+             scheduled — requests, nodeSelector, unbound claims), the events of it, its ReplicaSets and pods, and the \
+             log of the container in trouble — from before its last restart when it crashed. Facts, not a verdict: the \
+             hypothesis is yours. For a Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Pod. {WHERE}"
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "description": "Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Pod." },
+                "name": { "type": "string" },
+                "namespace": { "type": "string", "description": "Default: the chat's namespace." }
+            },
+            "required": ["kind", "name"]
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,7 +709,8 @@ mod tests {
         }
 
         fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError> {
-            self.asked.lock().unwrap().push(format!("logs {namespace} {pod} {:?} {:?}", query.container, query.tail));
+            let previous = if query.previous { " previous" } else { "" };
+            self.asked.lock().unwrap().push(format!("logs {namespace} {pod} {:?} {:?}{previous}", query.container, query.tail));
             let (_, text) = self.logs.iter().find(|(p, _)| p == pod).expect("a log for the pod");
             text.clone().map_err(KubeError::Cluster)
         }
@@ -669,6 +817,80 @@ mod tests {
         assert!(fake.asked().iter().any(|a| a.ends_with(&format!("Some({LOG_GREP_WINDOW})"))), "{:?}", fake.asked());
         let neither = kube_logs(pinned(&fake), &KubeLogsArgs::default());
         assert!(matches!(neither, Err(ToolError::InvalidArguments { .. })));
+    }
+
+    /// The crash: a Deployment one of whose pods restarts. Its status, the
+    /// pod's finding, the ReplicaSet's event and the crash's own log — and
+    /// nothing about the healthy pod or a neighbour's events.
+    #[test]
+    fn diagnose_puts_status_pods_events_and_the_crash_log_in_one_report() {
+        let deployment = json!({"metadata": {"name": "api", "namespace": "orders"},
+            "spec": {"replicas": 2, "selector": {"matchLabels": {"app": "api"}}},
+            "status": {"readyReplicas": 1, "conditions": [{"type": "Available", "status": "False", "reason": "MinimumReplicasUnavailable"}]}});
+        let mut crashing = pod("api-a", "api", &["app"]);
+        crashing["status"] = json!({"phase": "Running", "containerStatuses": [{"name": "app", "ready": false, "restartCount": 4,
+            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+            "lastState": {"terminated": {"reason": "Error", "exitCode": 1, "finishedAt": "2026-09-29T10:00:00Z"}}}]});
+        let mut healthy = pod("api-b", "api", &["app"]);
+        healthy["status"] = json!({"phase": "Running", "containerStatuses": [{"name": "app", "ready": true, "restartCount": 0, "state": {"running": {}}}]});
+        let event = |kind: &str, name: &str, reason: &str| json!({"metadata": {"namespace": "orders"},
+            "involvedObject": {"kind": kind, "name": name}, "type": "Warning", "reason": reason, "message": reason, "count": 1,
+            "lastTimestamp": "2026-09-29T10:00:00Z"});
+        let fake = Fake::with(&[("apps", "Deployment", "deployments"), ("", "Pod", "pods")])
+            .object("deployments", deployment)
+            .object("replicasets", json!({"metadata": {"name": "api-7d9", "namespace": "orders", "labels": {"app": "api"}}}))
+            .object("pods", crashing)
+            .object("pods", healthy)
+            .object("events", event("ReplicaSet", "api-7d9", "FailedCreate"))
+            .object("events", event("Pod", "api-a", "BackOff"))
+            .object("events", event("Pod", "web-a", "Unrelated"))
+            .log("api-a", Ok("2026-09-29T09:59:59Z panic: config key DB_URL missing\n"));
+        let args = KubeDiagnoseArgs { kind: "deploy".into(), name: "api".into(), namespace: None };
+        let shown = text(kube_diagnose(pinned(&fake), &args));
+        for said in [
+            "Deployment/api in namespace orders",
+            "Replicas: 2 desired, 1 ready",
+            "Available=False (MinimumReplicasUnavailable)",
+            "Pods: 2, 1 with problems.",
+            "api-a: container app: waiting CrashLoopBackOff; 4 restarts; last ended Error, exit code 1",
+            "FailedCreate",
+            "BackOff",
+            "Log of api-a, container app, before its last restart: last 1 lines, UTC:\n09:59:59 panic: config key DB_URL missing",
+            "Not visible here: events older than about an hour",
+        ] {
+            assert!(shown.contains(said), "{said:?} not in:\n{shown}");
+        }
+        assert!(!shown.contains("Unrelated") && !shown.contains("api-b "), "{shown}");
+        assert!(fake.asked().contains(&"logs orders api-a Some(\"app\") Some(40) previous".to_string()), "{:?}", fake.asked());
+    }
+
+    /// Pending: no container to read, so the report is why it was not placed.
+    #[test]
+    fn diagnose_of_a_pending_pod_says_what_it_asked_for_and_which_claim_waits() {
+        let mut pending = pod("db-0", "db", &["postgres"]);
+        pending["spec"]["containers"][0]["resources"] = json!({"requests": {"cpu": "4", "memory": "8Gi"}});
+        pending["spec"]["volumes"] = json!([{"name": "data", "persistentVolumeClaim": {"claimName": "data-db-0"}},
+                                            {"name": "logs", "persistentVolumeClaim": {"claimName": "logs-db-0"}}]);
+        pending["status"] = json!({"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False",
+            "reason": "Unschedulable", "message": "0/3 nodes are available: 3 Insufficient cpu."}]});
+        let fake = Fake::with(&[("", "Pod", "pods")])
+            .object("pods", pending)
+            .object("persistentvolumeclaims", json!({"metadata": {"name": "data-db-0", "namespace": "orders"}, "status": {"phase": "Pending"}}))
+            .object("persistentvolumeclaims", json!({"metadata": {"name": "logs-db-0", "namespace": "orders"}, "status": {"phase": "Bound"}}));
+        let shown = text(kube_diagnose(pinned(&fake), &KubeDiagnoseArgs { kind: "pod".into(), name: "db-0".into(), namespace: None }));
+        for said in ["3 Insufficient cpu", "db-0: requests cpu 4000m, memory 8192Mi", "db-0: claim data-db-0 is Pending", "No events of it or its pods."] {
+            assert!(shown.contains(said), "{said:?} not in:\n{shown}");
+        }
+        assert!(!shown.contains("Log of"), "no container ran: {shown}");
+        assert!(!shown.contains("logs-db-0"), "a bound claim is no finding: {shown}");
+    }
+
+    #[test]
+    fn diagnose_of_what_runs_no_pods_itself_says_where_to_look() {
+        let fake = Fake::with(&[("batch", "CronJob", "cronjobs")])
+            .object("cronjobs", json!({"metadata": {"name": "nightly", "namespace": "orders"}, "spec": {"schedule": "0 3 * * *"}}));
+        let refused = kube_diagnose(pinned(&fake), &KubeDiagnoseArgs { kind: "cronjob".into(), name: "nightly".into(), namespace: None });
+        assert!(matches!(&refused, Err(ToolError::InvalidArguments { reason, .. }) if reason.contains("latest Job")), "{refused:?}");
     }
 
     #[test]

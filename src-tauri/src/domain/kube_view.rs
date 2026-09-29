@@ -598,6 +598,159 @@ pub fn top(items: &[Value], all_namespaces: bool) -> String {
     aligned(&rows)
 }
 
+/// What a workload's own status says, `kubeDiagnose`'s first lines: its
+/// replicas as the controller counts them, a spec it has not acted on yet, a
+/// rollout paused or half done, and every condition with its reason.
+pub fn owner_status(kind: &str, owner: &Value) -> Vec<String> {
+    let n = |path: &str| int_at(owner, path);
+    let mut lines = match kind {
+        "Deployment" => vec![format!(
+            "Replicas: {} desired, {} ready, {} up to date, {} available, {} unavailable.",
+            n("spec.replicas"),
+            n("status.readyReplicas"),
+            n("status.updatedReplicas"),
+            n("status.availableReplicas"),
+            n("status.unavailableReplicas")
+        )],
+        "StatefulSet" => vec![format!(
+            "Replicas: {} desired, {} ready, {} on the new revision.",
+            n("spec.replicas"),
+            n("status.readyReplicas"),
+            n("status.updatedReplicas")
+        )],
+        "DaemonSet" => vec![format!(
+            "Pods: {} to run, {} ready, {} unavailable, {} on nodes they should not be on.",
+            n("status.desiredNumberScheduled"),
+            n("status.numberReady"),
+            n("status.numberUnavailable"),
+            n("status.numberMisscheduled")
+        )],
+        "Job" => vec![format!(
+            "Pods: {} running, {} succeeded, {} failed; backoffLimit {}.",
+            n("status.active"),
+            n("status.succeeded"),
+            n("status.failed"),
+            at(owner, "spec.backoffLimit").and_then(Value::as_i64).unwrap_or(6)
+        )],
+        "ReplicaSet" => vec![format!("Replicas: {} desired, {} ready.", n("spec.replicas"), n("status.readyReplicas"))],
+        _ => Vec::new(),
+    };
+    let (generation, observed) = (n("metadata.generation"), n("status.observedGeneration"));
+    if observed > 0 && generation > observed {
+        lines.push(format!("The controller has not acted on the latest spec yet (generation {generation}, observed {observed})."));
+    }
+    let revision = (at(owner, "status.currentRevision"), at(owner, "status.updateRevision"));
+    if let (Some(current), Some(update)) = revision {
+        if current != update {
+            lines.push(format!("A rollout is in progress: revision {} → {}.", cell(current), cell(update)));
+        }
+    }
+    if at(owner, "spec.paused") == Some(&Value::Bool(true)) {
+        lines.push("The rollout is paused.".to_string());
+    }
+    if at(owner, "spec.suspend") == Some(&Value::Bool(true)) {
+        lines.push("It is suspended.".to_string());
+    }
+    for condition in at(owner, "status.conditions").and_then(Value::as_array).into_iter().flatten() {
+        lines.push(condition_line(condition));
+    }
+    lines
+}
+
+fn condition_line(condition: &Value) -> String {
+    let mut line = format!("{}={}", text_at(condition, "type"), text_at(condition, "status"));
+    if let Some(reason) = condition.get("reason").and_then(Value::as_str) {
+        line.push_str(&format!(" ({reason})"));
+    }
+    if let Some(message) = condition.get("message").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+        line.push_str(&format!(": {}", clip(message.trim(), CELL_CAP)));
+    }
+    line
+}
+
+/// What is wrong with a pod, as the cluster states it — one line per fact,
+/// none for a pod that is running, ready and has never restarted.
+pub fn pod_findings(pod: &Value, now: DateTime<Utc>) -> Vec<String> {
+    let mut found = Vec::new();
+    if let Some(reason) = at(pod, "status.reason").and_then(Value::as_str) {
+        found.push(format!("{reason}: {}", clip(text_at(pod, "status.message").trim(), CELL_CAP)));
+    }
+    for condition in at(pod, "status.conditions").and_then(Value::as_array).into_iter().flatten() {
+        if condition["type"] == "PodScheduled" && condition["status"] != "True" {
+            found.push(format!("not scheduled — {}", condition_line(condition)));
+        }
+    }
+    for (label, field) in [("init container", "status.initContainerStatuses"), ("container", "status.containerStatuses")] {
+        for status in at(pod, field).and_then(Value::as_array).into_iter().flatten() {
+            let mut facts = Vec::new();
+            if let Some(waiting) = status.pointer("/state/waiting") {
+                facts.push(format!("waiting {}", reason_and_message(waiting)));
+            }
+            if let Some(ended) = status.pointer("/state/terminated") {
+                let failed = ended["reason"] != "Completed" || int_at(ended, "exitCode") != 0;
+                if failed {
+                    facts.push(format!("ended {}, exit code {}", reason_and_message(ended), int_at(ended, "exitCode")));
+                }
+            }
+            if label == "container" && status.pointer("/state/running").is_some() && status["ready"] != true {
+                facts.push("running but not ready".to_string());
+            }
+            let restarts = int_at(status, "restartCount");
+            if restarts > 0 {
+                facts.push(format!("{restarts} restart{}", if restarts == 1 { "" } else { "s" }));
+            }
+            if let Some(last) = status.pointer("/lastState/terminated") {
+                let when = age(last.get("finishedAt").and_then(Value::as_str), now);
+                facts.push(format!("last ended {}, exit code {}, {when} ago", reason_and_message(last), int_at(last, "exitCode")));
+            }
+            if !facts.is_empty() {
+                found.push(format!("{label} {}: {}", text_at(status, "name"), facts.join("; ")));
+            }
+        }
+    }
+    found
+}
+
+fn reason_and_message(state: &Value) -> String {
+    let reason = text_at(state, "reason");
+    match state.get("message").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
+        Some(message) => format!("{reason} ({})", clip(message, CELL_CAP)),
+        None => reason,
+    }
+}
+
+/// The container whose log explains the pod, and whether that is its log
+/// from before the last restart: an init container the pod is stuck on
+/// first, then one that restarts, waits or is not ready.
+pub fn problem_container(pod: &Value) -> Option<(String, bool)> {
+    ["status.initContainerStatuses", "status.containerStatuses"].iter().find_map(|field| {
+        at(pod, field)?.as_array()?.iter().find_map(|status| {
+            let restarted = int_at(status, "restartCount") > 0 || status.pointer("/lastState/terminated").is_some();
+            let init = field.contains("init");
+            let stuck = status.pointer("/state/waiting").is_some()
+                || (init && status.pointer("/state/terminated/exitCode").and_then(Value::as_i64).is_some_and(|c| c != 0))
+                || (!init && status["ready"] != true);
+            (restarted || stuck).then(|| (text_at(status, "name"), status.pointer("/lastState/terminated").is_some()))
+        })
+    })
+}
+
+/// A pod's containers' requests summed — what the scheduler had to find room for.
+pub fn requests_of(pod: &Value) -> String {
+    let containers = at(pod, "spec.containers").and_then(Value::as_array).cloned().unwrap_or_default();
+    let (cpu, memory) = containers.iter().fold((0.0, 0.0), |(cpu, memory), c| {
+        let request = |what: &str| c.pointer(&format!("/resources/requests/{what}")).and_then(Value::as_str).map(str::to_string);
+        (cpu + request("cpu").map_or(0.0, |q| cpu_millis(&q)), memory + request("memory").map_or(0.0, |q| memory_mib(&q)))
+    });
+    format!("requests cpu {cpu:.0}m, memory {memory:.0}Mi")
+}
+
+/// The claims a pod mounts, by name.
+pub fn claims_of(pod: &Value) -> Vec<String> {
+    let volumes = at(pod, "spec.volumes").and_then(Value::as_array).cloned().unwrap_or_default();
+    volumes.iter().filter_map(|v| v.pointer("/persistentVolumeClaim/claimName")?.as_str().map(str::to_string)).collect()
+}
+
 /// Who set which field of `object`, from its `managedFields`: one row per
 /// field and manager, cut to the `paths` asked about when there are any.
 pub fn field_history(object: &Value, paths: &[String]) -> Option<String> {
@@ -884,5 +1037,80 @@ mod tests {
             "fieldsV1": {"f:spec": {"f:ports": {"k:{\"port\":80}": {".": {}}}}}}]}});
         assert!(field_history(&whole, &[]).unwrap().contains("spec.ports[port=80]  helm"), "an item owned whole is lost");
         assert_eq!(field_history(&json!({"metadata": {}}), &[]), None);
+    }
+
+    #[test]
+    fn a_workloads_status_says_its_counts_lag_rollout_and_conditions() {
+        let deployment = json!({"metadata": {"generation": 5},
+            "spec": {"replicas": 3, "paused": true},
+            "status": {"observedGeneration": 4, "readyReplicas": 1, "updatedReplicas": 2, "availableReplicas": 1, "unavailableReplicas": 2,
+                       "conditions": [{"type": "Available", "status": "False", "reason": "MinimumReplicasUnavailable", "message": "Deployment does not have minimum availability."}]}});
+        assert_eq!(
+            owner_status("Deployment", &deployment),
+            [
+                "Replicas: 3 desired, 1 ready, 2 up to date, 1 available, 2 unavailable.",
+                "The controller has not acted on the latest spec yet (generation 5, observed 4).",
+                "The rollout is paused.",
+                "Available=False (MinimumReplicasUnavailable): Deployment does not have minimum availability.",
+            ]
+        );
+        let sts = json!({"spec": {"replicas": 2}, "status": {"readyReplicas": 2, "updatedReplicas": 1, "currentRevision": "web-1", "updateRevision": "web-2"}});
+        assert_eq!(owner_status("StatefulSet", &sts)[1], "A rollout is in progress: revision web-1 → web-2.");
+        let job = json!({"spec": {"suspend": true}, "status": {"failed": 3}});
+        assert_eq!(owner_status("Job", &job), ["Pods: 0 running, 0 succeeded, 3 failed; backoffLimit 6.", "It is suspended."]);
+    }
+
+    #[test]
+    fn a_pods_findings_are_its_stuck_containers_restarts_and_scheduling() {
+        let crashing = json!({"status": {"containerStatuses": [
+            {"name": "app", "ready": false, "restartCount": 7,
+             "state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 5m0s"}},
+             "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137, "finishedAt": "2026-09-29T11:58:00Z"}}},
+            {"name": "istio-proxy", "ready": true, "restartCount": 0, "state": {"running": {}}}]}});
+        assert_eq!(
+            pod_findings(&crashing, now()),
+            ["container app: waiting CrashLoopBackOff (back-off 5m0s); 7 restarts; last ended OOMKilled, exit code 137, 2m ago"]
+        );
+        assert_eq!(problem_container(&crashing), Some(("app".to_string(), true)));
+
+        let unscheduled = json!({"status": {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False",
+            "reason": "Unschedulable", "message": "0/3 nodes are available: 3 Insufficient cpu."}]}});
+        assert_eq!(pod_findings(&unscheduled, now()), ["not scheduled — PodScheduled=False (Unschedulable): 0/3 nodes are available: 3 Insufficient cpu."]);
+        assert_eq!(problem_container(&unscheduled), None, "no container to read");
+
+        let evicted = json!({"status": {"reason": "Evicted", "message": "The node was low on resource: memory."}});
+        assert_eq!(pod_findings(&evicted, now()), ["Evicted: The node was low on resource: memory."]);
+
+        let unready = json!({"status": {
+            "containerStatuses": [{"name": "app", "ready": false, "restartCount": 1, "state": {"running": {}}}],
+            "initContainerStatuses": [{"name": "migrate", "ready": false, "restartCount": 0, "state": {"running": {}}}]}});
+        assert_eq!(pod_findings(&unready, now()), ["container app: running but not ready; 1 restart"], "a running init container is at work, not unready");
+        let unready = json!({"status": {"containerStatuses": [{"name": "app", "ready": false, "restartCount": 0, "state": {"running": {}}}]}});
+        assert_eq!(problem_container(&unready), Some(("app".to_string(), false)), "its current log, not a previous one");
+
+        let healthy = json!({"status": {"phase": "Running", "containerStatuses": [
+            {"name": "app", "ready": true, "restartCount": 0, "state": {"running": {}}}],
+            "initContainerStatuses": [{"name": "migrate", "ready": false, "restartCount": 0, "state": {"terminated": {"reason": "Completed", "exitCode": 0}}}]}});
+        assert!(pod_findings(&healthy, now()).is_empty(), "{:?}", pod_findings(&healthy, now()));
+        assert_eq!(problem_container(&healthy), None);
+    }
+
+    /// A pod stuck in `Init:` is stuck on its init container: that is the log.
+    #[test]
+    fn an_init_container_that_fails_is_the_one_to_read() {
+        let pod = json!({"status": {
+            "initContainerStatuses": [{"name": "migrate", "restartCount": 0, "state": {"terminated": {"reason": "Error", "exitCode": 1}}}],
+            "containerStatuses": [{"name": "app", "ready": false, "restartCount": 0, "state": {"waiting": {"reason": "PodInitializing"}}}]}});
+        assert_eq!(problem_container(&pod), Some(("migrate".to_string(), false)));
+        assert_eq!(pod_findings(&pod, now())[0], "init container migrate: ended Error, exit code 1");
+    }
+
+    #[test]
+    fn a_pending_pods_requests_and_claims_are_summed_and_named() {
+        let pod = json!({"spec": {
+            "containers": [{"resources": {"requests": {"cpu": "1500m", "memory": "1Gi"}}}, {"resources": {"requests": {"cpu": "1"}}}, {}],
+            "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data-web-0"}}, {"name": "tmp", "emptyDir": {}}]}});
+        assert_eq!(requests_of(&pod), "requests cpu 2500m, memory 1024Mi");
+        assert_eq!(claims_of(&pod), ["data-web-0"]);
     }
 }
