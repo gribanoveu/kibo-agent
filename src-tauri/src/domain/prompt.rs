@@ -19,7 +19,8 @@
 
 use std::path::Path;
 
-use crate::domain::chat_role::{ChatRole, KubeSetup};
+use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubeSetup;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmMessage;
 use crate::domain::project_rules::RuleFile;

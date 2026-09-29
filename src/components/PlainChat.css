@@ -156,6 +156,21 @@
 .plain-tab .chip-label {
   display: flex;
 }
+/* Role, kubeconfig, context, namespace: in a narrow window each gives up width
+   and ellipsises, rather than the strip growing a second row. */
+.plain-tab > .dropdown-wrap {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.plain-tab .chip {
+  max-width: 100%;
+}
+.plain-tab .plain-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
 .plain-composer {

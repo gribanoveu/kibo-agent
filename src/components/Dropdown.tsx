@@ -30,10 +30,15 @@ type Props = {
   heading?: string;
   /** Called as the menu opens — for options that are fetched only when wanted. */
   onOpen?: () => void;
+  /** A box above the options for a value not among them — a namespace the
+      user may work in but not list. Enter picks what was typed. */
+  custom?: { placeholder: string; onEnter: (value: string) => void };
+  /** A line under the heading about the options themselves — why some are missing. */
+  note?: string;
 };
 
 /** Trigger + role="listbox" menu — the app draws its own dropdowns, never <select>. */
-export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen }: Props) {
+export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen, custom, note }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
 
@@ -72,7 +77,25 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
       {open && (
         <div className={`dropdown-menu${below ? " below" : ""}${right ? " right" : ""}`} role="listbox" aria-label={heading}>
           {heading && <div className="dropdown-heading">{heading}</div>}
-          {options.length === 0 && (
+          {custom && (
+            <input
+              className="dropdown-custom"
+              type="text"
+              autoFocus
+              placeholder={custom.placeholder}
+              aria-label={custom.placeholder}
+              // A form field's Enter, as in every settings form here — not a shortcut.
+              onKeyDown={(e) => {
+                const typed = e.currentTarget.value.trim();
+                if (e.key !== "Enter" || !typed) return;
+                e.preventDefault();
+                custom.onEnter(typed);
+                setOpen(false);
+              }}
+            />
+          )}
+          {note && <div className="dropdown-note">{note}</div>}
+          {options.length === 0 && !custom && (
             <div className="dropdown-empty">{emptyLabel ?? "Nothing here yet"}</div>
           )}
           {options.map((opt) => {

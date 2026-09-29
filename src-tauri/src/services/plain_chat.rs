@@ -6,7 +6,8 @@
 
 use std::time::Duration;
 
-use crate::domain::chat_role::{ChatRole, KubeSetup};
+use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubeSetup;
 use crate::domain::command_exec::Shell;
 use crate::domain::hooks::Hooks;
 use crate::domain::llm::LlmMessage;

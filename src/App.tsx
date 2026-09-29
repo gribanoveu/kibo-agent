@@ -100,7 +100,9 @@ export default function App() {
   // arriving while Agent is shown.
   const [mode, setMode] = useStoredState<AppMode>("atlas-mode", "agent", isAppMode);
   const agentMode = mode === "agent";
-  const plain = usePlainChat();
+  // Before Chat mode: a new chat starts at the kubeconfig picked last.
+  const kube = useKubeconfigs();
+  const plain = usePlainChat(kube.active?.name ?? null);
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
   const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
@@ -216,7 +218,6 @@ export default function App() {
   const skillSources = useSkills(settingsOpen, workspace.path);
   const commandFiles = useCommandFiles(workspace.path);
   const llm = useLlmSettings();
-  const kube = useKubeconfigs();
   const theme = useTheme();
   const fontSize = useChatFontSize();
   const panels = usePanelSizes({

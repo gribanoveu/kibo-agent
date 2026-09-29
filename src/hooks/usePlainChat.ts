@@ -30,6 +30,7 @@ import {
   type Block,
   type TurnState,
 } from "../lib/chatTurnReducer";
+import type { KubePin } from "../lib/kube";
 import { useStoredState } from "./useStoredState";
 
 const isId = (value: unknown): value is string | null => value === null || typeof value === "string";
@@ -79,7 +80,7 @@ export function chatBlocks(saved: unknown, messages: LlmMessage[]): Block[] {
  * the agent, the window keeps both halves: the blocks a reader sees and the
  * messages the model is sent again.
  */
-export function usePlainChat() {
+export function usePlainChat(lastKubeconfig: string | null = null) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   // Which chat is open, so the next launch opens it again. Null until the first message is saved.
   const [chatId, setChatId] = useStoredState<string | null>("plain-chat-open", null, isId);
@@ -87,6 +88,11 @@ export function usePlainChat() {
   const history = useRef<LlmMessage[]>([]);
   const [roles, setRoles] = useState<ChatRoleView[]>([]);
   const [role, setRole] = useState<ChatRoleId>("assistant");
+  // The cluster this chat is pinned to; until it is pinned, the kubeconfig
+  // picked last, at its current context and that context's namespace.
+  const [pinned, setPinned] = useState<KubePin | null>(null);
+  const kube: KubePin | null =
+    pinned ?? (lastKubeconfig ? { kubeconfig: lastKubeconfig, context: null, namespace: null } : null);
   const [error, setError] = useState<string | null>(null);
   // The running turn's id on the one event channel, and its listener.
   const turnId = useRef("");
@@ -103,7 +109,7 @@ export function usePlainChat() {
 
   useEffect(() => () => subscribed.current?.(), []);
 
-  const show = (id: string | null, blocks: Block[], messages: LlmMessage[], shownRole: ChatRoleId) => {
+  const show = (id: string | null, blocks: Block[], messages: LlmMessage[], shownRole: ChatRoleId, pin: KubePin | null) => {
     subscribed.current?.();
     subscribed.current = null;
     history.current = messages;
@@ -111,6 +117,7 @@ export function usePlainChat() {
     setChatId(id);
     setTurn(restoredTurn(blocks));
     setRole(shownRole);
+    setPinned(pin);
     setError(null);
   };
 
@@ -119,10 +126,10 @@ export function usePlainChat() {
     if (busy) return false;
     try {
       const record = await loadChat(id);
-      show(id, chatBlocks(record.blocks, record.messages), record.messages, record.role ?? "assistant");
+      show(id, chatBlocks(record.blocks, record.messages), record.messages, record.role ?? "assistant", record.kube ?? null);
     } catch (e) {
       // A chat deleted since it was left open is simply not reopened.
-      show(null, [], [], "assistant");
+      show(null, [], [], "assistant", null);
       if (id !== chatId) setError(String(e));
     }
     return true;
@@ -134,11 +141,18 @@ export function usePlainChat() {
     if (chatId) void open(chatId);
   }, []);
 
-  /** Starts over, keeping the role; `false` while a turn is under way. */
+  /** Starts over, keeping the role and the cluster; `false` while a turn is under way. */
   const newChat = () => {
     if (busy) return false;
-    show(null, [], [], role);
+    show(null, [], [], role, pinned);
     return true;
+  };
+
+  /** Pins the chat to a cluster — kept with a chat already saved, at once. */
+  const setPin = (next: KubePin) => {
+    setPinned(next);
+    if (chatId === null || busy || turn.blocks.length === 0) return;
+    plainChatSave(chatId, role, next, history.current, turn.blocks).catch((e) => setError(String(e)));
   };
 
   // Saved once the turn has come to rest, from the render that has its last
@@ -147,10 +161,10 @@ export function usePlainChat() {
     if (!unsaved.current || chatId === null) return;
     if (turn.status !== "done" && turn.status !== "cancelled") return;
     unsaved.current = false;
-    plainChatSave(chatId, role, history.current, turn.blocks)
+    plainChatSave(chatId, role, kube, history.current, turn.blocks)
       .then(() => refresh())
       .catch((e) => setError(String(e)));
-  }, [turn.status, turn.blocks, chatId, role, refresh]);
+  }, [turn.status, turn.blocks, chatId, role, kube, refresh]);
 
   const finish = (outcome: Outcome) => {
     setTurn((state) => acceptOutcome(state, outcome));
@@ -177,15 +191,17 @@ export function usePlainChat() {
     setChatId(id);
     setError(null);
     setTurn(asked);
+    // Pinned from its first message: the default it started with is its own now.
+    setPinned(kube);
     turnId.current = crypto.randomUUID();
     try {
       subscribed.current?.();
       subscribed.current = await onTurnEvent(turnId.current, (event) => setTurn((state) => acceptEvent(state, event)));
       // Saved before the turn: one that fails leaves what the user said to
       // retry, not retype — and the chat is in the sidebar from its first message.
-      await plainChatSave(id, role, history.current, asked.blocks);
+      await plainChatSave(id, role, kube, history.current, asked.blocks);
       void refresh();
-      finish(await plainChatSend(turnId.current, role, history.current));
+      finish(await plainChatSend(turnId.current, role, kube, history.current));
     } catch (e) {
       failed(e);
     }
@@ -198,7 +214,7 @@ export function usePlainChat() {
     setTurn((state) => clearApproval(state));
     try {
       for (const tool of always) await plainChatAlwaysAllow(tool);
-      finish(await plainChatResume(turnId.current, role, checkpoint, decisions));
+      finish(await plainChatResume(turnId.current, role, kube, checkpoint, decisions));
     } catch (e) {
       failed(e);
     }
@@ -227,7 +243,7 @@ export function usePlainChat() {
     void refresh();
   };
 
-  return { chats, chatId, turn, busy, roles, role, setRole, error, send, decide, stop, open, newChat, remove, archive };
+  return { chats, chatId, turn, busy, roles, role, setRole, kube, setPin, error, send, decide, stop, open, newChat, remove, archive };
 }
 
 export type PlainChatState = ReturnType<typeof usePlainChat>;

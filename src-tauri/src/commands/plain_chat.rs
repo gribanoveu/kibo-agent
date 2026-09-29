@@ -7,10 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubePin;
+use crate::infra::kube_client::Clusters;
 use crate::domain::llm::LlmMessage;
 use crate::domain::tool_call_log::ToolCallLogEntry;
 use crate::domain::tools::ApprovalPolicy;
@@ -54,11 +56,12 @@ pub async fn plain_chat_send<R: Runtime>(
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
     role: ChatRole,
+    kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
-    run_turn(app, state, turn_id, role, move |chat| plain_chat::start(chat, messages)).await
+    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
 /// Continues a turn paused on the approval card, with the user's answers. The
@@ -70,11 +73,12 @@ pub async fn plain_chat_resume<R: Runtime>(
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
     role: ChatRole,
+    kube: Option<KubePin>,
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_turn(app, state, turn_id, role, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
+    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
 }
 
 /// "Always allow this tool", from a chat's approval card — for Chat mode's
@@ -91,6 +95,7 @@ async fn run_turn<R, F>(
     state: Arc<PlainChatState>,
     turn_id: String,
     role: ChatRole,
+    kube: Option<KubePin>,
     run: F,
 ) -> Result<ChatStreamOutcome, String>
 where
@@ -98,10 +103,14 @@ where
     F: FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
     let events = chat_event_sink(&app, turn_id);
+    let clusters = app.state::<Arc<Clusters>>().inner().clone();
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        let kube = kubeconfigs::setup().map_err(|e| e.to_string())?;
+        // Asked every turn: a cluster that stopped answering, or a login that
+        // expired, is what the model most needs to know. The client is kept,
+        // so it is two quick requests, not a new login.
+        let kube = kubeconfigs::setup(kube.as_ref(), &clusters).map_err(|e| e.to_string())?;
         let cancelled = || state.cancel.load(Ordering::SeqCst);
         let record = crate::infra::tool_call_log::recorder();
         let log_call = |entry: ToolCallLogEntry| record(&entry);
@@ -133,10 +142,11 @@ pub fn plain_chat_list() -> Result<Vec<ChatSummary>, String> {
 pub fn plain_chat_save(
     id: String,
     role: ChatRole,
+    kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
     blocks: serde_json::Value,
 ) -> Result<ChatSummary, String> {
-    chat_store::save_plain(&id, role, &messages, &blocks).map_err(|e| e.to_string())
+    chat_store::save_plain(&id, role, kube, &messages, &blocks).map_err(|e| e.to_string())
 }
 
 /// Returns at once; the reply stops at its next chunk.

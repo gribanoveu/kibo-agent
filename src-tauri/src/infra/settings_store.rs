@@ -67,6 +67,7 @@ mod tests {
                     path: "/home/me/.kube/prod".to_string(),
                 }],
                 active: Some("prod".to_string()),
+                typed_namespaces: [("prod".to_string(), vec!["payments".to_string()])].into(),
             },
         }
     }

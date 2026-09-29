@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 // Type-only, and erased: the transcript's block shapes are defined beside the
 // reducer that builds them, and a saved chat is where they cross the wire.
 import type { Block } from "./chatTurnReducer";
+import type { KubePin } from "./kube";
 
 // One typed wrapper per command. Components and hooks call these, never
 // `invoke` directly — the command names and payload shapes live here and
@@ -520,6 +521,8 @@ export type ChatRecord = {
   branchedFrom?: string | null;
   /** Who the model was, in a Chat mode conversation; absent in the agent's. */
   role?: ChatRoleId | null;
+  /** The cluster a Kubernetes chat is pinned to. */
+  kube?: KubePin | null;
 };
 
 /** Chats of the open folder, newest first. No folder, no backend: no rows. */
@@ -707,20 +710,26 @@ export async function plainChatRoles(): Promise<ChatRoleView[]> {
  * and results arrive on `onTurnEvent(turnId)` as the agent's do; this resolves
  * with how it ended: done, stopped, or paused on the approval card.
  */
-export async function plainChatSend(turnId: string, role: ChatRoleId, messages: LlmMessage[]): Promise<Outcome> {
+export async function plainChatSend(
+  turnId: string,
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("plain_chat_send", { turnId, role, messages });
+  return invoke<Outcome>("plain_chat_send", { turnId, role, kube, messages });
 }
 
 /** Continues a chat's turn paused on the approval card, with the user's answers. */
 export async function plainChatResume(
   turnId: string,
   role: ChatRoleId,
+  kube: KubePin | null,
   checkpoint: Checkpoint,
   decisions: ToolCallDecision[],
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("plain_chat_resume", { turnId, role, checkpoint, decisions });
+  return invoke<Outcome>("plain_chat_resume", { turnId, role, kube, checkpoint, decisions });
 }
 
 /** "Always" on a chat's card: this tool stops asking in Chat mode until the app quits. */
@@ -739,11 +748,12 @@ export async function plainChatList(): Promise<ChatSummary[]> {
 export async function plainChatSave(
   id: string,
   role: ChatRoleId,
+  kube: KubePin | null,
   messages: LlmMessage[],
   blocks: unknown,
 ): Promise<ChatSummary> {
   requireBackend();
-  return invoke<ChatSummary>("plain_chat_save", { id, role, messages, blocks });
+  return invoke<ChatSummary>("plain_chat_save", { id, role, kube, messages, blocks });
 }
 
 export async function plainChatCancel(): Promise<void> {

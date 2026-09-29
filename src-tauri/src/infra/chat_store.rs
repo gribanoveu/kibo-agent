@@ -28,6 +28,7 @@ use crate::domain::chat_record::{
     self, ChatError, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
 use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubePin;
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::app_dir;
@@ -199,13 +200,20 @@ pub fn save(
         plan: plan.map(str::to_string),
         branched_from: branched_from.map(str::to_string),
         role: None,
+        kube: None,
     })
 }
 
 /// A Chat mode conversation, filed under no folder. `blocks` is its
 /// transcript as the window draws it — the model's thinking with each answer,
 /// which `messages`, what the model is sent again, leaves out.
-pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage], blocks: &Value) -> Result<ChatSummary, ChatError> {
+pub fn save_plain(
+    id: &str,
+    role: ChatRole,
+    kube: Option<KubePin>,
+    messages: &[LlmMessage],
+    blocks: &Value,
+) -> Result<ChatSummary, ChatError> {
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
@@ -219,6 +227,7 @@ pub fn save_plain(id: &str, role: ChatRole, messages: &[LlmMessage], blocks: &Va
         plan: None,
         branched_from: None,
         role: Some(role),
+        kube,
     })
 }
 
@@ -615,7 +624,8 @@ mod tests {
             save_one("agent", "/repo", "fix it");
             let said = [LlmMessage::user("what is a monad?"), LlmMessage::assistant("a monoid in…")];
             let shown = serde_json::json!([{ "role": "assistant", "text": "a monoid in…", "reasoning": "hm" }]);
-            let saved = save_plain("plain", ChatRole::Assistant, &said, &shown).unwrap();
+            let pin = KubePin { kubeconfig: "prod".into(), context: Some("eks".into()), namespace: Some("payments".into()) };
+            let saved = save_plain("plain", ChatRole::Assistant, Some(pin.clone()), &said, &shown).unwrap();
 
             assert_eq!(saved.title, "what is a monad?");
             let ids = |folder: &str| list(folder).unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
@@ -623,6 +633,7 @@ mod tests {
             assert_eq!(ids("/repo"), ["agent"]);
             let record = load("plain").unwrap();
             assert_eq!((record.role, record.messages, record.blocks), (Some(ChatRole::Assistant), said.to_vec(), shown));
+            assert_eq!(record.kube, Some(pin));
             assert_eq!(load("agent").unwrap().role, None);
         });
     }

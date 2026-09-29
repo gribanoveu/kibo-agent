@@ -17,6 +17,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::chat_role::ChatRole;
+use super::kube::KubePin;
 use super::compaction::SUMMARY_PREFIX;
 use super::llm::{LlmMessage, LlmRole};
 use super::tools::Task;
@@ -84,6 +85,10 @@ pub struct ChatRecord {
     /// Who the model was in a Chat mode conversation; `None` for the agent's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<ChatRole>,
+    /// The cluster a Kubernetes chat is pinned to — its own, so another chat's
+    /// pick never moves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kube: Option<KubePin>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -211,6 +216,7 @@ mod tests {
             plan: None,
             branched_from: None,
             role: None,
+            kube: None,
         }
     }
 

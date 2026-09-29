@@ -13,7 +13,9 @@ use tauri::State;
 
 use std::path::{Path, PathBuf};
 
+use crate::domain::kube::{KubeContexts, KubePin};
 use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage};
+use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::{kubeconfigs, llm_session};
@@ -156,6 +158,32 @@ pub fn kubeconfig_remove(name: String) -> Result<(), String> {
 #[tauri::command]
 pub fn kubeconfig_pick(name: Option<String>) -> Result<(), String> {
     kubeconfigs::pick(name).map_err(|e| e.to_string())
+}
+
+/// A kubeconfig's contexts and its current one, from the file — no cluster is asked.
+#[tauri::command]
+pub fn kube_contexts(kubeconfig: String) -> Result<KubeContexts, String> {
+    kubeconfigs::contexts(&kubeconfig)
+}
+
+/// The namespaces a chat's menu offers: the file's, the ones typed before, and
+/// the cluster's when this identity may list them. A live call, off the IPC loop.
+#[tauri::command]
+pub async fn kube_namespaces(pin: KubePin, clusters: State<'_, Arc<Clusters>>) -> Result<kubeconfigs::Namespaces, String> {
+    let clusters = clusters.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || kubeconfigs::namespaces(&pin, &clusters))
+        .await
+        .map_err(|e| format!("the request thread failed: {e}"))?
+}
+
+/// A namespace typed on a chat's tab, offered again for that kubeconfig.
+#[tauri::command]
+pub fn kube_namespace_remember(kubeconfig: String, namespace: String) -> Result<(), String> {
+    let namespace = namespace.trim();
+    if namespace.is_empty() {
+        return Err("a namespace needs a name".to_string());
+    }
+    kubeconfigs::remember_namespace(&kubeconfig, namespace).map_err(|e| e.to_string())
 }
 
 /// `~/.kube/config` as the shell would read it; any other path as it is.

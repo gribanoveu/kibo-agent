@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::settings::Kubeconfig;
+use super::kube::{Access, KubeSetup, KubeTarget, Reach};
 use super::tools::ToolName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -84,12 +84,18 @@ impl ChatRole {
                      their cluster, tell them to fix the path in Settings → Kubernetes.",
                     config.name, config.path
                 ),
-                KubeSetup::Ready(config) => format!(
-                    "The user's cluster is \"{}\", its kubeconfig at {}. Commands you give for it name that file — \
-                     `kubectl --kubeconfig {} …`, `helm --kubeconfig {} …` — so they reach this cluster and not \
-                     whichever context is current. You still cannot run them yourself.",
-                    config.name, config.path, config.path, config.path
+                KubeSetup::Unreadable { config, reason } => format!(
+                    "The user picked the kubeconfig \"{}\" at {}, and it cannot be read: {reason}. When they ask about \
+                     their cluster, say so, and that the file needs fixing or picking again in Settings → Kubernetes.",
+                    config.name, config.path
                 ),
+                KubeSetup::NoContext { config, context } => format!(
+                    "The chat is pinned to the context \"{context}\" of the kubeconfig \"{}\", and the file at {} no \
+                     longer has it. When they ask about their cluster, tell them to pick a context on the tab above the \
+                     message box.",
+                    config.name, config.path
+                ),
+                KubeSetup::Pinned(target) => pinned_note(target),
             }),
         }
     }
@@ -106,13 +112,35 @@ impl ChatRole {
     }
 }
 
-/// The kubeconfig the Kubernetes role works with, as far as the app can tell.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KubeSetup {
-    NotSet,
-    /// Picked, but its file is gone.
-    Missing(Kubeconfig),
-    Ready(Kubeconfig),
+
+/// Where the chat works, in the form the model's commands should take, and
+/// what the cluster said. The same words every turn while nothing changes, so a
+/// prompt cache keeps it.
+fn pinned_note(target: &KubeTarget) -> String {
+    let KubeTarget { config, context, cluster, namespace, reach } = target;
+    let place = format!(
+        "The user's cluster: context \"{context}\" (cluster \"{cluster}\") of the kubeconfig \"{}\" at {}, namespace \
+         \"{namespace}\". Commands you give name all three, so they reach this cluster and not whichever context is \
+         current: `kubectl --kubeconfig {} --context {context} -n {namespace} …`, `helm --kubeconfig {} --kube-context \
+         {context} -n {namespace} …`. You still cannot run them yourself.",
+        config.name, config.path, config.path, config.path
+    );
+    let found = match reach {
+        Reach::Answered { version, access } => {
+            let may = match access {
+                Access::None => "may not even read in this namespace — say so before suggesting anything that needs access",
+                Access::ReadOnly => "may only read in this namespace: a change you suggest is for someone with more access",
+                Access::Changes => "may change things in this namespace",
+                Access::Everything => "may do anything — an admin's kubeconfig; be explicit about what a change touches",
+            };
+            format!("The cluster runs Kubernetes {version}; this kubeconfig {may}.")
+        }
+        Reach::Unreachable(why) => format!(
+            "The cluster did not answer when Kibo asked: {why}. Say so when the user asks about its state, and help them \
+             get through — the VPN, an expired login (`aws sso login`, `gcloud auth login`), the context's server."
+        ),
+    };
+    format!("{place} {found}")
 }
 
 const KUBERNETES_PROMPT: &str = "\
@@ -164,15 +192,41 @@ mod tests {
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
     }
 
+    use crate::domain::settings::Kubeconfig;
+
     fn prod() -> Kubeconfig {
         Kubeconfig { name: "prod".to_string(), path: "/home/me/.kube/prod".to_string() }
     }
 
+    fn pinned(reach: Reach) -> KubeSetup {
+        KubeSetup::Pinned(KubeTarget {
+            config: prod(),
+            context: "eks-prod".into(),
+            cluster: "arn:prod".into(),
+            namespace: "payments".into(),
+            reach,
+        })
+    }
+
     #[test]
-    fn only_the_kubernetes_role_is_told_about_the_kubeconfig() {
-        assert_eq!(ChatRole::Assistant.setup_note(&KubeSetup::Ready(prod())), None);
-        let ready = ChatRole::Kubernetes.setup_note(&KubeSetup::Ready(prod())).unwrap();
-        assert!(ready.contains("\"prod\"") && ready.contains("--kubeconfig /home/me/.kube/prod"), "{ready}");
+    fn only_the_kubernetes_role_is_told_about_the_cluster() {
+        let answered = pinned(Reach::Answered { version: "v1.30.2".into(), access: Access::ReadOnly });
+        assert_eq!(ChatRole::Assistant.setup_note(&answered), None);
+        let note = ChatRole::Kubernetes.setup_note(&answered).unwrap();
+        for said in [
+            "--kubeconfig /home/me/.kube/prod --context eks-prod -n payments",
+            "--kube-context eks-prod",
+            "Kubernetes v1.30.2",
+            "may only read",
+        ] {
+            assert!(note.contains(said), "{said:?} not in {note}");
+        }
+    }
+
+    #[test]
+    fn a_cluster_that_did_not_answer_is_said_so_with_why() {
+        let note = ChatRole::Kubernetes.setup_note(&pinned(Reach::Unreachable("token expired".into()))).unwrap();
+        assert!(note.contains("did not answer") && note.contains("token expired"), "{note}");
     }
 
     /// Each state tells the model something different to say — the one thing
@@ -183,5 +237,7 @@ mod tests {
         assert!(not_set.contains("No kubeconfig") && not_set.contains("Settings → Kubernetes"), "{not_set}");
         let missing = ChatRole::Kubernetes.setup_note(&KubeSetup::Missing(prod())).unwrap();
         assert!(missing.contains("no file at /home/me/.kube/prod") && missing.contains("Settings → Kubernetes"), "{missing}");
+        let gone = ChatRole::Kubernetes.setup_note(&KubeSetup::NoContext { config: prod(), context: "old".into() }).unwrap();
+        assert!(gone.contains("\"old\"") && gone.contains("pick a context"), "{gone}");
     }
 }

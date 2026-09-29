@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { Brain, FileCog, Layers, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
@@ -11,6 +11,8 @@ import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
+import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
+import { rememberNamespace } from "../lib/kube";
 import "./PlainChat.css";
 
 /** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
@@ -69,6 +71,9 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
+  // The chat's own cluster: its kubeconfig from Settings, and what its pin resolves to.
+  const config = kube.configs.find((c) => c.name === chat.kube?.kubeconfig) ?? null;
+  const target = useKubeTarget(config ? chat.kube : null);
   const empty = chat.turn.blocks.length === 0;
   // Two of the set, picked again each time an empty chat opens.
   const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
@@ -153,20 +158,75 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
           />
           {chat.role === "kubernetes" && (
             <Dropdown
-              title="The cluster the model's commands are for"
+              title="The kubeconfig this chat works with"
               heading="Kubeconfig"
               label={
-                <span className={`plain-chip-label${kube.active ? "" : " unset"}`}>
-                  <Server size={13} />
-                  {kube.active?.name ?? "No kubeconfig"}
+                <span className={`plain-chip-label${config ? "" : " unset"}`}>
+                  <FileCog size={13} />
+                  {config?.name ?? "No kubeconfig"}
                 </span>
               }
-              value={kube.active?.name ?? ""}
+              value={config?.name ?? ""}
               options={[
                 ...kube.configs.map((c) => ({ value: c.name, hint: c.path })),
                 { value: MANAGE_KUBECONFIGS, label: kube.configs.length ? "Manage kubeconfigs…" : "Add a kubeconfig…" },
               ]}
-              onPick={(value) => (value === MANAGE_KUBECONFIGS ? onSetUpKube() : kube.pick(value))}
+              onPick={(value) => {
+                if (value === MANAGE_KUBECONFIGS) return onSetUpKube();
+                chat.setPin({ kubeconfig: value, context: null, namespace: null });
+                // Where the next new chat starts.
+                void kube.pick(value);
+              }}
+            />
+          )}
+          {chat.role === "kubernetes" && config && chat.kube && (
+            <Dropdown
+              title="The context of the kubeconfig — which cluster, as which user"
+              heading="Context"
+              label={
+                <span className={`plain-chip-label${target.context ? "" : " unset"}`}>
+                  <Server size={13} />
+                  {target.context?.name ?? chat.kube.context ?? "No context"}
+                </span>
+              }
+              value={target.context?.name ?? ""}
+              options={(target.contexts?.contexts ?? []).map((c) => ({
+                value: c.name,
+                hint: [c.cluster, c.namespace, c.name === target.contexts?.current ? "current" : null].filter(Boolean).join(" · "),
+              }))}
+              emptyLabel={target.error ?? "The kubeconfig has no contexts"}
+              onPick={(context) => chat.kube && chat.setPin({ ...chat.kube, context, namespace: null })}
+            />
+          )}
+          {chat.role === "kubernetes" && config && chat.kube && target.context && (
+            <Dropdown
+              title="The namespace this chat works in"
+              heading="Namespace"
+              label={
+                <span className="plain-chip-label">
+                  <Layers size={13} />
+                  {target.namespace}
+                </span>
+              }
+              value={target.namespace}
+              options={namespaceOptions(target.namespace, target.namespaces)}
+              onOpen={target.loadNamespaces}
+              note={
+                target.namespaces === null
+                  ? "Asking the cluster…"
+                  : target.namespaces.clusterError
+                    ? `The cluster did not list its namespaces: ${target.namespaces.clusterError}`
+                    : undefined
+              }
+              custom={{
+                placeholder: "Another namespace",
+                onEnter: (namespace) => {
+                  if (!chat.kube) return;
+                  chat.setPin({ ...chat.kube, namespace });
+                  void rememberNamespace(chat.kube.kubeconfig, namespace).catch(() => {});
+                },
+              }}
+              onPick={(namespace) => chat.kube && chat.setPin({ ...chat.kube, namespace })}
             />
           )}
         </div>

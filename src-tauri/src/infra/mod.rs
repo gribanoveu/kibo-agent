@@ -5,6 +5,7 @@ pub mod secret_store;
 pub mod workspace_scanner;
 pub mod app_dir;
 pub mod settings_store;
+pub mod kube_client;
 pub mod llm_credentials_store;
 pub mod llm_debug_log;
 pub mod index_store;

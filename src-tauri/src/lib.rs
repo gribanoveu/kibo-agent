@@ -73,6 +73,7 @@ pub fn run() {
         // thread that outlives the command call that started it.
         .manage(std::sync::Arc::new(commands::chat::AgentState::default()))
         .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
+        .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
         // The MCP servers, kept running between turns.
         .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
@@ -183,6 +184,9 @@ pub fn run() {
             commands::settings::kubeconfig_save,
             commands::settings::kubeconfig_remove,
             commands::settings::kubeconfig_pick,
+            commands::settings::kube_contexts,
+            commands::settings::kube_namespaces,
+            commands::settings::kube_namespace_remember,
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
             commands::settings::agent_readiness,

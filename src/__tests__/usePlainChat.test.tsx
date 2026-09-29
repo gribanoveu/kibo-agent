@@ -149,3 +149,42 @@ describe("a turn in a role", () => {
     expect(result.current.busy).toBe(false);
   });
 });
+
+describe("the cluster a chat works with", () => {
+  test("a new chat starts at the kubeconfig picked last, and is pinned to it from its first message", async () => {
+    results.plain_chat_send = { status: "done", value: { text: "ok", history: [], todos: [] } };
+    const { result } = renderHook(() => usePlainChat("prod"));
+    expect(result.current.kube).toEqual({ kubeconfig: "prod", context: null, namespace: null });
+    await act(async () => {
+      await result.current.send("pods?");
+    });
+    const sent = called("plain_chat_send")[0]?.args;
+    expect(sent?.kube).toEqual({ kubeconfig: "prod", context: null, namespace: null });
+    expect(called("plain_chat_save")[0]?.args.kube).toEqual({ kubeconfig: "prod", context: null, namespace: null });
+  });
+
+  test("a pin changed in a saved chat is kept with it at once", async () => {
+    results.plain_chat_send = { status: "done", value: { text: "ok", history: [], todos: [] } };
+    const { result } = renderHook(() => usePlainChat("prod"));
+    await act(async () => {
+      await result.current.send("pods?");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const saves = called("plain_chat_save").length;
+    act(() => result.current.setPin({ kubeconfig: "prod", context: "eks", namespace: "orders" }));
+    const last = called("plain_chat_save").slice(saves);
+    expect(last.map((call) => call.args.kube)).toEqual([{ kubeconfig: "prod", context: "eks", namespace: "orders" }]);
+    expect(result.current.kube?.namespace).toBe("orders");
+  });
+
+  test("an opened chat works where it was pinned, whatever was picked last", async () => {
+    const pin = { kubeconfig: "stg", context: "kind", namespace: "orders" };
+    results.chat_load = { id: "c", messages: [], blocks: [], role: "kubernetes", kube: pin };
+    const { result } = renderHook(() => usePlainChat("prod"));
+    await act(async () => {
+      await result.current.open("c");
+    });
+    expect(result.current.kube).toEqual(pin);
+    expect(result.current.role).toBe("kubernetes");
+  });
+});
