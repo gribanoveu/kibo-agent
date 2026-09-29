@@ -11,8 +11,8 @@ use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
-use crate::domain::kube::KubePin;
-use crate::infra::kube_client::Clusters;
+use crate::domain::kube::{KubeApi, KubePin, KubeSetup};
+use crate::infra::kube_client::{ClusterApi, Clusters};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tool_call_log::ToolCallLogEntry;
 use crate::domain::tools::ApprovalPolicy;
@@ -111,6 +111,13 @@ where
         // expired, is what the model most needs to know. The client is kept,
         // so it is two quick requests, not a new login.
         let kube = kubeconfigs::setup(kube.as_ref(), &clusters).map_err(|e| e.to_string())?;
+        // Read through the pin alone: the tools cannot name another cluster.
+        let api = match &kube {
+            KubeSetup::Pinned(target) => {
+                Some(ClusterApi::new(clusters.clone(), std::path::Path::new(&target.config.path), &target.context))
+            }
+            _ => None,
+        };
         let cancelled = || state.cancel.load(Ordering::SeqCst);
         let record = crate::infra::tool_call_log::recorder();
         let log_call = |entry: ToolCallLogEntry| record(&entry);
@@ -118,6 +125,7 @@ where
             session: &session,
             role,
             kube: &kube,
+            cluster: api.as_ref().map(|api| api as &dyn KubeApi),
             approval: &approval,
             events: &events,
             cancelled: &cancelled,

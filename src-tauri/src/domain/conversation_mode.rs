@@ -226,12 +226,15 @@ mod tests {
         }
     }
 
-    /// Every tool but a review's own: a finding needs a review to be about.
+    /// Every tool but a review's own — a finding needs a review to be about —
+    /// and the Kubernetes role's: the agent has no cluster pinned to it.
     #[test]
     fn agent_mode_offers_every_tool_there_is() {
         let agent = tools(ConversationMode::Agent);
-        assert_eq!(agent.len(), ToolName::ALL.len() - 1);
+        let cluster = crate::domain::chat_role::ChatRole::Kubernetes.tools();
+        assert_eq!(agent.len(), ToolName::ALL.len() - 1 - cluster.len());
         assert!(!agent.contains(&ToolName::ReportFinding));
+        assert!(cluster.iter().all(|tool| !agent.contains(tool)));
     }
 
     /// A reviewer reads everything, runs commands to prove a point, and

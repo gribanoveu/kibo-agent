@@ -477,6 +477,30 @@ describe("a connected server's tool", () => {
   });
 });
 
+describe("the Kubernetes role's reads", () => {
+  test("show what they read, where, the backend's summary and its text", () => {
+    const shown = describeTool(
+      tool({
+        name: "kubeLogs",
+        arguments: '{"kind":"Deployment","name":"api","namespace":"orders","grep":"error"}',
+        result: { result: "kube", text: "Logs of Deployment/api: 2 pods", summary: "12 lines · 2 pods" },
+      }),
+    );
+    expect(shown).toEqual({
+      name: "Logs",
+      arg: "Deployment api -n orders",
+      meta: "12 lines · 2 pods",
+      detail: "Logs of Deployment/api: 2 pods",
+    });
+    expect(describeTool(tool({ name: "kubeList", arguments: '{"kind":"pods","labelSelector":"app=api"}' })).arg).toBe(
+      "pods app=api",
+    );
+    expect(describeRun([tool({ name: "kubeGet" }), tool({ name: "kubeGet" }), tool({ name: "kubeEvents" })])).toBe(
+      "Read 2 objects, read events",
+    );
+  });
+});
+
 describe("arguments that are not finished yet", () => {
   /// The normal case while the model is still writing the call: the row has to
   /// draw something rather than throw.

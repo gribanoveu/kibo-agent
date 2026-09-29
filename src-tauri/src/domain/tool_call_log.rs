@@ -298,6 +298,14 @@ mod tests {
             ),
             // The task is the model's own brief and stays, as a command line
             // does; the answer quotes code, and goes as `text`.
+            // What the cluster said — manifests, logs — goes as `text`; the
+            // arguments are a kind, a name, a selector: what the log is for.
+            ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
             ToolName::Explore => (
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },

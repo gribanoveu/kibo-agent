@@ -9,16 +9,19 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use k8s_openapi::api::authorization::v1::{SelfSubjectRulesReview, SelfSubjectRulesReviewSpec};
-use k8s_openapi::api::core::v1::Namespace;
-use kube::api::{Api, ListParams, PostParams};
+use k8s_openapi::api::core::v1::{Namespace, Pod};
+use kube::api::{Api, ApiResource, DynamicObject, ListParams, LogParams, PostParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use kube::{Client, Config};
+use kube::core::discovery::{verbs, Scope};
+use kube::{Client, Config, Discovery};
 
-use crate::domain::kube::{access_of, KubeContext, KubeContexts, KubeError, Reach, Rule};
+use crate::domain::kube::{
+    access_of, KubeApi, KubeContext, KubeContexts, KubeError, KubeKind, ListPage, ListQuery, LogQuery, Reach, Rule,
+};
 use crate::infra::login_path;
 
 /// A cluster that has not connected in this long is not coming.
@@ -27,6 +30,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// The whole of a probe, a login plugin's run included: `aws eks get-token`
 /// waiting on an SSO login nobody will finish must not hold the turn.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// One read of a tool: a discovery of every API group, a page of a list, a
+/// pod's log.
+const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A kubeconfig's contexts, read from the file alone — no cluster is asked.
 pub fn contexts(path: &Path) -> Result<KubeContexts, KubeError> {
@@ -49,6 +55,9 @@ pub fn contexts(path: &Path) -> Result<KubeContexts, KubeError> {
 #[derive(Default)]
 pub struct Clusters {
     clients: Mutex<HashMap<Key, Client>>,
+    /// What each served, from discovery: a dozen requests on a cluster with
+    /// many CRDs, asked once per client rather than per call.
+    kinds: Mutex<HashMap<Key, Vec<KubeKind>>>,
 }
 
 /// A client is for one file as it was: rewritten by a fresh login
@@ -59,7 +68,7 @@ impl Clusters {
     /// The server's version and what this identity may do in `namespace` —
     /// or why the cluster could not be asked.
     pub fn probe(&self, path: &Path, context: &str, namespace: &str) -> Reach {
-        let asked = self.within(path, context, |client| async move {
+        let asked = self.within(path, context, PROBE_TIMEOUT, |client| async move {
             let version = client.apiserver_version().await.map_err(cluster_error)?.git_version;
             let review = SelfSubjectRulesReview {
                 spec: SelfSubjectRulesReviewSpec { namespace: Some(namespace.to_string()) },
@@ -87,7 +96,7 @@ impl Clusters {
 
     /// Every namespace, when this identity may list them — often it may not.
     pub fn namespaces(&self, path: &Path, context: &str) -> Result<Vec<String>, KubeError> {
-        self.within(path, context, |client| async move {
+        self.within(path, context, PROBE_TIMEOUT, |client| async move {
             let listed = Api::<Namespace>::all(client).list(&ListParams::default()).await.map_err(cluster_error)?;
             let mut names: Vec<String> = listed.items.into_iter().filter_map(|ns| ns.metadata.name).collect();
             names.sort();
@@ -95,20 +104,20 @@ impl Clusters {
         })
     }
 
-    /// Runs `ask` with this kubeconfig's client, bounded by [`PROBE_TIMEOUT`].
-    fn within<T, F, Fut>(&self, path: &Path, context: &str, ask: F) -> Result<T, KubeError>
+    /// Runs `ask` with this kubeconfig's client, bounded by `timeout`.
+    fn within<T, F, Fut>(&self, path: &Path, context: &str, timeout: Duration, ask: F) -> Result<T, KubeError>
     where
         F: FnOnce(Client) -> Fut,
         Fut: std::future::Future<Output = Result<T, KubeError>>,
     {
         tauri::async_runtime::block_on(async {
             let client = self.client(path, context).await?;
-            match tokio::time::timeout(PROBE_TIMEOUT, ask(client)).await {
+            match tokio::time::timeout(timeout, ask(client)).await {
                 Ok(result) => result,
                 Err(_) => {
                     // A login that hangs today may be done tomorrow: start over then.
                     self.forget(path, context);
-                    Err(KubeError::Timeout(PROBE_TIMEOUT.as_secs()))
+                    Err(KubeError::Timeout(timeout.as_secs()))
                 }
             }
         })
@@ -139,17 +148,139 @@ impl Clusters {
             clients.retain(|(p, c, _), _| !(p == path && c == context));
         }
     }
+
+    fn kinds(&self, path: &Path, context: &str) -> Result<Vec<KubeKind>, KubeError> {
+        let key = (path.to_path_buf(), context.to_string(), modified(path));
+        if let Some(kinds) = self.kinds.lock().ok().and_then(|kinds| kinds.get(&key).cloned()) {
+            return Ok(kinds);
+        }
+        let kinds = self.within(path, context, READ_CALL_TIMEOUT, |client| async move {
+            // Two requests where the server has aggregated discovery (1.30+),
+            // one per API group where it has not.
+            let discovery = match Discovery::new(client.clone()).run_aggregated().await {
+                Ok(discovery) => discovery,
+                Err(_) => Discovery::new(client).run().await.map_err(cluster_error)?,
+            };
+            Ok(discovery
+                .groups()
+                .flat_map(|group| group.recommended_resources())
+                .filter(|(_, caps)| caps.supports_operation(verbs::LIST))
+                .map(|(resource, caps)| KubeKind {
+                    group: resource.group,
+                    version: resource.version,
+                    kind: resource.kind,
+                    plural: resource.plural,
+                    namespaced: caps.scope == Scope::Namespaced,
+                })
+                .collect::<Vec<_>>())
+        })?;
+        if let Ok(mut cached) = self.kinds.lock() {
+            cached.retain(|(p, c, _), _| !(p == path && c == context));
+            cached.insert(key, kinds.clone());
+        }
+        Ok(kinds)
+    }
+}
+
+/// The cluster a chat is pinned to, for its read tools: the kubeconfig and
+/// context are fixed here, so no call can reach another.
+pub struct ClusterApi {
+    clusters: Arc<Clusters>,
+    path: PathBuf,
+    context: String,
+}
+
+impl ClusterApi {
+    pub fn new(clusters: Arc<Clusters>, path: &Path, context: &str) -> Self {
+        ClusterApi { clusters, path: path.to_path_buf(), context: context.to_string() }
+    }
+
+    fn within<T, F, Fut>(&self, ask: F) -> Result<T, KubeError>
+    where
+        F: FnOnce(Client) -> Fut,
+        Fut: std::future::Future<Output = Result<T, KubeError>>,
+    {
+        self.clusters.within(&self.path, &self.context, READ_CALL_TIMEOUT, ask)
+    }
+}
+
+fn resource(kind: &KubeKind) -> ApiResource {
+    let api_version = if kind.group.is_empty() { kind.version.clone() } else { format!("{}/{}", kind.group, kind.version) };
+    ApiResource {
+        group: kind.group.clone(),
+        version: kind.version.clone(),
+        api_version,
+        kind: kind.kind.clone(),
+        plural: kind.plural.clone(),
+    }
+}
+
+fn dynamic(client: Client, kind: &KubeKind, namespace: Option<&str>) -> Api<DynamicObject> {
+    match namespace {
+        Some(namespace) if kind.namespaced => Api::namespaced_with(client, namespace, &resource(kind)),
+        _ => Api::all_with(client, &resource(kind)),
+    }
+}
+
+fn json(object: DynamicObject) -> Result<serde_json::Value, KubeError> {
+    serde_json::to_value(object).map_err(|e| KubeError::Cluster(e.to_string()))
+}
+
+impl KubeApi for ClusterApi {
+    fn kinds(&self) -> Result<Vec<KubeKind>, KubeError> {
+        self.clusters.kinds(&self.path, &self.context)
+    }
+
+    fn list(&self, kind: &KubeKind, query: &ListQuery) -> Result<ListPage, KubeError> {
+        self.within(|client| async move {
+            let params = ListParams {
+                label_selector: query.label_selector.clone(),
+                field_selector: query.field_selector.clone(),
+                limit: query.limit,
+                continue_token: query.continue_token.clone(),
+                ..Default::default()
+            };
+            let listed = dynamic(client, kind, query.namespace.as_deref()).list(&params).await.map_err(cluster_error)?;
+            Ok(ListPage {
+                items: listed.items.into_iter().map(json).collect::<Result<_, _>>()?,
+                continue_token: listed.metadata.continue_.filter(|token| !token.is_empty()),
+                remaining: listed.metadata.remaining_item_count,
+            })
+        })
+    }
+
+    fn get(&self, kind: &KubeKind, namespace: &str, name: &str) -> Result<serde_json::Value, KubeError> {
+        self.within(|client| async move { json(dynamic(client, kind, Some(namespace)).get(name).await.map_err(cluster_error)?) })
+    }
+
+    fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError> {
+        self.within(|client| async move {
+            let params = LogParams {
+                container: query.container.clone(),
+                previous: query.previous,
+                tail_lines: query.tail,
+                since_seconds: query.since_seconds,
+                timestamps: true,
+                ..Default::default()
+            };
+            Api::<Pod>::namespaced(client, namespace).logs(pod, &params).await.map_err(cluster_error)
+        })
+    }
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// What the cluster said, cut to what fits in a chip's hint and a prompt.
+/// What the cluster said, cut to what fits in a chip's hint and a prompt —
+/// for a refusal, the server's own sentence (`pods is forbidden: User …`).
 fn cluster_error(error: kube::Error) -> KubeError {
-    let text = error.to_string();
+    let text = match error {
+        kube::Error::Api(status) if !status.message.is_empty() => status.message,
+        other => other.to_string(),
+    };
     let line = text.lines().next().unwrap_or_default();
-    KubeError::Cluster(line.chars().take(240).collect())
+    KubeError::Cluster(line.chars().take(400).collect())
 }
 
 /// Gives each login plugin (`exec`) the login shell's `PATH`.

@@ -16,6 +16,7 @@ pub mod next_prompt;
 pub mod conversation_mode;
 pub mod chat_role;
 pub mod kube;
+pub mod kube_view;
 pub mod embeddings;
 pub mod prompt;
 pub mod chunk_index;

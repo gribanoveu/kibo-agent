@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-29 The Kubernetes role reads your cluster itself: lists as `kubectl get` tables (with any fields as extra columns), objects as YAML without the noise, events, logs of a pod or of every pod of a Deployment merged by time, CPU and memory, and who set each field — only in the chat's pinned cluster, never changing it, and never seeing a Secret's values
+
 - 2026-09-29 Pin each Kubernetes chat to a kubeconfig, a context and a namespace on its tab — namespaces come from the kubeconfig, from the cluster when you may list them, or typed; the model is told the cluster's version, what your kubeconfig may do there, or that the cluster did not answer and why
 - 2026-09-29 Chat mode draws its conversation as the agent's chat does — turns under the role's name, thinking rows, Copy — and a role's tool calls, with their approval cards, will show there; chats saved before still open
 - 2026-09-28 Copy a message or an answer in Chat mode with the Copy button under it, shown on hover as in the agent's chat

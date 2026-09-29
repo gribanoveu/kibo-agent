@@ -23,7 +23,7 @@ use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
 use crate::domain::result_clearing;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
-use crate::domain::kube::KubeSetup;
+use crate::domain::kube::{KubeApi, KubeSetup, PinnedCluster};
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
@@ -244,8 +244,9 @@ pub enum Place<'a> {
     Folder { scope: &'a ToolScope, mode: ConversationMode },
     /// Chat mode (`docs/21-kubernetes-mode.md`, K-1): no folder. The role is
     /// who the model is and all it may call; `kube` is what it is told of the
-    /// user's cluster.
-    Chat { role: ChatRole, kube: &'a KubeSetup },
+    /// user's cluster, and `cluster` what its tools read it through — `None`
+    /// when no cluster is pinned.
+    Chat { role: ChatRole, kube: &'a KubeSetup, cluster: Option<&'a dyn KubeApi> },
 }
 
 impl<'a> Place<'a> {
@@ -874,6 +875,12 @@ fn execute_call(
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
+        kube: match turn.place {
+            Place::Chat { kube: KubeSetup::Pinned(target), cluster: Some(api), .. } => {
+                Some(PinnedCluster { api, namespace: &target.namespace })
+            }
+            _ => None,
+        },
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1250,7 +1257,7 @@ pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
 fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode } => (scope, mode),
-        Place::Chat { role, kube } => {
+        Place::Chat { role, kube, .. } => {
             let mut messages = vec![prompt::chat_system_message(role, kube, turn.session.reply_language)];
             messages.extend_from_slice(history);
             return messages;
@@ -1832,7 +1839,7 @@ mod tests {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
-                    Some(role) => Place::Chat { role, kube: &self.kube },
+                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None },
                     None => Place::Folder { scope: &self.scope, mode: self.mode },
                 },
                 approval: &self.approval,
@@ -3427,9 +3434,9 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one but a review's own; MCP tools come from
-        // servers, and none is connected.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 2);
+        // Every built-in one but a review's own and the Kubernetes role's;
+        // MCP tools come from servers, and none is connected.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 2 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

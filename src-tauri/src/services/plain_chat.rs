@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use crate::domain::chat_role::ChatRole;
-use crate::domain::kube::KubeSetup;
+use crate::domain::kube::{KubeApi, KubeSetup};
 use crate::domain::command_exec::Shell;
 use crate::domain::hooks::Hooks;
 use crate::domain::llm::LlmMessage;
@@ -24,6 +24,8 @@ pub struct ChatTurn<'a> {
     pub role: ChatRole,
     /// What the role is told of the user's cluster.
     pub kube: &'a KubeSetup,
+    /// What its tools read that cluster through, when one is pinned.
+    pub cluster: Option<&'a dyn KubeApi>,
     pub approval: &'a ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -55,7 +57,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
     let turn = Turn {
         events: chat.events,
         session: chat.session,
-        place: Place::Chat { role: chat.role, kube: chat.kube },
+        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster },
         approval: chat.approval,
         cancelled: chat.cancelled,
         sleep: &sleep,
@@ -84,6 +86,7 @@ mod tests {
     use crate::domain::llm::{
         ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, LlmRole, LlmToolCall,
     };
+    use crate::domain::kube::{Access, KubeError, KubeKind, KubeTarget, ListPage, ListQuery, LogQuery, Reach};
     use crate::domain::turn::{ChatEventPayload, ChatTurnEvent};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -136,6 +139,7 @@ mod tests {
         session: LlmSession,
         script: Arc<Script>,
         kube: KubeSetup,
+        cluster: Option<Arc<dyn KubeApi>>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
     }
@@ -153,6 +157,7 @@ mod tests {
             },
             script,
             kube: KubeSetup::NotSet,
+            cluster: None,
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
         }
@@ -168,6 +173,7 @@ mod tests {
                 session: &self.session,
                 role,
                 kube: &self.kube,
+                cluster: self.cluster.as_deref(),
                 approval: &self.approval,
                 events: &events,
                 cancelled: &stop,
@@ -302,6 +308,61 @@ mod tests {
         let deny = vec![ToolCallDecision { id: "c1".into(), approved: false, reason: Some("keep it".into()) }];
         let done = done(chat.run(ChatRole::Tester, false, |turn| resume(turn, paused, deny)).unwrap());
         assert_eq!(tool_result(&done.history), "Denied by the user: keep it");
+    }
+
+    /// A cluster of one pod, in whatever namespace it is asked about.
+    struct OnePod;
+
+    impl KubeApi for OnePod {
+        fn kinds(&self) -> Result<Vec<KubeKind>, KubeError> {
+            Ok(vec![KubeKind::core("Pod", "pods")])
+        }
+
+        fn list(&self, _: &KubeKind, query: &ListQuery) -> Result<ListPage, KubeError> {
+            let pod = serde_json::json!({"metadata": {"name": "api-1", "namespace": query.namespace}});
+            Ok(ListPage { items: vec![pod], ..Default::default() })
+        }
+
+        fn get(&self, _: &KubeKind, _: &str, _: &str) -> Result<serde_json::Value, KubeError> {
+            unreachable!("only listed")
+        }
+
+        fn logs(&self, _: &str, _: &str, _: &LogQuery) -> Result<String, KubeError> {
+            unreachable!("only listed")
+        }
+    }
+
+    fn pinned(namespace: &str) -> KubeSetup {
+        KubeSetup::Pinned(KubeTarget {
+            config: crate::domain::settings::Kubeconfig { name: "prod".into(), path: "/k/prod".into() },
+            context: "eks".into(),
+            cluster: "eks".into(),
+            namespace: namespace.into(),
+            reach: Reach::Answered { version: "v1.33.1".into(), access: Access::ReadOnly },
+        })
+    }
+
+    /// K-3 end to end: the role's read reaches the pinned cluster, in the
+    /// pinned namespace, and the model gets the table.
+    #[test]
+    fn a_pinned_chat_reads_its_cluster_in_its_namespace() {
+        let mut chat = chat(vec![calls("kubeList", r#"{"kind":"pods"}"#), said("one pod")], None);
+        chat.kube = pinned("payments");
+        chat.cluster = Some(Arc::new(OnePod));
+        let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("pods?")]));
+        let read = tool_result(&done.history);
+        assert!(read.starts_with("1 pods in namespace payments:") && read.contains("api-1"), "{read}");
+        assert_eq!(done.result.text, "one pod");
+    }
+
+    /// A cluster the setup does not vouch for is not read: the model is told
+    /// there is none, and says what to set up.
+    #[test]
+    fn a_chat_with_no_cluster_pinned_reads_nothing() {
+        let mut chat = chat(vec![calls("kubeList", r#"{"kind":"pods"}"#), said("pick one")], None);
+        chat.cluster = Some(Arc::new(OnePod));
+        let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("pods?")]));
+        assert!(tool_result(&done.history).contains("no cluster is pinned"), "{:?}", done.history);
     }
 
     /// Stopped before the first round: nothing asked, nothing run.

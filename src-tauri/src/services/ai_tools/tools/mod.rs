@@ -28,6 +28,7 @@ pub mod edit_file;
 pub mod explore;
 pub mod git;
 pub mod grep;
+pub mod cluster;
 pub mod list_files;
 pub mod move_path;
 pub mod report_finding;
@@ -75,6 +76,12 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::StopProcess, process::stop_definition),
     (ToolName::ReadTerminal, terminal::read_definition),
     (ToolName::RunInTerminal, terminal::run_definition),
+    (ToolName::KubeList, cluster::list_definition),
+    (ToolName::KubeGet, cluster::get_definition),
+    (ToolName::KubeEvents, cluster::events_definition),
+    (ToolName::KubeLogs, cluster::logs_definition),
+    (ToolName::KubeTop, cluster::top_definition),
+    (ToolName::KubeFieldHistory, cluster::field_history_definition),
 ];
 
 /// What the model is offered for a turn.
@@ -136,6 +143,12 @@ pub fn dispatch(
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
         ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
+        ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
+        ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
+        ToolCall::KubeEvents(args) => cluster::kube_events(deps.kube, args),
+        ToolCall::KubeLogs(args) => cluster::kube_logs(deps.kube, args),
+        ToolCall::KubeTop(args) => cluster::kube_top(deps.kube, args),
+        ToolCall::KubeFieldHistory(args) => cluster::kube_field_history(deps.kube, args),
     }
 }
 
@@ -148,6 +161,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
+        KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -362,6 +376,64 @@ mod definition_tests {
             ToolName::RunInTerminal => (
                 r#"{"command":"npm run dev"}"#,
                 vec![ToolCall::RunInTerminal(RunInTerminalArgs { command: "npm run dev".into(), id: None })],
+            ),
+            ToolName::KubeList => (
+                r#"{"kind":"pods"}"#,
+                vec![ToolCall::KubeList(KubeListArgs {
+                    kind: "pods".into(),
+                    namespace: Some("orders".into()),
+                    label_selector: Some("app=api".into()),
+                    field_selector: Some("status.phase=Running".into()),
+                    fields: Some(vec!["spec.nodeName".into()]),
+                    limit: Some(50),
+                    continue_token: Some("token".into()),
+                })],
+            ),
+            ToolName::KubeGet => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeGet(KubeGetArgs {
+                    kind: "Deployment".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
+                    sections: Some(vec!["spec".into()]),
+                })],
+            ),
+            ToolName::KubeEvents => (
+                "{}",
+                vec![ToolCall::KubeEvents(KubeEventsArgs {
+                    namespace: Some("orders".into()),
+                    kind: Some("Pod".into()),
+                    name: Some("api-1".into()),
+                    warnings_only: Some(true),
+                })],
+            ),
+            ToolName::KubeLogs => (
+                r#"{"pod":"api-1"}"#,
+                vec![ToolCall::KubeLogs(KubeLogsArgs {
+                    pod: Some("api-1".into()),
+                    kind: Some("Deployment".into()),
+                    name: Some("api".into()),
+                    label_selector: Some("app=api".into()),
+                    namespace: Some("orders".into()),
+                    container: Some("app".into()),
+                    previous: Some(true),
+                    tail: Some(100),
+                    since: Some("10m".into()),
+                    grep: Some("error".into()),
+                })],
+            ),
+            ToolName::KubeTop => (
+                r#"{"kind":"pods"}"#,
+                vec![ToolCall::KubeTop(KubeTopArgs { kind: "pods".into(), namespace: Some("orders".into()) })],
+            ),
+            ToolName::KubeFieldHistory => (
+                r#"{"kind":"Service","name":"api"}"#,
+                vec![ToolCall::KubeFieldHistory(KubeFieldHistoryArgs {
+                    kind: "Service".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
+                    paths: Some(vec!["metadata.annotations".into()]),
+                })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

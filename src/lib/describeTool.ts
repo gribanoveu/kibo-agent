@@ -58,6 +58,12 @@ export const LABELS: Record<string, string> = {
   runInTerminal: "Terminal",
   reportFinding: "Finding",
   explore: "Explore",
+  kubeList: "Kube list",
+  kubeGet: "Kube get",
+  kubeEvents: "Events",
+  kubeLogs: "Logs",
+  kubeTop: "Top",
+  kubeFieldHistory: "Field history",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -121,6 +127,19 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
   // shows this line — agreeing to a call must not mean agreeing blind.
   if (mcpParts(block.name)) {
     return { name, arg: Object.keys(args).length ? JSON.stringify(args) : "", detail: str(result.text) ?? "" };
+  }
+
+  // The Kubernetes role's reads: what they read, and the backend's own text
+  // for it — a table, YAML, a log — shaped there for the model.
+  if (block.name.startsWith("kube") && block.name in LABELS) {
+    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector)].filter(Boolean).join(" ");
+    const namespace = str(args.namespace);
+    return {
+      name,
+      arg: namespace ? `${target} -n ${namespace}` : target,
+      meta: str(result.summary),
+      detail: str(result.text) ?? "",
+    };
   }
 
   switch (block.name) {
@@ -550,6 +569,10 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Plan: () => "wrote the plan",
   Finding: (n) => `reported ${n === 1 ? "a finding" : `${n} findings`}`,
   Explore: (n) => `explored ${n === 1 ? "a question" : `${n} questions`}`,
+  "Kube list": (n) => `listed ${n === 1 ? "a kind" : `${n} kinds`}`,
+  "Kube get": (n) => `read ${n === 1 ? "an object" : `${n} objects`}`,
+  Events: () => "read events",
+  Logs: (n) => `read ${n === 1 ? "a log" : `${n} logs`}`,
 };
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {

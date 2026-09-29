@@ -55,6 +55,14 @@ pub enum ToolName {
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
+    /// The Kubernetes role's reads of the cluster its chat is pinned to
+    /// (`docs/21-kubernetes-mode.md`, K-3).
+    KubeList,
+    KubeGet,
+    KubeEvents,
+    KubeLogs,
+    KubeTop,
+    KubeFieldHistory,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -94,6 +102,12 @@ impl ToolName {
         ToolName::RunInTerminal,
         ToolName::ReportFinding,
         ToolName::Explore,
+        ToolName::KubeList,
+        ToolName::KubeGet,
+        ToolName::KubeEvents,
+        ToolName::KubeLogs,
+        ToolName::KubeTop,
+        ToolName::KubeFieldHistory,
         ToolName::Mcp,
     ];
 
@@ -125,6 +139,12 @@ impl ToolName {
             ToolName::RunInTerminal => "runInTerminal",
             ToolName::ReportFinding => "reportFinding",
             ToolName::Explore => "explore",
+            ToolName::KubeList => "kubeList",
+            ToolName::KubeGet => "kubeGet",
+            ToolName::KubeEvents => "kubeEvents",
+            ToolName::KubeLogs => "kubeLogs",
+            ToolName::KubeTop => "kubeTop",
+            ToolName::KubeFieldHistory => "kubeFieldHistory",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -220,6 +240,13 @@ impl ToolName {
             // A whole turn of its own. That turn has its own ceiling, so this
             // only keeps a turn from delegating without end.
             ToolName::Explore => 5,
+            // A request or two to the cluster; logs may be ten pods' worth.
+            ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory => 2,
+            ToolName::KubeLogs => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -373,7 +400,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            25,
+            31,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -764,6 +791,9 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
+    /// The cluster a Kubernetes chat is pinned to; `None` where there is
+    /// none, or its kubeconfig could not be read.
+    pub kube: Option<crate::domain::kube::PinnedCluster<'a>>,
 }
 
 /// Why a tool call could not be carried out.
@@ -931,6 +961,12 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// A Kubernetes tool in a chat with no cluster to read. The prompt's note
+    /// about the user's setup says why; the model tells the user what to fix.
+    #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
+    NoCluster,
+    #[error(transparent)]
+    Kube(#[from] crate::domain::kube::KubeError),
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -978,6 +1014,12 @@ pub enum ToolCall {
     RunInTerminal(RunInTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
     Explore(ExploreArgs),
+    KubeList(KubeListArgs),
+    KubeGet(KubeGetArgs),
+    KubeEvents(KubeEventsArgs),
+    KubeLogs(KubeLogsArgs),
+    KubeTop(KubeTopArgs),
+    KubeFieldHistory(KubeFieldHistoryArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1008,6 +1050,12 @@ impl ToolCall {
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Explore(_) => ToolName::Explore,
+            ToolCall::KubeList(_) => ToolName::KubeList,
+            ToolCall::KubeGet(_) => ToolName::KubeGet,
+            ToolCall::KubeEvents(_) => ToolName::KubeEvents,
+            ToolCall::KubeLogs(_) => ToolName::KubeLogs,
+            ToolCall::KubeTop(_) => ToolName::KubeTop,
+            ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1244,6 +1292,9 @@ pub enum ToolResult {
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
     },
+    /// What a Kubernetes tool read, already shaped for the model — a table,
+    /// YAML, a log — and a few words for the row in the transcript.
+    Kube { text: String, summary: String },
 }
 
 /// A call to an MCP tool: the full name the model used, and whatever it
@@ -1285,6 +1336,100 @@ pub struct RunInTerminalArgs {
     pub command: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub id: Option<u32>,
+}
+
+/// `kubeList`. `namespace` is the chat's when absent, and `*` is all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeListArgs {
+    pub kind: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub label_selector: Option<String>,
+    #[serde(default)]
+    pub field_selector: Option<String>,
+    /// Paths into each object, shown as extra columns.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub fields: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub limit: Option<u32>,
+    /// The token a page ended with, for the next one.
+    #[serde(default, rename = "continue")]
+    pub continue_token: Option<String>,
+}
+
+/// `kubeGet`: one object, whole or cut to its top-level `sections`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeGetArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub sections: Option<Vec<String>>,
+}
+
+/// `kubeEvents`: a namespace's, or one object's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeEventsArgs {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub warnings_only: Option<bool>,
+}
+
+/// `kubeLogs`: a pod, an owner's pods (`kind` and `name`), or a selector's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeLogsArgs {
+    #[serde(default)]
+    pub pod: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub label_selector: Option<String>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub container: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub previous: Option<bool>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub tail: Option<u32>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub grep: Option<String>,
+}
+
+/// `kubeTop`: `pods` or `nodes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeTopArgs {
+    pub kind: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `kubeFieldHistory`: who set an object's fields, cut to `paths`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeFieldHistoryArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub paths: Option<Vec<String>>,
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the

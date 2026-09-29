@@ -49,6 +49,142 @@ pub enum KubeError {
     Timeout(u64),
     #[error("{0}")]
     Cluster(String),
+    /// A kind the server does not serve, by any of its names.
+    #[error("the cluster serves no kind called `{0}` — check the spelling, or whether its CRD is installed")]
+    UnknownKind(String),
+    /// A kind served by more than one API group; which one was meant is the
+    /// model's to say.
+    #[error("`{asked}` is served by more than one API group — name one of: {options}")]
+    AmbiguousKind { asked: String, options: String },
+}
+
+/// One kind the cluster serves, as discovery reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KubeKind {
+    /// Empty for the core group.
+    pub group: String,
+    pub version: String,
+    pub kind: String,
+    pub plural: String,
+    pub namespaced: bool,
+}
+
+impl KubeKind {
+    /// A core-group kind every cluster serves, for the tools that need one
+    /// by definition — events, pods — without asking discovery.
+    pub fn core(kind: &str, plural: &str) -> KubeKind {
+        KubeKind { group: String::new(), version: "v1".into(), kind: kind.into(), plural: plural.into(), namespaced: true }
+    }
+
+    /// `Deployment.apps`, or `Pod` for the core group — how the model names it
+    /// back when a bare name is ambiguous.
+    pub fn qualified(&self) -> String {
+        if self.group.is_empty() { self.kind.clone() } else { format!("{}.{}", self.kind, self.group) }
+    }
+}
+
+/// What a list asks for. `namespace: None` is every namespace, or a
+/// cluster-scoped kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListQuery {
+    pub namespace: Option<String>,
+    pub label_selector: Option<String>,
+    pub field_selector: Option<String>,
+    pub limit: Option<u32>,
+    pub continue_token: Option<String>,
+}
+
+/// One page of a list: the objects as JSON, and how to ask for the next.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListPage {
+    pub items: Vec<serde_json::Value>,
+    pub continue_token: Option<String>,
+    /// How many are left after this page, when the server says.
+    pub remaining: Option<i64>,
+}
+
+/// What a container's log is asked for. Lines always carry the server's
+/// timestamps: several pods' logs are merged by them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogQuery {
+    pub container: Option<String>,
+    pub previous: bool,
+    pub tail: Option<i64>,
+    pub since_seconds: Option<i64>,
+}
+
+/// A cluster the chat is pinned to, as the tools read it: its kubeconfig and
+/// context already chosen, so no call can name another. Implemented by
+/// `infra::kube_client::ClusterApi`; a test's double answers from JSON.
+pub trait KubeApi: Send + Sync {
+    /// Every kind the server serves that can be listed.
+    fn kinds(&self) -> Result<Vec<KubeKind>, KubeError>;
+    fn list(&self, kind: &KubeKind, query: &ListQuery) -> Result<ListPage, KubeError>;
+    /// `namespace` is ignored for a cluster-scoped kind.
+    fn get(&self, kind: &KubeKind, namespace: &str, name: &str) -> Result<serde_json::Value, KubeError>;
+    fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError>;
+}
+
+/// What a Kubernetes chat's tools read: its cluster, and the namespace it is
+/// pinned to — the default of every call that names none.
+#[derive(Clone, Copy)]
+pub struct PinnedCluster<'a> {
+    pub api: &'a dyn KubeApi,
+    pub namespace: &'a str,
+}
+
+/// `kubectl`'s short names, for the kinds that have one — discovery in this
+/// client does not carry them.
+const SHORT_NAMES: &[(&str, &str)] = &[
+    ("po", "pods"),
+    ("svc", "services"),
+    ("deploy", "deployments"),
+    ("rs", "replicasets"),
+    ("sts", "statefulsets"),
+    ("ds", "daemonsets"),
+    ("cj", "cronjobs"),
+    ("cm", "configmaps"),
+    ("ns", "namespaces"),
+    ("no", "nodes"),
+    ("ing", "ingresses"),
+    ("pvc", "persistentvolumeclaims"),
+    ("pv", "persistentvolumes"),
+    ("sa", "serviceaccounts"),
+    ("hpa", "horizontalpodautoscalers"),
+    ("ep", "endpoints"),
+    ("ev", "events"),
+    ("netpol", "networkpolicies"),
+    ("pdb", "poddisruptionbudgets"),
+    ("crd", "customresourcedefinitions"),
+    ("vs", "virtualservices"),
+    ("dr", "destinationrules"),
+    ("se", "serviceentries"),
+];
+
+/// The kind the model means by `asked`: `Deployment`, `deployments`, `deploy`,
+/// or with its group, `Gateway.networking.istio.io`. A name several groups
+/// serve is the core group's when it has one — `Event` is `v1` — and
+/// otherwise the model is asked to say which.
+pub fn resolve_kind<'k>(kinds: &'k [KubeKind], asked: &str) -> Result<&'k KubeKind, KubeError> {
+    let asked = asked.trim();
+    let (name, group) = match asked.split_once('.') {
+        Some((name, group)) => (name.to_lowercase(), Some(group.to_lowercase())),
+        None => (asked.to_lowercase(), None),
+    };
+    let plural = SHORT_NAMES.iter().find(|(short, _)| *short == name).map_or(name.as_str(), |(_, plural)| plural);
+    let found: Vec<&KubeKind> = kinds
+        .iter()
+        .filter(|k| k.kind.to_lowercase() == name || k.plural == name || k.plural == plural)
+        .filter(|k| group.as_ref().is_none_or(|g| &k.group == g))
+        .collect();
+    match found.as_slice() {
+        [] => Err(KubeError::UnknownKind(asked.to_string())),
+        [one] => Ok(one),
+        many => many.iter().find(|k| k.group.is_empty()).copied().ok_or_else(|| KubeError::AmbiguousKind {
+            asked: asked.to_string(),
+            options: many.iter().map(|k| k.qualified()).collect::<Vec<_>>().join(", "),
+        }),
+    }
 }
 
 /// The namespace `kubectl` would use with no `-n`.
@@ -159,6 +295,37 @@ mod tests {
     /// What every identity is given: asking about itself. Not access.
     fn self_review() -> Rule {
         rule(&["create"], &["authorization.k8s.io"], &["selfsubjectaccessreviews", "selfsubjectrulesreviews"])
+    }
+
+    fn kind(group: &str, kind: &str, plural: &str) -> KubeKind {
+        KubeKind { group: group.into(), version: "v1".into(), kind: kind.into(), plural: plural.into(), namespaced: true }
+    }
+
+    #[test]
+    fn a_kind_is_found_by_any_of_its_names() {
+        let kinds = [kind("apps", "Deployment", "deployments"), kind("", "Pod", "pods")];
+        for asked in ["Deployment", "deployment", "deployments", "deploy", "Deployment.apps", " deploy "] {
+            assert_eq!(resolve_kind(&kinds, asked).unwrap().kind, "Deployment", "{asked}");
+        }
+        assert_eq!(resolve_kind(&kinds, "po").unwrap().kind, "Pod");
+        assert!(matches!(resolve_kind(&kinds, "Deployment.batch"), Err(KubeError::UnknownKind(_))));
+        assert!(matches!(resolve_kind(&kinds, "VirtualService"), Err(KubeError::UnknownKind(_))));
+    }
+
+    /// `Event` is core's and `events.k8s.io`'s: core wins, as in `kubectl`.
+    /// Two CRDs of one name have no such winner.
+    #[test]
+    fn a_name_two_groups_serve_is_cores_or_the_models_to_choose() {
+        let kinds = [
+            kind("events.k8s.io", "Event", "events"),
+            kind("", "Event", "events"),
+            kind("gateway.networking.k8s.io", "Gateway", "gateways"),
+            kind("networking.istio.io", "Gateway", "gateways"),
+        ];
+        assert_eq!(resolve_kind(&kinds, "events").unwrap().group, "");
+        let Err(KubeError::AmbiguousKind { options, .. }) = resolve_kind(&kinds, "Gateway") else { panic!("not ambiguous") };
+        assert_eq!(options, "Gateway.gateway.networking.k8s.io, Gateway.networking.istio.io");
+        assert_eq!(resolve_kind(&kinds, "Gateway.networking.istio.io").unwrap().group, "networking.istio.io");
     }
 
     #[test]
