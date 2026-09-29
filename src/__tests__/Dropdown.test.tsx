@@ -102,3 +102,9 @@ test("a typed value is picked on Enter, and an empty box picks nothing", () => {
   expect(typed).toEqual(["orders"]);
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+test("a locked one does not open", () => {
+  render(<Dropdown label="role" options={OPTIONS} value="main" onPick={() => {}} locked />);
+  fireEvent.click(screen.getByRole("button", { name: /role/ }));
+  expect(screen.queryByRole("listbox")).toBeNull();
+});

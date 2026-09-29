@@ -35,10 +35,12 @@ type Props = {
   custom?: { placeholder: string; onEnter: (value: string) => void };
   /** A line under the heading about the options themselves — why some are missing. */
   note?: string;
+  /** Shown but not changeable: the menu does not open, and `title` says why. */
+  locked?: boolean;
 };
 
 /** Trigger + role="listbox" menu — the app draws its own dropdowns, never <select>. */
-export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen, custom, note }: Props) {
+export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen, custom, note, locked = false }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
 
@@ -66,13 +68,16 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
+        // Not `disabled`: a disabled button shows no tooltip, and the tooltip is the reason.
+        aria-disabled={locked || undefined}
         onClick={() => {
+          if (locked) return;
           if (!open) onOpen?.();
           setOpen(!open);
         }}
       >
         <span className="chip-label">{label}</span>
-        <ChevronDown className="chip-chev" size={10} />
+        {!locked && <ChevronDown className="chip-chev" size={10} />}
       </button>
       {open && (
         <div className={`dropdown-menu${below ? " below" : ""}${right ? " right" : ""}`} role="listbox" aria-label={heading}>

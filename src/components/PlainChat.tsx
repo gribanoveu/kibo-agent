@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, FileCog, Layers, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
+import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
@@ -56,6 +57,8 @@ type Props = {
   kube: KubeconfigsState;
   /** Opens Settings → Kubernetes. */
   onSetUpKube: () => void;
+  /** "Compact now" on the context meter. */
+  onCompact: () => void;
 };
 
 // Not a kubeconfig's name: the menu's last row, which opens Settings instead.
@@ -66,7 +69,7 @@ const MANAGE_KUBECONFIGS = "\u0000manage";
  * No folder — the role says who the model is and what it may call; its calls
  * and their approval cards are drawn by the agent's own transcript.
  */
-export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels, kube, onSetUpKube }: Props) {
+export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels, kube, onSetUpKube, onCompact }: Props) {
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
@@ -143,8 +146,10 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
         {/* On the box's top edge, where the agent's says which folder: here, who the
             model is. The chat's own settings go on this strip as they come. */}
         <div className="plain-tab">
+          {/* One role per chat: what was said was said to it. */}
           <Dropdown
-            title="Who the model is in this chat"
+            title={empty ? "Who the model is in this chat" : "The chat's role — start a new chat for another"}
+            locked={!empty}
             heading="Role"
             label={
               <span className="plain-chip-label">
@@ -277,6 +282,11 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 options={efforts}
                 onPick={(v) => onEffort(v || null)}
               />
+            )}
+            {chat.context && (
+              <span className="plain-meter">
+                <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up />
+              </span>
             )}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>

@@ -150,6 +150,55 @@ describe("a turn in a role", () => {
   });
 });
 
+describe("room in the window", () => {
+  const done = { status: "done", value: { text: "ok", history: [], todos: [] } };
+
+  test("a message is sent with the history the backend folded first", async () => {
+    const folded = [{ role: "user", content: "summary" }, { role: "user", content: "hi" }];
+    results.plain_chat_compact = (args: { force: boolean }) => (args.force ? null : { history: folded, folded: 4 });
+    results.plain_chat_send = done;
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    expect(called("plain_chat_compact")[0]?.args).toMatchObject({ role: "assistant", force: false });
+    expect(called("plain_chat_send")[0]?.args.messages).toEqual(folded);
+    expect(result.current.turn.blocks.some((b) => b.kind === "compaction")).toBe(true);
+  });
+
+  test("Compact now asks outright, and says when nothing was folded", async () => {
+    results.plain_chat_send = done;
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    let folded = true;
+    await act(async () => {
+      folded = await result.current.compact();
+    });
+    expect(folded).toBe(false);
+    expect(called("plain_chat_compact").map((c) => c.args.force)).toEqual([false, true]);
+  });
+});
+
+describe("a chat's role", () => {
+  test("is picked before the first message and fixed after it", async () => {
+    results.plain_chat_send = { status: "done", value: { text: "ok", history: [], todos: [] } };
+    const { result } = renderHook(() => usePlainChat());
+    act(() => {
+      result.current.setRole("kubernetes");
+    });
+    expect(result.current.role).toBe("kubernetes");
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    act(() => {
+      result.current.setRole("assistant");
+    });
+    expect(result.current.role).toBe("kubernetes");
+  });
+});
+
 describe("the cluster a chat works with", () => {
   test("a new chat starts at the kubeconfig picked last, and is pinned to it from its first message", async () => {
     results.plain_chat_send = { status: "done", value: { text: "ok", history: [], todos: [] } };

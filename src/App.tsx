@@ -610,6 +610,9 @@ export default function App() {
               onLoadModels={llm.loadModels}
               kube={kube}
               onSetUpKube={() => openSettings("kubernetes")}
+              onCompact={async () => {
+                if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
+              }}
             />
           )}
         </main>

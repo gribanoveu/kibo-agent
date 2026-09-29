@@ -756,6 +756,28 @@ export async function plainChatSave(
   return invoke<ChatSummary>("plain_chat_save", { id, role, kube, messages, blocks });
 }
 
+/** `contextUsage` for a chat in `role`: its prompt and tools. */
+export async function plainChatContextUsage(
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+): Promise<ContextUsage> {
+  requireBackend();
+  return invoke<ContextUsage>("plain_chat_context_usage", { role, kube, messages });
+}
+
+/** `compactHistory` for a chat in `role`, against its own prompt and tools. */
+export async function plainChatCompact(
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+  force: boolean,
+  turnId: string,
+): Promise<{ history: LlmMessage[]; folded: number } | null> {
+  requireBackend();
+  return invoke<{ history: LlmMessage[]; folded: number } | null>("plain_chat_compact", { role, kube, messages, force, turnId });
+}
+
 export async function plainChatCancel(): Promise<void> {
   requireBackend();
   return invoke<void>("plain_chat_cancel");

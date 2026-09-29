@@ -20,6 +20,11 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+.chip[aria-disabled="true"] {
+  cursor: default;
+  background: none;
+  color: var(--text-dim);
+}
 .chip-label {
   min-width: 0;
   overflow: hidden;

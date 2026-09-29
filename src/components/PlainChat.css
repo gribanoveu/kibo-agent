@@ -227,6 +227,12 @@
 .plain-chip-label.unset {
   color: var(--text-faint);
 }
+.plain-meter {
+  margin-left: auto;
+}
+.plain-meter + .plain-send {
+  margin-left: 0;
+}
 .plain-send {
   margin-left: auto;
   width: 30px;

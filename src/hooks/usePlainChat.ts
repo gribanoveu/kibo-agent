@@ -5,6 +5,8 @@ import {
   onTurnEvent,
   plainChatAlwaysAllow,
   plainChatCancel,
+  plainChatCompact,
+  plainChatContextUsage,
   plainChatList,
   plainChatResume,
   plainChatRoles,
@@ -14,6 +16,7 @@ import {
   type ChatRoleId,
   type ChatRoleView,
   type ChatSummary,
+  type ContextUsage,
   type LlmMessage,
   type Outcome,
   type ToolCallDecision,
@@ -24,6 +27,8 @@ import {
   appendNotice,
   appendUserMessage,
   clearApproval,
+  compactionEnded,
+  compactionStarted,
   emptyTurn,
   endTurn,
   restoredTurn,
@@ -94,6 +99,8 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
   const kube: KubePin | null =
     pinned ?? (lastKubeconfig ? { kubeconfig: lastKubeconfig, context: null, namespace: null } : null);
   const [error, setError] = useState<string | null>(null);
+  const [context, setContext] = useState<ContextUsage | null>(null);
+  const [compacting, setCompacting] = useState(false);
   // The running turn's id on the one event channel, and its listener.
   const turnId = useRef("");
   const subscribed = useRef<(() => void) | null>(null);
@@ -103,11 +110,24 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
 
   // A turn under way belongs to the chat on screen: its answer, its card and
   // its save land here. Leaving waits for it to stop, as the agent's does.
-  const busy = turn.status === "running" || turn.status === "awaitingApproval";
+  // A summary being made counts too: a message sent under it would be folded away.
+  const busy = turn.status === "running" || turn.status === "awaitingApproval" || compacting;
 
   const refresh = useCallback(() => plainChatList().then(setChats, (e) => setError(String(e))), []);
 
   useEffect(() => () => subscribed.current?.(), []);
+
+  // As the agent's meter: every point the history, the role or the cluster can
+  // have changed. Asking reaches the pinned cluster, so an answer that comes
+  // back after a newer question is dropped.
+  const asked = useRef(0);
+  const refreshContext = useCallback(() => {
+    const seq = ++asked.current;
+    plainChatContextUsage(role, kube, history.current)
+      .then((usage) => seq === asked.current && setContext(usage))
+      .catch(() => seq === asked.current && setContext(null));
+  }, [role, kube?.kubeconfig, kube?.context, kube?.namespace]);
+  useEffect(refreshContext, [refreshContext, turn.status, chatId]);
 
   const show = (id: string | null, blocks: Block[], messages: LlmMessage[], shownRole: ChatRoleId, pin: KubePin | null) => {
     subscribed.current?.();
@@ -197,6 +217,8 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     try {
       subscribed.current?.();
       subscribed.current = await onTurnEvent(turnId.current, (event) => setTurn((state) => acceptEvent(state, event)));
+      // Before the turn, so the room is made once and kept, and saved with it.
+      await makeRoom(false);
       // Saved before the turn: one that fails leaves what the user said to
       // retry, not retype — and the chat is in the sidebar from its first message.
       await plainChatSave(id, role, kube, history.current, asked.blocks);
@@ -222,6 +244,40 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
 
   const stop = () => void plainChatCancel().catch(() => {});
 
+  /**
+   * Folds the older part of the conversation when the backend says it is
+   * worth it — before each message, as the agent's window does — or at once
+   * (`force`, "Compact now"). `false` when nothing was folded.
+   */
+  const makeRoom = async (force: boolean) => {
+    setCompacting(true);
+    // On the turn channel, as the agent's pass: the backend says when a summary is being made.
+    const id = `compact-${crypto.randomUUID()}`;
+    let ended = false;
+    const off = await onTurnEvent(id, (event) => {
+      if (event.type === "historyCompacting" && !ended) setTurn(compactionStarted);
+    });
+    const end = (result: { folded: number } | null) => {
+      ended = true;
+      off();
+      setTurn((state) => compactionEnded(state, result));
+      setCompacting(false);
+    };
+    try {
+      const shorter = await plainChatCompact(role, kube, history.current, force, id);
+      end(shorter && { folded: shorter.folded });
+      if (!shorter) return false;
+      history.current = shorter.history;
+      unsaved.current = true;
+      refreshContext();
+      return true;
+    } catch (e) {
+      end(null);
+      setError(String(e));
+      return false;
+    }
+  };
+
   /** `false` for the open chat while a turn is under way: its next save would write it back. */
   const remove = async (id: string) => {
     if (id === chatId && !newChat()) return false;
@@ -243,7 +299,27 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     void refresh();
   };
 
-  return { chats, chatId, turn, busy, roles, role, setRole, kube, setPin, error, send, decide, stop, open, newChat, remove, archive };
+  return {
+    chats,
+    chatId,
+    turn,
+    busy,
+    roles,
+    role,
+    setRole: (next: ChatRoleId) => turn.blocks.length === 0 && setRole(next),
+    kube,
+    setPin,
+    error,
+    context,
+    send,
+    decide,
+    stop,
+    compact: () => (busy ? Promise.resolve(false) : makeRoom(true)),
+    open,
+    newChat,
+    remove,
+    archive,
+  };
 }
 
 export type PlainChatState = ReturnType<typeof usePlainChat>;
