@@ -202,6 +202,20 @@ mod tests {
         history.iter().rev().find(|m| m.role == LlmRole::Tool).and_then(|m| m.content.clone()).unwrap_or_default()
     }
 
+    /// The meter is the estimate of what a turn sends: the role's prompt, its
+    /// tools and the conversation, no more and no less.
+    #[test]
+    fn the_meter_counts_what_a_chat_turn_sends() {
+        let chat = chat(Vec::new(), Some("French"));
+        let history = vec![LlmMessage::user("how many pods are running?")];
+        for &role in ChatRole::ALL {
+            let sent = chat.run(role, false, |c| in_place(c, |turn| llm_chat::estimate_request(turn, &history)));
+            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, chat.session.reply_language);
+            let usage = crate::services::context_compaction::usage(&chat.session, frame, &history);
+            assert_eq!(usage.total, sent, "{role:?}");
+        }
+    }
+
     #[test]
     fn the_role_speaks_first_the_conversation_follows_and_no_tool_is_offered() {
         let chat = chat(vec![said("hello")], Some("Russian"));

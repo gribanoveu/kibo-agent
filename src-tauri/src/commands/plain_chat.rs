@@ -16,11 +16,14 @@ use crate::infra::kube_client::{ClusterApi, Clusters};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tool_call_log::ToolCallLogEntry;
 use crate::domain::tools::ApprovalPolicy;
-use crate::domain::turn::{ChatStreamOutcome, PendingApproval, ToolCallDecision};
+use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, ToolCallDecision};
 use crate::services::llm_chat::TurnError;
+use crate::services::llm_session::LlmSession;
 use crate::infra::chat_store;
-use crate::services::{kubeconfigs, llm_session, plain_chat};
+use crate::domain::compaction::{ContextUsage, RequestFrame};
+use crate::services::{context_compaction, kubeconfigs, llm_session, plain_chat};
 
+use super::chat::CompactedHistory;
 use super::chat_events::chat_event_sink;
 
 /// The stop flag of the reply being written. Apart from the agent's: a chat
@@ -135,6 +138,57 @@ where
     })
     .await
     .map_err(|e| format!("the chat thread failed: {e}"))?
+}
+
+/// What the next request of a chat in `role` will cost, for its meter — the
+/// agent's `chat_context_usage` with the role's prompt and tools. Off the
+/// event loop: the prompt says what the pinned cluster answers, which asks it.
+#[tauri::command]
+pub async fn plain_chat_context_usage<R: Runtime>(
+    app: AppHandle<R>,
+    role: ChatRole,
+    kube: Option<KubePin>,
+    messages: Vec<LlmMessage>,
+) -> Result<ContextUsage, String> {
+    let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (session, frame) = chat_frame(&clusters, role, kube.as_ref())?;
+        Ok(context_compaction::usage(&session, frame, &messages))
+    })
+    .await
+    .map_err(|e| format!("the context thread failed: {e}"))?
+}
+
+/// The agent's `chat_compact` for a chat in `role`: sent before each message,
+/// and by "Compact now" (`force`), against the role's own prompt and tools.
+#[tauri::command]
+pub async fn plain_chat_compact<R: Runtime>(
+    app: AppHandle<R>,
+    role: ChatRole,
+    kube: Option<KubePin>,
+    messages: Vec<LlmMessage>,
+    force: bool,
+    turn_id: String,
+) -> Result<Option<CompactedHistory>, String> {
+    let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    let sink = chat_event_sink(&app, turn_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let (session, frame) = chat_frame(&clusters, role, kube.as_ref())?;
+        let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
+        context_compaction::compact_if_needed(&session, frame, &messages, force, &started)
+            .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("the compaction thread failed: {e}"))?
+}
+
+/// The provider, and what a chat's request sends in front of the conversation.
+fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Result<(LlmSession, RequestFrame), String> {
+    let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+    let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
+    let frame = context_compaction::chat_request_frame(role, &kube, session.reply_language);
+    Ok((session, frame))
 }
 
 /// Chat mode's conversations, newest first — whatever folder is open.

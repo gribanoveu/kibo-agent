@@ -1231,11 +1231,16 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools) -> Ve
 fn offered(turn: &Turn) -> Vec<LlmToolDefinition> {
     match turn.place {
         Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp),
-        Place::Chat { role, .. } => tool_definitions()
-            .into_iter()
-            .filter(|definition| ToolName::from_wire_name(&definition.name).is_some_and(|tool| role.tools().contains(&tool)))
-            .collect(),
+        Place::Chat { role, .. } => tool_definitions_for_role(role),
     }
+}
+
+/// The tools a chat in `role` is offered.
+pub(crate) fn tool_definitions_for_role(role: ChatRole) -> Vec<LlmToolDefinition> {
+    tool_definitions()
+        .into_iter()
+        .filter(|definition| ToolName::from_wire_name(&definition.name).is_some_and(|tool| role.tools().contains(&tool)))
+        .collect()
 }
 
 /// What a request of `turn` with `history` weighs, by the estimate the

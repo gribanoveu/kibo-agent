@@ -166,6 +166,8 @@ pub fn run() {
             commands::plain_chat::plain_chat_cancel,
             commands::plain_chat::plain_chat_list,
             commands::plain_chat::plain_chat_save,
+            commands::plain_chat::plain_chat_context_usage,
+            commands::plain_chat::plain_chat_compact,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load,
             commands::chat_history::chat_save,
