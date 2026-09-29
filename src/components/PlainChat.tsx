@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, ChevronRight, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { Brain, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
-import { Markdown } from "./Markdown";
-import { CopyAction } from "./CopyAction";
+import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
 import { pickSuggestions } from "../lib/chatSuggestions";
@@ -13,21 +12,6 @@ import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
-
-/** The model's thinking before an answer, folded until asked — as the agent's chat draws it. */
-function Thinking({ text }: { text: string }) {
-  return (
-    <details className="plain-reasoning">
-      <summary>
-        <Brain size={13} />
-        <span className="plain-reasoning-name">Thinking</span>
-        <span className="plain-reasoning-preview">{text.split("\n", 1)[0]}</span>
-        <ChevronRight className="plain-reasoning-chev" size={12} />
-      </summary>
-      <p className="plain-reasoning-text">{text}</p>
-    </details>
-  );
-}
 
 /** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
@@ -75,13 +59,17 @@ type Props = {
 // Not a kubeconfig's name: the menu's last row, which opens Settings instead.
 const MANAGE_KUBECONFIGS = "\u0000manage";
 
-/** Chat mode: the conversation and its message box, the two panels of `.main`. No folder, no tools — the role says what the model is. */
+/**
+ * Chat mode: the conversation and its message box, the two panels of `.main`.
+ * No folder — the role says who the model is and what it may call; its calls
+ * and their approval cards are drawn by the agent's own transcript.
+ */
 export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels, kube, onSetUpKube }: Props) {
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
-  const running = chat.streaming !== null;
+  const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
-  const empty = chat.messages.length === 0;
+  const empty = chat.turn.blocks.length === 0;
   // Two of the set, picked again each time an empty chat opens.
   const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
 
@@ -89,13 +77,13 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
-  const sent = chat.messages.filter((m) => m.role === "user").length;
+  const sent = chat.turn.blocks.filter((b) => b.kind === "user").length;
   useEffect(() => {
     scrollToBottom();
   }, [chat.chatId, sent, scrollToBottom]);
 
   const send = () => {
-    if (running || !draft.trim()) return;
+    if (chat.busy || !draft.trim()) return;
     void chat.send(draft);
     setDraft("");
   };
@@ -111,7 +99,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
         </header>
 
         <div ref={scrollRef} className="plain-thread chat-text">
-          {chat.messages.length === 0 && !running ? (
+          {empty ? (
             <div className="plain-welcome">
               <div className="plain-welcome-mascot">
                 <img className="plain-welcome-logo" src={logo} alt="" />
@@ -139,42 +127,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             </div>
           ) : (
             <div ref={contentRef}>
-              {chat.messages.map((message, i) =>
-                message.role === "user" ? (
-                  <div key={i} className="plain-msg me">
-                    <div className="plain-text">{message.text}</div>
-                    <div className="plain-foot">
-                      <CopyAction text={message.text} />
-                    </div>
-                  </div>
-                ) : (
-                  <div key={i} className="plain-msg">
-                    {message.reasoning && <Thinking text={message.reasoning} />}
-                    <Markdown text={message.text} streaming={false} />
-                    <div className="plain-foot">
-                      <CopyAction text={message.text} />
-                    </div>
-                  </div>
-                ),
-              )}
-              {chat.streaming && (
-                <div className="plain-msg">
-                  {chat.streaming.reasoning && <Thinking text={chat.streaming.reasoning} />}
-                  {chat.streaming.text ? (
-                    <Markdown text={chat.streaming.text} streaming />
-                  ) : (
-                    !chat.streaming.reasoning && (
-                      <div className="plain-typing" aria-label="Writing">
-                        <i />
-                        <i />
-                        <i />
-                      </div>
-                    )
-                  )}
-                  {/* Room kept while it streams, so Copy appears without the thread moving. */}
-                  <div className="plain-foot" />
-                </div>
-              )}
+              <Transcript turn={chat.turn} onDecide={chat.decide} speaker={roleName} />
               {chat.error && <div className="plain-error">{chat.error}</div>}
             </div>
           )}
@@ -270,7 +223,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 <Square size={14} />
               </button>
             ) : (
-              <button type="button" className="plain-send" title="Send" disabled={!draft.trim()} onClick={send}>
+              <button type="button" className="plain-send" title="Send" disabled={chat.busy || !draft.trim()} onClick={send}>
                 <SendHorizontal size={16} />
               </button>
             )}

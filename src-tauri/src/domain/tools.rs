@@ -782,6 +782,18 @@ pub enum ToolError {
         "the tool `{0}` is not available in this conversation mode — the user chose a mode that cannot change the repository. Say what would need to be done instead of doing it."
     )]
     NotOfferedInMode(String),
+    /// A tool the chat's role does not have. Chat has no folder: the role's
+    /// tools are all there is, and saying so is what stops a model reaching
+    /// for the agent's from memory.
+    #[error(
+        "the tool `{0}` is not available in this chat — its role has no such tool, and there is no folder to work in. Answer from what you have, or say what the user could do."
+    )]
+    NotOfferedInChat(String),
+    /// A tool that works in the open folder, called where there is none. The
+    /// chat's preflight refuses these first; this is the dispatcher's own
+    /// answer, so a tool never has to be handed a folder that does not exist.
+    #[error("the tool `{0}` works in a folder, and this chat has none")]
+    NoFolder(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("not a file: {0}")]

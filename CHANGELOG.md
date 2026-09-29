@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-09-29 Chat mode draws its conversation as the agent's chat does — turns under the role's name, thinking rows, Copy — and a role's tool calls, with their approval cards, will show there; chats saved before still open
 - 2026-09-28 Copy a message or an answer in Chat mode with the Copy button under it, shown on hover as in the agent's chat
 - 2026-09-28 Add your kubeconfig files in Settings → Kubernetes and pick one on the Kubernetes role's tab in Chat mode: the commands the model gives name that file; with none set up, it says where to add one
 - 2026-09-28 Chat mode's empty chat shows the role's icon in a thought cloud over Kibo, and the role's tab carries the same icon

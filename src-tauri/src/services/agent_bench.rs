@@ -294,9 +294,8 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let turn = Turn {
         events: &events,
         session,
-        scope: &scope,
+        place: llm_chat::Place::Folder { scope: &scope, mode: ConversationMode::Agent },
         approval: &approval,
-        mode: ConversationMode::Agent,
         cancelled: &cancelled,
         sleep: &sleep,
         shell: &shell,

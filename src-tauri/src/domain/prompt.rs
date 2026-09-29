@@ -19,6 +19,7 @@
 
 use std::path::Path;
 
+use crate::domain::chat_role::{ChatRole, KubeSetup};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmMessage;
 use crate::domain::project_rules::RuleFile;
@@ -356,6 +357,22 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
         Some(language) => format!("{text}\n\n[Reply in {language}.]"),
         None => text,
     }
+}
+
+/// What goes in front of a Chat mode conversation: the role, what it is told
+/// of the user's setup, the language. All settled before the conversation and
+/// the same every turn, so a request is the one before it plus the new
+/// messages — what a provider's prompt cache matches.
+pub fn chat_system_message(role: ChatRole, kube: &KubeSetup, language: Option<&str>) -> LlmMessage {
+    let mut prompt = role.prompt().to_string();
+    if let Some(note) = role.setup_note(kube) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&note);
+    }
+    if let Some(language) = language {
+        prompt.push_str(&format!("\n\nReply in {language}."));
+    }
+    LlmMessage::system(prompt)
 }
 
 /// What goes in front of the conversation on every request.
@@ -731,5 +748,17 @@ mod tests {
         assert_eq!(russian.len(), auto.len() + 1);
         let at = |needle: &str| russian.iter().position(|t| t.contains(needle)).unwrap();
         assert!(at("Write in English.") < at("Write everything you say in Russian"), "after the rules, so it wins");
+    }
+
+    /// The role, then its setup, then the language — the part most likely to
+    /// change last, and nothing at all for what is not set.
+    #[test]
+    fn a_chat_is_told_its_role_then_its_setup_then_the_language() {
+        let kube = KubeSetup::NotSet;
+        let note = ChatRole::Kubernetes.setup_note(&kube).unwrap();
+        let said = chat_system_message(ChatRole::Kubernetes, &kube, Some("Russian"));
+        assert_eq!(said.content.unwrap(), format!("{}\n\n{note}\n\nReply in Russian.", ChatRole::Kubernetes.prompt()));
+        let plain = chat_system_message(ChatRole::Assistant, &kube, None);
+        assert_eq!(plain.content.as_deref(), Some(ChatRole::Assistant.prompt()));
     }
 }

@@ -1,6 +1,6 @@
 # Режим Kubernetes: руки для роли
 
-План (не начат, кроме K-0; решение 1 принято): роль Kubernetes в режиме Chat получает свои инструменты —
+План: K-0 и K-1 сделаны, решение 1 принято: роль Kubernetes в режиме Chat получает свои инструменты —
 читать кластер, диагностировать, менять его с подтверждением. Документ фиксирует, что
 уже есть, какие решения предлагаются и почему, нарезку K-1…K-9 и открытые вопросы.
 
@@ -556,10 +556,17 @@ namespace» не нужен.
 ([11-mutation-testing.md](11-mutation-testing.md)).
 
 - **K-0 — роль, kubeconfig, состояние в промпте.** Сделано.
-- **K-1 — Chat с инструментами.** Необязательный `ToolScope` в `llm_chat::Turn`;
-  `plain_chat` запускает ход роли агентским циклом; транскрипт Chat на `Block[]` и
-  рендер из `ChatPanel`; карточки подтверждения в Chat. Проверка: роль с одним
-  безобидным инструментом проходит цикл, подтверждение, остановку.
+- **K-1 — Chat с инструментами.** Сделано. У `llm_chat::Turn` вместо `scope` и `mode` —
+  `place: Place`: `Folder { scope, mode }` у агента, `Chat { role, kube }` у чата — промпт
+  роли, её инструменты и своя предпроверка (`preflight_chat_call`,
+  `ToolError::NotOfferedInChat`); хуков и файловых мест у чата нет. Диспетчер —
+  `tools::dispatch(Option<&ToolScope>, …)`, инструмент без папки отвечает
+  `ToolError::NoFolder`. `services/plain_chat.rs` запускает ход тем же `stream`/`resume`;
+  команды `plain_chat_send`, `plain_chat_resume`, `plain_chat_always_allow`. Транскрипт
+  Chat — `Block[]` агента и `Transcript` из `ChatPanel.tsx`, подписанный именем роли;
+  старые чаты читаются (`chatBlocks`). Проверено на `ChatRole::Tester` (только в тестах):
+  `todo` идёт без карточки, `deleteFile` ждёт её, отказ и остановка. Мутаций семь, все
+  пойманы. Настоящих инструментов у ролей пока нет — с K-3.
 - **K-2 — клиент и закрепление кластера на чат.** `infra/kube_client.rs` на `kube-rs`,
   внесённый в `NETWORK_ALLOWED` и в [08-data-policy.md](08-data-policy.md); таймауты
   запросов; `PATH` логин-шелла в `exec.env` kubeconfig в памяти (см. «Exec-плагины и

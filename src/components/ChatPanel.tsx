@@ -590,6 +590,89 @@ type Props = {
   onFix?: (text: string) => void;
 };
 
+type TranscriptProps = Pick<
+  Props,
+  | "turn"
+  | "onDecide"
+  | "onOpenProcess"
+  | "onOpenAgent"
+  | "runningProcesses"
+  | "onPasteCommand"
+  | "onOpenFile"
+  | "branchable"
+  | "onBranch"
+  | "onRewind"
+  | "onFix"
+> & {
+  /** Who answers, over their turns: the agent, or a chat's role. */
+  speaker?: string;
+};
+
+/**
+ * The conversation as turns — the user's bubbles, the answers, the calls and
+ * their cards. The agent's chat draws it, and Chat mode draws its own with it,
+ * so a role's tool calls and approval cards look as the agent's do.
+ */
+export function Transcript({
+  turn,
+  onDecide,
+  speaker = "Agent",
+  onOpenProcess,
+  onOpenAgent,
+  runningProcesses = [],
+  onPasteCommand,
+  onOpenFile,
+  branchable = null,
+  onBranch,
+  onRewind,
+  onFix,
+}: TranscriptProps) {
+  const groups = group(turn.blocks);
+  // The one answer still arriving: the last block of a running turn.
+  const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
+  return (
+    <>
+      {groups.map((turnGroup, index) => (
+        <div className="turn" key={index}>
+          {turnGroup.role !== "notice" && (
+            <div className={`role${turnGroup.role === "agent" ? " agent" : ""}`}>
+              {turnGroup.role === "agent" ? speaker : "You"}
+            </div>
+          )}
+          {fold(turnGroup.blocks).map((block, at, items) =>
+            block.kind === "run" ? (
+              <ToolRun
+                key={block.id}
+                run={block}
+                // Only the work at the very end is under way; a run the
+                // agent has already written past is finished.
+                live={turn.status === "running" && index === groups.length - 1 && at === items.length - 1}
+                onOpenProcess={onOpenProcess}
+                onOpenAgent={onOpenAgent}
+              />
+            ) : block.kind === "user" ? (
+              <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
+            ) : (
+              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent)
+            ),
+          )}
+          {workedFooter(
+            groups,
+            index,
+            turn,
+            index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
+          )}
+        </div>
+      ))}
+      {turn.status === "running" && turn.runningSince !== null && (
+        <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
+          <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
+        </WorkingClock>
+      )}
+    </>
+  );
+}
+
 export function ChatPanel({
   asideOpen = false,
   onExport,
@@ -616,8 +699,6 @@ export function ChatPanel({
   onFix,
 }: Props) {
   const groups = group(turn.blocks);
-  // The one answer still arriving: the last block of a running turn.
-  const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
   // Under a finished answer only: mid-turn the plan is not written yet, and
   // after a stop or a failure it may be half of one.
   const planReady = onImplement && turn.status === "done" && groups[groups.length - 1]?.role === "agent";
@@ -705,43 +786,19 @@ export function ChatPanel({
           <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
         ) : (
           <div ref={contentRef}>
-            {groups.map((turnGroup, index) => (
-              <div className="turn" key={index}>
-                {turnGroup.role !== "notice" && (
-                  <div className={`role${turnGroup.role === "agent" ? " agent" : ""}`}>
-                    {turnGroup.role === "agent" ? "Agent" : "You"}
-                  </div>
-                )}
-                {fold(turnGroup.blocks).map((block, at, items) =>
-                  block.kind === "run" ? (
-                    <ToolRun
-                      key={block.id}
-                      run={block}
-                      // Only the work at the very end is under way; a run the
-                      // agent has already written past is finished.
-                      live={turn.status === "running" && index === groups.length - 1 && at === items.length - 1}
-                      onOpenProcess={onOpenProcess}
-                      onOpenAgent={onOpenAgent}
-                    />
-                  ) : block.kind === "user" ? (
-                    <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
-                  ) : (
-                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent)
-                  ),
-                )}
-                {workedFooter(
-                  groups,
-                  index,
-                  turn,
-                  index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
-                )}
-              </div>
-            ))}
-            {turn.status === "running" && turn.runningSince !== null && (
-              <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
-                <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
-              </WorkingClock>
-            )}
+            <Transcript
+              turn={turn}
+              onDecide={onDecide}
+              onOpenProcess={onOpenProcess}
+              onOpenAgent={onOpenAgent}
+              runningProcesses={runningProcesses}
+              onPasteCommand={onPasteCommand}
+              onOpenFile={onOpenFile}
+              branchable={branchable}
+              onBranch={onBranch}
+              onRewind={onRewind}
+              onFix={onFix}
+            />
             {planReady && (
               <div className="plan-handoff">
                 <button type="button" className="btn btn-primary" onClick={onImplement}>

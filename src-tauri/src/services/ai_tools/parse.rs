@@ -11,6 +11,7 @@
 
 use serde::de::DeserializeOwned;
 
+use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::llm::LlmToolCall;
 use crate::domain::tools::{McpCallArgs, ReadFiles, ToolCall, ToolError, ToolScope, WriteBlocked, MCP_PREFIX};
@@ -56,6 +57,17 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "gitStatus" => ToolCall::GitStatus,
         other => return Err(ToolError::UnknownTool(other.to_string())),
     })
+}
+
+/// Chat mode's preflight: the call parses, and the chat's role has the tool.
+/// No containment: there is no folder to be inside, and a role's tools touch
+/// none — [`crate::services::ai_tools::tools::dispatch`] refuses one that would.
+pub fn preflight_chat_call(role: ChatRole, call: &LlmToolCall) -> Result<(), ToolError> {
+    let parsed = parse_tool_call(call)?;
+    if !role.tools().contains(&parsed.name()) {
+        return Err(ToolError::NotOfferedInChat(parsed.name().wire_name().to_string()));
+    }
+    Ok(())
 }
 
 /// Rejects what cannot succeed, before a human is asked to approve it.

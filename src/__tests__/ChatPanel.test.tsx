@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { ChatPanel, Preview, formatDuration } from "../components/ChatPanel";
+import { ChatPanel, Preview, Transcript, formatDuration } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
 
 // The transcript's own rules: who a block belongs to, and what the approval
@@ -759,3 +759,32 @@ describe("a background process that ended", () => {
   });
 });
 
+describe("the transcript in Chat mode", () => {
+  /// The same turns, calls and cards as the agent's — under the role's name.
+  test("answers under the role's name, and its card answers as the agent's does", () => {
+    const decided: unknown[] = [];
+    render(
+      <Transcript
+        turn={state(
+          [
+            { kind: "user", id: "u0", text: "scale it" },
+            { kind: "message", id: "m1", round: 1, text: "Scaling." },
+            {
+              kind: "approval",
+              id: "approval:1",
+              round: 1,
+              calls: [{ id: "c1", name: "deleteFile", arguments: '{"path":"a"}', requiresConfirmation: true }],
+            },
+          ],
+          { status: "awaitingApproval" },
+        )}
+        onDecide={(decisions) => decided.push(decisions)}
+        speaker="Kubernetes"
+      />,
+    );
+    expect(screen.getByText("Kubernetes")).toBeTruthy();
+    expect(screen.queryByText("Agent")).toBeNull();
+    fireEvent.click(screen.getByText("Allow"));
+    expect(decided).toEqual([[{ id: "c1", approved: true, reason: null }]]);
+  });
+});

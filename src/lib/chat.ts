@@ -702,17 +702,31 @@ export async function plainChatRoles(): Promise<ChatRoleView[]> {
 }
 
 /**
- * The model's reply to `messages`, outside any folder. Its text arrives on
- * `onTurnEvent(turnId)` as `delta` events while it is written; this resolves
- * with all of it — what was said so far, after a stop.
+ * A turn in `role` on `messages`, the whole conversation so far, outside any
+ * folder — the agent's loop with the role's prompt and tools. Its text, calls
+ * and results arrive on `onTurnEvent(turnId)` as the agent's do; this resolves
+ * with how it ended: done, stopped, or paused on the approval card.
  */
-export async function plainChatSend(
+export async function plainChatSend(turnId: string, role: ChatRoleId, messages: LlmMessage[]): Promise<Outcome> {
+  requireBackend();
+  return invoke<Outcome>("plain_chat_send", { turnId, role, messages });
+}
+
+/** Continues a chat's turn paused on the approval card, with the user's answers. */
+export async function plainChatResume(
   turnId: string,
   role: ChatRoleId,
-  messages: LlmMessage[],
-): Promise<{ text: string; reasoning?: string; truncated?: boolean }> {
+  checkpoint: Checkpoint,
+  decisions: ToolCallDecision[],
+): Promise<Outcome> {
   requireBackend();
-  return invoke("plain_chat_send", { turnId, role, messages });
+  return invoke<Outcome>("plain_chat_resume", { turnId, role, checkpoint, decisions });
+}
+
+/** "Always" on a chat's card: this tool stops asking in Chat mode until the app quits. */
+export async function plainChatAlwaysAllow(tool: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("plain_chat_always_allow", { tool });
 }
 
 /** Chat mode's conversations, newest first, whatever folder is open. They open with `loadChat`. */
@@ -721,7 +735,7 @@ export async function plainChatList(): Promise<ChatSummary[]> {
   return invoke<ChatSummary[]>("plain_chat_list");
 }
 
-/** `messages` is what the model is sent again; `blocks` the transcript as drawn, thinking included. */
+/** `messages` is what the model is sent again; `blocks` the transcript as drawn — the agent's blocks. */
 export async function plainChatSave(
   id: string,
   role: ChatRoleId,

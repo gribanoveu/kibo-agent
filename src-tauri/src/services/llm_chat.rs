@@ -22,6 +22,7 @@ use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
 use crate::domain::result_clearing;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
+use crate::domain::chat_role::{ChatRole, KubeSetup};
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
@@ -40,12 +41,12 @@ use crate::domain::turn::{
     ToolResultEvent,
 };
 use crate::infra::llm_debug_log;
-use crate::services::ai_tools::parse::{parse_tool_call, preflight_tool_call};
+use crate::services::ai_tools::parse::{parse_tool_call, preflight_chat_call, preflight_tool_call};
 use crate::services::ai_tools::model_text::for_model;
 use crate::services::ai_tools::resolve::{relative_to_root, resolve_existing};
 use crate::domain::rewind::FileChange;
 use crate::services::ai_tools::file_changes;
-use crate::services::ai_tools::tools::{execute_tool, tool_definitions};
+use crate::services::ai_tools::tools::{dispatch, tool_definitions};
 use crate::services::context_compaction;
 use crate::services::llm_session::LlmSession;
 
@@ -174,12 +175,10 @@ pub fn truncated_round_note(round_truncated: bool, failed: bool, content: String
 pub struct Turn<'a> {
     pub events: &'a ChatEventSink,
     pub session: &'a LlmSession,
-    pub scope: &'a ToolScope,
+    /// The open folder and its mode, or a chat's role — what the model is
+    /// told and what it may call.
+    pub place: Place<'a>,
     pub approval: &'a ApprovalPolicy,
-    /// Which tools exist this turn, and what the model is told the
-    /// conversation is for. Read once per turn: a mode changed while an
-    /// approval card was showing does not rewrite decisions already made.
-    pub mode: ConversationMode,
     /// Polled between rounds, after a round streams, between individual calls,
     /// and during a retry wait.
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -233,6 +232,38 @@ pub struct Turn<'a> {
 }
 
 
+/// Where a turn works, which decides what the model is told and what it may
+/// call. One enum rather than an optional folder beside a mode: the two go
+/// together — Chat mode has no folder *and* no conversation mode, only a role.
+#[derive(Clone, Copy)]
+pub enum Place<'a> {
+    /// The agent in the open folder. The mode is read once per turn: a mode
+    /// changed while an approval card was showing does not rewrite decisions
+    /// already made.
+    Folder { scope: &'a ToolScope, mode: ConversationMode },
+    /// Chat mode (`docs/21-kubernetes-mode.md`, K-1): no folder. The role is
+    /// who the model is and all it may call; `kube` is what it is told of the
+    /// user's cluster.
+    Chat { role: ChatRole, kube: &'a KubeSetup },
+}
+
+impl<'a> Place<'a> {
+    /// The folder, where there is one.
+    pub fn scope(&self) -> Option<&'a ToolScope> {
+        match self {
+            Place::Folder { scope, .. } => Some(scope),
+            Place::Chat { .. } => None,
+        }
+    }
+
+    /// The conversation mode, where there is one.
+    pub fn mode(&self) -> Option<ConversationMode> {
+        match self {
+            Place::Folder { mode, .. } => Some(*mode),
+            Place::Chat { .. } => None,
+        }
+    }
+}
 
 /// Notes typed while a turn is running, waiting for the next round.
 ///
@@ -490,7 +521,7 @@ fn run(
                     },
                 );
             }
-            if turn.mode == ConversationMode::Review {
+            if turn.place.mode() == Some(ConversationMode::Review) {
                 let used = crate::domain::review::Budget { rounds: round - 1, weight: state.budget_used };
                 let limit = crate::domain::review::Budget { rounds: MAX_TOOL_ITERATIONS as u32, weight: MAX_TOOL_BUDGET };
                 if let Some(said) = crate::domain::review::wrap_up(used, limit, &state.history) {
@@ -504,7 +535,7 @@ fn run(
             }
             apply_steering(&events, round, &mut state.history, (turn.take_steering)());
             report_ended_processes(turn, &events, round, &mut state.history);
-            clear_stale_results(turn.scope, &mut state, &mut seen_results);
+            clear_stale_results(turn.place.scope(), &mut state, &mut seen_results);
             restore_checklist(&mut state.history, &state.todos);
             events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
 
@@ -579,7 +610,7 @@ fn run(
                 // cap a refusal no longer keeps the turn going.
                 // A helper's answer is not the turn ending: that is the
                 // calling turn's, and its Stop hooks run then.
-                let refused = if waiting.is_empty() && turn.mode != ConversationMode::Explore {
+                let refused = if waiting.is_empty() && turn.place.mode() != Some(ConversationMode::Explore) {
                     let fields = serde_json::json!({ "stop_hook_active": stop_blocks > 0 });
                     match fire_hook(turn, &events, round, HookEvent::Stop, None, fields) {
                         Some(_) if stop_blocks >= MAX_STOP_BLOCKS => {
@@ -632,7 +663,7 @@ fn run(
             // which is the case the truncation note exists for.
             let mut runnable: Vec<LlmToolCall> = Vec::new();
             for call in &result.tool_calls {
-                match preflight_tool_call(turn.scope, turn.mode, &state.reads, call) {
+                match preflight(turn, &state.reads, call) {
                     Ok(()) => runnable.push(call.clone()),
                     Err(e) => {
                         report_call(&events, round, call);
@@ -738,7 +769,7 @@ fn run(
                         }
                         // Around the call, not inside the tool: one place sees
                         // every write, and no tool has to remember to report.
-                        let watched = file_changes::before(turn.scope, &parsed);
+                        let watched = turn.place.scope().and_then(|scope| file_changes::before(scope, &parsed));
                         let result = execute_call(turn, round, call, &parsed, &mut state.reads, &mut state.todos);
                         changes = watched.map(file_changes::after).unwrap_or_default();
                         result
@@ -843,7 +874,16 @@ fn execute_call(
         review: turn.review.clone(),
         explore: Some(&explore),
     };
-    execute_tool(turn.scope, parsed, reads, todos, &deps)
+    dispatch(turn.place.scope(), parsed, reads, todos, &deps)
+}
+
+/// The half of the gate the model cannot see: in a folder, the mode and
+/// containment; in a chat, the role's own tools and nothing else.
+fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), crate::domain::tools::ToolError> {
+    match turn.place {
+        Place::Folder { scope, mode } => preflight_tool_call(scope, mode, reads, call),
+        Place::Chat { role, .. } => preflight_chat_call(role, call),
+    }
 }
 
 /// How many helpers run at once. More would be as many streams to one
@@ -967,14 +1007,17 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
             _ => {}
         })
     };
+    // Offered only in a folder; the chat's preflight refuses it first.
+    let Some(scope) = turn.place.scope() else {
+        return Err(ToolError::NoFolder("explore".to_string()));
+    };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
     let no_steering = Vec::new;
     let helper = Turn {
         events: &events,
         session: turn.session,
-        scope: turn.scope,
+        place: Place::Folder { scope, mode: ConversationMode::Explore },
         approval: &ApprovalPolicy::default(),
-        mode: ConversationMode::Explore,
         cancelled: &stopped,
         sleep: turn.sleep,
         shell: turn.shell,
@@ -1033,7 +1076,7 @@ fn explore_step(name: &str, arguments: &str) -> String {
 /// and makes the turn forget them as well. A repeat of a cleared call must
 /// come back in full rather than as "already above", and a file whose text
 /// the model no longer has must be read again before it is replaced whole.
-fn clear_stale_results(scope: &ToolScope, state: &mut State, seen_results: &mut HashMap<String, u64>) {
+fn clear_stale_results(scope: Option<&ToolScope>, state: &mut State, seen_results: &mut HashMap<String, u64>) {
     for cleared in result_clearing::plan(&state.history) {
         state.history[cleared.index].content = Some(cleared.stub);
         seen_results.remove(&format!("{}|{}", cleared.tool, cleared.arguments));
@@ -1044,7 +1087,7 @@ fn clear_stale_results(scope: &ToolScope, state: &mut State, seen_results: &mut 
         let path = serde_json::from_str::<serde_json::Value>(&cleared.arguments)
             .ok()
             .and_then(|args| args.get("path").and_then(|p| p.as_str()).map(str::to_string));
-        let relative = path.and_then(|path| {
+        let relative = path.zip(scope).and_then(|(path, scope)| {
             resolve_existing(scope, &path).and_then(|resolved| relative_to_root(scope, &resolved)).ok()
         });
         if let Some(relative) = relative {
@@ -1126,7 +1169,7 @@ fn ask_the_model(
     loop {
         let request = ChatRequest {
             messages: request_messages(turn, history),
-            tools: tool_definitions_for(turn.mode, turn.mcp),
+            tools: offered(turn),
             model: turn.session.model.clone(),
         };
         let error = match stream_one_round(turn, events, round, request) {
@@ -1176,12 +1219,23 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools) -> Ve
         .collect()
 }
 
+/// What the turn advertises: the mode's tools in a folder, the role's in a chat.
+fn offered(turn: &Turn) -> Vec<LlmToolDefinition> {
+    match turn.place {
+        Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp),
+        Place::Chat { role, .. } => tool_definitions()
+            .into_iter()
+            .filter(|definition| ToolName::from_wire_name(&definition.name).is_some_and(|tool| role.tools().contains(&tool)))
+            .collect(),
+    }
+}
+
 /// What a request of `turn` with `history` weighs, by the estimate the
 /// compaction pass uses — for a caller that shows a cost before the provider
 /// reports one.
 pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
     compaction::estimate_tokens(&request_messages(turn, history))
-        + compaction::estimate_tool_schema_tokens(&tool_definitions_for(turn.mode, turn.mcp))
+        + compaction::estimate_tool_schema_tokens(&offered(turn))
 }
 
 /// The request's messages: what the model is told, then the conversation.
@@ -1193,9 +1247,17 @@ pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
 /// resent, wrong, for as long as the chat exists. It is the same every round
 /// of a turn, so a prompt cache keeps it.
 fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
+    let (scope, mode) = match turn.place {
+        Place::Folder { scope, mode } => (scope, mode),
+        Place::Chat { role, kube } => {
+            let mut messages = vec![prompt::chat_system_message(role, kube, turn.session.reply_language)];
+            messages.extend_from_slice(history);
+            return messages;
+        }
+    };
     let context = prompt::TurnContext {
-        mode: turn.mode,
-        workspace: turn.scope.root(),
+        mode,
+        workspace: scope.root(),
         shell: turn.shell_described,
         today: &Local::now().format("%e %B %Y").to_string(),
         unattended: turn.approval.skip_all,
@@ -1393,7 +1455,8 @@ fn log_call(
 ) {
     (turn.log_call)(ToolCallLogEntry {
         ts_ms: crate::infra::tool_call_log::now_ms(),
-        repo_root: turn.scope.root().display().to_string(),
+        // Empty for a chat, which works in no folder.
+        repo_root: turn.place.scope().map(|scope| scope.root().display().to_string()).unwrap_or_default(),
         round,
         provider_id: turn.session.provider_id.clone(),
         model: turn.session.model.clone(),
@@ -1454,7 +1517,10 @@ fn fire_hook(
     tool: Option<&str>,
     fields: serde_json::Value,
 ) -> Option<String> {
-    let verdict = turn.hooks.fire(event, tool, fields, turn.scope.root());
+    // The user's hooks run in the folder a turn works in; a chat has none, and
+    // a guard written for the agent's files is not the chat's to answer.
+    let scope = turn.place.scope()?;
+    let verdict = turn.hooks.fire(event, tool, fields, scope.root());
     for warning in verdict.warnings {
         report_hook(events, round, event, warning, false);
     }
@@ -1665,6 +1731,9 @@ mod tests {
         log: Arc<Mutex<Vec<ChatTurnEvent>>>,
         approval: ApprovalPolicy,
         mode: ConversationMode,
+        /// A chat's role instead of the folder and the mode: `Place::Chat`.
+        chat: Option<ChatRole>,
+        kube: KubeSetup,
         cancel_after: Arc<Mutex<Option<usize>>>,
         polls: Arc<Mutex<usize>>,
         slept: Arc<Mutex<Vec<Duration>>>,
@@ -1711,6 +1780,8 @@ mod tests {
                 ..ApprovalPolicy::default()
             },
             mode: ConversationMode::Agent,
+            chat: None,
+            kube: KubeSetup::NotSet,
             cancel_after: Arc::new(Mutex::new(None)),
             polls: Arc::new(Mutex::new(0)),
             slept: Arc::new(Mutex::new(Vec::new())),
@@ -1759,9 +1830,11 @@ mod tests {
             let turn = Turn {
                 events: &self.events,
                 session: &self.session,
-                scope: &self.scope,
+                place: match self.chat {
+                    Some(role) => Place::Chat { role, kube: &self.kube },
+                    None => Place::Folder { scope: &self.scope, mode: self.mode },
+                },
                 approval: &self.approval,
-                mode: self.mode,
                 cancelled: &cancelled,
                 sleep: &sleep,
                 take_steering: &take_steering,

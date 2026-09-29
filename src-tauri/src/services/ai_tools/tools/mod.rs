@@ -96,22 +96,36 @@ pub fn execute_tool(
     todos: &mut Vec<Task>,
     deps: &ToolDeps,
 ) -> Result<ToolResult, ToolError> {
+    dispatch(Some(scope), call, reads, todos, deps)
+}
+
+/// The one `match` every tool is a branch of. `scope` is `None` in Chat mode,
+/// which has no folder: a tool that needs one says so rather than being handed
+/// a folder that does not exist — the chat's preflight has already refused it.
+pub fn dispatch(
+    scope: Option<&ToolScope>,
+    call: &ToolCall,
+    reads: &mut ReadFiles,
+    todos: &mut Vec<Task>,
+    deps: &ToolDeps,
+) -> Result<ToolResult, ToolError> {
+    let folder = || scope.ok_or_else(|| ToolError::NoFolder(call.name().wire_name().to_string()));
     match call {
-        ToolCall::ReadFile(args) => read_file::read_file(scope, args, reads),
-        ToolCall::Grep(args) => grep::grep(scope, args),
-        ToolCall::ListFiles(args) => list_files::list_files(scope, args),
-        ToolCall::WriteFile(args) => write_file::write_file(scope, args, reads),
-        ToolCall::EditFile(args) => edit_file::edit_file(scope, args, reads),
-        ToolCall::CreateDirectory(args) => create_directory::create_directory(scope, args),
-        ToolCall::DeleteFile(args) => delete_file::delete_file(scope, args, reads),
-        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(scope, args),
-        ToolCall::Move(args) => move_path::move_path(scope, args, reads),
+        ToolCall::ReadFile(args) => read_file::read_file(folder()?, args, reads),
+        ToolCall::Grep(args) => grep::grep(folder()?, args),
+        ToolCall::ListFiles(args) => list_files::list_files(folder()?, args),
+        ToolCall::WriteFile(args) => write_file::write_file(folder()?, args, reads),
+        ToolCall::EditFile(args) => edit_file::edit_file(folder()?, args, reads),
+        ToolCall::CreateDirectory(args) => create_directory::create_directory(folder()?, args),
+        ToolCall::DeleteFile(args) => delete_file::delete_file(folder()?, args, reads),
+        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(folder()?, args),
+        ToolCall::Move(args) => move_path::move_path(folder()?, args, reads),
         ToolCall::Todo(args) => todo::todo(todos, args),
-        ToolCall::GitStatus => git::git_status(scope),
-        ToolCall::GitDiff(args) => git::git_diff(scope, args),
-        ToolCall::GitBlame(args) => git::git_blame(scope, args),
-        ToolCall::GitLog(args) => git::git_log(scope, args),
-        ToolCall::RunCommand(request) => run_command::run_command(scope, request, deps),
+        ToolCall::GitStatus => git::git_status(folder()?),
+        ToolCall::GitDiff(args) => git::git_diff(folder()?, args),
+        ToolCall::GitBlame(args) => git::git_blame(folder()?, args),
+        ToolCall::GitLog(args) => git::git_log(folder()?, args),
+        ToolCall::RunCommand(request) => run_command::run_command(folder()?, request, deps),
         ToolCall::SemanticSearch(args) => semantic_search::semantic_search(args, deps),
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
@@ -120,7 +134,7 @@ pub fn execute_tool(
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
-        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(scope, args, deps),
+        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
     }
 }

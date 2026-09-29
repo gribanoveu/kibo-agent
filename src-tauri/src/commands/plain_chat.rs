@@ -4,14 +4,18 @@
 //! `chat_set_archived` and `chat_delete`, as the agent's do.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Runtime, State};
 
 use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
-use crate::domain::llm::{ChatStreamResult, LlmMessage};
+use crate::domain::llm::LlmMessage;
+use crate::domain::tool_call_log::ToolCallLogEntry;
+use crate::domain::tools::ApprovalPolicy;
+use crate::domain::turn::{ChatStreamOutcome, PendingApproval, ToolCallDecision};
+use crate::services::llm_chat::TurnError;
 use crate::infra::chat_store;
 use crate::services::{kubeconfigs, llm_session, plain_chat};
 
@@ -22,6 +26,10 @@ use super::chat_events::chat_event_sink;
 #[derive(Default)]
 pub struct PlainChatState {
     cancel: AtomicBool,
+    /// Grows as the user answers "Always" on a chat's card; not persisted,
+    /// for the agent's reason — a saved "never ask me" is a brake released a
+    /// month ago and forgotten.
+    approval: Mutex<ApprovalPolicy>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -37,8 +45,9 @@ pub fn plain_chat_roles() -> Vec<RoleView> {
     ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
 }
 
-/// The model's reply to `messages` in `role`. Its text arrives on
-/// `chat:turn-event` under `turn_id` as it is written; this resolves with all of it.
+/// A turn in `role` on `messages`, the whole conversation so far. Its text and
+/// calls arrive on `chat:turn-event` under `turn_id` as they happen; this
+/// resolves with how it ended — done, stopped, or paused on the approval card.
 #[tauri::command]
 pub async fn plain_chat_send<R: Runtime>(
     app: AppHandle<R>,
@@ -46,15 +55,66 @@ pub async fn plain_chat_send<R: Runtime>(
     turn_id: String,
     role: ChatRole,
     messages: Vec<LlmMessage>,
-) -> Result<ChatStreamResult, String> {
+) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
+    run_turn(app, state, turn_id, role, move |chat| plain_chat::start(chat, messages)).await
+}
+
+/// Continues a turn paused on the approval card, with the user's answers. The
+/// stop flag is left alone, as the agent's resume leaves it: a stop pressed
+/// while the card was showing ends the resumed turn.
+#[tauri::command]
+pub async fn plain_chat_resume<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<PlainChatState>>,
+    turn_id: String,
+    role: ChatRole,
+    checkpoint: PendingApproval,
+    decisions: Vec<ToolCallDecision>,
+) -> Result<ChatStreamOutcome, String> {
+    let state = state.inner().clone();
+    run_turn(app, state, turn_id, role, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
+}
+
+/// "Always allow this tool", from a chat's approval card — for Chat mode's
+/// turns only, and as long as the app runs, as the agent's is.
+#[tauri::command]
+pub fn plain_chat_always_allow(tool: String, state: State<'_, Arc<PlainChatState>>) -> Result<(), String> {
+    state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.allow_always(&tool)
+}
+
+/// Off the event loop: a turn is synchronous — provider calls and tool calls —
+/// and holding the IPC loop would freeze the command that stops it.
+async fn run_turn<R, F>(
+    app: AppHandle<R>,
+    state: Arc<PlainChatState>,
+    turn_id: String,
+    role: ChatRole,
+    run: F,
+) -> Result<ChatStreamOutcome, String>
+where
+    R: Runtime,
+    F: FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
+{
     let events = chat_event_sink(&app, turn_id);
+    let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
         let kube = kubeconfigs::setup().map_err(|e| e.to_string())?;
-        plain_chat::reply(&session, role, &kube, messages, &events, &|| state.cancel.load(Ordering::SeqCst))
-            .map_err(|e| e.to_string())
+        let cancelled = || state.cancel.load(Ordering::SeqCst);
+        let record = crate::infra::tool_call_log::recorder();
+        let log_call = |entry: ToolCallLogEntry| record(&entry);
+        let chat = plain_chat::ChatTurn {
+            session: &session,
+            role,
+            kube: &kube,
+            approval: &approval,
+            events: &events,
+            cancelled: &cancelled,
+            log_call: &log_call,
+        };
+        run(&chat).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("the chat thread failed: {e}"))?

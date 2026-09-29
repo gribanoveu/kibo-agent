@@ -24,6 +24,10 @@ pub enum ChatRole {
     Assistant,
     /// A Kubernetes engineer: clusters, manifests, Helm, debugging workloads.
     Kubernetes,
+    /// The loop's own check of a role with tools, before any real role has
+    /// one: a harmless tool that runs, and one that asks first.
+    #[cfg(test)]
+    Tester,
 }
 
 impl ChatRole {
@@ -33,6 +37,8 @@ impl ChatRole {
         match self {
             ChatRole::Assistant => "Assistant",
             ChatRole::Kubernetes => "Kubernetes",
+            #[cfg(test)]
+            ChatRole::Tester => "Tester",
         }
     }
 
@@ -41,6 +47,8 @@ impl ChatRole {
         match self {
             ChatRole::Assistant => "Answers in text; no files, commands or tools",
             ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
+            #[cfg(test)]
+            ChatRole::Tester => "Tests the tool loop",
         }
     }
 
@@ -53,6 +61,8 @@ impl ChatRole {
                  depends on code or output you have not been shown, ask for it rather than guessing."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
+            #[cfg(test)]
+            ChatRole::Tester => "You test the tool loop.",
         }
     }
 
@@ -62,6 +72,8 @@ impl ChatRole {
     pub fn setup_note(self, kube: &KubeSetup) -> Option<String> {
         match self {
             ChatRole::Assistant => None,
+            #[cfg(test)]
+            ChatRole::Tester => None,
             ChatRole::Kubernetes => Some(match kube {
                 KubeSetup::NotSet => "No kubeconfig is set up in Kibo yet. When the user asks about their own cluster, \
                     say once that they can add their kubeconfig file in Settings → Kubernetes and pick it on the tab above \
@@ -87,6 +99,9 @@ impl ChatRole {
         match self {
             // ponytail: talks only; `kubectl` and friends arrive here as tools once Chat runs them.
             ChatRole::Assistant | ChatRole::Kubernetes => &[],
+            // `todo` runs, `deleteFile` asks first — and then finds no folder.
+            #[cfg(test)]
+            ChatRole::Tester => &[ToolName::Todo, ToolName::DeleteFile],
         }
     }
 }

@@ -278,7 +278,7 @@ export default function App() {
   // this only stops pointing at it.
   const newChat = () => {
     if (!agentMode) {
-      plain.newChat();
+      if (!plain.newChat()) return toast.show(STAY);
       return focusComposer();
     }
     if (!agent.reset()) return toast.show(STAY);
@@ -491,14 +491,14 @@ export default function App() {
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           onSelectChat={(id) =>
-            agentMode ? void agent.open(id).then((opened) => opened || toast.show(STAY)) : void plain.open(id)
+            void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY))
           }
           onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }
           onDeleteChat={(id) => {
-            if (!agentMode) return void plain.remove(id);
+            if (!agentMode) return void plain.remove(id).then((removed) => removed || toast.show(STAY));
             // The open chat goes first: left on screen, its next save would write it back.
             if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
             history.remove(id).catch((e) => toast.show(String(e)));
