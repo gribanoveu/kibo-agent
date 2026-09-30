@@ -181,6 +181,8 @@ pub fn run() {
             commands::settings::llm_provider_save,
             commands::settings::llm_provider_remove,
             commands::settings::llm_api_key_save,
+            commands::settings::web_search_key_status,
+            commands::settings::web_search_key_save,
             commands::settings::llm_key_store_set,
             commands::settings::llm_active_provider_set,
             commands::settings::llm_debug_logging_set,

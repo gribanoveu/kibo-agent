@@ -99,6 +99,19 @@ pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
     llm_credentials_store::save_api_key(&id, key.trim())
 }
 
+/// Whether a key for the chat's web search is saved — all the window learns
+/// of it (`docs/24-web-search.md`).
+#[tauri::command]
+pub fn web_search_key_status() -> bool {
+    crate::infra::tavily::has_saved_key()
+}
+
+/// Seals the Tavily key beside the providers'; an empty one deletes it.
+#[tauri::command]
+pub fn web_search_key_save(key: String) -> Result<(), String> {
+    llm_api_key_save(crate::infra::tavily::KEY_ID.to_string(), key)
+}
+
 /// Moves the master key between the key file and the OS keychain. Off the
 /// main thread: the keychain may put up a prompt and wait for the user.
 #[tauri::command]
@@ -285,6 +298,28 @@ pub struct Readiness {
 mod tests {
     use super::*;
     use crate::testing::with_app_dir;
+
+    /// The key saved from Settings is the one a chat's turn searches with,
+    /// and a provider's key beside it is neither read nor touched.
+    #[test]
+    fn a_saved_search_key_turns_the_chats_search_on_and_an_empty_one_off() {
+        with_app_dir("web-search-key", || {
+            llm_api_key_save("openai".into(), "sk-provider".into()).unwrap();
+            assert!(!web_search_key_status());
+            assert!(crate::infra::tavily::saved().is_none());
+
+            web_search_key_save("  tvly-key  ".into()).unwrap();
+            assert!(web_search_key_status());
+            assert!(crate::infra::tavily::saved().is_some());
+            let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap();
+            assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "tvly-key");
+
+            web_search_key_save(" ".into()).unwrap();
+            assert!(!web_search_key_status());
+            assert!(crate::infra::tavily::saved().is_none());
+            assert!(llm_credentials_store::has_api_key("openai"));
+        });
+    }
 
     fn provider(id: &str) -> ProviderConfig {
         ProviderConfig {

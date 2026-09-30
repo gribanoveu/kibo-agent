@@ -422,6 +422,18 @@ export async function saveApiKey(id: string, key: string): Promise<void> {
   return invoke<void>("llm_api_key_save", { id, key });
 }
 
+/** Whether a Tavily key is saved for the chat's web search. The key itself never comes back. */
+export async function webSearchKeyStatus(): Promise<boolean> {
+  requireBackend();
+  return invoke<boolean>("web_search_key_status");
+}
+
+/** Seals the Tavily key; an empty string deletes the stored one. */
+export async function saveWebSearchKey(key: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("web_search_key_save", { key });
+}
+
 /** Moves the master key to `store`. The system may ask the user before the keychain answers. */
 export async function setKeyStore(store: KeyStore): Promise<void> {
   requireBackend();
