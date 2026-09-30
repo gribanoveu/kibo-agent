@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use k8s_openapi::api::authorization::v1::{SelfSubjectRulesReview, SelfSubjectRulesReviewSpec};
 use k8s_openapi::api::core::v1::{Namespace, Pod};
-use kube::api::{Api, ApiResource, DynamicObject, ListParams, LogParams, PostParams};
+use kube::api::{Api, ApiResource, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::core::discovery::{verbs, Scope};
 use kube::{Client, Config, Discovery};
@@ -49,6 +49,9 @@ pub fn contexts(path: &Path) -> Result<KubeContexts, KubeError> {
         current: file.current_context,
     })
 }
+
+/// The manager the app's changes are recorded under in `managedFields`.
+const FIELD_MANAGER: &str = "kibo";
 
 /// The clients the app has made, one per kubeconfig and context, kept: a new
 /// client is a new login — an `aws eks get-token` run — on every call.
@@ -266,6 +269,22 @@ impl KubeApi for ClusterApi {
             Api::<Pod>::namespaced(client, namespace).logs(pod, &params).await.map_err(cluster_error)
         })
     }
+
+    fn patch(
+        &self,
+        kind: &KubeKind,
+        namespace: &str,
+        name: &str,
+        patch: &serde_json::Value,
+        dry_run: bool,
+    ) -> Result<serde_json::Value, KubeError> {
+        self.within(|client| async move {
+            // Named, so `kubeFieldHistory` shows what this app set.
+            let params = PatchParams { dry_run, field_manager: Some(FIELD_MANAGER.to_string()), ..Default::default() };
+            let api = dynamic(client, kind, Some(namespace));
+            json(api.patch(name, &params, &Patch::Merge(patch)).await.map_err(cluster_error)?)
+        })
+    }
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -426,6 +445,39 @@ users:
         assert_eq!(gone, "pods \"no-such-pod\" not found");
         let paged = api.list(&find("pods"), &ListQuery { limit: Some(1), ..Default::default() }).unwrap();
         assert!(paged.items.len() == 1 && paged.continue_token.is_some(), "a page ends with a token when there is more");
+    }
+
+    /// A dry run is checked by the server and kept by nobody; a patch is kept,
+    /// moves the spec's generation, and is recorded under the app's name.
+    /// Dry-runs CoreDNS, which every OrbStack cluster has. The real patch needs
+    /// a Deployment of one's own to scale up and back:
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_dry_runs_without_changing_and_patches_for_real() {
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+        let deployments = crate::domain::kube::resolve_kind(&api.kinds().unwrap(), "deploy").unwrap().clone();
+        let replicas = |object: &serde_json::Value| object["spec"]["replicas"].as_i64().unwrap();
+
+        let before = api.get(&deployments, "kube-system", "coredns").unwrap();
+        let patch = serde_json::json!({"spec": {"replicas": replicas(&before) + 1}});
+        let dry = api.patch(&deployments, "kube-system", "coredns", &patch, true).unwrap();
+        assert_eq!(replicas(&dry), replicas(&before) + 1, "the server answers with what it would be");
+        let after = api.get(&deployments, "kube-system", "coredns").unwrap();
+        assert_eq!(after["metadata"]["generation"], before["metadata"]["generation"], "a dry run changed the object");
+
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, name) = target.split_once('/').expect("namespace/name");
+        let was = api.get(&deployments, namespace, name).unwrap();
+        let up = serde_json::json!({"spec": {"replicas": replicas(&was) + 1}});
+        let scaled = api.patch(&deployments, namespace, name, &up, false).unwrap();
+        assert_eq!(replicas(&scaled), replicas(&was) + 1);
+        assert!(scaled["metadata"]["generation"].as_i64() > was["metadata"]["generation"].as_i64());
+        let managers: Vec<&str> = scaled["metadata"]["managedFields"].as_array().unwrap().iter().filter_map(|m| m["manager"].as_str()).collect();
+        assert!(managers.contains(&FIELD_MANAGER), "{managers:?}");
+        let back = serde_json::json!({"spec": {"replicas": replicas(&was)}});
+        assert_eq!(replicas(&api.patch(&deployments, namespace, name, &back, false).unwrap()), replicas(&was));
     }
 
     /// Nothing listens on port 1: the probe says so instead of failing the turn.

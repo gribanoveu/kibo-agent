@@ -8,6 +8,7 @@ import {
   plainChatCompact,
   plainChatContextUsage,
   plainChatList,
+  plainChatPreview,
   plainChatResume,
   plainChatRoles,
   plainChatSave,
@@ -19,6 +20,7 @@ import {
   type ContextUsage,
   type LlmMessage,
   type Outcome,
+  type PendingToolCall,
   type ToolCallDecision,
 } from "../lib/chat";
 import {
@@ -137,7 +139,9 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     setChatId(id);
     setTurn(restoredTurn(blocks));
     setRole(shownRole);
-    setPinned(pin);
+    // "Changes" is for the chat as it is open now: a chat reopened, or a new
+    // one started from it, reads only until the switch is turned again.
+    setPinned(pin && { kubeconfig: pin.kubeconfig, context: pin.context, namespace: pin.namespace });
     setError(null);
   };
 
@@ -299,7 +303,14 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     void refresh();
   };
 
+  // What a card's calls would do in this chat's cluster. One function for
+  // the chat's life, reading the pin as it is when the card asks.
+  const pin = useRef(kube);
+  pin.current = kube;
+  const preview = useCallback((calls: PendingToolCall[]) => plainChatPreview(pin.current, calls), []);
+
   return {
+    preview,
     chats,
     chatId,
     turn,

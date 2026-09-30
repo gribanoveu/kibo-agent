@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 Let a Kubernetes chat change the cluster: switch its tab from Read only to Changes and the model can scale a Deployment, StatefulSet or ReplicaSet in the chat's namespace — each change asks on a card that names the cluster and shows the replicas before and after, and the object is backed up first
+
 - 2026-09-29 Ask the Kubernetes role why something is failing and it diagnoses it in one step: the workload's status, what is wrong with each pod, the events of it and its ReplicaSets, and the log of the crash from before its last restart — or, for a pending pod, what it asked for and which volume claim waits
 
 - 2026-09-29 A chat keeps the role it started with: the role is picked before the first message and fixed after it

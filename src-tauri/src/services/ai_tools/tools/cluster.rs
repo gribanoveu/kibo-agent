@@ -7,11 +7,12 @@
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::domain::kube::{resolve_kind, KubeKind, ListQuery, LogQuery, PinnedCluster};
+use crate::domain::kube::{resolve_kind, KubeChange, KubeKind, ListQuery, LogQuery, PinnedCluster};
 use crate::domain::kube_view::{self, cap, FieldPath, PodLog};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
-    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs, ToolError, ToolResult,
+    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeScaleArgs, KubeTopArgs,
+    ToolCall, ToolError, ToolPreview, ToolResult,
 };
 
 /// A page of a list when the model asks for none; the most it may ask for.
@@ -466,6 +467,119 @@ pub fn kube_diagnose(kube: Option<PinnedCluster>, args: &KubeDiagnoseArgs) -> Re
     result(out.join("\n"), summary, "diagnose one pod, or read events and logs on their own")
 }
 
+/// What has replicas to set. The rest are told how they are stopped instead.
+const SCALABLE: &[&str] = &["Deployment", "StatefulSet", "ReplicaSet"];
+
+/// A scale the server has accepted as a dry run: the object as it is, and
+/// the counts on either side.
+struct ScalePlan {
+    kind: KubeKind,
+    object: Value,
+    before: i64,
+    after: u32,
+}
+
+fn scale_patch(replicas: u32) -> Value {
+    serde_json::json!({"spec": {"replicas": replicas}})
+}
+
+/// Everything that can refuse a scale, in the order it is cheapest to know:
+/// the tab's switch, the arguments, the kind, the object, and last the
+/// server's own check — RBAC, admission, quota — as a dry run. Run before the
+/// card, for the card, and again before the change: the cluster may have
+/// moved while the user was reading.
+fn plan_scale(cluster: &PinnedCluster, args: &KubeScaleArgs) -> Result<ScalePlan, ToolError> {
+    if !cluster.writes {
+        return Err(ToolError::KubeReadOnly);
+    }
+    let after = args.replicas.ok_or_else(|| invalid("kubeScale", "replicas is required: the number to scale to"))?;
+    let kind = kind(cluster, &args.kind)?;
+    if !SCALABLE.contains(&kind.kind.as_str()) {
+        let how = match kind.kind.as_str() {
+            "DaemonSet" => "a DaemonSet runs a pod on every node and has no replicas — it stops only by deleting it, or by a nodeSelector no node matches",
+            "CronJob" => "a CronJob has no replicas — it is stopped with spec.suspend: true",
+            "Job" => "a Job has no replicas — it is stopped with spec.suspend: true, or by deleting it",
+            _ => "only a Deployment, StatefulSet or ReplicaSet has replicas to set",
+        };
+        return Err(invalid("kubeScale", format!("{how}. Give the user the command for it, and say it is still running.")));
+    }
+    let object = cluster.api.get(&kind, cluster.namespace, &args.name)?;
+    let before = object.pointer("/spec/replicas").and_then(Value::as_i64).unwrap_or(1);
+    if before == i64::from(after) {
+        return Err(invalid("kubeScale", format!("{}/{} already has {after} replicas — there is nothing to change", kind.kind, args.name)));
+    }
+    cluster.api.patch(&kind, cluster.namespace, &args.name, &scale_patch(after), true)?;
+    Ok(ScalePlan { kind, object, before, after })
+}
+
+/// A change that would be refused is refused before anyone is asked to
+/// approve it: no card for a call that cannot run. Reads pass.
+pub fn preflight(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<(), ToolError> {
+    match call {
+        ToolCall::KubeScale(args) => plan_scale(&cluster(kube)?, args).map(|_| ()),
+        _ => Ok(()),
+    }
+}
+
+/// What a change would do, for its approval card: where — the first thing
+/// to read before agreeing — and what becomes of what.
+pub fn preview(kube: Option<PinnedCluster>, call: &ToolCall) -> ToolPreview {
+    let ToolCall::KubeScale(args) = call else { return ToolPreview::Nothing };
+    let planned = cluster(kube).and_then(|cluster| Ok((plan_scale(&cluster, args)?, cluster)));
+    match planned {
+        Ok((plan, cluster)) => ToolPreview::Change {
+            place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
+            summary: format!("{}/{}: {} → {} replicas", plan.kind.kind, args.name, plan.before, plan.after),
+            notes: vec!["Can be undone: the object is backed up first, with its replica count.".to_string()],
+        },
+        Err(e) => ToolPreview::Failed { reason: e.to_string() },
+    }
+}
+
+/// Sets a workload's replicas (`docs/21-kubernetes-mode.md`, K-5a): dry run,
+/// backup — no backup, no change — the change, the audit line.
+pub fn kube_scale(kube: Option<PinnedCluster>, args: &KubeScaleArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    let plan = plan_scale(&cluster, args)?;
+    let changes = cluster.changes.ok_or_else(|| ToolError::KubeBackup("this chat has nowhere to record changes".to_string()))?;
+    let generation = |object: &Value| object.pointer("/metadata/generation").and_then(Value::as_i64);
+    let mut change = KubeChange {
+        id: format!("kc-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
+        at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        kubeconfig: cluster.kubeconfig.to_string(),
+        context: cluster.context.to_string(),
+        namespace: cluster.namespace.to_string(),
+        group: plan.kind.group.clone(),
+        version: plan.kind.version.clone(),
+        kind: plan.kind.kind.clone(),
+        plural: plan.kind.plural.clone(),
+        name: args.name.clone(),
+        tool: "kubeScale".to_string(),
+        summary: format!("{} → {} replicas", plan.before, plan.after),
+        generation_before: generation(&plan.object),
+        generation_after: None,
+        error: None,
+    };
+    changes.backup(&change, &plan.object).map_err(ToolError::KubeBackup)?;
+    let done = cluster.api.patch(&plan.kind, cluster.namespace, &args.name, &scale_patch(plan.after), false);
+    match &done {
+        Ok(object) => change.generation_after = generation(object),
+        Err(e) => change.error = Some(e.to_string()),
+    }
+    // The change is made or refused either way; an audit that could not be
+    // written is said, not hidden behind the result.
+    let audited = changes.audit(&change);
+    done?;
+    let mut text = format!(
+        "{}/{} in namespace {}: {}. Change id {} — the object as it was is backed up.",
+        plan.kind.kind, args.name, cluster.namespace, change.summary, change.id
+    );
+    if let Err(e) = audited {
+        text.push_str(&format!("\nThe audit line could not be written: {e}"));
+    }
+    Ok(ToolResult::Kube { text, summary: format!("{} → {}", plan.before, plan.after) })
+}
+
 /// How every Kubernetes tool is told where it reads.
 const WHERE: &str = "Reads the cluster, context and namespace this chat is pinned to — you cannot pick another cluster.";
 
@@ -628,10 +742,32 @@ pub(super) fn diagnose_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn scale_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeScale".to_string(),
+        description: "Set the replicas of a Deployment, StatefulSet or ReplicaSet in the chat's own namespace — a change is \
+            never made in another namespace or cluster. Works only when the user has switched the chat's tab to \"Changes\"; \
+            otherwise it answers that the chat is read-only. The user approves it on a card showing the cluster and the \
+            counts; the object is backed up first. Returns what it was and is, and a change id. To scale several, call it \
+            for each in one round — they share one card. A DaemonSet, CronJob or Job has no replicas: it answers how those \
+            are stopped."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "description": "Deployment, StatefulSet or ReplicaSet." },
+                "name": { "type": "string" },
+                "replicas": { "type": "integer", "description": "The number to scale to; 0 stops it." }
+            },
+            "required": ["kind", "name", "replicas"]
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::kube::{KubeApi, KubeError, ListPage};
+    use crate::domain::kube::{KubeApi, KubeChanges, KubeError, ListPage};
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -642,6 +778,31 @@ mod tests {
         objects: Vec<(String, Value)>,
         logs: Vec<(String, Result<String, String>)>,
         asked: Mutex<Vec<String>>,
+        /// What the server says to every patch, when it refuses them.
+        refuses: Option<String>,
+    }
+
+    /// What was backed up and audited; `full` is a disk that takes no backup.
+    #[derive(Default)]
+    struct Recorded {
+        backups: Mutex<Vec<(KubeChange, Value)>>,
+        audits: Mutex<Vec<KubeChange>>,
+        full: bool,
+    }
+
+    impl KubeChanges for Recorded {
+        fn backup(&self, change: &KubeChange, object: &Value) -> Result<(), String> {
+            if self.full {
+                return Err("no space left".to_string());
+            }
+            self.backups.lock().unwrap().push((change.clone(), object.clone()));
+            Ok(())
+        }
+
+        fn audit(&self, change: &KubeChange) -> Result<(), String> {
+            self.audits.lock().unwrap().push(change.clone());
+            Ok(())
+        }
     }
 
     impl Fake {
@@ -714,10 +875,152 @@ mod tests {
             let (_, text) = self.logs.iter().find(|(p, _)| p == pod).expect("a log for the pod");
             text.clone().map_err(KubeError::Cluster)
         }
+
+        fn patch(&self, kind: &KubeKind, namespace: &str, name: &str, patch: &Value, dry_run: bool) -> Result<Value, KubeError> {
+            let how = if dry_run { " dry" } else { "" };
+            self.asked.lock().unwrap().push(format!("patch {} {namespace} {name} {patch}{how}", kind.plural));
+            if let Some(why) = &self.refuses {
+                return Err(KubeError::Cluster(why.clone()));
+            }
+            let mut object = self.get(kind, namespace, name)?;
+            object["spec"]["replicas"] = patch["spec"]["replicas"].clone();
+            object["metadata"]["generation"] = json!(object["metadata"]["generation"].as_i64().unwrap_or(0) + 1);
+            Ok(object)
+        }
     }
 
     fn pinned(fake: &Fake) -> Option<PinnedCluster<'_>> {
-        Some(PinnedCluster { api: fake, namespace: "orders" })
+        Some(PinnedCluster { api: fake, namespace: "orders", kubeconfig: "prod", context: "eks", writes: false, changes: None })
+    }
+
+    /// The same chat with "Changes" switched on.
+    fn writing<'a>(fake: &'a Fake, recorded: &'a Recorded) -> Option<PinnedCluster<'a>> {
+        Some(PinnedCluster { writes: true, changes: Some(recorded), ..pinned(fake).unwrap() })
+    }
+
+    fn workload(plural: &str, replicas: i64) -> (String, Value) {
+        let object = json!({"metadata": {"name": "api", "namespace": "orders", "generation": 4}, "spec": {"replicas": replicas}});
+        (plural.to_string(), object)
+    }
+
+    fn scalable(replicas: i64) -> Fake {
+        let (plural, object) = workload("deployments", replicas);
+        Fake::with(&[("apps", "Deployment", "deployments"), ("apps", "DaemonSet", "daemonsets"), ("batch", "CronJob", "cronjobs")])
+            .object(&plural, object)
+    }
+
+    fn scale(replicas: u32) -> KubeScaleArgs {
+        KubeScaleArgs { kind: "deploy".into(), name: "api".into(), replicas: Some(replicas) }
+    }
+
+    /// The order that makes a change safe: the server's dry run, the backup
+    /// of the object as it was, the change, the audit — and what it was before
+    /// in the answer, for "put it back".
+    #[test]
+    fn a_scale_is_dry_run_backed_up_made_and_audited_in_that_order() {
+        let (fake, recorded) = (scalable(3), Recorded::default());
+        let ToolResult::Kube { text, summary } = kube_scale(writing(&fake, &recorded), &scale(0)).unwrap() else { panic!() };
+        assert_eq!(summary, "3 → 0");
+        assert!(text.starts_with("Deployment/api in namespace orders: 3 → 0 replicas. Change id kc-"), "{text}");
+        let patches: Vec<String> = fake.asked().into_iter().filter(|a| a.starts_with("patch")).collect();
+        assert_eq!(
+            patches,
+            ["patch deployments orders api {\"spec\":{\"replicas\":0}} dry", "patch deployments orders api {\"spec\":{\"replicas\":0}}"]
+        );
+        let backups = recorded.backups.lock().unwrap();
+        let (change, object) = &backups[0];
+        assert_eq!(object["spec"]["replicas"], 3, "the backup is the object before the change");
+        assert!(text.contains(&change.id));
+        assert_eq!((change.kubeconfig.as_str(), change.context.as_str(), change.namespace.as_str()), ("prod", "eks", "orders"));
+        assert_eq!((change.plural.as_str(), change.group.as_str(), change.tool.as_str()), ("deployments", "apps", "kubeScale"));
+        let audits = recorded.audits.lock().unwrap();
+        assert_eq!((audits[0].generation_before, audits[0].generation_after, &audits[0].error), (Some(4), Some(5), &None));
+        assert_eq!(audits[0].id, change.id);
+    }
+
+    /// The switch on the tab is the policy: off, nothing is even asked of the server.
+    #[test]
+    fn a_read_only_chat_changes_nothing_and_says_how_to_allow_it() {
+        let fake = scalable(3);
+        let recorded = Recorded::default();
+        let read_only = PinnedCluster { writes: false, ..writing(&fake, &recorded).unwrap() };
+        assert!(matches!(kube_scale(Some(read_only), &scale(0)), Err(ToolError::KubeReadOnly)));
+        assert!(matches!(preflight(Some(read_only), &ToolCall::KubeScale(scale(0))), Err(ToolError::KubeReadOnly)));
+        assert!(fake.asked().is_empty(), "{:?}", fake.asked());
+        assert!(ToolError::KubeReadOnly.to_string().contains("\"Changes\""));
+    }
+
+    /// No backup, no change: a cluster is not a working tree.
+    #[test]
+    fn a_scale_that_cannot_be_backed_up_is_not_made() {
+        let fake = scalable(3);
+        let full = Recorded { full: true, ..Default::default() };
+        assert!(matches!(kube_scale(writing(&fake, &full), &scale(0)), Err(ToolError::KubeBackup(why)) if why == "no space left"));
+        assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "{:?}", fake.asked());
+        let nowhere = PinnedCluster { changes: None, ..writing(&fake, &full).unwrap() };
+        assert!(matches!(kube_scale(Some(nowhere), &scale(0)), Err(ToolError::KubeBackup(_))));
+    }
+
+    /// What the server refuses — RBAC, a webhook — is known before the card.
+    #[test]
+    fn a_refused_dry_run_stops_the_call_before_anyone_is_asked() {
+        let fake = Fake { refuses: Some("deployments.apps \"api\" is forbidden".into()), ..scalable(3) };
+        let recorded = Recorded::default();
+        let call = ToolCall::KubeScale(scale(0));
+        assert!(matches!(preflight(writing(&fake, &recorded), &call), Err(ToolError::Kube(KubeError::Cluster(m))) if m.contains("forbidden")));
+        assert!(matches!(preview(writing(&fake, &recorded), &call), ToolPreview::Failed { reason } if reason.contains("forbidden")));
+        assert!(recorded.backups.lock().unwrap().is_empty());
+    }
+
+    /// A change that failed after its backup is still on record, with why.
+    #[test]
+    fn a_change_the_server_refuses_after_the_dry_run_is_audited_as_failed() {
+        struct LateRefusal(Fake);
+        impl KubeApi for LateRefusal {
+            fn kinds(&self) -> Result<Vec<KubeKind>, KubeError> { self.0.kinds() }
+            fn list(&self, kind: &KubeKind, query: &ListQuery) -> Result<ListPage, KubeError> { self.0.list(kind, query) }
+            fn get(&self, kind: &KubeKind, namespace: &str, name: &str) -> Result<Value, KubeError> { self.0.get(kind, namespace, name) }
+            fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError> { self.0.logs(namespace, pod, query) }
+            fn patch(&self, kind: &KubeKind, namespace: &str, name: &str, patch: &Value, dry_run: bool) -> Result<Value, KubeError> {
+                if dry_run { self.0.patch(kind, namespace, name, patch, dry_run) } else { Err(KubeError::Cluster("conflict".into())) }
+            }
+        }
+        let (late, recorded) = (LateRefusal(scalable(3)), Recorded::default());
+        let cluster = PinnedCluster { api: &late, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, changes: Some(&recorded) };
+        assert!(matches!(kube_scale(Some(cluster), &scale(0)), Err(ToolError::Kube(_))));
+        let audits = recorded.audits.lock().unwrap();
+        assert_eq!((audits[0].error.as_deref(), audits[0].generation_after), (Some("conflict"), None));
+    }
+
+    #[test]
+    fn the_card_says_where_and_from_what_to_what() {
+        let (fake, recorded) = (scalable(3), Recorded::default());
+        let shown = preview(writing(&fake, &recorded), &ToolCall::KubeScale(scale(5)));
+        let ToolPreview::Change { place, summary, notes } = shown else { panic!("{shown:?}") };
+        assert_eq!((place.as_str(), summary.as_str()), ("context eks · namespace orders", "Deployment/api: 3 → 5 replicas"));
+        assert!(notes[0].starts_with("Can be undone"));
+        assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "a preview changes nothing: {:?}", fake.asked());
+        let read = ToolCall::KubeGet(KubeGetArgs { kind: "deploy".into(), name: "api".into(), ..Default::default() });
+        assert_eq!(preview(writing(&fake, &recorded), &read), ToolPreview::Nothing);
+        assert!(preflight(None, &read).is_ok(), "a read needs no plan");
+    }
+
+    /// What has no replicas says how it is stopped; nothing to do is said too.
+    #[test]
+    fn what_cannot_be_scaled_says_how_it_is_stopped() {
+        let (fake, recorded) = (scalable(3), Recorded::default());
+        let refused = |kind: &str, replicas: Option<u32>| {
+            let args = KubeScaleArgs { kind: kind.into(), name: "api".into(), replicas };
+            match kube_scale(writing(&fake, &recorded), &args) {
+                Err(ToolError::InvalidArguments { reason, .. }) => reason,
+                other => panic!("{kind}: {other:?}"),
+            }
+        };
+        assert!(refused("ds", Some(0)).contains("runs a pod on every node"));
+        assert!(refused("cronjob", Some(0)).contains("spec.suspend: true"));
+        assert!(refused("deploy", Some(3)).contains("already has 3 replicas"));
+        assert!(refused("deploy", None).contains("replicas is required"));
+        assert!(recorded.backups.lock().unwrap().is_empty());
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

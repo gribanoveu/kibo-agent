@@ -100,6 +100,7 @@ pub fn setup(pin: Option<&KubePin>, clusters: &Clusters) -> Result<KubeSetup, Se
         cluster: context.cluster.clone(),
         namespace,
         reach,
+        writes: pin.writes,
     }))
 }
 
@@ -145,7 +146,7 @@ users:
     }
 
     fn pin(context: Option<&str>, namespace: Option<&str>) -> KubePin {
-        KubePin { kubeconfig: "prod".into(), context: context.map(Into::into), namespace: namespace.map(Into::into) }
+        KubePin { kubeconfig: "prod".into(), context: context.map(Into::into), namespace: namespace.map(Into::into), writes: false }
     }
 
     #[test]

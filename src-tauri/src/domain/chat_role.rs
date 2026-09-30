@@ -115,6 +115,8 @@ impl ChatRole {
                 ToolName::KubeTop,
                 ToolName::KubeFieldHistory,
                 ToolName::KubeDiagnose,
+                // The one change so far (K-5a); refused while the tab says Read only.
+                ToolName::KubeScale,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -128,12 +130,12 @@ impl ChatRole {
 /// what the cluster said. The same words every turn while nothing changes, so a
 /// prompt cache keeps it.
 fn pinned_note(target: &KubeTarget) -> String {
-    let KubeTarget { config, context, cluster, namespace, reach } = target;
+    let KubeTarget { config, context, cluster, namespace, reach, .. } = target;
     let place = format!(
         "The user's cluster: context \"{context}\" (cluster \"{cluster}\") of the kubeconfig \"{}\" at {}, namespace \
          \"{namespace}\". Commands you give name all three, so they reach this cluster and not whichever context is \
          current: `kubectl --kubeconfig {} --context {context} -n {namespace} …`, `helm --kubeconfig {} --kube-context \
-         {context} -n {namespace} …`. Your tools read this cluster and nothing else; they change nothing.",
+         {context} -n {namespace} …`. Your tools reach this cluster and no other.",
         config.name, config.path, config.path, config.path
     );
     let found = match reach {
@@ -161,8 +163,12 @@ Helm, Kustomize, container images, ingress controllers and service meshes, GitOp
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
-kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. You cannot change anything in it: for a change, \
-give the exact command, say what it affects, and let the user run it.
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. One change you can make yourself: \
+kubeScale. It works only in the chat's own namespace and only when the user has switched the chat's tab from \
+\"Read only\" to \"Changes\"; it shows them a card to approve first, and keeps a backup. Several scales in one \
+round are one card. For any other change, give the exact command, say what it affects, and let the user run it.
+- After a change, say what it was before and what it is now, and give its change id. When asked to stop \
+  everything, name what scaling does not stop — a DaemonSet, a CronJob, a Job — instead of passing over it.
 - Look before you ask: do not ask the user for output your tools can read. Ask them only for what the \
   cluster cannot tell — when it broke, which request failed (its path, time, request id, status code).
 - For a failing workload or pod, start with kubeDiagnose: its status, pods, events and the telling log in \
@@ -204,17 +210,17 @@ For a question outside Kubernetes and its ecosystem, answer briefly and say it i
 mod tests {
     use super::*;
 
-    /// The promise of K-3: the assistant only talks, and the Kubernetes role
-    /// reads its cluster — nothing it is given can change it or reach a file.
+    /// The assistant only talks. The Kubernetes role's tools are all the
+    /// cluster's — none reaches a file — and the ones that change it are
+    /// listed here by name: a new one is a decision, not a side effect.
     #[test]
-    fn roles_read_at_most() {
+    fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 7);
-        for tool in tools {
-            assert!(!tool.is_mutating(), "{tool:?}");
-            assert!(tool.wire_name().starts_with("kube"), "{tool:?} is not the cluster's");
-        }
+        assert_eq!(tools.len(), 8);
+        assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
+        let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
+        assert_eq!(changing, [&ToolName::KubeScale]);
     }
 
     /// The window sends the role by this name; a rename is a role it can no longer pick.
@@ -238,6 +244,7 @@ mod tests {
             cluster: "arn:prod".into(),
             namespace: "payments".into(),
             reach,
+            writes: false,
         })
     }
 

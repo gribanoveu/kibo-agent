@@ -236,4 +236,30 @@ describe("the cluster a chat works with", () => {
     expect(result.current.kube).toEqual(pin);
     expect(result.current.role).toBe("kubernetes");
   });
+
+  /// "Changes" is a brake released for the chat as it is open: a chat saved
+  /// with it on opens reading only, and so does a new chat started from it.
+  test("a chat saved with Changes on opens read-only", async () => {
+    const pin = { kubeconfig: "stg", context: "kind", namespace: "orders" };
+    results.chat_load = { id: "c", messages: [], blocks: [], role: "kubernetes", kube: { ...pin, writes: true } };
+    const { result } = renderHook(() => usePlainChat("prod"));
+    await act(async () => {
+      await result.current.open("c");
+    });
+    expect(result.current.kube).toEqual(pin);
+    act(() => result.current.setPin({ ...pin, writes: true }));
+    expect(result.current.kube?.writes).toBe(true);
+    act(() => void result.current.newChat());
+    expect(result.current.kube).toEqual(pin);
+  });
+
+  test("a card's preview is asked of the chat's own cluster", async () => {
+    results.plain_chat_preview = [{ kind: "nothing" }];
+    const { result } = renderHook(() => usePlainChat("prod"));
+    const calls = [{ id: "c1", name: "kubeScale", arguments: "{}", requiresConfirmation: true }];
+    await act(async () => {
+      await result.current.preview(calls);
+    });
+    expect(called("plain_chat_preview")[0]?.args).toEqual({ kube: { kubeconfig: "prod", context: null, namespace: null }, calls });
+  });
 });

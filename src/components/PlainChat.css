@@ -227,6 +227,10 @@
 .plain-chip-label.unset {
   color: var(--text-faint);
 }
+/* The chat may change the cluster: not to be missed among the chips. */
+.plain-chip-label.changes {
+  color: var(--amber);
+}
 .plain-meter {
   margin-left: auto;
 }

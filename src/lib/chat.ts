@@ -461,6 +461,12 @@ export async function readiness(): Promise<Readiness> {
   return invoke<Readiness>("agent_readiness");
 }
 
+/** The same for a chat's card: a change to its pinned cluster, dry-run there. */
+export async function plainChatPreview(kube: KubePin | null, calls: PendingToolCall[]): Promise<ToolPreview[]> {
+  if (!inTauri()) return calls.map(() => ({ kind: "nothing" }) as ToolPreview);
+  return invoke<ToolPreview[]>("plain_chat_preview", { kube, calls });
+}
+
 // ------------------------------------------------------------- previewing
 
 export type FileDiffStats = {
@@ -475,6 +481,8 @@ export type ToolPreview =
   | { kind: "diff"; path: string; diff: FileDiffStats }
   | { kind: "removes"; path: string; files: number }
   | { kind: "command"; command: string; cwd: string }
+  /** A change to a cluster: where, what becomes of what, and what to know first. */
+  | { kind: "change"; place: string; summary: string; notes: string[] }
   | { kind: "failed"; reason: string }
   | { kind: "nothing" };
 

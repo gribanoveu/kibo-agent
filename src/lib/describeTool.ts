@@ -65,6 +65,7 @@ export const LABELS: Record<string, string> = {
   kubeTop: "Top",
   kubeFieldHistory: "Field history",
   kubeDiagnose: "Diagnose",
+  kubeScale: "Scale",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -133,7 +134,10 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
   // The Kubernetes role's reads: what they read, and the backend's own text
   // for it — a table, YAML, a log — shaped there for the model.
   if (block.name.startsWith("kube") && block.name in LABELS) {
-    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector)].filter(Boolean).join(" ");
+    const replicas = num(args.replicas);
+    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector), replicas === undefined ? null : `→ ${replicas}`]
+      .filter(Boolean)
+      .join(" ");
     const namespace = str(args.namespace);
     return {
       name,
@@ -574,6 +578,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   "Kube get": (n) => `read ${n === 1 ? "an object" : `${n} objects`}`,
   Events: () => "read events",
   Logs: (n) => `read ${n === 1 ? "a log" : `${n} logs`}`,
+  Scale: (n) => `scaled ${n === 1 ? "a workload" : `${n} workloads`}`,
   Diagnose: (n) => `diagnosed ${n === 1 ? "a workload" : `${n} workloads`}`,
 };
 

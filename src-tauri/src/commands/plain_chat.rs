@@ -13,10 +13,11 @@ use crate::domain::chat_record::{ChatSummary, NO_FOLDER};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubePin, KubeSetup};
 use crate::infra::kube_client::{ClusterApi, Clusters};
-use crate::domain::llm::LlmMessage;
+use crate::domain::llm::{LlmMessage, LlmToolCall};
+use crate::infra::kube_changes::ChangeStore;
 use crate::domain::tool_call_log::ToolCallLogEntry;
-use crate::domain::tools::ApprovalPolicy;
-use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, ToolCallDecision};
+use crate::domain::tools::{ApprovalPolicy, ToolPreview};
+use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, ToolCallDecision};
 use crate::services::llm_chat::TurnError;
 use crate::services::llm_session::LlmSession;
 use crate::infra::chat_store;
@@ -129,6 +130,7 @@ where
             role,
             kube: &kube,
             cluster: api.as_ref().map(|api| api as &dyn KubeApi),
+            changes: Some(&ChangeStore),
             approval: &approval,
             events: &events,
             cancelled: &cancelled,
@@ -189,6 +191,32 @@ fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Re
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
     let frame = context_compaction::chat_request_frame(role, &kube, session.reply_language);
     Ok((session, frame))
+}
+
+/// What the calls on a chat's approval card would do: for a change to the
+/// cluster, where and from what to what. Reads the cluster — a dry run — so
+/// it runs off the event loop.
+#[tauri::command]
+pub async fn plain_chat_preview<R: Runtime>(
+    app: AppHandle<R>,
+    kube: Option<KubePin>,
+    calls: Vec<PendingToolCall>,
+) -> Result<Vec<ToolPreview>, String> {
+    let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let setup = kubeconfigs::setup(kube.as_ref(), &clusters).map_err(|e| e.to_string())?;
+        let api = match &setup {
+            KubeSetup::Pinned(target) => {
+                Some(ClusterApi::new(clusters.clone(), std::path::Path::new(&target.config.path), &target.context))
+            }
+            _ => None,
+        };
+        let calls: Vec<LlmToolCall> =
+            calls.into_iter().map(|call| LlmToolCall { id: call.id, name: call.name, arguments: call.arguments }).collect();
+        Ok(plain_chat::preview(&setup, api.as_ref().map(|api| api as &dyn KubeApi), &calls))
+    })
+    .await
+    .map_err(|e| format!("the preview thread failed: {e}"))?
 }
 
 /// Chat mode's conversations, newest first — whatever folder is open.

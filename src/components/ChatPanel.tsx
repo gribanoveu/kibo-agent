@@ -40,6 +40,7 @@ import {
   processStatus,
   type ProcessInfo,
   type ToolCallDecision,
+  type PendingToolCall,
   type ToolPreview,
 } from "../lib/chat";
 import "./ChatPanel.css";
@@ -191,9 +192,11 @@ function ToolRow({
 function ApprovalCard({
   block,
   onDecide,
+  preview = previewCalls,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
+  preview?: PreviewCalls;
 }) {
   const [reason, setReason] = useState("");
   // What each call would do. Approving a write means approving its contents,
@@ -208,14 +211,14 @@ function ApprovalCard({
 
   useEffect(() => {
     let live = true;
-    previewCalls(block.calls)
+    preview(block.calls)
       // `?? []`: the card is worth drawing even if the previews are not.
       .then((next) => live && setPreviews(next ?? []))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [block.calls]);
+  }, [block.calls, preview]);
   const answer = (approved: boolean, always: string[] = []) =>
     onDecide(
       asked.map((call) => ({
@@ -235,7 +238,7 @@ function ApprovalCard({
         call.requiresConfirmation ? (
           <div key={call.id}>
             {/* A diff names its file in its own header. */}
-            {previews[index]?.kind !== "diff" && (
+            {previews[index]?.kind !== "diff" && previews[index]?.kind !== "change" && (
               <div className="approval-cmd">{describeTool({ ...emptyTool, ...call }).arg}</div>
             )}
             {call.reason && (
@@ -292,6 +295,21 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
       <p className="approval-preview">
         Removes {preview.files} {preview.files === 1 ? "file" : "files"} under {preview.path}
       </p>
+    );
+  }
+
+  if (preview.kind === "change") {
+    // Where first: the cluster is what a wrong approval costs most.
+    return (
+      <div className="approval-change">
+        <div className="approval-change-place">{preview.place}</div>
+        <div className="approval-cmd">{preview.summary}</div>
+        {preview.notes.map((note) => (
+          <p className="approval-preview" key={note}>
+            {note}
+          </p>
+        ))}
+      </div>
     );
   }
 
@@ -606,7 +624,11 @@ type TranscriptProps = Pick<
 > & {
   /** Who answers, over their turns: the agent, or a chat's role. */
   speaker?: string;
+  /** What a card's calls would do; the agent's folder preview when absent. */
+  preview?: PreviewCalls;
 };
+
+type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
 
 /**
  * The conversation as turns — the user's bubbles, the answers, the calls and
@@ -617,6 +639,7 @@ export function Transcript({
   turn,
   onDecide,
   speaker = "Agent",
+  preview,
   onOpenProcess,
   onOpenAgent,
   runningProcesses = [],
@@ -653,7 +676,7 @@ export function Transcript({
             ) : block.kind === "user" ? (
               <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
             ) : (
-              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent)
+              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview)
             ),
           )}
           {workedFooter(
@@ -893,6 +916,7 @@ function renderBlock(
   onOpenFile?: (link: string) => void,
   onFix?: (text: string) => void,
   onOpenAgent?: OpenAgent,
+  preview?: PreviewCalls,
 ) {
   switch (block.kind) {
     case "user":
@@ -959,7 +983,7 @@ function renderBlock(
     case "approval":
       return (
         <div className="tools" key={block.id}>
-          <ApprovalCard block={block} onDecide={onDecide} />
+          <ApprovalCard block={block} onDecide={onDecide} preview={preview} />
         </div>
       );
   }

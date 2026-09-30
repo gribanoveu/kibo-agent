@@ -624,7 +624,7 @@ mod tests {
             save_one("agent", "/repo", "fix it");
             let said = [LlmMessage::user("what is a monad?"), LlmMessage::assistant("a monoid in…")];
             let shown = serde_json::json!([{ "role": "assistant", "text": "a monoid in…", "reasoning": "hm" }]);
-            let pin = KubePin { kubeconfig: "prod".into(), context: Some("eks".into()), namespace: Some("payments".into()) };
+            let pin = KubePin { kubeconfig: "prod".into(), context: Some("eks".into()), namespace: Some("payments".into()), writes: false };
             let saved = save_plain("plain", ChatRole::Assistant, Some(pin.clone()), &said, &shown).unwrap();
 
             assert_eq!(saved.title, "what is a monad?");

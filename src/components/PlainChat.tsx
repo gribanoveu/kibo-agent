@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, FileCog, Layers, MessagesSquare, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
@@ -15,6 +15,9 @@ import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
 import { rememberNamespace } from "../lib/kube";
 import "./PlainChat.css";
+
+const WRITES_OFF = "read";
+const WRITES_ON = "changes";
 
 /** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
@@ -135,7 +138,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             </div>
           ) : (
             <div ref={contentRef}>
-              <Transcript turn={chat.turn} onDecide={chat.decide} speaker={roleName} />
+              <Transcript turn={chat.turn} onDecide={chat.decide} speaker={roleName} preview={chat.preview} />
               {chat.error && <div className="plain-error">{chat.error}</div>}
             </div>
           )}
@@ -200,7 +203,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 hint: [c.cluster, c.namespace, c.name === target.contexts?.current ? "current" : null].filter(Boolean).join(" · "),
               }))}
               emptyLabel={target.error ?? "The kubeconfig has no contexts"}
-              onPick={(context) => chat.kube && chat.setPin({ ...chat.kube, context, namespace: null })}
+              onPick={(context) => chat.kube && chat.setPin({ ...chat.kube, context, namespace: null, writes: false })}
             />
           )}
           {chat.role === "kubernetes" && config && chat.kube && target.context && (
@@ -227,11 +230,33 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
                 placeholder: "Another namespace",
                 onEnter: (namespace) => {
                   if (!chat.kube) return;
-                  chat.setPin({ ...chat.kube, namespace });
+                  chat.setPin({ ...chat.kube, namespace, writes: false });
                   void rememberNamespace(chat.kube.kubeconfig, namespace).catch(() => {});
                 },
               }}
-              onPick={(namespace) => chat.kube && chat.setPin({ ...chat.kube, namespace })}
+              onPick={(namespace) => chat.kube && chat.setPin({ ...chat.kube, namespace, writes: false })}
+            />
+          )}
+          {chat.role === "kubernetes" && config && chat.kube && target.context && (
+            <Dropdown
+              title="Whether this chat may change the cluster, or only read it"
+              heading="Access"
+              label={
+                <span className={`plain-chip-label${chat.kube.writes ? " changes" : ""}`}>
+                  {chat.kube.writes ? <PencilLine size={13} /> : <Lock size={13} />}
+                  {chat.kube.writes ? "Changes" : "Read only"}
+                </span>
+              }
+              value={chat.kube.writes ? WRITES_ON : WRITES_OFF}
+              options={[
+                { value: WRITES_OFF, label: "Read only", hint: "The model reads the cluster and changes nothing" },
+                {
+                  value: WRITES_ON,
+                  label: "Changes",
+                  hint: `It may change ${target.namespace} — each change asks you first and is backed up`,
+                },
+              ]}
+              onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
             />
           )}
         </div>

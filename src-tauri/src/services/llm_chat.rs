@@ -23,7 +23,7 @@ use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
 use crate::domain::result_clearing;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
-use crate::domain::kube::{KubeApi, KubeSetup, PinnedCluster};
+use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
@@ -246,7 +246,13 @@ pub enum Place<'a> {
     /// who the model is and all it may call; `kube` is what it is told of the
     /// user's cluster, and `cluster` what its tools read it through — `None`
     /// when no cluster is pinned.
-    Chat { role: ChatRole, kube: &'a KubeSetup, cluster: Option<&'a dyn KubeApi> },
+    /// `changes` is where a change to it is recorded first.
+    Chat {
+        role: ChatRole,
+        kube: &'a KubeSetup,
+        cluster: Option<&'a dyn KubeApi>,
+        changes: Option<&'a dyn KubeChanges>,
+    },
 }
 
 impl<'a> Place<'a> {
@@ -875,12 +881,7 @@ fn execute_call(
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
-        kube: match turn.place {
-            Place::Chat { kube: KubeSetup::Pinned(target), cluster: Some(api), .. } => {
-                Some(PinnedCluster { api, namespace: &target.namespace })
-            }
-            _ => None,
-        },
+        kube: pinned_cluster(turn),
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -890,7 +891,28 @@ fn execute_call(
 fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), crate::domain::tools::ToolError> {
     match turn.place {
         Place::Folder { scope, mode } => preflight_tool_call(scope, mode, reads, call),
-        Place::Chat { role, .. } => preflight_chat_call(role, call),
+        Place::Chat { role, .. } => {
+            let parsed = preflight_chat_call(role, call)?;
+            // A change the cluster would refuse — read-only, RBAC, a
+            // webhook — is refused here, before a card asks about it.
+            crate::services::ai_tools::tools::cluster::preflight(pinned_cluster(turn), &parsed)
+        }
+    }
+}
+
+/// The chat's cluster as its tools get it; `None` unless one is pinned and
+/// its kubeconfig could be read.
+pub fn pinned_cluster<'a>(turn: &Turn<'a>) -> Option<PinnedCluster<'a>> {
+    match turn.place {
+        Place::Chat { kube: KubeSetup::Pinned(target), cluster: Some(api), changes, .. } => Some(PinnedCluster {
+            api,
+            namespace: &target.namespace,
+            kubeconfig: &target.config.name,
+            context: &target.context,
+            writes: target.writes,
+            changes,
+        }),
+        _ => None,
     }
 }
 
@@ -1844,7 +1866,7 @@ mod tests {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
-                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None },
+                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None },
                     None => Place::Folder { scope: &self.scope, mode: self.mode },
                 },
                 approval: &self.approval,

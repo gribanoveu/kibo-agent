@@ -787,4 +787,30 @@ describe("the transcript in Chat mode", () => {
     fireEvent.click(screen.getByText("Allow"));
     expect(decided).toEqual([[{ id: "c1", approved: true, reason: null }]]);
   });
+
+  /// A change to a cluster is approved knowing where it lands: the card asks
+  /// the chat's own preview, and shows the place before the change.
+  test("a change's card shows the cluster and what becomes of what", async () => {
+    const calls = [{ id: "c1", name: "kubeScale", arguments: '{"kind":"Deployment","name":"api","replicas":0}', requiresConfirmation: true }];
+    const asked: unknown[] = [];
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async (pending) => {
+            asked.push(pending);
+            return [{ kind: "change", place: "context eks · namespace orders", summary: "Deployment/api: 3 → 0 replicas", notes: ["Can be undone."] }];
+          }}
+        />,
+      );
+    });
+    expect(asked).toEqual([calls]);
+    const place = screen.getByText("context eks · namespace orders");
+    const summary = screen.getByText("Deployment/api: 3 → 0 replicas");
+    expect(place.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Can be undone.")).toBeTruthy();
+    // The summary stands for the arguments: the row is not said twice.
+    expect(screen.queryByText("Deployment api → 0")).toBeNull();
+  });
 });

@@ -59,6 +59,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "kubeTop" => ToolCall::KubeTop(args(call)?),
         "kubeFieldHistory" => ToolCall::KubeFieldHistory(args(call)?),
         "kubeDiagnose" => ToolCall::KubeDiagnose(args(call)?),
+        "kubeScale" => ToolCall::KubeScale(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to
         // get wrong. Whatever it sent alongside is ignored rather than refused.
         "gitStatus" => ToolCall::GitStatus,
@@ -69,12 +70,12 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
 /// Chat mode's preflight: the call parses, and the chat's role has the tool.
 /// No containment: there is no folder to be inside, and a role's tools touch
 /// none — [`crate::services::ai_tools::tools::dispatch`] refuses one that would.
-pub fn preflight_chat_call(role: ChatRole, call: &LlmToolCall) -> Result<(), ToolError> {
+pub fn preflight_chat_call(role: ChatRole, call: &LlmToolCall) -> Result<ToolCall, ToolError> {
     let parsed = parse_tool_call(call)?;
     if !role.tools().contains(&parsed.name()) {
         return Err(ToolError::NotOfferedInChat(parsed.name().wire_name().to_string()));
     }
-    Ok(())
+    Ok(parsed)
 }
 
 /// Rejects what cannot succeed, before a human is asked to approve it.

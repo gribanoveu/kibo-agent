@@ -7,13 +7,15 @@
 use std::time::Duration;
 
 use crate::domain::chat_role::ChatRole;
-use crate::domain::kube::{KubeApi, KubeSetup};
+use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
+use crate::services::ai_tools::parse::parse_tool_call;
+use crate::services::ai_tools::tools;
 use crate::domain::command_exec::Shell;
 use crate::domain::hooks::Hooks;
-use crate::domain::llm::LlmMessage;
+use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::mcp::McpTools;
 use crate::domain::tool_call_log::ToolCallLogEntry;
-use crate::domain::tools::ApprovalPolicy;
+use crate::domain::tools::{ApprovalPolicy, ToolPreview};
 use crate::domain::turn::{ChatEventSink, ChatStreamOutcome, PendingApproval, SteeringNote, ToolCallDecision};
 use crate::services::llm_chat::{self, Place, Turn, TurnError};
 use crate::services::llm_session::LlmSession;
@@ -26,6 +28,8 @@ pub struct ChatTurn<'a> {
     pub kube: &'a KubeSetup,
     /// What its tools read that cluster through, when one is pinned.
     pub cluster: Option<&'a dyn KubeApi>,
+    /// Where a change to it is recorded before it is made.
+    pub changes: Option<&'a dyn KubeChanges>,
     pub approval: &'a ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -46,6 +50,31 @@ pub fn resume(
     in_place(chat, |turn| llm_chat::resume(turn, checkpoint, decisions))
 }
 
+/// What the calls of a paused round would do, for the approval card — one
+/// answer per call, in order. A chat's card shows changes to a cluster: where,
+/// and from what to what. Nothing here changes anything.
+pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmToolCall]) -> Vec<ToolPreview> {
+    let pinned = match (kube, cluster) {
+        (KubeSetup::Pinned(target), Some(api)) => Some(PinnedCluster {
+            api,
+            namespace: &target.namespace,
+            kubeconfig: &target.config.name,
+            context: &target.context,
+            writes: target.writes,
+            // A preview records nothing, and must not be able to.
+            changes: None,
+        }),
+        _ => None,
+    };
+    calls
+        .iter()
+        .map(|call| match parse_tool_call(call) {
+            Ok(parsed) => tools::cluster::preview(pinned, &parsed),
+            Err(e) => ToolPreview::Failed { reason: e.to_string() },
+        })
+        .collect()
+}
+
 fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
     let sleep = |delay: Duration| std::thread::sleep(delay);
     // ponytail: no steering — the chat's box is disabled while a turn runs;
@@ -57,7 +86,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
     let turn = Turn {
         events: chat.events,
         session: chat.session,
-        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster },
+        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster, changes: chat.changes },
         approval: chat.approval,
         cancelled: chat.cancelled,
         sleep: &sleep,
@@ -86,7 +115,7 @@ mod tests {
     use crate::domain::llm::{
         ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, LlmRole, LlmToolCall,
     };
-    use crate::domain::kube::{Access, KubeError, KubeKind, KubeTarget, ListPage, ListQuery, LogQuery, Reach};
+    use crate::domain::kube::{Access, KubeChange, KubeError, KubeKind, KubeTarget, ListPage, ListQuery, LogQuery, Reach};
     use crate::domain::turn::{ChatEventPayload, ChatTurnEvent};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -140,6 +169,7 @@ mod tests {
         script: Arc<Script>,
         kube: KubeSetup,
         cluster: Option<Arc<dyn KubeApi>>,
+        changes: Option<Arc<Kept>>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
     }
@@ -158,6 +188,7 @@ mod tests {
             script,
             kube: KubeSetup::NotSet,
             cluster: None,
+            changes: None,
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
         }
@@ -174,6 +205,7 @@ mod tests {
                 role,
                 kube: &self.kube,
                 cluster: self.cluster.as_deref(),
+                changes: self.changes.as_deref().map(|kept| kept as &dyn KubeChanges),
                 approval: &self.approval,
                 events: &events,
                 cancelled: &stop,
@@ -344,6 +376,117 @@ mod tests {
         fn logs(&self, _: &str, _: &str, _: &LogQuery) -> Result<String, KubeError> {
             unreachable!("only listed")
         }
+
+        fn patch(&self, _: &KubeKind, _: &str, _: &str, _: &serde_json::Value, _: bool) -> Result<serde_json::Value, KubeError> {
+            unreachable!("only listed")
+        }
+    }
+
+    /// A Deployment of three replicas that takes every patch.
+    struct ThreeReplicas;
+
+    impl KubeApi for ThreeReplicas {
+        fn kinds(&self) -> Result<Vec<KubeKind>, KubeError> {
+            Ok(vec![KubeKind { group: "apps".into(), version: "v1".into(), kind: "Deployment".into(), plural: "deployments".into(), namespaced: true }])
+        }
+
+        fn list(&self, _: &KubeKind, _: &ListQuery) -> Result<ListPage, KubeError> {
+            unreachable!("only scaled")
+        }
+
+        fn get(&self, _: &KubeKind, _: &str, name: &str) -> Result<serde_json::Value, KubeError> {
+            Ok(serde_json::json!({"metadata": {"name": name, "generation": 1}, "spec": {"replicas": 3}}))
+        }
+
+        fn logs(&self, _: &str, _: &str, _: &LogQuery) -> Result<String, KubeError> {
+            unreachable!("only scaled")
+        }
+
+        fn patch(&self, _: &KubeKind, _: &str, name: &str, patch: &serde_json::Value, _: bool) -> Result<serde_json::Value, KubeError> {
+            Ok(serde_json::json!({"metadata": {"name": name, "generation": 2}, "spec": patch["spec"]}))
+        }
+    }
+
+    /// The changes that were made for real: each is audited once.
+    #[derive(Default)]
+    struct Kept(Mutex<Vec<KubeChange>>);
+
+    impl KubeChanges for Kept {
+        fn backup(&self, _: &KubeChange, _: &serde_json::Value) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn audit(&self, change: &KubeChange) -> Result<(), String> {
+            self.0.lock().unwrap().push(change.clone());
+            Ok(())
+        }
+    }
+
+    fn scaling(writes: bool, replies: Vec<ChatStreamResult>) -> Chat {
+        let mut chat = chat(replies, None);
+        let KubeSetup::Pinned(target) = pinned("payments") else { unreachable!() };
+        chat.kube = KubeSetup::Pinned(KubeTarget { writes, ..target });
+        chat.cluster = Some(Arc::new(ThreeReplicas));
+        chat.changes = Some(Arc::default());
+        chat
+    }
+
+    const SCALE: &str = r#"{"kind":"Deployment","name":"api","replicas":0}"#;
+
+    /// Decision 3: the tool is always offered, and the tab's switch is what
+    /// refuses it — with no card, since there is nothing to approve.
+    #[test]
+    fn a_read_only_chat_refuses_a_change_without_a_card() {
+        let chat = scaling(false, vec![calls("kubeScale", SCALE), said("turn on Changes")]);
+        let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("stop it")]));
+        assert!(tool_result(&done.history).contains("read-only"), "{:?}", done.history);
+        assert!(chat.changes.as_ref().unwrap().0.lock().unwrap().is_empty());
+        assert!(chat.asked()[0].tools.iter().any(|t| t.name == "kubeScale"), "offered all the same");
+    }
+
+    /// With Changes on, the change waits for the card; approved, it is made
+    /// and on record; denied, nothing is.
+    #[test]
+    fn a_change_waits_for_the_card_and_is_recorded_when_made() {
+        let chat = scaling(true, vec![calls("kubeScale", SCALE), said("stopped")]);
+        let ChatStreamOutcome::PendingApproval(paused) = chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("stop it")]) else {
+            panic!("expected a card");
+        };
+        assert!(paused.calls[0].requires_confirmation);
+        let kept = chat.changes.clone().unwrap();
+        assert!(kept.0.lock().unwrap().is_empty(), "changed before the answer");
+
+        let approve = vec![ToolCallDecision { id: "c1".into(), approved: true, reason: None }];
+        let done = done(chat.run(ChatRole::Kubernetes, false, |turn| resume(turn, paused, approve)).unwrap());
+        assert!(tool_result(&done.history).contains("3 → 0 replicas. Change id kc-"), "{:?}", done.history);
+        let made = kept.0.lock().unwrap();
+        assert_eq!((made.len(), made[0].namespace.as_str(), made[0].generation_after), (1, "payments", Some(2)));
+
+        let denied = scaling(true, vec![calls("kubeScale", SCALE), said("left alone")]);
+        let ChatStreamOutcome::PendingApproval(paused) = denied.start(ChatRole::Kubernetes, vec![LlmMessage::user("stop it")]) else {
+            panic!("expected a card");
+        };
+        let deny = vec![ToolCallDecision { id: "c1".into(), approved: false, reason: None }];
+        denied.run(ChatRole::Kubernetes, false, |turn| resume(turn, paused, deny)).unwrap();
+        assert!(denied.changes.as_ref().unwrap().0.lock().unwrap().is_empty());
+    }
+
+    /// The card's preview reads and dry-runs; it has nowhere to record, so it
+    /// cannot change anything even by mistake.
+    #[test]
+    fn a_preview_says_what_would_change_and_why_a_call_would_fail() {
+        let KubeSetup::Pinned(target) = pinned("payments") else { unreachable!() };
+        let on = KubeSetup::Pinned(KubeTarget { writes: true, ..target });
+        let call = |name: &str, arguments: &str| LlmToolCall { id: "c1".into(), name: name.into(), arguments: arguments.into() };
+        let shown = preview(&on, Some(&ThreeReplicas), &[call("kubeScale", SCALE), call("kubeScale", "{"), call("kubeGet", r#"{"kind":"deploy","name":"api"}"#)]);
+        assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. }
+            if place == "context eks · namespace payments" && summary == "Deployment/api: 3 → 0 replicas"), "{shown:?}");
+        assert!(matches!(&shown[1], ToolPreview::Failed { .. }), "{shown:?}");
+        assert_eq!(shown[2], ToolPreview::Nothing);
+        let read_only = preview(&pinned("payments"), Some(&ThreeReplicas), &[call("kubeScale", SCALE)]);
+        assert!(matches!(&read_only[0], ToolPreview::Failed { reason } if reason.contains("read-only")), "{read_only:?}");
+        let unpinned = preview(&KubeSetup::NotSet, Some(&ThreeReplicas), &[call("kubeScale", SCALE)]);
+        assert!(matches!(&unpinned[0], ToolPreview::Failed { reason } if reason.contains("no cluster")), "{unpinned:?}");
     }
 
     fn pinned(namespace: &str) -> KubeSetup {
@@ -353,6 +496,7 @@ mod tests {
             cluster: "eks".into(),
             namespace: namespace.into(),
             reach: Reach::Answered { version: "v1.33.1".into(), access: Access::ReadOnly },
+            writes: false,
         })
     }
 

@@ -30,7 +30,13 @@ export function activeKubeconfig(settings: KubeSettings | null): Kubeconfig | nu
 }
 
 /** Mirrors `domain::kube::KubePin`: where a chat works. `null` picks what `kubectl` would. */
-export type KubePin = { kubeconfig: string; context: string | null; namespace: string | null };
+export type KubePin = {
+  kubeconfig: string;
+  context: string | null;
+  namespace: string | null;
+  /** "Changes" on the chat's tab: its tools may change the cluster. Absent is read-only. */
+  writes?: boolean;
+};
 export type KubeContext = { name: string; cluster: string; namespace: string | null };
 export type KubeContexts = { contexts: KubeContext[]; current: string | null };
 /** The namespaces a chat's menu offers, by where each came from. */

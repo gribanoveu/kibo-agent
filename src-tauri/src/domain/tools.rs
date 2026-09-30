@@ -65,6 +65,8 @@ pub enum ToolName {
     KubeFieldHistory,
     /// A workload's state, pods, events and the telling log in one call (K-4).
     KubeDiagnose,
+    /// The first of the role's changes (K-5a): replicas, with a backup.
+    KubeScale,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -111,6 +113,7 @@ impl ToolName {
         ToolName::KubeTop,
         ToolName::KubeFieldHistory,
         ToolName::KubeDiagnose,
+        ToolName::KubeScale,
         ToolName::Mcp,
     ];
 
@@ -149,6 +152,7 @@ impl ToolName {
             ToolName::KubeTop => "kubeTop",
             ToolName::KubeFieldHistory => "kubeFieldHistory",
             ToolName::KubeDiagnose => "kubeDiagnose",
+            ToolName::KubeScale => "kubeScale",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -187,6 +191,8 @@ impl ToolName {
                 | ToolName::RunCommand
                 // The same command line, in the user's shell.
                 | ToolName::RunInTerminal
+                // Changes the user's cluster.
+                | ToolName::KubeScale
                 // Nothing is known about what a foreign tool does, and its
                 // server's own hints are untrusted by the specification: it
                 // asks, and it stays out of the modes that promise nothing
@@ -253,6 +259,8 @@ impl ToolName {
             ToolName::KubeLogs => 3,
             // Five or six reads of the cluster — the rounds it saves.
             ToolName::KubeDiagnose => 4,
+            // A read, a dry run, a backup, the change.
+            ToolName::KubeScale => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -406,7 +414,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            32,
+            33,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -467,6 +475,7 @@ mod tests {
         assert_eq!(
             mutating,
             HashSet::from([
+                ToolName::KubeScale,
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
@@ -755,6 +764,17 @@ pub enum ToolPreview {
     /// A command line and where it would run.
     #[serde(rename_all = "camelCase")]
     Command { command: String, cwd: String },
+    /// A change to a cluster: where, and what it would become — the server
+    /// has already accepted it as a dry run.
+    #[serde(rename_all = "camelCase")]
+    Change {
+        /// `context eks-prod · namespace payments` — read before agreeing.
+        place: String,
+        /// `Deployment/api: 3 → 0 replicas`.
+        summary: String,
+        /// What else to know first: whether it can be undone.
+        notes: Vec<String>,
+    },
     /// The call would not succeed anyway, and this says why — better learned
     /// before approving it than after.
     #[serde(rename_all = "camelCase")]
@@ -967,6 +987,13 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// A change asked for while the chat's tab says "Read only". The switch
+    /// is the user's; the model says what it would do and where to turn it on.
+    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
+    KubeReadOnly,
+    /// The backup could not be written, so nothing was changed.
+    #[error("nothing was changed: the backup that makes it undoable could not be written — {0}")]
+    KubeBackup(String),
     /// A Kubernetes tool in a chat with no cluster to read. The prompt's note
     /// about the user's setup says why; the model tells the user what to fix.
     #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
@@ -1027,6 +1054,7 @@ pub enum ToolCall {
     KubeTop(KubeTopArgs),
     KubeFieldHistory(KubeFieldHistoryArgs),
     KubeDiagnose(KubeDiagnoseArgs),
+    KubeScale(KubeScaleArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1064,6 +1092,7 @@ impl ToolCall {
             ToolCall::KubeTop(_) => ToolName::KubeTop,
             ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
             ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
+            ToolCall::KubeScale(_) => ToolName::KubeScale,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1448,6 +1477,18 @@ pub struct KubeDiagnoseArgs {
     pub name: String,
     #[serde(default)]
     pub namespace: Option<String>,
+}
+
+/// `kubeScale`: a workload's replicas, in the chat's own namespace — a
+/// change is never made in another. `replicas` is optional in the type so a
+/// missing number is the tool's error, worded for the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeScaleArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub replicas: Option<u32>,
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the

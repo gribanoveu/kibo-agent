@@ -675,6 +675,13 @@ button.turn-processes:hover {
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
+/* A change to a cluster: where it lands is read before what it does. */
+.approval-change-place {
+  margin: 0 0 4px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--amber);
+}
 .approval-preview.failed {
   color: var(--red);
 }

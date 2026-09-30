@@ -163,6 +163,7 @@ pub fn run() {
             commands::plain_chat::plain_chat_send,
             commands::plain_chat::plain_chat_resume,
             commands::plain_chat::plain_chat_always_allow,
+            commands::plain_chat::plain_chat_preview,
             commands::plain_chat::plain_chat_cancel,
             commands::plain_chat::plain_chat_list,
             commands::plain_chat::plain_chat_save,

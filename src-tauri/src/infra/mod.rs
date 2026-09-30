@@ -35,3 +35,4 @@ pub mod git_changes;
 pub mod file_tree;
 pub mod git_history;
 pub mod recent_workspaces;
+pub mod kube_changes;

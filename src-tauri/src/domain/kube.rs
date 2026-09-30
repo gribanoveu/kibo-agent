@@ -19,6 +19,10 @@ pub struct KubePin {
     /// `None` is the context's own namespace, or `default`.
     #[serde(default)]
     pub namespace: Option<String>,
+    /// Whether the chat's tools may change the cluster — "Changes" on its
+    /// tab. Off unless the user turned it on, in this chat, this time it is open.
+    #[serde(default)]
+    pub writes: bool,
 }
 
 /// One context of a kubeconfig, as its menu lists it.
@@ -123,6 +127,55 @@ pub trait KubeApi: Send + Sync {
     /// `namespace` is ignored for a cluster-scoped kind.
     fn get(&self, kind: &KubeKind, namespace: &str, name: &str) -> Result<serde_json::Value, KubeError>;
     fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError>;
+    /// Merges `patch` into the object and returns it as the server then has
+    /// it. With `dry_run` the server checks and answers, and keeps nothing.
+    fn patch(
+        &self,
+        kind: &KubeKind,
+        namespace: &str,
+        name: &str,
+        patch: &serde_json::Value,
+        dry_run: bool,
+    ) -> Result<serde_json::Value, KubeError>;
+}
+
+/// One change a tool made to a cluster, as the audit keeps it
+/// (`docs/21-kubernetes-mode.md`, decisions 6 and 9): where, what, and the
+/// spec's generation on either side — the undo's test of "nobody else
+/// changed it since".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeChange {
+    /// Names the backup, and is what `kubeUndo` takes.
+    pub id: String,
+    /// RFC 3339, UTC.
+    pub at: String,
+    pub kubeconfig: String,
+    pub context: String,
+    pub namespace: String,
+    pub group: String,
+    pub version: String,
+    pub kind: String,
+    pub plural: String,
+    pub name: String,
+    pub tool: String,
+    /// What it did, in words: `3 → 0 replicas`.
+    pub summary: String,
+    pub generation_before: Option<i64>,
+    /// `None` until the change ran, and when it failed.
+    pub generation_after: Option<i64>,
+    /// Why it failed; `None` when it did not.
+    pub error: Option<String>,
+}
+
+/// Where changes are recorded. A change that cannot be backed up does not
+/// run — the opposite of a file edit's best-effort copy: a cluster is not a
+/// working tree, and nothing there changes without a way back on record.
+pub trait KubeChanges: Send + Sync {
+    /// Keeps `object` — the live one, whole — under the change's id.
+    fn backup(&self, change: &KubeChange, object: &serde_json::Value) -> Result<(), String>;
+    /// Adds the change, with how it ended, to the audit.
+    fn audit(&self, change: &KubeChange) -> Result<(), String>;
 }
 
 /// What a Kubernetes chat's tools read: its cluster, and the namespace it is
@@ -131,6 +184,14 @@ pub trait KubeApi: Send + Sync {
 pub struct PinnedCluster<'a> {
     pub api: &'a dyn KubeApi,
     pub namespace: &'a str,
+    /// The kubeconfig's name in Settings and its context, for the audit
+    /// and the approval card.
+    pub kubeconfig: &'a str,
+    pub context: &'a str,
+    /// "Changes" is on for this chat.
+    pub writes: bool,
+    /// `None` where nothing can be recorded — and so nothing changed.
+    pub changes: Option<&'a dyn KubeChanges>,
 }
 
 /// `kubectl`'s short names, for the kinds that have one — discovery in this
@@ -227,6 +288,8 @@ pub struct KubeTarget {
     pub cluster: String,
     pub namespace: String,
     pub reach: Reach,
+    /// The pin's "Changes": whether a tool may change anything here.
+    pub writes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
