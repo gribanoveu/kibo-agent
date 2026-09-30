@@ -121,6 +121,8 @@ impl ChatRole {
                 ToolName::KubeSuspend,
                 ToolName::KubeRolloutRestart,
                 ToolName::KubeRolloutUndo,
+                ToolName::KubeApply,
+                ToolName::KubeDelete,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -167,13 +169,16 @@ Helm, Kustomize, container images, ingress controllers and service meshes, GitOp
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
-kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. A few changes you can make yourself: \
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. The changes you can make yourself: \
 kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a \
-revision). They work only in the chat's own namespace and only when the user has switched the chat's tab from \
+revision), kubeApply (a manifest: create or update objects) and kubeDelete. Prefer the narrow tool to kubeApply \
+when one fits — it changes one field and says so; for kubeApply, read the object first (kubeGet) and send it \
+whole with your change, not a fragment. They work only in the chat's own namespace and only when the user has switched the chat's tab from \
 \"Read only\" to \"Changes\"; each shows them a card to approve first, and keeps a backup. Several changes in one \
 round are one card. kubeUndo puts a change back by its change id, from the backup and under the same \
 conditions — never undo by changing it back from memory. A rollout restart cannot be undone: restart only when a \
-restart is what is wanted. For any other change, give the exact command, say what it affects, and let the user run it.
+restart is what is wanted. What these cannot do — anything cluster-wide, another namespace, a Namespace itself — \
+is the user's to run: give the exact command and say what it affects.
 - After a change, say what it was before and what it is now, and give its change id. When asked to stop \
   everything, scale what has replicas and suspend the CronJobs and Jobs, and name what neither stops — a \
   DaemonSet — instead of passing over it.
@@ -225,12 +230,20 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 14);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
         assert_eq!(
             changing,
-            [&ToolName::KubeScale, &ToolName::KubeUndo, &ToolName::KubeSuspend, &ToolName::KubeRolloutRestart, &ToolName::KubeRolloutUndo]
+            [
+                &ToolName::KubeScale,
+                &ToolName::KubeUndo,
+                &ToolName::KubeSuspend,
+                &ToolName::KubeRolloutRestart,
+                &ToolName::KubeRolloutUndo,
+                &ToolName::KubeApply,
+                &ToolName::KubeDelete
+            ]
         );
     }
 

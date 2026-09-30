@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use k8s_openapi::api::authorization::v1::{SelfSubjectRulesReview, SelfSubjectRulesReviewSpec};
 use k8s_openapi::api::core::v1::{Namespace, Pod};
-use kube::api::{Api, ApiResource, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams};
+use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::core::discovery::{verbs, Scope};
 use kube::{Client, Config, Discovery};
@@ -285,6 +285,22 @@ impl KubeApi for ClusterApi {
             json(api.patch(name, &params, &Patch::Merge(patch)).await.map_err(cluster_error)?)
         })
     }
+
+    fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, object: &serde_json::Value, dry_run: bool) -> Result<serde_json::Value, KubeError> {
+        self.within(|client| async move {
+            let params = PatchParams { dry_run, force: true, field_manager: Some(FIELD_MANAGER.to_string()), ..Default::default() };
+            let api = dynamic(client, kind, Some(namespace));
+            json(api.patch(name, &params, &Patch::Apply(object)).await.map_err(cluster_error)?)
+        })
+    }
+
+    fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> {
+        self.within(|client| async move {
+            let params = DeleteParams { dry_run, ..Default::default() };
+            dynamic(client, kind, Some(namespace)).delete(name, &params).await.map_err(cluster_error)?;
+            Ok(())
+        })
+    }
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -294,12 +310,13 @@ fn modified(path: &Path) -> Option<SystemTime> {
 /// What the cluster said, cut to what fits in a chip's hint and a prompt —
 /// for a refusal, the server's own sentence (`pods is forbidden: User …`).
 fn cluster_error(error: kube::Error) -> KubeError {
+    let missing = matches!(&error, kube::Error::Api(status) if status.code == 404);
     let text = match error {
         kube::Error::Api(status) if !status.message.is_empty() => status.message,
         other => other.to_string(),
     };
-    let line = text.lines().next().unwrap_or_default();
-    KubeError::Cluster(line.chars().take(400).collect())
+    let line: String = text.lines().next().unwrap_or_default().chars().take(400).collect();
+    if missing { KubeError::NotFound(line) } else { KubeError::Cluster(line) }
 }
 
 /// Gives each login plugin (`exec`) the login shell's `PATH`.

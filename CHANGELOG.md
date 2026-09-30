@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 The Kubernetes role can apply a manifest and delete an object in the chat's namespace: the card shows each object's diff before you agree, a deleted PersistentVolumeClaim says when its data goes with it, and undo takes away what an apply created, restores what it changed and recreates what was deleted
+
 - 2026-09-30 The Kubernetes role can suspend and resume a CronJob or Job, restart a Deployment, StatefulSet or DaemonSet, and roll a Deployment back to an earlier revision — each on a card that shows what changes (for a rollback, the revisions and images) and says when it cannot be undone
 
 - 2026-09-30 Undo a change Kibo made to a cluster: ask the Kubernetes chat to undo it and the object is put back from its backup, for 30 days, on a card you approve — never over what someone else changed since; Settings → Kubernetes → Changes lists the changes and their ids

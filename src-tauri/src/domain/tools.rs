@@ -74,6 +74,9 @@ pub enum ToolName {
     KubeSuspend,
     KubeRolloutRestart,
     KubeRolloutUndo,
+    /// A manifest applied, an object deleted (K-5d).
+    KubeApply,
+    KubeDelete,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -125,6 +128,8 @@ impl ToolName {
         ToolName::KubeSuspend,
         ToolName::KubeRolloutRestart,
         ToolName::KubeRolloutUndo,
+        ToolName::KubeApply,
+        ToolName::KubeDelete,
         ToolName::Mcp,
     ];
 
@@ -168,6 +173,8 @@ impl ToolName {
             ToolName::KubeSuspend => "kubeSuspend",
             ToolName::KubeRolloutRestart => "kubeRolloutRestart",
             ToolName::KubeRolloutUndo => "kubeRolloutUndo",
+            ToolName::KubeApply => "kubeApply",
+            ToolName::KubeDelete => "kubeDelete",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -212,6 +219,8 @@ impl ToolName {
                 | ToolName::KubeSuspend
                 | ToolName::KubeRolloutRestart
                 | ToolName::KubeRolloutUndo
+                | ToolName::KubeApply
+                | ToolName::KubeDelete
                 // Nothing is known about what a foreign tool does, and its
                 // server's own hints are untrusted by the specification: it
                 // asks, and it stays out of the modes that promise nothing
@@ -283,7 +292,9 @@ impl ToolName {
             | ToolName::KubeUndo
             | ToolName::KubeSuspend
             | ToolName::KubeRolloutRestart
-            | ToolName::KubeRolloutUndo => 3,
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -437,7 +448,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            37,
+            39,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -503,6 +514,8 @@ mod tests {
                 ToolName::KubeSuspend,
                 ToolName::KubeRolloutRestart,
                 ToolName::KubeRolloutUndo,
+                ToolName::KubeApply,
+                ToolName::KubeDelete,
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
@@ -801,6 +814,9 @@ pub enum ToolPreview {
         summary: String,
         /// What else to know first: whether it can be undone.
         notes: Vec<String>,
+        /// A manifest's objects, each as it is against what it would become.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diffs: Vec<ChangeDiff>,
     },
     /// The call would not succeed anyway, and this says why — better learned
     /// before approving it than after.
@@ -808,6 +824,15 @@ pub enum ToolPreview {
     Failed { reason: String },
     /// Nothing worth showing beyond the arguments themselves.
     Nothing,
+}
+
+/// One object of a change to a cluster: `Deployment/api`, and its YAML now
+/// against its YAML after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeDiff {
+    pub title: String,
+    pub diff: FileDiffStats,
 }
 
 /// What a tool needs from the environment, beyond the workspace it acts on.
@@ -1090,6 +1115,8 @@ pub enum ToolCall {
     KubeSuspend(KubeSuspendArgs),
     KubeRolloutRestart(KubeRolloutRestartArgs),
     KubeRolloutUndo(KubeRolloutUndoArgs),
+    KubeApply(KubeApplyArgs),
+    KubeDelete(KubeDeleteArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1132,6 +1159,8 @@ impl ToolCall {
             ToolCall::KubeSuspend(_) => ToolName::KubeSuspend,
             ToolCall::KubeRolloutRestart(_) => ToolName::KubeRolloutRestart,
             ToolCall::KubeRolloutUndo(_) => ToolName::KubeRolloutUndo,
+            ToolCall::KubeApply(_) => ToolName::KubeApply,
+            ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1558,6 +1587,21 @@ pub struct KubeRolloutUndoArgs {
     pub name: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub to_revision: Option<u32>,
+}
+
+/// `kubeApply`: one or more objects as YAML, `---` between them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeApplyArgs {
+    pub manifest: String,
+}
+
+/// `kubeDelete`: one object of the chat's own namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeDeleteArgs {
+    pub kind: String,
+    pub name: String,
 }
 
 /// `kubeUndo`: a change by the id its tool answered with.

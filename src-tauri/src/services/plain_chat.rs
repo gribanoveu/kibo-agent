@@ -377,6 +377,14 @@ mod tests {
             unreachable!("only listed")
         }
 
+        fn apply(&self, _: &KubeKind, _: &str, _: &str, _: &serde_json::Value, _: bool) -> Result<serde_json::Value, KubeError> {
+            unreachable!("only listed")
+        }
+
+        fn delete(&self, _: &KubeKind, _: &str, _: &str, _: bool) -> Result<(), KubeError> {
+            unreachable!("only listed")
+        }
+
         fn patch(&self, _: &KubeKind, _: &str, _: &str, _: &serde_json::Value, _: bool) -> Result<serde_json::Value, KubeError> {
             unreachable!("only listed")
         }
@@ -399,6 +407,14 @@ mod tests {
         }
 
         fn logs(&self, _: &str, _: &str, _: &LogQuery) -> Result<String, KubeError> {
+            unreachable!("only scaled")
+        }
+
+        fn apply(&self, _: &KubeKind, _: &str, _: &str, _: &serde_json::Value, _: bool) -> Result<serde_json::Value, KubeError> {
+            unreachable!("only scaled")
+        }
+
+        fn delete(&self, _: &KubeKind, _: &str, _: &str, _: bool) -> Result<(), KubeError> {
             unreachable!("only scaled")
         }
 

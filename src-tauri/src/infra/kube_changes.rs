@@ -143,6 +143,7 @@ mod tests {
             summary: "3 → 0 replicas".into(),
             generation_before: Some(4),
             generation_after: None,
+            version_after: None,
             error: None,
             undoes: None,
         }

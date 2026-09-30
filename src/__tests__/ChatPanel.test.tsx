@@ -813,4 +813,33 @@ describe("the transcript in Chat mode", () => {
     // The summary stands for the arguments: the row is not said twice.
     expect(screen.queryByText("Deployment api → 0")).toBeNull();
   });
+
+  /// A manifest's card shows each object as it is against what it would be.
+  test("an applied manifest's card shows every object's diff under its name", async () => {
+    const calls = [{ id: "c1", name: "kubeApply", arguments: '{"manifest":"kind: ConfigMap"}', requiresConfirmation: true }];
+    const diff = (line: string) => ({ linesAdded: 1, linesRemoved: 0, unifiedDiff: `@@ -0,0 +1 @@\n+${line}\n`, truncated: false });
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async () => [
+            {
+              kind: "change",
+              place: "context eks · namespace orders",
+              summary: "2 objects — ConfigMap/flags: create; Deployment/api: update (+1 −1 lines)",
+              notes: ["Can be undone: the object is backed up first."],
+              diffs: [
+                { title: "ConfigMap/flags", diff: diff("beta: on") },
+                { title: "Deployment/api", diff: diff("replicas: 5") },
+              ],
+            },
+          ]}
+        />,
+      );
+    });
+    expect(screen.getByText("ConfigMap/flags")).toBeTruthy();
+    expect(screen.getByText("Deployment/api")).toBeTruthy();
+    expect(document.body.textContent).toContain("replicas: 5");
+  });
 });

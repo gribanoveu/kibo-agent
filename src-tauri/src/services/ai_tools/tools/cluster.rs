@@ -5,12 +5,16 @@
 //! shapes what it read with `domain::kube_view` before the model sees it.
 
 use chrono::Utc;
+use serde::Deserialize;
 use serde_json::Value;
 
-use crate::domain::kube::{merge_diff, resolve_kind, undoable, KubeChange, ROLLOUT_RESTART, KubeKind, ListQuery, LogQuery, PinnedCluster};
+use crate::services::text_diff::diff_stats;
+
+use crate::domain::kube::{merge_diff, resolve_kind, undoable, KubeChange, KubeError, ROLLOUT_RESTART, KubeKind, ListQuery, LogQuery, PinnedCluster};
 use crate::domain::kube_view::{self, cap, FieldPath, PodLog};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
+    ChangeDiff, FileDiffStats, KubeApplyArgs, KubeDeleteArgs,
     KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeTopArgs,
     ToolCall, ToolError, ToolPreview, ToolResult,
 };
@@ -481,9 +485,40 @@ struct Plan {
     tool: &'static str,
     kind: KubeKind,
     name: String,
+    /// As it is now; `Null` when it is not there.
     object: Value,
-    patch: Value,
+    act: Act,
     summary: String,
+    /// Its YAML now against its YAML after, where the words do not say it all.
+    diff: Option<FileDiffStats>,
+    /// What else the card says before anyone agrees.
+    warning: Option<String>,
+}
+
+/// What a change does to its object.
+enum Act {
+    /// A merge patch: one field, or one section replaced.
+    Patch(Value),
+    /// The object whole, created when it is not there.
+    Apply(Value),
+    Delete,
+}
+
+impl Plan {
+    fn patching(tool: &'static str, kind: KubeKind, name: &str, object: Value, patch: Value, summary: String) -> Plan {
+        Plan { tool, kind, name: name.to_string(), object, act: Act::Patch(patch), summary, diff: None, warning: None }
+    }
+
+    /// Asks the server, for real or as a dry run. The object afterwards;
+    /// `Null` once it is deleted.
+    fn run(&self, cluster: &PinnedCluster, dry_run: bool) -> Result<Value, KubeError> {
+        let (api, namespace) = (cluster.api, cluster.namespace);
+        match &self.act {
+            Act::Patch(patch) => api.patch(&self.kind, namespace, &self.name, patch, dry_run),
+            Act::Apply(object) => api.apply(&self.kind, namespace, &self.name, object, dry_run),
+            Act::Delete => api.delete(&self.kind, namespace, &self.name, dry_run).map(|()| Value::Null),
+        }
+    }
 }
 
 /// Whether a change of this kind can be put back from its backup. A restart
@@ -518,8 +553,140 @@ fn target(
 /// admission, quota — as a dry run. Run before the card, for the card, and
 /// again before the change: the cluster may have moved while the user read.
 fn checked(cluster: &PinnedCluster, plan: Plan) -> Result<Plan, ToolError> {
-    cluster.api.patch(&plan.kind, cluster.namespace, &plan.name, &plan.patch, true)?;
+    plan.run(cluster, true)?;
     Ok(plan)
+}
+
+/// The object, or `Null` when the cluster has none of that name.
+fn found(cluster: &PinnedCluster, kind: &KubeKind, name: &str) -> Result<Value, ToolError> {
+    match cluster.api.get(kind, cluster.namespace, name) {
+        Err(KubeError::NotFound(_)) => Ok(Value::Null),
+        other => Ok(other?),
+    }
+}
+
+/// An object as a manifest says it, for a diff and for putting back: without
+/// what the server writes itself — its ids, counters, timestamps and status.
+fn declared(mut object: Value) -> Value {
+    if let Some(top) = object.as_object_mut() {
+        top.remove("status");
+    }
+    if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+        for written in ["uid", "resourceVersion", "generation", "creationTimestamp", "managedFields", "selfLink", "deletionTimestamp", "deletionGracePeriodSeconds"] {
+            metadata.remove(written);
+        }
+    }
+    object
+}
+
+/// What the card shows of an object: declared, and with a Secret's values
+/// and credentials in `env` taken out, as everywhere else.
+fn shown(kind: &KubeKind, object: &Value) -> String {
+    if object.is_null() {
+        return String::new();
+    }
+    let mut object = declared(object.clone());
+    kube_view::redact(&kind.kind, &mut object);
+    kube_view::object_yaml(object, &[])
+}
+
+/// A manifest's object: its kind as the cluster serves it, in the chat's own
+/// namespace and no other.
+fn addressed(cluster: &PinnedCluster, tool: &str, document: &mut Value) -> Result<(KubeKind, String), ToolError> {
+    let text = |path: &str| document.pointer(path).and_then(Value::as_str).map(str::to_string);
+    let (Some(named), Some(api_version), Some(name)) = (text("/kind"), text("/apiVersion"), text("/metadata/name")) else {
+        return Err(invalid(tool, "every object needs apiVersion, kind and metadata.name"));
+    };
+    let (group, version) = api_version.rsplit_once('/').unwrap_or(("", &api_version));
+    let kind = kind(cluster, &if group.is_empty() { named.clone() } else { format!("{named}.{group}") })?;
+    if kind.version != version || (group.is_empty() && !kind.group.is_empty()) {
+        let served = if kind.group.is_empty() { kind.version.clone() } else { format!("{}/{}", kind.group, kind.version) };
+        return Err(invalid(tool, format!("the cluster serves {named} as apiVersion {served}, not {api_version}")));
+    }
+    if !kind.namespaced {
+        return Err(invalid(tool, format!("a {named} is cluster-wide, and a chat changes only its own namespace — give the user the command instead")));
+    }
+    match text("/metadata/namespace") {
+        Some(other) if other != cluster.namespace => {
+            return Err(invalid(tool, format!("{named}/{name} names namespace {other}; this chat changes only {} — the user can open a chat pinned there", cluster.namespace)))
+        }
+        _ => document["metadata"]["namespace"] = Value::String(cluster.namespace.to_string()),
+    }
+    Ok((kind, name))
+}
+
+/// Objects one `kubeApply` takes: a card that long is not read.
+const APPLY_MOST: usize = 20;
+
+/// `kubectl apply`: each object of the manifest as the server would have it,
+/// against what is there. One that would not change is left out; a manifest
+/// that changes nothing is refused.
+fn plan_apply(cluster: &PinnedCluster, args: &KubeApplyArgs) -> Result<Vec<Plan>, ToolError> {
+    let tool = "kubeApply";
+    if !cluster.writes {
+        return Err(ToolError::KubeReadOnly);
+    }
+    let mut documents = Vec::new();
+    for document in yaml_serde::Deserializer::from_str(&args.manifest) {
+        let document = Value::deserialize(document).map_err(|e| invalid(tool, format!("the manifest is not YAML: {e}")))?;
+        if !document.is_null() {
+            documents.push(document);
+        }
+    }
+    if documents.is_empty() || documents.len() > APPLY_MOST {
+        return Err(invalid(tool, format!("a manifest is 1 to {APPLY_MOST} objects, `---` between them — this one has {}", documents.len())));
+    }
+    let mut plans = Vec::new();
+    for mut document in documents {
+        let (kind, name) = addressed(cluster, tool, &mut document)?;
+        let object = found(cluster, &kind, &name)?;
+        let mut plan = Plan { tool, kind, name, object, act: Act::Apply(document), summary: String::new(), diff: None, warning: None };
+        let after = plan.run(cluster, true)?;
+        let diff = diff_stats(&shown(&plan.kind, &plan.object), &shown(&plan.kind, &after));
+        if declared(plan.object.clone()) == declared(after) {
+            continue;
+        }
+        plan.summary = if plan.object.is_null() {
+            "create".to_string()
+        } else {
+            format!("update (+{} −{} lines)", diff.lines_added, diff.lines_removed)
+        };
+        plan.diff = Some(diff);
+        plans.push(plan);
+    }
+    if plans.is_empty() {
+        return Err(invalid(tool, "the cluster already has these objects exactly as the manifest says — there is nothing to change"));
+    }
+    Ok(plans)
+}
+
+/// What deleting a claim takes with it, when its volume is not kept.
+fn claim_warning(cluster: &PinnedCluster, claim: &Value) -> Option<String> {
+    let volume = claim.pointer("/spec/volumeName").and_then(Value::as_str)?;
+    let policy = kind(cluster, "persistentvolumes")
+        .and_then(|volumes| Ok(cluster.api.get(&volumes, "", volume)?))
+        .ok()
+        .and_then(|volume| volume.pointer("/spec/persistentVolumeReclaimPolicy").and_then(Value::as_str).map(str::to_string));
+    match policy.as_deref() {
+        Some("Retain") => None,
+        Some(_) => Some(format!("Its volume {volume} is deleted with it: the DATA IS LOST, and the backup does not bring it back.")),
+        None => Some(format!("Whether its volume {volume} is kept could not be read: the data may be lost with it.")),
+    }
+}
+
+fn plan_delete(cluster: &PinnedCluster, args: &KubeDeleteArgs) -> Result<Plan, ToolError> {
+    let tool = "kubeDelete";
+    if !cluster.writes {
+        return Err(ToolError::KubeReadOnly);
+    }
+    let kind = kind(cluster, &args.kind)?;
+    if !kind.namespaced {
+        return Err(invalid(tool, format!("a {} is cluster-wide, and a chat changes only its own namespace — give the user the command instead", kind.kind)));
+    }
+    let object = cluster.api.get(&kind, cluster.namespace, &args.name)?;
+    let warning = (kind.kind == "PersistentVolumeClaim").then(|| claim_warning(cluster, &object)).flatten();
+    let plan = Plan { tool, kind, name: args.name.clone(), object, act: Act::Delete, summary: "delete".to_string(), diff: None, warning };
+    checked(cluster, plan)
 }
 
 fn plan_scale(cluster: &PinnedCluster, args: &KubeScaleArgs) -> Result<Plan, ToolError> {
@@ -543,7 +710,7 @@ fn plan_scale(cluster: &PinnedCluster, args: &KubeScaleArgs) -> Result<Plan, Too
         return Err(invalid(tool, format!("{}/{} already has {after} replicas — there is nothing to change", kind.kind, args.name)));
     }
     let patch = serde_json::json!({"spec": {"replicas": after}});
-    checked(cluster, Plan { tool, kind, name: args.name.clone(), object, patch, summary: format!("{before} → {after} replicas") })
+    checked(cluster, Plan::patching(tool, kind, &args.name, object, patch, format!("{before} → {after} replicas")))
 }
 
 fn plan_suspend(cluster: &PinnedCluster, args: &KubeSuspendArgs) -> Result<Plan, ToolError> {
@@ -561,7 +728,7 @@ fn plan_suspend(cluster: &PinnedCluster, args: &KubeSuspendArgs) -> Result<Plan,
         return Err(invalid(tool, format!("{}/{} is already {} — there is nothing to change", kind.kind, args.name, word(after))));
     }
     let patch = serde_json::json!({"spec": {"suspend": after}});
-    checked(cluster, Plan { tool, kind, name: args.name.clone(), object, patch, summary: format!("{} → {}", word(before), word(after)) })
+    checked(cluster, Plan::patching(tool, kind, &args.name, object, patch, format!("{} → {}", word(before), word(after))))
 }
 
 /// `kubectl rollout restart`: the pod template's `restartedAt`, which makes
@@ -573,7 +740,7 @@ fn plan_restart(cluster: &PinnedCluster, args: &KubeRolloutRestartArgs) -> Resul
     })?;
     let at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let patch = serde_json::json!({"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": at}}}}});
-    checked(cluster, Plan { tool, kind, name: args.name.clone(), object, patch, summary: "rollout restart — every pod is replaced".to_string() })
+    checked(cluster, Plan::patching(tool, kind, &args.name, object, patch, "rollout restart — every pod is replaced".to_string()))
 }
 
 fn images(template: &Value) -> String {
@@ -595,7 +762,7 @@ fn plan_template(cluster: &PinnedCluster, kind: KubeKind, name: &str, object: Va
     let (was, will) = (images(&current), images(wanted));
     let summary = if was == will { label } else { format!("{label}, image {was} → {will}") };
     let patch = serde_json::json!({"spec": {"template": difference}});
-    checked(cluster, Plan { tool, kind, name: name.to_string(), object, patch, summary })
+    checked(cluster, Plan::patching(tool, kind, name, object, patch, summary))
 }
 
 /// `kubectl rollout undo`: the pod template of an earlier revision, read
@@ -642,13 +809,30 @@ fn generation(object: &Value) -> Option<i64> {
     object.pointer("/metadata/generation").and_then(Value::as_i64)
 }
 
+fn version(object: &Value) -> Option<String> {
+    object.pointer("/metadata/resourceVersion").and_then(Value::as_str).map(str::to_string)
+}
+
+/// Whether the object is as the change `made` left it: by its spec's
+/// generation — which a status update does not move — or, for a kind that
+/// has none, by its resource version.
+fn same_since(object: &Value, made: &KubeChange) -> bool {
+    match (made.generation_after, &made.version_after) {
+        (Some(left), _) => generation(object) == Some(left),
+        (None, Some(left)) => version(object).as_ref() == Some(left),
+        (None, None) => true,
+    }
+}
+
 /// An undo the server has accepted as a dry run (`docs/21-kubernetes-mode.md`,
 /// decision 9): what the backup of `id` puts back. The record decides, not
 /// the model's memory: the change happened, here, and is the last of its
 /// object; its backup is still kept; and nobody else has changed the object
 /// since, which its spec's generation tells.
 fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
-    // The tab's switch is each plan's to refuse, before it asks the cluster anything.
+    if !cluster.writes {
+        return Err(ToolError::KubeReadOnly);
+    }
     let refused = |why: String| invalid("kubeUndo", why);
     let id = id.trim();
     let changes = cluster.changes.ok_or_else(|| refused("this chat keeps no record of changes".to_string()))?;
@@ -681,9 +865,37 @@ fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
             let wanted = was.pointer("/spec/template").cloned().unwrap_or(Value::Null);
             plan_template(cluster, kind, &name, object, &wanted, format!("the pod template as it was before {id}"))?
         }
+        // What an apply made is taken away; what it changed is put back whole.
+        "kubeApply" => {
+            let kind = self::kind(cluster, &kind)?;
+            let object = found(cluster, &kind, &name)?;
+            if object.is_null() {
+                return Err(refused(format!("{}/{name} is no longer there — it was deleted after {id}, and there is nothing to undo", kind.kind)));
+            }
+            let plan = if was.is_null() {
+                Plan { tool: "kubeDelete", kind, name, object, act: Act::Delete, summary: format!("delete — it did not exist before {id}"), diff: None, warning: None }
+            } else {
+                let Some(back) = merge_diff(&declared(object.clone()), &declared(was.clone())) else {
+                    return Err(refused(format!("{}/{name} is already as it was before {id} — there is nothing to change", kind.kind)));
+                };
+                let diff = diff_stats(&shown(&kind, &object), &shown(&kind, &was));
+                Plan { diff: Some(diff), ..Plan::patching("kubeApply", kind, &name, object, back, format!("as it was before {id}")) }
+            };
+            checked(cluster, plan)?
+        }
+        // What was deleted is made again from its backup.
+        "kubeDelete" => {
+            let kind = self::kind(cluster, &kind)?;
+            if !found(cluster, &kind, &name)?.is_null() {
+                return Err(ToolError::KubeChangedSince(format!("{}/{name} exists again — someone recreated it after {id}", kind.kind)));
+            }
+            let diff = diff_stats("", &shown(&kind, &was));
+            let summary = format!("create again, from the backup of {id}");
+            checked(cluster, Plan { tool: "kubeApply", kind, name, object: Value::Null, act: Act::Apply(declared(was)), summary, diff: Some(diff), warning: None })?
+        }
         other => return Err(refused(format!("a {other} change cannot be undone"))),
     };
-    if generation(&plan.object) != made.generation_after {
+    if !plan.object.is_null() && !same_since(&plan.object, made) {
         return Err(ToolError::KubeChangedSince(format!(
             "{}/{} was changed by someone else after {id} — undoing it now would be: {}",
             plan.kind.kind, plan.name, plan.summary
@@ -692,23 +904,32 @@ fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
     Ok(plan)
 }
 
-/// The change a call asks for, accepted by the server as a dry run; `None`
-/// for a read. With it, the change an undo puts back.
-fn planned<'c>(cluster: &PinnedCluster, call: &'c ToolCall) -> Result<Option<(Plan, Option<&'c str>)>, ToolError> {
-    Ok(Some(match call {
-        ToolCall::KubeScale(args) => (plan_scale(cluster, args)?, None),
-        ToolCall::KubeSuspend(args) => (plan_suspend(cluster, args)?, None),
-        ToolCall::KubeRolloutRestart(args) => (plan_restart(cluster, args)?, None),
-        ToolCall::KubeRolloutUndo(args) => (plan_rollout_undo(cluster, args)?, None),
-        ToolCall::KubeUndo(args) => (plan_undo(cluster, &args.change_id)?, Some(args.change_id.trim())),
-        _ => return Ok(None),
-    }))
+/// The changes a call asks for, each accepted by the server as a dry run —
+/// one, but for a manifest of several objects. With them, the change an undo
+/// puts back.
+fn planned<'c>(cluster: &PinnedCluster, call: &'c ToolCall) -> Result<(Vec<Plan>, Option<&'c str>), ToolError> {
+    Ok(match call {
+        ToolCall::KubeScale(args) => (vec![plan_scale(cluster, args)?], None),
+        ToolCall::KubeSuspend(args) => (vec![plan_suspend(cluster, args)?], None),
+        ToolCall::KubeRolloutRestart(args) => (vec![plan_restart(cluster, args)?], None),
+        ToolCall::KubeRolloutUndo(args) => (vec![plan_rollout_undo(cluster, args)?], None),
+        ToolCall::KubeApply(args) => (plan_apply(cluster, args)?, None),
+        ToolCall::KubeDelete(args) => (vec![plan_delete(cluster, args)?], None),
+        ToolCall::KubeUndo(args) => (vec![plan_undo(cluster, &args.change_id)?], Some(args.change_id.trim())),
+        _ => (Vec::new(), None),
+    })
 }
 
 fn changes(call: &ToolCall) -> bool {
     matches!(
         call,
-        ToolCall::KubeScale(_) | ToolCall::KubeSuspend(_) | ToolCall::KubeRolloutRestart(_) | ToolCall::KubeRolloutUndo(_) | ToolCall::KubeUndo(_)
+        ToolCall::KubeScale(_)
+            | ToolCall::KubeSuspend(_)
+            | ToolCall::KubeRolloutRestart(_)
+            | ToolCall::KubeRolloutUndo(_)
+            | ToolCall::KubeApply(_)
+            | ToolCall::KubeDelete(_)
+            | ToolCall::KubeUndo(_)
     )
 }
 
@@ -721,6 +942,10 @@ pub fn preflight(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<(), Too
     planned(&cluster(kube)?, call).map(|_| ())
 }
 
+fn titled(plan: &Plan) -> String {
+    format!("{}/{}", plan.kind.kind, plan.name)
+}
+
 /// What a change would do, for its approval card: where — the first thing
 /// to read before agreeing — what becomes of what, and whether it can be
 /// undone.
@@ -728,29 +953,34 @@ pub fn preview(kube: Option<PinnedCluster>, call: &ToolCall) -> ToolPreview {
     if !changes(call) {
         return ToolPreview::Nothing;
     }
-    let shown = cluster(kube).and_then(|cluster| Ok((cluster, planned(&cluster, call)?)));
-    match shown {
-        Ok((cluster, Some((plan, undoes)))) => {
-            let what = format!("{}/{}: {}", plan.kind.kind, plan.name, plan.summary);
-            ToolPreview::Change {
-                place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
-                summary: undoes.map_or(what.clone(), |id| format!("Undo {id} — {what}")),
-                notes: vec![match undoes {
-                    Some(_) => "Put back from the change's backup. An undo is a change too: it is backed up and can be undone.",
-                    None if can_be_undone(plan.tool) => "Can be undone: the object is backed up first.",
-                    None => "Cannot be undone: the pods are replaced, and the old ones do not come back.",
-                }
-                .to_string()],
-            }
-        }
-        Ok((_, None)) => ToolPreview::Nothing,
-        Err(e) => ToolPreview::Failed { reason: e.to_string() },
+    let (cluster, plans, undoes) = match cluster(kube).and_then(|cluster| planned(&cluster, call).map(|(plans, undoes)| (cluster, plans, undoes))) {
+        Ok(found) => found,
+        Err(e) => return ToolPreview::Failed { reason: e.to_string() },
+    };
+    let what: Vec<String> = plans.iter().map(|plan| format!("{}: {}", titled(plan), plan.summary)).collect();
+    let what = match what.as_slice() {
+        [one] => one.clone(),
+        many => format!("{} objects — {}", many.len(), many.join("; ")),
+    };
+    let way_back = match undoes {
+        Some(_) => "Put back from the change's backup. An undo is a change too: it is backed up and can be undone.",
+        None if plans.iter().all(|plan| can_be_undone(plan.tool)) => "Can be undone: the object is backed up first.",
+        None => "Cannot be undone: the pods are replaced, and the old ones do not come back.",
+    };
+    let mut notes: Vec<String> = plans.iter().filter_map(|plan| plan.warning.clone()).collect();
+    notes.push(way_back.to_string());
+    ToolPreview::Change {
+        place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
+        summary: undoes.map_or(what.clone(), |id| format!("Undo {id} — {what}")),
+        notes,
+        diffs: plans.iter().filter_map(|plan| Some(ChangeDiff { title: titled(plan), diff: plan.diff.clone()? })).collect(),
     }
 }
 
 /// Makes a planned change: the backup — no backup, no change — the change,
 /// the audit line. `undoes` is the change it puts back, when it is an undo.
-fn make(cluster: &PinnedCluster, plan: &Plan, undoes: Option<&str>) -> Result<ToolResult, ToolError> {
+/// Answers with what it did, in a sentence.
+fn make(cluster: &PinnedCluster, plan: &Plan, undoes: Option<&str>) -> Result<String, ToolError> {
     let changes = cluster.changes.ok_or_else(|| ToolError::KubeBackup("this chat has nowhere to record changes".to_string()))?;
     let mut change = KubeChange {
         id: format!("kc-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
@@ -769,20 +999,25 @@ fn make(cluster: &PinnedCluster, plan: &Plan, undoes: Option<&str>) -> Result<To
         summary: plan.summary.clone(),
         generation_before: generation(&plan.object),
         generation_after: None,
+        version_after: None,
         error: None,
         undoes: undoes.map(str::to_string),
     };
+    // `Null` for what was not there: the way back from a creation is a deletion.
     changes.backup(&change, &plan.object).map_err(ToolError::KubeBackup)?;
-    let done = cluster.api.patch(&plan.kind, cluster.namespace, &plan.name, &plan.patch, false);
+    let done = plan.run(cluster, false);
     match &done {
-        Ok(object) => change.generation_after = generation(object),
+        Ok(object) => {
+            change.generation_after = generation(object);
+            change.version_after = if change.generation_after.is_none() { version(object) } else { None };
+        }
         Err(e) => change.error = Some(e.to_string()),
     }
     // The change is made or refused either way; an audit that could not be
     // written is said, not hidden behind the result.
     let audited = changes.audit(&change);
     done?;
-    let what = format!("{}/{} in namespace {}: {}", plan.kind.kind, plan.name, cluster.namespace, change.summary);
+    let what = format!("{} in namespace {}: {}", titled(plan), cluster.namespace, change.summary);
     let mut text = match undoes {
         Some(undone) => format!("Undid {undone} — {what}. Change id {} — undoing that makes the change again.", change.id),
         None if can_be_undone(plan.tool) => format!("{what}. Change id {} — the object as it was is backed up.", change.id),
@@ -791,15 +1026,33 @@ fn make(cluster: &PinnedCluster, plan: &Plan, undoes: Option<&str>) -> Result<To
     if let Err(e) = audited {
         text.push_str(&format!("\nThe audit line could not be written: {e}"));
     }
-    Ok(ToolResult::Kube { text, summary: change.summary })
+    Ok(text)
 }
 
 /// A changing tool, whole (`docs/21-kubernetes-mode.md`, K-5): the plan —
-/// dry run and all — then backup, the change, the audit line.
+/// dry run and all — then for each object the backup, the change, the audit
+/// line. A manifest stops at the first object the server refuses, and says
+/// what it had already changed.
 pub fn change(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<ToolResult, ToolError> {
     let cluster = cluster(kube)?;
-    let (plan, undoes) = planned(&cluster, call)?.ok_or_else(|| invalid("kube", "not a change"))?;
-    make(&cluster, &plan, undoes)
+    let (plans, undoes) = planned(&cluster, call)?;
+    let mut said: Vec<String> = Vec::new();
+    for plan in &plans {
+        match make(&cluster, plan, undoes) {
+            Ok(text) => said.push(text),
+            Err(e) if said.is_empty() => return Err(e),
+            Err(e) => {
+                let stopped = format!("{}\nThen {} failed, and nothing after it was changed: {e}", said.join("\n"), titled(plan));
+                return Err(ToolError::Kube(KubeError::Cluster(stopped)));
+            }
+        }
+    }
+    let summary = match plans.as_slice() {
+        [] => return Err(invalid("kube", "not a change")),
+        [one] => one.summary.clone(),
+        many => format!("{} objects", many.len()),
+    };
+    Ok(ToolResult::Kube { text: said.join("\n"), summary })
 }
 
 /// What every changing tool says of itself.
@@ -1051,6 +1304,49 @@ pub(super) fn rollout_undo_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn apply_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeApply".to_string(),
+        description: format!(
+            "Create or update objects in the chat's own namespace from a YAML manifest, as `kubectl apply` does — up to \
+             {APPLY_MOST} objects, `---` between them, on one card with each object's diff. Send each object WHOLE, as it \
+             should be: what the manifest leaves out of an object this tool applied before is removed. To change an \
+             existing object, read it with kubeGet first and send it back with your change. metadata.namespace may be \
+             omitted; another namespace, or a cluster-wide kind (Namespace, ClusterRole, a CRD), is refused. It takes \
+             over fields other tools set — an object managed by Argo CD, Flux or Helm will be put back by them; say so \
+             rather than apply. An object the manifest would not change is skipped. Each object changed answers with its \
+             own change id. {CHANGE}"
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "manifest": { "type": "string", "description": "YAML: one or more whole objects, `---` between them." }
+            },
+            "required": ["manifest"]
+        }),
+    }
+}
+
+pub(super) fn delete_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeDelete".to_string(),
+        description: format!(
+            "Delete one object in the chat's own namespace. It is backed up whole, and kubeUndo creates it again from \
+             that — the object, not what it held: a deleted Deployment's pods are new ones, and a PersistentVolumeClaim's \
+             data is gone unless its volume is kept (the card says which). What an owner manages — a pod of a Deployment \
+             — comes back by itself: delete the owner, or scale it. A Namespace and other cluster-wide kinds are refused. {CHANGE}"
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string" },
+                "name": { "type": "string" }
+            },
+            "required": ["kind", "name"]
+        }),
+    }
+}
+
 pub(super) fn undo_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "kubeUndo".to_string(),
@@ -1132,7 +1428,7 @@ mod tests {
                     version: "v1".into(),
                     kind: kind.to_string(),
                     plural: plural.to_string(),
-                    namespaced: *kind != "Node" && *kind != "NodeMetrics",
+                    namespaced: !["Node", "NodeMetrics", "PersistentVolume"].contains(kind),
                 })
                 .collect();
             Fake { kinds, ..Default::default() }
@@ -1206,9 +1502,9 @@ mod tests {
             self.asked.lock().unwrap().push(format!("get {} {namespace} {name}", kind.plural));
             self.objects
                 .iter()
-                .find(|(plural, o)| plural == &kind.plural && o["metadata"]["name"] == name && o["metadata"]["namespace"] == namespace)
+                .find(|(plural, o)| plural == &kind.plural && o["metadata"]["name"] == name && (!kind.namespaced || o["metadata"]["namespace"] == namespace))
                 .map(|(_, o)| o.clone())
-                .ok_or_else(|| KubeError::Cluster(format!("{} \"{name}\" not found", kind.plural)))
+                .ok_or_else(|| KubeError::NotFound(format!("{} \"{name}\" not found", kind.plural)))
         }
 
         fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError> {
@@ -1228,6 +1524,36 @@ mod tests {
             merge(&mut object, patch);
             object["metadata"]["generation"] = json!(object["metadata"]["generation"].as_i64().unwrap_or(0) + 1);
             Ok(object)
+        }
+
+        /// As the server applies: the manifest over what is there, or alone
+        /// when nothing is. A kind with a `spec` has a generation; one
+        /// without — a ConfigMap — has only its resource version.
+        fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, manifest: &Value, dry_run: bool) -> Result<Value, KubeError> {
+            let how = if dry_run { " dry" } else { "" };
+            self.asked.lock().unwrap().push(format!("apply {} {namespace} {name} {manifest}{how}", kind.plural));
+            if let Some(why) = &self.refuses {
+                return Err(KubeError::Cluster(why.clone()));
+            }
+            let mut object = self.get(kind, namespace, name).unwrap_or(json!({}));
+            merge(&mut object, manifest);
+            let bumped = |path: &str| json!(object.pointer(path).and_then(Value::as_i64).unwrap_or(0) + 1);
+            if object.get("spec").is_some() {
+                object["metadata"]["generation"] = bumped("/metadata/generation");
+            } else {
+                let next = object.pointer("/metadata/resourceVersion").and_then(Value::as_str).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0) + 1;
+                object["metadata"]["resourceVersion"] = json!(next.to_string());
+            }
+            Ok(object)
+        }
+
+        fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> {
+            let how = if dry_run { " dry" } else { "" };
+            self.asked.lock().unwrap().push(format!("delete {} {namespace} {name}{how}", kind.plural));
+            match &self.refuses {
+                Some(why) => Err(KubeError::Cluster(why.clone())),
+                None => self.get(kind, namespace, name).map(|_| ()),
+            }
         }
     }
 
@@ -1328,6 +1654,10 @@ mod tests {
             fn patch(&self, kind: &KubeKind, namespace: &str, name: &str, patch: &Value, dry_run: bool) -> Result<Value, KubeError> {
                 if dry_run { self.0.patch(kind, namespace, name, patch, dry_run) } else { Err(KubeError::Cluster("conflict".into())) }
             }
+            fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, object: &Value, dry_run: bool) -> Result<Value, KubeError> {
+                if dry_run || name == "first" { self.0.apply(kind, namespace, name, object, dry_run) } else { Err(KubeError::Cluster("conflict".into())) }
+            }
+            fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> { self.0.delete(kind, namespace, name, dry_run) }
         }
         let (late, recorded) = (LateRefusal(scalable(3)), Recorded::default());
         let cluster = PinnedCluster { api: &late, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, changes: Some(&recorded) };
@@ -1340,7 +1670,7 @@ mod tests {
     fn the_card_says_where_and_from_what_to_what() {
         let (fake, recorded) = (scalable(3), Recorded::default());
         let shown = preview(writing(&fake, &recorded), &ToolCall::KubeScale(scale(5)));
-        let ToolPreview::Change { place, summary, notes } = shown else { panic!("{shown:?}") };
+        let ToolPreview::Change { place, summary, notes, .. } = shown else { panic!("{shown:?}") };
         assert_eq!((place.as_str(), summary.as_str()), ("context eks · namespace orders", "Deployment/api: 3 → 5 replicas"));
         assert_eq!(notes, ["Can be undone: the object is backed up first."]);
         assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "a preview changes nothing: {:?}", fake.asked());
@@ -1448,8 +1778,8 @@ mod tests {
         let (fake, recorded) = scaled(0, 4);
         recorded.audits.lock().unwrap()[0].tool = "kubeRolloutRestart".into();
         assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of("kc-1"))).contains("was a rollout restart, which cannot be undone"));
-        recorded.audits.lock().unwrap()[0].tool = "kubeDelete".into();
-        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of("kc-1"))).contains("a kubeDelete change cannot be undone"));
+        recorded.audits.lock().unwrap()[0].tool = "kubeExec".into();
+        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of("kc-1"))).contains("a kubeExec change cannot be undone"));
         assert!(fake.asked().is_empty(), "{:?}", fake.asked());
         recorded.audits.lock().unwrap()[0].tool = "kubeScale".into();
         recorded.backups.lock().unwrap().clear();
@@ -1462,7 +1792,7 @@ mod tests {
     fn the_card_of_an_undo_names_the_change_and_what_comes_back() {
         let (fake, recorded) = scaled(0, 4);
         let shown = preview(writing(&fake, &recorded), &ToolCall::KubeUndo(undo_of("kc-1")));
-        let ToolPreview::Change { place, summary, notes } = shown else { panic!("{shown:?}") };
+        let ToolPreview::Change { place, summary, notes, .. } = shown else { panic!("{shown:?}") };
         assert_eq!((place.as_str(), summary.as_str()), ("context eks · namespace orders", "Undo kc-1 — Deployment/api: 0 → 3 replicas"));
         assert!(notes[0].starts_with("Put back from the change's backup"));
         assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "{:?}", fake.asked());
@@ -1669,6 +1999,263 @@ mod tests {
             last_patch(&rolled),
             "patch deployments orders api {\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"image\":\"api:3\",\"name\":\"api\"}],\"nodeSelector\":{\"gpu\":\"yes\"}}}}}"
         );
+    }
+
+    /// A namespace with a Deployment, a ConfigMap and a Service — and a
+    /// cluster that also serves a cluster-wide kind.
+    fn namespace_of_three() -> Fake {
+        Fake::with(&[("apps", "Deployment", "deployments"), ("", "ConfigMap", "configmaps"), ("", "Service", "services"), ("", "Secret", "secrets"), ("", "Node", "nodes")])
+            .object("deployments", json!({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "api", "namespace": "orders", "generation": 4, "uid": "u-1"}, "spec": {"replicas": 3}, "status": {"readyReplicas": 3}}))
+            .object("services", json!({"apiVersion": "v1", "kind": "Service", "metadata": {"name": "api", "namespace": "orders", "resourceVersion": "70"}, "spec": {"ports": [{"port": 80}]}}))
+    }
+
+    fn apply(manifest: &str) -> ToolCall {
+        ToolCall::KubeApply(KubeApplyArgs { manifest: manifest.into() })
+    }
+
+    const THREE: &str = "\
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: flags}
+data: {beta: 'on'}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: orders}
+spec: {replicas: 5}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: api}
+spec: {ports: [{port: 80}]}
+";
+
+    /// A manifest is one card: each object that would change, as it is
+    /// against what it would be; one that would not change is not in it.
+    #[test]
+    fn a_manifests_card_shows_each_object_that_changes_and_its_diff() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        let shown = preview(writing(&fake, &recorded), &apply(THREE));
+        let ToolPreview::Change { place, summary, notes, diffs } = shown else { panic!("{shown:?}") };
+        assert_eq!(place, "context eks · namespace orders");
+        assert_eq!(summary, "2 objects — ConfigMap/flags: create; Deployment/api: update (+1 −1 lines)");
+        assert_eq!(notes, ["Can be undone: the object is backed up first."]);
+        let titles: Vec<&str> = diffs.iter().map(|d| d.title.as_str()).collect();
+        assert_eq!(titles, ["ConfigMap/flags", "Deployment/api"]);
+        assert!(diffs[0].diff.unified_diff.contains("+  beta: on"), "{}", diffs[0].diff.unified_diff);
+        let changed = &diffs[1].diff.unified_diff;
+        assert!(changed.contains("-  replicas: 3") && changed.contains("+  replicas: 5"), "{changed}");
+        assert!(!changed.contains("uid") && !changed.contains("readyReplicas"), "what the server writes is not the manifest's: {changed}");
+        assert!(fake.asked().iter().all(|a| !a.starts_with("apply") || a.ends_with(" dry")), "{:?}", fake.asked());
+        // Sent to the chat's own namespace, whether or not the manifest named it.
+        assert!(fake.asked().iter().any(|a| a.starts_with("apply configmaps orders flags {") && a.contains("\"namespace\":\"orders\"")), "{:?}", fake.asked());
+    }
+
+    /// Each object is its own change: a backup — nothing, for what was not
+    /// there — an audit line and an id. A kind with no generation is marked
+    /// by its resource version.
+    #[test]
+    fn an_applied_manifest_is_a_change_per_object() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        let ToolResult::Kube { text, summary } = change(writing(&fake, &recorded), &apply(THREE)).unwrap() else { panic!() };
+        assert_eq!(summary, "2 objects");
+        let audits = recorded.audits.lock().unwrap().clone();
+        assert_eq!(
+            text,
+            format!(
+                "ConfigMap/flags in namespace orders: create. Change id {} — the object as it was is backed up.\n\
+                 Deployment/api in namespace orders: update (+1 −1 lines). Change id {} — the object as it was is backed up.",
+                audits[0].id, audits[1].id
+            )
+        );
+        assert_eq!((audits[0].tool.as_str(), audits[0].generation_after, audits[0].version_after.as_deref()), ("kubeApply", None, Some("1")));
+        assert_eq!((audits[1].generation_before, audits[1].generation_after, &audits[1].version_after), (Some(4), Some(5), &None));
+        let backups = recorded.backups.lock().unwrap().clone();
+        assert!(backups[0].1.is_null(), "nothing was there");
+        assert_eq!(backups[1].1["spec"]["replicas"], 3);
+        let applied: Vec<String> = fake.asked().into_iter().filter(|a| a.starts_with("apply") && !a.ends_with(" dry")).collect();
+        assert_eq!(applied.len(), 2, "{applied:?}");
+
+        let one = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: flags}\n";
+        let ToolResult::Kube { summary, .. } = change(writing(&fake, &recorded), &apply(one)).unwrap() else { panic!() };
+        assert_eq!(summary, "create");
+    }
+
+    /// Everything a manifest can be refused for before the server is asked
+    /// to change anything — and a Secret's values never reach the card.
+    #[test]
+    fn a_manifest_is_refused_for_what_it_is_or_where_it_points() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        let here = writing(&fake, &recorded);
+        let refused = |manifest: &str| invalid_reason(change(here, &apply(manifest)));
+        assert!(refused("kind: [").contains("the manifest is not YAML"));
+        assert!(refused("").contains("this one has 0"));
+        assert!(refused(&"---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n".repeat(21)).contains("this one has 21"));
+        assert!(refused("apiVersion: v1\nkind: ConfigMap\n").contains("needs apiVersion, kind and metadata.name"));
+        assert!(refused("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a, namespace: payments}\n").contains("names namespace payments; this chat changes only orders"));
+        assert!(refused("apiVersion: v1\nkind: Node\nmetadata: {name: n1}\n").contains("a Node is cluster-wide"));
+        assert!(refused("apiVersion: apps/v1beta1\nkind: Deployment\nmetadata: {name: api}\n").contains("serves Deployment as apiVersion apps/v1, not apps/v1beta1"));
+        assert!(refused("apiVersion: v1\nkind: Deployment\nmetadata: {name: api}\n").contains("serves Deployment as apiVersion apps/v1, not v1"));
+        assert!(refused("apiVersion: v1\nkind: Service\nmetadata: {name: api}\nspec: {ports: [{port: 80}]}\n").contains("exactly as the manifest says"));
+        assert!(matches!(change(here, &apply("apiVersion: v2\nkind: Widget\nmetadata: {name: a}\n")), Err(ToolError::Kube(KubeError::UnknownKind(_)))));
+        assert!(matches!(change(Some(PinnedCluster { writes: false, ..here.unwrap() }), &apply("kind: [")), Err(ToolError::KubeReadOnly)));
+        assert!(recorded.backups.lock().unwrap().is_empty());
+
+        let secret = "apiVersion: v1\nkind: Secret\nmetadata: {name: db}\nstringData: {password: hunter2}\n";
+        let ToolPreview::Change { diffs, .. } = preview(here, &apply(secret)) else { panic!() };
+        assert!(diffs[0].diff.unified_diff.contains("password") && !diffs[0].diff.unified_diff.contains("hunter2"), "{}", diffs[0].diff.unified_diff);
+    }
+
+    /// A manifest the server stops halfway says what it had already changed
+    /// — those changes are made, on record, and undoable.
+    #[test]
+    fn a_manifest_stopped_halfway_says_what_was_already_changed() {
+        struct SecondRefused(Fake);
+        impl KubeApi for SecondRefused {
+            fn kinds(&self) -> Result<Vec<KubeKind>, KubeError> { self.0.kinds() }
+            fn list(&self, kind: &KubeKind, query: &ListQuery) -> Result<ListPage, KubeError> { self.0.list(kind, query) }
+            fn get(&self, kind: &KubeKind, namespace: &str, name: &str) -> Result<Value, KubeError> { self.0.get(kind, namespace, name) }
+            fn logs(&self, namespace: &str, pod: &str, query: &LogQuery) -> Result<String, KubeError> { self.0.logs(namespace, pod, query) }
+            fn patch(&self, kind: &KubeKind, namespace: &str, name: &str, patch: &Value, dry_run: bool) -> Result<Value, KubeError> { self.0.patch(kind, namespace, name, patch, dry_run) }
+            fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, object: &Value, dry_run: bool) -> Result<Value, KubeError> {
+                if dry_run || name == "first" { self.0.apply(kind, namespace, name, object, dry_run) } else { Err(KubeError::Cluster("quota exceeded".into())) }
+            }
+            fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> { self.0.delete(kind, namespace, name, dry_run) }
+        }
+        let (stops, recorded) = (SecondRefused(namespace_of_three()), Recorded::default());
+        let cluster = PinnedCluster { api: &stops, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, changes: Some(&recorded) };
+        let names = ["first", "second", "third"].map(|name| format!("apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: {name}}}\n")).join("---\n");
+        let stopped = change(Some(cluster), &apply(&names)).unwrap_err().to_string();
+        let audits = recorded.audits.lock().unwrap();
+        assert!(stopped.starts_with(&format!("ConfigMap/first in namespace orders: create. Change id {}", audits[0].id)), "{stopped}");
+        assert!(stopped.ends_with("Then ConfigMap/second failed, and nothing after it was changed: quota exceeded"), "{stopped}");
+        assert_eq!(audits.len(), 2);
+        assert_eq!((audits[1].name.as_str(), audits[1].error.as_deref()), ("second", Some("quota exceeded")));
+    }
+
+    fn delete(kind: &str, name: &str) -> ToolCall {
+        ToolCall::KubeDelete(KubeDeleteArgs { kind: kind.into(), name: name.into() })
+    }
+
+    /// Deleted after a dry run, with the object whole in the backup; and what
+    /// cannot be deleted from a chat at all.
+    #[test]
+    fn a_delete_backs_the_object_up_whole_and_stays_in_its_namespace() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        let here = writing(&fake, &recorded);
+        let shown = preview(here, &delete("deploy", "api"));
+        let ToolPreview::Change { summary, notes, diffs, .. } = shown else { panic!("{shown:?}") };
+        assert_eq!((summary.as_str(), diffs.len()), ("Deployment/api: delete", 0));
+        assert_eq!(notes, ["Can be undone: the object is backed up first."]);
+
+        let said = text(change(here, &delete("deploy", "api")));
+        assert!(said.starts_with("Deployment/api in namespace orders: delete. Change id kc-"), "{said}");
+        let deletes: Vec<String> = fake.asked().into_iter().filter(|a| a.starts_with("delete")).collect();
+        assert_eq!(deletes, ["delete deployments orders api dry", "delete deployments orders api dry", "delete deployments orders api"]);
+        let made = recorded.audits.lock().unwrap()[0].clone();
+        assert_eq!((made.tool.as_str(), made.generation_before, made.generation_after, made.version_after), ("kubeDelete", Some(4), None, None));
+        assert_eq!(recorded.backups.lock().unwrap()[0].1["status"]["readyReplicas"], 3, "the backup is the object whole");
+
+        assert!(invalid_reason(change(here, &delete("node", "n1"))).contains("a Node is cluster-wide"));
+        assert!(matches!(change(here, &delete("cm", "absent")), Err(ToolError::Kube(KubeError::NotFound(_)))));
+        assert!(matches!(change(Some(PinnedCluster { writes: false, ..here.unwrap() }), &delete("deploy", "api")), Err(ToolError::KubeReadOnly)));
+    }
+
+    /// A claim's data goes with its volume unless the volume is kept — said
+    /// on the card, before the way back, which does not cover it.
+    #[test]
+    fn a_claims_card_says_when_its_data_is_lost() {
+        let claim = |name: &str, volume: &str| json!({"metadata": {"name": name, "namespace": "orders"}, "spec": {"volumeName": volume}});
+        let volume = |name: &str, policy: &str| json!({"metadata": {"name": name}, "spec": {"persistentVolumeReclaimPolicy": policy}});
+        let fake = Fake::with(&[("", "PersistentVolumeClaim", "persistentvolumeclaims"), ("", "PersistentVolume", "persistentvolumes")])
+            .object("persistentvolumeclaims", claim("data", "pv-1"))
+            .object("persistentvolumeclaims", claim("kept", "pv-2"))
+            .object("persistentvolumeclaims", claim("unknown", "pv-3"))
+            .object("persistentvolumeclaims", json!({"metadata": {"name": "unbound", "namespace": "orders"}, "spec": {}}))
+            .object("persistentvolumes", volume("pv-1", "Delete"))
+            .object("persistentvolumes", volume("pv-2", "Retain"));
+        let recorded = Recorded::default();
+        let notes = |name: &str| match preview(writing(&fake, &recorded), &delete("pvc", name)) {
+            ToolPreview::Change { notes, .. } => notes,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            notes("data"),
+            ["Its volume pv-1 is deleted with it: the DATA IS LOST, and the backup does not bring it back.", "Can be undone: the object is backed up first."]
+        );
+        assert_eq!(notes("kept").len(), 1);
+        assert_eq!(notes("unbound").len(), 1);
+        assert!(notes("unknown")[0].contains("Whether its volume pv-3 is kept could not be read"));
+    }
+
+    /// The way back from a delete is the backup applied again, without what
+    /// the server wrote on the old object — and not over a new one of that name.
+    #[test]
+    fn an_undone_delete_creates_the_object_again_from_its_backup() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        change(writing(&fake, &recorded), &delete("deploy", "api")).unwrap();
+        let id = recorded.audits.lock().unwrap()[0].id.clone();
+        let refused = kube_undo(writing(&fake, &recorded), &undo_of(&id));
+        assert!(matches!(&refused, Err(ToolError::KubeChangedSince(why)) if why.contains("Deployment/api exists again")), "{refused:?}");
+
+        let mut gone = namespace_of_three();
+        gone.objects.retain(|(plural, _)| plural != "deployments");
+        let shown = preview(writing(&gone, &recorded), &ToolCall::KubeUndo(undo_of(&id)));
+        let ToolPreview::Change { summary, diffs, .. } = shown else { panic!("{shown:?}") };
+        assert_eq!(summary, format!("Undo {id} — Deployment/api: create again, from the backup of {id}"));
+        assert!(diffs[0].diff.unified_diff.contains("+  replicas: 3"));
+        kube_undo(writing(&gone, &recorded), &undo_of(&id)).unwrap();
+        let applied = gone.asked().into_iter().rfind(|a| a.starts_with("apply")).unwrap();
+        assert_eq!(
+            applied,
+            "apply deployments orders api {\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"name\":\"api\",\"namespace\":\"orders\"},\"spec\":{\"replicas\":3}}"
+        );
+        let audits = recorded.audits.lock().unwrap();
+        assert_eq!((audits[1].tool.as_str(), audits[1].undoes.as_deref()), ("kubeApply", Some(id.as_str())), "undoing the undo deletes it again");
+        assert!(recorded.backups.lock().unwrap()[1].1.is_null());
+    }
+
+    /// What an apply created is deleted; what it changed is put back whole.
+    /// Either only while the object is as the apply left it — for a kind with
+    /// no generation, by its resource version.
+    #[test]
+    fn an_undone_apply_deletes_what_it_created_and_restores_what_it_changed() {
+        let (fake, recorded) = (namespace_of_three(), Recorded::default());
+        change(writing(&fake, &recorded), &apply(THREE)).unwrap();
+        let (created, updated) = {
+            let audits = recorded.audits.lock().unwrap();
+            (audits[0].id.clone(), audits[1].id.clone())
+        };
+        // Neither is there as the apply left it: the fake keeps nothing.
+        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of(&created))).contains("ConfigMap/flags is no longer there"));
+        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of(&updated))).contains("Deployment/api is already as it was before"));
+
+        let flags = |version: &str| json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "flags", "namespace": "orders", "resourceVersion": version}, "data": {"beta": "on"}});
+        let after = |version: &str, generation: i64, labels: Value| {
+            Fake::with(&[("apps", "Deployment", "deployments"), ("", "ConfigMap", "configmaps")])
+                .object("configmaps", flags(version))
+                .object("deployments", json!({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "api", "namespace": "orders", "generation": generation, "labels": labels}, "spec": {"replicas": 5}}))
+        };
+        let moved = after("1", 9, json!({}));
+        assert!(matches!(kube_undo(writing(&moved, &recorded), &undo_of(&updated)), Err(ToolError::KubeChangedSince(_))), "someone changed the Deployment");
+        let edited = after("2", 5, json!({}));
+        assert!(matches!(kube_undo(writing(&edited, &recorded), &undo_of(&created)), Err(ToolError::KubeChangedSince(_))), "someone edited the ConfigMap");
+
+        let left = after("1", 5, json!({"added": "by-apply"}));
+        let said = text(kube_undo(writing(&left, &recorded), &undo_of(&created)));
+        assert!(said.contains(&format!("ConfigMap/flags in namespace orders: delete — it did not exist before {created}")), "{said}");
+        assert_eq!(left.asked().pop().unwrap(), "get configmaps orders flags", "the fake's own look before it deletes");
+        assert!(left.asked().contains(&"delete configmaps orders flags".to_string()));
+
+        let shown = preview(writing(&left, &recorded), &ToolCall::KubeUndo(undo_of(&updated)));
+        let ToolPreview::Change { summary, diffs, .. } = shown else { panic!("{shown:?}") };
+        assert_eq!(summary, format!("Undo {updated} — Deployment/api: as it was before {updated}"));
+        assert!(diffs[0].diff.unified_diff.contains("+  replicas: 3"), "{}", diffs[0].diff.unified_diff);
+        kube_undo(writing(&left, &recorded), &undo_of(&updated)).unwrap();
+        assert_eq!(last_patch(&left), "patch deployments orders api {\"metadata\":{\"labels\":null},\"spec\":{\"replicas\":3}}");
+        let audits = recorded.audits.lock().unwrap();
+        let tools: Vec<&str> = audits.iter().skip(2).map(|a| a.tool.as_str()).collect();
+        assert_eq!(tools, ["kubeDelete", "kubeApply"], "each undo is on record as what it did");
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

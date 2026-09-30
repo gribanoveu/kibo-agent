@@ -40,6 +40,7 @@ mod tests {
             summary: "3 → 0 replicas".into(),
             generation_before: Some(4),
             generation_after: Some(5),
+            version_after: None,
             error: None,
             undoes: None,
         }
@@ -133,6 +134,70 @@ mod tests {
             let stamp = &read("deploy", "rollme")["spec"]["template"]["metadata"]["annotations"]["kubectl.kubernetes.io/restartedAt"];
             assert!(stamp.is_string(), "{stamp}");
             assert!(undo(restarted).unwrap_err().to_string().contains("cannot be undone"));
+        });
+    }
+
+    /// A manifest applied, changed, deleted and each put back, on the local
+    /// cluster (K-5d). Its own objects — a ConfigMap and a Deployment of no
+    /// replicas, both `kibo-live` — are gone again when it ends.
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_applies_deletes_and_undoes_both() {
+        use crate::domain::kube::KubeError;
+        use crate::domain::tools::{KubeApplyArgs, KubeDeleteArgs, ToolPreview};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, _) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let manifest = |beta: &str| {
+            format!(
+                "apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: kibo-live}}\ndata: {{beta: '{beta}'}}\n---\n\
+                 apiVersion: apps/v1\nkind: Deployment\nmetadata: {{name: kibo-live}}\n\
+                 spec:\n  replicas: 0\n  selector: {{matchLabels: {{app: kibo-live}}}}\n  template:\n    metadata: {{labels: {{app: kibo-live}}}}\n    \
+                 spec: {{containers: [{{name: main, image: 'busybox:stable'}}]}}\n"
+            )
+        };
+        with_app_dir("kube-changes-live-apply", || {
+            let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, changes: Some(&ChangeStore) };
+            let kinds = api.kinds().unwrap();
+            let read = |kind: &str| api.get(crate::domain::kube::resolve_kind(&kinds, kind).unwrap(), namespace, "kibo-live");
+            let run = |call: ToolCall| cluster::change(Some(place), &call);
+            let apply = |beta: &str| ToolCall::KubeApply(KubeApplyArgs { manifest: manifest(beta) });
+            let undo = |id: &str| run(ToolCall::KubeUndo(KubeUndoArgs { change_id: id.into() }));
+            let id_of = |name_kind: &str, nth: usize| list().unwrap().into_iter().filter(|c| c.kind == name_kind).nth(nth).unwrap().id;
+
+            // Both created; applied again, neither changes — the server's own defaults are not a difference.
+            run(apply("on")).unwrap();
+            assert_eq!(read("cm").unwrap()["data"]["beta"], "on");
+            // Its controller writes the revision a moment after it is created: a change, but not ours.
+            for _ in 0..50 {
+                if !read("deploy").unwrap()["metadata"]["annotations"].is_null() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            assert!(run(apply("on")).unwrap_err().to_string().contains("exactly as the manifest says"));
+
+            // Only the ConfigMap changes, and its card shows that one line.
+            let ToolPreview::Change { summary, diffs, .. } = cluster::preview(Some(place), &apply("off")) else { panic!() };
+            assert!(summary.starts_with("ConfigMap/kibo-live: update"), "{summary}");
+            assert_eq!(diffs.len(), 1);
+            run(apply("off")).unwrap();
+            undo(&id_of("ConfigMap", 0)).unwrap();
+            assert_eq!(read("cm").unwrap()["data"]["beta"], "on", "the update is put back");
+
+            // A delete, and the object made again from its backup.
+            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "deploy".into(), name: "kibo-live".into() })).unwrap();
+            assert!(matches!(read("deploy"), Err(KubeError::NotFound(_))));
+            undo(&id_of("Deployment", 0)).unwrap();
+            assert_eq!(read("deploy").unwrap()["spec"]["template"]["spec"]["containers"][0]["image"], "busybox:stable");
+
+            // Undoing that undo deletes it again; the ConfigMap goes by a delete of its own.
+            undo(&id_of("Deployment", 0)).unwrap();
+            assert!(matches!(read("deploy"), Err(KubeError::NotFound(_))));
+            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "cm".into(), name: "kibo-live".into() })).unwrap();
+            assert!(matches!(read("cm"), Err(KubeError::NotFound(_))));
         });
     }
 }

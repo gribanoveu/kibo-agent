@@ -515,6 +515,15 @@ describe("the Kubernetes role's reads", () => {
       name: "Restart",
       arg: "Deployment api",
     });
+    const manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: flags}\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata: {name: api}\n";
+    expect(describeTool(tool({ name: "kubeApply", arguments: JSON.stringify({ manifest }) }))).toMatchObject({
+      name: "Apply",
+      arg: "ConfigMap, Deployment",
+    });
+    expect(describeTool(tool({ name: "kubeDelete", arguments: '{"kind":"ConfigMap","name":"flags"}' }))).toMatchObject({
+      name: "Delete object",
+      arg: "ConfigMap flags",
+    });
     expect(describeTool(tool({ name: "kubeUndo", arguments: '{"changeId":"kc-1a2b3c4d"}' }))).toMatchObject({ name: "Undo", arg: "kc-1a2b3c4d" });
     const diagnosed = describeTool(
       tool({ name: "kubeDiagnose", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "2 pods, 1 with problems" } }),

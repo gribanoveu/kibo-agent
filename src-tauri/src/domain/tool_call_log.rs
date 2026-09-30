@@ -24,6 +24,8 @@ use crate::domain::tools::{ToolCall, ToolError, ToolResult};
 pub const CONTENT_FIELDS: &[&str] = &[
     // readFile, writeFile, a skill's file
     "content",
+    // kubeApply: objects whole, a Secret's values among them
+    "manifest",
     // grep and semanticSearch matches, and grep's context lines
     "text",
     "before",
@@ -311,7 +313,13 @@ mod tests {
             | ToolName::KubeUndo
             | ToolName::KubeSuspend
             | ToolName::KubeRolloutRestart
-            | ToolName::KubeRolloutUndo => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeDelete => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
+            // A manifest may carry a Secret's values: it goes as `manifest`.
+            ToolName::KubeApply => (
+                Some(ToolCall::KubeApply(crate::domain::tools::KubeApplyArgs { manifest: LEAK.into() })),
+                ToolResult::Kube { text: LEAK.into(), summary: "1 object".into() },
+            ),
             ToolName::Explore => (
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },

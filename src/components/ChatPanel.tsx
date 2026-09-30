@@ -42,6 +42,7 @@ import {
   type ProcessInfo,
   type ToolCallDecision,
   type PendingToolCall,
+  type FileDiffStats,
   type ToolPreview,
 } from "../lib/chat";
 import "./ChatPanel.css";
@@ -311,6 +312,7 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
             {note}
           </p>
         ))}
+        {preview.diffs?.map((object) => <DiffPreview key={object.title} title={object.title} diff={object.diff} />)}
       </div>
     );
   }
@@ -319,19 +321,22 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
     return <p className="approval-preview">Runs in {preview.cwd}</p>;
   }
 
+  return <DiffPreview title={preview.path} diff={preview.diff} />;
+}
+
+/** What becomes of one thing — a file, a cluster's object — under its name. */
+function DiffPreview({ title, diff }: { title: string; diff: FileDiffStats }) {
   return (
     <div className="diff-preview-wrap">
       <div className="diff-preview-head">
-        <span className="diff-preview-name">{preview.path}</span>
+        <span className="diff-preview-name">{title}</span>
         <span className="meta mono">
-          <span className="add">+{preview.diff.linesAdded}</span>{" "}
-          <span className={preview.diff.linesRemoved ? "del" : "zero"}>
-            -{preview.diff.linesRemoved}
-          </span>
+          <span className="add">+{diff.linesAdded}</span>{" "}
+          <span className={diff.linesRemoved ? "del" : "zero"}>-{diff.linesRemoved}</span>
         </span>
       </div>
-      <DiffView unified={preview.diff.unifiedDiff} />
-      {preview.diff.truncated && <p className="approval-preview">…the rest is not shown</p>}
+      <DiffView unified={diff.unifiedDiff} />
+      {diff.truncated && <p className="approval-preview">…the rest is not shown</p>}
     </div>
   );
 }

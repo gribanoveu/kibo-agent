@@ -88,6 +88,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeSuspend, cluster::suspend_definition),
     (ToolName::KubeRolloutRestart, cluster::rollout_restart_definition),
     (ToolName::KubeRolloutUndo, cluster::rollout_undo_definition),
+    (ToolName::KubeApply, cluster::apply_definition),
+    (ToolName::KubeDelete, cluster::delete_definition),
 ];
 
 /// What the model is offered for a turn.
@@ -160,7 +162,9 @@ pub fn dispatch(
         | ToolCall::KubeUndo(_)
         | ToolCall::KubeSuspend(_)
         | ToolCall::KubeRolloutRestart(_)
-        | ToolCall::KubeRolloutUndo(_) => cluster::change(deps.kube, call),
+        | ToolCall::KubeRolloutUndo(_)
+        | ToolCall::KubeApply(_)
+        | ToolCall::KubeDelete(_) => cluster::change(deps.kube, call),
     }
 }
 
@@ -173,7 +177,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
-        KubeDiagnoseArgs, KubeEventsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
+        KubeDiagnoseArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -474,6 +478,14 @@ mod definition_tests {
             ToolName::KubeRolloutUndo => (
                 r#"{"kind":"Deployment","name":"api","toRevision":3}"#,
                 vec![ToolCall::KubeRolloutUndo(KubeRolloutUndoArgs { kind: "Deployment".into(), name: "api".into(), to_revision: Some(3) })],
+            ),
+            ToolName::KubeApply => (
+                r#"{"manifest":"kind: ConfigMap"}"#,
+                vec![ToolCall::KubeApply(KubeApplyArgs { manifest: "kind: ConfigMap".into() })],
+            ),
+            ToolName::KubeDelete => (
+                r#"{"kind":"ConfigMap","name":"flags"}"#,
+                vec![ToolCall::KubeDelete(KubeDeleteArgs { kind: "ConfigMap".into(), name: "flags".into() })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

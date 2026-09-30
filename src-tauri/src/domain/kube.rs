@@ -53,6 +53,10 @@ pub enum KubeError {
     Timeout(u64),
     #[error("{0}")]
     Cluster(String),
+    /// The server's 404, apart from its other answers: an apply asks whether
+    /// the object is there, and an undone delete needs it not to be.
+    #[error("{0}")]
+    NotFound(String),
     /// A kind the server does not serve, by any of its names.
     #[error("the cluster serves no kind called `{0}` — check the spelling, or whether its CRD is installed")]
     UnknownKind(String),
@@ -137,6 +141,11 @@ pub trait KubeApi: Send + Sync {
         patch: &serde_json::Value,
         dry_run: bool,
     ) -> Result<serde_json::Value, KubeError>;
+    /// Server-side apply of a whole `object` — created when it is not there —
+    /// under the app's name, taking over fields others set: the user has
+    /// approved the difference. Returns it as the server then has it.
+    fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, object: &serde_json::Value, dry_run: bool) -> Result<serde_json::Value, KubeError>;
+    fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError>;
 }
 
 /// One change a tool made to a cluster, as the audit keeps it
@@ -164,6 +173,10 @@ pub struct KubeChange {
     pub generation_before: Option<i64>,
     /// `None` until the change ran, and when it failed.
     pub generation_after: Option<i64>,
+    /// `metadata.resourceVersion` after it, for a kind with no generation — a
+    /// ConfigMap, a Secret, a Service — where any change at all is a change.
+    #[serde(default)]
+    pub version_after: Option<String>,
     /// Why it failed; `None` when it did not.
     pub error: Option<String>,
     /// The change this one put back, when it is an undo — itself a change,
@@ -450,6 +463,7 @@ mod tests {
             summary: "3 → 0 replicas".into(),
             generation_before: Some(4),
             generation_after: Some(5),
+            version_after: None,
             error: None,
             undoes: None,
         }

@@ -696,11 +696,33 @@ namespace» не нужен.
     (`live_cluster_suspends_rolls_back_and_restarts`; в `kibo-test` для этого остаются
     CronJob `report` и Deployment `rollme`). Мутаций двадцать восемь, все пойманы — одна
     после добавленного случая (шаблон уже такой, как в бэкапе).
-  - **K-5d — `kubeApply` и `kubeDelete`.** Server-side dry-run и diff манифеста в карточке;
-    несколько документов — одна карточка; отказ dry-run — ошибка сервера модели, без
-    карточки. Откат удаления — пересоздание из бэкапа без `uid`, `resourceVersion`,
-    `managedFields`, `status`. Пределы: PVC с `reclaimPolicy: Delete` — отдельная фраза в
-    карточке, Namespace не удаляется вовсе.
+  - **K-5d — `kubeApply` и `kubeDelete`.** Сделано; у роли четырнадцать инструментов.
+    `KubeApi` получил `apply` (server-side apply под именем `kibo`, с `force`: разницу
+    пользователь подтвердил на карточке) и `delete`, `KubeError` — `NotFound` (404 отдельно
+    от прочих ответов сервера). `cluster::Plan` теперь несёт действие — `Act::Patch`,
+    `Apply` или `Delete` — и, где слов мало, diff. `kubeApply`: YAML до двадцати объектов;
+    каждый — свой план, свой бэкап (`Null` для того, чего не было), своя строка аудита и свой
+    id, а карточка одна: «2 objects — ConfigMap/flags: create; Deployment/api: update (+1 −1
+    lines)» и diff каждого объекта (`ToolPreview::Change.diffs`) — «как есть» против ответа
+    серверного dry-run, без того, что пишет сам сервер (`declared`), и с редакцией Secrets.
+    Объект, который манифест не меняет, пропускается; не меняет ничего — отказ. Только
+    закреплённый namespace: другой namespace в манифесте, cluster-wide вид (в том числе
+    Namespace) и чужая `apiVersion` — отказ до сервера. Остановился сервер на втором объекте
+    — ответ говорит, что уже изменено и с какими id. `kubeDelete`: объект целиком в бэкап;
+    у PVC карточка говорит, уходят ли данные (политика тома не `Retain` или не прочиталась).
+    `kubeUndo`: созданное apply — удаляется, изменённое — возвращается целиком
+    (`merge_diff` по объявленной части), удалённое — создаётся заново из бэкапа без `uid`,
+    `resourceVersion`, `managedFields`, `status`; откат записывается тем, чем он был
+    (`kubeDelete` или `kubeApply`), поэтому откат отката работает. «Не поверх чужого»: у
+    вида без `generation` (ConfigMap, Secret, Service) сверяется `resourceVersion`
+    (`KubeChange.version_after`); удалённое не создаётся поверх объекта, появившегося снова.
+    Манифест в лог вызовов не пишется (`manifest` в `CONTENT_FIELDS`). Проверено на OrbStack
+    (`live_cluster_applies_deletes_and_undoes_both`, после себя ничего не оставляет). Мутаций
+    тридцать две, все пойманы. **Отложено:** `force` забирает поля у других менеджеров —
+    предупреждение про Argo CD / Flux / Helm на карточке в K-5e, пока об этом говорит только
+    описание инструмента; у вида без `generation` с часто меняющимся статусом (Pod)
+    `resourceVersion` уходит сам, и откат apply откажет; манифест режется до двадцати
+    объектов, а не потоком.
   - **K-5e — предупреждения и production.** В карточке — что отменит изменение само: HPA,
     Argo CD / Flux, `ownerReferences`, Helm. Пометка production у kubeconfig или контекста в
     Settings: запись — только на текущий чат, каждая мутация спрашивает даже при «Always

@@ -70,6 +70,8 @@ export const LABELS: Record<string, string> = {
   kubeSuspend: "Suspend",
   kubeRolloutRestart: "Restart",
   kubeRolloutUndo: "Roll back",
+  kubeApply: "Apply",
+  kubeDelete: "Delete object",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -149,7 +151,9 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           : typeof args.suspend === "boolean"
             ? `→ ${args.suspend ? "suspended" : "active"}`
             : null;
-    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), to]
+    // A manifest is named by the kinds in it: `Deployment, Service`.
+    const kinds = [...(str(args.manifest) ?? "").matchAll(/^kind:\s*(\S+)/gm)].map((found) => found[1]).join(", ");
+    const target = [str(args.kind) ?? kinds, str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), to]
       .filter(Boolean)
       .join(" ");
     const namespace = str(args.namespace);
