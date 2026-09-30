@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 // Type-only, and erased: the transcript's block shapes are defined beside the
 // reducer that builds them, and a saved chat is where they cross the wire.
 import type { Block } from "./chatTurnReducer";
+import type { KubePin } from "./kube";
 
 // One typed wrapper per command. Components and hooks call these, never
 // `invoke` directly — the command names and payload shapes live here and
@@ -381,18 +382,22 @@ export function withLanguageReminder(prompt: string, language: ReplyLanguage): s
   return `${prompt}\n\n[Reply in ${name}.]`;
 }
 
+/** Mirrors `infra::master_key::KeyStore`: where the key the API keys are sealed under is kept. */
+export type KeyStore = "file" | "keychain";
+
 export type LlmSettings = {
   providers: ProviderView[];
   activeProviderId: string | null;
   debugLogging: boolean;
   replyLanguage: ReplyLanguage;
+  keyStore: KeyStore;
 };
 
 /** What a turn still needs before it can start. Asked before sending, not discovered by failing. */
 export type Readiness = { workspace: string | null; provider: string | null; hasKey: boolean };
 
 export async function llmSettings(): Promise<LlmSettings> {
-  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto" };
+  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", keyStore: "file" };
   return invoke<LlmSettings>("llm_settings_get");
 }
 
@@ -413,6 +418,12 @@ export async function removeProvider(id: string): Promise<void> {
 export async function saveApiKey(id: string, key: string): Promise<void> {
   requireBackend();
   return invoke<void>("llm_api_key_save", { id, key });
+}
+
+/** Moves the master key to `store`. The system may ask the user before the keychain answers. */
+export async function setKeyStore(store: KeyStore): Promise<void> {
+  requireBackend();
+  return invoke<void>("llm_key_store_set", { store });
 }
 
 export async function setActiveProvider(id: string | null): Promise<void> {
@@ -450,6 +461,12 @@ export async function readiness(): Promise<Readiness> {
   return invoke<Readiness>("agent_readiness");
 }
 
+/** The same for a chat's card: a change to its pinned cluster, dry-run there. */
+export async function plainChatPreview(kube: KubePin | null, calls: PendingToolCall[]): Promise<ToolPreview[]> {
+  if (!inTauri()) return calls.map(() => ({ kind: "nothing" }) as ToolPreview);
+  return invoke<ToolPreview[]>("plain_chat_preview", { kube, calls });
+}
+
 // ------------------------------------------------------------- previewing
 
 export type FileDiffStats = {
@@ -464,6 +481,8 @@ export type ToolPreview =
   | { kind: "diff"; path: string; diff: FileDiffStats }
   | { kind: "removes"; path: string; files: number }
   | { kind: "command"; command: string; cwd: string }
+  /** A change to a cluster: where, what becomes of what, and what to know first. */
+  | { kind: "change"; place: string; summary: string; notes: string[]; production?: boolean; diffs?: { title: string; diff: FileDiffStats }[] }
   | { kind: "failed"; reason: string }
   | { kind: "nothing" };
 
@@ -484,6 +503,8 @@ export type ChatSummary = {
   branchedFrom?: string | null;
   /** Filed away: shown under the sidebar's "Archived" filter, not in the list. */
   archived: boolean;
+  /** Who answers in a Chat mode conversation; absent for the agent's and for chats saved before rows kept it. */
+  role?: ChatRoleId | null;
 };
 
 /**
@@ -508,6 +529,10 @@ export type ChatRecord = {
   /** Absent in chats saved before plans existed. */
   plan?: string | null;
   branchedFrom?: string | null;
+  /** Who the model was, in a Chat mode conversation; absent in the agent's. */
+  role?: ChatRoleId | null;
+  /** The cluster a Kubernetes chat is pinned to. */
+  kube?: KubePin | null;
 };
 
 /** Chats of the open folder, newest first. No folder, no backend: no rows. */
@@ -676,6 +701,96 @@ export async function connectMcpServer(name: string): Promise<McpView> {
 export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpView> {
   requireBackend();
   return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
+}
+
+// ---------------------------------------------------------------- plain chat
+
+/** Mirrors `domain::chat_role::ChatRole`: who the model is in Chat mode, and which tools it has. */
+export type ChatRoleId = "assistant" | "kubernetes";
+export type ChatRoleView = { id: ChatRoleId; name: string; description: string };
+
+export async function plainChatRoles(): Promise<ChatRoleView[]> {
+  if (!inTauri()) return [];
+  return invoke<ChatRoleView[]>("plain_chat_roles");
+}
+
+/**
+ * A turn in `role` on `messages`, the whole conversation so far, outside any
+ * folder — the agent's loop with the role's prompt and tools. Its text, calls
+ * and results arrive on `onTurnEvent(turnId)` as the agent's do; this resolves
+ * with how it ended: done, stopped, or paused on the approval card.
+ */
+export async function plainChatSend(
+  turnId: string,
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+): Promise<Outcome> {
+  requireBackend();
+  return invoke<Outcome>("plain_chat_send", { turnId, role, kube, messages });
+}
+
+/** Continues a chat's turn paused on the approval card, with the user's answers. */
+export async function plainChatResume(
+  turnId: string,
+  role: ChatRoleId,
+  kube: KubePin | null,
+  checkpoint: Checkpoint,
+  decisions: ToolCallDecision[],
+): Promise<Outcome> {
+  requireBackend();
+  return invoke<Outcome>("plain_chat_resume", { turnId, role, kube, checkpoint, decisions });
+}
+
+/** "Always" on a chat's card: this tool stops asking in Chat mode until the app quits. */
+export async function plainChatAlwaysAllow(tool: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("plain_chat_always_allow", { tool });
+}
+
+/** Chat mode's conversations, newest first, whatever folder is open. They open with `loadChat`. */
+export async function plainChatList(): Promise<ChatSummary[]> {
+  if (!inTauri()) return [];
+  return invoke<ChatSummary[]>("plain_chat_list");
+}
+
+/** `messages` is what the model is sent again; `blocks` the transcript as drawn — the agent's blocks. */
+export async function plainChatSave(
+  id: string,
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+  blocks: unknown,
+): Promise<ChatSummary> {
+  requireBackend();
+  return invoke<ChatSummary>("plain_chat_save", { id, role, kube, messages, blocks });
+}
+
+/** `contextUsage` for a chat in `role`: its prompt and tools. */
+export async function plainChatContextUsage(
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+): Promise<ContextUsage> {
+  requireBackend();
+  return invoke<ContextUsage>("plain_chat_context_usage", { role, kube, messages });
+}
+
+/** `compactHistory` for a chat in `role`, against its own prompt and tools. */
+export async function plainChatCompact(
+  role: ChatRoleId,
+  kube: KubePin | null,
+  messages: LlmMessage[],
+  force: boolean,
+  turnId: string,
+): Promise<{ history: LlmMessage[]; folded: number } | null> {
+  requireBackend();
+  return invoke<{ history: LlmMessage[]; folded: number } | null>("plain_chat_compact", { role, kube, messages, force, turnId });
+}
+
+export async function plainChatCancel(): Promise<void> {
+  requireBackend();
+  return invoke<void>("plain_chat_cancel");
 }
 
 // ---------------------------------------------------------------- review

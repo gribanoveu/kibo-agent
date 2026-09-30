@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: shop-data}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 32Mi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: invoices-archive
+  annotations:
+    example.com/note: "Invoices of 2024, the only copy. Kept for the tax audit until 2030 - nothing mounts it on purpose."
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 32Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: shop}}
+  template:
+    metadata: {labels: {app: shop}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      volumes: [{name: data, persistentVolumeClaim: {claimName: shop-data}}]
+      containers:
+        - {name: app, image: busybox, command: [sleep, "86400"], volumeMounts: [{name: data, mountPath: /data}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: old-api}
+spec:
+  replicas: 0
+  selector: {matchLabels: {app: old-api}}
+  template:
+    metadata: {labels: {app: old-api}}
+    spec:
+      containers:
+        - {name: app, image: busybox, command: [sleep, "86400"], envFrom: [{configMapRef: {name: old-api-config}}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: old-api-config}
+data: {MODE: legacy}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: migrate-2023}
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers: [{name: app, image: busybox, command: [sh, -c, "echo migrated"]}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: seed-archive}
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      volumes: [{name: data, persistentVolumeClaim: {claimName: invoices-archive}}]
+      containers:
+        - {name: app, image: busybox, command: [sh, -c, "echo invoices > /data/2024.tar"], volumeMounts: [{name: data, mountPath: /data}]}

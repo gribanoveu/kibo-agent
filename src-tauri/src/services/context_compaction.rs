@@ -12,7 +12,11 @@ use crate::domain::mcp::McpTools;
 use crate::domain::prompt;
 use crate::domain::tools::ToolName;
 use crate::infra::llm_debug_log;
-use crate::services::llm_chat::tool_definitions_for;
+use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubeSetup;
+use crate::domain::runbooks::Runbook;
+
+use crate::services::llm_chat::{tool_definitions_for, tool_definitions_for_role};
 use crate::services::llm_session::LlmSession;
 
 /// A conversation, shorter than it was.
@@ -44,6 +48,17 @@ pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools) -> RequestFrame 
         skills,
         tools: compaction::estimate_tool_schema_tokens(&built_in),
         mcp: compaction::estimate_tool_schema_tokens(&mcp_tools),
+    }
+}
+
+/// [`request_frame`] for a chat in `role`: its one system message and its
+/// tools, as `llm_chat` sends them — no skills, rules or MCP servers.
+pub fn chat_request_frame(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> RequestFrame {
+    RequestFrame {
+        instructions: compaction::estimate_tokens(&prompt::chat_system_messages(role, kube, runbooks, language)),
+        skills: 0,
+        tools: compaction::estimate_tool_schema_tokens(&tool_definitions_for_role(role)),
+        mcp: 0,
     }
 }
 

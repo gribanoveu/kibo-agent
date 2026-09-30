@@ -161,6 +161,77 @@ pub struct AppSettings {
     pub rules: OptOut,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
+    /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
+    pub kube: KubeSettings,
+}
+
+/// The kubeconfig files the Kubernetes role can be pointed at — by path, never
+/// by contents. The file stays where kubectl keeps it, with its credentials and
+/// whatever refreshes them, and this file stays free of secrets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KubeSettings {
+    pub configs: Vec<Kubeconfig>,
+    /// The last one picked on a chat's tab, by name — where a new chat
+    /// starts. `None` falls back to the first, as the active provider does.
+    pub active: Option<String>,
+    /// Namespaces typed on a chat's tab, per kubeconfig, newest first: a
+    /// namespace the identity may work in but not list is typed once.
+    #[serde(default)]
+    pub typed_namespaces: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Kubeconfig {
+    /// What the user calls the cluster: `prod`, `staging`.
+    pub name: String,
+    pub path: String,
+    /// The user's mark that this is a production cluster: every change there
+    /// asks, whatever "Always allow" says, and its card says where it lands.
+    #[serde(default)]
+    pub production: bool,
+}
+
+/// How many typed namespaces a kubeconfig remembers.
+pub const TYPED_NAMESPACES: usize = 10;
+
+impl KubeSettings {
+    /// Puts `namespace` first among `kubeconfig`'s typed ones.
+    pub fn remember_namespace(&mut self, kubeconfig: &str, namespace: &str) {
+        let typed = self.typed_namespaces.entry(kubeconfig.to_string()).or_default();
+        typed.retain(|n| n != namespace);
+        typed.insert(0, namespace.to_string());
+        typed.truncate(TYPED_NAMESPACES);
+    }
+
+    /// The one in use: the picked one, or the first when none is picked. A pick
+    /// naming a removed file is none, not some other cluster.
+    pub fn active(&self) -> Option<&Kubeconfig> {
+        match &self.active {
+            Some(name) => self.configs.iter().find(|c| &c.name == name),
+            None => self.configs.first(),
+        }
+    }
+
+    /// Adds `config`, or replaces the one of that name where it stands —
+    /// its path; the production mark is kept: a file moved is the same cluster.
+    pub fn upsert(&mut self, config: Kubeconfig) {
+        match self.configs.iter_mut().find(|c| c.name == config.name) {
+            Some(existing) => existing.path = config.path,
+            None => self.configs.push(config),
+        }
+    }
+
+    /// Removes it, and the pick and its typed namespaces with it: the next
+    /// falls back to the first.
+    pub fn remove(&mut self, name: &str) {
+        self.configs.retain(|c| c.name != name);
+        self.typed_namespaces.remove(name);
+        if self.active.as_deref() == Some(name) {
+            self.active = None;
+        }
+    }
 }
 
 /// Where the composer's Ask/Auto is remembered. A chat or folder not listed
@@ -392,5 +463,63 @@ mod tests {
         let anthropic: ProviderConfig =
             serde_json::from_str(r#"{"id":"a","baseUrl":"https://x/v1","kind":"anthropic"}"#).unwrap();
         assert_eq!(anthropic.kind, ProviderKind::Anthropic);
+    }
+
+    fn config(name: &str) -> Kubeconfig {
+        Kubeconfig { name: name.to_string(), path: format!("/home/me/.kube/{name}"), production: false }
+    }
+
+    #[test]
+    fn the_first_kubeconfig_is_in_use_until_another_is_picked() {
+        let mut kube = KubeSettings::default();
+        assert_eq!(kube.active(), None);
+        kube.upsert(config("prod"));
+        kube.upsert(config("staging"));
+        assert_eq!(kube.active().map(|c| c.name.as_str()), Some("prod"));
+        kube.active = Some("staging".to_string());
+        assert_eq!(kube.active().map(|c| c.name.as_str()), Some("staging"));
+        kube.active = Some("gone".to_string());
+        assert_eq!(kube.active(), None, "a pick naming a removed file is not some other cluster");
+    }
+
+    #[test]
+    fn saving_a_kubeconfig_under_its_name_replaces_it_in_place() {
+        let mut kube = KubeSettings { configs: vec![config("prod"), config("staging")], ..Default::default() };
+        kube.configs[0].production = true;
+        kube.upsert(Kubeconfig { name: "prod".to_string(), path: "/elsewhere".to_string(), production: false });
+        assert!(kube.configs[0].production, "the mark stays with the name");
+        kube.configs[0].production = false;
+        assert_eq!(kube.configs.len(), 2);
+        assert_eq!(kube.configs[0].path, "/elsewhere");
+    }
+
+    #[test]
+    fn removing_the_picked_kubeconfig_drops_the_pick() {
+        let mut kube = KubeSettings {
+            configs: vec![config("prod"), config("staging")],
+            active: Some("staging".to_string()),
+            ..Default::default()
+        };
+        kube.remember_namespace("prod", "payments");
+        kube.remove("prod");
+        assert_eq!(kube.active.as_deref(), Some("staging"), "another's removal keeps the pick");
+        assert!(kube.typed_namespaces.is_empty(), "its typed namespaces outlived it");
+        kube.remove("staging");
+        assert!(kube.configs.is_empty());
+        assert_eq!(kube.active, None);
+    }
+
+    #[test]
+    fn a_typed_namespace_goes_first_once_and_the_oldest_drop_off() {
+        let mut kube = KubeSettings::default();
+        for n in 0..TYPED_NAMESPACES + 2 {
+            kube.remember_namespace("prod", &format!("ns{n}"));
+        }
+        kube.remember_namespace("prod", "ns5");
+        let typed = &kube.typed_namespaces["prod"];
+        assert_eq!(typed.len(), TYPED_NAMESPACES);
+        assert_eq!(typed[0], "ns5");
+        assert_eq!(typed.iter().filter(|n| *n == "ns5").count(), 1);
+        assert!(!typed.contains(&"ns0".to_string()), "the oldest stayed");
     }
 }

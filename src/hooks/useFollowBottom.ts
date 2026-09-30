@@ -10,13 +10,25 @@ import { useCallback, useRef } from "react";
  *
  * `scrollRef` goes on the scrolling box, `contentRef` on the one child that
  * holds everything inside it.
+ *
+ * Letting go cannot wait for the scroll event alone. WebKit scrolls a box off
+ * the main thread and reports it a frame or more later; a stream grows the
+ * thread every frame, and the stick in between put the box back at the end
+ * before the user's scroll was ever seen. So a wheel turned up lets go at
+ * once, and a scroll event that still reads the position the stick left says
+ * nothing about the user.
  */
 export function useFollowBottom() {
   const box = useRef<HTMLElement | null>(null);
   const following = useRef(true);
+  // Where the last stick left the box, as the box reports it back.
+  const stuckAt = useRef<number | null>(null);
 
   const stick = useCallback(() => {
-    if (following.current && box.current) box.current.scrollTop = box.current.scrollHeight;
+    const el = box.current;
+    if (!following.current || !el) return;
+    el.scrollTop = el.scrollHeight;
+    stuckAt.current = el.scrollTop;
   }, []);
 
   const scrollRef = useCallback(
@@ -25,14 +37,20 @@ export function useFollowBottom() {
       box.current = el;
       // A pixel of slack: scrollTop is fractional on a Retina screen.
       const onScroll = () => {
+        if (el.scrollTop === stuckAt.current) return;
         following.current = el.scrollHeight - el.clientHeight - el.scrollTop < 2;
+      };
+      const onWheel = (e: WheelEvent) => {
+        if (e.deltaY < 0) following.current = false;
       };
       const resize = new ResizeObserver(stick);
       resize.observe(el);
       el.addEventListener("scroll", onScroll, { passive: true });
+      el.addEventListener("wheel", onWheel, { passive: true });
       return () => {
         resize.disconnect();
         el.removeEventListener("scroll", onScroll);
+        el.removeEventListener("wheel", onWheel);
         box.current = null;
       };
     },

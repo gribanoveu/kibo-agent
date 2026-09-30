@@ -20,6 +20,11 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+.chip[aria-disabled="true"] {
+  cursor: default;
+  background: none;
+  color: var(--text-dim);
+}
 .chip-label {
   min-width: 0;
   overflow: hidden;
@@ -61,6 +66,28 @@
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  color: var(--text-faint);
+}
+.dropdown-custom {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 2px 4px 4px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--bg-bubble);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.dropdown-custom:focus {
+  border-color: var(--text-faint);
+}
+.dropdown-note {
+  padding: 2px 9px 6px;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
   color: var(--text-faint);
 }
 .dropdown-menu.right {

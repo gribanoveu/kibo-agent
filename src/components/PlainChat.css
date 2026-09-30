@@ -1,0 +1,275 @@
+.plain-panel {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+}
+
+.plain-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.plain-head h1 {
+  /* As tall as the agent's header buttons, so the thread below starts where
+     the agent's does and nothing moves when the mode is switched. */
+  line-height: 30px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.plain-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+}
+
+/* In the middle of the empty thread, as the agent's empty chat is. */
+.plain-welcome {
+  min-height: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* The agent's empty chat's rhythm: the title and the text sit where its do. */
+  gap: 10px;
+  text-align: center;
+}
+/* As large as the agent's on its empty chat. */
+.plain-welcome-mascot {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  margin: 0 auto 2px;
+}
+.plain-welcome-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* The role's icon in a thought cloud over Kibo's head; out of the flow, so
+   Kibo stays exactly where the agent's is. */
+.plain-welcome-cloud {
+  position: absolute;
+  top: -44px;
+  left: calc(100% - 22px);
+  width: 72px;
+  height: 58px;
+  color: var(--accent);
+}
+.plain-cloud-shape {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+/* A 2px stroke under the fill leaves a 1px edge round the whole cloud. */
+.plain-cloud-edge {
+  fill: var(--border);
+  stroke: var(--border);
+  stroke-width: 2px;
+}
+.plain-cloud-fill {
+  fill: var(--bg-panel-soft);
+}
+/* Centred on the cloud's body, not on its box with the trail in it. */
+.plain-welcome-cloud > .lucide {
+  position: absolute;
+  left: 38px;
+  top: 25px;
+  transform: translate(-50%, -50%);
+}
+.plain-welcome h2 {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.plain-welcome p {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+/* One per row, whatever their length: the block's height is what keeps Kibo in place. */
+.plain-suggest {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  /* Makes the block as tall as the agent's, so Kibo stays put across modes. */
+  margin-top: 7px;
+}
+.plain-suggest button {
+  padding: 7px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.plain-suggest button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.plain-error {
+  font-size: var(--fs-sm);
+  color: var(--red);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The box and the strip on its top edge — the agent's folder tab, measured the
+   same, so the thread above is as tall in either mode. */
+.plain-composer-wrap {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+.plain-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 24px;
+  padding: 3px 11px 3px 7px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  min-width: 0;
+}
+/* As the folder tab's: a flex label, which is what sets the strip's height. */
+.plain-tab .chip-label {
+  display: flex;
+}
+/* Role, kubeconfig, context, namespace: in a narrow window each gives up width
+   and ellipsises, rather than the strip growing a second row. */
+.plain-tab > .dropdown-wrap {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.plain-tab .chip {
+  max-width: 100%;
+}
+.plain-tab .plain-chip-label {
+  min-width: 0;
+  white-space: nowrap;
+}
+/* The label is a flex row, and only a block ellipsises: the name is its own box. */
+.plain-tab .plain-chip-label > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
+.plain-composer {
+  flex: none;
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  padding: 14px 16px 11px;
+}
+.plain-composer textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 160px;
+  resize: none;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.plain-composer textarea::placeholder {
+  color: var(--text-faint);
+}
+.plain-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.plain-composer-bar > * {
+  flex: none;
+}
+/* A long provider/model ellipsises rather than pushing send off the bar. */
+.plain-composer-bar > .dropdown-wrap:has(.plain-model-label) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.plain-composer-bar > .dropdown-wrap:has(.plain-model-label) .chip {
+  max-width: 100%;
+}
+.plain-model-label {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plain-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* Nothing to point the role at yet: said quietly, the menu offers the way. */
+/* The name gives up width in a narrow window; its icon does not. */
+.plain-chip-label svg {
+  flex: none;
+}
+.plain-chip-label.unset {
+  color: var(--text-faint);
+}
+/* The chat may change the cluster: not to be missed among the chips. */
+.plain-chip-label.changes {
+  color: var(--amber);
+}
+/* A cluster the user marked as production: seen before a word is typed. */
+.plain-chip-label.production {
+  color: var(--red);
+}
+.plain-meter {
+  margin-left: auto;
+}
+.plain-meter + .plain-send {
+  margin-left: 0;
+}
+.plain-send {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.plain-send:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.plain-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.plain-send.stop {
+  background: var(--bg-active);
+  color: var(--text);
+}

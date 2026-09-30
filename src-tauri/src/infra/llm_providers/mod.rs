@@ -1,7 +1,12 @@
 pub mod anthropic;
 pub mod openai_compatible;
 
+use std::io::{BufRead, BufReader};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
+
 use secrecy::SecretString;
+use serde_json::Value;
 
 use crate::domain::llm::{LlmError, LlmProvider};
 use crate::domain::settings::{ProviderConfig, ProviderKind};
@@ -49,9 +54,83 @@ pub fn provider_for(
     })
 }
 
+/// How soon a stop is seen while the provider says nothing.
+const CANCEL_POLL: Duration = Duration::from_millis(100);
+
+/// A streamed answer's lines, sent and read on a thread of its own. A model
+/// that thinks before its first byte, or a proxy that holds the headers, keeps
+/// that thread blocked for as long as it likes — the caller waits on the
+/// channel instead, and a stop lands within `CANCEL_POLL`. The thread left
+/// behind hangs up at its next line, once nobody takes it.
+pub(super) struct StreamLines(Receiver<Result<String, LlmError>>);
+
+impl StreamLines {
+    pub(super) fn send(post: ureq::RequestBuilder<ureq::typestate::WithBody>, body: Value) -> Self {
+        let (lines, taken) = mpsc::channel();
+        std::thread::spawn(move || {
+            let response = post
+                .send_json(&body)
+                .map_err(|e| LlmError::Http(e.to_string()))
+                .and_then(openai_compatible::ok_or_status_error);
+            let response = match response {
+                Ok(response) => response,
+                Err(e) => {
+                    let _ = lines.send(Err(e));
+                    return;
+                }
+            };
+            for line in BufReader::new(response.into_body().into_reader()).lines() {
+                let line = line.map_err(|e| LlmError::Http(e.to_string()));
+                let failed = line.is_err();
+                if lines.send(line).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Self(taken)
+    }
+
+    /// The next line; `None` at the end of the stream or once `cancelled`.
+    pub(super) fn next(&self, cancelled: &dyn Fn() -> bool) -> Result<Option<String>, LlmError> {
+        loop {
+            if cancelled() {
+                return Ok(None);
+            }
+            match self.0.recv_timeout(CANCEL_POLL) {
+                Ok(line) => return line.map(Some),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Ok(None),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The provider has taken the request and says nothing yet — the Stop
+    /// button still has to work.
+    #[test]
+    fn a_stop_lands_while_the_provider_is_still_silent() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let url = format!("http://127.0.0.1:{}", listener.local_addr().expect("addr").port());
+        // Silent for 3 s, then gone: a wait that ignores the stop fails the
+        // timing check below instead of hanging the run.
+        std::thread::spawn(move || {
+            let socket = listener.accept();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(socket);
+        });
+        let post = http_agent::build_agent(None).expect("agent").post(url);
+        let lines = StreamLines::send(post, serde_json::json!({}));
+
+        let started = std::time::Instant::now();
+        let stop_after = started + Duration::from_millis(200);
+        let next = lines.next(&|| std::time::Instant::now() > stop_after);
+        assert!(started.elapsed() < Duration::from_secs(2), "waited for the provider instead");
+        assert_eq!(next.expect("a stop is not an error"), None);
+    }
 
     fn config(trusted_cert_pem: Option<&str>) -> ProviderConfig {
         ProviderConfig {

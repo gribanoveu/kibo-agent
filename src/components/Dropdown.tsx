@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import "./Dropdown.css";
 
@@ -30,12 +30,26 @@ type Props = {
   heading?: string;
   /** Called as the menu opens — for options that are fetched only when wanted. */
   onOpen?: () => void;
+  /** A box above the options for a value not among them — a namespace the
+      user may work in but not list. Enter picks what was typed. */
+  custom?: { placeholder: string; onEnter: (value: string) => void };
+  /** A line under the heading about the options themselves — why some are missing. */
+  note?: string;
+  /** Shown but not changeable: the menu does not open, and `title` says why. */
+  locked?: boolean;
 };
 
 /** Trigger + role="listbox" menu — the app draws its own dropdowns, never <select>. */
-export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen }: Props) {
+export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen, custom, note, locked = false }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  // A menu that would run past the window's right edge hangs from the trigger's right instead.
+  const [flip, setFlip] = useState(false);
+  useLayoutEffect(() => {
+    const edge = menu.current?.getBoundingClientRect().right ?? 0;
+    setFlip(open && edge > window.innerWidth);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -61,18 +75,39 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
+        // Not `disabled`: a disabled button shows no tooltip, and the tooltip is the reason.
+        aria-disabled={locked || undefined}
         onClick={() => {
+          if (locked) return;
           if (!open) onOpen?.();
           setOpen(!open);
         }}
       >
         <span className="chip-label">{label}</span>
-        <ChevronDown className="chip-chev" size={10} />
+        {!locked && <ChevronDown className="chip-chev" size={10} />}
       </button>
       {open && (
-        <div className={`dropdown-menu${below ? " below" : ""}${right ? " right" : ""}`} role="listbox" aria-label={heading}>
+        <div ref={menu} className={`dropdown-menu${below ? " below" : ""}${right || flip ? " right" : ""}`} role="listbox" aria-label={heading}>
           {heading && <div className="dropdown-heading">{heading}</div>}
-          {options.length === 0 && (
+          {custom && (
+            <input
+              className="dropdown-custom"
+              type="text"
+              autoFocus
+              placeholder={custom.placeholder}
+              aria-label={custom.placeholder}
+              // A form field's Enter, as in every settings form here — not a shortcut.
+              onKeyDown={(e) => {
+                const typed = e.currentTarget.value.trim();
+                if (e.key !== "Enter" || !typed) return;
+                e.preventDefault();
+                custom.onEnter(typed);
+                setOpen(false);
+              }}
+            />
+          )}
+          {note && <div className="dropdown-note">{note}</div>}
+          {options.length === 0 && !custom && (
             <div className="dropdown-empty">{emptyLabel ?? "Nothing here yet"}</div>
           )}
           {options.map((opt) => {

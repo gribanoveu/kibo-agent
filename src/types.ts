@@ -7,6 +7,10 @@ export const ASIDE_TABS = ["changes", "plan", "mcp", "hooks", "skills", "rules",
 export type AsideTab = (typeof ASIDE_TABS)[number];
 export const isAsideTab = (value: unknown): value is AsideTab => ASIDE_TABS.includes(value as AsideTab);
 
+/** The sidebar's switch: the agent in the open folder, or a plain chat with the model. */
+export type AppMode = "agent" | "chat";
+export const isAppMode = (value: unknown): value is AppMode => value === "agent" || value === "chat";
+
 export type PanelItem = {
   id: string;
   badge: string;

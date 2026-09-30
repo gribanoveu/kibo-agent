@@ -34,7 +34,7 @@ use crate::domain::turn::{
     ToolCallDecision,
 };
 use crate::services::ai_tools::preview;
-use crate::services::llm_chat::{self, SteeringQueue, Turn, TurnError};
+use crate::services::llm_chat::{self, Place, SteeringQueue, Turn, TurnError};
 use crate::services::context_compaction;
 use crate::domain::review::ReviewDesk;
 use crate::services::mcp_servers::McpServers;
@@ -744,9 +744,8 @@ where
         let turn = Turn {
             events: &events,
             session: &session,
-            scope: &scope,
+            place: Place::Folder { scope: &scope, mode },
             approval: &approval,
-            mode,
             cancelled: &cancelled,
             sleep: &sleep,
             take_steering: &take_steering,

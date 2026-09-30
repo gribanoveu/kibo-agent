@@ -19,6 +19,9 @@
 
 use std::path::Path;
 
+use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubeSetup;
+use crate::domain::runbooks::{self, Runbook};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmMessage;
 use crate::domain::project_rules::RuleFile;
@@ -356,6 +359,28 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
         Some(language) => format!("{text}\n\n[Reply in {language}.]"),
         None => text,
     }
+}
+
+/// What goes in front of a Chat mode conversation, steadiest first: the
+/// role, the runbooks it may read, the language, and last what it is told of
+/// the user's cluster — the part that changes with the chat's pin and with a
+/// cluster that stops answering. Separate messages, as the agent's are: a
+/// provider's prompt cache serves a prefix, and one that matches whole
+/// messages (DeepSeek served the tools and nothing of a single message whose
+/// last line named the namespace) still serves everything before the change.
+pub fn chat_system_messages(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> Vec<LlmMessage> {
+    let mut messages = vec![LlmMessage::system(role.prompt())];
+    let reads_runbooks = role.tools().contains(&crate::domain::tools::ToolName::KubeRunbook);
+    if let Some(list) = runbooks::listing(runbooks).filter(|_| reads_runbooks) {
+        messages.push(LlmMessage::system(list));
+    }
+    if let Some(language) = language {
+        messages.push(LlmMessage::system(format!("Reply in {language}.")));
+    }
+    if let Some(note) = role.setup_note(kube) {
+        messages.push(LlmMessage::system(note));
+    }
+    messages
 }
 
 /// What goes in front of the conversation on every request.
@@ -731,5 +756,24 @@ mod tests {
         assert_eq!(russian.len(), auto.len() + 1);
         let at = |needle: &str| russian.iter().position(|t| t.contains(needle)).unwrap();
         assert!(at("Write in English.") < at("Write everything you say in Russian"), "after the rules, so it wins");
+    }
+
+    /// The role, the runbooks, the language, and the cluster last: what
+    /// changes most comes after everything a cache can keep.
+    #[test]
+    fn a_chat_is_told_its_role_its_runbooks_the_language_and_the_cluster_last() {
+        let kube = KubeSetup::NotSet;
+        let note = ChatRole::Kubernetes.setup_note(&kube).unwrap();
+        let texts = |messages: Vec<LlmMessage>| messages.into_iter().map(|m| (m.role, m.content.unwrap())).collect::<Vec<_>>();
+        let system = |text: &str| (crate::domain::llm::LlmRole::System, text.to_string());
+        let books = runbooks::merged(Vec::new());
+        let list = runbooks::listing(&books).unwrap();
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"))),
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian."), system(&note)]
+        );
+        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
+        // A role that cannot read a runbook is not told of any.
+        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None)), [system(ChatRole::Assistant.prompt())]);
     }
 }

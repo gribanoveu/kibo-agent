@@ -30,6 +30,9 @@ const NONCE_LEN: usize = 12;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretPurpose {
     ProviderApiKey,
+    /// An object as it was before the app changed it (`infra::kube_changes`)
+    /// — a Secret's backup holds the secrets themselves.
+    KubeBackup,
     /// A second purpose, so the suite can prove the one property that needs
     /// two to exist: that a blob restamped as another purpose and opened as
     /// that purpose still fails. Compiled out of release builds — by the time
@@ -42,6 +45,7 @@ impl SecretPurpose {
     fn as_bytes(self) -> &'static [u8] {
         match self {
             SecretPurpose::ProviderApiKey => b"provider-api-key",
+            SecretPurpose::KubeBackup => b"kube-backup",
             #[cfg(test)]
             SecretPurpose::Other => b"something-else",
         }

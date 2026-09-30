@@ -55,6 +55,31 @@ pub enum ToolName {
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
+    /// The Kubernetes role's reads of the cluster its chat is pinned to
+    /// (`docs/21-kubernetes-mode.md`, K-3).
+    KubeList,
+    KubeGet,
+    KubeEvents,
+    KubeLogs,
+    KubeTop,
+    KubeFieldHistory,
+    /// A workload's state, pods, events and the telling log in one call (K-4).
+    KubeDiagnose,
+    KubeWaitRollout,
+    KubeProbe,
+    KubeRunbook,
+    /// The first of the role's changes (K-5a): replicas, with a backup.
+    KubeScale,
+    /// Puts a recorded change back from its backup (K-5b).
+    KubeUndo,
+    /// The simple changes (K-5c): a CronJob or Job stopped and resumed, a
+    /// workload's pods replaced, a Deployment put back a revision.
+    KubeSuspend,
+    KubeRolloutRestart,
+    KubeRolloutUndo,
+    /// A manifest applied, an object deleted (K-5d).
+    KubeApply,
+    KubeDelete,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -94,6 +119,23 @@ impl ToolName {
         ToolName::RunInTerminal,
         ToolName::ReportFinding,
         ToolName::Explore,
+        ToolName::KubeList,
+        ToolName::KubeGet,
+        ToolName::KubeEvents,
+        ToolName::KubeLogs,
+        ToolName::KubeTop,
+        ToolName::KubeFieldHistory,
+        ToolName::KubeDiagnose,
+        ToolName::KubeWaitRollout,
+        ToolName::KubeProbe,
+        ToolName::KubeRunbook,
+        ToolName::KubeScale,
+        ToolName::KubeUndo,
+        ToolName::KubeSuspend,
+        ToolName::KubeRolloutRestart,
+        ToolName::KubeRolloutUndo,
+        ToolName::KubeApply,
+        ToolName::KubeDelete,
         ToolName::Mcp,
     ];
 
@@ -125,6 +167,23 @@ impl ToolName {
             ToolName::RunInTerminal => "runInTerminal",
             ToolName::ReportFinding => "reportFinding",
             ToolName::Explore => "explore",
+            ToolName::KubeList => "kubeList",
+            ToolName::KubeGet => "kubeGet",
+            ToolName::KubeEvents => "kubeEvents",
+            ToolName::KubeLogs => "kubeLogs",
+            ToolName::KubeTop => "kubeTop",
+            ToolName::KubeFieldHistory => "kubeFieldHistory",
+            ToolName::KubeDiagnose => "kubeDiagnose",
+            ToolName::KubeWaitRollout => "kubeWaitRollout",
+            ToolName::KubeProbe => "kubeProbe",
+            ToolName::KubeRunbook => "kubeRunbook",
+            ToolName::KubeScale => "kubeScale",
+            ToolName::KubeUndo => "kubeUndo",
+            ToolName::KubeSuspend => "kubeSuspend",
+            ToolName::KubeRolloutRestart => "kubeRolloutRestart",
+            ToolName::KubeRolloutUndo => "kubeRolloutUndo",
+            ToolName::KubeApply => "kubeApply",
+            ToolName::KubeDelete => "kubeDelete",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -163,6 +222,14 @@ impl ToolName {
                 | ToolName::RunCommand
                 // The same command line, in the user's shell.
                 | ToolName::RunInTerminal
+                // Changes the user's cluster.
+                | ToolName::KubeScale
+                | ToolName::KubeUndo
+                | ToolName::KubeSuspend
+                | ToolName::KubeRolloutRestart
+                | ToolName::KubeRolloutUndo
+                | ToolName::KubeApply
+                | ToolName::KubeDelete
                 // Nothing is known about what a foreign tool does, and its
                 // server's own hints are untrusted by the specification: it
                 // asks, and it stays out of the modes that promise nothing
@@ -220,6 +287,29 @@ impl ToolName {
             // A whole turn of its own. That turn has its own ceiling, so this
             // only keeps a turn from delegating without end.
             ToolName::Explore => 5,
+            // A request or two to the cluster; logs may be ten pods' worth.
+            ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory => 2,
+            ToolName::KubeLogs => 3,
+            // Five or six reads of the cluster — the rounds it saves.
+            ToolName::KubeDiagnose => 4,
+            // One watch, however long: waiting is the round it saves.
+            ToolName::KubeWaitRollout => 2,
+            // A read or two, and a command or two in the pod.
+            ToolName::KubeProbe => 2,
+            // A text already in memory.
+            ToolName::KubeRunbook => 1,
+            // A read, a dry run, a backup, the change.
+            ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -373,7 +463,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            25,
+            42,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -434,6 +524,13 @@ mod tests {
         assert_eq!(
             mutating,
             HashSet::from([
+                ToolName::KubeScale,
+                ToolName::KubeUndo,
+                ToolName::KubeSuspend,
+                ToolName::KubeRolloutRestart,
+                ToolName::KubeRolloutUndo,
+                ToolName::KubeApply,
+                ToolName::KubeDelete,
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
@@ -722,12 +819,38 @@ pub enum ToolPreview {
     /// A command line and where it would run.
     #[serde(rename_all = "camelCase")]
     Command { command: String, cwd: String },
+    /// A change to a cluster: where, and what it would become — the server
+    /// has already accepted it as a dry run.
+    #[serde(rename_all = "camelCase")]
+    Change {
+        /// `context eks-prod · namespace payments` — read before agreeing.
+        place: String,
+        /// `Deployment/api: 3 → 0 replicas`.
+        summary: String,
+        /// What else to know first: whether it can be undone.
+        notes: Vec<String>,
+        /// The user marked this cluster as production: the card says so first.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        production: bool,
+        /// A manifest's objects, each as it is against what it would become.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diffs: Vec<ChangeDiff>,
+    },
     /// The call would not succeed anyway, and this says why — better learned
     /// before approving it than after.
     #[serde(rename_all = "camelCase")]
     Failed { reason: String },
     /// Nothing worth showing beyond the arguments themselves.
     Nothing,
+}
+
+/// One object of a change to a cluster: `Deployment/api`, and its YAML now
+/// against its YAML after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeDiff {
+    pub title: String,
+    pub diff: FileDiffStats,
 }
 
 /// What a tool needs from the environment, beyond the workspace it acts on.
@@ -764,6 +887,12 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
+    /// The cluster a Kubernetes chat is pinned to; `None` where there is
+    /// none, or its kubeconfig could not be read.
+    pub kube: Option<crate::domain::kube::PinnedCluster<'a>>,
+    /// The runbooks this turn's prompt listed — the only ones `kubeRunbook`
+    /// reads.
+    pub runbooks: Vec<crate::domain::runbooks::Runbook>,
 }
 
 /// Why a tool call could not be carried out.
@@ -782,6 +911,18 @@ pub enum ToolError {
         "the tool `{0}` is not available in this conversation mode — the user chose a mode that cannot change the repository. Say what would need to be done instead of doing it."
     )]
     NotOfferedInMode(String),
+    /// A tool the chat's role does not have. Chat has no folder: the role's
+    /// tools are all there is, and saying so is what stops a model reaching
+    /// for the agent's from memory.
+    #[error(
+        "the tool `{0}` is not available in this chat — its role has no such tool, and there is no folder to work in. Answer from what you have, or say what the user could do."
+    )]
+    NotOfferedInChat(String),
+    /// A tool that works in the open folder, called where there is none. The
+    /// chat's preflight refuses these first; this is the dispatcher's own
+    /// answer, so a tool never has to be handed a folder that does not exist.
+    #[error("the tool `{0}` works in a folder, and this chat has none")]
+    NoFolder(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("not a file: {0}")]
@@ -919,6 +1060,23 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// A change asked for while the chat's tab says "Read only". The switch
+    /// is the user's; the model says what it would do and where to turn it on.
+    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
+    KubeReadOnly,
+    /// The backup could not be written, so nothing was changed.
+    #[error("nothing was changed: the backup that makes it undoable could not be written — {0}")]
+    KubeBackup(String),
+    /// An undo of an object somebody else has changed since: the app does
+    /// not write over what it did not write.
+    #[error("not undone: {0}. Whether to change it again is the user's decision, not yours — tell them what you found and what it is now, and do nothing more to it unless they then ask.")]
+    KubeChangedSince(String),
+    /// A Kubernetes tool in a chat with no cluster to read. The prompt's note
+    /// about the user's setup says why; the model tells the user what to fix.
+    #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
+    NoCluster,
+    #[error(transparent)]
+    Kube(#[from] crate::domain::kube::KubeError),
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -966,6 +1124,23 @@ pub enum ToolCall {
     RunInTerminal(RunInTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
     Explore(ExploreArgs),
+    KubeList(KubeListArgs),
+    KubeGet(KubeGetArgs),
+    KubeEvents(KubeEventsArgs),
+    KubeLogs(KubeLogsArgs),
+    KubeTop(KubeTopArgs),
+    KubeFieldHistory(KubeFieldHistoryArgs),
+    KubeDiagnose(KubeDiagnoseArgs),
+    KubeWaitRollout(KubeWaitRolloutArgs),
+    KubeProbe(KubeProbeArgs),
+    KubeRunbook(KubeRunbookArgs),
+    KubeScale(KubeScaleArgs),
+    KubeUndo(KubeUndoArgs),
+    KubeSuspend(KubeSuspendArgs),
+    KubeRolloutRestart(KubeRolloutRestartArgs),
+    KubeRolloutUndo(KubeRolloutUndoArgs),
+    KubeApply(KubeApplyArgs),
+    KubeDelete(KubeDeleteArgs),
     Mcp(McpCallArgs),
 }
 
@@ -996,6 +1171,23 @@ impl ToolCall {
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Explore(_) => ToolName::Explore,
+            ToolCall::KubeList(_) => ToolName::KubeList,
+            ToolCall::KubeGet(_) => ToolName::KubeGet,
+            ToolCall::KubeEvents(_) => ToolName::KubeEvents,
+            ToolCall::KubeLogs(_) => ToolName::KubeLogs,
+            ToolCall::KubeTop(_) => ToolName::KubeTop,
+            ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
+            ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
+            ToolCall::KubeWaitRollout(_) => ToolName::KubeWaitRollout,
+            ToolCall::KubeProbe(_) => ToolName::KubeProbe,
+            ToolCall::KubeRunbook(_) => ToolName::KubeRunbook,
+            ToolCall::KubeScale(_) => ToolName::KubeScale,
+            ToolCall::KubeUndo(_) => ToolName::KubeUndo,
+            ToolCall::KubeSuspend(_) => ToolName::KubeSuspend,
+            ToolCall::KubeRolloutRestart(_) => ToolName::KubeRolloutRestart,
+            ToolCall::KubeRolloutUndo(_) => ToolName::KubeRolloutUndo,
+            ToolCall::KubeApply(_) => ToolName::KubeApply,
+            ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1232,6 +1424,9 @@ pub enum ToolResult {
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
     },
+    /// What a Kubernetes tool read, already shaped for the model — a table,
+    /// YAML, a log — and a few words for the row in the transcript.
+    Kube { text: String, summary: String },
 }
 
 /// A call to an MCP tool: the full name the model used, and whatever it
@@ -1273,6 +1468,210 @@ pub struct RunInTerminalArgs {
     pub command: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub id: Option<u32>,
+}
+
+/// `kubeList`. `namespace` is the chat's when absent, and `*` is all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeListArgs {
+    pub kind: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub label_selector: Option<String>,
+    #[serde(default)]
+    pub field_selector: Option<String>,
+    /// Paths into each object, shown as extra columns.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub fields: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub limit: Option<u32>,
+    /// The token a page ended with, for the next one.
+    #[serde(default, rename = "continue")]
+    pub continue_token: Option<String>,
+}
+
+/// `kubeGet`: one object, whole or cut to its top-level `sections`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeGetArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub sections: Option<Vec<String>>,
+}
+
+/// `kubeEvents`: a namespace's, or one object's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeEventsArgs {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub warnings_only: Option<bool>,
+}
+
+/// `kubeLogs`: a pod, an owner's pods (`kind` and `name`), or a selector's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeLogsArgs {
+    #[serde(default)]
+    pub pod: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub label_selector: Option<String>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub container: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub previous: Option<bool>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub tail: Option<u32>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub grep: Option<String>,
+}
+
+/// `kubeTop`: `pods` or `nodes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeTopArgs {
+    pub kind: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `kubeFieldHistory`: who set an object's fields, cut to `paths`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeFieldHistoryArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub paths: Option<Vec<String>>,
+}
+
+/// `kubeDiagnose`: a workload, or one pod.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeDiagnoseArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `kubeWaitRollout`: a workload in the chat's own namespace, and how long
+/// to wait for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeWaitRolloutArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+}
+
+/// `kubeProbe`: where from — a pod, or a workload for one of its pods, in
+/// the chat's own namespace — and what to reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeProbeArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub container: Option<String>,
+    pub target: String,
+}
+
+/// `kubeRunbook`: one runbook, by the name the prompt listed it under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KubeRunbookArgs {
+    pub name: String,
+}
+
+/// `kubeScale`: a workload's replicas, in the chat's own namespace — a
+/// change is never made in another. `replicas` is optional in the type so a
+/// missing number is the tool's error, worded for the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeScaleArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub replicas: Option<u32>,
+    /// The user has said losing the data is acceptable: asked for only when
+    /// the scale destroys some.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub confirm_data_loss: Option<bool>,
+}
+
+/// `kubeSuspend`: a CronJob's or Job's `spec.suspend`. Optional in the type
+/// so a missing answer is the tool's error, worded for the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeSuspendArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub suspend: Option<bool>,
+}
+
+/// `kubeRolloutRestart`: the workload whose pods are replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeRolloutRestartArgs {
+    pub kind: String,
+    pub name: String,
+}
+
+/// `kubeRolloutUndo`: a Deployment, and the revision to go back to — the
+/// previous one when none is named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeRolloutUndoArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub to_revision: Option<u32>,
+}
+
+/// `kubeApply`: one or more objects as YAML, `---` between them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeApplyArgs {
+    pub manifest: String,
+}
+
+/// `kubeDelete`: one object of the chat's own namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeDeleteArgs {
+    pub kind: String,
+    pub name: String,
+    /// As `kubeScale`'s.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub confirm_data_loss: Option<bool>,
+}
+
+/// `kubeUndo`: a change by the id its tool answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeUndoArgs {
+    pub change_id: String,
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the

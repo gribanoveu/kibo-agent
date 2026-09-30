@@ -9,6 +9,8 @@
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
+  /* No taller than the window: the list scrolls, the rest stays put. */
+  min-height: 0;
   transition: width 0.22s ease;
   /* No overflow:hidden here — it would clip the account menu, which deliberately
      sits outside the rail when collapsed. Clipping lives on the rows below. */
@@ -23,6 +25,7 @@
 .sidebar-top {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 12px 10px 10px;
@@ -62,9 +65,67 @@
   display: none;
 }
 
+/* Agent | Chat: a segmented control on its own row; on the rail, a column of icons. */
+.mode-switch {
+  flex: 0 0 100%;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+}
+.window.collapsed .mode-switch {
+  flex: none;
+  flex-direction: column;
+}
+.mode-opt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.mode-opt:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.mode-opt.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.mode-opt svg {
+  flex: none;
+}
+.window.collapsed .mode-opt {
+  flex: none;
+  width: 26px;
+  padding: 0;
+}
+.window.collapsed .mode-opt span {
+  display: none;
+}
+
+/* The chats take what height is left and scroll in it, so the account row
+   and the first-steps card under them never leave the window. */
 .group {
-  padding: 10px 10px 0;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0 10px;
+  margin-top: 10px;
   overflow-x: clip;
+  overflow-y: auto;
 }
 .window.collapsed .group {
   display: none;
@@ -113,6 +174,11 @@
   padding: 0 0 2px 8px;
   font-size: var(--fs-xs);
   color: var(--text-faint);
+  /* Stays over the rows as they scroll under it. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel);
 }
 
 /* A row is the chat and its ⋮, which shows on hover or while its menu is open. */
@@ -221,6 +287,7 @@
 }
 
 .sidebar-bottom {
+  flex: none;
   margin-top: auto;
   padding: 10px;
   position: relative;

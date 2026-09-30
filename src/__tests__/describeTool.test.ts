@@ -477,6 +477,69 @@ describe("a connected server's tool", () => {
   });
 });
 
+describe("the Kubernetes role's reads", () => {
+  test("show what they read, where, the backend's summary and its text", () => {
+    const shown = describeTool(
+      tool({
+        name: "kubeLogs",
+        arguments: '{"kind":"Deployment","name":"api","namespace":"orders","grep":"error"}',
+        result: { result: "kube", text: "Logs of Deployment/api: 2 pods", summary: "12 lines · 2 pods" },
+      }),
+    );
+    expect(shown).toEqual({
+      name: "Logs",
+      arg: "Deployment api -n orders",
+      meta: "12 lines · 2 pods",
+      detail: "Logs of Deployment/api: 2 pods",
+    });
+    expect(describeTool(tool({ name: "kubeList", arguments: '{"kind":"pods","labelSelector":"app=api"}' })).arg).toBe(
+      "pods app=api",
+    );
+    expect(describeRun([tool({ name: "kubeGet" }), tool({ name: "kubeGet" }), tool({ name: "kubeEvents" })])).toBe(
+      "Read 2 objects, read events",
+    );
+    expect(describeTool(tool({ name: "kubeScale", arguments: '{"kind":"Deployment","name":"api","replicas":0}' }))).toMatchObject({
+      name: "Scale",
+      arg: "Deployment api → 0",
+    });
+    expect(describeTool(tool({ name: "kubeSuspend", arguments: '{"kind":"CronJob","name":"report","suspend":true}' }))).toMatchObject({
+      name: "Suspend",
+      arg: "CronJob report → suspended",
+    });
+    expect(describeTool(tool({ name: "kubeSuspend", arguments: '{"kind":"Job","name":"report","suspend":false}' })).arg).toBe("Job report → active");
+    expect(describeTool(tool({ name: "kubeRolloutUndo", arguments: '{"kind":"Deployment","name":"api","toRevision":3}' }))).toMatchObject({
+      name: "Roll back",
+      arg: "Deployment api → revision 3",
+    });
+    expect(describeTool(tool({ name: "kubeRolloutRestart", arguments: '{"kind":"Deployment","name":"api"}' }))).toMatchObject({
+      name: "Restart",
+      arg: "Deployment api",
+    });
+    const manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: flags}\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata: {name: api}\n";
+    expect(describeTool(tool({ name: "kubeApply", arguments: JSON.stringify({ manifest }) }))).toMatchObject({
+      name: "Apply",
+      arg: "ConfigMap, Deployment",
+    });
+    expect(describeTool(tool({ name: "kubeDelete", arguments: '{"kind":"ConfigMap","name":"flags"}' }))).toMatchObject({
+      name: "Delete object",
+      arg: "ConfigMap flags",
+    });
+    expect(describeTool(tool({ name: "kubeUndo", arguments: '{"changeId":"kc-1a2b3c4d"}' }))).toMatchObject({ name: "Undo", arg: "kc-1a2b3c4d" });
+    const diagnosed = describeTool(
+      tool({ name: "kubeDiagnose", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "2 pods, 1 with problems" } }),
+    );
+    expect(diagnosed).toMatchObject({ name: "Diagnose", arg: "Deployment api", meta: "2 pods, 1 with problems" });
+    const waited = describeTool(tool({ name: "kubeWaitRollout", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "stuck" } }));
+    expect(waited).toMatchObject({ name: "Wait for rollout", arg: "Deployment api", meta: "stuck" });
+    const probed = describeTool(
+      tool({ name: "kubeProbe", arguments: '{"kind":"Deployment","name":"api","target":"db:5432"}', result: { result: "kube", text: "…", summary: "refused" } }),
+    );
+    expect(probed).toMatchObject({ name: "Probe", arg: "Deployment api → db:5432", meta: "refused" });
+    const read = describeTool(tool({ name: "kubeRunbook", arguments: '{"name":"oom-killed"}', result: { result: "kube", text: "…", summary: "built in" } }));
+    expect(read).toMatchObject({ name: "Runbook", arg: "oom-killed", meta: "built in" });
+  });
+});
+
 describe("arguments that are not finished yet", () => {
   /// The normal case while the model is still writing the call: the row has to
   /// draw something rather than throw.

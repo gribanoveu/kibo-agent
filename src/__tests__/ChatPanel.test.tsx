@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { ChatPanel, Preview, formatDuration } from "../components/ChatPanel";
+import { ChatPanel, Preview, Transcript, formatDuration } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
 
 // The transcript's own rules: who a block belongs to, and what the approval
@@ -759,3 +759,104 @@ describe("a background process that ended", () => {
   });
 });
 
+describe("the transcript in Chat mode", () => {
+  /// The same turns, calls and cards as the agent's — under the role's name.
+  test("answers under the role's name, and its card answers as the agent's does", () => {
+    const decided: unknown[] = [];
+    render(
+      <Transcript
+        turn={state(
+          [
+            { kind: "user", id: "u0", text: "scale it" },
+            { kind: "message", id: "m1", round: 1, text: "Scaling." },
+            {
+              kind: "approval",
+              id: "approval:1",
+              round: 1,
+              calls: [{ id: "c1", name: "deleteFile", arguments: '{"path":"a"}', requiresConfirmation: true }],
+            },
+          ],
+          { status: "awaitingApproval" },
+        )}
+        onDecide={(decisions) => decided.push(decisions)}
+        speaker="Kubernetes"
+      />,
+    );
+    expect(screen.getByText("Kubernetes")).toBeTruthy();
+    expect(screen.queryByText("Agent")).toBeNull();
+    fireEvent.click(screen.getByText("Allow"));
+    expect(decided).toEqual([[{ id: "c1", approved: true, reason: null }]]);
+  });
+
+  /// A change to a cluster is approved knowing where it lands: the card asks
+  /// the chat's own preview, and shows the place before the change.
+  test("a change's card shows the cluster and what becomes of what", async () => {
+    const calls = [{ id: "c1", name: "kubeScale", arguments: '{"kind":"Deployment","name":"api","replicas":0}', requiresConfirmation: true }];
+    const asked: unknown[] = [];
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async (pending) => {
+            asked.push(pending);
+            return [{ kind: "change", place: "context eks · namespace orders", summary: "Deployment/api: 3 → 0 replicas", notes: ["Can be undone."] }];
+          }}
+        />,
+      );
+    });
+    expect(asked).toEqual([calls]);
+    const place = screen.getByText("context eks · namespace orders");
+    const summary = screen.getByText("Deployment/api: 3 → 0 replicas");
+    expect(place.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Can be undone.")).toBeTruthy();
+    // The summary stands for the arguments: the row is not said twice.
+    expect(screen.queryByText("Deployment api → 0")).toBeNull();
+  });
+
+  /// A production cluster is the first word on the card.
+  test("a change to a production cluster says so before where and what", async () => {
+    const calls = [{ id: "c1", name: "kubeScale", arguments: "{}", requiresConfirmation: true, reason: "a production cluster — every change to it asks" }];
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async () => [{ kind: "change", place: "context eks · namespace orders", summary: "Deployment/api: 3 → 0 replicas", notes: [], production: true }]}
+        />,
+      );
+    });
+    expect(document.querySelector(".approval-change-place.production")?.textContent).toBe("PRODUCTION · context eks · namespace orders");
+    expect(screen.getByText("Always asks: a production cluster — every change to it asks")).toBeTruthy();
+  });
+
+  /// A manifest's card shows each object as it is against what it would be.
+  test("an applied manifest's card shows every object's diff under its name", async () => {
+    const calls = [{ id: "c1", name: "kubeApply", arguments: '{"manifest":"kind: ConfigMap"}', requiresConfirmation: true }];
+    const diff = (line: string) => ({ linesAdded: 1, linesRemoved: 0, unifiedDiff: `@@ -0,0 +1 @@\n+${line}\n`, truncated: false });
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async () => [
+            {
+              kind: "change",
+              place: "context eks · namespace orders",
+              summary: "2 objects — ConfigMap/flags: create; Deployment/api: update (+1 −1 lines)",
+              notes: ["Can be undone: the object is backed up first."],
+              diffs: [
+                { title: "ConfigMap/flags", diff: diff("beta: on") },
+                { title: "Deployment/api", diff: diff("replicas: 5") },
+              ],
+            },
+          ]}
+        />,
+      );
+    });
+    expect(screen.getByText("ConfigMap/flags")).toBeTruthy();
+    expect(screen.getByText("Deployment/api")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("PRODUCTION");
+    expect(document.body.textContent).toContain("replicas: 5");
+  });
+});

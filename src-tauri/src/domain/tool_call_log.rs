@@ -24,6 +24,8 @@ use crate::domain::tools::{ToolCall, ToolError, ToolResult};
 pub const CONTENT_FIELDS: &[&str] = &[
     // readFile, writeFile, a skill's file
     "content",
+    // kubeApply: objects whole, a Secret's values among them
+    "manifest",
     // grep and semanticSearch matches, and grep's context lines
     "text",
     "before",
@@ -298,6 +300,29 @@ mod tests {
             ),
             // The task is the model's own brief and stays, as a command line
             // does; the answer quotes code, and goes as `text`.
+            // What the cluster said — manifests, logs — goes as `text`; the
+            // arguments are a kind, a name, a selector: what the log is for.
+            ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory
+            | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
+            | ToolName::KubeProbe
+            | ToolName::KubeRunbook
+            | ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeDelete => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
+            // A manifest may carry a Secret's values: it goes as `manifest`.
+            ToolName::KubeApply => (
+                Some(ToolCall::KubeApply(crate::domain::tools::KubeApplyArgs { manifest: LEAK.into() })),
+                ToolResult::Kube { text: LEAK.into(), summary: "1 object".into() },
+            ),
             ToolName::Explore => (
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },

@@ -9,13 +9,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The provider's client and the agent it is built on, and the MCP servers
-/// the user gave a URL. Anything else that opens a connection is a new place
-/// data can go, and the policy document has to say so before this list does.
-const NETWORK_ALLOWED: &[&str] = &["src/infra/http_agent.rs", "src/infra/llm_providers/", "src/infra/mcp_http.rs"];
+/// The provider's client and the agent it is built on, the MCP servers the
+/// user gave a URL, and the cluster of a kubeconfig the user added. Anything
+/// else that opens a connection is a new place data can go, and the policy
+/// document has to say so before this list does.
+const NETWORK_ALLOWED: &[&str] = &[
+    "src/infra/http_agent.rs",
+    "src/infra/llm_providers/",
+    "src/infra/mcp_http.rs",
+    "src/infra/kube_client.rs",
+];
 
 /// What opening a connection looks like in Rust here.
-const RUST_NETWORK: &[&str] = &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::"];
+const RUST_NETWORK: &[&str] =
+    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::"];
 
 /// And in the window. The CSP in `tauri.conf.json` refuses these at runtime
 /// too; this catches them before anyone has to wonder why a request failed.

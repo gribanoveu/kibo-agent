@@ -1,10 +1,12 @@
 pub mod llm_providers;
 pub mod http_agent;
 pub mod master_key;
+pub mod runbooks_store;
 pub mod secret_store;
 pub mod workspace_scanner;
 pub mod app_dir;
 pub mod settings_store;
+pub mod kube_client;
 pub mod llm_credentials_store;
 pub mod llm_debug_log;
 pub mod index_store;
@@ -34,3 +36,4 @@ pub mod git_changes;
 pub mod file_tree;
 pub mod git_history;
 pub mod recent_workspaces;
+pub mod kube_changes;

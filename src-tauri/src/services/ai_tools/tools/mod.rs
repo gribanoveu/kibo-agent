@@ -28,6 +28,8 @@ pub mod edit_file;
 pub mod explore;
 pub mod git;
 pub mod grep;
+pub mod cluster;
+pub mod runbook;
 pub mod list_files;
 pub mod move_path;
 pub mod report_finding;
@@ -75,6 +77,23 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::StopProcess, process::stop_definition),
     (ToolName::ReadTerminal, terminal::read_definition),
     (ToolName::RunInTerminal, terminal::run_definition),
+    (ToolName::KubeList, cluster::list_definition),
+    (ToolName::KubeGet, cluster::get_definition),
+    (ToolName::KubeEvents, cluster::events_definition),
+    (ToolName::KubeLogs, cluster::logs_definition),
+    (ToolName::KubeTop, cluster::top_definition),
+    (ToolName::KubeFieldHistory, cluster::field_history_definition),
+    (ToolName::KubeDiagnose, cluster::diagnose_definition),
+    (ToolName::KubeWaitRollout, cluster::wait_rollout_definition),
+    (ToolName::KubeProbe, cluster::probe_definition),
+    (ToolName::KubeRunbook, runbook::definition),
+    (ToolName::KubeScale, cluster::scale_definition),
+    (ToolName::KubeUndo, cluster::undo_definition),
+    (ToolName::KubeSuspend, cluster::suspend_definition),
+    (ToolName::KubeRolloutRestart, cluster::rollout_restart_definition),
+    (ToolName::KubeRolloutUndo, cluster::rollout_undo_definition),
+    (ToolName::KubeApply, cluster::apply_definition),
+    (ToolName::KubeDelete, cluster::delete_definition),
 ];
 
 /// What the model is offered for a turn.
@@ -96,22 +115,36 @@ pub fn execute_tool(
     todos: &mut Vec<Task>,
     deps: &ToolDeps,
 ) -> Result<ToolResult, ToolError> {
+    dispatch(Some(scope), call, reads, todos, deps)
+}
+
+/// The one `match` every tool is a branch of. `scope` is `None` in Chat mode,
+/// which has no folder: a tool that needs one says so rather than being handed
+/// a folder that does not exist — the chat's preflight has already refused it.
+pub fn dispatch(
+    scope: Option<&ToolScope>,
+    call: &ToolCall,
+    reads: &mut ReadFiles,
+    todos: &mut Vec<Task>,
+    deps: &ToolDeps,
+) -> Result<ToolResult, ToolError> {
+    let folder = || scope.ok_or_else(|| ToolError::NoFolder(call.name().wire_name().to_string()));
     match call {
-        ToolCall::ReadFile(args) => read_file::read_file(scope, args, reads),
-        ToolCall::Grep(args) => grep::grep(scope, args),
-        ToolCall::ListFiles(args) => list_files::list_files(scope, args),
-        ToolCall::WriteFile(args) => write_file::write_file(scope, args, reads),
-        ToolCall::EditFile(args) => edit_file::edit_file(scope, args, reads),
-        ToolCall::CreateDirectory(args) => create_directory::create_directory(scope, args),
-        ToolCall::DeleteFile(args) => delete_file::delete_file(scope, args, reads),
-        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(scope, args),
-        ToolCall::Move(args) => move_path::move_path(scope, args, reads),
+        ToolCall::ReadFile(args) => read_file::read_file(folder()?, args, reads),
+        ToolCall::Grep(args) => grep::grep(folder()?, args),
+        ToolCall::ListFiles(args) => list_files::list_files(folder()?, args),
+        ToolCall::WriteFile(args) => write_file::write_file(folder()?, args, reads),
+        ToolCall::EditFile(args) => edit_file::edit_file(folder()?, args, reads),
+        ToolCall::CreateDirectory(args) => create_directory::create_directory(folder()?, args),
+        ToolCall::DeleteFile(args) => delete_file::delete_file(folder()?, args, reads),
+        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(folder()?, args),
+        ToolCall::Move(args) => move_path::move_path(folder()?, args, reads),
         ToolCall::Todo(args) => todo::todo(todos, args),
-        ToolCall::GitStatus => git::git_status(scope),
-        ToolCall::GitDiff(args) => git::git_diff(scope, args),
-        ToolCall::GitBlame(args) => git::git_blame(scope, args),
-        ToolCall::GitLog(args) => git::git_log(scope, args),
-        ToolCall::RunCommand(request) => run_command::run_command(scope, request, deps),
+        ToolCall::GitStatus => git::git_status(folder()?),
+        ToolCall::GitDiff(args) => git::git_diff(folder()?, args),
+        ToolCall::GitBlame(args) => git::git_blame(folder()?, args),
+        ToolCall::GitLog(args) => git::git_log(folder()?, args),
+        ToolCall::RunCommand(request) => run_command::run_command(folder()?, request, deps),
         ToolCall::SemanticSearch(args) => semantic_search::semantic_search(args, deps),
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
@@ -120,8 +153,25 @@ pub fn execute_tool(
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
-        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(scope, args, deps),
+        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
+        ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
+        ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
+        ToolCall::KubeEvents(args) => cluster::kube_events(deps.kube, args),
+        ToolCall::KubeLogs(args) => cluster::kube_logs(deps.kube, args),
+        ToolCall::KubeTop(args) => cluster::kube_top(deps.kube, args),
+        ToolCall::KubeFieldHistory(args) => cluster::kube_field_history(deps.kube, args),
+        ToolCall::KubeDiagnose(args) => cluster::kube_diagnose(deps.kube, args),
+        ToolCall::KubeWaitRollout(args) => cluster::kube_wait_rollout(deps.kube, deps.cancelled, args),
+        ToolCall::KubeProbe(args) => cluster::kube_probe(deps.kube, args),
+        ToolCall::KubeRunbook(args) => runbook::kube_runbook(args, deps),
+        ToolCall::KubeScale(_)
+        | ToolCall::KubeUndo(_)
+        | ToolCall::KubeSuspend(_)
+        | ToolCall::KubeRolloutRestart(_)
+        | ToolCall::KubeRolloutUndo(_)
+        | ToolCall::KubeApply(_)
+        | ToolCall::KubeDelete(_) => cluster::change(deps.kube, call),
     }
 }
 
@@ -134,6 +184,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
+        KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -348,6 +399,109 @@ mod definition_tests {
             ToolName::RunInTerminal => (
                 r#"{"command":"npm run dev"}"#,
                 vec![ToolCall::RunInTerminal(RunInTerminalArgs { command: "npm run dev".into(), id: None })],
+            ),
+            ToolName::KubeList => (
+                r#"{"kind":"pods"}"#,
+                vec![ToolCall::KubeList(KubeListArgs {
+                    kind: "pods".into(),
+                    namespace: Some("orders".into()),
+                    label_selector: Some("app=api".into()),
+                    field_selector: Some("status.phase=Running".into()),
+                    fields: Some(vec!["spec.nodeName".into()]),
+                    limit: Some(50),
+                    continue_token: Some("token".into()),
+                })],
+            ),
+            ToolName::KubeGet => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeGet(KubeGetArgs {
+                    kind: "Deployment".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
+                    sections: Some(vec!["spec".into()]),
+                })],
+            ),
+            ToolName::KubeEvents => (
+                "{}",
+                vec![ToolCall::KubeEvents(KubeEventsArgs {
+                    namespace: Some("orders".into()),
+                    kind: Some("Pod".into()),
+                    name: Some("api-1".into()),
+                    warnings_only: Some(true),
+                })],
+            ),
+            ToolName::KubeLogs => (
+                r#"{"pod":"api-1"}"#,
+                vec![ToolCall::KubeLogs(KubeLogsArgs {
+                    pod: Some("api-1".into()),
+                    kind: Some("Deployment".into()),
+                    name: Some("api".into()),
+                    label_selector: Some("app=api".into()),
+                    namespace: Some("orders".into()),
+                    container: Some("app".into()),
+                    previous: Some(true),
+                    tail: Some(100),
+                    since: Some("10m".into()),
+                    grep: Some("error".into()),
+                })],
+            ),
+            ToolName::KubeTop => (
+                r#"{"kind":"pods"}"#,
+                vec![ToolCall::KubeTop(KubeTopArgs { kind: "pods".into(), namespace: Some("orders".into()) })],
+            ),
+            ToolName::KubeFieldHistory => (
+                r#"{"kind":"Service","name":"api"}"#,
+                vec![ToolCall::KubeFieldHistory(KubeFieldHistoryArgs {
+                    kind: "Service".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
+                    paths: Some(vec!["metadata.annotations".into()]),
+                })],
+            ),
+            ToolName::KubeDiagnose => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeDiagnose(KubeDiagnoseArgs {
+                    kind: "Deployment".into(),
+                    name: "api".into(),
+                    namespace: Some("orders".into()),
+                })],
+            ),
+            ToolName::KubeWaitRollout => (
+                r#"{"kind":"Deployment","name":"api","timeoutSeconds":60}"#,
+                vec![ToolCall::KubeWaitRollout(KubeWaitRolloutArgs { kind: "Deployment".into(), name: "api".into(), timeout_seconds: Some(60) })],
+            ),
+            ToolName::KubeProbe => (
+                r#"{"kind":"Deployment","name":"api","target":"http://orders:8080/health"}"#,
+                vec![ToolCall::KubeProbe(KubeProbeArgs { kind: "Deployment".into(), name: "api".into(), container: Some("app".into()), target: "db:5432".into() })],
+            ),
+            ToolName::KubeRunbook => (r#"{"name":"pending"}"#, vec![ToolCall::KubeRunbook(KubeRunbookArgs { name: "pending".into() })]),
+            ToolName::KubeScale => (
+                r#"{"kind":"Deployment","name":"api","replicas":0}"#,
+                vec![ToolCall::KubeScale(KubeScaleArgs { kind: "Deployment".into(), name: "api".into(), replicas: Some(0), ..Default::default() })],
+            ),
+            ToolName::KubeUndo => (
+                r#"{"changeId":"kc-1a2b3c4d"}"#,
+                vec![ToolCall::KubeUndo(KubeUndoArgs { change_id: "kc-1a2b3c4d".into() })],
+            ),
+            ToolName::KubeSuspend => (
+                r#"{"kind":"CronJob","name":"report","suspend":"true"}"#,
+                vec![ToolCall::KubeSuspend(KubeSuspendArgs { kind: "CronJob".into(), name: "report".into(), suspend: Some(true) })],
+            ),
+            ToolName::KubeRolloutRestart => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeRolloutRestart(KubeRolloutRestartArgs { kind: "Deployment".into(), name: "api".into() })],
+            ),
+            ToolName::KubeRolloutUndo => (
+                r#"{"kind":"Deployment","name":"api","toRevision":3}"#,
+                vec![ToolCall::KubeRolloutUndo(KubeRolloutUndoArgs { kind: "Deployment".into(), name: "api".into(), to_revision: Some(3) })],
+            ),
+            ToolName::KubeApply => (
+                r#"{"manifest":"kind: ConfigMap"}"#,
+                vec![ToolCall::KubeApply(KubeApplyArgs { manifest: "kind: ConfigMap".into() })],
+            ),
+            ToolName::KubeDelete => (
+                r#"{"kind":"ConfigMap","name":"flags"}"#,
+                vec![ToolCall::KubeDelete(KubeDeleteArgs { kind: "ConfigMap".into(), name: "flags".into(), ..Default::default() })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

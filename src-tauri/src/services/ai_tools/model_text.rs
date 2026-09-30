@@ -111,6 +111,7 @@ pub fn for_model(result: &ToolResult) -> String {
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
+        ToolResult::Kube { text, .. } => text.clone(),
     }
 }
 

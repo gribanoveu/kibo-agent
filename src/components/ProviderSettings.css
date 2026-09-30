@@ -373,3 +373,18 @@
   font-size: var(--fs-sm);
   color: var(--text-dim);
 }
+
+.provider-key-store {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* Under the key field's control, as a hint would be. */
+  margin: -6px 0 0 144px;
+}
+.provider-key-store .modal-note {
+  margin: 0;
+}
+.provider-key-store .btn {
+  flex-shrink: 0;
+}

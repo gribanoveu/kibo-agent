@@ -79,3 +79,32 @@ test("a row's action runs without picking, and an unavailable one does nothing",
   expect(picked).toEqual([]);
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+test("a typed value is picked on Enter, and an empty box picks nothing", () => {
+  const typed: string[] = [];
+  render(
+    <Dropdown
+      label="namespace"
+      options={[]}
+      value=""
+      onPick={() => {}}
+      custom={{ placeholder: "Another namespace", onEnter: (v) => typed.push(v) }}
+      note="The cluster did not list its namespaces"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /namespace/ }));
+  expect(screen.getByText("The cluster did not list its namespaces")).toBeTruthy();
+  const box = screen.getByLabelText("Another namespace") as HTMLInputElement;
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(typed).toEqual([]);
+  box.value = "  orders ";
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(typed).toEqual(["orders"]);
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+test("a locked one does not open", () => {
+  render(<Dropdown label="role" options={OPTIONS} value="main" onPick={() => {}} locked />);
+  fireEvent.click(screen.getByRole("button", { name: /role/ }));
+  expect(screen.queryByRole("listbox")).toBeNull();
+});

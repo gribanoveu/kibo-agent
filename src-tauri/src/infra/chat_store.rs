@@ -25,8 +25,10 @@ use serde_json::Value;
 use crate::domain::chat_export;
 use crate::domain::compaction::SUMMARY_PREFIX;
 use crate::domain::chat_record::{
-    self, ChatError, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION,
+    self, ChatError, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
+use crate::domain::chat_role::ChatRole;
+use crate::domain::kube::KubePin;
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::app_dir;
@@ -45,7 +47,8 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at     INTEGER NOT NULL,
   branched_from  TEXT,
   body           TEXT NOT NULL,
-  archived       INTEGER NOT NULL DEFAULT 0
+  archived       INTEGER NOT NULL DEFAULT 0,
+  role           TEXT
 );
 CREATE INDEX IF NOT EXISTS chats_workspace ON chats(workspace, updated_at DESC);
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -88,6 +91,14 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
         conn.execute_batch("ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
             .map_err(store)?;
     }
+    // The same for a chat's role, which the list draws a sign from: null for
+    // the agent's chats and for those saved before the column.
+    let has_role: bool = conn
+        .query_row("SELECT COUNT(*) > 0 FROM pragma_table_info('chats') WHERE name = 'role'", [], |row| row.get(0))
+        .map_err(store)?;
+    if !has_role {
+        conn.execute_batch("ALTER TABLE chats ADD COLUMN role TEXT").map_err(store)?;
+    }
     Ok(conn)
 }
 
@@ -108,7 +119,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
     rename_summary_titles(&conn, workspace)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, updated_at, branched_from, archived FROM chats
+            "SELECT id, title, updated_at, branched_from, archived, role FROM chats
              WHERE workspace = ?1 AND schema_version <= ?2
              ORDER BY updated_at DESC, id",
         )
@@ -121,6 +132,8 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
                 updated_at: row.get(2)?,
                 branched_from: row.get(3)?,
                 archived: row.get(4)?,
+                // A role a newer build wrote is no sign, not an error.
+                role: row.get::<_, Option<String>>(5)?.and_then(|role| serde_json::from_value(serde_json::Value::String(role)).ok()),
             })
         })
         .map_err(store)?;
@@ -185,36 +198,70 @@ pub fn save(
     plan: Option<&str>,
     branched_from: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
-    chat_record::check_id(id)?;
-    let conn = open()?;
-    let stored: Option<(i64, bool)> = conn
-        .query_row("SELECT created_at, archived FROM chats WHERE id = ?1", params![id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
-        .optional()
-        .map_err(store)?;
-    let (created_at, archived) = (stored.map(|s| s.0), stored.is_some_and(|s| s.1));
-
-    let record = ChatRecord {
+    upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
         workspace: workspace.to_string(),
         title: chat_record::derive_title(messages, blocks),
-        created_at: created_at.unwrap_or_else(now),
-        updated_at: now(),
+        created_at: 0,
+        updated_at: 0,
         messages: messages.to_vec(),
         blocks: blocks.clone(),
         todos: todos.to_vec(),
         plan: plan.map(str::to_string),
         branched_from: branched_from.map(str::to_string),
-    };
+        role: None,
+        kube: None,
+    })
+}
+
+/// A Chat mode conversation, filed under no folder. `blocks` is its
+/// transcript as the window draws it — the model's thinking with each answer,
+/// which `messages`, what the model is sent again, leaves out.
+pub fn save_plain(
+    id: &str,
+    role: ChatRole,
+    kube: Option<KubePin>,
+    messages: &[LlmMessage],
+    blocks: &Value,
+) -> Result<ChatSummary, ChatError> {
+    upsert(ChatRecord {
+        schema_version: CHAT_SCHEMA_VERSION,
+        id: id.to_string(),
+        workspace: NO_FOLDER.to_string(),
+        title: chat_record::derive_title(messages, &Value::Null),
+        created_at: 0,
+        updated_at: 0,
+        messages: messages.to_vec(),
+        blocks: blocks.clone(),
+        todos: Vec::new(),
+        plan: None,
+        branched_from: None,
+        role: Some(role),
+        kube,
+    })
+}
+
+/// Writes `record`, stamped now and keeping the moment it was first saved.
+fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
+    chat_record::check_id(&record.id)?;
+    let conn = open()?;
+    let stored: Option<(i64, bool)> = conn
+        .query_row("SELECT created_at, archived FROM chats WHERE id = ?1", params![record.id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(store)?;
+    let archived = stored.is_some_and(|s| s.1);
+    record.updated_at = now();
+    record.created_at = stored.map_or(record.updated_at, |s| s.0);
 
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
     // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -222,7 +269,8 @@ pub fn save(
            created_at = excluded.created_at,
            updated_at = excluded.updated_at,
            branched_from = excluded.branched_from,
-           body = excluded.body",
+           body = excluded.body,
+           role = excluded.role",
         params![
             record.id,
             record.workspace,
@@ -232,6 +280,7 @@ pub fn save(
             record.updated_at,
             record.branched_from,
             body,
+            record.role.and_then(|role| serde_json::to_value(role).ok()?.as_str().map(str::to_string)),
         ],
     )
     .map_err(store)?;
@@ -577,6 +626,37 @@ mod tests {
             assert!(!listed[0].archived);
             set_archived("old", true).unwrap();
             assert!(list("/repo").unwrap()[0].archived);
+        });
+    }
+
+    /// Chat mode's conversations are listed together, apart from every
+    /// folder's, and keep their role.
+    #[test]
+    fn a_plain_chat_is_filed_under_no_folder_with_its_role() {
+        with_app_dir("chat-store-plain", || {
+            save_one("agent", "/repo", "fix it");
+            let said = [LlmMessage::user("what is a monad?"), LlmMessage::assistant("a monoid in…")];
+            let shown = serde_json::json!([{ "role": "assistant", "text": "a monoid in…", "reasoning": "hm" }]);
+            let pin = KubePin { kubeconfig: "prod".into(), context: Some("eks".into()), namespace: Some("payments".into()), writes: false };
+            let saved = save_plain("plain", ChatRole::Assistant, Some(pin.clone()), &said, &shown).unwrap();
+
+            assert_eq!(saved.title, "what is a monad?");
+            let ids = |folder: &str| list(folder).unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
+            assert_eq!(ids(NO_FOLDER), ["plain"]);
+            // The list's row says who answers, without reading the body.
+            save_plain("cluster", ChatRole::Kubernetes, None, &said, &shown).unwrap();
+            let roles: Vec<_> = list(NO_FOLDER).unwrap().into_iter().map(|c| (c.id, c.role)).collect();
+            assert!(roles.contains(&("plain".into(), Some(ChatRole::Assistant))) && roles.contains(&("cluster".into(), Some(ChatRole::Kubernetes))), "{roles:?}");
+            assert_eq!(list("/repo").unwrap()[0].role, None);
+            // A row from before the column, or with a role this build does not know.
+            open().unwrap().execute("UPDATE chats SET role = CASE id WHEN 'plain' THEN NULL ELSE 'astrologer' END", []).unwrap();
+            assert!(list(NO_FOLDER).unwrap().iter().all(|c| c.role.is_none()));
+            delete("cluster").unwrap();
+            assert_eq!(ids("/repo"), ["agent"]);
+            let record = load("plain").unwrap();
+            assert_eq!((record.role, record.messages, record.blocks), (Some(ChatRole::Assistant), said.to_vec(), shown));
+            assert_eq!(record.kube, Some(pin));
+            assert_eq!(load("agent").unwrap().role, None);
         });
     }
 

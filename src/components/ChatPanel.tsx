@@ -3,9 +3,7 @@ import {
   ArrowUpRight,
   Brain,
   Loader2,
-  Check,
   ChevronRight,
-  Copy,
   FileText,
   Folder,
   FileDiff,
@@ -18,6 +16,7 @@ import {
   Download,
   Search,
   ShieldAlert,
+  ShipWheel,
   Terminal,
   TerminalSquare,
   Trash2,
@@ -31,6 +30,7 @@ import { DiffView } from "./DiffView";
 import { PANES } from "./panes";
 import { shortcutText } from "../lib/shortcuts";
 import type { AsideTab } from "../types";
+import { CopyAction } from "./CopyAction";
 import { Markdown } from "./Markdown";
 import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { useFollowBottom } from "../hooks/useFollowBottom";
@@ -41,6 +41,8 @@ import {
   processStatus,
   type ProcessInfo,
   type ToolCallDecision,
+  type PendingToolCall,
+  type FileDiffStats,
   type ToolPreview,
 } from "../lib/chat";
 import "./ChatPanel.css";
@@ -142,7 +144,8 @@ function ToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
-  const Icon = TOOL_ICON[shown.name] ?? Terminal;
+  // A cluster call wears its role's sign, whatever its label.
+  const Icon = block.name.startsWith("kube") ? ShipWheel : (TOOL_ICON[shown.name] ?? Terminal);
   // A background start has nothing to unfold here: its output is the
   // Terminal tab's, and the row goes there.
   const process = shown.process !== undefined && onOpenProcess ? shown.process : undefined;
@@ -192,9 +195,11 @@ function ToolRow({
 function ApprovalCard({
   block,
   onDecide,
+  preview = previewCalls,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
+  preview?: PreviewCalls;
 }) {
   const [reason, setReason] = useState("");
   // What each call would do. Approving a write means approving its contents,
@@ -209,14 +214,14 @@ function ApprovalCard({
 
   useEffect(() => {
     let live = true;
-    previewCalls(block.calls)
+    preview(block.calls)
       // `?? []`: the card is worth drawing even if the previews are not.
       .then((next) => live && setPreviews(next ?? []))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [block.calls]);
+  }, [block.calls, preview]);
   const answer = (approved: boolean, always: string[] = []) =>
     onDecide(
       asked.map((call) => ({
@@ -236,7 +241,7 @@ function ApprovalCard({
         call.requiresConfirmation ? (
           <div key={call.id}>
             {/* A diff names its file in its own header. */}
-            {previews[index]?.kind !== "diff" && (
+            {previews[index]?.kind !== "diff" && previews[index]?.kind !== "change" && (
               <div className="approval-cmd">{describeTool({ ...emptyTool, ...call }).arg}</div>
             )}
             {call.reason && (
@@ -296,23 +301,45 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
     );
   }
 
+  if (preview.kind === "change") {
+    // Where first: the cluster is what a wrong approval costs most.
+    return (
+      <div className="approval-change">
+        <div className={`approval-change-place${preview.production ? " production" : ""}`}>
+          {preview.production && "PRODUCTION · "}
+          {preview.place}
+        </div>
+        <div className="approval-cmd">{preview.summary}</div>
+        {preview.notes.map((note) => (
+          <p className="approval-preview" key={note}>
+            {note}
+          </p>
+        ))}
+        {preview.diffs?.map((object) => <DiffPreview key={object.title} title={object.title} diff={object.diff} />)}
+      </div>
+    );
+  }
+
   if (preview.kind === "command") {
     return <p className="approval-preview">Runs in {preview.cwd}</p>;
   }
 
+  return <DiffPreview title={preview.path} diff={preview.diff} />;
+}
+
+/** What becomes of one thing — a file, a cluster's object — under its name. */
+function DiffPreview({ title, diff }: { title: string; diff: FileDiffStats }) {
   return (
     <div className="diff-preview-wrap">
       <div className="diff-preview-head">
-        <span className="diff-preview-name">{preview.path}</span>
+        <span className="diff-preview-name">{title}</span>
         <span className="meta mono">
-          <span className="add">+{preview.diff.linesAdded}</span>{" "}
-          <span className={preview.diff.linesRemoved ? "del" : "zero"}>
-            -{preview.diff.linesRemoved}
-          </span>
+          <span className="add">+{diff.linesAdded}</span>{" "}
+          <span className={diff.linesRemoved ? "del" : "zero"}>-{diff.linesRemoved}</span>
         </span>
       </div>
-      <DiffView unified={preview.diff.unifiedDiff} />
-      {preview.diff.truncated && <p className="approval-preview">…the rest is not shown</p>}
+      <DiffView unified={diff.unifiedDiff} />
+      {diff.truncated && <p className="approval-preview">…the rest is not shown</p>}
     </div>
   );
 }
@@ -591,6 +618,94 @@ type Props = {
   onFix?: (text: string) => void;
 };
 
+type TranscriptProps = Pick<
+  Props,
+  | "turn"
+  | "onDecide"
+  | "onOpenProcess"
+  | "onOpenAgent"
+  | "runningProcesses"
+  | "onPasteCommand"
+  | "onOpenFile"
+  | "branchable"
+  | "onBranch"
+  | "onRewind"
+  | "onFix"
+> & {
+  /** Who answers, over their turns: the agent, or a chat's role. */
+  speaker?: string;
+  /** What a card's calls would do; the agent's folder preview when absent. */
+  preview?: PreviewCalls;
+};
+
+type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
+
+/**
+ * The conversation as turns — the user's bubbles, the answers, the calls and
+ * their cards. The agent's chat draws it, and Chat mode draws its own with it,
+ * so a role's tool calls and approval cards look as the agent's do.
+ */
+export function Transcript({
+  turn,
+  onDecide,
+  speaker = "Agent",
+  preview,
+  onOpenProcess,
+  onOpenAgent,
+  runningProcesses = [],
+  onPasteCommand,
+  onOpenFile,
+  branchable = null,
+  onBranch,
+  onRewind,
+  onFix,
+}: TranscriptProps) {
+  const groups = group(turn.blocks);
+  // The one answer still arriving: the last block of a running turn.
+  const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
+  return (
+    <>
+      {groups.map((turnGroup, index) => (
+        <div className="turn" key={index}>
+          {turnGroup.role !== "notice" && (
+            <div className={`role${turnGroup.role === "agent" ? " agent" : ""}`}>
+              {turnGroup.role === "agent" ? speaker : "You"}
+            </div>
+          )}
+          {fold(turnGroup.blocks).map((block, at, items) =>
+            block.kind === "run" ? (
+              <ToolRun
+                key={block.id}
+                run={block}
+                // Only the work at the very end is under way; a run the
+                // agent has already written past is finished.
+                live={turn.status === "running" && index === groups.length - 1 && at === items.length - 1}
+                onOpenProcess={onOpenProcess}
+                onOpenAgent={onOpenAgent}
+              />
+            ) : block.kind === "user" ? (
+              <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
+            ) : (
+              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview)
+            ),
+          )}
+          {workedFooter(
+            groups,
+            index,
+            turn,
+            index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
+          )}
+        </div>
+      ))}
+      {turn.status === "running" && turn.runningSince !== null && (
+        <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
+          <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
+        </WorkingClock>
+      )}
+    </>
+  );
+}
+
 export function ChatPanel({
   asideOpen = false,
   onExport,
@@ -617,8 +732,6 @@ export function ChatPanel({
   onFix,
 }: Props) {
   const groups = group(turn.blocks);
-  // The one answer still arriving: the last block of a running turn.
-  const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
   // Under a finished answer only: mid-turn the plan is not written yet, and
   // after a stop or a failure it may be half of one.
   const planReady = onImplement && turn.status === "done" && groups[groups.length - 1]?.role === "agent";
@@ -706,43 +819,19 @@ export function ChatPanel({
           <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
         ) : (
           <div ref={contentRef}>
-            {groups.map((turnGroup, index) => (
-              <div className="turn" key={index}>
-                {turnGroup.role !== "notice" && (
-                  <div className={`role${turnGroup.role === "agent" ? " agent" : ""}`}>
-                    {turnGroup.role === "agent" ? "Agent" : "You"}
-                  </div>
-                )}
-                {fold(turnGroup.blocks).map((block, at, items) =>
-                  block.kind === "run" ? (
-                    <ToolRun
-                      key={block.id}
-                      run={block}
-                      // Only the work at the very end is under way; a run the
-                      // agent has already written past is finished.
-                      live={turn.status === "running" && index === groups.length - 1 && at === items.length - 1}
-                      onOpenProcess={onOpenProcess}
-                      onOpenAgent={onOpenAgent}
-                    />
-                  ) : block.kind === "user" ? (
-                    <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
-                  ) : (
-                    renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent)
-                  ),
-                )}
-                {workedFooter(
-                  groups,
-                  index,
-                  turn,
-                  index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
-                )}
-              </div>
-            ))}
-            {turn.status === "running" && turn.runningSince !== null && (
-              <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
-                <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
-              </WorkingClock>
-            )}
+            <Transcript
+              turn={turn}
+              onDecide={onDecide}
+              onOpenProcess={onOpenProcess}
+              onOpenAgent={onOpenAgent}
+              runningProcesses={runningProcesses}
+              onPasteCommand={onPasteCommand}
+              onOpenFile={onOpenFile}
+              branchable={branchable}
+              onBranch={onBranch}
+              onRewind={onRewind}
+              onFix={onFix}
+            />
             {planReady && (
               <div className="plan-handoff">
                 <button type="button" className="btn btn-primary" onClick={onImplement}>
@@ -828,30 +917,6 @@ function UserBubble({
   );
 }
 
-/** Copies a message's text as written — Markdown source for the agent's, not the rendered page. */
-function CopyAction({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <button
-      type="button"
-      className="bubble-action"
-      onClick={() => {
-        // A clipboard that refuses loses nothing: the text is on screen.
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), 1500);
-        }, () => {});
-      }}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? "Copied" : "Copy"}
-    </button>
-  );
-}
-
 function renderBlock(
   block: Block,
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void,
@@ -861,6 +926,7 @@ function renderBlock(
   onOpenFile?: (link: string) => void,
   onFix?: (text: string) => void,
   onOpenAgent?: OpenAgent,
+  preview?: PreviewCalls,
 ) {
   switch (block.kind) {
     case "user":
@@ -927,7 +993,7 @@ function renderBlock(
     case "approval":
       return (
         <div className="tools" key={block.id}>
-          <ApprovalCard block={block} onDecide={onDecide} />
+          <ApprovalCard block={block} onDecide={onDecide} preview={preview} />
         </div>
       );
   }
