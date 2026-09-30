@@ -704,7 +704,7 @@ fn run(
             let pending: Vec<PendingToolCall> = runnable
                 .iter()
                 .map(|call| {
-                    let (requires_confirmation, reason) = needs_approval(turn.approval, call);
+                    let (requires_confirmation, reason) = needs_approval(turn, call);
                     PendingToolCall {
                         requires_confirmation,
                         reason,
@@ -910,6 +910,7 @@ pub fn pinned_cluster<'a>(turn: &Turn<'a>) -> Option<PinnedCluster<'a>> {
             kubeconfig: &target.config.name,
             context: &target.context,
             writes: target.writes,
+            production: target.config.production,
             changes,
         }),
         _ => None,
@@ -1466,11 +1467,21 @@ fn wait(turn: &Turn, delay: Duration) -> bool {
 ///
 /// An unparseable call is never risky: it cannot run, and asking about a call
 /// that is going to fail either way spends the user's attention on nothing.
-fn needs_approval(policy: &ApprovalPolicy, call: &LlmToolCall) -> (bool, Option<String>) {
-    match parse_tool_call(call) {
-        Ok(parsed) if policy.requires_approval_for(&parsed) => (true, policy.approval_reason(&parsed)),
-        _ => (false, None),
+///
+/// A change to a cluster the user marked as production asks whatever "Always
+/// allow" says (`docs/21-kubernetes-mode.md`, K-5e): there, a card skipped is
+/// the accident.
+fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<String>) {
+    let policy = turn.approval;
+    let Ok(parsed) = parse_tool_call(call) else { return (false, None) };
+    let production = matches!(turn.place, Place::Chat { kube: KubeSetup::Pinned(target), .. } if target.config.production);
+    if production && parsed.name().is_mutating() && parsed.name().wire_name().starts_with("kube") {
+        return (true, Some("a production cluster — every change to it asks".to_string()));
     }
+    if policy.requires_approval_for(&parsed) {
+        return (true, policy.approval_reason(&parsed));
+    }
+    (false, None)
 }
 
 /// What a refused call tells the model. The reason is the point: a model told

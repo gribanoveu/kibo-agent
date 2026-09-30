@@ -187,6 +187,10 @@ pub struct Kubeconfig {
     /// What the user calls the cluster: `prod`, `staging`.
     pub name: String,
     pub path: String,
+    /// The user's mark that this is a production cluster: every change there
+    /// asks, whatever "Always allow" says, and its card says where it lands.
+    #[serde(default)]
+    pub production: bool,
 }
 
 /// How many typed namespaces a kubeconfig remembers.
@@ -210,10 +214,11 @@ impl KubeSettings {
         }
     }
 
-    /// Adds `config`, or replaces the one of that name where it stands.
+    /// Adds `config`, or replaces the one of that name where it stands —
+    /// its path; the production mark is kept: a file moved is the same cluster.
     pub fn upsert(&mut self, config: Kubeconfig) {
         match self.configs.iter_mut().find(|c| c.name == config.name) {
-            Some(existing) => *existing = config,
+            Some(existing) => existing.path = config.path,
             None => self.configs.push(config),
         }
     }
@@ -461,7 +466,7 @@ mod tests {
     }
 
     fn config(name: &str) -> Kubeconfig {
-        Kubeconfig { name: name.to_string(), path: format!("/home/me/.kube/{name}") }
+        Kubeconfig { name: name.to_string(), path: format!("/home/me/.kube/{name}"), production: false }
     }
 
     #[test]
@@ -480,7 +485,10 @@ mod tests {
     #[test]
     fn saving_a_kubeconfig_under_its_name_replaces_it_in_place() {
         let mut kube = KubeSettings { configs: vec![config("prod"), config("staging")], ..Default::default() };
-        kube.upsert(Kubeconfig { name: "prod".to_string(), path: "/elsewhere".to_string() });
+        kube.configs[0].production = true;
+        kube.upsert(Kubeconfig { name: "prod".to_string(), path: "/elsewhere".to_string(), production: false });
+        assert!(kube.configs[0].production, "the mark stays with the name");
+        kube.configs[0].production = false;
         assert_eq!(kube.configs.len(), 2);
         assert_eq!(kube.configs[0].path, "/elsewhere");
     }

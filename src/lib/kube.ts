@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /** A kubeconfig file Chat mode's Kubernetes role can be pointed at — by path, never contents. */
-export type Kubeconfig = { name: string; path: string };
+export type Kubeconfig = {
+  name: string;
+  path: string;
+  /** The user's mark: every change to its clusters asks, and the card says where it lands. */
+  production?: boolean;
+};
 export type KubeSettings = { configs: Kubeconfig[]; active: string | null };
 
 export async function kubeSettings(): Promise<KubeSettings> {
@@ -11,6 +16,10 @@ export async function kubeSettings(): Promise<KubeSettings> {
 /** Adds it, or replaces the one of that name. Refused unless a file is at `path`; `~` is the home folder. */
 export async function saveKubeconfig(name: string, path: string): Promise<void> {
   await invoke("kubeconfig_save", { name, path });
+}
+
+export async function setKubeconfigProduction(name: string, production: boolean): Promise<void> {
+  await invoke("kubeconfig_production_set", { name, production });
 }
 
 export async function removeKubeconfig(name: string): Promise<void> {

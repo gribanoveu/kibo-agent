@@ -273,6 +273,8 @@ pub struct PinnedCluster<'a> {
     pub context: &'a str,
     /// "Changes" is on for this chat.
     pub writes: bool,
+    /// The user marked this kubeconfig as production: said on every card.
+    pub production: bool,
     /// `None` where nothing can be recorded — and so nothing changed.
     pub changes: Option<&'a dyn KubeChanges>,
 }

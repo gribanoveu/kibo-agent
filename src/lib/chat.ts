@@ -482,7 +482,7 @@ export type ToolPreview =
   | { kind: "removes"; path: string; files: number }
   | { kind: "command"; command: string; cwd: string }
   /** A change to a cluster: where, what becomes of what, and what to know first. */
-  | { kind: "change"; place: string; summary: string; notes: string[]; diffs?: { title: string; diff: FileDiffStats }[] }
+  | { kind: "change"; place: string; summary: string; notes: string[]; production?: boolean; diffs?: { title: string; diff: FileDiffStats }[] }
   | { kind: "failed"; reason: string }
   | { kind: "nothing" };
 

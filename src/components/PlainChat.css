@@ -239,6 +239,10 @@
 .plain-chip-label.changes {
   color: var(--amber);
 }
+/* A cluster the user marked as production: seen before a word is typed. */
+.plain-chip-label.production {
+  color: var(--red);
+}
 .plain-meter {
   margin-left: auto;
 }

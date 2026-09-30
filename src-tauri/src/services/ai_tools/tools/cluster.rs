@@ -491,8 +491,9 @@ struct Plan {
     summary: String,
     /// Its YAML now against its YAML after, where the words do not say it all.
     diff: Option<FileDiffStats>,
-    /// What else the card says before anyone agrees.
-    warning: Option<String>,
+    /// What else the card says before anyone agrees: what is lost, and what
+    /// will put the object back by itself.
+    warnings: Vec<String>,
 }
 
 /// What a change does to its object.
@@ -506,7 +507,7 @@ enum Act {
 
 impl Plan {
     fn patching(tool: &'static str, kind: KubeKind, name: &str, object: Value, patch: Value, summary: String) -> Plan {
-        Plan { tool, kind, name: name.to_string(), object, act: Act::Patch(patch), summary, diff: None, warning: None }
+        Plan { tool, kind, name: name.to_string(), object, act: Act::Patch(patch), summary, diff: None, warnings: Vec::new() }
     }
 
     /// Asks the server, for real or as a dry run. The object afterwards;
@@ -640,7 +641,7 @@ fn plan_apply(cluster: &PinnedCluster, args: &KubeApplyArgs) -> Result<Vec<Plan>
     for mut document in documents {
         let (kind, name) = addressed(cluster, tool, &mut document)?;
         let object = found(cluster, &kind, &name)?;
-        let mut plan = Plan { tool, kind, name, object, act: Act::Apply(document), summary: String::new(), diff: None, warning: None };
+        let mut plan = Plan { tool, kind, name, object, act: Act::Apply(document), summary: String::new(), diff: None, warnings: Vec::new() };
         let after = plan.run(cluster, true)?;
         let diff = diff_stats(&shown(&plan.kind, &plan.object), &shown(&plan.kind, &after));
         if declared(plan.object.clone()) == declared(after) {
@@ -685,7 +686,8 @@ fn plan_delete(cluster: &PinnedCluster, args: &KubeDeleteArgs) -> Result<Plan, T
     }
     let object = cluster.api.get(&kind, cluster.namespace, &args.name)?;
     let warning = (kind.kind == "PersistentVolumeClaim").then(|| claim_warning(cluster, &object)).flatten();
-    let plan = Plan { tool, kind, name: args.name.clone(), object, act: Act::Delete, summary: "delete".to_string(), diff: None, warning };
+    let warnings = warning.into_iter().collect();
+    let plan = Plan { tool, kind, name: args.name.clone(), object, act: Act::Delete, summary: "delete".to_string(), diff: None, warnings };
     checked(cluster, plan)
 }
 
@@ -873,7 +875,7 @@ fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
                 return Err(refused(format!("{}/{name} is no longer there — it was deleted after {id}, and there is nothing to undo", kind.kind)));
             }
             let plan = if was.is_null() {
-                Plan { tool: "kubeDelete", kind, name, object, act: Act::Delete, summary: format!("delete — it did not exist before {id}"), diff: None, warning: None }
+                Plan { tool: "kubeDelete", kind, name, object, act: Act::Delete, summary: format!("delete — it did not exist before {id}"), diff: None, warnings: Vec::new() }
             } else {
                 let Some(back) = merge_diff(&declared(object.clone()), &declared(was.clone())) else {
                     return Err(refused(format!("{}/{name} is already as it was before {id} — there is nothing to change", kind.kind)));
@@ -891,7 +893,7 @@ fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
             }
             let diff = diff_stats("", &shown(&kind, &was));
             let summary = format!("create again, from the backup of {id}");
-            checked(cluster, Plan { tool: "kubeApply", kind, name, object: Value::Null, act: Act::Apply(declared(was)), summary, diff: Some(diff), warning: None })?
+            checked(cluster, Plan { tool: "kubeApply", kind, name, object: Value::Null, act: Act::Apply(declared(was)), summary, diff: Some(diff), warnings: Vec::new() })?
         }
         other => return Err(refused(format!("a {other} change cannot be undone"))),
     };
@@ -908,6 +910,15 @@ fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<Plan, ToolError> {
 /// one, but for a manifest of several objects. With them, the change an undo
 /// puts back.
 fn planned<'c>(cluster: &PinnedCluster, call: &'c ToolCall) -> Result<(Vec<Plan>, Option<&'c str>), ToolError> {
+    let (mut plans, undoes) = plans_of(cluster, call)?;
+    for plan in &mut plans {
+        let reverters = reverters(cluster, plan);
+        plan.warnings.extend(reverters);
+    }
+    Ok((plans, undoes))
+}
+
+fn plans_of<'c>(cluster: &PinnedCluster, call: &'c ToolCall) -> Result<(Vec<Plan>, Option<&'c str>), ToolError> {
     Ok(match call {
         ToolCall::KubeScale(args) => (vec![plan_scale(cluster, args)?], None),
         ToolCall::KubeSuspend(args) => (vec![plan_suspend(cluster, args)?], None),
@@ -942,6 +953,65 @@ pub fn preflight(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<(), Too
     planned(&cluster(kube)?, call).map(|_| ())
 }
 
+/// A warning as the card and the answer give it: under the object's name
+/// where there are several to tell apart.
+fn named(plans: &[Plan], plan: &Plan, warning: &str) -> String {
+    if plans.len() > 1 { format!("{}: {warning}", titled(plan)) } else { warning.to_string() }
+}
+
+/// What will put an object back by itself (`docs/21-kubernetes-mode.md`,
+/// "Что отменит изменение само"), read from the object the plan already has
+/// — and, for a scale, from the namespace's autoscalers. Not a refusal: a
+/// scale to zero under an HPA for five minutes can be exactly what is wanted.
+/// But it is the user's to decide seeing it, not the model's to pass over.
+fn reverters(cluster: &PinnedCluster, plan: &Plan) -> Vec<String> {
+    let object = &plan.object;
+    let mut found = Vec::new();
+    let keys = |section: &str| -> Vec<String> {
+        let map = object.pointer(&format!("/metadata/{section}")).and_then(Value::as_object);
+        map.into_iter().flat_map(|map| map.keys().cloned()).collect()
+    };
+    let marked = |prefix: &str| keys("labels").iter().chain(keys("annotations").iter()).any(|key| key.starts_with(prefix));
+    if plan.tool == "kubeScale" {
+        let scalers = kind(cluster, "horizontalpodautoscalers.autoscaling")
+            .and_then(|scalers| Ok(cluster.api.list(&scalers, &ListQuery { namespace: Some(cluster.namespace.to_string()), ..Default::default() })?))
+            .map(|page| page.items)
+            .unwrap_or_default();
+        for scaler in scalers {
+            let target = &scaler["spec"]["scaleTargetRef"];
+            if target["kind"] == plan.kind.kind.as_str() && target["name"] == plan.name.as_str() {
+                let bound = |field: &str| scaler["spec"][field].as_i64().map_or("?".to_string(), |n| n.to_string());
+                found.push(format!(
+                    "HorizontalPodAutoscaler/{} sets its replicas ({}–{}): it will scale it back.",
+                    scaler["metadata"]["name"].as_str().unwrap_or("?"),
+                    bound("minReplicas"),
+                    bound("maxReplicas")
+                ));
+            }
+        }
+    }
+    let flux = marked("kustomize.toolkit.fluxcd.io/") || marked("helm.toolkit.fluxcd.io/");
+    if marked("argocd.argoproj.io/") {
+        found.push("Managed by Argo CD: with self-heal on, it puts back what Git says.".to_string());
+    }
+    if flux {
+        found.push("Managed by Flux: its next reconcile puts back what Git says.".to_string());
+    }
+    // Flux's Helm releases carry Helm's label too; the one line says enough.
+    if !flux && object.pointer("/metadata/labels/app.kubernetes.io~1managed-by").and_then(Value::as_str) == Some("Helm") {
+        found.push("Installed by Helm: the next `helm upgrade` overwrites this.".to_string());
+    }
+    let owners = object.pointer("/metadata/ownerReferences").and_then(Value::as_array);
+    for owner in owners.into_iter().flatten().filter(|owner| owner["controller"] == true) {
+        found.push(format!(
+            "Owned by {}/{}: its owner may put it back, or make another.",
+            owner["kind"].as_str().unwrap_or("?"),
+            owner["name"].as_str().unwrap_or("?")
+        ));
+    }
+    found
+}
+
 fn titled(plan: &Plan) -> String {
     format!("{}/{}", plan.kind.kind, plan.name)
 }
@@ -967,12 +1037,13 @@ pub fn preview(kube: Option<PinnedCluster>, call: &ToolCall) -> ToolPreview {
         None if plans.iter().all(|plan| can_be_undone(plan.tool)) => "Can be undone: the object is backed up first.",
         None => "Cannot be undone: the pods are replaced, and the old ones do not come back.",
     };
-    let mut notes: Vec<String> = plans.iter().filter_map(|plan| plan.warning.clone()).collect();
+    let mut notes: Vec<String> = plans.iter().flat_map(|plan| plan.warnings.iter().map(|warning| named(&plans, plan, warning))).collect();
     notes.push(way_back.to_string());
     ToolPreview::Change {
         place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
         summary: undoes.map_or(what.clone(), |id| format!("Undo {id} — {what}")),
         notes,
+        production: cluster.production,
         diffs: plans.iter().filter_map(|plan| Some(ChangeDiff { title: titled(plan), diff: plan.diff.clone()? })).collect(),
     }
 }
@@ -1039,7 +1110,11 @@ pub fn change(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<ToolResult
     let mut said: Vec<String> = Vec::new();
     for plan in &plans {
         match make(&cluster, plan, undoes) {
-            Ok(text) => said.push(text),
+            Ok(text) => {
+                said.push(text);
+                // The user read these on the card; the model says what they mean for the change.
+                said.extend(plan.warnings.iter().map(|warning| format!("  Note — {}", named(&plans, plan, warning))));
+            }
             Err(e) if said.is_empty() => return Err(e),
             Err(e) => {
                 let stopped = format!("{}\nThen {} failed, and nothing after it was changed: {e}", said.join("\n"), titled(plan));
@@ -1558,7 +1633,7 @@ mod tests {
     }
 
     fn pinned(fake: &Fake) -> Option<PinnedCluster<'_>> {
-        Some(PinnedCluster { api: fake, namespace: "orders", kubeconfig: "prod", context: "eks", writes: false, changes: None })
+        Some(PinnedCluster { api: fake, namespace: "orders", kubeconfig: "prod", context: "eks", writes: false, production: false, changes: None })
     }
 
     /// The same chat with "Changes" switched on.
@@ -1660,7 +1735,7 @@ mod tests {
             fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> { self.0.delete(kind, namespace, name, dry_run) }
         }
         let (late, recorded) = (LateRefusal(scalable(3)), Recorded::default());
-        let cluster = PinnedCluster { api: &late, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, changes: Some(&recorded) };
+        let cluster = PinnedCluster { api: &late, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, production: false, changes: Some(&recorded) };
         assert!(matches!(kube_scale(Some(cluster), &scale(0)), Err(ToolError::Kube(_))));
         let audits = recorded.audits.lock().unwrap();
         assert_eq!((audits[0].error.as_deref(), audits[0].generation_after), (Some("conflict"), None));
@@ -2036,7 +2111,7 @@ spec: {ports: [{port: 80}]}
     fn a_manifests_card_shows_each_object_that_changes_and_its_diff() {
         let (fake, recorded) = (namespace_of_three(), Recorded::default());
         let shown = preview(writing(&fake, &recorded), &apply(THREE));
-        let ToolPreview::Change { place, summary, notes, diffs } = shown else { panic!("{shown:?}") };
+        let ToolPreview::Change { place, summary, notes, diffs, .. } = shown else { panic!("{shown:?}") };
         assert_eq!(place, "context eks · namespace orders");
         assert_eq!(summary, "2 objects — ConfigMap/flags: create; Deployment/api: update (+1 −1 lines)");
         assert_eq!(notes, ["Can be undone: the object is backed up first."]);
@@ -2123,7 +2198,7 @@ spec: {ports: [{port: 80}]}
             fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError> { self.0.delete(kind, namespace, name, dry_run) }
         }
         let (stops, recorded) = (SecondRefused(namespace_of_three()), Recorded::default());
-        let cluster = PinnedCluster { api: &stops, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, changes: Some(&recorded) };
+        let cluster = PinnedCluster { api: &stops, namespace: "orders", kubeconfig: "prod", context: "eks", writes: true, production: false, changes: Some(&recorded) };
         let names = ["first", "second", "third"].map(|name| format!("apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: {name}}}\n")).join("---\n");
         let stopped = change(Some(cluster), &apply(&names)).unwrap_err().to_string();
         let audits = recorded.audits.lock().unwrap();
@@ -2256,6 +2331,54 @@ spec: {ports: [{port: 80}]}
         let audits = recorded.audits.lock().unwrap();
         let tools: Vec<&str> = audits.iter().skip(2).map(|a| a.tool.as_str()).collect();
         assert_eq!(tools, ["kubeDelete", "kubeApply"], "each undo is on record as what it did");
+    }
+
+    /// What will put a change back by itself is on the card before anyone
+    /// agrees, and in the answer for the model to say — a warning, not a refusal.
+    #[test]
+    fn the_card_names_what_will_put_the_change_back() {
+        let managed = |name: &str, metadata: Value| {
+            let mut object = json!({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name, "namespace": "orders", "generation": 1}, "spec": {"replicas": 3}});
+            merge(&mut object["metadata"], &metadata);
+            object
+        };
+        let scaler = |name: &str, target: &str| json!({"metadata": {"name": name, "namespace": "orders"}, "spec": {"minReplicas": 2, "maxReplicas": 9, "scaleTargetRef": {"kind": "Deployment", "name": target}}});
+        let fake = Fake::with(&[("apps", "Deployment", "deployments"), ("autoscaling", "HorizontalPodAutoscaler", "horizontalpodautoscalers")])
+            .object("deployments", managed("plain", json!({"labels": {"app.kubernetes.io/managed-by": "kustomize"}})))
+            .object("deployments", managed("argo", json!({"annotations": {"argocd.argoproj.io/tracking-id": "x"}, "labels": {"app.kubernetes.io/managed-by": "Helm"}})))
+            .object("deployments", managed("flux", json!({"labels": {"helm.toolkit.fluxcd.io/name": "x", "app.kubernetes.io/managed-by": "Helm"}})))
+            .object("deployments", managed("owned", json!({"ownerReferences": [{"kind": "Rollout", "name": "api", "controller": true}, {"kind": "Thing", "name": "t"}]})))
+            .object("horizontalpodautoscalers", scaler("plain-hpa", "plain"))
+            .object("horizontalpodautoscalers", scaler("other-hpa", "other"));
+        let recorded = Recorded::default();
+        let here = writing(&fake, &recorded);
+        let scale = |name: &str| ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: name.into(), replicas: Some(0) });
+        let notes = |call: &ToolCall| match preview(here, call) {
+            ToolPreview::Change { notes, .. } => notes,
+            other => panic!("{other:?}"),
+        };
+        let way_back = "Can be undone: the object is backed up first.";
+        assert_eq!(notes(&scale("plain")), ["HorizontalPodAutoscaler/plain-hpa sets its replicas (2–9): it will scale it back.", way_back]);
+        assert_eq!(
+            notes(&scale("argo")),
+            ["Managed by Argo CD: with self-heal on, it puts back what Git says.", "Installed by Helm: the next `helm upgrade` overwrites this.", way_back]
+        );
+        assert_eq!(notes(&scale("flux")), ["Managed by Flux: its next reconcile puts back what Git says.", way_back]);
+        assert_eq!(notes(&scale("owned")), ["Owned by Rollout/api: its owner may put it back, or make another.", way_back]);
+
+        // An autoscaler is a scale's business only: a delete does not ask for them.
+        let asked = fake.asked().len();
+        assert_eq!(notes(&ToolCall::KubeDelete(KubeDeleteArgs { kind: "deploy".into(), name: "plain".into() })), [way_back]);
+        assert!(fake.asked()[asked..].iter().all(|a| !a.starts_with("list")), "{:?}", fake.asked());
+
+        let said = text(change(here, &scale("plain")));
+        assert!(said.ends_with("\n  Note — HorizontalPodAutoscaler/plain-hpa sets its replicas (2–9): it will scale it back."), "{said}");
+
+        // Several objects on one card: each warning under its object's name.
+        let two = "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: flux}\nspec: {replicas: 1}\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata: {name: plain}\nspec: {replicas: 1}\n";
+        assert_eq!(notes(&ToolCall::KubeApply(KubeApplyArgs { manifest: two.into() })), ["Deployment/flux: Managed by Flux: its next reconcile puts back what Git says.", way_back]);
+        assert!(matches!(preview(Some(PinnedCluster { production: true, ..here.unwrap() }), &scale("plain")), ToolPreview::Change { production: true, .. }));
+        assert!(matches!(preview(here, &scale("plain")), ToolPreview::Change { production: false, .. }));
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

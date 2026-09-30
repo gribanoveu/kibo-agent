@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderOpen, History, Server, Trash2 } from "lucide-react";
+import { FolderOpen, History, Server, ShieldAlert, Trash2 } from "lucide-react";
 import { pickFile } from "../lib/dialog";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { useKubeChanges } from "../hooks/useKubeChanges";
@@ -43,9 +43,24 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
                 <span className="kube-row-name">
                   {config.name}
                   {kube.active?.name === config.name && <span className="kube-row-badge">in use</span>}
+                  {config.production && <span className="kube-row-badge production">production</span>}
                 </span>
                 <span className="kube-row-path">{config.path}</span>
               </span>
+              <button
+                type="button"
+                className={`iconbtn kube-production${config.production ? " on" : ""}`}
+                title={
+                  config.production
+                    ? "Production: every change asks, even a tool you always allow. Click to take the mark off"
+                    : "Mark as production: every change will ask, even a tool you always allow"
+                }
+                aria-label={`${config.name} is production`}
+                aria-pressed={!!config.production}
+                onClick={() => kube.setProduction(config.name, !config.production)}
+              >
+                <ShieldAlert size={14} />
+              </button>
               <button
                 type="button"
                 className="iconbtn"

@@ -5,6 +5,7 @@ import {
   pickKubeconfig,
   removeKubeconfig,
   saveKubeconfig,
+  setKubeconfigProduction,
   type KubeSettings,
 } from "../lib/kube";
 
@@ -45,6 +46,7 @@ export function useKubeconfigs() {
     active: activeKubeconfig(settings),
     error,
     save: useCallback((name: string, path: string) => run(() => saveKubeconfig(name, path)), [run]),
+    setProduction: useCallback((name: string, production: boolean) => run(() => setKubeconfigProduction(name, production)), [run]),
     remove: useCallback((name: string) => run(() => removeKubeconfig(name)), [run]),
     pick: useCallback((name: string) => run(() => pickKubeconfig(name)), [run]),
   };

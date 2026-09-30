@@ -814,6 +814,22 @@ describe("the transcript in Chat mode", () => {
     expect(screen.queryByText("Deployment api → 0")).toBeNull();
   });
 
+  /// A production cluster is the first word on the card.
+  test("a change to a production cluster says so before where and what", async () => {
+    const calls = [{ id: "c1", name: "kubeScale", arguments: "{}", requiresConfirmation: true, reason: "a production cluster — every change to it asks" }];
+    await act(async () => {
+      render(
+        <Transcript
+          turn={state([{ kind: "approval", id: "approval:1", round: 1, calls }], { status: "awaitingApproval" })}
+          onDecide={() => {}}
+          preview={async () => [{ kind: "change", place: "context eks · namespace orders", summary: "Deployment/api: 3 → 0 replicas", notes: [], production: true }]}
+        />,
+      );
+    });
+    expect(document.querySelector(".approval-change-place.production")?.textContent).toBe("PRODUCTION · context eks · namespace orders");
+    expect(screen.getByText("Always asks: a production cluster — every change to it asks")).toBeTruthy();
+  });
+
   /// A manifest's card shows each object as it is against what it would be.
   test("an applied manifest's card shows every object's diff under its name", async () => {
     const calls = [{ id: "c1", name: "kubeApply", arguments: '{"manifest":"kind: ConfigMap"}', requiresConfirmation: true }];
@@ -840,6 +856,7 @@ describe("the transcript in Chat mode", () => {
     });
     expect(screen.getByText("ConfigMap/flags")).toBeTruthy();
     expect(screen.getByText("Deployment/api")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("PRODUCTION");
     expect(document.body.textContent).toContain("replicas: 5");
   });
 });

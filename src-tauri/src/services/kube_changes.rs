@@ -72,7 +72,7 @@ mod tests {
         let path = dirs::home_dir().unwrap().join(".kube/config");
         with_app_dir("kube-changes-live", || {
             let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
-            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, changes: Some(&ChangeStore) };
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, production: false, changes: Some(&ChangeStore) };
             let kind = crate::domain::kube::resolve_kind(&api.kinds().unwrap(), "deploy").unwrap().clone();
             let replicas = || api.get(&kind, namespace, name).unwrap()["spec"]["replicas"].as_u64().unwrap() as u32;
             let set = |to: u32| api.patch(&kind, namespace, name, &json!({"spec": {"replicas": to}}), false).unwrap();
@@ -110,7 +110,7 @@ mod tests {
         let path = dirs::home_dir().unwrap().join(".kube/config");
         with_app_dir("kube-changes-live-simple", || {
             let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
-            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, changes: Some(&ChangeStore) };
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, production: false, changes: Some(&ChangeStore) };
             let kinds = api.kinds().unwrap();
             let read = |kind: &str, name: &str| api.get(crate::domain::kube::resolve_kind(&kinds, kind).unwrap(), namespace, name).unwrap();
             let run = |call: ToolCall| {
@@ -159,7 +159,7 @@ mod tests {
         };
         with_app_dir("kube-changes-live-apply", || {
             let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
-            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, changes: Some(&ChangeStore) };
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, production: false, changes: Some(&ChangeStore) };
             let kinds = api.kinds().unwrap();
             let read = |kind: &str| api.get(crate::domain::kube::resolve_kind(&kinds, kind).unwrap(), namespace, "kibo-live");
             let run = |call: ToolCall| cluster::change(Some(place), &call);
@@ -198,6 +198,31 @@ mod tests {
             assert!(matches!(read("deploy"), Err(KubeError::NotFound(_))));
             run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "cm".into(), name: "kibo-live".into() })).unwrap();
             assert!(matches!(read("cm"), Err(KubeError::NotFound(_))));
+        });
+    }
+
+    /// An autoscaler the cluster really has is named on a scale's card (K-5e).
+    /// Makes an HPA for `rollme` and takes it away again.
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_names_the_autoscaler_on_a_scales_card() {
+        use crate::domain::tools::{KubeApplyArgs, KubeDeleteArgs, ToolPreview};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, _) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let scaler = "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata: {name: kibo-live}\n\
+                      spec:\n  minReplicas: 1\n  maxReplicas: 3\n  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: rollme}\n  \
+                      metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}}]\n";
+        with_app_dir("kube-changes-live-hpa", || {
+            let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, production: false, changes: Some(&ChangeStore) };
+            cluster::change(Some(place), &ToolCall::KubeApply(KubeApplyArgs { manifest: scaler.into() })).unwrap();
+            let scale = ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: "rollme".into(), replicas: Some(5) });
+            let shown = cluster::preview(Some(place), &scale);
+            cluster::change(Some(place), &ToolCall::KubeDelete(KubeDeleteArgs { kind: "hpa".into(), name: "kibo-live".into() })).unwrap();
+            let ToolPreview::Change { notes, .. } = shown else { panic!("{shown:?}") };
+            assert_eq!(notes[0], "HorizontalPodAutoscaler/kibo-live sets its replicas (1–3): it will scale it back.");
         });
     }
 }

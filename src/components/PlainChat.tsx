@@ -169,7 +169,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               title="The kubeconfig this chat works with"
               heading="Kubeconfig"
               label={
-                <span className={`plain-chip-label${config ? "" : " unset"}`}>
+                <span className={`plain-chip-label${config ? "" : " unset"}${config?.production ? " production" : ""}`}>
                   <FileCog size={13} />
                   <span>{config?.name ?? "No kubeconfig"}</span>
                 </span>

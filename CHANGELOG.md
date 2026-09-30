@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 Mark a kubeconfig as production in Settings → Kubernetes: every change to its clusters then asks even for a tool you always allow, and the card says PRODUCTION first; a change's card also names what will put it back by itself — an autoscaler, Argo CD or Flux, Helm, an owner
+
 - 2026-09-30 The Kubernetes role can apply a manifest and delete an object in the chat's namespace: the card shows each object's diff before you agree, a deleted PersistentVolumeClaim says when its data goes with it, and undo takes away what an apply created, restores what it changed and recreates what was deleted
 
 - 2026-09-30 The Kubernetes role can suspend and resume a CronJob or Job, restart a Deployment, StatefulSet or DaemonSet, and roll a Deployment back to an earlier revision — each on a card that shows what changes (for a rollback, the revisions and images) and says when it cannot be undone

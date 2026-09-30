@@ -30,6 +30,11 @@ pub fn pick(name: Option<String>) -> Result<(), SettingsError> {
 }
 
 /// A namespace typed on a chat's tab, offered again for that kubeconfig.
+/// Marks a kubeconfig as production, or takes the mark off.
+pub fn set_production(name: &str, production: bool) -> Result<(), SettingsError> {
+    update(|kube| kube.configs.iter_mut().filter(|config| config.name == name).for_each(|config| config.production = production))
+}
+
 pub fn remember_namespace(kubeconfig: &str, namespace: &str) -> Result<(), SettingsError> {
     update(|kube| kube.remember_namespace(kubeconfig, namespace))
 }
@@ -140,7 +145,7 @@ users:
 
     fn added(label: &str) -> (Kubeconfig, std::path::PathBuf) {
         let file = crate::infra::app_dir::dir().unwrap().join(format!("{label}.yaml"));
-        let config = Kubeconfig { name: "prod".to_string(), path: file.to_string_lossy().into_owned() };
+        let config = Kubeconfig { name: "prod".to_string(), path: file.to_string_lossy().into_owned(), production: false };
         save(config.clone()).unwrap();
         (config, file)
     }
@@ -197,7 +202,7 @@ users:
     fn the_last_pick_is_kept_and_cleared() {
         with_app_dir("kubeconfigs-pick", || {
             for name in ["prod", "staging"] {
-                save(Kubeconfig { name: name.to_string(), path: format!("/k/{name}") }).unwrap();
+                save(Kubeconfig { name: name.to_string(), path: format!("/k/{name}"), production: false }).unwrap();
             }
             pick(Some("staging".to_string())).unwrap();
             assert_eq!(list().unwrap().active().map(|c| c.name.clone()).as_deref(), Some("staging"));

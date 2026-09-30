@@ -258,7 +258,7 @@ mod tests {
     use crate::domain::settings::Kubeconfig;
 
     fn prod() -> Kubeconfig {
-        Kubeconfig { name: "prod".to_string(), path: "/home/me/.kube/prod".to_string() }
+        Kubeconfig { name: "prod".to_string(), path: "/home/me/.kube/prod".to_string(), production: false }
     }
 
     fn pinned(reach: Reach) -> KubeSetup {

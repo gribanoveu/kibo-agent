@@ -186,6 +186,7 @@ pub fn run() {
             commands::settings::kube_settings_get,
             commands::settings::kubeconfig_save,
             commands::settings::kubeconfig_remove,
+            commands::settings::kubeconfig_production_set,
             commands::settings::kubeconfig_pick,
             commands::settings::kube_contexts,
             commands::settings::kube_namespaces,

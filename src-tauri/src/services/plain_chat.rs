@@ -61,6 +61,7 @@ pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmTool
             kubeconfig: &target.config.name,
             context: &target.context,
             writes: target.writes,
+            production: target.config.production,
             // A preview records nothing, and must not be able to.
             changes: None,
         }),
@@ -495,6 +496,30 @@ mod tests {
         assert!(denied.changes.as_ref().unwrap().0.lock().unwrap().is_empty());
     }
 
+    /// "Always allow" spares the card everywhere but on a cluster marked as
+    /// production: there every change asks, and the card says why and where.
+    #[test]
+    fn a_production_cluster_asks_for_every_change_even_when_always_allowed() {
+        let mut allowed = scaling(true, vec![calls("kubeScale", SCALE), said("stopped")]);
+        allowed.approval.allow_always("kubeScale").unwrap();
+        let done = done(allowed.start(ChatRole::Kubernetes, vec![LlmMessage::user("stop it")]));
+        assert!(tool_result(&done.history).contains("3 → 0 replicas"), "always allowed, it runs without a card");
+
+        let mut production = scaling(true, vec![calls("kubeScale", SCALE), calls("kubeGet", r#"{"kind":"deploy","name":"api"}"#), said("stopped")]);
+        production.approval.allow_always("kubeScale").unwrap();
+        let KubeSetup::Pinned(target) = &mut production.kube else { unreachable!() };
+        target.config.production = true;
+        let ChatStreamOutcome::PendingApproval(paused) = production.start(ChatRole::Kubernetes, vec![LlmMessage::user("stop it")]) else {
+            panic!("expected a card");
+        };
+        assert_eq!(paused.calls[0].reason.as_deref(), Some("a production cluster — every change to it asks"));
+        let shown = preview(&production.kube, Some(&ThreeReplicas), &[LlmToolCall { id: "c1".into(), name: "kubeScale".into(), arguments: SCALE.into() }]);
+        assert!(matches!(&shown[0], ToolPreview::Change { production: true, .. }), "{shown:?}");
+        // A read of the same cluster is no change: it asks nobody.
+        let approve = vec![ToolCallDecision { id: "c1".into(), approved: true, reason: None }];
+        assert!(matches!(production.run(ChatRole::Kubernetes, false, |turn| resume(turn, paused, approve)).unwrap(), ChatStreamOutcome::Done(_)));
+    }
+
     /// The card's preview reads and dry-runs; it has nowhere to record, so it
     /// cannot change anything even by mistake.
     #[test]
@@ -515,7 +540,7 @@ mod tests {
 
     fn pinned(namespace: &str) -> KubeSetup {
         KubeSetup::Pinned(KubeTarget {
-            config: crate::domain::settings::Kubeconfig { name: "prod".into(), path: "/k/prod".into() },
+            config: crate::domain::settings::Kubeconfig { name: "prod".into(), path: "/k/prod".into(), production: false },
             context: "eks".into(),
             cluster: "eks".into(),
             namespace: namespace.into(),

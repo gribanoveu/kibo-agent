@@ -682,6 +682,9 @@ button.turn-processes:hover {
   font-weight: 600;
   color: var(--amber);
 }
+.approval-change-place.production {
+  color: var(--red);
+}
 .approval-preview.failed {
   color: var(--red);
 }

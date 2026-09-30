@@ -65,6 +65,7 @@ mod tests {
                 configs: vec![crate::domain::settings::Kubeconfig {
                     name: "prod".to_string(),
                     path: "/home/me/.kube/prod".to_string(),
+                    production: true,
                 }],
                 active: Some("prod".to_string()),
                 typed_namespaces: [("prod".to_string(), vec!["payments".to_string()])].into(),

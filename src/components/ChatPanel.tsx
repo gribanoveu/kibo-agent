@@ -305,7 +305,10 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
     // Where first: the cluster is what a wrong approval costs most.
     return (
       <div className="approval-change">
-        <div className="approval-change-place">{preview.place}</div>
+        <div className={`approval-change-place${preview.production ? " production" : ""}`}>
+          {preview.production && "PRODUCTION · "}
+          {preview.place}
+        </div>
         <div className="approval-cmd">{preview.summary}</div>
         {preview.notes.map((note) => (
           <p className="approval-preview" key={note}>

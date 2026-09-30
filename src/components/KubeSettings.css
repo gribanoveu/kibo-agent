@@ -66,6 +66,12 @@
 .kube-path .btn {
   flex: none;
 }
+.kube-row-badge.production {
+  color: var(--red);
+}
+.kube-production.on {
+  color: var(--red);
+}
 .kube-changes-title {
   margin-top: 22px;
 }

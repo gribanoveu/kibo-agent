@@ -814,6 +814,9 @@ pub enum ToolPreview {
         summary: String,
         /// What else to know first: whether it can be undone.
         notes: Vec<String>,
+        /// The user marked this cluster as production: the card says so first.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        production: bool,
         /// A manifest's objects, each as it is against what it would become.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         diffs: Vec<ChangeDiff>,

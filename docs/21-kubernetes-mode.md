@@ -723,10 +723,27 @@ namespace» не нужен.
     описание инструмента; у вида без `generation` с часто меняющимся статусом (Pod)
     `resourceVersion` уходит сам, и откат apply откажет; манифест режется до двадцати
     объектов, а не потоком.
-  - **K-5e — предупреждения и production.** В карточке — что отменит изменение само: HPA,
-    Argo CD / Flux, `ownerReferences`, Helm. Пометка production у kubeconfig или контекста в
-    Settings: запись — только на текущий чат, каждая мутация спрашивает даже при «Always
-    allow», кластер в карточке выделен.
+  - **K-5e — предупреждения и production.** Сделано. `cluster::reverters` читает из
+    объекта, который план уже прочитал, что вернёт изменение само, и кладёт это строками в
+    карточку (перед «откатываемо ли») и в ответ инструмента («Note — …», чтобы модель
+    сказала): HPA на цели — только для `kubeScale`, один список автоскейлеров namespace, с
+    границами; Argo CD (`argocd.argoproj.io/*` в метках и аннотациях); Flux
+    (`kustomize.toolkit.fluxcd.io/*`, `helm.toolkit.fluxcd.io/*`); Helm
+    (`app.kubernetes.io/managed-by: Helm`, если это не Flux); владелец-контроллер из
+    `ownerReferences`. Предупреждение, не отказ. На карточке нескольких объектов каждое — под
+    именем своего объекта. `app.kubernetes.io/instance` признаком Argo CD не считается: ту же
+    метку ставит Helm. Production: пометка у kubeconfig (`Kubeconfig.production`, кнопка-щит
+    в Settings → Kubernetes, команда `kubeconfig_production_set`; повторное сохранение пути
+    пометку не снимает). На таком кластере каждое изменение спрашивает и при «Always allow»
+    (`llm_chat::needs_approval`, причина на карточке — «Always asks: a production cluster…»),
+    карточка начинается с «PRODUCTION ·» красным (`ToolPreview::Change.production`), чип
+    kubeconfig на вкладке чата красный. «Запись только на текущий чат» уже выполняется для
+    любого кластера с K-5a. Проверено на OrbStack (`live_cluster_names_the_autoscaler_…`).
+    Мутаций девятнадцать: две пойманы после добавленных случаев (другой менеджер в метке
+    `managed-by`, второй kubeconfig без пометки), одна эквивалентна — `production` в
+    `PinnedCluster` цикла при выполнении не читается, он нужен только предпросмотру.
+    **Отложено:** пометка — у kubeconfig целиком, не у отдельного контекста; кнопка «Always»
+    на карточке production остаётся и на этот кластер не действует.
 - **K-6 — живые карточки.** Watcher, sink и `kube:changed`, Channel для `follow`,
   финальное состояние в чат; `kubeWaitRollout`.
 - **K-7 — ранбуки.** `kubeRunbook`, шесть встроенных, свои из `~/.kibo/runbooks/` с

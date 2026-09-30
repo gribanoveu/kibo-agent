@@ -145,8 +145,15 @@ pub fn kubeconfig_save(name: String, path: String) -> Result<(), String> {
     if !path.is_file() {
         return Err(format!("there is no file at {}", path.display()));
     }
-    let config = Kubeconfig { name: name.to_string(), path: path.to_string_lossy().into_owned() };
+    let config = Kubeconfig { name: name.to_string(), path: path.to_string_lossy().into_owned(), production: false };
     kubeconfigs::save(config).map_err(|e| e.to_string())
+}
+
+/// The user's mark that a kubeconfig's clusters are production: changes
+/// there always ask.
+#[tauri::command]
+pub fn kubeconfig_production_set(name: String, production: bool) -> Result<(), String> {
+    kubeconfigs::set_production(&name, production).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -375,7 +382,14 @@ mod tests {
             assert!(kubeconfig_save("  ".to_string(), path.clone()).unwrap_err().contains("name"));
             kubeconfig_save(" prod ".to_string(), path.clone()).unwrap();
             let kube = kube_settings_get().unwrap();
-            assert_eq!(kube.configs, vec![Kubeconfig { name: "prod".to_string(), path }]);
+            assert_eq!(kube.configs, vec![Kubeconfig { name: "prod".to_string(), path: path.clone(), production: false }]);
+            // The mark is the user's, and saving the file's path again does not take it off.
+            kubeconfig_save("staging".to_string(), path.clone()).unwrap();
+            kubeconfig_production_set("prod".to_string(), true).unwrap();
+            kubeconfig_production_set("absent".to_string(), true).unwrap();
+            kubeconfig_save("prod".to_string(), path.clone()).unwrap();
+            let marked: Vec<(String, bool)> = kube_settings_get().unwrap().configs.into_iter().map(|c| (c.name, c.production)).collect();
+            assert_eq!(marked, [("prod".to_string(), true), ("staging".to_string(), false)]);
         });
     }
 
