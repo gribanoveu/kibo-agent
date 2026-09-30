@@ -105,6 +105,10 @@ pub struct ChatSummary {
     /// than in it, so a record alone says `false`.
     #[serde(default)]
     pub archived: bool,
+    /// Who the model is in a Chat mode conversation, for the row's sign.
+    /// `None` for the agent's, and for a chat last saved before rows kept it.
+    #[serde(default)]
+    pub role: Option<ChatRole>,
 }
 
 impl From<&ChatRecord> for ChatSummary {
@@ -115,6 +119,7 @@ impl From<&ChatRecord> for ChatSummary {
             updated_at: record.updated_at,
             branched_from: record.branched_from.clone(),
             archived: false,
+            role: record.role,
         }
     }
 }

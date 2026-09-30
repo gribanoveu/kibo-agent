@@ -503,6 +503,8 @@ export type ChatSummary = {
   branchedFrom?: string | null;
   /** Filed away: shown under the sidebar's "Archived" filter, not in the list. */
   archived: boolean;
+  /** Who answers in a Chat mode conversation; absent for the agent's and for chats saved before rows kept it. */
+  role?: ChatRoleId | null;
 };
 
 /**

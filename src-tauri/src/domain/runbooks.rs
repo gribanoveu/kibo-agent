@@ -16,7 +16,6 @@ pub struct Runbook {
     pub name: String,
     /// When to read it, in a line.
     pub sign: String,
-    #[serde(skip)]
     pub text: String,
     /// The user's file, not the app's.
     pub own: bool,

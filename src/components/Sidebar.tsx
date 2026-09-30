@@ -12,6 +12,7 @@ import {
   PanelLeft,
   Plus,
   Settings,
+  ShipWheel,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -160,6 +161,10 @@ export function Sidebar({
                   <Archive size={14} />
                 ) : chat.branchedFrom ? (
                   <GitBranch size={14} />
+                ) : chat.role === "kubernetes" ? (
+                  <ShipWheel size={14} />
+                ) : chat.role === "assistant" ? (
+                  <MessagesSquare size={14} />
                 ) : (
                   <MessageSquare size={14} />
                 )}

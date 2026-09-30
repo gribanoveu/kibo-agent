@@ -72,10 +72,45 @@
 .kube-production.on {
   color: var(--red);
 }
-.kube-changes-title {
-  margin-top: 22px;
+/* The pane's three views, under its title. */
+.kube-views {
+  margin-bottom: 12px;
 }
 /* Under the controls, where the fields' inputs start. */
 .kube-actions {
   margin-left: 144px;
+}
+
+/* A runbook's row opens its text under it. */
+.kube-runbook {
+  border-bottom: 1px solid var(--border-soft);
+}
+.kube-runbook:last-child {
+  border-bottom: 0;
+}
+.kube-runbook-head {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kube-runbook-head:hover {
+  background: var(--bg-hover);
+}
+.kube-runbook-chev {
+  flex: none;
+  margin-right: 6px;
+  color: var(--text-faint);
+  transition: transform 0.15s;
+}
+.kube-runbook-chev.open {
+  transform: rotate(90deg);
+}
+.kube-runbook-text {
+  padding: 4px 14px 12px 35px;
+  font-size: var(--fs-sm);
+  border-top: 1px solid var(--border-soft);
 }

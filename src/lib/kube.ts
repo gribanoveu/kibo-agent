@@ -94,11 +94,13 @@ export type KubeChange = {
   undoes: string | null;
 };
 
-/** Mirrors `domain::runbooks::Runbook`, without its text. */
+/** Mirrors `domain::runbooks::Runbook`. */
 export type Runbook = {
   name: string;
   /** When the model reads it, in a line. */
   sign: string;
+  /** The whole note, Markdown. */
+  text: string;
   /** The user's file, not the app's. */
   own: boolean;
 };

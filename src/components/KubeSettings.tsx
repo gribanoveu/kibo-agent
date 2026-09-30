@@ -1,10 +1,14 @@
 import { useState } from "react";
-import { BookOpen, FolderOpen, History, Server, ShieldAlert, Trash2 } from "lucide-react";
+import { BookOpen, ChevronRight, FolderOpen, History, Server, ShieldAlert, Trash2 } from "lucide-react";
 import { pickFile } from "../lib/dialog";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { useKubeChanges } from "../hooks/useKubeChanges";
 import { useKubeRunbooks } from "../hooks/useKubeRunbooks";
+import { Markdown } from "./Markdown";
+import { Tabs, type TabItem } from "./Tabs";
 import "./KubeSettings.css";
+
+type View = "clusters" | "runbooks" | "changes";
 
 /** Settings → Kubernetes: the kubeconfig files Chat mode's Kubernetes role knows of. */
 export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
@@ -12,6 +16,14 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
   const [path, setPath] = useState("");
   const changes = useKubeChanges();
   const { dir, runbooks } = useKubeRunbooks();
+  const [view, setView] = useState<View>("clusters");
+  // The runbook opened for reading, one at a time.
+  const [reading, setReading] = useState<string | null>(null);
+  const views: TabItem<View>[] = [
+    { id: "clusters", label: "Kubeconfigs", count: kube.configs.length },
+    { id: "runbooks", label: "Runbooks", count: runbooks.length },
+    { id: "changes", label: "Changes", count: changes.length },
+  ];
 
   const add = async () => {
     if (await kube.save(name, path)) {
@@ -25,140 +37,180 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
     if (!chosen) return;
     setPath(chosen);
     // The file's own name is a fair first guess at the cluster's.
-    if (!name.trim()) setName(chosen.split(/[\\/]/).pop()?.replace(/\.(ya?ml|conf)$/i, "") ?? "");
+    if (!name.trim())
+      setName(
+        chosen
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.(ya?ml|conf)$/i, "") ?? "",
+      );
   };
 
   return (
     <>
       <h3 className="settings-title">Kubernetes</h3>
-      <p className="modal-note kube-intro">
-        The kubeconfig files the Kubernetes role in Chat mode works with; pick one on the tab above the chat's message
-        box. Kibo keeps only the path — the file stays where kubectl reads it, credentials and all.
-      </p>
+      <div className="kube-views">
+        <Tabs label="Kubernetes settings" tabs={views} value={view} onChange={setView} />
+      </div>
 
-      {kube.configs.length > 0 && (
-        <ul className="kube-list">
-          {kube.configs.map((config) => (
-            <li key={config.name} className="kube-row">
-              <Server size={14} className="kube-row-icon" />
-              <span className="kube-row-text">
-                <span className="kube-row-name">
-                  {config.name}
-                  {kube.active?.name === config.name && <span className="kube-row-badge">in use</span>}
-                  {config.production && <span className="kube-row-badge production">production</span>}
-                </span>
-                <span className="kube-row-path">{config.path}</span>
-              </span>
-              <button
-                type="button"
-                className={`iconbtn kube-production${config.production ? " on" : ""}`}
-                title={
-                  config.production
-                    ? "Production: every change asks, even a tool you always allow. Click to take the mark off"
-                    : "Mark as production: every change will ask, even a tool you always allow"
-                }
-                aria-label={`${config.name} is production`}
-                aria-pressed={!!config.production}
-                onClick={() => kube.setProduction(config.name, !config.production)}
-              >
-                <ShieldAlert size={14} />
+      {view === "clusters" && (
+        <>
+          <p className="modal-note kube-intro">
+            The kubeconfig files the Kubernetes role in Chat mode works with; pick one on the tab above the chat's
+            message box. Kibo keeps only the path — the file stays where kubectl reads it, credentials and all.
+          </p>
+
+          {kube.configs.length > 0 && (
+            <ul className="kube-list">
+              {kube.configs.map((config) => (
+                <li key={config.name} className="kube-row">
+                  <Server size={14} className="kube-row-icon" />
+                  <span className="kube-row-text">
+                    <span className="kube-row-name">
+                      {config.name}
+                      {kube.active?.name === config.name && <span className="kube-row-badge">in use</span>}
+                      {config.production && <span className="kube-row-badge production">production</span>}
+                    </span>
+                    <span className="kube-row-path">{config.path}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className={`iconbtn kube-production${config.production ? " on" : ""}`}
+                    title={
+                      config.production
+                        ? "Production: every change asks, even a tool you always allow. Click to take the mark off"
+                        : "Mark as production: every change will ask, even a tool you always allow"
+                    }
+                    aria-label={`${config.name} is production`}
+                    aria-pressed={!!config.production}
+                    onClick={() => kube.setProduction(config.name, !config.production)}
+                  >
+                    <ShieldAlert size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    title={`Remove ${config.name}`}
+                    aria-label={`Remove ${config.name}`}
+                    onClick={() => kube.remove(config.name)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <form
+            className="kube-add"
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              add();
+            }}
+          >
+            <div className="modal-field">
+              <label htmlFor="kube-path">Kubeconfig file</label>
+              <div className="kube-path">
+                <input
+                  id="kube-path"
+                  type="text"
+                  value={path}
+                  placeholder="~/.kube/config"
+                  onChange={(e) => setPath(e.target.value)}
+                />
+                <button type="button" className="btn btn-ghost" onClick={browse}>
+                  <FolderOpen size={13} />
+                  Browse
+                </button>
+              </div>
+            </div>
+            <div className="modal-field">
+              <label htmlFor="kube-name">Name</label>
+              <input
+                id="kube-name"
+                type="text"
+                value={name}
+                placeholder="prod"
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            {kube.error && <p className="modal-note settings-hint settings-error">{kube.error}</p>}
+            <div className="kube-actions">
+              <button type="submit" className="btn btn-primary" disabled={!name.trim() || !path.trim()}>
+                Add kubeconfig
               </button>
-              <button
-                type="button"
-                className="iconbtn"
-                title={`Remove ${config.name}`}
-                aria-label={`Remove ${config.name}`}
-                onClick={() => kube.remove(config.name)}
-              >
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
+            </div>
+          </form>
+        </>
       )}
 
-      <form
-        className="kube-add"
-        noValidate
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
-      >
-        <div className="modal-field">
-          <label htmlFor="kube-path">Kubeconfig file</label>
-          <div className="kube-path">
-            <input
-              id="kube-path"
-              type="text"
-              value={path}
-              placeholder="~/.kube/config"
-              onChange={(e) => setPath(e.target.value)}
-            />
-            <button type="button" className="btn btn-ghost" onClick={browse}>
-              <FolderOpen size={13} />
-              Browse
-            </button>
-          </div>
-        </div>
-        <div className="modal-field">
-          <label htmlFor="kube-name">Name</label>
-          <input id="kube-name" type="text" value={name} placeholder="prod" onChange={(e) => setName(e.target.value)} />
-        </div>
-        {kube.error && <p className="modal-note settings-hint settings-error">{kube.error}</p>}
-        <div className="kube-actions">
-          <button type="submit" className="btn btn-primary" disabled={!name.trim() || !path.trim()}>
-            Add kubeconfig
-          </button>
-        </div>
-      </form>
+      {view === "runbooks" && (
+        <>
+          <p className="modal-note kube-intro">
+            Short notes on how one kind of failure is taken apart. A Kubernetes chat is told their names and reads one
+            when it sees its sign. Add your own as Markdown files in {dir || "~/.kibo/runbooks/kubernetes"} — a line
+            starting with “Sign:” says when to read it, and a file named like a built-in one replaces it.
+          </p>
+          <ul className="kube-list">
+            {runbooks.map((runbook) => (
+              <li key={runbook.name} className="kube-runbook">
+                <button
+                  type="button"
+                  className="kube-row kube-runbook-head"
+                  aria-expanded={reading === runbook.name}
+                  title="Read it"
+                  onClick={() => setReading(reading === runbook.name ? null : runbook.name)}
+                >
+                  <BookOpen size={14} className="kube-row-icon" />
+                  <span className="kube-row-text">
+                    <span className="kube-row-name">
+                      {runbook.name}
+                      {runbook.own && <span className="kube-row-badge">yours</span>}
+                    </span>
+                    <span className="kube-row-path">{runbook.sign}</span>
+                  </span>
+                  <ChevronRight size={13} className={`kube-runbook-chev${reading === runbook.name ? " open" : ""}`} />
+                </button>
+                {reading === runbook.name && (
+                  <div className="kube-runbook-text">
+                    <Markdown text={runbook.text} streaming={false} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
-      <h3 className="settings-title kube-changes-title">Runbooks</h3>
-      <p className="modal-note kube-intro">
-        Short notes on how one kind of failure is taken apart. A Kubernetes chat is told their names and reads one when
-        it sees its sign. Add your own as Markdown files in {dir || "~/.kibo/runbooks/kubernetes"} — a line starting with
-        “Sign:” says when to read it, and a file named like a built-in one replaces it.
-      </p>
-      <ul className="kube-list">
-        {runbooks.map((runbook) => (
-          <li key={runbook.name} className="kube-row">
-            <BookOpen size={14} className="kube-row-icon" />
-            <span className="kube-row-text">
-              <span className="kube-row-name">
-                {runbook.name}
-                {runbook.own && <span className="kube-row-badge">yours</span>}
-              </span>
-              <span className="kube-row-path" title={runbook.sign}>{runbook.sign}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      <h3 className="settings-title kube-changes-title">Changes</h3>
-      <p className="modal-note kube-intro">
-        What Kibo changed in your clusters. Each was backed up first and can be undone for 30 days, the last change of
-        an object first: ask in a Kubernetes chat pinned to the same context and namespace, by the change's id.
-      </p>
-      {changes.length === 0 ? (
-        <p className="modal-note">Nothing yet.</p>
-      ) : (
-        <ul className="kube-list">
-          {changes.map((change) => (
-            <li key={change.id} className="kube-row">
-              <History size={14} className="kube-row-icon" />
-              <span className="kube-row-text">
-                <span className="kube-row-name">
-                  {change.kind}/{change.name} · {change.summary}
-                  {change.undoes && <span className="kube-row-badge">undo of {change.undoes}</span>}
-                  {change.error && <span className="kube-row-badge">refused</span>}
-                </span>
-                <span className="kube-row-path">
-                  {change.id} · {change.context} · {change.namespace} · {new Date(change.at).toLocaleString()}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
+      {view === "changes" && (
+        <>
+          <p className="modal-note kube-intro">
+            What Kibo changed in your clusters. Each was backed up first and can be undone for 30 days, the last change
+            of an object first: ask in a Kubernetes chat pinned to the same context and namespace, by the change's id.
+          </p>
+          {changes.length === 0 ? (
+            <p className="modal-note">Nothing yet.</p>
+          ) : (
+            <ul className="kube-list">
+              {changes.map((change) => (
+                <li key={change.id} className="kube-row">
+                  <History size={14} className="kube-row-icon" />
+                  <span className="kube-row-text">
+                    <span className="kube-row-name">
+                      {change.kind}/{change.name} · {change.summary}
+                      {change.undoes && <span className="kube-row-badge">undo of {change.undoes}</span>}
+                      {change.error && <span className="kube-row-badge">refused</span>}
+                    </span>
+                    <span className="kube-row-path">
+                      {change.id} · {change.context} · {change.namespace} · {new Date(change.at).toLocaleString()}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </>
   );

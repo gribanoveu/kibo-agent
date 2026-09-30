@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2026-09-30 Settings → Kubernetes is three tabs — Kubeconfigs, Runbooks, Changes — and a runbook opens under its row to be read
+
+- 2026-09-30 The chat list scrolls by itself, so the account row and the first-steps card stay on screen however many chats there are; a Chat mode conversation wears its role's sign in the list
+
 - 2026-09-30 The Kubernetes role follows runbooks: seven built in — crash loops, image pulls, Pending, OOMKilled, failing probes, requests that do not arrive, and a Spring Boot application — and your own from `~/.kibo/runbooks/kubernetes`, which replace a built-in one of the same name; Settings → Kubernetes lists them
 
 - 2026-09-30 The Kubernetes role checks from inside a pod whether it reaches a URL, a port or a name — resolved, open, the HTTP status, refused or timed out — without reading the response and without running anything else in the pod

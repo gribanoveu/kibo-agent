@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at     INTEGER NOT NULL,
   branched_from  TEXT,
   body           TEXT NOT NULL,
-  archived       INTEGER NOT NULL DEFAULT 0
+  archived       INTEGER NOT NULL DEFAULT 0,
+  role           TEXT
 );
 CREATE INDEX IF NOT EXISTS chats_workspace ON chats(workspace, updated_at DESC);
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -90,6 +91,14 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
         conn.execute_batch("ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
             .map_err(store)?;
     }
+    // The same for a chat's role, which the list draws a sign from: null for
+    // the agent's chats and for those saved before the column.
+    let has_role: bool = conn
+        .query_row("SELECT COUNT(*) > 0 FROM pragma_table_info('chats') WHERE name = 'role'", [], |row| row.get(0))
+        .map_err(store)?;
+    if !has_role {
+        conn.execute_batch("ALTER TABLE chats ADD COLUMN role TEXT").map_err(store)?;
+    }
     Ok(conn)
 }
 
@@ -110,7 +119,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
     rename_summary_titles(&conn, workspace)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, updated_at, branched_from, archived FROM chats
+            "SELECT id, title, updated_at, branched_from, archived, role FROM chats
              WHERE workspace = ?1 AND schema_version <= ?2
              ORDER BY updated_at DESC, id",
         )
@@ -123,6 +132,8 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
                 updated_at: row.get(2)?,
                 branched_from: row.get(3)?,
                 archived: row.get(4)?,
+                // A role a newer build wrote is no sign, not an error.
+                role: row.get::<_, Option<String>>(5)?.and_then(|role| serde_json::from_value(serde_json::Value::String(role)).ok()),
             })
         })
         .map_err(store)?;
@@ -249,8 +260,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -258,7 +269,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
            created_at = excluded.created_at,
            updated_at = excluded.updated_at,
            branched_from = excluded.branched_from,
-           body = excluded.body",
+           body = excluded.body,
+           role = excluded.role",
         params![
             record.id,
             record.workspace,
@@ -268,6 +280,7 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
             record.updated_at,
             record.branched_from,
             body,
+            record.role.and_then(|role| serde_json::to_value(role).ok()?.as_str().map(str::to_string)),
         ],
     )
     .map_err(store)?;
@@ -630,6 +643,15 @@ mod tests {
             assert_eq!(saved.title, "what is a monad?");
             let ids = |folder: &str| list(folder).unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
             assert_eq!(ids(NO_FOLDER), ["plain"]);
+            // The list's row says who answers, without reading the body.
+            save_plain("cluster", ChatRole::Kubernetes, None, &said, &shown).unwrap();
+            let roles: Vec<_> = list(NO_FOLDER).unwrap().into_iter().map(|c| (c.id, c.role)).collect();
+            assert!(roles.contains(&("plain".into(), Some(ChatRole::Assistant))) && roles.contains(&("cluster".into(), Some(ChatRole::Kubernetes))), "{roles:?}");
+            assert_eq!(list("/repo").unwrap()[0].role, None);
+            // A row from before the column, or with a role this build does not know.
+            open().unwrap().execute("UPDATE chats SET role = CASE id WHEN 'plain' THEN NULL ELSE 'astrologer' END", []).unwrap();
+            assert!(list(NO_FOLDER).unwrap().iter().all(|c| c.role.is_none()));
+            delete("cluster").unwrap();
             assert_eq!(ids("/repo"), ["agent"]);
             let record = load("plain").unwrap();
             assert_eq!((record.role, record.messages, record.blocks), (Some(ChatRole::Assistant), said.to_vec(), shown));
