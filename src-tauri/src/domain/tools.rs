@@ -65,6 +65,7 @@ pub enum ToolName {
     KubeFieldHistory,
     /// A workload's state, pods, events and the telling log in one call (K-4).
     KubeDiagnose,
+    KubeWaitRollout,
     /// The first of the role's changes (K-5a): replicas, with a backup.
     KubeScale,
     /// Puts a recorded change back from its backup (K-5b).
@@ -123,6 +124,7 @@ impl ToolName {
         ToolName::KubeTop,
         ToolName::KubeFieldHistory,
         ToolName::KubeDiagnose,
+        ToolName::KubeWaitRollout,
         ToolName::KubeScale,
         ToolName::KubeUndo,
         ToolName::KubeSuspend,
@@ -168,6 +170,7 @@ impl ToolName {
             ToolName::KubeTop => "kubeTop",
             ToolName::KubeFieldHistory => "kubeFieldHistory",
             ToolName::KubeDiagnose => "kubeDiagnose",
+            ToolName::KubeWaitRollout => "kubeWaitRollout",
             ToolName::KubeScale => "kubeScale",
             ToolName::KubeUndo => "kubeUndo",
             ToolName::KubeSuspend => "kubeSuspend",
@@ -287,6 +290,8 @@ impl ToolName {
             ToolName::KubeLogs => 3,
             // Five or six reads of the cluster — the rounds it saves.
             ToolName::KubeDiagnose => 4,
+            // One watch, however long: waiting is the round it saves.
+            ToolName::KubeWaitRollout => 2,
             // A read, a dry run, a backup, the change.
             ToolName::KubeScale
             | ToolName::KubeUndo
@@ -448,7 +453,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            39,
+            40,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1113,6 +1118,7 @@ pub enum ToolCall {
     KubeTop(KubeTopArgs),
     KubeFieldHistory(KubeFieldHistoryArgs),
     KubeDiagnose(KubeDiagnoseArgs),
+    KubeWaitRollout(KubeWaitRolloutArgs),
     KubeScale(KubeScaleArgs),
     KubeUndo(KubeUndoArgs),
     KubeSuspend(KubeSuspendArgs),
@@ -1157,6 +1163,7 @@ impl ToolCall {
             ToolCall::KubeTop(_) => ToolName::KubeTop,
             ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
             ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
+            ToolCall::KubeWaitRollout(_) => ToolName::KubeWaitRollout,
             ToolCall::KubeScale(_) => ToolName::KubeScale,
             ToolCall::KubeUndo(_) => ToolName::KubeUndo,
             ToolCall::KubeSuspend(_) => ToolName::KubeSuspend,
@@ -1548,6 +1555,17 @@ pub struct KubeDiagnoseArgs {
     pub name: String,
     #[serde(default)]
     pub namespace: Option<String>,
+}
+
+/// `kubeWaitRollout`: a workload in the chat's own namespace, and how long
+/// to wait for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeWaitRolloutArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// `kubeScale`: a workload's replicas, in the chat's own namespace — a

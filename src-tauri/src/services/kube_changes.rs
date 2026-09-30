@@ -225,4 +225,37 @@ mod tests {
             assert_eq!(notes[0], "HorizontalPodAutoscaler/kibo-live sets its replicas (1–3): it will scale it back.");
         });
     }
+
+    /// A rollout that cannot finish is waited for no longer than asked and
+    /// answered with why (K-6a). Makes a Deployment whose pod is never ready
+    /// in the target's namespace, and deletes it.
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_waits_for_a_rollout_and_says_why_it_is_not_done() {
+        use crate::domain::kube::KubeApi;
+        use crate::domain::tools::{KubeWaitRolloutArgs, ToolResult};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, _) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+        let deployments = crate::domain::kube::resolve_kind(&api.kinds().unwrap(), "deploy").unwrap().clone();
+        let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: false, production: false, changes: None };
+        let never_ready = serde_json::json!({
+            "apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "kibo-live-wait"},
+            "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "kibo-live-wait"}}, "template": {
+                "metadata": {"labels": {"app": "kibo-live-wait"}},
+                "spec": {"terminationGracePeriodSeconds": 0, "containers": [{"name": "app", "image": "busybox", "command": ["sleep", "600"],
+                    "readinessProbe": {"exec": {"command": ["false"]}}}]}}}
+        });
+
+        api.apply(&deployments, namespace, "kibo-live-wait", &never_ready, false).unwrap();
+        let wait = KubeWaitRolloutArgs { kind: "deploy".into(), name: "kibo-live-wait".into(), timeout_seconds: Some(10) };
+        let waited = cluster::kube_wait_rollout(Some(place), None, &wait);
+        api.delete(&deployments, namespace, "kibo-live-wait", false).unwrap();
+        let ToolResult::Kube { text, summary } = waited.unwrap() else { panic!() };
+        println!("{text}");
+        assert!(summary == "not done" && text.starts_with("Rollout of Deployment/kibo-live-wait is not done after 10s: 0 of 1 up-to-date pods available."), "{text}");
+        assert!(text.contains("Pods: 1, 1 with problems."), "{text}");
+    }
 }

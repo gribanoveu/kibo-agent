@@ -657,6 +657,67 @@ pub fn owner_status(kind: &str, owner: &Value) -> Vec<String> {
     lines
 }
 
+/// Where a rollout stands, with the numbers that say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rollout {
+    Done(String),
+    Going(String),
+    /// The controller itself gave up: waiting longer changes nothing.
+    Stuck(String),
+}
+
+/// A workload's rollout, read from its own status the way `kubectl rollout
+/// status` reads it: a Deployment, a StatefulSet, or else a DaemonSet.
+pub fn rollout(kind: &str, owner: &Value) -> Rollout {
+    let n = |path: &str| int_at(owner, path);
+    if n("metadata.generation") > n("status.observedGeneration") {
+        return Rollout::Going("the controller has not acted on the latest spec yet".to_string());
+    }
+    let want = n("spec.replicas");
+    match kind {
+        "Deployment" => {
+            let (updated, all, available) = (n("status.updatedReplicas"), n("status.replicas"), n("status.availableReplicas"));
+            let conditions = at(owner, "status.conditions").and_then(Value::as_array);
+            let gave_up = conditions.into_iter().flatten().find(|c| c["type"] == "Progressing" && c["reason"] == "ProgressDeadlineExceeded");
+            if let Some(condition) = gave_up {
+                Rollout::Stuck(format!("no progress within its deadline — {}", condition_line(condition)))
+            } else if updated < want {
+                Rollout::Going(format!("{updated} of {want} pods up to date"))
+            } else if all > updated {
+                Rollout::Going(format!("{} old pods still to stop", all - updated))
+            } else if available < updated {
+                Rollout::Going(format!("{available} of {updated} up-to-date pods available"))
+            } else {
+                Rollout::Done(format!("{want} of {want} pods up to date and available"))
+            }
+        }
+        "StatefulSet" => {
+            // ponytail: a partitioned update never brings the revisions
+            // together and reads as going; compare against the partition if
+            // someone waits on one.
+            let (ready, updated) = (n("status.readyReplicas"), n("status.updatedReplicas"));
+            if at(owner, "status.updateRevision") != at(owner, "status.currentRevision") {
+                Rollout::Going(format!("{updated} of {want} pods on the new revision"))
+            } else if ready < want {
+                Rollout::Going(format!("{ready} of {want} pods ready"))
+            } else {
+                Rollout::Done(format!("{want} of {want} pods on the revision and ready"))
+            }
+        }
+        _ => {
+            let want = n("status.desiredNumberScheduled");
+            let (updated, available) = (n("status.updatedNumberScheduled"), n("status.numberAvailable"));
+            if updated < want {
+                Rollout::Going(format!("{updated} of {want} pods up to date"))
+            } else if available < want {
+                Rollout::Going(format!("{available} of {want} pods available"))
+            } else {
+                Rollout::Done(format!("{want} of {want} pods up to date and available"))
+            }
+        }
+    }
+}
+
 fn condition_line(condition: &Value) -> String {
     let mut line = format!("{}={}", text_at(condition, "type"), text_at(condition, "status"));
     if let Some(reason) = condition.get("reason").and_then(Value::as_str) {
@@ -1037,6 +1098,46 @@ mod tests {
             "fieldsV1": {"f:spec": {"f:ports": {"k:{\"port\":80}": {".": {}}}}}}]}});
         assert!(field_history(&whole, &[]).unwrap().contains("spec.ports[port=80]  helm"), "an item owned whole is lost");
         assert_eq!(field_history(&json!({"metadata": {}}), &[]), None);
+    }
+
+    #[test]
+    fn a_rollout_is_read_from_the_workloads_own_counts() {
+        let going = |text: &str| Rollout::Going(text.to_string());
+        let deployment = |generation: i64, updated: i64, all: i64, available: i64| {
+            json!({"metadata": {"generation": generation}, "spec": {"replicas": 3},
+                   "status": {"observedGeneration": 4, "updatedReplicas": updated, "replicas": all, "availableReplicas": available}})
+        };
+        assert_eq!(rollout("Deployment", &deployment(5, 3, 3, 3)), going("the controller has not acted on the latest spec yet"));
+        assert_eq!(rollout("Deployment", &deployment(4, 2, 3, 3)), going("2 of 3 pods up to date"));
+        assert_eq!(rollout("Deployment", &deployment(4, 3, 4, 3)), going("1 old pods still to stop"));
+        assert_eq!(rollout("Deployment", &deployment(4, 3, 3, 2)), going("2 of 3 up-to-date pods available"));
+        assert_eq!(rollout("Deployment", &deployment(4, 3, 3, 3)), Rollout::Done("3 of 3 pods up to date and available".into()));
+        // An older spec's status is no worse than the spec's own.
+        assert!(matches!(rollout("Deployment", &deployment(3, 3, 3, 3)), Rollout::Done(_)));
+
+        let mut gave_up = deployment(4, 1, 3, 2);
+        gave_up["status"]["conditions"] = json!([
+            {"type": "Available", "status": "True", "reason": "MinimumReplicasAvailable"},
+            {"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "ReplicaSet \"api-7d\" has timed out progressing."},
+        ]);
+        assert_eq!(
+            rollout("Deployment", &gave_up),
+            Rollout::Stuck("no progress within its deadline — Progressing=False (ProgressDeadlineExceeded): ReplicaSet \"api-7d\" has timed out progressing.".into())
+        );
+        gave_up["status"]["conditions"][1]["reason"] = json!("ReplicaSetUpdated");
+        assert_eq!(rollout("Deployment", &gave_up), going("1 of 3 pods up to date"));
+
+        let set = |ready: i64, update: &str| {
+            json!({"spec": {"replicas": 2}, "status": {"readyReplicas": ready, "updatedReplicas": 1, "currentRevision": "web-1", "updateRevision": update}})
+        };
+        assert_eq!(rollout("StatefulSet", &set(2, "web-2")), going("1 of 2 pods on the new revision"));
+        assert_eq!(rollout("StatefulSet", &set(1, "web-1")), going("1 of 2 pods ready"));
+        assert_eq!(rollout("StatefulSet", &set(2, "web-1")), Rollout::Done("2 of 2 pods on the revision and ready".into()));
+
+        let daemons = |updated: i64, available: i64| json!({"status": {"desiredNumberScheduled": 4, "updatedNumberScheduled": updated, "numberAvailable": available}});
+        assert_eq!(rollout("DaemonSet", &daemons(3, 4)), going("3 of 4 pods up to date"));
+        assert_eq!(rollout("DaemonSet", &daemons(4, 3)), going("3 of 4 pods available"));
+        assert_eq!(rollout("DaemonSet", &daemons(4, 4)), Rollout::Done("4 of 4 pods up to date and available".into()));
     }
 
     #[test]

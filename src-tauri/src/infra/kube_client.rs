@@ -14,7 +14,8 @@ use std::time::{Duration, SystemTime};
 
 use k8s_openapi::api::authorization::v1::{SelfSubjectRulesReview, SelfSubjectRulesReviewSpec};
 use k8s_openapi::api::core::v1::{Namespace, Pod};
-use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams};
+use futures_util::StreamExt;
+use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams, WatchEvent, WatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::core::discovery::{verbs, Scope};
 use kube::{Client, Config, Discovery};
@@ -33,6 +34,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// One read of a tool: a discovery of every API group, a page of a list, a
 /// pod's log.
 const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often a watch with nothing to show looks at whether it was stopped.
+const STOP_CHECK: Duration = Duration::from_millis(500);
 
 /// A kubeconfig's contexts, read from the file alone — no cluster is asked.
 pub fn contexts(path: &Path) -> Result<KubeContexts, KubeError> {
@@ -301,6 +304,51 @@ impl KubeApi for ClusterApi {
             Ok(())
         })
     }
+
+    fn watch(
+        &self,
+        kind: &KubeKind,
+        namespace: &str,
+        name: &str,
+        timeout: Duration,
+        stop: &dyn Fn() -> bool,
+        seen: &mut dyn FnMut(&serde_json::Value) -> bool,
+    ) -> Result<(), KubeError> {
+        // The call's own bound is a backstop: the watch ends itself at `timeout`.
+        self.clusters.within(&self.path, &self.context, timeout + READ_CALL_TIMEOUT, |client| async move {
+            let api = dynamic(client, kind, Some(namespace));
+            let deadline = tokio::time::Instant::now() + timeout;
+            let over = || stop() || tokio::time::Instant::now() >= deadline;
+            let params = WatchParams::default().fields(&format!("metadata.name={name}"));
+            loop {
+                // Read, then watch from what was read. The server closes a
+                // watch when it likes; one that ends starts over here.
+                let object = api.get(name).await.map_err(cluster_error)?;
+                let version = object.metadata.resource_version.clone().unwrap_or_default();
+                if seen(&json(object)?) || over() {
+                    return Ok(());
+                }
+                let mut events = std::pin::pin!(api.watch(&params, &version).await.map_err(cluster_error)?);
+                loop {
+                    // Wakes to see whether the turn was stopped — it asks the
+                    // cluster nothing.
+                    match tokio::time::timeout(STOP_CHECK, events.next()).await {
+                        Ok(Some(Ok(WatchEvent::Added(object) | WatchEvent::Modified(object)))) => {
+                            if seen(&json(object)?) {
+                                return Ok(());
+                            }
+                        }
+                        Ok(Some(Ok(WatchEvent::Deleted(_)))) => return Err(KubeError::NotFound(format!("{} \"{name}\" was deleted", kind.plural))),
+                        Ok(Some(Ok(WatchEvent::Bookmark(_)))) | Err(_) => {}
+                        Ok(Some(Ok(WatchEvent::Error(_)) | Err(_)) | None) => break,
+                    }
+                    if over() {
+                        return Ok(());
+                    }
+                }
+            }
+        })
+    }
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -495,6 +543,47 @@ users:
         assert!(managers.contains(&FIELD_MANAGER), "{managers:?}");
         let back = serde_json::json!({"spec": {"replicas": replicas(&was)}});
         assert_eq!(replicas(&api.patch(&deployments, namespace, name, &back, false).unwrap()), replicas(&was));
+    }
+
+    /// A watch shows the object now and after each change, and ends when told
+    /// it has seen enough, when stopped, and when its time is out. Scales a
+    /// Deployment of one's own up by one and back:
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_watches_a_rollout_to_its_end() {
+        use crate::domain::kube_view::{rollout, Rollout};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, name) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+        let deployments = crate::domain::kube::resolve_kind(&api.kinds().unwrap(), "deploy").unwrap().clone();
+        let was = api.get(&deployments, namespace, name).unwrap()["spec"]["replicas"].as_i64().unwrap();
+        let minute = Duration::from_secs(60);
+
+        for replicas in [was + 1, was] {
+            api.patch(&deployments, namespace, name, &serde_json::json!({"spec": {"replicas": replicas}}), false).unwrap();
+            let (mut shown, mut stands) = (0, Rollout::Going(String::new()));
+            api.watch(&deployments, namespace, name, minute, &|| false, &mut |object| {
+                shown += 1;
+                stands = rollout("Deployment", object);
+                println!("{replicas}: {stands:?}");
+                !matches!(stands, Rollout::Going(_))
+            })
+            .unwrap();
+            assert_eq!(stands, Rollout::Done(format!("{replicas} of {replicas} pods up to date and available")));
+            assert!(replicas == was || shown > 1, "a pod does not start before the first read");
+        }
+
+        let started = std::time::Instant::now();
+        let mut shown = 0;
+        api.watch(&deployments, namespace, name, minute, &|| true, &mut |_| { shown += 1; false }).unwrap();
+        assert!(shown == 1 && started.elapsed() < Duration::from_secs(5), "a stopped turn waits no longer");
+        let started = std::time::Instant::now();
+        api.watch(&deployments, namespace, name, Duration::from_secs(2), &|| false, &mut |_| false).unwrap();
+        assert!((2..6).contains(&started.elapsed().as_secs()), "{:?}", started.elapsed());
+        let gone = api.watch(&deployments, namespace, "no-such", minute, &|| false, &mut |_| false).unwrap_err();
+        assert!(matches!(gone, KubeError::NotFound(_)), "{gone:?}");
     }
 
     /// Nothing listens on port 1: the probe says so instead of failing the turn.

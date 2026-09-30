@@ -146,6 +146,21 @@ pub trait KubeApi: Send + Sync {
     /// approved the difference. Returns it as the server then has it.
     fn apply(&self, kind: &KubeKind, namespace: &str, name: &str, object: &serde_json::Value, dry_run: bool) -> Result<serde_json::Value, KubeError>;
     fn delete(&self, kind: &KubeKind, namespace: &str, name: &str, dry_run: bool) -> Result<(), KubeError>;
+    /// Shows `seen` the object as it is, and again after every change to it,
+    /// until `seen` says it has seen enough, `timeout` passes or `stop` says
+    /// the turn is over. A client that cannot watch shows it once.
+    fn watch(
+        &self,
+        kind: &KubeKind,
+        namespace: &str,
+        name: &str,
+        _timeout: std::time::Duration,
+        _stop: &dyn Fn() -> bool,
+        seen: &mut dyn FnMut(&serde_json::Value) -> bool,
+    ) -> Result<(), KubeError> {
+        seen(&self.get(kind, namespace, name)?);
+        Ok(())
+    }
 }
 
 /// One change a tool made to a cluster, as the audit keeps it

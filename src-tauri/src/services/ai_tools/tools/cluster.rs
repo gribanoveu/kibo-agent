@@ -11,11 +11,11 @@ use serde_json::Value;
 use crate::services::text_diff::diff_stats;
 
 use crate::domain::kube::{merge_diff, resolve_kind, undoable, KubeChange, KubeError, ROLLOUT_RESTART, KubeKind, ListQuery, LogQuery, PinnedCluster};
-use crate::domain::kube_view::{self, cap, FieldPath, PodLog};
+use crate::domain::kube_view::{self, cap, FieldPath, PodLog, Rollout};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
     ChangeDiff, FileDiffStats, KubeApplyArgs, KubeDeleteArgs,
-    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeTopArgs,
+    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeTopArgs, KubeWaitRolloutArgs,
     ToolCall, ToolError, ToolPreview, ToolResult,
 };
 
@@ -469,6 +469,45 @@ pub fn kube_diagnose(kube: Option<PinnedCluster>, args: &KubeDiagnoseArgs) -> Re
     );
     let summary = format!("{} pods, {} with problems", pods.len(), troubled.len());
     result(out.join("\n"), summary, "diagnose one pod, or read events and logs on their own")
+}
+
+/// How long `kubeWaitRollout` waits when not told, and the most it will.
+const WAIT_SECONDS: u64 = 120;
+const WAIT_MOST: u64 = 600;
+
+/// `kubeWaitRollout`: watches a workload until its rollout is done, the
+/// controller gives up, the time is out or the turn is stopped. Done is one
+/// line; anything else is that line and the diagnosis — why is the question
+/// the model asks next.
+pub fn kube_wait_rollout(kube: Option<PinnedCluster>, cancelled: Option<&dyn Fn() -> bool>, args: &KubeWaitRolloutArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    let kind = kind(&cluster, &args.kind)?;
+    let what = format!("{}/{}", kind.kind, args.name);
+    if !RESTARTABLE.contains(&kind.kind.as_str()) {
+        return Err(invalid("kubeWaitRollout", format!("{what} has no rollout to wait for — a Deployment, StatefulSet or DaemonSet has; read anything else with kubeGet")));
+    }
+    let mut stands = Rollout::Going(String::new());
+    let seconds = args.timeout_seconds.unwrap_or(WAIT_SECONDS).clamp(1, WAIT_MOST);
+    let stop = || cancelled.is_some_and(|cancelled| cancelled());
+    cluster.api.watch(&kind, cluster.namespace, &args.name, std::time::Duration::from_secs(seconds), &stop, &mut |object| {
+        stands = kube_view::rollout(&kind.kind, object);
+        !matches!(stands, Rollout::Going(_))
+    })?;
+    let (summary, line) = match stands {
+        Rollout::Done(numbers) => return result(format!("Rollout of {what} is done: {numbers}."), "done".to_string(), ""),
+        Rollout::Stuck(why) => ("stuck", format!("Rollout of {what} is stuck: {why}.")),
+        Rollout::Going(numbers) if stop() => ("stopped", format!("Stopped waiting for {what} — the user stopped the turn: {numbers}.")),
+        Rollout::Going(numbers) => {
+            ("not done", format!("Rollout of {what} is not done after {seconds}s: {numbers}. It may still finish — wait again, or read why below."))
+        }
+    };
+    let diagnose = KubeDiagnoseArgs { kind: args.kind.clone(), name: args.name.clone(), namespace: None };
+    let why = match kube_diagnose(Some(cluster), &diagnose) {
+        Ok(ToolResult::Kube { text, .. }) => text,
+        Ok(_) => String::new(),
+        Err(e) => format!("Not diagnosed: {e}"),
+    };
+    result(format!("{line}\n\n{why}"), summary.to_string(), "kubeDiagnose reads it on its own")
 }
 
 /// What has replicas to set. The rest are told how they are stopped instead.
@@ -1296,6 +1335,29 @@ pub(super) fn diagnose_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn wait_rollout_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeWaitRollout".to_string(),
+        description: format!(
+            "Waits for a rollout of a Deployment, StatefulSet or DaemonSet in the chat's namespace and answers how it \
+             ended: done, with the numbers; stuck — the controller gave up (ProgressDeadlineExceeded); or not done in \
+             time. When it is not done the answer carries the diagnosis too: pods and what is wrong with each, events, \
+             the log of the container in trouble. Done is the controller's count of available pods: a container that \
+             crashes a moment after starting was counted — kubeDiagnose when in doubt. One call after a restart, a rollback, an apply or a scale — instead \
+             of reading the object round after round. {WHERE}"
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "description": "Deployment, StatefulSet or DaemonSet." },
+                "name": { "type": "string" },
+                "timeoutSeconds": { "type": "integer", "description": "How long to wait. Default 120, at most 600." }
+            },
+            "required": ["kind", "name"]
+        }),
+    }
+}
+
 pub(super) fn scale_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "kubeScale".to_string(),
@@ -1460,6 +1522,8 @@ mod tests {
         asked: Mutex<Vec<String>>,
         /// What the server says to every patch, when it refuses them.
         refuses: Option<String>,
+        /// What a watched object becomes, change by change.
+        later: Vec<Value>,
     }
 
     /// What was backed up and audited; `full` is a disk that takes no backup.
@@ -1629,6 +1693,18 @@ mod tests {
                 Some(why) => Err(KubeError::Cluster(why.clone())),
                 None => self.get(kind, namespace, name).map(|_| ()),
             }
+        }
+
+        fn watch(&self, kind: &KubeKind, namespace: &str, name: &str, timeout: std::time::Duration, stop: &dyn Fn() -> bool, seen: &mut dyn FnMut(&Value) -> bool) -> Result<(), KubeError> {
+            let first = self.get(kind, namespace, name)?;
+            self.asked.lock().unwrap().push(format!("watch {} {namespace} {name} {}s", kind.plural, timeout.as_secs()));
+            for object in std::iter::once(&first).chain(&self.later) {
+                if seen(object) || stop() {
+                    break;
+                }
+                self.asked.lock().unwrap().push("shown".to_string());
+            }
+            Ok(())
         }
     }
 
@@ -2379,6 +2455,66 @@ spec: {ports: [{port: 80}]}
         assert_eq!(notes(&ToolCall::KubeApply(KubeApplyArgs { manifest: two.into() })), ["Deployment/flux: Managed by Flux: its next reconcile puts back what Git says.", way_back]);
         assert!(matches!(preview(Some(PinnedCluster { production: true, ..here.unwrap() }), &scale("plain")), ToolPreview::Change { production: true, .. }));
         assert!(matches!(preview(here, &scale("plain")), ToolPreview::Change { production: false, .. }));
+    }
+
+    /// A Deployment of three, `updated` and `available` of them so far.
+    fn rolling(updated: i64, available: i64) -> Value {
+        json!({"metadata": {"name": "api", "namespace": "orders", "generation": 4},
+               "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "api"}}},
+               "status": {"observedGeneration": 4, "replicas": 3, "updatedReplicas": updated, "availableReplicas": available}})
+    }
+
+    fn rolling_out(later: Vec<Value>) -> Fake {
+        let kinds = [("apps", "Deployment", "deployments"), ("batch", "CronJob", "cronjobs"), ("", "Pod", "pods")];
+        let waiting = json!({"metadata": {"name": "api-1", "namespace": "orders", "labels": {"app": "api"}},
+            "status": {"phase": "Pending", "containerStatuses": [{"name": "app", "state": {"waiting": {"reason": "ImagePullBackOff"}}}]}});
+        Fake { later, ..Fake::with(&kinds).object("deployments", rolling(1, 1)).object("pods", waiting).log("api-1", Ok("")) }
+    }
+
+    fn wait(kind: &str, seconds: Option<u64>) -> KubeWaitRolloutArgs {
+        KubeWaitRolloutArgs { kind: kind.into(), name: "api".into(), timeout_seconds: seconds }
+    }
+
+    /// A read: it works in a read-only chat, in the chat's namespace, and
+    /// stops at the first state that is an end.
+    #[test]
+    fn a_rollout_is_waited_for_until_it_is_done_and_no_longer() {
+        let fake = rolling_out(vec![rolling(2, 1), rolling(3, 3), rolling(0, 0)]);
+        let done = kube_wait_rollout(pinned(&fake), None, &wait("deploy", None)).unwrap();
+        assert_eq!(done, ToolResult::Kube { text: "Rollout of Deployment/api is done: 3 of 3 pods up to date and available.".into(), summary: "done".into() });
+        assert_eq!(fake.asked(), ["get deployments orders api", "watch deployments orders api 120s", "shown", "shown"]);
+
+        let bounded = rolling_out(Vec::new());
+        kube_wait_rollout(pinned(&bounded), None, &wait("deploy", Some(9_999))).unwrap();
+        kube_wait_rollout(pinned(&bounded), None, &wait("deploy", Some(0))).unwrap();
+        let watches: Vec<String> = bounded.asked().into_iter().filter(|a| a.starts_with("watch")).collect();
+        assert_eq!(watches, ["watch deployments orders api 600s", "watch deployments orders api 1s"]);
+
+        let reason = invalid_reason(kube_wait_rollout(pinned(&fake), None, &wait("cronjob", None)));
+        assert!(reason.starts_with("CronJob/api has no rollout to wait for"), "{reason}");
+        assert!(matches!(kube_wait_rollout(None, None, &wait("deploy", None)), Err(ToolError::NoCluster)));
+    }
+
+    /// Whatever is not done comes with why: the model asks that next.
+    #[test]
+    fn a_rollout_that_is_not_done_says_how_it_stands_and_is_diagnosed() {
+        let late = text(kube_wait_rollout(pinned(&rolling_out(vec![rolling(2, 1)])), None, &wait("deploy", Some(30))));
+        assert!(late.starts_with("Rollout of Deployment/api is not done after 30s: 2 of 3 pods up to date. It may still finish"), "{late}");
+        assert!(late.contains("Pods: 1, 1 with problems.") && late.contains("ImagePullBackOff"), "{late}");
+
+        let mut gave_up = rolling(1, 1);
+        gave_up["status"]["conditions"] = json!([{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded"}]);
+        let fake = rolling_out(vec![gave_up, rolling(3, 3)]);
+        let stuck = kube_wait_rollout(pinned(&fake), None, &wait("deploy", None)).unwrap();
+        let ToolResult::Kube { text, summary } = stuck else { panic!("{stuck:?}") };
+        assert!(text.starts_with("Rollout of Deployment/api is stuck: no progress within its deadline — Progressing=False (ProgressDeadlineExceeded).\n\nDeployment/api in namespace orders"), "{text}");
+        assert_eq!(summary, "stuck");
+
+        let fake = rolling_out(vec![rolling(2, 2), rolling(3, 3)]);
+        let stopped = kube_wait_rollout(pinned(&fake), Some(&|| true), &wait("deploy", None)).unwrap();
+        let ToolResult::Kube { text, summary } = stopped else { panic!("{stopped:?}") };
+        assert!(text.starts_with("Stopped waiting for Deployment/api — the user stopped the turn: 1 of 3 pods up to date."), "{text}");
+        assert_eq!(summary, "stopped");
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

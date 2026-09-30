@@ -115,6 +115,7 @@ impl ChatRole {
                 ToolName::KubeTop,
                 ToolName::KubeFieldHistory,
                 ToolName::KubeDiagnose,
+                ToolName::KubeWaitRollout,
                 // The changes so far (K-5a–c); refused while the tab says Read only.
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
@@ -169,7 +170,7 @@ Helm, Kustomize, container images, ingress controllers and service meshes, GitOp
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
-kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. The changes you can make yourself: \
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout. The changes you can make yourself: \
 kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a \
 revision), kubeApply (a manifest: create or update objects) and kubeDelete. Prefer the narrow tool to kubeApply \
 when one fits — it changes one field and says so; for kubeApply, read the object first (kubeGet) and send it \
@@ -179,6 +180,9 @@ round are one card. kubeUndo puts a change back by its change id, from the backu
 conditions — never undo by changing it back from memory. A rollout restart cannot be undone: restart only when a \
 restart is what is wanted. What these cannot do — anything cluster-wide, another namespace, a Namespace itself — \
 is the user's to run: give the exact command and say what it affects.
+- After a change that starts a rollout — a restart, a rollback, an apply, a scale — and whenever the user \
+  wants to know that it came up, call kubeWaitRollout once instead of reading the object again and again: \
+  it waits and answers done, or stuck and why.
 - After a change, say what it was before and what it is now, and give its change id. When asked to stop \
   everything, scale what has replicas and suspend the CronJobs and Jobs, and name what neither stops — a \
   DaemonSet — instead of passing over it.
@@ -230,7 +234,7 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
         assert_eq!(

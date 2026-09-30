@@ -65,6 +65,7 @@ export const LABELS: Record<string, string> = {
   kubeTop: "Top",
   kubeFieldHistory: "Field history",
   kubeDiagnose: "Diagnose",
+  kubeWaitRollout: "Wait for rollout",
   kubeScale: "Scale",
   kubeUndo: "Undo",
   kubeSuspend: "Suspend",

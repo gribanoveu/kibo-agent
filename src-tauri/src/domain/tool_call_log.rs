@@ -309,6 +309,7 @@ mod tests {
             | ToolName::KubeTop
             | ToolName::KubeFieldHistory
             | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
             | ToolName::KubeScale
             | ToolName::KubeUndo
             | ToolName::KubeSuspend

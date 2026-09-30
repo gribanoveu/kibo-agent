@@ -744,8 +744,35 @@ namespace» не нужен.
     `PinnedCluster` цикла при выполнении не читается, он нужен только предпросмотру.
     **Отложено:** пометка — у kubeconfig целиком, не у отдельного контекста; кнопка «Always»
     на карточке production остаётся и на этот кластер не действует.
-- **K-6 — живые карточки.** Watcher, sink и `kube:changed`, Channel для `follow`,
-  финальное состояние в чат; `kubeWaitRollout`.
+- **K-6 — живые карточки**, тремя шагами:
+  - **K-6a — `kubeWaitRollout`.** Сделано. `KubeApi::watch(kind, namespace, name, timeout,
+    stop, seen)`: показывает объект как он есть и после каждого изменения, пока `seen` не
+    скажет «хватит», не выйдет время или ход не остановлен. В `infra/kube_client.rs` это
+    чтение и `Api::watch` с версии прочитанного (без `kube-runtime`: один объект, один
+    поток; watch, который сервер закрыл, начинается заново с чтения); раз в полсекунды
+    поток без событий смотрит, не остановлен ли ход, — кластер при этом не спрашивается.
+    У клиента без watch (тестовые двойники) — одно чтение. Правило «где rollout» —
+    `kube_view::rollout` (`Done` / `Going` / `Stuck` с числами), по тем же полям, что
+    `kubectl rollout status`: generation против observedGeneration, у Deployment —
+    `ProgressDeadlineExceeded`, updated / replicas / available, у StatefulSet — ревизии и
+    ready, у DaemonSet — updated и available от desired. Инструмент — чтение: работает в
+    read-only чате, только в namespace чата, для Deployment, StatefulSet, DaemonSet;
+    `timeoutSeconds` 120 по умолчанию, не больше 600. «Готово» — одна строка; «застрял»,
+    «не готово за N с» и «ход остановлен» — строка и отчёт `kubeDiagnose` следом: «почему»
+    модель спросила бы следующим раундом. Промпт роли: после изменения, начинающего
+    rollout, — один `kubeWaitRollout`, а не `kubeGet` по кругу. Проверено на OrbStack
+    (`live_cluster_watches_a_rollout_to_its_end`,
+    `live_cluster_waits_for_a_rollout_and_says_why_it_is_not_done`). Мутаций двадцать пять, все
+    пойманы. **Известный предел:**
+    «готово» — счёт контроллера; контейнер, который падает через секунду после старта,
+    успевает посчитаться available (так же отвечает `kubectl rollout status`) — описание
+    инструмента об этом говорит. **Отложено:** StatefulSet с `partition` читается как
+    «идёт» до конца ожидания; ожидание Job и Pod (`kubectl wait`) — другого инструмента.
+  - **K-6b — живая карточка rollout.** Тот же `watch` и `kube_view::rollout` для окна:
+    sink в `domain/`, событие `kube:changed { id }`, троттлинг 100 мс; карточка изменения
+    показывает «1/3 → 3/3», пока на экране; в чат сохраняется итог.
+  - **K-6c — лог, который продолжает писаться.** `follow` по кнопке в карточке `kubeLogs`
+    через `tauri::ipc::Channel`.
 - **K-7 — ранбуки.** `kubeRunbook`, шесть встроенных, свои из `~/.kibo/runbooks/` с
   заменой встроенных по имени, список в Settings → Kubernetes.
 - **K-8 — бенч на локальном кластере.** Ниже.

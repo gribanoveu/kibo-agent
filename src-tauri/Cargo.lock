@@ -2654,6 +2654,7 @@ dependencies = [
  "blake3",
  "chrono",
  "dirs 7.0.0",
+ "futures-util",
  "git2",
  "globset",
  "http",
