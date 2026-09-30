@@ -72,6 +72,8 @@ pub fn run() {
         // reach a turn while it runs. `Arc` because a turn runs on a blocking
         // thread that outlives the command call that started it.
         .manage(std::sync::Arc::new(commands::chat::AgentState::default()))
+        // The questions MCP servers are waiting on the user for.
+        .manage(std::sync::Arc::new(services::mcp_questions::McpQuestions::default()))
         .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
@@ -202,6 +204,9 @@ pub fn run() {
             commands::mcp::mcp_config_save,
             commands::mcp::mcp_server_set_enabled,
             commands::mcp::mcp_server_connect,
+            commands::mcp::mcp_prompts,
+            commands::mcp::mcp_prompt_get,
+            commands::chat::chat_answer_mcp_question,
             commands::hooks::hooks_config_get,
             commands::hooks::hooks_config_save,
             commands::processes::processes_list,

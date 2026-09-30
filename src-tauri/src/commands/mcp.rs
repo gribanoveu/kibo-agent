@@ -81,6 +81,40 @@ pub async fn mcp_server_connect(
     .map_err(|e| e.to_string())?
 }
 
+/// A prompt a running server offers, as the composer lists it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptItem {
+    pub server: String,
+    #[serde(flatten)]
+    pub prompt: crate::domain::mcp::McpPrompt,
+}
+
+/// The prompts of the servers running for the open folder. Starts nothing:
+/// a server's prompts are offered once a turn or the tab has started it.
+#[tauri::command]
+pub fn mcp_prompts(state: State<'_, Arc<AgentState>>, servers: State<'_, Arc<McpServers>>) -> Vec<McpPromptItem> {
+    let Ok(workspace) = state.workspace() else { return Vec::new() };
+    servers.prompts(&workspace).into_iter().map(|(server, prompt)| McpPromptItem { server, prompt }).collect()
+}
+
+/// A prompt written with what was typed after its name — the text the
+/// composer sends. Off the event loop: it is a request to the server.
+#[tauri::command]
+pub async fn mcp_prompt_get(
+    server: String,
+    name: String,
+    typed: String,
+    state: State<'_, Arc<AgentState>>,
+    servers: State<'_, Arc<McpServers>>,
+) -> Result<String, String> {
+    let workspace = state.workspace()?;
+    let servers = Arc::clone(&servers);
+    tauri::async_runtime::spawn_blocking(move || servers.get_prompt(&server, &name, &typed, &workspace).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

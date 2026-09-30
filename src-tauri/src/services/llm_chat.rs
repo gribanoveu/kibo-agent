@@ -232,6 +232,9 @@ pub struct Turn<'a> {
     pub review: Option<Arc<crate::domain::review::ReviewDesk>>,
     /// The Agents tab's record of `explore` runs; `None` keeps a throwaway one.
     pub agents: Option<Arc<crate::domain::agents::Agents>>,
+    /// Where an MCP server's question waits for the user's answer; `None`
+    /// where there is no window to ask in, and the question is declined.
+    pub questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
 }
 
 
@@ -874,6 +877,7 @@ fn execute_call(
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
     let explore = |task: &str| run_explore(turn, task, &output);
+    let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
         shell: turn.shell.clone(),
         output: Some(output.clone()),
@@ -881,6 +885,7 @@ fn execute_call(
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
+        ask: turn.questions.is_some().then_some(&ask as _),
         processes: turn.processes.clone(),
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
@@ -1075,6 +1080,7 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         terminals: turn.terminals.clone(),
         review: None,
         agents: None,
+        questions: None,
     };
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
@@ -1158,6 +1164,33 @@ fn command_output_sink(events: &ChatEventSink, round: u32, call_id: &str) -> Com
             },
         });
     })
+}
+
+/// Puts an MCP server's question to the user and waits for the answer — the
+/// call it came from waits with it. Said out of the turn's sequence, like a
+/// command's output, from inside the call. Auto does not answer for the
+/// user: a question is the server asking a person.
+fn ask_user(
+    turn: &Turn,
+    round: u32,
+    call_id: &str,
+    server: &str,
+    question: &crate::domain::mcp::McpQuestion,
+) -> crate::domain::mcp::McpAnswer {
+    let Some(questions) = &turn.questions else { return crate::domain::mcp::McpAnswer::Decline };
+    let id = uuid::Uuid::new_v4().to_string();
+    let say = |event: ChatEventPayload| {
+        (turn.events)(ChatTurnEvent { seq: 0, round, target_id: Some(format!("round:{round}:tool:{call_id}")), event })
+    };
+    say(ChatEventPayload::McpQuestion {
+        id: id.clone(),
+        call: call_id.to_string(),
+        server: server.to_string(),
+        question: question.clone(),
+    });
+    let answer = questions.wait(&id, turn.cancelled);
+    say(ChatEventPayload::McpQuestionClosed { id, action: answer.action().to_string() });
+    answer
 }
 
 /// Adds queued notes to the conversation and says so, one event per note, so
@@ -1817,6 +1850,7 @@ mod tests {
         terminals: Option<Arc<dyn crate::domain::terminal::UserTerminals>>,
         shell_described: String,
         agents: Option<Arc<crate::domain::agents::Agents>>,
+        questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -1865,6 +1899,7 @@ mod tests {
             terminals: None,
             shell_described: "/bin/sh".to_string(),
             agents: None,
+            questions: None,
         }
     }
 
@@ -1919,6 +1954,7 @@ mod tests {
                 terminals: self.terminals.clone(),
                 review: None,
                 agents: self.agents.clone(),
+                questions: self.questions.clone(),
             };
             f(&turn)
         }
@@ -1945,6 +1981,8 @@ mod tests {
                 ChatEventPayload::ProcessesEnded { processes } => format!("ended:{}", processes.len()),
                 ChatEventPayload::LoopReminded { tool, failing } => format!("loop:{tool}:{failing}"),
                 ChatEventPayload::WrapUpReminded { rounds, .. } => format!("wrap-up:{rounds}"),
+                ChatEventPayload::McpQuestion { call, .. } => format!("question:{call}"),
+                ChatEventPayload::McpQuestionClosed { action, .. } => format!("questionClosed:{action}"),
             })
             .collect()
     }
@@ -3904,6 +3942,78 @@ mod tests {
 
         let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
         assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "it paused");
+    }
+
+    /// A server that asks the user something mid-call: the window is told —
+    /// which call, which server, what — the answer it sends back reaches the
+    /// server, and the window hears the question closed. Nobody to ask is a
+    /// declined question.
+    #[test]
+    fn a_servers_question_goes_to_the_window_and_its_answer_back_to_the_server() {
+        use crate::domain::mcp::{McpAnswer, McpQuestion};
+        struct Asks;
+        impl crate::domain::mcp::McpClient for Asks {
+            fn list_tools(&self) -> Result<Vec<crate::domain::mcp::McpTool>, crate::domain::mcp::McpError> {
+                Ok(vec![])
+            }
+            fn call_tool(&self, name: &str, arguments: serde_json::Value, cancelled: &dyn Fn() -> bool) -> Result<crate::domain::mcp::McpCallResult, crate::domain::mcp::McpError> {
+                self.call_tool_asking(name, arguments, cancelled, &|_| McpAnswer::Decline)
+            }
+            fn call_tool_asking(
+                &self,
+                _: &str,
+                _: serde_json::Value,
+                _: &dyn Fn() -> bool,
+                ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+            ) -> Result<crate::domain::mcp::McpCallResult, crate::domain::mcp::McpError> {
+                let answer = ask(&McpQuestion::Url { message: "Sign in".into(), url: "https://a.example/in".into() });
+                Ok(crate::domain::mcp::McpCallResult { text: format!("answered {}", answer.action()), is_error: false })
+            }
+        }
+        let with_asking = |label: &str| {
+            let mut h = harness(label, vec![asks(vec![wants("m1", "mcp__tracker__login", "{}")]), text("done")]);
+            h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
+                name: "tracker".into(),
+                weight: 3,
+                client: Arc::new(Asks),
+                tools: vec![crate::domain::mcp::McpTool { name: "login".into(), input_schema: serde_json::json!({}), ..Default::default() }],
+                instructions: None,
+            }]);
+            h
+        };
+
+        let mut h = with_asking("mcp-question");
+        let desk = Arc::new(crate::services::mcp_questions::McpQuestions::default());
+        h.questions = Some(Arc::clone(&desk));
+        let log = h.log.clone();
+        let window = std::thread::spawn(move || loop {
+            let asked = log.lock().unwrap().iter().find_map(|e| match &e.event {
+                ChatEventPayload::McpQuestion { id, call, server, question } => Some((id.clone(), call.clone(), server.clone(), question.clone())),
+                _ => None,
+            });
+            if let Some((id, call, server, question)) = asked {
+                assert!(desk.answer(&id, McpAnswer::Accept { content: Default::default() }));
+                return (call, server, question);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        });
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let (call, server, question) = window.join().unwrap();
+        assert_eq!((call.as_str(), server.as_str()), ("m1", "tracker"));
+        assert!(matches!(question, McpQuestion::Url { url, .. } if url == "https://a.example/in"));
+        let closed = h.events().into_iter().find_map(|e| match e.event {
+            ChatEventPayload::McpQuestionClosed { action, .. } => Some(action),
+            _ => None,
+        });
+        assert_eq!(closed.as_deref(), Some("accept"));
+        let sent = &h.provider.requests()[1].messages;
+        assert!(sent.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("answered accept"))));
+
+        let nobody = with_asking("mcp-question-nobody");
+        nobody.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        assert!(nobody.events().iter().all(|e| !matches!(e.event, ChatEventPayload::McpQuestion { .. })));
+        let sent = &nobody.provider.requests()[1].messages;
+        assert!(sent.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("answered decline"))));
     }
 
     /// Stop reaches a call that is waiting on a server, not only the loop

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use crate::domain::llm::LlmToolDefinition;
@@ -349,10 +349,233 @@ pub trait McpClient: Send + Sync {
 
     /// The tool list read earlier may no longer be the server's: it said so,
     /// or the time it gave the list has run out. A client that cannot tell
-    /// says `false`.
+    /// says `false`. Covers the prompts too — they are read with the tools.
     fn tools_stale(&self) -> bool {
         false
     }
+
+    /// `call_tool`, for a caller that can put the server's questions to the
+    /// user (`docs/23-mcp-extension.md`, M-8). `ask` blocks until the user
+    /// answers; the call's own timeout does not run meanwhile. A client that
+    /// cannot carry a question never asks one.
+    fn call_tool_asking(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancelled: &dyn Fn() -> bool,
+        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+    ) -> Result<McpCallResult, McpError> {
+        let _ = ask;
+        self.call_tool(name, arguments, cancelled)
+    }
+
+    /// The prompts the server offers; none from a server that offers none.
+    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+        Ok(Vec::new())
+    }
+
+    /// One prompt with its arguments filled in, as the text of a message.
+    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+        let _ = arguments;
+        Err(McpError::Protocol(format!("this server offers no prompt {name:?}")))
+    }
+}
+
+// ------------------------------------------------------------- prompts
+
+/// A prompt a server offers: a message the user can start from, run from the
+/// composer as `/<server>:<name>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPrompt {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptArgument {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+}
+
+/// A prompt entry, or nothing for one without a name.
+pub fn prompt(entry: &Value) -> Option<McpPrompt> {
+    let text = |value: &Value| value.as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let name = text(&entry["name"])?;
+    let arguments = entry["arguments"]
+        .as_array()
+        .map(|arguments| {
+            arguments
+                .iter()
+                .filter_map(|argument| {
+                    Some(McpPromptArgument {
+                        name: text(&argument["name"])?,
+                        description: text(&argument["description"]).unwrap_or_default(),
+                        required: argument["required"] == true,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(McpPrompt { name, title: text(&entry["title"]), description: text(&entry["description"]).unwrap_or_default(), arguments })
+}
+
+/// What was typed after `/<server>:<prompt>`, given to its arguments: all of
+/// it to the only one, and to several one word each in the order the server
+/// lists them, the last taking the rest. Nothing typed gives nothing.
+pub fn prompt_arguments(prompt: &McpPrompt, typed: &str) -> BTreeMap<String, String> {
+    let typed = typed.trim();
+    let mut given = BTreeMap::new();
+    if typed.is_empty() {
+        return given;
+    }
+    let mut rest = typed;
+    for (at, argument) in prompt.arguments.iter().enumerate() {
+        if rest.is_empty() {
+            break;
+        }
+        let value = if at + 1 == prompt.arguments.len() {
+            std::mem::take(&mut rest)
+        } else {
+            let (word, after) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            rest = after.trim_start();
+            word
+        };
+        given.insert(argument.name.clone(), value.to_string());
+    }
+    given
+}
+
+/// A `prompts/get` result as one message: each message's content, text as
+/// it is and anything else named in its place, one after another.
+pub fn render_prompt(result: &Value) -> String {
+    result["messages"]
+        .as_array()
+        .map(|messages| messages.iter().map(|message| render_block(&message["content"])).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .join("\n\n")
+}
+
+// ----------------------------------------------------------- questions
+
+/// A server asking the user something in the middle of a call
+/// (`elicitation/create`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum McpQuestion {
+    /// A few plain fields to fill in.
+    Form { message: String, fields: Vec<McpField> },
+    /// Something to do in the browser, at an address of the server's.
+    Url { message: String, url: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpField {
+    pub name: String,
+    /// What to call it on the form: the server's title, else its name.
+    pub label: String,
+    pub description: Option<String>,
+    pub required: bool,
+    pub kind: McpFieldKind,
+    pub default: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum McpFieldKind {
+    Text,
+    Number { integer: bool },
+    Boolean,
+    /// One of these values; `labels` beside them when the server named them.
+    Choice { values: Vec<String>, labels: Vec<String> },
+}
+
+/// The user's answer. `Accept` carries the form's values, keyed by field.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "action", rename_all = "camelCase")]
+pub enum McpAnswer {
+    Accept {
+        #[serde(default)]
+        content: Map<String, Value>,
+    },
+    Decline,
+    Cancel,
+}
+
+impl McpAnswer {
+    /// The answer as the protocol's `ElicitResult`. A form's values are only
+    /// the fields it asked for — nothing else the window sent goes out.
+    pub fn to_result(&self, question: &McpQuestion) -> Value {
+        match (self, question) {
+            (McpAnswer::Accept { content }, McpQuestion::Form { fields, .. }) => {
+                let asked: Map<String, Value> =
+                    content.iter().filter(|(name, _)| fields.iter().any(|f| &f.name == *name)).map(|(k, v)| (k.clone(), v.clone())).collect();
+                json!({ "action": "accept", "content": asked })
+            }
+            (McpAnswer::Accept { .. }, McpQuestion::Url { .. }) => json!({ "action": "accept" }),
+            (McpAnswer::Decline, _) => json!({ "action": "decline" }),
+            (McpAnswer::Cancel, _) => json!({ "action": "cancel" }),
+        }
+    }
+
+    pub fn action(&self) -> &'static str {
+        match self {
+            McpAnswer::Accept { .. } => "accept",
+            McpAnswer::Decline => "decline",
+            McpAnswer::Cancel => "cancel",
+        }
+    }
+}
+
+/// An `elicitation/create` request's params as a question, or `None` for one
+/// this window cannot put — a field that is not one of the protocol's plain
+/// kinds (a list, a nested object), or a URL that is not http(s). Such a
+/// question is declined rather than shown half.
+pub fn question(params: &Value) -> Option<McpQuestion> {
+    let message = params["message"].as_str().unwrap_or_default().to_string();
+    if params["mode"] == "url" {
+        let url = params["url"].as_str()?;
+        url_parts(url)?;
+        return Some(McpQuestion::Url { message, url: url.to_string() });
+    }
+    let schema = &params["requestedSchema"];
+    let required: Vec<&str> = schema["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let mut fields = Vec::new();
+    for (name, property) in schema["properties"].as_object().into_iter().flatten() {
+        let text = |key: &str| property[key].as_str().filter(|t| !t.trim().is_empty()).map(str::to_string);
+        let kind = match (property["type"].as_str(), property["enum"].as_array(), property["oneOf"].as_array()) {
+            (Some("string"), Some(values), _) => McpFieldKind::Choice {
+                values: values.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                labels: property["enumNames"].as_array().map(|n| n.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
+            },
+            (Some("string"), None, Some(options)) => McpFieldKind::Choice {
+                values: options.iter().filter_map(|o| o["const"].as_str()).map(str::to_string).collect(),
+                labels: options.iter().filter_map(|o| o["title"].as_str().or(o["const"].as_str())).map(str::to_string).collect(),
+            },
+            (Some("string"), None, None) => McpFieldKind::Text,
+            (Some("number"), ..) => McpFieldKind::Number { integer: false },
+            (Some("integer"), ..) => McpFieldKind::Number { integer: true },
+            (Some("boolean"), ..) => McpFieldKind::Boolean,
+            _ => return None,
+        };
+        if matches!(&kind, McpFieldKind::Choice { values, .. } if values.is_empty()) {
+            return None;
+        }
+        fields.push(McpField {
+            name: name.clone(),
+            label: text("title").unwrap_or_else(|| name.clone()),
+            description: text("description"),
+            required: required.contains(&name.as_str()),
+            kind,
+            default: property.get("default").filter(|d| !d.is_null()).cloned(),
+        });
+    }
+    Some(McpQuestion::Form { message, fields })
 }
 
 // ------------------------------------------------------ the turn's view
@@ -503,7 +726,7 @@ pub fn render_content(result: &Value) -> String {
     parts.join("\n")
 }
 
-fn render_block(block: &Value) -> String {
+pub fn render_block(block: &Value) -> String {
     let field = |name: &str| block[name].as_str().unwrap_or_default();
     match field("type") {
         "text" => field("text").to_string(),
@@ -750,6 +973,102 @@ mod tests {
         assert!(tools.hints("mcp__gh__delete_repo").destructive);
         assert_eq!(tools.hints("mcp__gh__search"), McpToolHints::default());
         assert_eq!(tools.hints("mcp__gone__x"), McpToolHints::default(), "a guess is not destructive by being unknown");
+    }
+
+    #[test]
+    fn a_prompt_is_read_as_the_server_gave_it_and_a_nameless_one_is_not() {
+        let entry = serde_json::json!({ "name": "review", "title": "Review a PR", "description": "Reviews one",
+            "arguments": [{ "name": "pr", "description": "Its number", "required": true }, { "name": "focus" }, { "description": "no name" }] });
+        assert_eq!(
+            prompt(&entry),
+            Some(McpPrompt {
+                name: "review".into(),
+                title: Some("Review a PR".into()),
+                description: "Reviews one".into(),
+                arguments: vec![
+                    McpPromptArgument { name: "pr".into(), description: "Its number".into(), required: true },
+                    McpPromptArgument { name: "focus".into(), description: String::new(), required: false },
+                ],
+            })
+        );
+        assert_eq!(prompt(&serde_json::json!({ "name": " " })), None);
+        assert_eq!(prompt(&serde_json::json!({ "name": "bare" })).unwrap().arguments, []);
+    }
+
+    #[test]
+    fn what_is_typed_after_a_prompt_goes_to_its_arguments_in_order_the_last_taking_the_rest() {
+        let with = |names: &[&str]| McpPrompt {
+            arguments: names.iter().map(|n| McpPromptArgument { name: n.to_string(), ..Default::default() }).collect(),
+            ..Default::default()
+        };
+        let given = |p: &McpPrompt, typed: &str| prompt_arguments(p, typed).into_iter().collect::<Vec<_>>();
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(given(&with(&["topic"]), "  the whole thing  "), [pair("topic", "the whole thing")]);
+        assert_eq!(given(&with(&["pr", "focus"]), "42 the  error handling"), [pair("focus", "the  error handling"), pair("pr", "42")]);
+        assert_eq!(given(&with(&["pr", "focus"]), "42"), [pair("pr", "42")]);
+        assert_eq!(given(&with(&["pr"]), ""), []);
+        assert_eq!(given(&with(&[]), "ignored"), []);
+    }
+
+    #[test]
+    fn a_prompts_messages_become_one_text() {
+        let result = serde_json::json!({ "messages": [
+            { "role": "user", "content": { "type": "text", "text": "Review PR 42." } },
+            { "role": "assistant", "content": { "type": "text", "text": "Looking." } },
+            { "role": "user", "content": { "type": "image", "data": "AA", "mimeType": "image/png" } }
+        ] });
+        assert_eq!(render_prompt(&result), "Review PR 42.\n\nLooking.\n\n[image omitted: image/png]");
+        assert_eq!(render_prompt(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn a_form_question_is_read_field_by_field() {
+        let params = serde_json::json!({ "message": "Where to?", "requestedSchema": { "type": "object", "required": ["repo"], "properties": {
+            "repo": { "type": "string", "title": "Repository", "description": "owner/name" },
+            "count": { "type": "integer", "default": 3 },
+            "ratio": { "type": "number" },
+            "force": { "type": "boolean", "default": null },
+            "branch": { "type": "string", "enum": ["main", "dev"], "enumNames": ["Main", "Development"] },
+            "level": { "type": "string", "oneOf": [{ "const": "hi", "title": "High" }, { "const": "lo" }] }
+        } } });
+        let Some(McpQuestion::Form { message, fields }) = question(&params) else { panic!("not a form") };
+        assert_eq!(message, "Where to?");
+        let by = |name: &str| fields.iter().find(|f| f.name == name).unwrap().clone();
+        assert_eq!((by("repo").label.as_str(), by("repo").description.as_deref(), by("repo").required), ("Repository", Some("owner/name"), true));
+        assert_eq!((by("count").kind, by("count").default, by("count").required), (McpFieldKind::Number { integer: true }, Some(serde_json::json!(3)), false));
+        assert_eq!(by("ratio").kind, McpFieldKind::Number { integer: false });
+        assert_eq!((by("force").kind, by("force").default), (McpFieldKind::Boolean, None));
+        assert_eq!(by("branch").kind, McpFieldKind::Choice { values: vec!["main".into(), "dev".into()], labels: vec!["Main".into(), "Development".into()] });
+        assert_eq!(by("level").kind, McpFieldKind::Choice { values: vec!["hi".into(), "lo".into()], labels: vec!["High".into(), "lo".into()] });
+        assert_eq!(by("count").label, "count", "no title: its name");
+    }
+
+    /// A question this window cannot put whole is not put at all.
+    #[test]
+    fn a_question_with_a_field_that_is_not_plain_or_an_odd_url_is_not_put() {
+        let form = |property: serde_json::Value| serde_json::json!({ "message": "m", "requestedSchema": { "properties": { "x": property } } });
+        assert_eq!(question(&form(serde_json::json!({ "type": "array", "items": { "type": "string" } }))), None);
+        assert_eq!(question(&form(serde_json::json!({ "type": "object" }))), None);
+        assert_eq!(question(&form(serde_json::json!({ "type": "string", "enum": [] }))), None);
+        assert_eq!(
+            question(&serde_json::json!({ "mode": "url", "message": "Sign in", "url": "https://a.example/login", "elicitationId": "e" })),
+            Some(McpQuestion::Url { message: "Sign in".into(), url: "https://a.example/login".into() })
+        );
+        assert_eq!(question(&serde_json::json!({ "mode": "url", "message": "m", "url": "javascript:alert(1)" })), None);
+        assert_eq!(question(&serde_json::json!({ "mode": "url", "message": "m" })), None);
+    }
+
+    /// Only what the form asked for goes back, and a declined or cancelled
+    /// question sends no values at all.
+    #[test]
+    fn an_answer_carries_only_the_fields_that_were_asked() {
+        let asked = question(&serde_json::json!({ "message": "m", "requestedSchema": { "properties": { "repo": { "type": "string" } } } })).unwrap();
+        let answer: McpAnswer = serde_json::from_value(serde_json::json!({ "action": "accept", "content": { "repo": "a/b", "token": "x" } })).unwrap();
+        assert_eq!(answer.to_result(&asked), serde_json::json!({ "action": "accept", "content": { "repo": "a/b" } }));
+        assert_eq!(McpAnswer::Decline.to_result(&asked), serde_json::json!({ "action": "decline" }));
+        assert_eq!(McpAnswer::Cancel.to_result(&asked), serde_json::json!({ "action": "cancel" }));
+        let url = McpQuestion::Url { message: "m".into(), url: "https://a.example".into() };
+        assert_eq!(answer.to_result(&url), serde_json::json!({ "action": "accept" }));
     }
 
     #[test]

@@ -876,6 +876,10 @@ pub struct ToolDeps<'a> {
     /// The turn's stop button, for a tool that waits on someone else — an
     /// MCP call. `None` never stops.
     pub cancelled: Option<&'a dyn Fn() -> bool>,
+    /// Puts an MCP server's question (the server's name, the question) to
+    /// the user and waits for the answer; `None` where nobody is there to
+    /// ask, and the question is declined.
+    pub ask: Option<&'a dyn Fn(&str, &crate::domain::mcp::McpQuestion) -> crate::domain::mcp::McpAnswer>,
     /// The background processes; `None` where there are none to have, and
     /// `runCommand` with `background` says so.
     pub processes: Option<std::sync::Arc<dyn crate::domain::background::BackgroundProcesses>>,

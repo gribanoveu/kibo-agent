@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2026-09-30 An MCP server can ask you something in the middle of a call — a form or a page to open — and the call goes on with your answer
+
+- 2026-09-30 The prompts of running MCP servers are commands in the / menu, as /server:prompt
+
 - 2026-09-30 A tool its MCP server marks destructive asks before every call, even under Always allow; the MCP tab shows what each server says about its tools
 
 - 2026-09-30 An MCP server's instructions reach the model, and the MCP tab shows what the server tells it

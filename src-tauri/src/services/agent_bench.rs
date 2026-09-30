@@ -313,6 +313,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         terminals: None,
         review: None,
         agents: Some(Arc::clone(&agents)),
+        questions: None,
     };
     let outcome = llm_chat::stream(&turn, vec![LlmMessage::user(task.prompt.clone())], Vec::new());
     let seconds = started.elapsed().as_secs_f64();

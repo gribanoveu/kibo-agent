@@ -47,7 +47,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { exportChat, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
+import { exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -58,9 +58,10 @@ import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
 import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
-import { expandTemplate, fileCommands, typedCommand, type SlashCommand } from "./lib/slashCommands";
+import { expandTemplate, fileCommands, mcpPromptCommands, typedCommand, type SlashCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
+import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
 
@@ -217,6 +218,7 @@ export default function App() {
   // pane reads the same list for itself while it is open.
   const skillSources = useSkills(settingsOpen, workspace.path);
   const commandFiles = useCommandFiles(workspace.path);
+  const serverPrompts = useMcpPrompts(workspace.path, agent.turn.status);
   const llm = useLlmSettings();
   const theme = useTheme();
   const fontSize = useChatFontSize();
@@ -332,7 +334,11 @@ export default function App() {
     },
   ];
   // `send` is declared further down; the arrow reaches it when a command runs.
-  const commands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
+  const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
+  const commands = [
+    ...ownCommands,
+    ...mcpPromptCommands(serverPrompts.prompts, ownCommands, mcpPromptGet, (text, sent) => void send(text, sent), toast.show),
+  ];
 
   const pickConversation = async (mode: ConversationMode) => {
     const failed = await conversation.pick(mode);
@@ -524,6 +530,7 @@ export default function App() {
                 workspace={workspace.path}
                 turn={agent.turn}
                 onDecide={agent.decide}
+                onAnswerQuestion={agent.answerQuestion}
                 onOpenRepo={chooseFolder}
                 asideOpen={changesShown(docks)}
                 onToggleAside={() => setDocks(toggleChanges(docks))}
@@ -597,7 +604,10 @@ export default function App() {
                 usage={agent.turn.usage}
                 onCompact={compactNow}
                 commands={commands}
-                onCommandsOpen={commandFiles.reload}
+                onCommandsOpen={() => {
+                  commandFiles.reload();
+                  serverPrompts.reload();
+                }}
               />
             </>
           ) : (

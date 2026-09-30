@@ -3,6 +3,7 @@ import {
   commandFor,
   expandTemplate,
   fileCommands,
+  mcpPromptCommands,
   parseCommand,
   suggestCommands,
   type SlashCommand,
@@ -108,5 +109,61 @@ describe("a command's prompt and the reply language", () => {
     expect(withLanguageReminder("Write AGENTS.md.", "russian")).toBe("Write AGENTS.md.\n\n[Reply in Russian.]");
     expect(withLanguageReminder("Write AGENTS.md.", "english")).toBe("Write AGENTS.md.\n\n[Reply in English.]");
     expect(withLanguageReminder("Write AGENTS.md.", "auto")).toBe("Write AGENTS.md.");
+  });
+});
+
+describe("an MCP server's prompts", () => {
+  const prompt = (name: string, args: { name: string; required: boolean }[] = [], extra = {}) => ({
+    server: "GitHub",
+    name,
+    title: null,
+    description: "",
+    arguments: args.map((a) => ({ ...a, description: "" })),
+    ...extra,
+  });
+
+  test("are commands named for their server, with their arguments shown", () => {
+    const commands = mcpPromptCommands(
+      [prompt("Review", [{ name: "pr", required: true }, { name: "focus", required: false }], { title: "Review a PR" }), prompt("plain")],
+      [],
+      async () => "",
+      () => {},
+      () => {},
+    );
+    expect(commands.map((c) => [c.name, c.hint, c.argumentHint])).toEqual([
+      ["github:review", "Review a PR — from GitHub", "<pr> [focus]"],
+      ["github:plain", "plain — from GitHub", undefined],
+    ]);
+  });
+
+  test("leave a name already taken to its owner", () => {
+    const taken = [{ name: "github:review", hint: "mine", run: () => {} }];
+    expect(mcpPromptCommands([prompt("review")], taken, async () => "", () => {}, () => {})).toEqual([]);
+  });
+
+  test("send what the server wrote, shown as the command typed; a failure is said, not sent", async () => {
+    const sent: [string, string][] = [];
+    const failed: string[] = [];
+    const asked: string[][] = [];
+    const [ok] = mcpPromptCommands(
+      [prompt("Review")],
+      [],
+      async (server, name, args) => {
+        asked.push([server, name, args]);
+        return "Review PR 42 carefully.";
+      },
+      (text, body) => sent.push([text, body]),
+      (why) => failed.push(why),
+    );
+    ok.run("42");
+    await new Promise((settled) => setTimeout(settled, 0));
+    expect(asked).toEqual([["GitHub", "Review", "42"]]);
+    expect(sent).toEqual([["/github:review 42", "Review PR 42 carefully."]]);
+
+    const [broken] = mcpPromptCommands([prompt("Review")], [], async () => Promise.reject("not running"), (t, b) => sent.push([t, b]), (why) => failed.push(why));
+    broken.run("");
+    await new Promise((settled) => setTimeout(settled, 0));
+    expect(sent).toHaveLength(1);
+    expect(failed[0]).toContain("not running");
   });
 });

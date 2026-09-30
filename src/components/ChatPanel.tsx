@@ -31,6 +31,7 @@ import { PANES } from "./panes";
 import { shortcutText } from "../lib/shortcuts";
 import type { AsideTab } from "../types";
 import { CopyAction } from "./CopyAction";
+import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { useFollowBottom } from "../hooks/useFollowBottom";
@@ -44,6 +45,7 @@ import {
   type PendingToolCall,
   type FileDiffStats,
   type ToolPreview,
+  type McpAnswer,
 } from "../lib/chat";
 import "./ChatPanel.css";
 
@@ -616,6 +618,8 @@ type Props = {
   onRewind?: (bubbleId: string) => void;
   /** Puts a request to fix a review's finding into the message box. */
   onFix?: (text: string) => void;
+  /** Answers an MCP server's question to a call that is waiting on it. */
+  onAnswerQuestion?: (id: string, answer: McpAnswer) => void;
 };
 
 type TranscriptProps = Pick<
@@ -631,6 +635,7 @@ type TranscriptProps = Pick<
   | "onBranch"
   | "onRewind"
   | "onFix"
+  | "onAnswerQuestion"
 > & {
   /** Who answers, over their turns: the agent, or a chat's role. */
   speaker?: string;
@@ -659,6 +664,7 @@ export function Transcript({
   onBranch,
   onRewind,
   onFix,
+  onAnswerQuestion,
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -686,7 +692,10 @@ export function Transcript({
             ) : block.kind === "user" ? (
               <UserBubble key={block.id} block={block} branchable={branchable} onBranch={onBranch} onRewind={onRewind} />
             ) : (
-              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview)
+              renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
+                live: turn.status === "running",
+                onAnswer: onAnswerQuestion,
+              })
             ),
           )}
           {workedFooter(
@@ -730,6 +739,7 @@ export function ChatPanel({
   onBranch,
   onRewind,
   onFix,
+  onAnswerQuestion,
 }: Props) {
   const groups = group(turn.blocks);
   // Under a finished answer only: mid-turn the plan is not written yet, and
@@ -830,6 +840,7 @@ export function ChatPanel({
               branchable={branchable}
               onBranch={onBranch}
               onRewind={onRewind}
+              onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
             />
             {planReady && (
@@ -927,6 +938,7 @@ function renderBlock(
   onFix?: (text: string) => void,
   onOpenAgent?: OpenAgent,
   preview?: PreviewCalls,
+  questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
 ) {
   switch (block.kind) {
     case "user":
@@ -994,6 +1006,12 @@ function renderBlock(
       return (
         <div className="tools" key={block.id}>
           <ApprovalCard block={block} onDecide={onDecide} preview={preview} />
+        </div>
+      );
+    case "question":
+      return (
+        <div className="tools" key={block.id}>
+          <McpQuestionCard block={block} live={questions?.live ?? false} onAnswer={questions?.onAnswer} />
         </div>
       );
   }

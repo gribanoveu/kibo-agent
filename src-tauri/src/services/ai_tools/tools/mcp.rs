@@ -11,7 +11,11 @@ pub fn mcp(args: &McpCallArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
     let entry = deps.mcp.get(&args.name).ok_or_else(|| ToolError::UnknownTool(args.name.clone()))?;
     let never = || false;
     let cancelled = deps.cancelled.unwrap_or(&never);
-    match entry.client.call_tool(&entry.tool.name, args.arguments.clone(), cancelled) {
+    let called = match deps.ask {
+        Some(ask) => entry.client.call_tool_asking(&entry.tool.name, args.arguments.clone(), cancelled, &|question| ask(&entry.server, question)),
+        None => entry.client.call_tool(&entry.tool.name, args.arguments.clone(), cancelled),
+    };
+    match called {
         Ok(result) if result.is_error => Err(ToolError::McpToolFailed(result.text)),
         Ok(result) => Ok(ToolResult::Mcp { text: result.text }),
         Err(error @ McpError::Cancelled) => Err(ToolError::McpUnavailable(error.to_string())),
@@ -45,6 +49,19 @@ mod tests {
                 _ => Err(McpError::Exited { code: Some(1), stderr: String::new() }),
             }
         }
+        fn call_tool_asking(
+            &self,
+            name: &str,
+            arguments: Value,
+            cancelled: &dyn Fn() -> bool,
+            ask: &dyn Fn(&crate::domain::mcp::McpQuestion) -> crate::domain::mcp::McpAnswer,
+        ) -> Result<McpCallResult, McpError> {
+            if name != "asks" {
+                return self.call_tool(name, arguments, cancelled);
+            }
+            let answer = ask(&crate::domain::mcp::McpQuestion::Form { message: "Which?".into(), fields: vec![] });
+            Ok(McpCallResult { text: answer.action().into(), is_error: false })
+        }
     }
 
     fn deps(client: Arc<Scripted>) -> McpTools {
@@ -53,7 +70,7 @@ mod tests {
             name: "gh".into(),
             weight: 3,
             client,
-            tools: vec![tool("ok"), tool("fails"), tool("waits"), tool("dies")],
+            tools: vec![tool("ok"), tool("fails"), tool("waits"), tool("dies"), tool("asks")],
             instructions: None,
         }])
     }
@@ -84,6 +101,25 @@ mod tests {
     fn a_name_no_server_has_is_an_unknown_tool() {
         let deps = ToolDeps { mcp: deps(Arc::new(Scripted::default())), ..ToolDeps::default() };
         assert!(matches!(mcp(&call("mcp__gh__nope"), &deps), Err(ToolError::UnknownTool(_))));
+    }
+
+    /// A question goes through the turn's way to the user, named for the
+    /// server it comes from; without one, the plain call is made.
+    #[test]
+    fn a_servers_question_is_put_through_the_turn_with_the_servers_name() {
+        let asked = Mutex::new(Vec::new());
+        let ask = |server: &str, _: &crate::domain::mcp::McpQuestion| {
+            asked.lock().unwrap().push(server.to_string());
+            crate::domain::mcp::McpAnswer::Decline
+        };
+        let with = ToolDeps { mcp: deps(Arc::new(Scripted::default())), ask: Some(&ask), ..ToolDeps::default() };
+        assert_eq!(mcp(&call("mcp__gh__asks"), &with).unwrap(), ToolResult::Mcp { text: "decline".into() });
+        assert_eq!(*asked.lock().unwrap(), ["gh"]);
+
+        let client = Arc::new(Scripted::default());
+        let without = ToolDeps { mcp: deps(Arc::clone(&client)), ..ToolDeps::default() };
+        assert!(mcp(&call("mcp__gh__asks"), &without).is_err(), "the plain call, which this double does not know");
+        assert_eq!(client.asked.lock().unwrap()[0].0, "asks");
     }
 
     /// The stop button reaches a call that is waiting on a server.

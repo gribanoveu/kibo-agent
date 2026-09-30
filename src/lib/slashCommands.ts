@@ -1,4 +1,4 @@
-import type { CommandFile } from "./chat";
+import type { CommandFile, McpPromptItem } from "./chat";
 
 /**
  * A command typed into the composer as `/name` or `/name arguments`.
@@ -84,5 +84,35 @@ export function fileCommands(
       hint: file.description,
       argumentHint: file.argumentHint ?? undefined,
       run: (args: string) => send(typedCommand(file.name, args), expandTemplate(file.template, args)),
+    }));
+}
+
+/**
+ * The running MCP servers' prompts as menu entries, `/<server>:<prompt>`. The
+ * server writes the prompt when it runs, with what was typed after the name
+ * given to its arguments; the transcript shows the command typed, as for a
+ * command file. A name already taken — built in, or a file — stays the
+ * other's.
+ */
+export function mcpPromptCommands(
+  prompts: readonly McpPromptItem[],
+  taken: readonly SlashCommand[],
+  write: (server: string, prompt: string, args: string) => Promise<string>,
+  send: (text: string, sent: string) => void,
+  fail: (why: string) => void,
+): SlashCommand[] {
+  return prompts
+    .map((prompt) => ({ prompt, name: `${prompt.server}:${prompt.name}`.toLowerCase() }))
+    .filter(({ name }) => !taken.some((c) => c.name === name))
+    .map(({ prompt, name }) => ({
+      name,
+      hint: `${prompt.title || prompt.description || prompt.name} — from ${prompt.server}`,
+      argumentHint: prompt.arguments.map((a) => (a.required ? `<${a.name}>` : `[${a.name}]`)).join(" ") || undefined,
+      run: (args: string) => {
+        write(prompt.server, prompt.name, args).then(
+          (text) => send(typedCommand(name, args), text),
+          (e) => fail(`${prompt.server} could not write /${name}: ${e}`),
+        );
+      },
     }));
 }

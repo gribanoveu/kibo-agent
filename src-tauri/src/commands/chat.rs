@@ -37,7 +37,9 @@ use crate::services::ai_tools::preview;
 use crate::services::llm_chat::{self, Place, SteeringQueue, Turn, TurnError};
 use crate::services::context_compaction;
 use crate::domain::review::ReviewDesk;
+use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
+use crate::domain::mcp::McpAnswer;
 use crate::domain::mcp::McpTools;
 use crate::domain::hooks::Hooks;
 use crate::infra::background::Processes;
@@ -492,6 +494,17 @@ fn home() -> String {
 
 /// Asks the running turn to stop. Returns at once: the turn notices at its
 /// next checkpoint, which is never more than one tool call away.
+/// The window's answer to an MCP server's question, by the id the question
+/// came with. A question no longer open — its call stopped — is said to be.
+#[tauri::command]
+pub fn chat_answer_mcp_question(id: String, answer: McpAnswer, questions: State<'_, Arc<McpQuestions>>) -> Result<(), String> {
+    if questions.answer(&id, answer) {
+        Ok(())
+    } else {
+        Err("the question is no longer open: its call has ended".into())
+    }
+}
+
 #[tauri::command]
 pub fn chat_cancel(state: State<'_, Arc<AgentState>>) {
     state.cancel.store(true, Ordering::SeqCst);
@@ -703,6 +716,7 @@ where
         .try_state::<Arc<Processes>>()
         .map(|processes| Arc::clone(&processes) as Arc<dyn crate::domain::background::BackgroundProcesses>);
     let agents = app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents));
+    let questions = app.try_state::<Arc<McpQuestions>>().map(|questions| Arc::clone(&questions));
     let terminals = app
         .try_state::<Arc<crate::infra::terminal::Terminals>>()
         .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>);
@@ -764,6 +778,7 @@ where
             terminals,
             review,
             agents,
+            questions,
         };
         let outcome = run(&turn).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);

@@ -8,7 +8,7 @@
 //! Left out on purpose: OAuth (a 401 says so; `docs/18-mcp-oauth.md`) and the
 //! old HTTP+SSE transport.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::StreamableHttpClientTransport;
 use serde_json::Value;
 
-use crate::domain::mcp::{McpCallResult, McpClient, McpError, McpServerConfig, McpTool};
+use crate::domain::mcp::{McpAnswer, McpCallResult, McpClient, McpError, McpPrompt, McpQuestion, McpServerConfig, McpTool};
 use crate::infra::mcp_rmcp::{Failure, RmcpClient};
 
 /// Enough of an error body to explain it; a server that answers an error
@@ -82,6 +82,27 @@ impl McpClient for HttpServer {
     fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
         self.ended()?;
         self.client.call_tool(name, arguments, cancelled)
+    }
+
+    fn call_tool_asking(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancelled: &dyn Fn() -> bool,
+        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+    ) -> Result<McpCallResult, McpError> {
+        self.ended()?;
+        self.client.call_tool_asking(name, arguments, cancelled, ask)
+    }
+
+    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+        self.ended()?;
+        self.client.list_prompts()
+    }
+
+    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+        self.ended()?;
+        self.client.get_prompt(name, arguments)
     }
 
     fn instructions(&self) -> Option<String> {
@@ -397,6 +418,46 @@ mod tests {
         let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
         assert_eq!(err, McpError::Http { status: 401, body: "missing bearer token".into() });
         assert!(err.to_string().contains("OAuth"));
+    }
+
+    /// A server's prompts and questions reach it over HTTP too — and not
+    /// once its session is over.
+    #[test]
+    fn prompts_and_questions_go_over_http() {
+        let (url, log) = serve(|request| match request.body["method"].as_str() {
+            Some("initialize") => {
+                let mut answer = json_answer(
+                    request,
+                    json!({ "protocolVersion": "2025-06-18", "capabilities": { "prompts": {} }, "serverInfo": { "name": "f", "version": "1" } }),
+                );
+                answer.headers.push(("Mcp-Session-Id", "s-1".into()));
+                answer
+            }
+            Some("prompts/list") => json_answer(request, json!({ "prompts": [{ "name": "greet" }] })),
+            Some("prompts/get") => json_answer(request, json!({ "messages": [{ "role": "user", "content": { "type": "text", "text": "Hello." } }] })),
+            Some("tools/call") if request.body["params"]["name"] == "gone" => status(404, ""),
+            Some("tools/call") if request.body["params"]["inputResponses"].is_null() => json_answer(
+                request,
+                json!({ "resultType": "input_required", "inputRequests": { "q": { "method": "elicitation/create",
+                    "params": { "mode": "url", "message": "Sign in", "url": "https://a.example/in" } } } }),
+            ),
+            Some("tools/call") => json_answer(request, json!({ "content": [{ "type": "text", "text": "in" }] })),
+            _ => well_behaved(request),
+        });
+        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        assert_eq!(server.list_prompts().unwrap()[0].name, "greet");
+        assert_eq!(server.get_prompt("greet", &BTreeMap::new()).unwrap(), "Hello.");
+        let agreed = |_: &McpQuestion| McpAnswer::Accept { content: Default::default() };
+        let done = server.call_tool_asking("login", json!({}), &|| false, &agreed).unwrap();
+        assert_eq!(done.text, "in");
+        let retry = log.lock().unwrap().iter().filter(|s| s.body["method"] == "tools/call").nth(1).unwrap().body.clone();
+        assert_eq!(retry["params"]["inputResponses"]["q"], json!({ "action": "accept" }), "the user's answer, not a default");
+
+        server.call_tool("gone", json!({}), &|| false).unwrap_err();
+        let over = |r: Result<(), McpError>| assert!(matches!(r, Err(McpError::Http { status: 404, .. })), "{r:?}");
+        over(server.list_prompts().map(|_| ()));
+        over(server.get_prompt("greet", &BTreeMap::new()).map(|_| ()));
+        over(server.call_tool_asking("login", json!({}), &|| false, &|_| McpAnswer::Decline).map(|_| ()));
     }
 
     /// A server that challenges for a sign-in: the SDK keeps the challenge

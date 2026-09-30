@@ -110,6 +110,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         terminals: None,
         review: None,
         agents: None,
+        questions: None,
     };
     run(&turn)
 }

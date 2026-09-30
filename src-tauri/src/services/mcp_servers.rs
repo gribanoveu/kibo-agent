@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde_json::Value;
 
 use crate::domain::mcp::{
-    items, ConnectedServer, McpCallResult, McpClient, McpConfig, McpError, McpServerConfig, McpServerState, McpTool,
-    McpToolInfo, McpTools,
+    items, prompt_arguments, ConnectedServer, McpAnswer, McpCallResult, McpClient, McpConfig, McpError, McpPrompt,
+    McpQuestion, McpServerConfig, McpServerState, McpTool, McpToolInfo, McpTools,
 };
 
 /// Starts one server in a folder and completes its handshake — the stdio
@@ -46,7 +46,7 @@ struct Slot {
 
 enum SlotState {
     Starting,
-    Running { server: Arc<Supervised>, tools: Vec<McpTool> },
+    Running { server: Arc<Supervised>, tools: Vec<McpTool>, prompts: Vec<McpPrompt> },
     Failed(String),
 }
 
@@ -138,11 +138,15 @@ impl McpServers {
         };
         for (name, stale) in stale {
             let Ok(listed) = stale.list_tools() else { continue };
+            let offered = stale.list_prompts();
             let mut pool = lock(&self.pool);
             // Switched off or edited meanwhile: the slot is gone or another's.
-            if let Some(SlotState::Running { server, tools }) = pool.slots.get_mut(&name).map(|slot| &mut slot.state) {
+            if let Some(SlotState::Running { server, tools, prompts }) = pool.slots.get_mut(&name).map(|slot| &mut slot.state) {
                 if Arc::ptr_eq(server, &stale) {
                     *tools = listed;
+                    if let Ok(offered) = offered {
+                        *prompts = offered;
+                    }
                 }
             }
         }
@@ -206,7 +210,10 @@ impl McpServers {
     fn start_one(&self, config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool) -> Option<SlotState> {
         let started = (self.start)(config, cwd, cancelled).and_then(|client| Ok((client.list_tools()?, client)));
         match started {
+            // Prompts are a convenience: a server whose list of them fails
+            // still has its tools.
             Ok((tools, client)) => Some(SlotState::Running {
+                prompts: client.list_prompts().unwrap_or_default(),
                 server: Arc::new(Supervised {
                     config: config.clone(),
                     cwd: cwd.to_path_buf(),
@@ -240,7 +247,7 @@ impl McpServers {
         };
         match &slot.state {
             SlotState::Starting => McpServerState::Starting,
-            SlotState::Running { server, tools } if server.is_alive() => McpServerState::Running {
+            SlotState::Running { server, tools, .. } if server.is_alive() => McpServerState::Running {
                 tools: tools.iter().map(McpToolInfo::from).collect(),
                 instructions: server.instructions(),
             },
@@ -249,6 +256,43 @@ impl McpServers {
             },
             SlotState::Failed(error) => McpServerState::Failed { error: error.clone() },
         }
+    }
+
+    /// The prompts of the servers running for `cwd`, by server — what the
+    /// composer offers. Nothing is started to be asked.
+    pub fn prompts(&self, cwd: &Path) -> Vec<(String, McpPrompt)> {
+        let pool = lock(&self.pool);
+        if pool.cwd.as_deref() != Some(cwd) {
+            return Vec::new();
+        }
+        pool.slots
+            .iter()
+            .filter_map(|(name, slot)| match &slot.state {
+                SlotState::Running { server, prompts, .. } if server.is_alive() => Some((name, prompts)),
+                _ => None,
+            })
+            .flat_map(|(name, prompts)| prompts.iter().map(move |prompt| (name.clone(), prompt.clone())))
+            .collect()
+    }
+
+    /// One prompt of a running server, written with what was typed after its
+    /// name — given to its arguments by `domain::mcp::prompt_arguments`.
+    pub fn get_prompt(&self, server: &str, name: &str, typed: &str, cwd: &Path) -> Result<String, McpError> {
+        let (client, prompt) = {
+            let pool = lock(&self.pool);
+            let running = pool.slots.get(server).filter(|_| pool.cwd.as_deref() == Some(cwd)).and_then(|slot| match &slot.state {
+                SlotState::Running { server, prompts, .. } => Some((server, prompts)),
+                _ => None,
+            });
+            let Some((client, prompts)) = running else {
+                return Err(McpError::NotStarted(format!("\"{server}\" is not running")));
+            };
+            let Some(prompt) = prompts.iter().find(|p| p.name == name) else {
+                return Err(McpError::Protocol(format!("\"{server}\" offers no prompt {name:?}")));
+            };
+            (Arc::clone(client), prompt.clone())
+        };
+        client.get_prompt(name, &prompt_arguments(&prompt, typed))
     }
 
     /// When the app quits.
@@ -262,7 +306,7 @@ fn connected(pool: &Pool) -> McpTools {
         .slots
         .iter()
         .filter_map(|(name, slot)| match &slot.state {
-            SlotState::Running { server, tools } => Some(ConnectedServer {
+            SlotState::Running { server, tools, .. } => Some(ConnectedServer {
                 name: name.clone(),
                 weight: slot.config.weight(),
                 client: Arc::clone(server) as Arc<dyn McpClient>,
@@ -330,12 +374,36 @@ impl McpClient for Supervised {
         result
     }
 
+    fn call_tool_asking(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancelled: &dyn Fn() -> bool,
+        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+    ) -> Result<McpCallResult, McpError> {
+        let result = self.live(cancelled)?.call_tool_asking(name, arguments, cancelled, ask);
+        if let Err(error @ McpError::Exited { .. }) = &result {
+            *lock(&self.last_error) = Some(error.to_string());
+        }
+        result
+    }
+
     fn is_alive(&self) -> bool {
         lock(&self.current).is_alive()
     }
 
     fn instructions(&self) -> Option<String> {
         lock(&self.current).instructions()
+    }
+
+    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+        let current = Arc::clone(&lock(&self.current));
+        current.list_prompts()
+    }
+
+    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+        let current = Arc::clone(&lock(&self.current));
+        current.get_prompt(name, arguments)
     }
 
     /// A server started again mid-turn is another process, perhaps another
@@ -410,6 +478,18 @@ mod tests {
         }
         fn tools_stale(&self) -> bool {
             self.stale.load(Ordering::SeqCst)
+        }
+        /// `greet`, and after `grow` also `part`.
+        fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+            let argument = |name: &str| crate::domain::mcp::McpPromptArgument { name: name.into(), ..Default::default() };
+            let mut prompts = vec![McpPrompt { name: "greet".into(), arguments: vec![argument("who"), argument("how")], ..Default::default() }];
+            if self.grown.load(Ordering::SeqCst) {
+                prompts.push(McpPrompt { name: "part".into(), ..Default::default() });
+            }
+            Ok(prompts)
+        }
+        fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+            Ok(format!("{name} {arguments:?} (run {})", self.run))
         }
     }
 
@@ -703,6 +783,58 @@ mod tests {
         let next = servers.for_turn(&config, &cwd(), NO);
         assert!(next.get("mcp__a__wipe").is_some(), "the list of the process that died");
         assert_eq!(next.instructions()[0].text, "Echo first. (run 2)");
+    }
+
+    /// The composer's list: the prompts of the servers running here, and a
+    /// prompt written with what was typed given to its arguments.
+    #[test]
+    fn a_running_servers_prompts_are_offered_and_written_with_what_was_typed() {
+        let (servers, starts) = servers();
+        let config = config(&[("a", "ok")]);
+        assert!(servers.prompts(&cwd()).is_empty(), "started to be listed");
+        servers.for_turn(&config, &cwd(), NO);
+
+        let offered = servers.prompts(&cwd());
+        assert_eq!(offered.iter().map(|(server, p)| format!("{server}:{}", p.name)).collect::<Vec<_>>(), ["a:greet"]);
+        assert!(servers.prompts(Path::new("/elsewhere")).is_empty());
+        assert_eq!(
+            servers.get_prompt("a", "greet", "world  warmly please", &cwd()).unwrap(),
+            r#"greet {"how": "warmly please", "who": "world"} (run 1)"#
+        );
+        assert!(matches!(servers.get_prompt("b", "greet", "", &cwd()), Err(McpError::NotStarted(_))));
+        assert!(matches!(servers.get_prompt("a", "nope", "", &cwd()), Err(McpError::Protocol(m)) if m.contains("nope")));
+        assert!(matches!(servers.get_prompt("a", "greet", "", Path::new("/elsewhere")), Err(McpError::NotStarted(_))));
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+
+        let tools = servers.running(&cwd());
+        call(&tools, "crash").unwrap_err();
+        assert!(servers.prompts(&cwd()).is_empty(), "a server that went is not offered until it is back");
+    }
+
+    /// Read again with the tools, between turns.
+    #[test]
+    fn a_servers_new_prompts_are_offered_from_the_next_turn() {
+        let (servers, _) = servers();
+        let config = config(&[("a", "ok")]);
+        let tools = servers.for_turn(&config, &cwd(), NO);
+        call(&tools, "grow").unwrap();
+        assert_eq!(servers.prompts(&cwd()).len(), 1);
+        servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(servers.prompts(&cwd()).len(), 2);
+    }
+
+    /// A question a server asks goes through the server started again, like
+    /// a plain call: the restart does not lose the way to the user.
+    #[test]
+    fn a_question_reaches_the_user_through_a_restarted_server() {
+        let (servers, starts) = servers();
+        let config = config(&[("a", "ok")]);
+        let tools = servers.for_turn(&config, &cwd(), NO);
+        call(&tools, "crash").unwrap_err();
+        let entry = tools.get("mcp__a__echo").unwrap();
+        let answered = entry.client.call_tool_asking("echo", json!({}), &|| false, &|_| McpAnswer::Decline).unwrap();
+        assert_eq!(answered.text, "run 2");
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
     }
 
     #[test]

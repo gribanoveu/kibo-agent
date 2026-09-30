@@ -1,0 +1,92 @@
+/* An MCP server's question: the same weight as an approval card — it waits
+   on the user — in the accent rather than the warning colour. */
+.mcp-question {
+  margin: 6px 0 4px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-question.closed {
+  border-color: var(--border-soft);
+  background: var(--bg-panel-soft);
+  opacity: 0.85;
+}
+.mcp-question-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+}
+.mcp-question.closed .mcp-question-label {
+  color: var(--text-faint);
+}
+.mcp-question-message {
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.mcp-question-url {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.mcp-question-note {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.mcp-question-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mcp-question-name {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.mcp-question-required {
+  color: var(--amber);
+}
+.mcp-question-input {
+  padding: 5px 7px;
+  background: var(--bg-bubble);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+.mcp-question-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-question-choice {
+  display: flex;
+  gap: 4px;
+}
+.mcp-question-choice button {
+  padding: 3px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-bubble);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.mcp-question-choice button.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.mcp-question-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mcp-question-actions .btn {
+  padding: 5px 9px;
+  font-size: var(--fs-xs);
+}

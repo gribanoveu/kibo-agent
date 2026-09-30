@@ -313,6 +313,20 @@ pub enum ChatEventPayload {
     /// (`domain::review::wrap_up`). Said to the reader too, since the note is
     /// in the history the model reads.
     WrapUpReminded { rounds: u32, tokens: u64 },
+    /// An MCP server asks the user something in the middle of call `call`
+    /// (`docs/23-mcp-extension.md`, M-8). The call waits until
+    /// `chat_answer_mcp_question` answers `id`, or Stop.
+    ///
+    /// Outside the turn's sequence, like `CommandOutput`: it is sent from
+    /// inside the call, where the cursor is not.
+    McpQuestion {
+        id: String,
+        call: String,
+        server: String,
+        question: crate::domain::mcp::McpQuestion,
+    },
+    /// Question `id` is closed — answered, or left when the call stopped.
+    McpQuestionClosed { id: String, action: String },
     /// Token usage as of the round that just finished. Since every request
     /// resends the whole history, this is the authoritative context size, not
     /// a per-round statistic.

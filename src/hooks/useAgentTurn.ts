@@ -3,7 +3,9 @@ import { writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom } from "../lib/rewind";
 import {
+  answerMcpQuestion,
   cancelChat,
+  type McpAnswer,
   compactHistory,
   contextUsage,
   loadChat,
@@ -377,6 +379,19 @@ export function useAgentTurn({
     await cancelChat();
   }, []);
 
+  /**
+   * Answers an MCP server's question; the call waiting on it goes on. Refused
+   * when the call has ended meanwhile — said in the transcript, since the
+   * card that was clicked is the only place the user was looking.
+   */
+  const answerQuestion = useCallback(async (id: string, answer: McpAnswer) => {
+    try {
+      await answerMcpQuestion(id, answer);
+    } catch (e) {
+      setTurn((state) => appendNotice(state, `The answer did not reach the server: ${e}`));
+    }
+  }, []);
+
   // A turn under way belongs to the chat on screen: its answer, its approval
   // card and its first save all land here. Leaving would hand them to the
   // next chat and drop this one, so leaving waits for it to stop.
@@ -566,6 +581,7 @@ export function useAgentTurn({
     unqueue,
     decide,
     cancel,
+    answerQuestion,
     open,
     reset,
     compact: makeRoom,

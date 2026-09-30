@@ -93,6 +93,8 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "toolCall"; payload: LlmToolCall }
   | { type: "toolResult"; payload: { id: string; result?: unknown; error?: string | null; changes?: FileChange[] } }
   | { type: "commandOutput"; payload: { id: string; stream: OutputStream; chunk: string } }
+  | { type: "mcpQuestion"; payload: { id: string; call: string; server: string; question: McpQuestion } }
+  | { type: "mcpQuestionClosed"; payload: { id: string; action: McpAnswer["action"] } }
   | { type: "contextUsage"; payload: ChatUsage }
 );
 
@@ -683,6 +685,61 @@ export type McpServerItem = {
 };
 /** The file (`text`, for the editor), where it is, and its servers as rows. */
 export type McpView = { path: string; text: string; servers: McpServerItem[] };
+
+/** Mirrors `domain::mcp::McpFieldKind`. */
+export type McpFieldKind =
+  | { type: "text" }
+  | { type: "number"; integer: boolean }
+  | { type: "boolean" }
+  | { type: "choice"; values: string[]; labels: string[] };
+
+/** Mirrors `domain::mcp::McpField`: one field of a server's form. */
+export type McpField = {
+  name: string;
+  label: string;
+  description: string | null;
+  required: boolean;
+  kind: McpFieldKind;
+  default: unknown;
+};
+
+/** Mirrors `domain::mcp::McpQuestion`: what an MCP server asks the user mid-call. */
+export type McpQuestion =
+  | { mode: "form"; message: string; fields: McpField[] }
+  | { mode: "url"; message: string; url: string };
+
+/** Mirrors `domain::mcp::McpAnswer`. */
+export type McpAnswer =
+  | { action: "accept"; content?: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/** Answers question `id` of a running turn; refused when its call has already ended. */
+export async function answerMcpQuestion(id: string, answer: McpAnswer): Promise<void> {
+  requireBackend();
+  await invoke("chat_answer_mcp_question", { id, answer });
+}
+
+/** Mirrors `commands::mcp::McpPromptItem`: a prompt a running server offers. */
+export type McpPromptItem = {
+  server: string;
+  name: string;
+  title: string | null;
+  description: string;
+  arguments: { name: string; description: string; required: boolean }[];
+};
+
+/** The prompts of the servers running for the open folder; none are started to be asked. */
+export async function mcpPrompts(): Promise<McpPromptItem[]> {
+  if (!inTauri()) return [];
+  return invoke<McpPromptItem[]>("mcp_prompts");
+}
+
+/** A server's prompt written with what was typed after its name. */
+export async function mcpPromptGet(server: string, name: string, typed: string): Promise<string> {
+  requireBackend();
+  return invoke<string>("mcp_prompt_get", { server, name, typed });
+}
 
 export async function mcpConfig(): Promise<McpView> {
   if (!inTauri()) return { path: "", text: "", servers: [] };

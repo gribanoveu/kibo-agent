@@ -12,30 +12,40 @@
 //! - what a failure means is the transport's to say ([`Failure`]): for a
 //!   process, its exit code and the last lines of its stderr;
 //! - a tool list is read again only between turns, when the server said it
-//!   changed or the time it gave the list ran out ([`McpClient::tools_stale`]).
+//!   changed or the time it gave the list ran out ([`McpClient::tools_stale`]);
+//! - a server's question in the middle of a call reaches the user through the
+//!   caller, and the call's clock stops while the user answers — however the
+//!   question came: as a request of the server's own (before 2026-07-28) or
+//!   as an answer asking for input, the call then sent again (`docs/23-mcp-extension.md`, M-8).
 //!
 //! `rmcp` is async on tokio and everything above `McpClient` is blocking, so
 //! each method is one `block_on` on Tauri's runtime — the same bridge as
 //! `infra::kube_client`. Never call these from a task of that runtime.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientCapabilities, ClientConfig, ClientRequest, Implementation,
-    ListToolsRequest, PaginatedRequestParams, ProtocolVersion,
+    CallToolRequest, CallToolRequestParams, ClientConfig, ClientRequest, ElicitRequestParams, ElicitResult,
+    GetPromptRequest, GetPromptRequestParams, Implementation, ListPromptsRequest, ListToolsRequest,
+    PaginatedRequestParams, ProtocolVersion,
 };
 use rmcp::service::{
     ClientInitializeError, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer, PeerRequestOptions,
-    RoleClient, RunningService, ServiceError,
+    RequestContext, RoleClient, RunningService, ServiceError,
 };
 use rmcp::transport::IntoTransport;
 use rmcp::ClientHandler;
 use serde_json::{json, Value};
+use tokio::sync::{mpsc, oneshot};
 
-use crate::domain::mcp::{render_content, McpCallResult, McpClient, McpError, McpTool, McpToolHints};
+use crate::domain::mcp::{
+    prompt, question, render_content, render_prompt, McpAnswer, McpCallResult, McpClient, McpError, McpPrompt,
+    McpQuestion, McpTool, McpToolHints,
+};
 
 /// How often a waiting call looks at its stop flag.
 const POLL: Duration = Duration::from_millis(50);
@@ -44,6 +54,8 @@ const POLL: Duration = Duration::from_millis(50);
 const CANCEL_GRACE: Duration = Duration::from_secs(1);
 /// A server that pages its tool list forever is broken, not large.
 const MAX_TOOL_PAGES: usize = 50;
+/// A server that asks for input round after round is broken, not curious.
+const MAX_INPUT_ROUNDS: usize = 10;
 
 /// What went wrong below the protocol, for the transport to put into words.
 pub enum Failure<'a> {
@@ -55,6 +67,9 @@ pub enum Failure<'a> {
 
 pub type Describe = Box<dyn Fn(Failure<'_>) -> McpError + Send + Sync>;
 
+/// A question the server sent on its own, and where its answer goes.
+type Asked = (McpQuestion, oneshot::Sender<McpAnswer>);
+
 pub struct RmcpClient {
     /// Held for its end: dropping it closes the conversation — for an HTTP
     /// session, with the `DELETE` that ends it on the server.
@@ -62,18 +77,24 @@ pub struct RmcpClient {
     peer: Peer<RoleClient>,
     timeout: Duration,
     describe: Describe,
-    /// The server said its tools changed since they were last listed.
-    tools_changed: Arc<AtomicBool>,
+    /// The server said its tools or prompts changed since they were read.
+    lists_changed: Arc<AtomicBool>,
     /// Until when the server said the list it gave may be kept; `None` when
     /// it gave no time, which is every server before 2026-07-28.
     tools_fresh_until: Mutex<Option<Instant>>,
+    /// Where the server's own questions go while a call can carry them.
+    desk: Desk,
 }
 
-/// This side of the conversation: who the client is, and an ear for the one
-/// thing a server says unasked that matters here.
+/// The call that takes the server's questions now, if one does.
+type Desk = Arc<Mutex<Option<mpsc::UnboundedSender<Asked>>>>;
+
+/// This side of the conversation: who the client is, an ear for the lists
+/// changing, and the way to the user for a question.
 struct Listener {
     config: ClientConfig,
-    tools_changed: Arc<AtomicBool>,
+    lists_changed: Arc<AtomicBool>,
+    desk: Desk,
 }
 
 impl ClientHandler for Listener {
@@ -82,7 +103,38 @@ impl ClientHandler for Listener {
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        self.tools_changed.store(true, Ordering::SeqCst);
+        self.lists_changed.store(true, Ordering::SeqCst);
+    }
+
+    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.lists_changed.store(true, Ordering::SeqCst);
+    }
+
+    /// A question outside a call that can carry it — or one this window
+    /// cannot put — is declined: nobody would see it.
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
+        let asked = serde_json::to_value(&request).ok().as_ref().and_then(question);
+        let desk = lock(&self.desk).clone();
+        let answer = match (asked.clone(), desk) {
+            (Some(asked), Some(desk)) => {
+                let (reply, answered) = oneshot::channel();
+                match desk.send((asked, reply)) {
+                    // The call ended before anyone asked: nobody declined it louder.
+                    Ok(()) => answered.await.unwrap_or(McpAnswer::Decline),
+                    Err(_) => McpAnswer::Decline,
+                }
+            }
+            _ => McpAnswer::Decline,
+        };
+        let result = match &asked {
+            Some(asked) => answer.to_result(asked),
+            None => json!({ "action": "decline" }),
+        };
+        serde_json::from_value(result).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))
     }
 }
 
@@ -105,19 +157,21 @@ impl RmcpClient {
         T: IntoTransport<RoleClient, E, A>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let config = ClientConfig::new(
-            ClientCapabilities::default(),
-            Implementation::new("kibo-agent", env!("CARGO_PKG_VERSION")),
-        );
+        // Questions, both kinds: a form, and an address to open. Nothing
+        // else is promised — no sampling, no roots.
+        let capabilities = serde_json::from_value(json!({ "elicitation": { "form": {}, "url": {} } }))
+            .map_err(|e| McpError::NotStarted(e.to_string()))?;
+        let config = ClientConfig::new(capabilities, Implementation::new("kibo-agent", env!("CARGO_PKG_VERSION")));
         let lifecycle = ClientLifecycleMode::Auto {
             preferred_versions: vec![ProtocolVersion::V_2026_07_28],
             legacy_version: Some(ProtocolVersion::V_2025_11_25),
         };
-        let tools_changed = Arc::new(AtomicBool::new(false));
-        let listener = Listener { config, tools_changed: Arc::clone(&tools_changed) };
+        let lists_changed = Arc::new(AtomicBool::new(false));
+        let desk = Desk::default();
+        let listener = Listener { config, lists_changed: Arc::clone(&lists_changed), desk: Arc::clone(&desk) };
         let service = tauri::async_runtime::block_on(async {
             let mut serving = Box::pin(listener.serve_with_lifecycle(transport()?, lifecycle));
-            match wait(&mut serving, timeout, cancelled).await {
+            match wait(&mut serving, timeout, cancelled, None).await {
                 Ok(served) => served.map_err(|e| handshake_error(e, &describe)),
                 Err(Stop::Cancelled) => Err(McpError::Cancelled),
                 Err(Stop::TimedOut) => Err(McpError::Timeout(timeout.as_secs())),
@@ -128,22 +182,31 @@ impl RmcpClient {
             _service: service,
             timeout,
             describe,
-            tools_changed,
+            lists_changed,
             tools_fresh_until: Mutex::default(),
+            desk,
         })
     }
 
     /// One request and its answer as JSON. Through `Value` rather than the
     /// SDK's types: an answer its schema refuses arrives as a custom result,
     /// and what can be read from it still is.
-    fn request(&self, request: ClientRequest, cancelled: &dyn Fn() -> bool) -> Result<Value, McpError> {
+    ///
+    /// With `asking`, a question the server sends meanwhile is put to the
+    /// user, and the time the user takes is not the server's.
+    fn request(
+        &self,
+        request: ClientRequest,
+        cancelled: &dyn Fn() -> bool,
+        asking: Option<&mut Asking<'_>>,
+    ) -> Result<Value, McpError> {
         tauri::async_runtime::block_on(async {
             let mut handle = self
                 .peer
                 .send_cancellable_request(request, PeerRequestOptions::no_options())
                 .await
                 .map_err(|e| self.error(e))?;
-            let stop = match wait(&mut handle.rx, self.timeout, cancelled).await {
+            let stop = match wait(&mut handle.rx, self.timeout, cancelled, asking).await {
                 Ok(Ok(Ok(result))) => return serde_json::to_value(result).map_err(|e| McpError::Protocol(e.to_string())),
                 Ok(Ok(Err(error))) => return Err(self.error(error)),
                 Ok(Err(_)) => return Err((self.describe)(Failure::Closed)),
@@ -172,6 +235,16 @@ impl RmcpClient {
             other => McpError::Protocol(other.to_string()),
         }
     }
+
+    fn offers_prompts(&self) -> bool {
+        self.peer.peer_info().is_some_and(|info| info.capabilities.prompts.is_some())
+    }
+}
+
+/// A call's way to the user for the server's own questions.
+struct Asking<'a> {
+    questions: mpsc::UnboundedReceiver<Asked>,
+    ask: &'a dyn Fn(&McpQuestion) -> McpAnswer,
 }
 
 impl McpClient for RmcpClient {
@@ -180,15 +253,15 @@ impl McpClient for RmcpClient {
         let mut cursor: Option<String> = None;
         // Before asking, so a change announced while the answer is on its
         // way is not lost to this reading.
-        self.tools_changed.store(false, Ordering::SeqCst);
+        self.lists_changed.store(false, Ordering::SeqCst);
         let asked = Instant::now();
         for page_number in 0..MAX_TOOL_PAGES {
             let params = PaginatedRequestParams::default().with_cursor(cursor.take());
             let request = ClientRequest::ListToolsRequest(ListToolsRequest::with_param(params));
-            let page = self.request(request, &|| false)?;
+            let page = self.request(request, &|| false, None)?;
             if page_number == 0 {
                 let fresh_for = page["ttlMs"].as_u64().map(Duration::from_millis);
-                *self.tools_fresh_until.lock().unwrap_or_else(|p| p.into_inner()) = fresh_for.map(|ttl| asked + ttl);
+                *lock(&self.tools_fresh_until) = fresh_for.map(|ttl| asked + ttl);
             }
             let listed = page["tools"]
                 .as_array()
@@ -203,18 +276,58 @@ impl McpClient for RmcpClient {
     }
 
     fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
+        self.call_tool_asking(name, arguments, cancelled, &|_| McpAnswer::Decline)
+    }
+
+    fn call_tool_asking(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancelled: &dyn Fn() -> bool,
+        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+    ) -> Result<McpCallResult, McpError> {
         let mut params = CallToolRequestParams::new(name.to_string());
         if let Value::Object(arguments) = arguments {
             params = params.with_arguments(arguments);
         }
-        let result = self.request(ClientRequest::CallToolRequest(CallToolRequest::new(params)), cancelled)?;
-        // Only a client that declared it can answer may be asked for input,
-        // and this one declares nothing; a server that asks anyway gets no
-        // retry, and the model hears why.
-        if result["resultType"] == "input_required" {
-            return Err(McpError::Protocol(format!("{name} asked for input mid-call, which this app cannot give yet")));
+        // This call takes the server's own questions until it ends. Two
+        // calls to one server at once: the later one takes them.
+        let (questions, taken) = mpsc::unbounded_channel();
+        *lock(&self.desk) = Some(questions.clone());
+        let mut asking = Asking { questions: taken, ask };
+        let result = (|| {
+            for _ in 0..MAX_INPUT_ROUNDS {
+                let request = ClientRequest::CallToolRequest(CallToolRequest::new(params.clone()));
+                let result = self.request(request, cancelled, Some(&mut asking))?;
+                if result["resultType"] != "input_required" {
+                    return Ok(McpCallResult { text: render_content(&result), is_error: result["isError"].as_bool().unwrap_or(false) });
+                }
+                // The server asked for input instead of answering: put its
+                // questions, then send the call again with the answers.
+                let mut answers = BTreeMap::new();
+                for (key, asked) in result["inputRequests"].as_object().into_iter().flatten() {
+                    if asked["method"] != "elicitation/create" {
+                        return Err(McpError::Protocol(format!("{name} asked for {}, which this app does not offer", asked["method"])));
+                    }
+                    let answer = match question(&asked["params"]) {
+                        Some(asked) => ask(&asked).to_result(&asked),
+                        None => json!({ "action": "decline" }),
+                    };
+                    if cancelled() {
+                        return Err(McpError::Cancelled);
+                    }
+                    answers.insert(key.clone(), answer);
+                }
+                params.input_responses = Some(answers);
+                params.request_state = result["requestState"].as_str().map(str::to_string);
+            }
+            Err(McpError::Protocol(format!("{name} kept asking for input past {MAX_INPUT_ROUNDS} rounds")))
+        })();
+        let mut desk = lock(&self.desk);
+        if desk.as_ref().is_some_and(|taking| taking.same_channel(&questions)) {
+            *desk = None;
         }
-        Ok(McpCallResult { text: render_content(&result), is_error: result["isError"].as_bool().unwrap_or(false) })
+        result
     }
 
     fn is_alive(&self) -> bool {
@@ -226,8 +339,44 @@ impl McpClient for RmcpClient {
     }
 
     fn tools_stale(&self) -> bool {
-        let expired = self.tools_fresh_until.lock().unwrap_or_else(|p| p.into_inner()).is_some_and(|until| Instant::now() >= until);
-        expired || self.tools_changed.load(Ordering::SeqCst)
+        let expired = lock(&self.tools_fresh_until).is_some_and(|until| Instant::now() >= until);
+        expired || self.lists_changed.load(Ordering::SeqCst)
+    }
+
+    /// Asked only of a server that said it has prompts: one that did not may
+    /// not know the method at all.
+    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+        if !self.offers_prompts() {
+            return Ok(Vec::new());
+        }
+        let mut prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_TOOL_PAGES {
+            let params = PaginatedRequestParams::default().with_cursor(cursor.take());
+            let page = self.request(ClientRequest::ListPromptsRequest(ListPromptsRequest::with_param(params)), &|| false, None)?;
+            let listed = page["prompts"]
+                .as_array()
+                .ok_or_else(|| McpError::Protocol(format!("prompts/list returned no prompts array: {page}")))?;
+            prompts.extend(listed.iter().filter_map(prompt));
+            match page["nextCursor"].as_str() {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => return Ok(prompts),
+            }
+        }
+        Err(McpError::Protocol(format!("prompts/list kept paging past {MAX_TOOL_PAGES} pages")))
+    }
+
+    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+        let mut params = GetPromptRequestParams::new(name);
+        if !arguments.is_empty() {
+            params = params.with_arguments(arguments.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect());
+        }
+        let result = self.request(ClientRequest::GetPromptRequest(GetPromptRequest::new(params)), &|| false, None)?;
+        // The composer is not a turn: there is nobody there to answer.
+        if result["resultType"] == "input_required" {
+            return Err(McpError::Protocol(format!("{name} asks for input before it can be written, which the composer cannot give")));
+        }
+        Ok(render_prompt(&result))
     }
 }
 
@@ -273,8 +422,15 @@ fn handshake_error(error: ClientInitializeError, describe: &Describe) -> McpErro
     }
 }
 
-/// `future`, unless the deadline or the stop flag comes first.
-async fn wait<F: Future + Unpin>(future: &mut F, limit: Duration, cancelled: &dyn Fn() -> bool) -> Result<F::Output, Stop> {
+/// `future`, unless the deadline or the stop flag comes first. A question
+/// the server asks meanwhile is put through `asking`, and the deadline moves
+/// by however long the user took: that time is not the server's.
+async fn wait<F: Future + Unpin>(
+    future: &mut F,
+    limit: Duration,
+    cancelled: &dyn Fn() -> bool,
+    mut asking: Option<&mut Asking<'_>>,
+) -> Result<F::Output, Stop> {
     let deadline = tokio::time::sleep(limit);
     tokio::pin!(deadline);
     let mut poll = tokio::time::interval(POLL);
@@ -282,6 +438,15 @@ async fn wait<F: Future + Unpin>(future: &mut F, limit: Duration, cancelled: &dy
         tokio::select! {
             biased;
             output = &mut *future => return Ok(output),
+            Some((asked, reply)) = async { asking.as_mut()?.questions.recv().await }, if asking.is_some() => {
+                let started = Instant::now();
+                // Blocks this thread until the user answers — the thread that
+                // waits on this call and on nothing else.
+                let answer = asking.as_ref().map_or(McpAnswer::Decline, |asking| (asking.ask)(&asked));
+                let _ = reply.send(answer);
+                let later = deadline.deadline() + started.elapsed();
+                deadline.as_mut().reset(later);
+            }
             _ = &mut deadline => return Err(Stop::TimedOut),
             _ = poll.tick() => {
                 if cancelled() {
@@ -292,11 +457,15 @@ async fn wait<F: Future + Unpin>(future: &mut F, limit: Duration, cancelled: &dy
     }
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::AtomicUsize;
     use std::time::Instant;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -428,7 +597,7 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen[1]["params"]["protocolVersion"], "2025-11-25", "the newest version with a handshake");
         assert_eq!(seen[1]["params"]["clientInfo"]["name"], "kibo-agent");
-        assert_eq!(seen[1]["params"]["capabilities"], json!({}), "nothing is promised that is not built");
+        assert_eq!(seen[1]["params"]["capabilities"], json!({ "elicitation": { "form": {}, "url": {} } }), "questions, and nothing else");
         assert_eq!(client.instructions().as_deref(), Some("Search before you open."));
     }
 
@@ -451,14 +620,233 @@ mod tests {
         assert_eq!(client.instructions().as_deref(), Some("Stateless."));
     }
 
-    /// Nothing here can answer a server's question yet, and nothing said it
-    /// could; the call fails with the reason rather than being retried blind.
+    /// The user's side of a question, for a test: records what was asked
+    /// and answers as told, after `takes`.
+    struct User {
+        asked: Mutex<Vec<McpQuestion>>,
+        answer: Value,
+        takes: Duration,
+    }
+
+    impl User {
+        fn answering(answer: Value, takes: Duration) -> Self {
+            Self { asked: Mutex::default(), answer, takes }
+        }
+        fn ask(&self, question: &McpQuestion) -> McpAnswer {
+            self.asked.lock().unwrap().push(question.clone());
+            std::thread::sleep(self.takes);
+            serde_json::from_value(self.answer.clone()).unwrap()
+        }
+    }
+
+    fn form(message: &str) -> Value {
+        json!({ "mode": "form", "message": message, "requestedSchema": { "type": "object",
+            "properties": { "repo": { "type": "string" } }, "required": ["repo"] } })
+    }
+
+    /// A server of the new era asks by answering "input required"; the
+    /// question is put, and the call is sent again — a new request, with the
+    /// answers and the server's state as it gave it.
     #[test]
-    fn a_call_that_asks_for_input_fails_and_says_why() {
-        let (client, seen) = fake(SECOND, modern);
-        let err = client.unwrap().call_tool("asks", json!({}), &|| false).unwrap_err();
-        assert!(matches!(&err, McpError::Protocol(m) if m.contains("asked for input")), "{err}");
-        assert_eq!(methods(&seen).iter().filter(|m| *m == "tools/call").count(), 1, "not retried");
+    fn a_call_that_asks_for_input_is_put_to_the_user_and_sent_again_with_the_answer() {
+        let (client, seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") if request["params"]["inputResponses"].is_null() => ok(
+                request,
+                json!({ "resultType": "input_required", "inputRequests": { "where": { "method": "elicitation/create", "params": form("Which repository?") } },
+                    "requestState": "opaque-1" }),
+            ),
+            Some("tools/call") => ok(
+                request,
+                json!({ "resultType": "complete", "content": [{ "type": "text", "text": format!("opened {}", request["params"]["inputResponses"]["where"]["content"]["repo"]) }] }),
+            ),
+            _ => modern(request),
+        });
+        let user = User::answering(json!({ "action": "accept", "content": { "repo": "a/b", "unasked": "x" } }), Duration::ZERO);
+        let done = client.unwrap().call_tool_asking("open", json!({ "n": 1 }), &|| false, &|q| user.ask(q)).unwrap();
+
+        assert_eq!(done.text, "opened \"a/b\"");
+        assert!(matches!(&user.asked.lock().unwrap()[..], [McpQuestion::Form { message, .. }] if message == "Which repository?"));
+        let seen = seen.lock().unwrap();
+        let calls: Vec<&Value> = seen.iter().filter(|m| m["method"] == "tools/call").collect();
+        assert_eq!(calls.len(), 2);
+        assert_ne!(calls[0]["id"], calls[1]["id"], "the retry is a request of its own");
+        let retry = &calls[1]["params"];
+        assert_eq!((&retry["name"], &retry["arguments"]), (&json!("open"), &json!({ "n": 1 })));
+        assert_eq!(retry["requestState"], "opaque-1", "given back as it came");
+        assert_eq!(retry["inputResponses"]["where"], json!({ "action": "accept", "content": { "repo": "a/b" } }), "only what was asked");
+    }
+
+    /// Asked for something this app never said it gives: the call fails and
+    /// says what, rather than being sent again empty-handed.
+    #[test]
+    fn a_call_that_asks_for_what_was_never_offered_fails_and_says_what() {
+        let (client, seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") => ok(
+                request,
+                json!({ "resultType": "input_required", "inputRequests": { "m": { "method": "sampling/createMessage", "params": {} } } }),
+            ),
+            _ => modern(request),
+        });
+        let err = client.unwrap().call_tool_asking("x", json!({}), &|| false, &|_| panic!("put to the user")).unwrap_err();
+        assert!(matches!(&err, McpError::Protocol(m) if m.contains("sampling/createMessage")), "{err}");
+        assert_eq!(methods(&seen).iter().filter(|m| *m == "tools/call").count(), 1);
+    }
+
+    /// A server that asks round after round is given up on, not answered
+    /// forever.
+    #[test]
+    fn a_server_that_keeps_asking_is_given_up_on() {
+        let (client, seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") => ok(request, json!({ "resultType": "input_required", "requestState": "again" })),
+            _ => modern(request),
+        });
+        let err = client.unwrap().call_tool_asking("x", json!({}), &|| false, &|_| McpAnswer::Decline).unwrap_err();
+        assert!(matches!(&err, McpError::Protocol(m) if m.contains("10 rounds")), "{err}");
+        assert_eq!(methods(&seen).iter().filter(|m| *m == "tools/call").count(), 10);
+    }
+
+    /// Stop pressed while the question is open ends the call there: the
+    /// answer is not sent on.
+    #[test]
+    fn a_stop_while_the_user_is_asked_ends_the_call_without_sending_it_again() {
+        let (client, seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") => ok(
+                request,
+                json!({ "resultType": "input_required", "inputRequests": { "w": { "method": "elicitation/create", "params": form("?") } } }),
+            ),
+            _ => modern(request),
+        });
+        let stopped = AtomicBool::new(false);
+        let err = client
+            .unwrap()
+            .call_tool_asking("x", json!({}), &|| stopped.load(Ordering::SeqCst), &|_| {
+                stopped.store(true, Ordering::SeqCst);
+                McpAnswer::Cancel
+            })
+            .unwrap_err();
+        assert_eq!(err, McpError::Cancelled);
+        assert_eq!(methods(&seen).iter().filter(|m| *m == "tools/call").count(), 1);
+    }
+
+    /// A server of the `initialize` era asks with a request of its own while
+    /// the call is open. The user's time is not the server's: a question
+    /// answered after the call's whole timeout still lets the call finish.
+    #[test]
+    fn an_older_servers_own_question_is_put_to_the_user_and_the_calls_clock_stops_meanwhile() {
+        let call_id = Arc::new(Mutex::new(Value::Null));
+        let held = Arc::clone(&call_id);
+        let (client, seen) = fake(Duration::from_millis(300), move |request| match (request["method"].as_str(), &request["id"]) {
+            (Some("tools/call"), id) => {
+                *held.lock().unwrap() = id.clone();
+                Some(vec![json!({ "jsonrpc": "2.0", "id": "q-1", "method": "elicitation/create", "params": form("Which repository?") })])
+            }
+            // The user's answer, as this client's reply to the server's request.
+            (None, id) if id == "q-1" => {
+                let repo = request["result"]["content"]["repo"].clone();
+                ok(&json!({ "id": held.lock().unwrap().clone() }), json!({ "content": [{ "type": "text", "text": format!("opened {repo}") }] }))
+            }
+            _ => legacy(request),
+        });
+        let user = User::answering(json!({ "action": "accept", "content": { "repo": "a/b" } }), Duration::from_millis(600));
+        let done = client.unwrap().call_tool_asking("open", json!({}), &|| false, &|q| user.ask(q)).unwrap();
+
+        assert_eq!(done.text, "opened \"a/b\"");
+        assert_eq!(user.asked.lock().unwrap().len(), 1);
+        let reply = seen.lock().unwrap().iter().find(|m| m["id"] == "q-1").cloned().unwrap();
+        assert_eq!(reply["result"]["action"], "accept");
+        assert!(!call_id.lock().unwrap().is_null());
+    }
+
+    /// Nobody to ask — a plain call, or a question nobody can put — is an
+    /// answered question, not a hung server.
+    #[test]
+    fn a_question_nobody_can_answer_is_declined() {
+        let replies = AtomicUsize::new(0);
+        let (client, seen) = fake(SECOND, move |request| match (request["method"].as_str(), &request["id"]) {
+            (Some("tools/call"), _) => Some(vec![
+                json!({ "jsonrpc": "2.0", "id": "q-1", "method": "elicitation/create", "params": form("?") }),
+                json!({ "jsonrpc": "2.0", "id": "q-2", "method": "elicitation/create",
+                    "params": { "mode": "form", "message": "?", "requestedSchema": { "properties": { "tags": { "type": "array" } } } } }),
+            ]),
+            // The call is answered once both questions are.
+            (None, id) if id.is_string() && replies.fetch_add(1, Ordering::SeqCst) == 1 => {
+                ok(&json!({ "id": 2 }), json!({ "content": [{ "type": "text", "text": "fine" }] }))
+            }
+            _ => legacy(request),
+        });
+        assert_eq!(client.unwrap().call_tool("x", json!({}), &|| false).unwrap().text, "fine");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while seen.lock().unwrap().iter().filter(|m| m["id"].is_string()).count() < 2 {
+            assert!(Instant::now() < deadline, "a question was left unanswered: {:#?}", seen.lock().unwrap());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let seen = seen.lock().unwrap();
+        let reply = |id: &str| seen.iter().find(|m| m["id"] == id).unwrap().clone();
+        assert_eq!(reply("q-1")["result"], json!({ "action": "decline" }));
+        // A form the protocol does not allow (a list field) the SDK refuses
+        // before it reaches this app — with an error, which answers too.
+        assert!(reply("q-2")["error"].is_object(), "{}", reply("q-2"));
+    }
+
+    /// Prompts are asked only of a server that said it has them.
+    #[test]
+    fn prompts_are_listed_and_written_by_a_server_that_has_them() {
+        let (client, seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("initialize") => ok(
+                request,
+                json!({ "protocolVersion": "2025-06-18", "capabilities": { "prompts": {} }, "serverInfo": { "name": "f", "version": "1" } }),
+            ),
+            Some("prompts/list") => ok(request, json!({ "prompts": [{ "name": "review", "arguments": [{ "name": "pr", "required": true }] }, { "title": "nameless" }] })),
+            Some("prompts/get") => ok(
+                request,
+                json!({ "messages": [{ "role": "user", "content": { "type": "text", "text": format!("Review PR {}.", request["params"]["arguments"]["pr"]) } }] }),
+            ),
+            _ => legacy(request),
+        });
+        let client = client.unwrap();
+        let prompts = client.list_prompts().unwrap();
+        assert_eq!(prompts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["review"]);
+        assert!(prompts[0].arguments[0].required);
+        let given = BTreeMap::from([("pr".to_string(), "42".to_string())]);
+        assert_eq!(client.get_prompt("review", &given).unwrap(), "Review PR \"42\".");
+        assert_eq!(seen.lock().unwrap().iter().find(|m| m["method"] == "prompts/get").unwrap()["params"]["name"], "review");
+
+        // The composer is nobody to answer a question: such a prompt fails.
+        let (asking, _seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("initialize") => ok(
+                request,
+                json!({ "protocolVersion": "2025-06-18", "capabilities": { "prompts": {} }, "serverInfo": { "name": "f", "version": "1" } }),
+            ),
+            Some("prompts/get") => ok(request, json!({ "resultType": "input_required", "requestState": "s" })),
+            _ => legacy(request),
+        });
+        let err = asking.unwrap().get_prompt("review", &BTreeMap::new()).unwrap_err();
+        assert!(matches!(&err, McpError::Protocol(m) if m.contains("asks for input")), "{err}");
+
+        let (quiet, seen) = fake(SECOND, legacy);
+        assert_eq!(quiet.unwrap().list_prompts().unwrap(), []);
+        assert!(!methods(&seen).contains(&"prompts/list".to_string()), "asked a server that has none");
+    }
+
+    /// A prompt list can change like a tool list, and is read again with it.
+    #[test]
+    fn a_prompt_list_the_server_says_changed_makes_the_lists_stale() {
+        let (client, _seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") => {
+                let mut replies = vec![json!({ "jsonrpc": "2.0", "method": "notifications/prompts/list_changed" })];
+                replies.extend(legacy(request)?);
+                Some(replies)
+            }
+            _ => legacy(request),
+        });
+        let client = client.unwrap();
+        client.list_tools().unwrap();
+        client.call_tool("x", json!({}), &|| false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !client.tools_stale() {
+            assert!(Instant::now() < deadline, "not heard");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

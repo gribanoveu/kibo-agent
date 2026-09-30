@@ -2,6 +2,8 @@ import {
   type ChatUsage,
   type Checkpoint,
   type FileChange,
+  type McpAnswer,
+  type McpQuestion,
   type Outcome,
   type PendingToolCall,
   type ProcessInfo,
@@ -54,6 +56,17 @@ export type Block =
       output: string;
       /** What the call did to files, kept for a rewind — absent when nothing. */
       changes?: FileChange[];
+    }
+  /** An MCP server asking the user something in the middle of call `call`. */
+  | {
+      kind: "question";
+      id: string;
+      round: number;
+      call: string;
+      server: string;
+      question: McpQuestion;
+      /** `open` until answered, or left when its call ended. */
+      status: "open" | McpAnswer["action"];
     }
   | {
       kind: "approval";
@@ -200,10 +213,13 @@ export function restoredTurn(blocks: Block[]): TurnState {
  *
  * That last one is not an oversight: command output is written from the
  * runner's reader threads, where the turn's cursor does not exist. It belongs
- * to the call named in its payload and is ordered against nothing.
+ * to the call named in its payload and is ordered against nothing. An MCP
+ * server's question is sent from inside its call too, and is keyed by its id.
  */
 export function acceptEvent(state: TurnState, event: TurnEvent): TurnState {
-  if (event.type === "commandOutput") return applyEvent(state, event);
+  if (event.type === "commandOutput" || event.type === "mcpQuestion" || event.type === "mcpQuestionClosed") {
+    return applyEvent(state, event);
+  }
 
   if (event.seq <= state.lastSeq) return state;
   if (event.seq > state.lastSeq + 1) {
@@ -362,6 +378,20 @@ function applyEvent(state: TurnState, event: TurnEvent): TurnState {
         ...block,
         output: block.output + event.payload.chunk,
       }));
+
+    case "mcpQuestion": {
+      const { id, call, server, question } = event.payload;
+      if (state.blocks.some((block) => block.kind === "question" && block.id === id)) return state;
+      return { ...state, blocks: [...state.blocks, { kind: "question", id, round: event.round, call, server, question, status: "open" }] };
+    }
+
+    case "mcpQuestionClosed":
+      return {
+        ...state,
+        blocks: state.blocks.map((block) =>
+          block.kind === "question" && block.id === event.payload.id ? { ...block, status: event.payload.action } : block,
+        ),
+      };
 
     case "contextUsage":
       return { ...state, usage: event.payload };

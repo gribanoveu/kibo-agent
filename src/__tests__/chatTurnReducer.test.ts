@@ -490,3 +490,28 @@ describe("a user message", () => {
     expect(typed.blocks[0]).toEqual({ kind: "user", id: "user:0", text: "hello" });
   });
 });
+
+describe("an MCP server's question", () => {
+  const question = { mode: "form" as const, message: "Which repository?", fields: [] };
+  const asked = (id: string) =>
+    ev({ type: "mcpQuestion", seq: 0, payload: { id, call: "c1", server: "gh", question } });
+
+  test("arrives outside the sequence as a card of its own, once, and closes with the answer", () => {
+    let state = acceptEvent(emptyTurn(), ev({ type: "roundStarted", seq: 1 }));
+    state = acceptEvent(state, asked("q1"));
+    state = acceptEvent(state, asked("q1"));
+    const cards = state.blocks.filter((b): b is Extract<Block, { kind: "question" }> => b.kind === "question");
+    expect(cards).toHaveLength(1, "a repeat is not a second question");
+    expect(cards[0]).toMatchObject({ id: "q1", call: "c1", server: "gh", status: "open", question });
+    expect(state.lastSeq).toBe(1, "the sequence is not moved by it");
+
+    state = acceptEvent(state, ev({ type: "mcpQuestionClosed", seq: 0, payload: { id: "q1", action: "decline" } }));
+    expect(state.blocks.find((b) => b.kind === "question")).toMatchObject({ status: "decline" });
+  });
+
+  test("is not held back behind a gap in the sequence", () => {
+    const early = acceptEvent(emptyTurn(), ev({ type: "delta", seq: 5, payload: { delta: "x" } }));
+    const state = acceptEvent(early, asked("q2"));
+    expect(state.blocks.some((b) => b.kind === "question")).toBe(true);
+  });
+});

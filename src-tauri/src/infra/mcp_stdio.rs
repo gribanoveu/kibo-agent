@@ -5,7 +5,7 @@
 //! code and its end. The protocol over the two pipes is `rmcp`'s
 //! (`infra::mcp_rmcp`), which is handed them once the process runs.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::domain::mcp::{McpCallResult, McpClient, McpError, McpServerConfig, McpTool};
+use crate::domain::mcp::{McpAnswer, McpCallResult, McpClient, McpError, McpPrompt, McpQuestion, McpServerConfig, McpTool};
 use crate::infra::mcp_rmcp::{Failure, RmcpClient};
 use crate::infra::process_runner::{kill_tree, set_process_group};
 
@@ -100,6 +100,24 @@ impl McpClient for StdioServer {
     /// The stream closing is how an exit shows first; the process is asked
     /// too, for one that is gone while its stdout is still held open by a
     /// child of its own.
+    fn call_tool_asking(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancelled: &dyn Fn() -> bool,
+        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
+    ) -> Result<McpCallResult, McpError> {
+        self.client.call_tool_asking(name, arguments, cancelled, ask)
+    }
+
+    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
+        self.client.list_prompts()
+    }
+
+    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
+        self.client.get_prompt(name, arguments)
+    }
+
     fn instructions(&self) -> Option<String> {
         self.client.instructions()
     }
@@ -201,6 +219,35 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(server.tools_stale(), "the server said its tools changed");
+    }
+
+    /// A server's prompts and questions reach it through the process too.
+    #[cfg(unix)]
+    #[test]
+    fn prompts_and_questions_go_through_the_process() {
+        let script = r#"
+            read discover; echo '{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"Method not found"}}'
+            read init; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"prompts":{}},"serverInfo":{"name":"sh","version":"1"}}}'
+            read initialized
+            read list; echo '{"jsonrpc":"2.0","id":2,"result":{"prompts":[{"name":"greet"}]}}'
+            read get; echo '{"jsonrpc":"2.0","id":3,"result":{"messages":[{"role":"user","content":{"type":"text","text":"Hello."}}]}}'
+            read call; echo '{"jsonrpc":"2.0","id":4,"result":{"resultType":"input_required","inputRequests":{"q":{"method":"elicitation/create","params":{"mode":"url","message":"Sign in","url":"https://a.example/in"}}}}}'
+            read retry; echo '{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"in"}]}}'
+            read _
+        "#;
+        let dir = crate::testing::temp_dir("mcp-stdio-prompts");
+        let server = StdioServer::start(&sh(script, 5), &dir, &|| false).unwrap();
+        assert_eq!(server.list_prompts().unwrap()[0].name, "greet");
+        assert_eq!(server.get_prompt("greet", &BTreeMap::new()).unwrap(), "Hello.");
+        let asked = std::sync::Mutex::new(Vec::new());
+        let done = server
+            .call_tool_asking("login", json!({}), &|| false, &|q| {
+                asked.lock().unwrap().push(q.clone());
+                McpAnswer::Accept { content: Default::default() }
+            })
+            .unwrap();
+        assert_eq!(done.text, "in");
+        assert_eq!(asked.lock().unwrap().len(), 1);
     }
 
     /// Why an exit is worth its own variant: the code and the last lines of
