@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.0-alfa — 2026-09-30
+
 - 2026-09-30 In Chat mode the model can search the web with a Tavily key, added in Settings → Web search; each search shows in the chat
 
 - 2026-09-30 An MCP server can ask you something in the middle of a call — a form or a page to open — and the call goes on with your answer
