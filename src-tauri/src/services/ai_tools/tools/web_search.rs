@@ -48,9 +48,10 @@ pub(super) fn definition() -> LlmToolDefinition {
         description: format!(
             "Search the web for what you cannot know from your training or this conversation: current versions, \
 release notes, error messages, known issues, documentation. Returns pages with their address and the passages that match. \
-Search when the answer depends on facts that change; answer from what you know when it does not. \
-The query goes to a search service outside the user's machine: put in it only what the search needs — \
-never secrets, credentials, internal host names or pasted code beyond an error message. \
+Search when the answer depends on facts that change — a release, a chart's or an operator's notes, the known issue \
+behind an error message, what a version deprecates; answer from what you know when it does not. \
+The query goes to a search service outside the user's machine: search with the error text, the product and its version — \
+never with secrets, credentials, or names from the user's own systems (hosts, clusters, namespaces, services). \
 Write the query in the language the pages you want are written in — usually English for technical subjects. \
 Say which address each fact you use comes from. Returns at most {MAX_RESULTS} pages."
         ),

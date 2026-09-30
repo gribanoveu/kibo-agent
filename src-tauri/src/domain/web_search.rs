@@ -55,4 +55,14 @@ pub enum WebSearchError {
     BadAnswer(String),
 }
 
+/// What the key has spent this billing cycle, and of how much — Settings'
+/// line under the key. `limit` is `None` when Tavily sets none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebUsage {
+    pub plan: Option<String>,
+    pub used: u64,
+    pub limit: Option<u64>,
+}
+
 pub type WebSearchFn = Arc<dyn Fn(&WebQuery) -> Result<Vec<WebHit>, WebSearchError> + Send + Sync>;

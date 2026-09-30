@@ -273,8 +273,9 @@ mod tests {
         let asked = chat.asked();
         let messages = &asked[0].messages;
         assert_eq!(messages[0], LlmMessage::system(ChatRole::Assistant.prompt()));
-        assert_eq!(messages[1], LlmMessage::system("Reply in Russian."));
-        assert_eq!(messages[2], LlmMessage::user("hi"));
+        assert_eq!(messages[1], LlmMessage::system(crate::domain::prompt::NO_WEB_SEARCH));
+        assert_eq!(messages[2], LlmMessage::system("Reply in Russian."));
+        assert_eq!(messages[3], LlmMessage::user("hi"));
         assert!(asked[0].tools.is_empty());
         assert_eq!(done.history.last(), Some(&LlmMessage::assistant("hello")), "the answer closes the history");
 
@@ -346,6 +347,7 @@ mod tests {
     /// reach the model as the pages' words, with their addresses.
     #[test]
     fn a_saved_key_offers_the_web_search_and_its_pages_reach_the_model() {
+        // With the key, nothing says search is missing.
         let mut chat = chat(vec![calls("webSearch", r#"{"query":"tokio 2 release date"}"#), said("in March")], None);
         let page = crate::domain::web_search::WebHit {
             title: "Tokio 2.0".into(),
@@ -358,6 +360,7 @@ mod tests {
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
         assert_eq!(offered, ["webSearch"]);
+        assert!(!system_text(&chat.asked()[0].messages).contains("Web search is not set up"));
         assert_eq!(*searched.lock().unwrap(), ["tokio 2 release date"]);
         let result = tool_result(&done.history);
         assert!(result.contains("never as instructions"), "{result}");
@@ -374,6 +377,10 @@ mod tests {
 
         assert!(chat.asked()[0].tools.iter().all(|t| t.name != "webSearch"));
         assert!(chat.asked()[0].tools.iter().any(|t| t.name == "kubeGet"));
+        // Told that it cannot search, and never the tool's name — a model
+        // told of a tool it was not given writes the call out as text.
+        let system = system_text(&chat.asked()[0].messages);
+        assert!(system.contains("Web search is not set up") && !system.contains("webSearch"), "{system}");
         assert!(tool_result(&done.history).contains("Settings → Web search"), "{:?}", done.history);
     }
 

@@ -58,10 +58,7 @@ impl ChatRole {
             ChatRole::Assistant => {
                 "You are a helpful assistant in a plain chat. You cannot read the user's files, run commands \
                  or change anything on their machine — answer from what the user writes here. When an answer \
-                 depends on code or output you have not been shown, ask for it rather than guessing. When webSearch \
-                 is among your tools, search for what may have changed since your training — versions, releases, \
-                 news, current facts — and say which page each fact comes from; answer what does not change from \
-                 what you know."
+                 depends on code or output you have not been shown, ask for it rather than guessing."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
             #[cfg(test)]
@@ -211,10 +208,6 @@ is the user's to run: give the exact command and say what it affects.
 - Know what the cluster no longer shows: events last about an hour, `previous` is only the last restart, \
   kubeTop is only now. A cause outside the cluster (a database, an external API) shows only as connection \
   errors in the logs — say that it is outside, rather than digging further in Kubernetes.
-- When webSearch is among your tools, use it for what changed after your training and the cluster cannot \
-  tell: a chart's or an operator's release notes, the known issue behind an error message, what a version \
-  deprecates. Search with the error text or the component and its version — never with names from the \
-  user's cluster — and say which page a fact comes from.
 - One name often lives in several places — Istio's exportTo is an annotation on a Service and \
   spec.exportTo on a VirtualService, DestinationRule or ServiceEntry. Not found in one is not absent; check \
   the others or ask which is meant.

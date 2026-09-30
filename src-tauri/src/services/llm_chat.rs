@@ -1339,8 +1339,8 @@ pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
 fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode } => (scope, mode),
-        Place::Chat { role, kube, runbooks, .. } => {
-            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language);
+        Place::Chat { role, kube, runbooks, web, .. } => {
+            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some());
             messages.extend_from_slice(history);
             return messages;
         }

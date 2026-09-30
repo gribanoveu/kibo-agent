@@ -385,6 +385,13 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
     }
 }
 
+/// Told to a chat while no search key is saved.
+/// The tool is not named: a model told of a tool it was not given writes the
+/// call out as text in its own markup (DeepSeek's `<｜DSML｜ calls>`).
+pub const NO_WEB_SEARCH: &str = "Web search is not set up, so you cannot look anything up. When an answer depends on \
+current information — versions, releases, news — answer from what you know, say that it may be out of date, and \
+that the user can add a Tavily API key in Settings → Web search to let you search the web.";
+
 /// What goes in front of a Chat mode conversation, steadiest first: the
 /// role, the runbooks it may read, the language, and last what it is told of
 /// the user's cluster — the part that changes with the chat's pin and with a
@@ -392,11 +399,21 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
 /// provider's prompt cache serves a prefix, and one that matches whole
 /// messages (DeepSeek served the tools and nothing of a single message whose
 /// last line named the namespace) still serves everything before the change.
-pub fn chat_system_messages(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> Vec<LlmMessage> {
+pub fn chat_system_messages(
+    role: ChatRole,
+    kube: &KubeSetup,
+    runbooks: &[Runbook],
+    language: Option<&str>,
+    web: bool,
+) -> Vec<LlmMessage> {
     let mut messages = vec![LlmMessage::system(role.prompt())];
     let reads_runbooks = role.tools().contains(&crate::domain::tools::ToolName::KubeRunbook);
     if let Some(list) = runbooks::listing(runbooks).filter(|_| reads_runbooks) {
         messages.push(LlmMessage::system(list));
+    }
+    // Every role can search; a role that cannot would need this gated.
+    if !web {
+        messages.push(LlmMessage::system(NO_WEB_SEARCH));
     }
     if let Some(language) = language {
         messages.push(LlmMessage::system(format!("Reply in {language}.")));
@@ -818,11 +835,21 @@ mod tests {
         let books = runbooks::merged(Vec::new());
         let list = runbooks::listing(&books).unwrap();
         assert_eq!(
-            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"))),
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), true)),
             [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian."), system(&note)]
         );
-        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
+        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, true)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
         // A role that cannot read a runbook is not told of any.
-        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None)), [system(ChatRole::Assistant.prompt())]);
+        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, true)), [system(ChatRole::Assistant.prompt())]);
+        // Without a key, after the runbooks and before the language: it
+        // changes once, when the key is saved.
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), false)),
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system(NO_WEB_SEARCH), system("Reply in Russian."), system(&note)]
+        );
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false)),
+            [system(ChatRole::Assistant.prompt()), system(NO_WEB_SEARCH)]
+        );
     }
 }

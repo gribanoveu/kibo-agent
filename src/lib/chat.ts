@@ -428,6 +428,25 @@ export async function webSearchKeyStatus(): Promise<boolean> {
   return invoke<boolean>("web_search_key_status");
 }
 
+/** What the saved key has spent this billing cycle; `limit` is null when Tavily sets none. */
+export type WebUsage = { plan: string | null; used: number; limit: number | null };
+
+/** "Researcher · 150 of 1,000 credits used this billing cycle, 850 left". */
+export function describeUsage({ plan, used, limit }: WebUsage): string {
+  const n = (value: number) => value.toLocaleString("en-US");
+  const spent =
+    limit === null
+      ? `${n(used)} credits used this billing cycle`
+      : `${n(used)} of ${n(limit)} credits used this billing cycle, ${n(Math.max(limit - used, 0))} left`;
+  return plan ? `${plan} · ${spent}` : spent;
+}
+
+/** Asks Tavily what the saved key has spent — `null` without a key. Rejects when Tavily refuses the key. */
+export async function webSearchUsage(): Promise<WebUsage | null> {
+  requireBackend();
+  return invoke<WebUsage | null>("web_search_usage");
+}
+
 /** Seals the Tavily key; an empty string deletes the stored one. */
 export async function saveWebSearchKey(key: string): Promise<void> {
   requireBackend();

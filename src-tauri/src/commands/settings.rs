@@ -112,6 +112,22 @@ pub fn web_search_key_save(key: String) -> Result<(), String> {
     llm_api_key_save(crate::infra::tavily::KEY_ID.to_string(), key)
 }
 
+/// What the saved key has spent, asked of Tavily; `None` without a key. A
+/// refused key says so here, where the user can fix it.
+#[tauri::command]
+pub async fn web_search_usage() -> Result<Option<crate::domain::web_search::WebUsage>, String> {
+    use crate::domain::web_search::WebSearchError;
+    let asked = tauri::async_runtime::spawn_blocking(crate::infra::tavily::saved_usage)
+        .await
+        .map_err(|e| format!("the usage thread failed: {e}"))?;
+    match asked {
+        None => Ok(None),
+        Some(Ok(usage)) => Ok(Some(usage)),
+        Some(Err(WebSearchError::KeyRefused)) => Err("Tavily refused this key — check it and save it again".to_string()),
+        Some(Err(e)) => Err(format!("could not ask Tavily what the key has spent: {e}")),
+    }
+}
+
 /// Moves the master key between the key file and the OS keychain. Off the
 /// main thread: the keychain may put up a prompt and wait for the user.
 #[tauri::command]

@@ -9,10 +9,12 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::domain::web_search::{TimeRange, WebHit, WebQuery, WebSearchError, WebSearchFn};
+use crate::domain::web_search::{TimeRange, WebHit, WebQuery, WebSearchError, WebSearchFn, WebUsage};
 use crate::infra::http_agent::{self, TlsError};
 
 const ENDPOINT: &str = "https://api.tavily.com/search";
+/// What the key has spent — asked from Settings, never by a turn.
+const USAGE: &str = "https://api.tavily.com/usage";
 /// The key's name in the sealed credentials file, beside the providers'.
 pub const KEY_ID: &str = "web-search:tavily";
 /// A basic search answers in a second or two; a minute of nothing is a
@@ -36,19 +38,40 @@ pub fn has_saved_key() -> bool {
     crate::infra::llm_credentials_store::has_api_key(KEY_ID)
 }
 
+/// What the saved key has spent this billing cycle; `None` while there is no key.
+pub fn saved_usage() -> Option<Result<WebUsage, WebSearchError>> {
+    let key = crate::infra::llm_credentials_store::get_api_key(KEY_ID)?;
+    Some(usage(&key))
+}
+
+fn usage(key: &SecretString) -> Result<WebUsage, WebSearchError> {
+    let agent = http_agent::build_agent(None).map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
+    let sent = agent.get(USAGE).header("Authorization", &bearer(key)).config().timeout_global(Some(TIMEOUT)).build().call();
+    parse_usage(&answer(sent)?)
+}
+
 fn search(agent: &ureq::Agent, key: &SecretString, query: &WebQuery) -> Result<Vec<WebHit>, WebSearchError> {
-    let mut response = agent
+    let sent = agent
         .post(ENDPOINT)
-        .header("Authorization", &format!("Bearer {}", key.expose_secret()))
+        .header("Authorization", &bearer(key))
         .config()
         .timeout_global(Some(TIMEOUT))
         .build()
-        .send_json(body(query))
-        .map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
+        .send_json(body(query));
+    parse(&answer(sent)?)
+}
+
+fn bearer(key: &SecretString) -> String {
+    format!("Bearer {}", key.expose_secret())
+}
+
+/// The body of a success, or what the status says went wrong.
+fn answer(sent: Result<http::Response<ureq::Body>, ureq::Error>) -> Result<String, WebSearchError> {
+    let mut response = sent.map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
     let status = response.status().as_u16();
     let text = response.body_mut().read_to_string().map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
     match status {
-        200..=299 => parse(&text),
+        200..=299 => Ok(text),
         _ => Err(status_error(status, &text)),
     }
 }
@@ -92,6 +115,42 @@ struct Found {
 fn parse(text: &str) -> Result<Vec<WebHit>, WebSearchError> {
     let answer: Answer = serde_json::from_str(text).map_err(|e| WebSearchError::BadAnswer(e.to_string()))?;
     Ok(answer.results.into_iter().map(|f| WebHit { title: f.title, url: f.url, content: f.content }).collect())
+}
+
+#[derive(Deserialize)]
+struct UsageAnswer {
+    key: KeyUsage,
+    #[serde(default)]
+    account: Option<AccountUsage>,
+}
+
+#[derive(Deserialize)]
+struct KeyUsage {
+    #[serde(default)]
+    usage: u64,
+    limit: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct AccountUsage {
+    current_plan: Option<String>,
+    #[serde(default)]
+    plan_usage: u64,
+    plan_limit: Option<u64>,
+}
+
+/// The key's own limit when it has one — it runs out first — and the plan's
+/// otherwise; a key with no limit on an account that says nothing has spent
+/// its credits out of nothing known.
+fn parse_usage(text: &str) -> Result<WebUsage, WebSearchError> {
+    let answer: UsageAnswer = serde_json::from_str(text).map_err(|e| WebSearchError::BadAnswer(e.to_string()))?;
+    let plan = answer.account.as_ref().and_then(|a| a.current_plan.clone());
+    let (used, limit) = match (answer.key.limit, &answer.account) {
+        (Some(limit), _) => (answer.key.usage, Some(limit)),
+        (None, Some(account)) => (account.plan_usage, account.plan_limit),
+        (None, None) => (answer.key.usage, None),
+    };
+    Ok(WebUsage { plan, used, limit })
 }
 
 /// 432 and 433 are Tavily's own: the plan's credits, and the pay-as-you-go
@@ -170,6 +229,17 @@ mod tests {
     fn an_answer_without_results_is_unreadable() {
         assert!(matches!(parse(r#"{"query":"q"}"#), Err(WebSearchError::BadAnswer(_))));
         assert!(matches!(parse("<html>"), Err(WebSearchError::BadAnswer(_))));
+    }
+
+    #[test]
+    fn usage_is_the_keys_limit_when_it_has_one_and_the_plans_otherwise() {
+        let key_limited = r#"{"key":{"usage":150,"limit":1000,"search_usage":100},
+            "account":{"current_plan":"Bootstrap","plan_usage":500,"plan_limit":15000,"paygo_usage":25}}"#;
+        assert_eq!(parse_usage(key_limited).unwrap(), WebUsage { plan: Some("Bootstrap".into()), used: 150, limit: Some(1000) });
+        let plan_limited = r#"{"key":{"usage":150,"limit":null},"account":{"current_plan":"Researcher","plan_usage":500,"plan_limit":1000}}"#;
+        assert_eq!(parse_usage(plan_limited).unwrap(), WebUsage { plan: Some("Researcher".into()), used: 500, limit: Some(1000) });
+        assert_eq!(parse_usage(r#"{"key":{"usage":7}}"#).unwrap(), WebUsage { plan: None, used: 7, limit: None });
+        assert!(matches!(parse_usage(r#"{"account":{}}"#), Err(WebSearchError::BadAnswer(_))));
     }
 
     #[test]

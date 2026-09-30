@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 Settings → Web search shows how many Tavily credits the key has used this billing cycle and how many are left, and says when Tavily refuses the key; without a key, a chat's model says it cannot search and where to add one, instead of writing out a search call as text
+
 ## v0.3.0-alfa — 2026-09-30
 
 - 2026-09-30 In Chat mode the model can search the web with a Tavily key, added in Settings → Web search; each search shows in the chat

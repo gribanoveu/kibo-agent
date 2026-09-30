@@ -2,13 +2,14 @@ import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWebSearchKey } from "../hooks/useWebSearchKey";
+import { describeUsage } from "../lib/chat";
 import "./WebSearchSettings.css";
 
 const KEYS_PAGE = "https://app.tavily.com";
 
 /** Settings → Web search: the Tavily key a chat's `webSearch` uses. The key goes in and never comes back. */
 export function WebSearchSettings() {
-  const { hasKey, error, save } = useWebSearchKey();
+  const { hasKey, usage, error, save } = useWebSearchKey();
   const [key, setKey] = useState("");
 
   return (
@@ -36,6 +37,7 @@ export function WebSearchSettings() {
             onChange={(e) => setKey(e.target.value)}
           />
         </div>
+        {usage && <p className="modal-note settings-hint">{describeUsage(usage)}</p>}
         {error && <p className="modal-note settings-hint settings-error">{error}</p>}
         <div className="web-search-actions">
           <button type="submit" className="btn btn-primary" disabled={!key.trim()}>
