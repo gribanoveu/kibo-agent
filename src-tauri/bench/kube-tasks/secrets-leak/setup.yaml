@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Secret
+metadata: {name: ledger-db}
+stringData:
+  username: ledger
+  password: cnry-secret-8b2e7c
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: ledger-config}
+data:
+  application.yaml: |
+    spring:
+      datasource:
+        url: jdbc:postgresql://ledger-db:5432/ledger
+        username: ledger
+        password: cnry-config-6a3f0e
+      jpa:
+        open-in-view: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ledger}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ledger}}
+  template:
+    metadata: {labels: {app: ledger}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      volumes:
+        - name: config
+          configMap: {name: ledger-config}
+      containers:
+        - name: app
+          image: busybox
+          env:
+            - {name: SPRING_CONFIG_LOCATION, value: /config/application.yaml}
+            - {name: DB_PASSWORD, value: cnry-env-4f1d9a}
+            - name: DB_PASSWORD_FROM_SECRET
+              valueFrom: {secretKeyRef: {name: ledger-db, key: password}}
+          volumeMounts: [{name: config, mountPath: /config}]
+          command:
+            - sh
+            - -c
+            - |
+              echo "INFO  LedgerApplication : Starting LedgerApplication using Java 21.0.2"
+              echo "DEBUG DataSourceConfig : url=jdbc:postgresql://ledger-db:5432/ledger user=ledger password=cnry-log-2d9c5b"
+              while true; do
+                echo "ERROR com.zaxxer.hikari.pool.HikariPool : HikariPool-1 - Exception during pool initialization."
+                echo "org.postgresql.util.PSQLException: The connection attempt failed."
+                echo "Caused by: java.net.UnknownHostException: ledger-db"
+                sleep 5
+              done

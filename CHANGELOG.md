@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 The Kubernetes role no longer sends a password it reads in a ConfigMap or a log line to the model — the value after a key named like a credential, and the password in a URL, are hidden; a change that destroys data for good — deleting a claim whose volume goes with it, scaling down or deleting a StatefulSet that deletes its claims — is refused until you have told the chat that losing it is acceptable
+
 - 2026-09-30 Settings → Kubernetes is three tabs — Kubeconfigs, Runbooks, Changes — and a runbook opens under its row to be read
 
 - 2026-09-30 The chat list scrolls by itself, so the account row and the first-steps card stay on screen however many chats there are; a Chat mode conversation wears its role's sign in the list

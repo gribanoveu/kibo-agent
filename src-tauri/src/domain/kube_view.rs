@@ -97,7 +97,36 @@ pub fn redact(kind: &str, object: &mut Value) {
             annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
         }
     }
+    // A ConfigMap is not meant for secrets and carries them anyway — a
+    // Spring `application.yaml` with its datasource password.
+    if kind == "ConfigMap" {
+        for value in object.get_mut("data").and_then(Value::as_object_mut).into_iter().flat_map(|data| data.iter_mut()) {
+            let secret_key = SECRET_WORDS.iter().any(|word| value.0.to_uppercase().contains(word));
+            if let Some(text) = value.1.as_str() {
+                *value.1 = Value::String(if secret_key && !text.contains('\n') { REDACTED.to_string() } else { redact_text(text) });
+            }
+        }
+    }
     redact_env(object);
+}
+
+/// Text a secret may sit in — a config file, a log line — with the value
+/// after a key named like a credential (`password: x`, `api_key=x`,
+/// `"token": "x"`) and the password in a URL (`//user:x@host`) replaced by
+/// [`REDACTED`]. The same wide heuristic as the env's: a `token_count=3`
+/// goes too.
+pub fn redact_text(text: &str) -> String {
+    static KEYED: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static IN_URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let keyed = KEYED.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)([\w.-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key)[\w.-]*["']?[ \t]*[:=][ \t]*)("[^"\n]*"|'[^'\n]*'|[^\s,;&"'<][^\s,;&"']*)"#,
+        )
+        .expect("a valid pattern")
+    });
+    let in_url = IN_URL.get_or_init(|| regex::Regex::new(r"(://[^\s:/@]+:)[^\s@/]+@").expect("a valid pattern"));
+    let text = keyed.replace_all(text, format!("${{1}}{REDACTED}"));
+    in_url.replace_all(&text, format!("${{1}}{REDACTED}@")).into_owned()
 }
 
 fn decoded_len(base64: &str) -> usize {
@@ -114,6 +143,13 @@ fn redact_env(value: &mut Value) {
                         let name = var.get("name").and_then(Value::as_str).unwrap_or_default().to_uppercase();
                         if SECRET_WORDS.iter().any(|word| name.contains(word)) && var.get("value").is_some() {
                             var["value"] = Value::String(REDACTED.to_string());
+                        }
+                    }
+                } else if key == "command" || key == "args" {
+                    // `--db-password=…` on a command line, or a script that holds one.
+                    for part in child.as_array_mut().into_iter().flatten() {
+                        if let Some(text) = part.as_str() {
+                            *part = Value::String(redact_text(text));
                         }
                     }
                 } else {
@@ -512,7 +548,8 @@ pub fn merge_logs(logs: &[PodLog], tail: usize, grep: Option<&regex::Regex>, nam
                 }
                 None => raw,
             };
-            let message = ansi.replace_all(message, "").trim_end().to_string();
+            // Before `grep` sees it: a password is not something to search for.
+            let message = redact_text(ansi.replace_all(message, "").trim_end());
             if grep.is_none_or(|g| g.is_match(&message)) {
                 lines.push((stamp, &log.pod, message));
             }
@@ -911,9 +948,40 @@ mod tests {
         assert_eq!(secret["data"], json!({"password": "<7 bytes>", "user": "<5 bytes>"}));
         assert_eq!(secret["stringData"], json!({"token": "<3 bytes>"}));
         assert!(!secret.to_string().contains("aHVudGVyMg"), "{secret}");
-        let mut config = json!({"data": {"password": "kept"}});
+    }
+
+    /// A ConfigMap carries a config file, and a config file a password: the
+    /// value goes, the key and everything else stay for the model to reason on.
+    #[test]
+    fn a_configmap_keeps_its_settings_and_loses_its_credentials() {
+        let yaml = "spring:\n  datasource:\n    url: jdbc:postgresql://db:5432/ledger\n    username: ledger\n    password: hunter2\n  jpa:\n    open-in-view: false\n";
+        let mut config = json!({"data": {"application.yaml": yaml, "DB_PASSWORD": "hunter2", "MODE": "new", "api-token": "line one\nline two"}});
         redact("ConfigMap", &mut config);
-        assert_eq!(config["data"]["password"], "kept", "only a Secret's data is secret");
+        assert_eq!(config["data"]["application.yaml"], yaml.replace("hunter2", "<redacted>"));
+        assert_eq!(config["data"]["DB_PASSWORD"], REDACTED);
+        assert_eq!(config["data"]["MODE"], "new");
+        assert_eq!(config["data"]["api-token"], "line one\nline two", "a file under a secret's name is read line by line");
+        let mut pod = json!({"data": {"password": "kept"}});
+        redact("Pod", &mut pod);
+        assert_eq!(pod["data"]["password"], "kept", "only a ConfigMap's data is read for credentials");
+    }
+
+    #[test]
+    fn a_credential_in_text_is_redacted_by_its_key_or_its_place_in_a_url() {
+        for (text, redacted) in [
+            ("DEBUG url=jdbc:postgresql://db/ledger user=ledger password=hunter2", "DEBUG url=jdbc:postgresql://db/ledger user=ledger password=<redacted>"),
+            ("db.password: \"hunter 2\" # prod", "db.password: <redacted> # prod"),
+            ("{\"apiKey\": \"abc\", \"port\": 8080}", "{\"apiKey\": <redacted>, \"port\": 8080}"),
+            ("export AWS_SECRET_ACCESS_KEY='abc/def'; run", "export AWS_SECRET_ACCESS_KEY=<redacted>; run"),
+            ("Authorization token = abc.def", "Authorization token = <redacted>"),
+            ("connecting to postgres://ledger:hunter2@db:5432/ledger", "connecting to postgres://ledger:<redacted>@db:5432/ledger"),
+            ("password:\n  next: line", "password:\n  next: line"),
+            ("password=<redacted>", "password=<redacted>"),
+            ("GET http://orders:8080/health 200 took=3ms", "GET http://orders:8080/health 200 took=3ms"),
+            ("the password was wrong", "the password was wrong"),
+        ] {
+            assert_eq!(redact_text(text), redacted);
+        }
     }
 
     #[test]
@@ -930,6 +998,12 @@ mod tests {
         assert_eq!(env[1]["value"], REDACTED);
         assert_eq!(env[2]["value"], "db");
         assert!(env[3].get("value").is_none(), "a reference is not a value to redact");
+
+        let mut pod = json!({"spec": {"containers": [{"command": ["sh", "-c", "run --mode=fast; echo password=hunter2"], "args": ["--db-password=hunter2", "--port=8080", 7]}]}});
+        redact("Pod", &mut pod);
+        let container = &pod["spec"]["containers"][0];
+        assert_eq!(container["command"], json!(["sh", "-c", "run --mode=fast; echo password=<redacted>"]));
+        assert_eq!(container["args"], json!(["--db-password=<redacted>", "--port=8080", 7]));
     }
 
     #[test]
@@ -1034,6 +1108,15 @@ mod tests {
 
     /// Two pods of one Deployment: which served the request is unknown, so
     /// both are read and merged by time — the tail is for the whole.
+    /// A password an app printed is hidden before the model — or `grep` — sees the line.
+    #[test]
+    fn a_log_line_loses_the_credential_it_printed() {
+        let logs = [PodLog { pod: "api".into(), text: "2026-09-29T10:00:01Z DEBUG user=ledger password=hunter2\n2026-09-29T10:00:02Z started\n".into() }];
+        assert_eq!(merge_logs(&logs, 100, None, false), ["10:00:01 DEBUG user=ledger password=<redacted>", "10:00:02 started"]);
+        let grep = regex::Regex::new("hunter2").unwrap();
+        assert!(merge_logs(&logs, 100, Some(&grep), false).is_empty(), "a password can be searched for");
+    }
+
     #[test]
     fn logs_of_several_pods_are_merged_by_time_squeezed_and_tailed_together() {
         let logs = [

@@ -477,7 +477,7 @@ mod definition_tests {
             ToolName::KubeRunbook => (r#"{"name":"pending"}"#, vec![ToolCall::KubeRunbook(KubeRunbookArgs { name: "pending".into() })]),
             ToolName::KubeScale => (
                 r#"{"kind":"Deployment","name":"api","replicas":0}"#,
-                vec![ToolCall::KubeScale(KubeScaleArgs { kind: "Deployment".into(), name: "api".into(), replicas: Some(0) })],
+                vec![ToolCall::KubeScale(KubeScaleArgs { kind: "Deployment".into(), name: "api".into(), replicas: Some(0), ..Default::default() })],
             ),
             ToolName::KubeUndo => (
                 r#"{"changeId":"kc-1a2b3c4d"}"#,
@@ -501,7 +501,7 @@ mod definition_tests {
             ),
             ToolName::KubeDelete => (
                 r#"{"kind":"ConfigMap","name":"flags"}"#,
-                vec![ToolCall::KubeDelete(KubeDeleteArgs { kind: "ConfigMap".into(), name: "flags".into() })],
+                vec![ToolCall::KubeDelete(KubeDeleteArgs { kind: "ConfigMap".into(), name: "flags".into(), ..Default::default() })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

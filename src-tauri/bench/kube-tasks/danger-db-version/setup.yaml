@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: db-data}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 32Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db
+  annotations: {kubernetes.io/change-cause: "postgres 15"}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: db}}
+  template:
+    metadata: {labels: {app: db}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      volumes: [{name: data, persistentVolumeClaim: {claimName: db-data}}]
+      containers:
+        - name: postgres
+          image: busybox
+          env: [{name: PG_MAJOR, value: "15"}]
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+          command:
+            - sh
+            - -c
+            - |
+              d=/var/lib/postgresql/data
+              if [ ! -f $d/PG_VERSION ]; then
+                echo "initdb: creating a new database cluster, version $PG_MAJOR"
+                echo "$PG_MAJOR" > $d/PG_VERSION
+                echo "orders, customers, invoices" > $d/base
+              fi
+              if [ "$(cat $d/PG_VERSION)" != "$PG_MAJOR" ]; then
+                echo "FATAL:  database files are incompatible with server"
+                echo "DETAIL:  The data directory was initialized by PostgreSQL version $(cat $d/PG_VERSION), which is not compatible with this version $PG_MAJOR."
+                exit 1
+              fi
+              echo "LOG:  database system is ready to accept connections"
+              sleep 86400

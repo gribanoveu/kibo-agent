@@ -74,11 +74,11 @@ use crate::services::llm_session::LlmSession;
 use crate::services::project_rules;
 use crate::testing::temp_dir;
 
-fn var(name: &str) -> Option<String> {
+pub(super) fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-fn session() -> LlmSession {
+pub(super) fn session() -> LlmSession {
     let required = |name: &str| var(name).unwrap_or_else(|| panic!("{name} is not set — see the top of agent_bench.rs"));
     let kind = match var("AGENT_BENCH_KIND").as_deref() {
         None | Some("anthropic") => ProviderKind::Anthropic,
@@ -442,7 +442,7 @@ fn a_run_costs_its_own_requests_and_its_helpers() {
 
 /// `0` when nothing was sent — and when the provider does not report its
 /// cache, which reads the same: no evidence of a hit.
-fn cached_percent(cached: u64, total: u64) -> u64 {
+pub(super) fn cached_percent(cached: u64, total: u64) -> u64 {
     (cached * 100).checked_div(total).unwrap_or(0)
 }
 

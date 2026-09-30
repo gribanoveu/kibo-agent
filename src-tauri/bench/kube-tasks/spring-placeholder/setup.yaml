@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: payments}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: payments}}
+  template:
+    metadata: {labels: {app: payments}}
+    spec:
+      containers:
+        - name: app
+          image: busybox
+          env:
+            - {name: SPRING_PROFILES_ACTIVE, value: prod}
+            - {name: PAYMENT_GATEWAY_URL, value: "https://gw.bank.example/v2"}
+            - {name: SERVER_PORT, value: "8080"}
+          command:
+            - sh
+            - -c
+            - |
+              cat <<'LOG'
+              2026-09-30T09:14:01.102Z  INFO 1 --- [payments] [main] c.e.payments.PaymentsApplication : Starting PaymentsApplication using Java 21.0.2 with PID 1
+              2026-09-30T09:14:01.110Z  INFO 1 --- [payments] [main] c.e.payments.PaymentsApplication : The following 1 profile is active: "prod"
+              2026-09-30T09:14:03.871Z  WARN 1 --- [payments] [main] ConfigServletWebServerApplicationContext : Exception encountered during context initialization - cancelling refresh attempt
+              2026-09-30T09:14:03.902Z ERROR 1 --- [payments] [main] o.s.boot.SpringApplication : Application run failed
+              org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'paymentController': Unsatisfied dependency expressed through constructor parameter 0
+              	at org.springframework.beans.factory.support.ConstructorResolver.resolveAutowiredArgument(ConstructorResolver.java:795)
+              	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1354)
+              Caused by: org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'gatewayClient': Injection of autowired dependencies failed
+              	at org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor.postProcessProperties(AutowiredAnnotationBeanPostProcessor.java:515)
+              Caused by: java.lang.IllegalArgumentException: Could not resolve placeholder 'PAYMENTS_GATEWAY_URL' in value "${PAYMENTS_GATEWAY_URL}"
+              	at org.springframework.util.PropertyPlaceholderHelper.parseStringValue(PropertyPlaceholderHelper.java:180)
+              LOG
+              exit 1

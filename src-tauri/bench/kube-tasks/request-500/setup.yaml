@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: orders}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: orders, track: stable}}
+  template:
+    metadata: {labels: {app: orders, track: stable}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: app
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while true; do
+                i=$((i + 1))
+                echo "INFO  [req-$(hostname | tail -c 5)$i] POST /api/orders 201 rate=0.2 took=12ms"
+                echo "INFO  [req-$(hostname | tail -c 5)g$i] GET /api/orders/$i 200 took=3ms"
+                sleep 2
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: orders-canary}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: orders, track: canary}}
+  template:
+    metadata: {labels: {app: orders, track: canary}}
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: app
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "WARN  PricingConfig : pricing.yaml not found on the classpath, pricing is not configured"
+              echo "INFO  [req-7f3a91c1] GET /api/orders/41 200 took=4ms"
+              echo "ERROR [req-7f3a91c2] POST /api/orders 500 took=2ms"
+              echo "java.lang.NullPointerException: Cannot invoke \"com.example.orders.PricingConfig.getRate()\" because \"this.pricing\" is null"
+              echo "	at com.example.orders.OrderService.create(OrderService.java:57)"
+              i=0
+              while true; do
+                i=$((i + 1))
+                echo "INFO  [req-c$i] GET /api/orders/$i 200 took=3ms"
+                sleep 2
+              done
+---
+apiVersion: v1
+kind: Service
+metadata: {name: orders}
+spec:
+  selector: {app: orders}
+  ports: [{port: 80, targetPort: 8080}]

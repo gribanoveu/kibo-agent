@@ -60,6 +60,22 @@ at the top of `services/agent_bench.rs`:
 cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… AGENT_BENCH_RUNS=3 cargo test --release agent_bench -- --ignored --nocapture
 ```
 
+The Kubernetes role has one as well: a namespace with something wrong in it on the local
+cluster (OrbStack), a request, and a hidden check of the cluster and the answer —
+`src-tauri/bench/kube-tasks/`. The provider is the agent bench's (`AGENT_BENCH_*`). Run it
+after touching the role's prompt, a `kube*` tool or a runbook:
+
+```bash
+cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… AGENT_BENCH_RUNS=3 cargo test --release kube_bench -- --ignored --nocapture --test-threads=1
+```
+
+Its tasks check themselves without a model — untouched fails, the reference solution
+passes, the wrong one fails. Run that after adding or changing a task:
+
+```bash
+cd src-tauri && cargo test kube_fixtures -- --ignored --nocapture
+```
+
 The Kubernetes client has a live test against the local cluster (OrbStack's, context
 `orbstack` in `~/.kube/config`), ignored because it needs that cluster running. Run it
 after touching `infra/kube_client.rs`:

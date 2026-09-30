@@ -1613,6 +1613,10 @@ pub struct KubeScaleArgs {
     pub name: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub replicas: Option<u32>,
+    /// The user has said losing the data is acceptable: asked for only when
+    /// the scale destroys some.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub confirm_data_loss: Option<bool>,
 }
 
 /// `kubeSuspend`: a CronJob's or Job's `spec.suspend`. Optional in the type
@@ -1658,6 +1662,9 @@ pub struct KubeApplyArgs {
 pub struct KubeDeleteArgs {
     pub kind: String,
     pub name: String,
+    /// As `kubeScale`'s.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub confirm_data_loss: Option<bool>,
 }
 
 /// `kubeUndo`: a change by the id its tool answered with.

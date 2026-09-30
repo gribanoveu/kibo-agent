@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: billing}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: billing}}
+  template:
+    metadata: {labels: {app: billing}}
+    spec:
+      containers:
+        - name: app
+          image: busybox
+          env:
+            - {name: JAVA_TOOL_OPTIONS, value: "-Xmx512m -XX:+UseG1GC"}
+            - {name: SPRING_PROFILES_ACTIVE, value: prod}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Picked up JAVA_TOOL_OPTIONS: $JAVA_TOOL_OPTIONS"
+              echo "INFO  BillingApplication : Starting BillingApplication using Java 21.0.2"
+              echo "INFO  BillingApplication : Started BillingApplication in 4.812 seconds"
+              x=a
+              while true; do x="$x$x"; done
+          resources:
+            requests: {memory: 32Mi, cpu: 20m}
+            limits: {memory: 48Mi}

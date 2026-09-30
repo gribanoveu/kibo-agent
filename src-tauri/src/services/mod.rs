@@ -17,6 +17,8 @@ pub mod code_search;
 mod search_bench;
 #[cfg(test)]
 mod agent_bench;
+#[cfg(test)]
+mod kube_bench;
 pub mod skills;
 pub mod project_rules;
 pub mod mcp_servers;

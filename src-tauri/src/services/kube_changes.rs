@@ -77,7 +77,7 @@ mod tests {
             let replicas = || api.get(&kind, namespace, name).unwrap()["spec"]["replicas"].as_u64().unwrap() as u32;
             let set = |to: u32| api.patch(&kind, namespace, name, &json!({"spec": {"replicas": to}}), false).unwrap();
             let scale = |to: u32| {
-                cluster::change(Some(place), &ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: name.into(), replicas: Some(to) })).unwrap();
+                cluster::change(Some(place), &ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: name.into(), replicas: Some(to), ..Default::default() })).unwrap();
                 list().unwrap()[0].id.clone()
             };
             let undo = |id: &str| cluster::change(Some(place), &ToolCall::KubeUndo(KubeUndoArgs { change_id: id.into() }));
@@ -188,7 +188,7 @@ mod tests {
             assert_eq!(read("cm").unwrap()["data"]["beta"], "on", "the update is put back");
 
             // A delete, and the object made again from its backup.
-            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "deploy".into(), name: "kibo-live".into() })).unwrap();
+            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "deploy".into(), name: "kibo-live".into(), ..Default::default() })).unwrap();
             assert!(matches!(read("deploy"), Err(KubeError::NotFound(_))));
             undo(&id_of("Deployment", 0)).unwrap();
             assert_eq!(read("deploy").unwrap()["spec"]["template"]["spec"]["containers"][0]["image"], "busybox:stable");
@@ -196,7 +196,7 @@ mod tests {
             // Undoing that undo deletes it again; the ConfigMap goes by a delete of its own.
             undo(&id_of("Deployment", 0)).unwrap();
             assert!(matches!(read("deploy"), Err(KubeError::NotFound(_))));
-            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "cm".into(), name: "kibo-live".into() })).unwrap();
+            run(ToolCall::KubeDelete(KubeDeleteArgs { kind: "cm".into(), name: "kibo-live".into(), ..Default::default() })).unwrap();
             assert!(matches!(read("cm"), Err(KubeError::NotFound(_))));
         });
     }
@@ -218,9 +218,9 @@ mod tests {
             let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
             let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, production: false, changes: Some(&ChangeStore) };
             cluster::change(Some(place), &ToolCall::KubeApply(KubeApplyArgs { manifest: scaler.into() })).unwrap();
-            let scale = ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: "rollme".into(), replicas: Some(5) });
+            let scale = ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: "rollme".into(), replicas: Some(5), ..Default::default() });
             let shown = cluster::preview(Some(place), &scale);
-            cluster::change(Some(place), &ToolCall::KubeDelete(KubeDeleteArgs { kind: "hpa".into(), name: "kibo-live".into() })).unwrap();
+            cluster::change(Some(place), &ToolCall::KubeDelete(KubeDeleteArgs { kind: "hpa".into(), name: "kibo-live".into(), ..Default::default() })).unwrap();
             let ToolPreview::Change { notes, .. } = shown else { panic!("{shown:?}") };
             assert_eq!(notes[0], "HorizontalPodAutoscaler/kibo-live sets its replicas (1–3): it will scale it back.");
         });

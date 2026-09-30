@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: storefront}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: storefront}}
+  template:
+    metadata: {labels: {app: storefront}}
+    spec:
+      containers:
+        - name: app
+          image: nginx:alpine
+          ports: [{containerPort: 80, name: http}]
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: 8081}
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata: {name: storefront}
+spec:
+  selector: {app: storefront}
+  ports: [{port: 80, targetPort: http}]
