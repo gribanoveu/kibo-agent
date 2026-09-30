@@ -48,12 +48,13 @@ mod tests {
     }
 
     fn deps(client: Arc<Scripted>) -> McpTools {
-        let tool = |name: &str| McpTool { name: name.into(), description: String::new(), input_schema: json!({}) };
+        let tool = |name: &str| McpTool { name: name.into(), input_schema: json!({}), ..Default::default() };
         McpTools::new(vec![ConnectedServer {
             name: "gh".into(),
             weight: 3,
             client,
             tools: vec![tool("ok"), tool("fails"), tool("waits"), tool("dies")],
+            instructions: None,
         }])
     }
 

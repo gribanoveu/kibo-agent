@@ -212,6 +212,44 @@ describe("the MCP tab", () => {
     expect(screen.getAllByText(warning)).toHaveLength(1);
   });
 
+  test("a running server's row shows what it says about its tools and what it tells the model", () => {
+    const server = disk.servers[1];
+    const warning = "box.lan is reached over plain http";
+    panel({
+      ...disk,
+      servers: [
+        {
+          ...server,
+          name: "tracker",
+          command: "http://box.lan/mcp",
+          warning,
+          state: {
+            state: "running",
+            instructions: "Find before you purge.",
+            tools: [
+              { name: "find", description: "Finds issues", title: "Find issues", readOnly: true, destructive: false },
+              { name: "purge", description: "Deletes them", title: null, readOnly: false, destructive: true },
+              { name: "edit", description: "Edits one", readOnly: false, destructive: false },
+            ],
+          },
+        },
+        { ...server, name: "quiet", command: "http://quiet.lan/mcp", warning, state: { state: "running", tools: [], instructions: null } },
+      ],
+    });
+    fireEvent.click(screen.getByText("http://box.lan/mcp"));
+    expect(screen.getByText("find · read-only")).toBeTruthy();
+    expect(screen.getByText("Find issues — Finds issues")).toBeTruthy();
+    expect(screen.getByText("purge · destructive")).toBeTruthy();
+    expect(screen.getByText("Deletes them")).toBeTruthy();
+    expect(screen.getByText("edit")).toBeTruthy();
+    const note = screen.getByText(/It tells the model: Find before you purge\./);
+    expect(note.textContent).toContain(warning, "the entry's warning is not lost to the instructions");
+
+    fireEvent.click(screen.getByText("http://quiet.lan/mcp"));
+    expect(screen.getAllByText(/It tells the model/)).toHaveLength(1, "a server that said nothing has nothing quoted");
+    expect(screen.getAllByText(new RegExp(warning))).toHaveLength(2);
+  });
+
   test("opening a server that has not started asks for it, and only on the way open", () => {
     const opened: string[] = [];
     panel(disk, () => {}, () => {}, (name) => opened.push(name));

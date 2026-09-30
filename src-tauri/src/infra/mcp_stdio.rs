@@ -100,6 +100,14 @@ impl McpClient for StdioServer {
     /// The stream closing is how an exit shows first; the process is asked
     /// too, for one that is gone while its stdout is still held open by a
     /// child of its own.
+    fn instructions(&self) -> Option<String> {
+        self.client.instructions()
+    }
+
+    fn tools_stale(&self) -> bool {
+        self.client.tools_stale()
+    }
+
     fn is_alive(&self) -> bool {
         self.client.is_alive() && matches!(lock(&self.child).try_wait(), Ok(None))
     }
@@ -175,16 +183,24 @@ mod tests {
     fn a_process_is_started_and_spoken_to() {
         let script = r#"
             read discover; echo '{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"Method not found"}}'
-            read init; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"sh","version":"1"}}}'
+            read init; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"sh","version":"1"},"instructions":"Say hi."}}'
             read initialized
-            read call; echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"hello '"$MCP_TEST_TOKEN"'"}]}}'
+            read call; echo '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+            echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"hello '"$MCP_TEST_TOKEN"'"}]}}'
             read _
         "#;
         let dir = crate::testing::temp_dir("mcp-stdio-process");
         // `env` is where a server's token lives; it has to reach the process.
         let config = McpServerConfig { env: [("MCP_TEST_TOKEN".to_string(), "t0k3n".to_string())].into(), ..sh(script, 5) };
         let server = StdioServer::start(&config, &dir, &|| false).unwrap();
+        assert_eq!(server.instructions().as_deref(), Some("Say hi."));
+        assert!(!server.tools_stale());
         assert_eq!(server.call_tool("hi", json!({}), &|| false).unwrap().text, "hello t0k3n");
+        let heard = Instant::now() + Duration::from_secs(3);
+        while !server.tools_stale() && Instant::now() < heard {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(server.tools_stale(), "the server said its tools changed");
     }
 
     /// Why an exit is worth its own variant: the code and the last lines of

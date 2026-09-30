@@ -655,14 +655,17 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<v
 
 // ---------------------------------------------------------------- MCP servers
 
-/** Mirrors `domain::mcp::McpToolInfo`: one tool a running server offers. */
-export type McpToolInfo = { name: string; description: string };
+/**
+ * Mirrors `domain::mcp::McpToolInfo`: one tool a running server offers. `readOnly` and `destructive`
+ * are the server's own word about it — shown, never trusted.
+ */
+export type McpToolInfo = { name: string; description: string; title?: string | null; readOnly?: boolean; destructive?: boolean };
 
 /** Mirrors `domain::mcp::McpServerState`: what the server's process is doing. */
 export type McpServerState =
   | { state: "notStarted" }
   | { state: "starting" }
-  | { state: "running"; tools: McpToolInfo[] }
+  | { state: "running"; tools: McpToolInfo[]; instructions?: string | null }
   | { state: "exited"; error: string }
   | { state: "failed"; error: string };
 

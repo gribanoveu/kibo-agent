@@ -104,7 +104,7 @@ mod tests {
             let config = mcp_config::save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
             let servers = McpServers::new(Arc::new(|_, _, _| Ok(Arc::new(Idle) as Arc<dyn McpClient>)));
             servers.for_turn(&config, &crate::testing::temp_dir("cmd-mcp-changed-root"), &|| false);
-            assert_eq!(view(config.clone(), &servers).unwrap().servers[0].state, McpServerState::Running { tools: vec![] });
+            assert_eq!(view(config.clone(), &servers).unwrap().servers[0].state, McpServerState::Running { tools: vec![], instructions: None });
 
             let off = mcp_config::set_enabled("a", false).unwrap();
             let shown = changed(off, &servers).unwrap();

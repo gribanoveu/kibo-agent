@@ -10,27 +10,32 @@
 //!   turn's Stop within [`POLL`]; either way the server is told;
 //! - a tool list with an entry the schema refuses still yields the others;
 //! - what a failure means is the transport's to say ([`Failure`]): for a
-//!   process, its exit code and the last lines of its stderr.
+//!   process, its exit code and the last lines of its stderr;
+//! - a tool list is read again only between turns, when the server said it
+//!   changed or the time it gave the list ran out ([`McpClient::tools_stale`]).
 //!
 //! `rmcp` is async on tokio and everything above `McpClient` is blocking, so
 //! each method is one `block_on` on Tauri's runtime — the same bridge as
 //! `infra::kube_client`. Never call these from a task of that runtime.
 
 use std::future::Future;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientCapabilities, ClientConfig, ClientRequest, Implementation,
     ListToolsRequest, PaginatedRequestParams, ProtocolVersion,
 };
 use rmcp::service::{
-    ClientInitializeError, ClientLifecycleMode, ClientServiceExt, Peer, PeerRequestOptions, RoleClient, RunningService,
-    ServiceError,
+    ClientInitializeError, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer, PeerRequestOptions,
+    RoleClient, RunningService, ServiceError,
 };
 use rmcp::transport::IntoTransport;
+use rmcp::ClientHandler;
 use serde_json::{json, Value};
 
-use crate::domain::mcp::{render_content, McpCallResult, McpClient, McpError, McpTool};
+use crate::domain::mcp::{render_content, McpCallResult, McpClient, McpError, McpTool, McpToolHints};
 
 /// How often a waiting call looks at its stop flag.
 const POLL: Duration = Duration::from_millis(50);
@@ -53,10 +58,32 @@ pub type Describe = Box<dyn Fn(Failure<'_>) -> McpError + Send + Sync>;
 pub struct RmcpClient {
     /// Held for its end: dropping it closes the conversation — for an HTTP
     /// session, with the `DELETE` that ends it on the server.
-    _service: RunningService<RoleClient, ClientConfig>,
+    _service: RunningService<RoleClient, Listener>,
     peer: Peer<RoleClient>,
     timeout: Duration,
     describe: Describe,
+    /// The server said its tools changed since they were last listed.
+    tools_changed: Arc<AtomicBool>,
+    /// Until when the server said the list it gave may be kept; `None` when
+    /// it gave no time, which is every server before 2026-07-28.
+    tools_fresh_until: Mutex<Option<Instant>>,
+}
+
+/// This side of the conversation: who the client is, and an ear for the one
+/// thing a server says unasked that matters here.
+struct Listener {
+    config: ClientConfig,
+    tools_changed: Arc<AtomicBool>,
+}
+
+impl ClientHandler for Listener {
+    fn get_info(&self) -> ClientConfig {
+        self.config.clone()
+    }
+
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.tools_changed.store(true, Ordering::SeqCst);
+    }
 }
 
 enum Stop {
@@ -86,20 +113,24 @@ impl RmcpClient {
             preferred_versions: vec![ProtocolVersion::V_2026_07_28],
             legacy_version: Some(ProtocolVersion::V_2025_11_25),
         };
+        let tools_changed = Arc::new(AtomicBool::new(false));
+        let listener = Listener { config, tools_changed: Arc::clone(&tools_changed) };
         let service = tauri::async_runtime::block_on(async {
-            let mut serving = Box::pin(config.serve_with_lifecycle(transport()?, lifecycle));
+            let mut serving = Box::pin(listener.serve_with_lifecycle(transport()?, lifecycle));
             match wait(&mut serving, timeout, cancelled).await {
                 Ok(served) => served.map_err(|e| handshake_error(e, &describe)),
                 Err(Stop::Cancelled) => Err(McpError::Cancelled),
                 Err(Stop::TimedOut) => Err(McpError::Timeout(timeout.as_secs())),
             }
         })?;
-        Ok(Self { peer: service.peer().clone(), _service: service, timeout, describe })
-    }
-
-    /// What the server said about using its tools, when it said anything.
-    pub fn instructions(&self) -> Option<String> {
-        self.peer.peer_info().and_then(|info| info.instructions.clone())
+        Ok(Self {
+            peer: service.peer().clone(),
+            _service: service,
+            timeout,
+            describe,
+            tools_changed,
+            tools_fresh_until: Mutex::default(),
+        })
     }
 
     /// One request and its answer as JSON. Through `Value` rather than the
@@ -147,10 +178,18 @@ impl McpClient for RmcpClient {
     fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
         let mut tools = Vec::new();
         let mut cursor: Option<String> = None;
-        for _ in 0..MAX_TOOL_PAGES {
+        // Before asking, so a change announced while the answer is on its
+        // way is not lost to this reading.
+        self.tools_changed.store(false, Ordering::SeqCst);
+        let asked = Instant::now();
+        for page_number in 0..MAX_TOOL_PAGES {
             let params = PaginatedRequestParams::default().with_cursor(cursor.take());
             let request = ClientRequest::ListToolsRequest(ListToolsRequest::with_param(params));
             let page = self.request(request, &|| false)?;
+            if page_number == 0 {
+                let fresh_for = page["ttlMs"].as_u64().map(Duration::from_millis);
+                *self.tools_fresh_until.lock().unwrap_or_else(|p| p.into_inner()) = fresh_for.map(|ttl| asked + ttl);
+            }
             let listed = page["tools"]
                 .as_array()
                 .ok_or_else(|| McpError::Protocol(format!("tools/list returned no tools array: {page}")))?;
@@ -181,6 +220,15 @@ impl McpClient for RmcpClient {
     fn is_alive(&self) -> bool {
         !self.peer.is_transport_closed()
     }
+
+    fn instructions(&self) -> Option<String> {
+        self.peer.peer_info().and_then(|info| info.instructions.clone())
+    }
+
+    fn tools_stale(&self) -> bool {
+        let expired = self.tools_fresh_until.lock().unwrap_or_else(|p| p.into_inner()).is_some_and(|until| Instant::now() >= until);
+        expired || self.tools_changed.load(Ordering::SeqCst)
+    }
 }
 
 /// A tool entry, or nothing for one without a name — there is no way to
@@ -193,6 +241,17 @@ fn tool(entry: &Value) -> Option<McpTool> {
         input_schema: match &entry["inputSchema"] {
             schema @ Value::Object(_) => schema.clone(),
             _ => json!({ "type": "object" }),
+        },
+        // The newer place for a title is the tool's own; the older one is
+        // among its annotations.
+        title: [&entry["title"], &entry["annotations"]["title"]]
+            .iter()
+            .find_map(|title| title.as_str().filter(|t| !t.trim().is_empty()))
+            .map(str::to_string),
+        hints: {
+            let read_only = entry["annotations"]["readOnlyHint"] == true;
+            // A tool that only reads destroys nothing, whatever else is said.
+            McpToolHints { read_only, destructive: !read_only && entry["annotations"]["destructiveHint"] == true }
         },
     })
 }
@@ -414,13 +473,86 @@ mod tests {
                     name: "search".into(),
                     description: "Search issues".into(),
                     input_schema: json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
+                    ..Default::default()
                 },
-                McpTool { name: "open".into(), description: String::new(), input_schema: json!({ "type": "object" }) },
+                McpTool { name: "open".into(), input_schema: json!({ "type": "object" }), ..Default::default() },
             ]
         );
         let seen = seen.lock().unwrap();
         let second = seen.iter().filter(|m| m["method"] == "tools/list").nth(1).unwrap();
         assert_eq!(second["params"]["cursor"], "p2");
+    }
+
+    /// What a server says about a tool is read where it said it, and only
+    /// what it said outright: silence is not "destructive".
+    #[test]
+    fn a_tools_title_and_hints_are_read_as_the_server_gave_them() {
+        let (client, _seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/list") => ok(
+                request,
+                json!({ "tools": [
+                    { "name": "list", "title": "List issues", "annotations": { "readOnlyHint": true, "destructiveHint": true } },
+                    { "name": "drop", "annotations": { "title": "Drop a table", "destructiveHint": true } },
+                    { "name": "edit", "annotations": { "readOnlyHint": false } },
+                    { "name": "plain", "title": "  " }
+                ] }),
+            ),
+            _ => legacy(request),
+        });
+        let tools = client.unwrap().list_tools().unwrap();
+        let told: Vec<_> = tools.iter().map(|t| (t.title.as_deref(), t.hints.read_only, t.hints.destructive)).collect();
+        assert_eq!(
+            told,
+            [(Some("List issues"), true, false), (Some("Drop a table"), false, true), (None, false, false), (None, false, false)]
+        );
+    }
+
+    /// A server that says its tools changed is believed until they are read
+    /// again — and the reading is what clears it.
+    #[test]
+    fn a_list_the_server_says_changed_is_stale_until_it_is_read_again() {
+        let (client, _seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/call") => {
+                let mut replies = vec![json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" })];
+                replies.extend(legacy(request)?);
+                Some(replies)
+            }
+            _ => legacy(request),
+        });
+        let client = client.unwrap();
+        client.list_tools().unwrap();
+        assert!(!client.tools_stale());
+
+        client.call_tool("enable_more", json!({}), &|| false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !client.tools_stale() {
+            assert!(Instant::now() < deadline, "the server's notice was not heard");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        client.list_tools().unwrap();
+        assert!(!client.tools_stale());
+    }
+
+    /// A server of the new era says how long its list may be kept; one that
+    /// says nothing is kept until it says otherwise.
+    #[test]
+    fn a_list_is_stale_once_the_time_the_server_gave_it_runs_out() {
+        let (client, _seen) = fake(SECOND, |request| match request["method"].as_str() {
+            Some("tools/list") => ok(request, json!({ "resultType": "complete", "tools": [], "ttlMs": 150, "cacheScope": "private" })),
+            _ => modern(request),
+        });
+        let client = client.unwrap();
+        assert!(!client.tools_stale(), "nothing read, nothing to go stale");
+        client.list_tools().unwrap();
+        assert!(!client.tools_stale());
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(client.tools_stale());
+
+        let (legacy_client, _seen) = fake(SECOND, legacy);
+        let legacy_client = legacy_client.unwrap();
+        legacy_client.list_tools().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!legacy_client.tools_stale(), "no time given, no expiry");
     }
 
     #[test]

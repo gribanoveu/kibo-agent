@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2026-09-30 A tool its MCP server marks destructive asks before every call, even under Always allow; the MCP tab shows what each server says about its tools
+
+- 2026-09-30 An MCP server's instructions reach the model, and the MCP tab shows what the server tells it
+
+- 2026-09-30 An MCP server that changes its tools offers the new ones from the next message, without a restart
+
 - 2026-09-30 MCP servers that speak the 2026-07-28 revision of the protocol connect; older ones work as before
 
 - 2026-09-30 The Skills panel lists the skills that are on first and the ones switched off after them, in grey

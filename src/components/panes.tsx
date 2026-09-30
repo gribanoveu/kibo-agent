@@ -109,13 +109,13 @@ function mcpItems(view: McpView | null): PanelItem[] {
           enabled: server.enabled,
           // The process's own trouble, when it has one, says more than the entry's.
           note: server.warning ?? undefined,
-          ...(server.enabled ? mcpState(server.state) : {}),
+          ...(server.enabled ? mcpState(server.state, server.warning) : {}),
         },
   );
 }
 
 /** What the process is doing, for a server that is switched on. */
-function mcpState(state: McpServerState): Partial<PanelItem> {
+function mcpState(state: McpServerState, warning: string | null): Partial<PanelItem> {
   switch (state.state) {
     case "notStarted":
       return { meta: "Open this row to start it and see its tools" };
@@ -124,7 +124,15 @@ function mcpState(state: McpServerState): Partial<PanelItem> {
     case "running":
       return {
         status: { label: `${state.tools.length} ${state.tools.length === 1 ? "tool" : "tools"}`, tone: "ok" },
-        rows: state.tools.map((tool) => ({ name: tool.name, desc: tool.description })),
+        rows: state.tools.map((tool) => ({
+          // The server's word about its own tool, said as such by where it stands: beside the name.
+          name: tool.name + (tool.destructive ? " · destructive" : tool.readOnly ? " · read-only" : ""),
+          desc: tool.title ? `${tool.title} — ${tool.description}` : tool.description,
+        })),
+        // What the server tells the model is said on the user's behalf, so the user can read it.
+        ...(state.instructions
+          ? { note: [warning, `It tells the model: ${state.instructions}`].filter(Boolean).join("\n\n") }
+          : {}),
       };
     case "exited":
       return { status: { label: "exited", tone: "warn" }, meta: "Restarts with the next call", note: state.error };

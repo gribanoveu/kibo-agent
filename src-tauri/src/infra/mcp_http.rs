@@ -84,6 +84,14 @@ impl McpClient for HttpServer {
         self.client.call_tool(name, arguments, cancelled)
     }
 
+    fn instructions(&self) -> Option<String> {
+        self.client.instructions()
+    }
+
+    fn tools_stale(&self) -> bool {
+        self.client.tools_stale()
+    }
+
     fn is_alive(&self) -> bool {
         self.client.is_alive() && lock(&self.ended).is_none()
     }
@@ -239,7 +247,8 @@ mod tests {
     }
 
     fn handshake(request: &Seen, session: Option<&str>) -> Answer {
-        let mut answer = json_answer(request, json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": "f", "version": "1" } }));
+        let mut answer = json_answer(request, json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": { "listChanged": true } },
+            "serverInfo": { "name": "f", "version": "1" }, "instructions": "Search first." }));
         if let Some(session) = session {
             answer.headers.push(("Mcp-Session-Id", session.into()));
         }
@@ -270,6 +279,7 @@ mod tests {
             Some("tools/call") => events(&[
                 json!({ "jsonrpc": "2.0", "id": id, "method": "ping" }),
                 json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": {} }),
+                json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }),
                 json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": "found it" }] } }),
                 json!({ "jsonrpc": "2.0", "id": "srv-late", "method": "ping" }),
             ]),
@@ -308,7 +318,14 @@ mod tests {
         let (url, log) = serve(well_behaved);
         let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
         assert_eq!(server.list_tools().unwrap()[0].name, "search", "an event over several data: lines");
+        assert_eq!(server.instructions().as_deref(), Some("Search first."));
+        assert!(!server.tools_stale());
         assert_eq!(server.call_tool("search", json!({ "q": "x" }), &|| false).unwrap().text, "found it");
+        let heard = Instant::now() + Duration::from_secs(3);
+        while !server.tools_stale() && Instant::now() < heard {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(server.tools_stale(), "the server said its tools changed, in the call's own stream");
 
         let seen = log.lock().unwrap().clone();
         let probe = &seen[0];

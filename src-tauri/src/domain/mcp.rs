@@ -96,7 +96,12 @@ pub enum McpServerState {
     #[default]
     NotStarted,
     Starting,
-    Running { tools: Vec<McpToolInfo> },
+    Running {
+        tools: Vec<McpToolInfo>,
+        /// What the server tells the model about using its tools — shown so
+        /// the user can read what is said on their behalf.
+        instructions: Option<String>,
+    },
     /// It was running and stopped; the next call to it starts it again.
     Exited { error: String },
     /// It never started. Not retried turn after turn — a server that hangs
@@ -107,10 +112,34 @@ pub enum McpServerState {
 
 /// One tool a running server offers, as the tab lists it. The schema is
 /// the model's business, not the tab's.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpToolInfo {
     pub name: String,
     pub description: String,
+    /// The server's name for it meant for people, when it has one.
+    pub title: Option<String>,
+    #[serde(flatten)]
+    pub hints: McpToolHints,
+}
+
+impl From<&McpTool> for McpToolInfo {
+    fn from(tool: &McpTool) -> Self {
+        Self { name: tool.name.clone(), description: tool.description.clone(), title: tool.title.clone(), hints: tool.hints }
+    }
+}
+
+/// What a server says about a tool of its own. Its word and nothing more: a
+/// server that calls `delete_repo` read-only is believed by nobody, so
+/// `read_only` is shown and never lifts a question, while `destructive` can
+/// only add one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolHints {
+    pub read_only: bool,
+    /// Said outright. The protocol reads silence as "may destroy", which
+    /// would make every tool of every server that says nothing ask forever.
+    pub destructive: bool,
 }
 
 #[derive(Debug, Error)]
@@ -222,12 +251,14 @@ pub fn parse(text: &str) -> Result<McpConfig, McpConfigError> {
 // ------------------------------------------------------------ the client
 
 /// One tool a server offers, as the model will need to see it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct McpTool {
     pub name: String,
     pub description: String,
     /// A JSON Schema, passed through untouched like a built-in tool's.
     pub input_schema: Value,
+    pub title: Option<String>,
+    pub hints: McpToolHints,
 }
 
 /// What a call came back with, already reduced to the text a tool result is.
@@ -310,6 +341,18 @@ pub trait McpClient: Send + Sync {
     fn is_alive(&self) -> bool {
         true
     }
+
+    /// What the server said about using its tools, when it said anything.
+    fn instructions(&self) -> Option<String> {
+        None
+    }
+
+    /// The tool list read earlier may no longer be the server's: it said so,
+    /// or the time it gave the list has run out. A client that cannot tell
+    /// says `false`.
+    fn tools_stale(&self) -> bool {
+        false
+    }
 }
 
 // ------------------------------------------------------ the turn's view
@@ -321,7 +364,20 @@ pub struct ConnectedServer {
     pub weight: u32,
     pub client: Arc<dyn McpClient>,
     pub tools: Vec<McpTool>,
+    pub instructions: Option<String>,
 }
+
+/// What one server tells the model about its tools, cut to
+/// [`MAX_INSTRUCTION_CHARS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerInstructions {
+    pub server: String,
+    pub text: String,
+}
+
+/// A server's instructions ride in every request of every turn; one that
+/// sends a manual is cut here.
+pub const MAX_INSTRUCTION_CHARS: usize = 2000;
 
 /// One tool as the turn sees it: the name the model calls it by, and where
 /// the call goes.
@@ -336,7 +392,10 @@ pub struct McpToolEntry {
 /// Every connected server's tools, named for the model. Cheap to clone —
 /// every call's `ToolDeps` carries one.
 #[derive(Clone, Default)]
-pub struct McpTools(Arc<Vec<McpToolEntry>>);
+pub struct McpTools {
+    entries: Arc<Vec<McpToolEntry>>,
+    instructions: Arc<Vec<ServerInstructions>>,
+}
 
 /// What providers accept as a tool name, OpenAI's and Anthropic's alike.
 pub const MAX_TOOL_NAME_CHARS: usize = 64;
@@ -350,7 +409,12 @@ impl McpTools {
     pub fn new(servers: Vec<ConnectedServer>) -> Self {
         let mut taken = std::collections::HashSet::new();
         let mut entries = Vec::new();
+        let mut instructions = Vec::new();
         for server in servers {
+            if let Some(text) = server.instructions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+                let text = text.chars().take(MAX_INSTRUCTION_CHARS).collect();
+                instructions.push(ServerInstructions { server: server.name.clone(), text });
+            }
             let key = server_key(&server.name);
             for tool in server.tools {
                 let wire_name = tool_wire_name(&key, &tool.name);
@@ -366,11 +430,21 @@ impl McpTools {
                 });
             }
         }
-        Self(Arc::new(entries))
+        Self { entries: Arc::new(entries), instructions: Arc::new(instructions) }
     }
 
     pub fn get(&self, wire_name: &str) -> Option<&McpToolEntry> {
-        self.0.iter().find(|entry| entry.wire_name == wire_name)
+        self.entries.iter().find(|entry| entry.wire_name == wire_name)
+    }
+
+    /// What the connected servers say about their tools, for the prompt.
+    pub fn instructions(&self) -> &[ServerInstructions] {
+        &self.instructions
+    }
+
+    /// What its server says about this tool; nothing, for a name no server has.
+    pub fn hints(&self, wire_name: &str) -> McpToolHints {
+        self.get(wire_name).map(|entry| entry.tool.hints).unwrap_or_default()
     }
 
     /// What one call costs: the server's weight, or the default for a name
@@ -383,7 +457,7 @@ impl McpTools {
     /// tool belongs to: the model otherwise has no way to tell `search` on
     /// one from `search` on another, or either from a built-in tool.
     pub fn definitions(&self) -> Vec<LlmToolDefinition> {
-        self.0
+        self.entries
             .iter()
             .map(|entry| LlmToolDefinition {
                 name: entry.wire_name.clone(),
@@ -611,8 +685,15 @@ mod tests {
             client: Arc::new(Nothing),
             tools: tools
                 .iter()
-                .map(|t| McpTool { name: t.to_string(), description: format!("does {t}"), input_schema: serde_json::json!({"type":"object"}) })
+                .map(|t| McpTool {
+                    name: t.to_string(),
+                    description: format!("does {t}"),
+                    input_schema: serde_json::json!({"type":"object"}),
+                    hints: McpToolHints { read_only: false, destructive: t.starts_with("delete") },
+                    ..Default::default()
+                })
                 .collect(),
+            instructions: None,
         }
     }
 
@@ -645,6 +726,30 @@ mod tests {
         assert!(names.iter().all(|n| n.len() == MAX_TOOL_NAME_CHARS && n.starts_with("mcp__s__xxx")), "{names:?}");
         assert_ne!(names[0], names[1]);
         assert_eq!(tool_wire_name("s", &format!("{long}_one")), names[0], "stable");
+    }
+
+    /// Only what a server said, trimmed and cut — and nothing for a server
+    /// that said nothing, or said only whitespace.
+    #[test]
+    fn instructions_are_kept_per_server_cut_to_the_limit_and_empty_ones_dropped() {
+        let with = |name: &str, text: Option<&str>| ConnectedServer { instructions: text.map(str::to_string), ..server(name, 3, &[]) };
+        let long = "x".repeat(MAX_INSTRUCTION_CHARS + 500);
+        let tools = McpTools::new(vec![with("a", Some("  Search first.\n")), with("b", None), with("c", Some("  ")), with("d", Some(&long))]);
+        assert_eq!(
+            tools.instructions(),
+            [
+                ServerInstructions { server: "a".into(), text: "Search first.".into() },
+                ServerInstructions { server: "d".into(), text: "x".repeat(MAX_INSTRUCTION_CHARS) },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tools_hints_are_found_by_the_name_the_model_calls() {
+        let tools = McpTools::new(vec![server("gh", 3, &["search", "delete_repo"])]);
+        assert!(tools.hints("mcp__gh__delete_repo").destructive);
+        assert_eq!(tools.hints("mcp__gh__search"), McpToolHints::default());
+        assert_eq!(tools.hints("mcp__gone__x"), McpToolHints::default(), "a guess is not destructive by being unknown");
     }
 
     #[test]

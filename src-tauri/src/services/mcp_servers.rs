@@ -91,6 +91,8 @@ impl McpServers {
             handles.into_iter().filter_map(|handle| handle.join().ok()).collect()
         });
 
+        self.refresh_stale(cwd);
+
         let mut pool = lock(&self.pool);
         for (name, state) in started {
             // Switched off or edited while it started: `prune` has removed
@@ -110,6 +112,40 @@ impl McpServers {
             }
         }
         connected(&pool)
+    }
+
+    /// Reads again the tool list of every running server whose list may no
+    /// longer be its own — it said so, its time ran out, or it was started
+    /// anew last turn. Here, between turns, and nowhere else: within a turn
+    /// the model keeps the list it was given. A server that does not answer
+    /// keeps the list it had, and the turn finds out when it calls.
+    ///
+    /// With the pool unlocked, like a start: a reading can take the server's
+    /// whole timeout.
+    fn refresh_stale(&self, cwd: &Path) {
+        let stale: Vec<(String, Arc<Supervised>)> = {
+            let pool = lock(&self.pool);
+            if pool.cwd.as_deref() != Some(cwd) {
+                return;
+            }
+            pool.slots
+                .iter()
+                .filter_map(|(name, slot)| match &slot.state {
+                    SlotState::Running { server, .. } if server.tools_stale() => Some((name.clone(), Arc::clone(server))),
+                    _ => None,
+                })
+                .collect()
+        };
+        for (name, stale) in stale {
+            let Ok(listed) = stale.list_tools() else { continue };
+            let mut pool = lock(&self.pool);
+            // Switched off or edited meanwhile: the slot is gone or another's.
+            if let Some(SlotState::Running { server, tools }) = pool.slots.get_mut(&name).map(|slot| &mut slot.state) {
+                if Arc::ptr_eq(server, &stale) {
+                    *tools = listed;
+                }
+            }
+        }
     }
 
     /// The tools of the servers already running for `cwd` — what the next
@@ -205,10 +241,8 @@ impl McpServers {
         match &slot.state {
             SlotState::Starting => McpServerState::Starting,
             SlotState::Running { server, tools } if server.is_alive() => McpServerState::Running {
-                tools: tools
-                    .iter()
-                    .map(|t| McpToolInfo { name: t.name.clone(), description: t.description.clone() })
-                    .collect(),
+                tools: tools.iter().map(McpToolInfo::from).collect(),
+                instructions: server.instructions(),
             },
             SlotState::Running { server, .. } => McpServerState::Exited {
                 error: lock(&server.last_error).clone().unwrap_or_else(|| "the MCP server exited".into()),
@@ -233,6 +267,7 @@ fn connected(pool: &Pool) -> McpTools {
                 weight: slot.config.weight(),
                 client: Arc::clone(server) as Arc<dyn McpClient>,
                 tools: tools.clone(),
+                instructions: server.instructions(),
             }),
             _ => None,
         })
@@ -298,6 +333,16 @@ impl McpClient for Supervised {
     fn is_alive(&self) -> bool {
         lock(&self.current).is_alive()
     }
+
+    fn instructions(&self) -> Option<String> {
+        lock(&self.current).instructions()
+    }
+
+    /// A server started again mid-turn is another process, perhaps another
+    /// version: what it offers is asked anew before the next turn.
+    fn tools_stale(&self) -> bool {
+        self.restarted.load(Ordering::SeqCst) || lock(&self.current).tools_stale()
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -310,28 +355,61 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
 
-    /// One process of a scripted server: it dies on the tool `crash`.
+    /// One process of a scripted server: it dies on the tool `crash`, and
+    /// the tool `grow` makes it offer one tool more and say its list changed.
+    /// A process started after the first is a newer one, and offers that
+    /// tool from the start without saying anything.
     struct Process {
         alive: AtomicBool,
         run: usize,
+        grown: AtomicBool,
+        stale: AtomicBool,
+    }
+
+    impl Process {
+        fn started(run: usize) -> Arc<dyn McpClient> {
+            Arc::new(Self { alive: AtomicBool::new(true), run, grown: AtomicBool::new(run > 1), stale: AtomicBool::new(false) })
+        }
     }
 
     impl McpClient for Process {
         fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-            Ok(vec![
-                McpTool { name: "echo".into(), description: "Says it back".into(), input_schema: json!({"type": "object"}) },
-                McpTool { name: "crash".into(), description: "Dies".into(), input_schema: json!({"type": "object"}) },
-            ])
+            self.stale.store(false, Ordering::SeqCst);
+            let tool = |name: &str, description: &str| McpTool {
+                name: name.into(),
+                description: description.into(),
+                input_schema: json!({"type": "object"}),
+                ..Default::default()
+            };
+            let mut tools = vec![tool("echo", "Says it back"), tool("crash", "Dies")];
+            if self.grown.load(Ordering::SeqCst) {
+                tools.push(McpTool {
+                    title: Some("Wipe everything".into()),
+                    hints: crate::domain::mcp::McpToolHints { read_only: false, destructive: true },
+                    ..tool("wipe", "Wipes")
+                });
+            }
+            Ok(tools)
         }
         fn call_tool(&self, name: &str, _: Value, _: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
             if name == "crash" {
                 self.alive.store(false, Ordering::SeqCst);
                 return Err(McpError::Exited { code: Some(1), stderr: "boom".into() });
             }
+            if name == "grow" {
+                self.grown.store(true, Ordering::SeqCst);
+                self.stale.store(true, Ordering::SeqCst);
+            }
             Ok(McpCallResult { text: format!("run {}", self.run), is_error: false })
         }
         fn is_alive(&self) -> bool {
             self.alive.load(Ordering::SeqCst)
+        }
+        fn instructions(&self) -> Option<String> {
+            Some(format!("Echo first. (run {})", self.run))
+        }
+        fn tools_stale(&self) -> bool {
+            self.stale.load(Ordering::SeqCst)
         }
     }
 
@@ -348,7 +426,7 @@ mod tests {
             if config.command == "broken" || (config.command == "once" && run > 1) {
                 return Err(McpError::NotStarted("no such command".into()));
             }
-            Ok(Arc::new(Process { alive: AtomicBool::new(true), run }) as Arc<dyn McpClient>)
+            Ok(Process::started(run))
         });
         (McpServers::new(start), starts)
     }
@@ -386,9 +464,10 @@ mod tests {
             servers.state("a", &config.mcp_servers["a"]),
             McpServerState::Running {
                 tools: vec![
-                    McpToolInfo { name: "echo".into(), description: "Says it back".into() },
-                    McpToolInfo { name: "crash".into(), description: "Dies".into() },
-                ]
+                    McpToolInfo { name: "echo".into(), description: "Says it back".into(), ..Default::default() },
+                    McpToolInfo { name: "crash".into(), description: "Dies".into(), ..Default::default() },
+                ],
+                instructions: Some("Echo first. (run 1)".into()),
             },
             "the tab lists every tool the server offers, not just how many");
     }
@@ -482,9 +561,10 @@ mod tests {
             state,
             McpServerState::Running {
                 tools: vec![
-                    McpToolInfo { name: "echo".into(), description: "Says it back".into() },
-                    McpToolInfo { name: "crash".into(), description: "Dies".into() },
-                ]
+                    McpToolInfo { name: "echo".into(), description: "Says it back".into(), ..Default::default() },
+                    McpToolInfo { name: "crash".into(), description: "Dies".into(), ..Default::default() },
+                ],
+                instructions: Some("Echo first. (run 1)".into()),
             }
         );
         assert_eq!(servers.connect("a", &config, &cwd()), state, "the same server, not a new one");
@@ -537,7 +617,7 @@ mod tests {
         let wait = Mutex::new(wait);
         let start: Start = Arc::new(move |_, _, _| {
             wait.lock().unwrap().recv().unwrap();
-            Ok(Arc::new(Process { alive: AtomicBool::new(true), run: 1 }) as Arc<dyn McpClient>)
+            Ok(Process::started(1))
         });
         let servers = Arc::new(McpServers::new(start));
         let mut config = config(&[("a", "ok")]);
@@ -575,6 +655,54 @@ mod tests {
         servers.for_turn(&config, &cwd(), NO);
         servers.for_turn(&config, Path::new("/elsewhere"), NO);
         assert_eq!(starts.load(Ordering::SeqCst), 2);
+    }
+
+    /// The done-when of M-4: a server that changed its list offers the new
+    /// one from the next turn, with no restart — and not before: the turn
+    /// keeps the list the model was given.
+    #[test]
+    fn a_list_the_server_changed_is_read_again_for_the_next_turn_and_not_before() {
+        let (servers, starts) = servers();
+        let config = config(&[("a", "ok")]);
+        let tools = servers.for_turn(&config, &cwd(), NO);
+        assert!(tools.get("mcp__a__wipe").is_none());
+
+        call(&tools, "grow").unwrap();
+        assert!(tools.get("mcp__a__wipe").is_none(), "the turn's own list moved under it");
+        assert!(servers.running(&cwd()).get("mcp__a__wipe").is_none(), "read again mid-turn");
+
+        let next = servers.for_turn(&config, &cwd(), NO);
+        let wipe = next.get("mcp__a__wipe").expect("the new tool is offered");
+        assert!(wipe.tool.hints.destructive);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "restarted to be asked");
+        let McpServerState::Running { tools: shown, .. } = servers.state("a", &config.mcp_servers["a"]) else { panic!("not running") };
+        assert_eq!(
+            shown[2],
+            McpToolInfo {
+                name: "wipe".into(),
+                description: "Wipes".into(),
+                title: Some("Wipe everything".into()),
+                hints: crate::domain::mcp::McpToolHints { read_only: false, destructive: true },
+            },
+            "the tab shows what the server says about it"
+        );
+    }
+
+    /// A server started again mid-turn is another process: what it offers and
+    /// what it says are asked of it, not remembered from the one that died.
+    #[test]
+    fn a_restarted_server_is_asked_again_what_it_offers_and_says() {
+        let (servers, _) = servers();
+        let config = config(&[("a", "ok")]);
+        let tools = servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(tools.instructions()[0].text, "Echo first. (run 1)");
+        call(&tools, "crash").unwrap_err();
+        assert_eq!(call(&tools, "echo").unwrap(), "run 2");
+        assert!(tools.get("mcp__a__wipe").is_none(), "the turn keeps the list it was given");
+
+        let next = servers.for_turn(&config, &cwd(), NO);
+        assert!(next.get("mcp__a__wipe").is_some(), "the list of the process that died");
+        assert_eq!(next.instructions()[0].text, "Echo first. (run 2)");
     }
 
     #[test]

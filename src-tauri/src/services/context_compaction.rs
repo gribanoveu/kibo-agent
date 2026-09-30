@@ -40,14 +40,16 @@ pub struct Compacted {
 pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools) -> RequestFrame {
     let skills = prompt::skills_block(ctx.skills).map_or(0, |list| compaction::estimate_tokens(&[LlmMessage::system(list)]));
     let system = compaction::estimate_tokens(&prompt::system_messages(ctx));
+    // A server's instructions are in the prompt and are the server's cost.
+    let said = prompt::mcp_block(ctx.mcp_instructions).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
     let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp)
         .into_iter()
         .partition(|definition| ToolName::from_wire_name(&definition.name) == Some(ToolName::Mcp));
     RequestFrame {
-        instructions: system.saturating_sub(skills),
+        instructions: system.saturating_sub(skills).saturating_sub(said),
         skills,
         tools: compaction::estimate_tool_schema_tokens(&built_in),
-        mcp: compaction::estimate_tool_schema_tokens(&mcp_tools),
+        mcp: compaction::estimate_tool_schema_tokens(&mcp_tools) + said,
     }
 }
 
@@ -181,6 +183,7 @@ mod tests {
                 plan: None,
                 worktree_of: None,
                 language: None,
+                mcp_instructions: mcp.instructions(),
             },
             mcp,
         )
@@ -211,7 +214,9 @@ mod tests {
                 name: "find".into(),
                 description: "Finds issues. ".repeat(200),
                 input_schema: serde_json::json!({"type": "object"}),
+                ..Default::default()
             }],
+            instructions: None,
         }])
     }
 
@@ -241,6 +246,18 @@ mod tests {
         let with_server = frame_with(ConversationMode::Agent, &[], &[], &server());
         assert!(with_server.mcp > 600, "{with_server:?}");
         assert_eq!(with_server.tools, base.tools);
+
+        let said = "Search before you open. ".repeat(40);
+        let talkative = McpTools::new(vec![ConnectedServer {
+            name: "tracker".into(),
+            weight: 1,
+            client: Arc::new(Idle),
+            tools: vec![],
+            instructions: Some(said),
+        }]);
+        let with_words = frame_with(ConversationMode::Agent, &[], &[], &talkative);
+        assert!(with_words.mcp > 200, "a server's instructions are its cost: {with_words:?}");
+        assert_eq!(with_words.instructions, base.instructions, "and not the prompt's");
 
         let plan = frame_with(ConversationMode::Plan, &[], &[], &server());
         assert_eq!(plan.mcp, 0, "Plan offers no server's tools");

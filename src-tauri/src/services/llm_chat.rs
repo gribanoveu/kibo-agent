@@ -1310,6 +1310,7 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
         plan: turn.plan,
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
+        mcp_instructions: turn.mcp.instructions(),
     };
     let mut messages = prompt::system_messages(&context);
     messages.extend_from_slice(history);
@@ -1485,6 +1486,18 @@ fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<String>) {
     let production = matches!(turn.place, Place::Chat { kube: KubeSetup::Pinned(target), .. } if target.config.production);
     if production && parsed.name().is_mutating() && parsed.name().wire_name().starts_with("kube") {
         return (true, Some("a production cluster — every change to it asks".to_string()));
+    }
+    // What a server says about its own tool is its word (`McpToolHints`):
+    // "destructive" asks whatever "Always allow" says, "only reads" is put
+    // on the card and lifts nothing.
+    if let crate::domain::tools::ToolCall::Mcp(args) = &parsed {
+        let hints = turn.mcp.hints(&args.name);
+        if hints.destructive && !policy.skip_all {
+            return (true, Some("its server marks this tool as destructive — every call to it asks".to_string()));
+        }
+        let asks = policy.requires_approval_for(&parsed);
+        let said = hints.read_only.then(|| "its server says this tool only reads — the server's word, not checked".to_string());
+        return (asks, said.filter(|_| asks));
     }
     if policy.requires_approval_for(&parsed) {
         return (true, policy.approval_reason(&parsed));
@@ -3776,17 +3789,75 @@ mod tests {
     }
 
     fn with_server(mut h: Harness, weight: u32) -> Harness {
+        use crate::domain::mcp::{McpTool, McpToolHints};
+        let tool = |name: &str, hints: McpToolHints| McpTool {
+            name: name.into(),
+            description: "Finds issues.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            hints,
+            ..Default::default()
+        };
         h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
             name: "tracker".into(),
             weight,
             client: Arc::new(Echo),
-            tools: vec![crate::domain::mcp::McpTool {
-                name: "find".into(),
-                description: "Finds issues.".into(),
-                input_schema: serde_json::json!({"type": "object"}),
-            }],
+            tools: vec![
+                tool("find", McpToolHints::default()),
+                tool("list", McpToolHints { read_only: true, destructive: false }),
+                tool("purge", McpToolHints { read_only: false, destructive: true }),
+            ],
+            instructions: Some("Find before you purge.".into()),
         }]);
         h
+    }
+
+    /// What a server says about using its tools reaches the model, as the
+    /// server's own words.
+    #[test]
+    fn a_servers_instructions_are_in_the_prompt() {
+        let h = with_server(harness("mcp-instructions", vec![text("hi")]), 3);
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let sent = &h.provider.requests()[0].messages;
+        let said = sent.iter().filter_map(|m| m.content.as_deref()).find(|c| c.contains("## MCP servers")).expect("said");
+        assert!(said.contains("### tracker\n\nFind before you purge."), "{said}");
+    }
+
+    /// A tool its server calls destructive asks even under "Always allow",
+    /// and says why; Auto still means not asking.
+    #[test]
+    fn a_tool_its_server_calls_destructive_asks_despite_always_allow() {
+        let script = || vec![asks(vec![wants("m1", "mcp__tracker__purge", "{}")]), text("done")];
+        let mut h = with_server(harness("mcp-destructive", script()), 3);
+        h.approval = asking();
+        h.approval.allow_always("mcp__tracker__purge").unwrap();
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+        let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else { panic!("it ran") };
+        assert!(pending.calls[0].reason.as_deref().unwrap().contains("destructive"), "{:?}", pending.calls[0].reason);
+
+        let mut auto = with_server(harness("mcp-destructive-auto", script()), 3);
+        auto.approval = asking();
+        auto.approval.skip_all = true;
+        let outcome = auto.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+        assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "Auto asked");
+    }
+
+    /// "Only reads" is the server's word: it is put on the card and lifts
+    /// nothing — and a card that is not shown has nothing to say.
+    #[test]
+    fn a_tool_its_server_calls_read_only_still_asks_and_the_card_says_whose_word_it_is() {
+        let script = || vec![asks(vec![wants("m1", "mcp__tracker__list", "{}")]), text("done")];
+        let mut h = with_server(harness("mcp-read-only", script()), 3);
+        h.approval = asking();
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+        let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else { panic!("it ran unasked") };
+        assert!(pending.calls[0].requires_confirmation);
+        assert!(pending.calls[0].reason.as_deref().unwrap().contains("not checked"), "{:?}", pending.calls[0].reason);
+
+        let mut plain = with_server(harness("mcp-no-hint", vec![asks(vec![wants("m1", "mcp__tracker__find", "{}")])]), 3);
+        plain.approval = asking();
+        let outcome = plain.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+        let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else { panic!("it ran unasked") };
+        assert_eq!(pending.calls[0].reason, None, "a tool its server said nothing about has no note");
     }
 
     /// Offered in Agent beside the built-in tools; not in Plan, which
@@ -3866,7 +3937,8 @@ mod tests {
             name: "slow".into(),
             weight: 3,
             client: Arc::new(WaitsForStop(h.cancel_after.clone())),
-            tools: vec![crate::domain::mcp::McpTool { name: "wait".into(), description: String::new(), input_schema: serde_json::json!({}) }],
+            tools: vec![crate::domain::mcp::McpTool { name: "wait".into(), input_schema: serde_json::json!({}), ..Default::default() }],
+            instructions: None,
         }]);
 
         let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
