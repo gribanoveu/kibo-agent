@@ -211,6 +211,13 @@ describe("the skills tab", () => {
     expect(toggled).toEqual([["release", false]]);
   });
 
+  test("the ones switched off come after the ones on, and are drawn grey", () => {
+    const { container } = panel({ dir: "/d", skills: [skill("alpha", false), skill("beta"), skill("gamma", false), skill("delta")] });
+    const rows = [...container.querySelectorAll(".item")];
+    expect(rows.map((r) => r.querySelector(".item-title")?.textContent)).toEqual(["beta", "delta", "alpha", "gamma"]);
+    expect(rows.map((r) => r.classList.contains("dim"))).toEqual([false, false, true, true]);
+  });
+
   test("a broken skill shows its reason and has no switch", () => {
     panel({
       dir: "/d",

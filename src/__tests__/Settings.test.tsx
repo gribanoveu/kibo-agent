@@ -14,7 +14,7 @@ const SOURCES: SkillsView["sources"] = [
   { id: "claude", path: "/Users/me/.claude/skills", enabled: true },
 ];
 
-const dialog = (debugLogging = false) => {
+const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
   const sizes: string[] = [];
@@ -27,7 +27,7 @@ const dialog = (debugLogging = false) => {
   render(
     <Settings
       skills={{
-        view: { dir: "/Users/me/.kibo/skills", skills: [], sources: SOURCES },
+        view: { dir: "/Users/me/.kibo/skills", skills, sources: SOURCES },
         error: null,
         onToggle: (id, on) => sources.push([id, on]),
       }}
@@ -112,6 +112,26 @@ describe("the settings dialog", () => {
     fireEvent.click(screen.getAllByRole("button", { pressed: false })[0]);
     fireEvent.click(screen.getAllByRole("button", { pressed: true })[0]);
     expect(sources).toEqual([["agents", true], ["project", false]]);
+  });
+
+  test("a folder opens to the skills it gave; one switched off says it is not read", () => {
+    const skill = { enabled: true, error: null, shadowedBy: null };
+    dialog(false, [
+      { ...skill, name: "deploy", description: "Ships it", source: "project", path: "/repo/.claude/skills/deploy" },
+      { ...skill, name: "pdf", description: "Reads PDFs", source: "user", path: "/Users/me/.claude/skills/pdf" },
+    ]);
+    fireEvent.click(screen.getByText("Skills"));
+    expect(screen.queryByText("pdf")).toBeNull();
+
+    fireEvent.click(screen.getByText("Claude Code's"));
+    expect(screen.getByText("pdf")).toBeDefined();
+    expect(screen.getByText("Reads PDFs")).toBeDefined();
+    expect(screen.queryByText("deploy")).toBeNull();
+
+    fireEvent.click(screen.getByText("Kibo's"));
+    expect(screen.getByText("No skills here.")).toBeDefined();
+    fireEvent.click(screen.getByText("Codex and other agents'"));
+    expect(screen.getByText("Switched off — not read.")).toBeDefined();
   });
 
   test("the font size is picked under Appearance", () => {

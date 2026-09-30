@@ -62,14 +62,29 @@ const SOURCES: Record<SkillSourceItem["id"], { badge: string; title: string; des
   claude: { badge: "CL", title: "Claude Code's", desc: "Your personal Claude Code skills" },
 };
 
-function sourceItems(sources: SkillSourceItem[]): PanelItem[] {
-  return sources.map((source) => ({
-    id: source.id,
-    kind: "skill",
-    ...SOURCES[source.id],
-    enabled: source.enabled,
-    meta: source.path || "No folder open",
-  }));
+/** A row opens to the skills its folder gave: the user's by the folder they sit in, the repository's by source. */
+function sourceItems({ sources, skills }: SkillsView): PanelItem[] {
+  return sources.map((source) => {
+    const rows = skills
+      .filter((s) =>
+        source.id === "project"
+          ? s.source === "project"
+          : s.source === "user" && s.path.replace(/[\\/][^\\/]*$/, "") === source.path,
+      )
+      .map((s) => ({
+        name: s.name,
+        desc: s.error ?? (s.shadowedBy ? "Hidden — a folder higher up has one of this name. " : !s.enabled ? "Off. " : "") + s.description,
+      }));
+    return {
+      id: source.id,
+      kind: "skill",
+      ...SOURCES[source.id],
+      enabled: source.enabled,
+      meta: source.path || "No folder open",
+      rows,
+      note: !source.enabled ? "Switched off — not read." : rows.length === 0 ? "No skills here." : undefined,
+    };
+  });
 }
 
 type Props = {
@@ -321,7 +336,7 @@ export function Settings({
             <ItemList
               label="Where skills come from"
               count={`${(skills.view?.sources ?? []).filter((s) => s.enabled).length}/${skills.view?.sources.length ?? 0}`}
-              items={sourceItems(skills.view?.sources ?? [])}
+              items={skills.view ? sourceItems(skills.view) : []}
               emptyLabel="Reading the folders…"
               onToggle={(id, enabled) => skills.onToggle(id as SkillSourceItem["id"], enabled)}
             />

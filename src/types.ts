@@ -21,6 +21,8 @@ export type PanelItem = {
   meta?: string;
   tags?: string[];
   enabled?: boolean;
+  /** Drawn grey: there, but not in use. */
+  dim?: boolean;
   rows?: { name: string; desc: string }[];
   note?: string;
   source?: string;

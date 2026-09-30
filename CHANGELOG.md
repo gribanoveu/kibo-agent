@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2026-09-30 The Skills panel lists the skills that are on first and the ones switched off after them, in grey
+
+- 2026-09-30 Settings → Skills: a folder opens under its row to show the skills it gave, with the hidden and switched-off ones marked
+
 - 2026-09-30 The Kubernetes role no longer sends a password it reads in a ConfigMap or a log line to the model — the value after a key named like a credential, and the password in a URL, are hidden; a change that destroys data for good — deleting a claim whose volume goes with it, scaling down or deleting a StatefulSet that deletes its claims — is refused until you have told the chat that losing it is acceptable
 
 - 2026-09-30 Settings → Kubernetes is three tabs — Kubeconfigs, Runbooks, Changes — and a runbook opens under its row to be read

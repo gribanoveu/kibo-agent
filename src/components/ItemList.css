@@ -43,6 +43,10 @@
 .item-ico.rule {
   color: var(--amber);
 }
+.item.dim .item-title,
+.item.dim .item-ico {
+  color: var(--text-faint);
+}
 .item-body {
   flex: 1;
   min-width: 0;

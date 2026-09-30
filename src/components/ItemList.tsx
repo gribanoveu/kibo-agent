@@ -18,7 +18,7 @@ function Item({ item, onToggle, onOpen, onEdit, onRemove }: ItemProps) {
   const enabled = item.enabled ?? false;
 
   return (
-    <div className={`item${open ? " open" : ""}`}>
+    <div className={`item${open ? " open" : ""}${item.dim ? " dim" : ""}`}>
       <div
         className="item-head"
         onClick={() => {

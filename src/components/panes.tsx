@@ -223,7 +223,12 @@ export function folderOf(path: string): string {
 }
 
 /** A broken skill is shown by its folder with the reason, and has no switch: it never reaches the model. */
-function skillItems(skills: SkillListItem[], project: boolean, all: SkillListItem[]): PanelItem[] {
+function skillItems(found: SkillListItem[], project: boolean, all: SkillListItem[]): PanelItem[] {
+  // The ones on first, the ones off after them and grey; a broken one has no
+  // switch and stays where it was found. The sort is stable, so each group
+  // keeps the order a name is looked up in.
+  const off = (s: SkillListItem) => !s.error && !s.enabled;
+  const skills = [...found].sort((a, b) => Number(off(a)) - Number(off(b)));
   // Where the skill used instead of a hidden one is, in a word or two: the
   // full path is in the expanded row, and a card has no room for it.
   const usedFrom = (path: string) =>
@@ -251,6 +256,7 @@ function skillItems(skills: SkillListItem[], project: boolean, all: SkillListIte
           ...(project ? {} : { tags: [folderOf(skill.path)] }),
           desc: skill.description,
           enabled: skill.enabled,
+          dim: !skill.enabled,
           note: skill.description,
           source: skill.path,
         },
