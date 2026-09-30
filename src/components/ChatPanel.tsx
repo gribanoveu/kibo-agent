@@ -16,6 +16,7 @@ import {
   Download,
   Search,
   ShieldAlert,
+  ShipWheel,
   Terminal,
   TerminalSquare,
   Trash2,
@@ -142,7 +143,8 @@ function ToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
-  const Icon = TOOL_ICON[shown.name] ?? Terminal;
+  // A cluster call wears its role's sign, whatever its label.
+  const Icon = block.name.startsWith("kube") ? ShipWheel : (TOOL_ICON[shown.name] ?? Terminal);
   // A background start has nothing to unfold here: its output is the
   // Terminal tab's, and the row goes there.
   const process = shown.process !== undefined && onOpenProcess ? shown.process : undefined;

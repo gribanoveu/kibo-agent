@@ -294,9 +294,21 @@ textarea,
 .diff-view,
 .terminal-out,
 .rule-block,
-.commit-status {
+.commit-status,
+/* What a card is approved on, what went wrong, and everything Settings says —
+   a change's id there is what the user passes back to the model. */
+.approval-preview,
+.approval-why,
+.modal-note,
+.toast,
+.settings-pane {
   -webkit-user-select: text;
   user-select: text;
+}
+/* A control's own label still does not highlight under a stray drag. */
+.settings-pane button {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 ::-webkit-scrollbar {
