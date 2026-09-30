@@ -24,6 +24,8 @@ use crate::domain::result_clearing;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
+use crate::domain::runbooks::Runbook;
+
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
@@ -252,6 +254,8 @@ pub enum Place<'a> {
         kube: &'a KubeSetup,
         cluster: Option<&'a dyn KubeApi>,
         changes: Option<&'a dyn KubeChanges>,
+        /// The runbooks the prompt lists and `kubeRunbook` reads.
+        runbooks: &'a [Runbook],
     },
 }
 
@@ -882,6 +886,10 @@ fn execute_call(
         review: turn.review.clone(),
         explore: Some(&explore),
         kube: pinned_cluster(turn),
+        runbooks: match turn.place {
+            Place::Chat { runbooks, .. } => runbooks.to_vec(),
+            Place::Folder { .. } => Vec::new(),
+        },
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1285,8 +1293,8 @@ pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
 fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode } => (scope, mode),
-        Place::Chat { role, kube, .. } => {
-            let mut messages = vec![prompt::chat_system_message(role, kube, turn.session.reply_language)];
+        Place::Chat { role, kube, runbooks, .. } => {
+            let mut messages = vec![prompt::chat_system_message(role, kube, runbooks, turn.session.reply_language)];
             messages.extend_from_slice(history);
             return messages;
         }
@@ -1877,7 +1885,7 @@ mod tests {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
-                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None },
+                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[] },
                     None => Place::Folder { scope: &self.scope, mode: self.mode },
                 },
                 approval: &self.approval,

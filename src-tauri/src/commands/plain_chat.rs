@@ -15,6 +15,8 @@ use crate::domain::kube::{KubeApi, KubePin, KubeSetup};
 use crate::infra::kube_client::{ClusterApi, Clusters};
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::infra::kube_changes::ChangeStore;
+use crate::domain::runbooks;
+use crate::infra::runbooks_store;
 use crate::domain::tool_call_log::ToolCallLogEntry;
 use crate::domain::tools::{ApprovalPolicy, ToolPreview};
 use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, ToolCallDecision};
@@ -125,10 +127,13 @@ where
         let cancelled = || state.cancel.load(Ordering::SeqCst);
         let record = crate::infra::tool_call_log::recorder();
         let log_call = |entry: ToolCallLogEntry| record(&entry);
+        // Read each turn: a runbook the user just wrote is there for this answer.
+        let runbooks = runbooks::merged(runbooks_store::own());
         let chat = plain_chat::ChatTurn {
             session: &session,
             role,
             kube: &kube,
+            runbooks: &runbooks,
             cluster: api.as_ref().map(|api| api as &dyn KubeApi),
             changes: Some(&ChangeStore),
             approval: &approval,
@@ -189,7 +194,7 @@ pub async fn plain_chat_compact<R: Runtime>(
 fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Result<(LlmSession, RequestFrame), String> {
     let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
-    let frame = context_compaction::chat_request_frame(role, &kube, session.reply_language);
+    let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()), session.reply_language);
     Ok((session, frame))
 }
 

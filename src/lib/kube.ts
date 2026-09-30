@@ -94,6 +94,20 @@ export type KubeChange = {
   undoes: string | null;
 };
 
+/** Mirrors `domain::runbooks::Runbook`, without its text. */
+export type Runbook = {
+  name: string;
+  /** When the model reads it, in a line. */
+  sign: string;
+  /** The user's file, not the app's. */
+  own: boolean;
+};
+
+/** The runbooks a Kubernetes chat is told of, and the folder the user's own are read from. */
+export async function kubeRunbooks(): Promise<{ dir: string; runbooks: Runbook[] }> {
+  return invoke("kube_runbooks");
+}
+
 /** What the app changed in the user's clusters and can still put back, newest first. */
 export async function kubeChanges(): Promise<KubeChange[]> {
   return invoke<KubeChange[]>("kube_changes");

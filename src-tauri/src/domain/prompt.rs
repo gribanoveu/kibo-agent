@@ -21,6 +21,7 @@ use std::path::Path;
 
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubeSetup;
+use crate::domain::runbooks::{self, Runbook};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmMessage;
 use crate::domain::project_rules::RuleFile;
@@ -364,8 +365,15 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
 /// of the user's setup, the language. All settled before the conversation and
 /// the same every turn, so a request is the one before it plus the new
 /// messages — what a provider's prompt cache matches.
-pub fn chat_system_message(role: ChatRole, kube: &KubeSetup, language: Option<&str>) -> LlmMessage {
+pub fn chat_system_message(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> LlmMessage {
     let mut prompt = role.prompt().to_string();
+    // Before the setup: the list changes when a file is added, the setup
+    // when a cluster stops answering — the steadier part goes first.
+    let reads_runbooks = role.tools().contains(&crate::domain::tools::ToolName::KubeRunbook);
+    if let Some(list) = runbooks::listing(runbooks).filter(|_| reads_runbooks) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&list);
+    }
     if let Some(note) = role.setup_note(kube) {
         prompt.push_str("\n\n");
         prompt.push_str(&note);
@@ -757,9 +765,14 @@ mod tests {
     fn a_chat_is_told_its_role_then_its_setup_then_the_language() {
         let kube = KubeSetup::NotSet;
         let note = ChatRole::Kubernetes.setup_note(&kube).unwrap();
-        let said = chat_system_message(ChatRole::Kubernetes, &kube, Some("Russian"));
+        let said = chat_system_message(ChatRole::Kubernetes, &kube, &[], Some("Russian"));
         assert_eq!(said.content.unwrap(), format!("{}\n\n{note}\n\nReply in Russian.", ChatRole::Kubernetes.prompt()));
-        let plain = chat_system_message(ChatRole::Assistant, &kube, None);
+        let books = runbooks::merged(Vec::new());
+        let list = runbooks::listing(&books).unwrap();
+        let listed = chat_system_message(ChatRole::Kubernetes, &kube, &books, None);
+        assert_eq!(listed.content.unwrap(), format!("{}\n\n{list}\n\n{note}", ChatRole::Kubernetes.prompt()));
+        // A role that cannot read a runbook is not told of any.
+        let plain = chat_system_message(ChatRole::Assistant, &kube, &books, None);
         assert_eq!(plain.content.as_deref(), Some(ChatRole::Assistant.prompt()));
     }
 }

@@ -535,6 +535,8 @@ describe("the Kubernetes role's reads", () => {
       tool({ name: "kubeProbe", arguments: '{"kind":"Deployment","name":"api","target":"db:5432"}', result: { result: "kube", text: "…", summary: "refused" } }),
     );
     expect(probed).toMatchObject({ name: "Probe", arg: "Deployment api → db:5432", meta: "refused" });
+    const read = describeTool(tool({ name: "kubeRunbook", arguments: '{"name":"oom-killed"}', result: { result: "kube", text: "…", summary: "built in" } }));
+    expect(read).toMatchObject({ name: "Runbook", arg: "oom-killed", meta: "built in" });
   });
 });
 

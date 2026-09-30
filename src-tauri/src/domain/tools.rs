@@ -67,6 +67,7 @@ pub enum ToolName {
     KubeDiagnose,
     KubeWaitRollout,
     KubeProbe,
+    KubeRunbook,
     /// The first of the role's changes (K-5a): replicas, with a backup.
     KubeScale,
     /// Puts a recorded change back from its backup (K-5b).
@@ -127,6 +128,7 @@ impl ToolName {
         ToolName::KubeDiagnose,
         ToolName::KubeWaitRollout,
         ToolName::KubeProbe,
+        ToolName::KubeRunbook,
         ToolName::KubeScale,
         ToolName::KubeUndo,
         ToolName::KubeSuspend,
@@ -174,6 +176,7 @@ impl ToolName {
             ToolName::KubeDiagnose => "kubeDiagnose",
             ToolName::KubeWaitRollout => "kubeWaitRollout",
             ToolName::KubeProbe => "kubeProbe",
+            ToolName::KubeRunbook => "kubeRunbook",
             ToolName::KubeScale => "kubeScale",
             ToolName::KubeUndo => "kubeUndo",
             ToolName::KubeSuspend => "kubeSuspend",
@@ -297,6 +300,8 @@ impl ToolName {
             ToolName::KubeWaitRollout => 2,
             // A read or two, and a command or two in the pod.
             ToolName::KubeProbe => 2,
+            // A text already in memory.
+            ToolName::KubeRunbook => 1,
             // A read, a dry run, a backup, the change.
             ToolName::KubeScale
             | ToolName::KubeUndo
@@ -458,7 +463,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            41,
+            42,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -885,6 +890,9 @@ pub struct ToolDeps<'a> {
     /// The cluster a Kubernetes chat is pinned to; `None` where there is
     /// none, or its kubeconfig could not be read.
     pub kube: Option<crate::domain::kube::PinnedCluster<'a>>,
+    /// The runbooks this turn's prompt listed — the only ones `kubeRunbook`
+    /// reads.
+    pub runbooks: Vec<crate::domain::runbooks::Runbook>,
 }
 
 /// Why a tool call could not be carried out.
@@ -1125,6 +1133,7 @@ pub enum ToolCall {
     KubeDiagnose(KubeDiagnoseArgs),
     KubeWaitRollout(KubeWaitRolloutArgs),
     KubeProbe(KubeProbeArgs),
+    KubeRunbook(KubeRunbookArgs),
     KubeScale(KubeScaleArgs),
     KubeUndo(KubeUndoArgs),
     KubeSuspend(KubeSuspendArgs),
@@ -1171,6 +1180,7 @@ impl ToolCall {
             ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
             ToolCall::KubeWaitRollout(_) => ToolName::KubeWaitRollout,
             ToolCall::KubeProbe(_) => ToolName::KubeProbe,
+            ToolCall::KubeRunbook(_) => ToolName::KubeRunbook,
             ToolCall::KubeScale(_) => ToolName::KubeScale,
             ToolCall::KubeUndo(_) => ToolName::KubeUndo,
             ToolCall::KubeSuspend(_) => ToolName::KubeSuspend,
@@ -1585,6 +1595,12 @@ pub struct KubeProbeArgs {
     #[serde(default)]
     pub container: Option<String>,
     pub target: String,
+}
+
+/// `kubeRunbook`: one runbook, by the name the prompt listed it under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KubeRunbookArgs {
+    pub name: String,
 }
 
 /// `kubeScale`: a workload's replicas, in the chat's own namespace — a

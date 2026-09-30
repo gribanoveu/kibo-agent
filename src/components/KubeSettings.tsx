@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { FolderOpen, History, Server, ShieldAlert, Trash2 } from "lucide-react";
+import { BookOpen, FolderOpen, History, Server, ShieldAlert, Trash2 } from "lucide-react";
 import { pickFile } from "../lib/dialog";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { useKubeChanges } from "../hooks/useKubeChanges";
+import { useKubeRunbooks } from "../hooks/useKubeRunbooks";
 import "./KubeSettings.css";
 
 /** Settings → Kubernetes: the kubeconfig files Chat mode's Kubernetes role knows of. */
@@ -10,6 +11,7 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const changes = useKubeChanges();
+  const { dir, runbooks } = useKubeRunbooks();
 
   const add = async () => {
     if (await kube.save(name, path)) {
@@ -110,6 +112,27 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
           </button>
         </div>
       </form>
+
+      <h3 className="settings-title kube-changes-title">Runbooks</h3>
+      <p className="modal-note kube-intro">
+        Short notes on how one kind of failure is taken apart. A Kubernetes chat is told their names and reads one when
+        it sees its sign. Add your own as Markdown files in {dir || "~/.kibo/runbooks/kubernetes"} — a line starting with
+        “Sign:” says when to read it, and a file named like a built-in one replaces it.
+      </p>
+      <ul className="kube-list">
+        {runbooks.map((runbook) => (
+          <li key={runbook.name} className="kube-row">
+            <BookOpen size={14} className="kube-row-icon" />
+            <span className="kube-row-text">
+              <span className="kube-row-name">
+                {runbook.name}
+                {runbook.own && <span className="kube-row-badge">yours</span>}
+              </span>
+              <span className="kube-row-path" title={runbook.sign}>{runbook.sign}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
 
       <h3 className="settings-title kube-changes-title">Changes</h3>
       <p className="modal-note kube-intro">

@@ -61,6 +61,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "kubeDiagnose" => ToolCall::KubeDiagnose(args(call)?),
         "kubeWaitRollout" => ToolCall::KubeWaitRollout(args(call)?),
         "kubeProbe" => ToolCall::KubeProbe(args(call)?),
+        "kubeRunbook" => ToolCall::KubeRunbook(args(call)?),
         "kubeScale" => ToolCall::KubeScale(args(call)?),
         "kubeUndo" => ToolCall::KubeUndo(args(call)?),
         "kubeSuspend" => ToolCall::KubeSuspend(args(call)?),

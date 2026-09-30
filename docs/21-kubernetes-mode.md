@@ -284,7 +284,7 @@ Chat сейчас рисует свой простой список сообще
 - **Встроенные** — в приложении (`include_str!`): CrashLoopBackOff, ImagePullBackOff,
   Pending (ресурсы, affinity/taints, PVC), OOMKilled, падающие пробы, сеть (Service без
   endpoints, Ingress).
-- **Свои** — Markdown-файлы в `~/.kibo/runbooks/`, по образцу своих `/`-команд в
+- **Свои** — Markdown-файлы в `~/.kibo/runbooks/kubernetes/`, по образцу своих `/`-команд в
   `.kibo/commands`. Имя файла — имя ранбука; свой с именем встроенного его заменяет —
   так компания переписывает общий под себя. У Chat нет папки, поэтому только из
   `~/.kibo`, не из проекта. Список видно в Settings → Kubernetes.
@@ -412,7 +412,7 @@ writes over what it did not write»), только для объекта:
 | `kubeEvents` | `namespace?`, `kind?`, `name?`, `warningsOnly?` | События по времени, схлопнутые по причине |
 | `kubeLogs` | `pod` **или** `kind`+`name` **или** `labelSelector`; `namespace?`, `container?`, `previous?`, `tail?`, `since?`, `grep?` | Хвост лога, дедуплицированный; с нескольких подов — склеенный по времени |
 | `kubeTop` | `kind` (`pods`/`nodes`), `namespace?` | CPU и память; нет metrics-server — так и сказано |
-| `kubeRunbook` | `name` | Текст ранбука: свой из `~/.kibo/runbooks/` или встроенный (решение 7) |
+| `kubeRunbook` | `name` | Текст ранбука: свой из `~/.kibo/runbooks/kubernetes/` или встроенный (решение 7) |
 | `kubeWaitRollout` | `kind`, `name`, `timeoutSeconds?` | Итог rollout: готово или застряло и почему (решение 8) |
 | `kubeFieldHistory` | `kind`, `name`, `namespace?`, `paths?` | Кто и когда выставил поля: «поле → менеджер, операция, время» |
 
@@ -824,8 +824,30 @@ namespace» не нужен.
   - **K-6c — лог, который продолжает писаться.** Отложено: это просмотрщик логов, а не
     чат с агентом, — есть терминал и `kubectl logs -f`. `follow` по кнопке в карточке `kubeLogs`
     через `tauri::ipc::Channel`.
-- **K-7 — ранбуки.** `kubeRunbook`, шесть встроенных, свои из `~/.kibo/runbooks/` с
-  заменой встроенных по имени, список в Settings → Kubernetes.
+- **K-7 — ранбуки.** Сделано. Семь встроенных (`src-tauri/runbooks/kubernetes/*.md`, в бинаре через
+  `include_str!`): `crashloop`, `image-pull`, `pending`, `oom-killed`, `probes`, `network` и
+  `spring-boot`. Написаны по-английски, как промпт, и с расчётом на то, что приложения в
+  основном Spring Boot: в `crashloop` — «APPLICATION FAILED TO START» и последний
+  «Caused by», плейсхолдеры, Hikari, Flyway/Liquibase; в `oom-killed` — OOMKilled против
+  `OutOfMemoryError`, `-Xmx` и `MaxRAMPercentage` против лимита; в `probes` — пути actuator,
+  `management.server.port`, убийство на старте и `startupProbe`; в `network` — `server.port`
+  против `targetPort`, 502 при rollout и graceful shutdown; `spring-boot` — откуда берётся
+  конфигурация, как приложение стартует, останавливается и что модель изнутри пода сделать
+  не может. Свои — `*.md` в `~/.kibo/runbooks/kubernetes/` — папка на роль, чтобы заметки другой
+  роли сюда не попали (`infra/runbooks_store.rs`, до 32 КБ, имя
+  файла из строчных букв, цифр и дефисов — имя ранбука); свой с именем встроенного его
+  заменяет (`domain::runbooks::merged`). Признак — строка «Sign: …», иначе первая строка не
+  заголовок. В промпте роли — только список «имя — признак», свои помечены «(the user's)» и
+  названы главнее общего знания; список стоит перед состоянием кластера. Текст читает
+  `kubeRunbook(name)` — без кластера и без карточки; неверное имя получает список верных.
+  Читаются на каждый ход: файл, написанный только что, виден со следующего ответа. Settings
+  → Kubernetes → Runbooks показывает список и папку (`kube_runbooks`). Тест держит
+  встроенные в порядке: у каждого есть «Sign:», он короче 4 КБ, называет только
+  существующие инструменты и существующие ранбуки. Мутаций девятнадцать: одна поймана после
+  добавленного случая (заглавные буквы в имени). **Не проверено:** тексты написаны по
+  знанию, а не по прогону на живом Spring Boot приложении — их проверит бенч (K-8) и
+  практика; список в Settings в окне не смотрел. **Отложено:** редактирование ранбуков из
+  приложения (сейчас — файлы руками).
 - **K-8 — бенч на локальном кластере.** Ниже.
 - **K-9 — по необходимости.** Вынос инструментов в отдельный MCP-сервер, прикрепление
   объектов кластера к сообщению (как MCP resources: выбрал деплоймент — он ушёл в

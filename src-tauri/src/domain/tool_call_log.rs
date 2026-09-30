@@ -311,6 +311,7 @@ mod tests {
             | ToolName::KubeDiagnose
             | ToolName::KubeWaitRollout
             | ToolName::KubeProbe
+            | ToolName::KubeRunbook
             | ToolName::KubeScale
             | ToolName::KubeUndo
             | ToolName::KubeSuspend

@@ -192,6 +192,7 @@ pub fn run() {
             commands::settings::kube_namespaces,
             commands::settings::kube_namespace_remember,
             commands::settings::kube_changes,
+            commands::settings::kube_runbooks,
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
             commands::settings::agent_readiness,

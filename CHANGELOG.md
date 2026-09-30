@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 The Kubernetes role follows runbooks: seven built in — crash loops, image pulls, Pending, OOMKilled, failing probes, requests that do not arrive, and a Spring Boot application — and your own from `~/.kibo/runbooks/kubernetes`, which replace a built-in one of the same name; Settings → Kubernetes lists them
+
 - 2026-09-30 The Kubernetes role checks from inside a pod whether it reaches a URL, a port or a name — resolved, open, the HTTP status, refused or timed out — without reading the response and without running anything else in the pod
 
 - 2026-09-30 The Kubernetes role waits for a rollout instead of asking again and again: after a restart, a rollback, an apply or a scale it says when the pods are up — or that the rollout is stuck or not done in time, and why

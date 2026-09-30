@@ -117,6 +117,7 @@ impl ChatRole {
                 ToolName::KubeDiagnose,
                 ToolName::KubeWaitRollout,
                 ToolName::KubeProbe,
+                ToolName::KubeRunbook,
                 // The changes so far (K-5a–c); refused while the tab says Read only.
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
@@ -238,7 +239,7 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
         assert_eq!(

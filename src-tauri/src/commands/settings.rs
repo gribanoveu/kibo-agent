@@ -199,6 +199,23 @@ pub fn kube_changes() -> Result<Vec<crate::domain::kube::KubeChange>, String> {
     kube_changes::list()
 }
 
+/// The runbooks a Kubernetes chat is told of — the app's and the user's — and
+/// the folder the user's are read from.
+#[derive(serde::Serialize)]
+pub struct Runbooks {
+    dir: String,
+    runbooks: Vec<crate::domain::runbooks::Runbook>,
+}
+
+#[tauri::command]
+pub fn kube_runbooks() -> Result<Runbooks, String> {
+    use crate::infra::runbooks_store;
+    Ok(Runbooks {
+        dir: runbooks_store::dir()?.to_string_lossy().into_owned(),
+        runbooks: crate::domain::runbooks::merged(runbooks_store::own()),
+    })
+}
+
 /// `~/.kube/config` as the shell would read it; any other path as it is.
 fn expand_home(path: &str) -> Option<PathBuf> {
     match path.strip_prefix('~') {

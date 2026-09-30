@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
+use crate::domain::runbooks::Runbook;
+
 use crate::services::ai_tools::parse::parse_tool_call;
 use crate::services::ai_tools::tools;
 use crate::domain::command_exec::Shell;
@@ -30,6 +32,8 @@ pub struct ChatTurn<'a> {
     pub cluster: Option<&'a dyn KubeApi>,
     /// Where a change to it is recorded before it is made.
     pub changes: Option<&'a dyn KubeChanges>,
+    /// The runbooks the role is told of and may read.
+    pub runbooks: &'a [Runbook],
     pub approval: &'a ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -87,7 +91,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
     let turn = Turn {
         events: chat.events,
         session: chat.session,
-        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster, changes: chat.changes },
+        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster, changes: chat.changes, runbooks: chat.runbooks },
         approval: chat.approval,
         cancelled: chat.cancelled,
         sleep: &sleep,
@@ -171,6 +175,7 @@ mod tests {
         kube: KubeSetup,
         cluster: Option<Arc<dyn KubeApi>>,
         changes: Option<Arc<Kept>>,
+        runbooks: Vec<Runbook>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
     }
@@ -190,6 +195,7 @@ mod tests {
             kube: KubeSetup::NotSet,
             cluster: None,
             changes: None,
+            runbooks: crate::domain::runbooks::merged(Vec::new()),
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
         }
@@ -207,6 +213,7 @@ mod tests {
                 kube: &self.kube,
                 cluster: self.cluster.as_deref(),
                 changes: self.changes.as_deref().map(|kept| kept as &dyn KubeChanges),
+                runbooks: &self.runbooks,
                 approval: &self.approval,
                 events: &events,
                 cancelled: &stop,
@@ -243,7 +250,7 @@ mod tests {
         let history = vec![LlmMessage::user("how many pods are running?")];
         for &role in ChatRole::ALL {
             let sent = chat.run(role, false, |c| in_place(c, |turn| llm_chat::estimate_request(turn, &history)));
-            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, chat.session.reply_language);
+            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language);
             let usage = crate::services::context_compaction::usage(&chat.session, frame, &history);
             assert_eq!(usage.total, sent, "{role:?}");
         }
@@ -292,6 +299,21 @@ mod tests {
         assert_eq!(asked[0].tools, asked[1].tools);
         let system = a[0].content.as_deref().unwrap();
         assert!(system.contains(&ChatRole::Kubernetes.setup_note(&chat.kube).unwrap()), "the setup was not told: {system}");
+    }
+
+    /// The prompt carries the runbooks' names, the tool their text: with no
+    /// cluster and without a card.
+    #[test]
+    fn the_kubernetes_role_is_told_of_the_runbooks_and_reads_one_when_it_asks() {
+        let mut chat = chat(vec![calls("kubeRunbook", r#"{"name":"quota"}"#), said("it is the quota")], None);
+        chat.runbooks = crate::domain::runbooks::merged(vec![crate::domain::runbooks::parse("quota", "Sign: pods are not created\nAsk the platform team.", true).unwrap()]);
+        let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("no pods")]));
+
+        let system = chat.asked()[0].messages[0].content.clone().unwrap();
+        assert!(system.contains("- quota (the user's) — pods are not created") && system.contains("- spring-boot — "), "{system}");
+        assert!(!system.contains("Ask the platform team."), "a runbook's text is in the prompt");
+        assert_eq!(tool_result(&done.history), "Sign: pods are not created\nAsk the platform team.");
+        assert_eq!(done.result.text, "it is the quota");
     }
 
     /// The role's tools and nothing else — none of the agent's, however the

@@ -29,6 +29,7 @@ pub mod explore;
 pub mod git;
 pub mod grep;
 pub mod cluster;
+pub mod runbook;
 pub mod list_files;
 pub mod move_path;
 pub mod report_finding;
@@ -85,6 +86,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeDiagnose, cluster::diagnose_definition),
     (ToolName::KubeWaitRollout, cluster::wait_rollout_definition),
     (ToolName::KubeProbe, cluster::probe_definition),
+    (ToolName::KubeRunbook, runbook::definition),
     (ToolName::KubeScale, cluster::scale_definition),
     (ToolName::KubeUndo, cluster::undo_definition),
     (ToolName::KubeSuspend, cluster::suspend_definition),
@@ -162,6 +164,7 @@ pub fn dispatch(
         ToolCall::KubeDiagnose(args) => cluster::kube_diagnose(deps.kube, args),
         ToolCall::KubeWaitRollout(args) => cluster::kube_wait_rollout(deps.kube, deps.cancelled, args),
         ToolCall::KubeProbe(args) => cluster::kube_probe(deps.kube, args),
+        ToolCall::KubeRunbook(args) => runbook::kube_runbook(args, deps),
         ToolCall::KubeScale(_)
         | ToolCall::KubeUndo(_)
         | ToolCall::KubeSuspend(_)
@@ -181,7 +184,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
-        KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
+        KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -471,6 +474,7 @@ mod definition_tests {
                 r#"{"kind":"Deployment","name":"api","target":"http://orders:8080/health"}"#,
                 vec![ToolCall::KubeProbe(KubeProbeArgs { kind: "Deployment".into(), name: "api".into(), container: Some("app".into()), target: "db:5432".into() })],
             ),
+            ToolName::KubeRunbook => (r#"{"name":"pending"}"#, vec![ToolCall::KubeRunbook(KubeRunbookArgs { name: "pending".into() })]),
             ToolName::KubeScale => (
                 r#"{"kind":"Deployment","name":"api","replicas":0}"#,
                 vec![ToolCall::KubeScale(KubeScaleArgs { kind: "Deployment".into(), name: "api".into(), replicas: Some(0) })],
