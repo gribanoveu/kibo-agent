@@ -20,6 +20,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/mcp_http.rs",
     "src/infra/mcp_rmcp.rs",
     "src/infra/kube_client.rs",
+    "src/infra/tavily.rs",
 ];
 
 /// What opening a connection looks like in Rust here.

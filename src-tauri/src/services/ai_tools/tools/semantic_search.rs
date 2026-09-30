@@ -42,7 +42,7 @@ pub fn semantic_search(args: &SemanticSearchArgs, deps: &ToolDeps) -> Result<Too
     Ok(ToolResult::SearchResults { matches, meta: result.meta })
 }
 
-fn shorten(text: &str, limit: usize) -> String {
+pub(super) fn shorten(text: &str, limit: usize) -> String {
     let Some((cut, _)) = text.char_indices().nth(limit) else {
         return text.to_string();
     };

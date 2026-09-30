@@ -1,7 +1,8 @@
 import { useState, type ComponentProps } from "react";
-import { Bell, Bot, Check, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
+import { Bell, Bot, Check, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { KubeSettings } from "./KubeSettings";
+import { WebSearchSettings } from "./WebSearchSettings";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
 import type { RememberScope, ReplyLanguage, SkillSourceItem, SkillsView } from "../lib/chat";
@@ -21,6 +22,7 @@ const SECTIONS = [
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "kubernetes", label: "Kubernetes", icon: ShipWheel },
+  { id: "web", label: "Web search", icon: Globe },
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Shield },
 ] as const;
@@ -349,6 +351,7 @@ export function Settings({
         )}
 
         {section === "kubernetes" && <KubeSettings kube={kube} />}
+        {section === "web" && <WebSearchSettings />}
 
         {section === "permissions" && (
           <>

@@ -19,6 +19,7 @@ pub mod chat_role;
 pub mod kube;
 pub mod kube_probe;
 pub mod kube_view;
+pub mod web_search;
 pub mod embeddings;
 pub mod prompt;
 pub mod chunk_index;

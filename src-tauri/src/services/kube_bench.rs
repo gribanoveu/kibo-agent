@@ -248,6 +248,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         cluster: Some(&api as &dyn KubeApi),
         changes: Some(&ChangeStore),
         runbooks: &runbooks,
+        web: None,
         approval: &approval,
         events: &events,
         cancelled: &cancelled,

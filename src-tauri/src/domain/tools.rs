@@ -80,6 +80,8 @@ pub enum ToolName {
     /// A manifest applied, an object deleted (K-5d).
     KubeApply,
     KubeDelete,
+    /// A chat's search of the web (`docs/24-web-search.md`).
+    WebSearch,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -136,6 +138,7 @@ impl ToolName {
         ToolName::KubeRolloutUndo,
         ToolName::KubeApply,
         ToolName::KubeDelete,
+        ToolName::WebSearch,
         ToolName::Mcp,
     ];
 
@@ -184,6 +187,7 @@ impl ToolName {
             ToolName::KubeRolloutUndo => "kubeRolloutUndo",
             ToolName::KubeApply => "kubeApply",
             ToolName::KubeDelete => "kubeDelete",
+            ToolName::WebSearch => "webSearch",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -310,6 +314,8 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete => 3,
+            // One request to the search service, a second or two.
+            ToolName::WebSearch => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -463,7 +469,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            42,
+            43,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -897,6 +903,8 @@ pub struct ToolDeps<'a> {
     /// The runbooks this turn's prompt listed — the only ones `kubeRunbook`
     /// reads.
     pub runbooks: Vec<crate::domain::runbooks::Runbook>,
+    /// The web search a chat's `webSearch` asks; `None` without a key.
+    pub web: Option<crate::domain::web_search::WebSearchFn>,
 }
 
 /// Why a tool call could not be carried out.
@@ -1079,6 +1087,11 @@ pub enum ToolError {
     /// about the user's setup says why; the model tells the user what to fix.
     #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
     NoCluster,
+    /// `webSearch` with no key saved: called from memory of an earlier turn.
+    #[error("web search is not set up — tell the user they can add a Tavily API key in Settings → Web search, and answer without searching")]
+    NoWebSearch,
+    #[error(transparent)]
+    WebSearch(#[from] crate::domain::web_search::WebSearchError),
     #[error(transparent)]
     Kube(#[from] crate::domain::kube::KubeError),
 }
@@ -1145,6 +1158,7 @@ pub enum ToolCall {
     KubeRolloutUndo(KubeRolloutUndoArgs),
     KubeApply(KubeApplyArgs),
     KubeDelete(KubeDeleteArgs),
+    WebSearch(WebSearchArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1192,6 +1206,7 @@ impl ToolCall {
             ToolCall::KubeRolloutUndo(_) => ToolName::KubeRolloutUndo,
             ToolCall::KubeApply(_) => ToolName::KubeApply,
             ToolCall::KubeDelete(_) => ToolName::KubeDelete,
+            ToolCall::WebSearch(_) => ToolName::WebSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1431,6 +1446,19 @@ pub enum ToolResult {
     /// What a Kubernetes tool read, already shaped for the model — a table,
     /// YAML, a log — and a few words for the row in the transcript.
     Kube { text: String, summary: String },
+    /// `webSearch`: the pages found, in the service's order.
+    WebResults { hits: Vec<crate::domain::web_search::WebHit> },
+}
+
+/// `webSearch`. `maxResults` is the tool's default when absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchArgs {
+    pub query: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub max_results: Option<u32>,
+    #[serde(default)]
+    pub time_range: Option<crate::domain::web_search::TimeRange>,
 }
 
 /// A call to an MCP tool: the full name the model used, and whatever it

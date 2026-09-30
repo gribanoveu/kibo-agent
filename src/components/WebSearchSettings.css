@@ -1,0 +1,9 @@
+.web-search-intro {
+  margin-bottom: 14px;
+}
+
+.web-search-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: 144px;
+}
