@@ -37,7 +37,7 @@ import { Markdown } from "./Markdown";
 import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
-import type { Block, TurnState } from "../lib/chatTurnReducer";
+import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
 import {
   previewCalls,
   processStatus,
@@ -421,18 +421,50 @@ function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number
   );
 }
 
-/** The time the agent has spent on the turn under way, ticking. */
-function WorkingClock({ since, before, children }: { since: number; before: number; children?: ReactNode }) {
+/** "· 48 tok/s" beside the clock; nothing until there is a rate. */
+function Speed({ rate, prefix = "" }: { rate: number | null; prefix?: string }) {
+  if (rate === null) return null;
+  return (
+    <>
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">
+        {prefix}
+        {Math.round(rate)} tok/s
+      </span>
+    </>
+  );
+}
+
+/** The session's average output speed, or `null` before anything was timed. */
+const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
+
+/**
+ * The time the agent has spent on the turn under way, ticking, and the
+ * provider's speed: estimated while a round streams, measured once it ends.
+ */
+function WorkingClock({
+  since,
+  before,
+  turn,
+  children,
+}: {
+  since: number;
+  before: number;
+  turn: TurnState;
+  children?: ReactNode;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
   }, []);
+  const live = liveSpeed(turn, now);
   return (
     <div className="turn-clock live" role="timer">
       <PawLoader />
       <span className="turn-clock-text">Working…</span>{" "}
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
+      {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
       {children}
     </div>
   );
@@ -704,12 +736,17 @@ export function Transcript({
             groups,
             index,
             turn,
-            index === groups.length - 1 && <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />,
+            index === groups.length - 1 && (
+              <>
+                <Speed rate={averageSpeed(turn)} prefix="avg " />
+                <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
+              </>
+            ),
           )}
         </div>
       ))}
       {turn.status === "running" && turn.runningSince !== null && (
-        <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0}>
+        <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
           <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
         </WorkingClock>
       )}

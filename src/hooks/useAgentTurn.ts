@@ -121,7 +121,11 @@ export function useAgentTurn({
 
   const listen = useCallback(async (id: string) => {
     subscribed.current?.();
-    const off = await onTurnEvent(id, (event) => setTurn((state) => acceptEvent(state, event)));
+    const off = await onTurnEvent(id, (event) => {
+      // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
+      const now = Date.now();
+      setTurn((state) => acceptEvent(state, event, now));
+    });
     subscribed.current = off;
   }, []);
 

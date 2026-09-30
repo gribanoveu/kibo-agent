@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 See the provider's output speed in tokens per second beside Working, live while it streams, and the session's average beside Worked for
+
 ## v0.3.1-alfa — 2026-09-30
 
 - 2026-09-30 Settings → Web search shows how many Tavily credits the key has used this billing cycle and how many are left, and says when Tavily refuses the key; without a key, a chat's model says it cannot search and where to add one, instead of writing out a search call as text

@@ -220,7 +220,11 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     turnId.current = crypto.randomUUID();
     try {
       subscribed.current?.();
-      subscribed.current = await onTurnEvent(turnId.current, (event) => setTurn((state) => acceptEvent(state, event)));
+      subscribed.current = await onTurnEvent(turnId.current, (event) => {
+      // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
+      const now = Date.now();
+      setTurn((state) => acceptEvent(state, event, now));
+    });
       // Before the turn, so the room is made once and kept, and saved with it.
       await makeRoom(false);
       // Saved before the turn: one that fails leaves what the user said to

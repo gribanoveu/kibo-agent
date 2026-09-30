@@ -8,6 +8,7 @@ import {
   compactionStarted,
   emptyTurn,
   endTurn,
+  liveSpeed,
   restoredTurn,
   type Block,
   type TurnState,
@@ -513,5 +514,49 @@ describe("an MCP server's question", () => {
     const early = acceptEvent(emptyTurn(), ev({ type: "delta", seq: 5, payload: { delta: "x" } }));
     const state = acceptEvent(early, asked("q2"));
     expect(state.blocks.some((b) => b.kind === "question")).toBe(true);
+  });
+});
+
+describe("speed", () => {
+  test("tokens per second run from a round's first token to its usage, and average over the session", () => {
+    seq = 0;
+    const usage = (completionTokens: number) => ({ promptTokens: 1000, completionTokens, totalTokens: 1000 + completionTokens });
+    const at: [TurnEvent, number][] = [
+      [ev({ type: "roundStarted" }), 0],
+      // The wait for the first token is the provider reading the prompt, not counted.
+      [ev({ type: "reasoning", payload: { delta: "hm" } }), 5_000],
+      [ev({ type: "delta", payload: { delta: "hi" } }), 6_000],
+      [ev({ type: "contextUsage", payload: usage(100) }), 7_000],
+      [ev({ type: "roundStarted", round: 2 }), 7_100],
+      [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "" } }), 8_000],
+      [ev({ type: "contextUsage", round: 2, payload: usage(20) }), 9_000],
+      // An answer that came in one piece is not timed.
+      [ev({ type: "roundStarted", round: 3 }), 9_100],
+      [ev({ type: "delta", round: 3, payload: { delta: "all" } }), 10_000],
+      [ev({ type: "contextUsage", round: 3, payload: usage(500) }), 10_010],
+    ];
+    const state = at.reduce((s, [event, now]) => acceptEvent(s, event, now), emptyTurn());
+    // "hm" + "hi" in round one, nothing counted from the one-piece round three.
+    expect(state.speed).toEqual({ last: 20, tokens: 120, ms: 3_000, chars: 4 });
+  });
+
+  test("while a round streams, its speed is estimated from characters at the session's ratio", () => {
+    seq = 0;
+    const usage = { promptTokens: 1000, completionTokens: 100, totalTokens: 1100 };
+    const at: [TurnEvent, number][] = [
+      [ev({ type: "roundStarted" }), 0],
+      [ev({ type: "delta", payload: { delta: "x".repeat(400) } }), 1_000],
+      [ev({ type: "contextUsage", payload: usage }), 2_000],
+      [ev({ type: "roundStarted", round: 2 }), 2_100],
+      // Arguments come whole each time: 30 characters, then 30 more.
+      [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "a".repeat(30) } }), 3_000],
+      [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "a".repeat(60) } }), 3_500],
+      [ev({ type: "delta", round: 2, payload: { delta: "y".repeat(60) } }), 4_000],
+    ];
+    const state = at.reduce((s, [event, now]) => acceptEvent(s, event, now), emptyTurn());
+    // Round one: 400 characters were 100 tokens, so 120 characters are 30 tokens, over 2 s.
+    expect(liveSpeed(state, 5_000)).toBe(15);
+    // Too early to say anything.
+    expect(liveSpeed(state, 3_900)).toBeNull();
   });
 });

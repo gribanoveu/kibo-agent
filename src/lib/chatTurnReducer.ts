@@ -91,6 +91,13 @@ export type TurnState = {
   checkpoint: Checkpoint | null;
   /** When the agent last started working (ms since the epoch); `null` while it is not. */
   runningSince: number | null;
+  /** When the round under way streamed its first token; `null` before it has. */
+  streamSince: number | null;
+  /** Characters the round under way has streamed: text, reasoning, call arguments. */
+  streamChars: number;
+  /** The provider's output speed: the last round's tokens per second, and the
+      session's tokens, streaming time and characters it averages over. */
+  speed: { last: number | null; tokens: number; ms: number; chars: number };
 };
 
 export const emptyTurn = (): TurnState => ({
@@ -102,7 +109,24 @@ export const emptyTurn = (): TurnState => ({
   retrying: null,
   checkpoint: null,
   runningSince: null,
+  streamSince: null,
+  streamChars: 0,
+  speed: { last: null, tokens: 0, ms: 0, chars: 0 },
 });
+
+/**
+ * The round under way's speed while it streams, an estimate: the provider
+ * counts tokens only at the end. Characters are turned into tokens at the
+ * ratio this session's finished rounds had — which follows the model's
+ * tokenizer and the language — or a guess before there is one. `null` for
+ * the first second, when a few characters say nothing.
+ */
+export function liveSpeed(state: TurnState, now: number): number | null {
+  if (state.streamSince === null || now - state.streamSince < 1000) return null;
+  const { chars, tokens } = state.speed;
+  const perToken = chars > 0 && tokens > 0 ? chars / tokens : 3.5;
+  return (state.streamChars / perToken) * (1000 / (now - state.streamSince));
+}
 
 /**
  * Stops the clock: the time since `runningSince` is added to the message that
@@ -216,9 +240,9 @@ export function restoredTurn(blocks: Block[]): TurnState {
  * to the call named in its payload and is ordered against nothing. An MCP
  * server's question is sent from inside its call too, and is keyed by its id.
  */
-export function acceptEvent(state: TurnState, event: TurnEvent): TurnState {
+export function acceptEvent(state: TurnState, event: TurnEvent, now = Date.now()): TurnState {
   if (event.type === "commandOutput" || event.type === "mcpQuestion" || event.type === "mcpQuestionClosed") {
-    return applyEvent(state, event);
+    return applyEvent(state, event, now);
   }
 
   if (event.seq <= state.lastSeq) return state;
@@ -226,7 +250,7 @@ export function acceptEvent(state: TurnState, event: TurnEvent): TurnState {
     return { ...state, buffered: [...state.buffered, event] };
   }
 
-  let next = applyEvent({ ...state, lastSeq: event.seq }, event);
+  let next = applyEvent({ ...state, lastSeq: event.seq }, event, now);
 
   // The gap is filled; anything that was waiting on it may now apply, in order.
   let progressed = true;
@@ -237,6 +261,7 @@ export function acceptEvent(state: TurnState, event: TurnEvent): TurnState {
       next = applyEvent(
         { ...next, lastSeq: ready.seq, buffered: next.buffered.filter((e) => e !== ready) },
         ready,
+        now,
       );
       progressed = true;
     }
@@ -283,7 +308,51 @@ export function clearApproval(state: TurnState, now = Date.now()): TurnState {
   };
 }
 
-function applyEvent(state: TurnState, event: TurnEvent): TurnState {
+/**
+ * Times the round's streaming, from its first token to its usage: time spent
+ * on the prompt before the first token is the provider reading, not sending.
+ */
+function timeStream(state: TurnState, event: TurnEvent, now: number): TurnState {
+  switch (event.type) {
+    case "roundStarted":
+      return { ...state, streamSince: null, streamChars: 0 };
+    case "delta":
+    case "reasoning":
+      return streamed(state, event.payload.delta.length, now);
+    case "toolCallDelta": {
+      // A call's arguments arrive whole each time: what is new is the growth.
+      const { id, arguments: args } = event.payload;
+      const before = state.blocks.find((b) => b.kind === "tool" && b.id === id);
+      return streamed(state, Math.max(0, args.length - (before?.kind === "tool" ? before.arguments.length : 0)), now);
+    }
+    case "contextUsage": {
+      const ms = state.streamSince === null ? 0 : now - state.streamSince;
+      const tokens = event.payload.completionTokens;
+      const ended = { ...state, streamSince: null, streamChars: 0 };
+      // An answer that arrived in one piece has no streaming time to divide by.
+      if (ms < 250 || tokens <= 0) return ended;
+      const { speed } = state;
+      return {
+        ...ended,
+        speed: {
+          last: (tokens * 1000) / ms,
+          tokens: speed.tokens + tokens,
+          ms: speed.ms + ms,
+          chars: speed.chars + state.streamChars,
+        },
+      };
+    }
+    default:
+      return state;
+  }
+}
+
+function streamed(state: TurnState, chars: number, now: number): TurnState {
+  return { ...state, streamSince: state.streamSince ?? now, streamChars: state.streamChars + chars };
+}
+
+function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState {
+  state = timeStream(state, event, now);
   switch (event.type) {
     case "roundStarted":
       // Nothing to add — but the next prose must not join the previous round's
