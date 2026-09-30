@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import "./Dropdown.css";
 
@@ -43,6 +43,13 @@ type Props = {
 export function Dropdown({ label, title, options, value, onPick, emptyLabel, below, right, heading, onOpen, custom, note, locked = false }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  // A menu that would run past the window's right edge hangs from the trigger's right instead.
+  const [flip, setFlip] = useState(false);
+  useLayoutEffect(() => {
+    const edge = menu.current?.getBoundingClientRect().right ?? 0;
+    setFlip(open && edge > window.innerWidth);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -80,7 +87,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
         {!locked && <ChevronDown className="chip-chev" size={10} />}
       </button>
       {open && (
-        <div className={`dropdown-menu${below ? " below" : ""}${right ? " right" : ""}`} role="listbox" aria-label={heading}>
+        <div ref={menu} className={`dropdown-menu${below ? " below" : ""}${right || flip ? " right" : ""}`} role="listbox" aria-label={heading}>
           {heading && <div className="dropdown-heading">{heading}</div>}
           {custom && (
             <input

@@ -167,9 +167,13 @@
 }
 .plain-tab .plain-chip-label {
   min-width: 0;
+  white-space: nowrap;
+}
+/* The label is a flex row, and only a block ellipsises: the name is its own box. */
+.plain-tab .plain-chip-label > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
@@ -224,6 +228,10 @@
   gap: 5px;
 }
 /* Nothing to point the role at yet: said quietly, the menu offers the way. */
+/* The name gives up width in a narrow window; its icon does not. */
+.plain-chip-label svg {
+  flex: none;
+}
 .plain-chip-label.unset {
   color: var(--text-faint);
 }

@@ -157,7 +157,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             label={
               <span className="plain-chip-label">
                 <RoleIcon size={13} />
-                {roleName}
+                <span>{roleName}</span>
               </span>
             }
             value={chat.role}
@@ -171,7 +171,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               label={
                 <span className={`plain-chip-label${config ? "" : " unset"}`}>
                   <FileCog size={13} />
-                  {config?.name ?? "No kubeconfig"}
+                  <span>{config?.name ?? "No kubeconfig"}</span>
                 </span>
               }
               value={config?.name ?? ""}
@@ -194,7 +194,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               label={
                 <span className={`plain-chip-label${target.context ? "" : " unset"}`}>
                   <Server size={13} />
-                  {target.context?.name ?? chat.kube.context ?? "No context"}
+                  <span>{target.context?.name ?? chat.kube.context ?? "No context"}</span>
                 </span>
               }
               value={target.context?.name ?? ""}
@@ -213,7 +213,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               label={
                 <span className="plain-chip-label">
                   <Layers size={13} />
-                  {target.namespace}
+                  <span>{target.namespace}</span>
                 </span>
               }
               value={target.namespace}
@@ -244,7 +244,7 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
               label={
                 <span className={`plain-chip-label${chat.kube.writes ? " changes" : ""}`}>
                   {chat.kube.writes ? <PencilLine size={13} /> : <Lock size={13} />}
-                  {chat.kube.writes ? "Changes" : "Read only"}
+                  <span>{chat.kube.writes ? "Changes" : "Read only"}</span>
                 </span>
               }
               value={chat.kube.writes ? WRITES_ON : WRITES_OFF}
