@@ -67,6 +67,9 @@ export const LABELS: Record<string, string> = {
   kubeDiagnose: "Diagnose",
   kubeScale: "Scale",
   kubeUndo: "Undo",
+  kubeSuspend: "Suspend",
+  kubeRolloutRestart: "Restart",
+  kubeRolloutUndo: "Roll back",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -136,7 +139,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
   // for it — a table, YAML, a log — shaped there for the model.
   if (block.name.startsWith("kube") && block.name in LABELS) {
     const replicas = num(args.replicas);
-    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), replicas === undefined ? null : `→ ${replicas}`]
+    // What the change sets, where its arguments say: replicas, a revision, on or off.
+    const revision = num(args.toRevision);
+    const to =
+      replicas !== undefined
+        ? `→ ${replicas}`
+        : revision !== undefined
+          ? `→ revision ${revision}`
+          : typeof args.suspend === "boolean"
+            ? `→ ${args.suspend ? "suspended" : "active"}`
+            : null;
+    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), to]
       .filter(Boolean)
       .join(" ");
     const namespace = str(args.namespace);

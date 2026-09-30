@@ -85,6 +85,9 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeDiagnose, cluster::diagnose_definition),
     (ToolName::KubeScale, cluster::scale_definition),
     (ToolName::KubeUndo, cluster::undo_definition),
+    (ToolName::KubeSuspend, cluster::suspend_definition),
+    (ToolName::KubeRolloutRestart, cluster::rollout_restart_definition),
+    (ToolName::KubeRolloutUndo, cluster::rollout_undo_definition),
 ];
 
 /// What the model is offered for a turn.
@@ -153,8 +156,11 @@ pub fn dispatch(
         ToolCall::KubeTop(args) => cluster::kube_top(deps.kube, args),
         ToolCall::KubeFieldHistory(args) => cluster::kube_field_history(deps.kube, args),
         ToolCall::KubeDiagnose(args) => cluster::kube_diagnose(deps.kube, args),
-        ToolCall::KubeScale(args) => cluster::kube_scale(deps.kube, args),
-        ToolCall::KubeUndo(args) => cluster::kube_undo(deps.kube, args),
+        ToolCall::KubeScale(_)
+        | ToolCall::KubeUndo(_)
+        | ToolCall::KubeSuspend(_)
+        | ToolCall::KubeRolloutRestart(_)
+        | ToolCall::KubeRolloutUndo(_) => cluster::change(deps.kube, call),
     }
 }
 
@@ -167,7 +173,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
-        KubeDiagnoseArgs, KubeEventsArgs, KubeScaleArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
+        KubeDiagnoseArgs, KubeEventsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -456,6 +462,18 @@ mod definition_tests {
             ToolName::KubeUndo => (
                 r#"{"changeId":"kc-1a2b3c4d"}"#,
                 vec![ToolCall::KubeUndo(KubeUndoArgs { change_id: "kc-1a2b3c4d".into() })],
+            ),
+            ToolName::KubeSuspend => (
+                r#"{"kind":"CronJob","name":"report","suspend":"true"}"#,
+                vec![ToolCall::KubeSuspend(KubeSuspendArgs { kind: "CronJob".into(), name: "report".into(), suspend: Some(true) })],
+            ),
+            ToolName::KubeRolloutRestart => (
+                r#"{"kind":"Deployment","name":"api"}"#,
+                vec![ToolCall::KubeRolloutRestart(KubeRolloutRestartArgs { kind: "Deployment".into(), name: "api".into() })],
+            ),
+            ToolName::KubeRolloutUndo => (
+                r#"{"kind":"Deployment","name":"api","toRevision":3}"#,
+                vec![ToolCall::KubeRolloutUndo(KubeRolloutUndoArgs { kind: "Deployment".into(), name: "api".into(), to_revision: Some(3) })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

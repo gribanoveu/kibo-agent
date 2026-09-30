@@ -61,6 +61,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "kubeDiagnose" => ToolCall::KubeDiagnose(args(call)?),
         "kubeScale" => ToolCall::KubeScale(args(call)?),
         "kubeUndo" => ToolCall::KubeUndo(args(call)?),
+        "kubeSuspend" => ToolCall::KubeSuspend(args(call)?),
+        "kubeRolloutRestart" => ToolCall::KubeRolloutRestart(args(call)?),
+        "kubeRolloutUndo" => ToolCall::KubeRolloutUndo(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to
         // get wrong. Whatever it sent alongside is ignored rather than refused.
         "gitStatus" => ToolCall::GitStatus,

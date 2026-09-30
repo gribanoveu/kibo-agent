@@ -678,9 +678,24 @@ namespace» не нужен.
     изменения не делается вовсе — пользователь просит модель выставить нужное явно; откат
     изменения из другого контекста или namespace — только из чата, закреплённого там; аудит
     не обрезается.
-  - **K-5c — простые мутации.** `kubeSuspend` (CronJob, Job), `kubeRolloutRestart` (не
-    откатывается — карточка говорит это до подтверждения), `kubeRolloutUndo` (`toRevision?`).
-    Все — на основе K-5a, откат — по K-5b.
+  - **K-5c — простые мутации.** Сделано. Три инструмента, у роли их двенадцать:
+    `kubeSuspend` (CronJob, Job: `spec.suspend`), `kubeRolloutRestart` (Deployment,
+    StatefulSet, DaemonSet: `restartedAt` в шаблоне пода), `kubeRolloutUndo` (только
+    Deployment, `toRevision?`). Машинерия `kubeScale` обобщена: `cluster::Plan` — объект как
+    есть, merge-patch и слова («3 → 0 replicas», «active → suspended», «revision 3 → 2,
+    image api:3 → api:2»); у каждого инструмента свой планировщик, а предпроверка, карточка,
+    бэкап, выполнение и аудит — общие (`planned`, `preview`, `make`, `change`). Откат
+    версии берёт шаблон пода из ReplicaSet этого Deployment (по `ownerReferences` и
+    аннотации ревизии), без `pod-template-hash`, и заменяет шаблон целиком:
+    `domain::kube::merge_diff` ставит `null` тому, чего в прежнем шаблоне не было. `kubeUndo`
+    возвращает `suspend` и шаблон пода из бэкапа тем же путём. Рестарт не откатывается: это
+    говорят карточка, ответ инструмента и отказ `kubeUndo`; рестарт после изменения
+    закрывает и его откат (`undoable` так и отвечает, а не «сначала откати рестарт»).
+    StatefulSet и DaemonSet версией не откатываются — их ревизии в ControllerRevision;
+    модель даёт команду `kubectl rollout undo`. Проверено на OrbStack
+    (`live_cluster_suspends_rolls_back_and_restarts`; в `kibo-test` для этого остаются
+    CronJob `report` и Deployment `rollme`). Мутаций двадцать восемь, все пойманы — одна
+    после добавленного случая (шаблон уже такой, как в бэкапе).
   - **K-5d — `kubeApply` и `kubeDelete`.** Server-side dry-run и diff манифеста в карточке;
     несколько документов — одна карточка; отказ dry-run — ошибка сервера модели, без
     карточки. Откат удаления — пересоздание из бэкапа без `uid`, `resourceVersion`,

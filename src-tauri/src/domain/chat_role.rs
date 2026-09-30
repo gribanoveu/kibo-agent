@@ -115,9 +115,12 @@ impl ChatRole {
                 ToolName::KubeTop,
                 ToolName::KubeFieldHistory,
                 ToolName::KubeDiagnose,
-                // The changes so far (K-5a, K-5b); refused while the tab says Read only.
+                // The changes so far (K-5a–c); refused while the tab says Read only.
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
+                ToolName::KubeSuspend,
+                ToolName::KubeRolloutRestart,
+                ToolName::KubeRolloutUndo,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -164,14 +167,16 @@ Helm, Kustomize, container images, ingress controllers and service meshes, GitOp
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
-kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. One change you can make yourself: \
-kubeScale. It works only in the chat's own namespace and only when the user has switched the chat's tab from \
-\"Read only\" to \"Changes\"; it shows them a card to approve first, and keeps a backup. Several scales in one \
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. A few changes you can make yourself: \
+kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a \
+revision). They work only in the chat's own namespace and only when the user has switched the chat's tab from \
+\"Read only\" to \"Changes\"; each shows them a card to approve first, and keeps a backup. Several changes in one \
 round are one card. kubeUndo puts a change back by its change id, from the backup and under the same \
-conditions — never undo by scaling back from memory. For any other change, give the exact command, say what \
-it affects, and let the user run it.
+conditions — never undo by changing it back from memory. A rollout restart cannot be undone: restart only when a \
+restart is what is wanted. For any other change, give the exact command, say what it affects, and let the user run it.
 - After a change, say what it was before and what it is now, and give its change id. When asked to stop \
-  everything, name what scaling does not stop — a DaemonSet, a CronJob, a Job — instead of passing over it.
+  everything, scale what has replicas and suspend the CronJobs and Jobs, and name what neither stops — a \
+  DaemonSet — instead of passing over it.
 - Look before you ask: do not ask the user for output your tools can read. Ask them only for what the \
   cluster cannot tell — when it broke, which request failed (its path, time, request id, status code).
 - For a failing workload or pod, start with kubeDiagnose: its status, pods, events and the telling log in \
@@ -220,10 +225,13 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 12);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
-        assert_eq!(changing, [&ToolName::KubeScale, &ToolName::KubeUndo]);
+        assert_eq!(
+            changing,
+            [&ToolName::KubeScale, &ToolName::KubeUndo, &ToolName::KubeSuspend, &ToolName::KubeRolloutRestart, &ToolName::KubeRolloutUndo]
+        );
     }
 
     /// The window sends the role by this name; a rename is a role it can no longer pick.

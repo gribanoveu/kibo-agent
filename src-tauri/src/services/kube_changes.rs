@@ -16,7 +16,7 @@ pub fn list() -> Result<Vec<KubeChange>, String> {
 mod tests {
     use super::*;
     use crate::domain::kube::{KubeApi, KubeChanges, PinnedCluster};
-    use crate::domain::tools::{KubeScaleArgs, KubeUndoArgs, ToolError};
+    use crate::domain::tools::{KubeScaleArgs, KubeUndoArgs, ToolCall, ToolError};
     use crate::infra::kube_changes::ChangeStore;
     use crate::infra::kube_client::{ClusterApi, Clusters};
     use crate::services::ai_tools::tools::cluster;
@@ -76,10 +76,10 @@ mod tests {
             let replicas = || api.get(&kind, namespace, name).unwrap()["spec"]["replicas"].as_u64().unwrap() as u32;
             let set = |to: u32| api.patch(&kind, namespace, name, &json!({"spec": {"replicas": to}}), false).unwrap();
             let scale = |to: u32| {
-                cluster::kube_scale(Some(place), &KubeScaleArgs { kind: "deploy".into(), name: name.into(), replicas: Some(to) }).unwrap();
+                cluster::change(Some(place), &ToolCall::KubeScale(KubeScaleArgs { kind: "deploy".into(), name: name.into(), replicas: Some(to) })).unwrap();
                 list().unwrap()[0].id.clone()
             };
-            let undo = |id: &str| cluster::kube_undo(Some(place), &KubeUndoArgs { change_id: id.into() });
+            let undo = |id: &str| cluster::change(Some(place), &ToolCall::KubeUndo(KubeUndoArgs { change_id: id.into() }));
             let was = replicas();
 
             let first = scale(was + 1);
@@ -93,6 +93,46 @@ mod tests {
             assert_eq!(replicas(), was + 2, "a refused undo changed the object");
             set(was);
             assert_eq!(list().unwrap().len(), 3, "two scales and an undo");
+        });
+    }
+
+    /// The simple changes on the local cluster (K-5c), each left as found:
+    /// a CronJob `report` suspended and resumed, a Deployment `rollme` with
+    /// two revisions rolled back and put forward again, then restarted.
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_suspends_rolls_back_and_restarts() {
+        use crate::domain::tools::{KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeSuspendArgs};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, _) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        with_app_dir("kube-changes-live-simple", || {
+            let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+            let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: true, changes: Some(&ChangeStore) };
+            let kinds = api.kinds().unwrap();
+            let read = |kind: &str, name: &str| api.get(crate::domain::kube::resolve_kind(&kinds, kind).unwrap(), namespace, name).unwrap();
+            let run = |call: ToolCall| {
+                cluster::change(Some(place), &call).unwrap();
+                list().unwrap()[0].id.clone()
+            };
+            let undo = |id: String| cluster::change(Some(place), &ToolCall::KubeUndo(KubeUndoArgs { change_id: id }));
+
+            let suspended = run(ToolCall::KubeSuspend(KubeSuspendArgs { kind: "cj".into(), name: "report".into(), suspend: Some(true) }));
+            assert_eq!(read("cj", "report")["spec"]["suspend"], true);
+            undo(suspended).unwrap();
+            assert_eq!(read("cj", "report")["spec"]["suspend"], false);
+
+            let before = read("deploy", "rollme")["spec"]["template"].clone();
+            let rolled = run(ToolCall::KubeRolloutUndo(KubeRolloutUndoArgs { kind: "deploy".into(), name: "rollme".into(), to_revision: None }));
+            assert_ne!(read("deploy", "rollme")["spec"]["template"], before);
+            undo(rolled).unwrap();
+            assert_eq!(read("deploy", "rollme")["spec"]["template"], before, "the template is back whole");
+
+            let restarted = run(ToolCall::KubeRolloutRestart(KubeRolloutRestartArgs { kind: "deploy".into(), name: "rollme".into() }));
+            let stamp = &read("deploy", "rollme")["spec"]["template"]["metadata"]["annotations"]["kubectl.kubernetes.io/restartedAt"];
+            assert!(stamp.is_string(), "{stamp}");
+            assert!(undo(restarted).unwrap_err().to_string().contains("cannot be undone"));
         });
     }
 }

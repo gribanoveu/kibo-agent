@@ -179,6 +179,34 @@ impl KubeChange {
     }
 }
 
+/// The one change that cannot be put back: by the time it is made, the pods
+/// it replaced are gone.
+pub const ROLLOUT_RESTART: &str = "kubeRolloutRestart";
+
+/// The merge patch that turns `from` into `to`: what differs, and `null` for
+/// what `to` lacks — so a whole section is replaced rather than merged into.
+/// `None` when nothing differs. A list is one value, as a merge patch has it.
+pub fn merge_diff(from: &serde_json::Value, to: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    let (Value::Object(from), Value::Object(to)) = (from, to) else {
+        return (from != to).then(|| to.clone());
+    };
+    let mut patch = serde_json::Map::new();
+    for (key, wanted) in to {
+        let changed = match from.get(key) {
+            Some(had) => merge_diff(had, wanted),
+            None => Some(wanted.clone()),
+        };
+        if let Some(changed) = changed {
+            patch.insert(key.clone(), changed);
+        }
+    }
+    for key in from.keys().filter(|key| !to.contains_key(*key)) {
+        patch.insert(key.clone(), Value::Null);
+    }
+    (!patch.is_empty()).then_some(Value::Object(patch))
+}
+
 /// Whether the change `id` is the one to undo now, by the audit — `history`,
 /// oldest first: it happened, and nothing of the app's changed its object
 /// after it. Changes of one object come off last to first, as file edits do;
@@ -196,6 +224,11 @@ pub fn undoable<'h>(history: &'h [KubeChange], id: &str) -> Result<&'h KubeChang
     }
     Err(if last.undoes.as_deref() == Some(id) {
         format!("the change {id} is already undone, by {} — undoing that one makes the change again", last.id)
+    } else if last.tool == ROLLOUT_RESTART {
+        format!(
+            "{}/{} was restarted after {id} ({}), and a restart cannot be undone — set what is wanted with the changing tools instead",
+            change.kind, change.name, last.id
+        )
     } else {
         format!("{}/{} was changed again after {id}, by {} ({}) — undo that one first", change.kind, change.name, last.id, last.summary)
     })
@@ -435,10 +468,30 @@ mod tests {
         assert!(undoable(&history, "kc-4").unwrap_err().contains("changed nothing: conflict"));
         assert!(undoable(&history, "kc-9").unwrap_err().contains("not on record"));
 
+        let restart = KubeChange { tool: ROLLOUT_RESTART.into(), ..change("kc-7", "api") };
+        let history = [change("kc-1", "api"), restart];
+        assert!(undoable(&history, "kc-1").unwrap_err().contains("was restarted after kc-1 (kc-7), and a restart cannot be undone"));
+
         let undo = KubeChange { undoes: Some("kc-2".into()), ..change("kc-6", "web") };
         let history = [change("kc-2", "web"), undo];
         assert!(undoable(&history, "kc-2").unwrap_err().contains("already undone, by kc-6"));
         assert_eq!(undoable(&history, "kc-6").unwrap().id, "kc-6", "an undo is undone like any change");
+    }
+
+    /// A rollback replaces the pod template: what the old one lacks goes,
+    /// what it had comes back, and a list is swapped whole.
+    #[test]
+    fn a_merge_diff_takes_out_what_the_target_lacks() {
+        use serde_json::json;
+        let now = json!({"metadata": {"labels": {"app": "api", "new": "x"}}, "spec": {"containers": [{"image": "api:2"}], "nodeSelector": {"gpu": "yes"}}});
+        let was = json!({"metadata": {"labels": {"app": "api"}, "annotations": {"a": "1"}}, "spec": {"containers": [{"image": "api:1"}]}});
+        assert_eq!(
+            merge_diff(&now, &was).unwrap(),
+            json!({"metadata": {"labels": {"new": null}, "annotations": {"a": "1"}}, "spec": {"containers": [{"image": "api:1"}], "nodeSelector": null}})
+        );
+        assert_eq!(merge_diff(&now, &now), None);
+        assert_eq!(merge_diff(&json!(3), &json!(0)), Some(json!(0)));
+        assert_eq!(merge_diff(&json!(null), &json!({"a": 1})), Some(json!({"a": 1})));
     }
 
     #[test]

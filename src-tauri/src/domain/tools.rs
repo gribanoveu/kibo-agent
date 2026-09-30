@@ -69,6 +69,11 @@ pub enum ToolName {
     KubeScale,
     /// Puts a recorded change back from its backup (K-5b).
     KubeUndo,
+    /// The simple changes (K-5c): a CronJob or Job stopped and resumed, a
+    /// workload's pods replaced, a Deployment put back a revision.
+    KubeSuspend,
+    KubeRolloutRestart,
+    KubeRolloutUndo,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -117,6 +122,9 @@ impl ToolName {
         ToolName::KubeDiagnose,
         ToolName::KubeScale,
         ToolName::KubeUndo,
+        ToolName::KubeSuspend,
+        ToolName::KubeRolloutRestart,
+        ToolName::KubeRolloutUndo,
         ToolName::Mcp,
     ];
 
@@ -157,6 +165,9 @@ impl ToolName {
             ToolName::KubeDiagnose => "kubeDiagnose",
             ToolName::KubeScale => "kubeScale",
             ToolName::KubeUndo => "kubeUndo",
+            ToolName::KubeSuspend => "kubeSuspend",
+            ToolName::KubeRolloutRestart => "kubeRolloutRestart",
+            ToolName::KubeRolloutUndo => "kubeRolloutUndo",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -198,6 +209,9 @@ impl ToolName {
                 // Changes the user's cluster.
                 | ToolName::KubeScale
                 | ToolName::KubeUndo
+                | ToolName::KubeSuspend
+                | ToolName::KubeRolloutRestart
+                | ToolName::KubeRolloutUndo
                 // Nothing is known about what a foreign tool does, and its
                 // server's own hints are untrusted by the specification: it
                 // asks, and it stays out of the modes that promise nothing
@@ -265,7 +279,11 @@ impl ToolName {
             // Five or six reads of the cluster — the rounds it saves.
             ToolName::KubeDiagnose => 4,
             // A read, a dry run, a backup, the change.
-            ToolName::KubeScale | ToolName::KubeUndo => 3,
+            ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -419,7 +437,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            34,
+            37,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -482,6 +500,9 @@ mod tests {
             HashSet::from([
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
+                ToolName::KubeSuspend,
+                ToolName::KubeRolloutRestart,
+                ToolName::KubeRolloutUndo,
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
@@ -1066,6 +1087,9 @@ pub enum ToolCall {
     KubeDiagnose(KubeDiagnoseArgs),
     KubeScale(KubeScaleArgs),
     KubeUndo(KubeUndoArgs),
+    KubeSuspend(KubeSuspendArgs),
+    KubeRolloutRestart(KubeRolloutRestartArgs),
+    KubeRolloutUndo(KubeRolloutUndoArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1105,6 +1129,9 @@ impl ToolCall {
             ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
             ToolCall::KubeScale(_) => ToolName::KubeScale,
             ToolCall::KubeUndo(_) => ToolName::KubeUndo,
+            ToolCall::KubeSuspend(_) => ToolName::KubeSuspend,
+            ToolCall::KubeRolloutRestart(_) => ToolName::KubeRolloutRestart,
+            ToolCall::KubeRolloutUndo(_) => ToolName::KubeRolloutUndo,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1501,6 +1528,36 @@ pub struct KubeScaleArgs {
     pub name: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub replicas: Option<u32>,
+}
+
+/// `kubeSuspend`: a CronJob's or Job's `spec.suspend`. Optional in the type
+/// so a missing answer is the tool's error, worded for the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeSuspendArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub suspend: Option<bool>,
+}
+
+/// `kubeRolloutRestart`: the workload whose pods are replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeRolloutRestartArgs {
+    pub kind: String,
+    pub name: String,
+}
+
+/// `kubeRolloutUndo`: a Deployment, and the revision to go back to — the
+/// previous one when none is named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeRolloutUndoArgs {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub to_revision: Option<u32>,
 }
 
 /// `kubeUndo`: a change by the id its tool answered with.

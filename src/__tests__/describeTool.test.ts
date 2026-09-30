@@ -502,6 +502,19 @@ describe("the Kubernetes role's reads", () => {
       name: "Scale",
       arg: "Deployment api → 0",
     });
+    expect(describeTool(tool({ name: "kubeSuspend", arguments: '{"kind":"CronJob","name":"report","suspend":true}' }))).toMatchObject({
+      name: "Suspend",
+      arg: "CronJob report → suspended",
+    });
+    expect(describeTool(tool({ name: "kubeSuspend", arguments: '{"kind":"Job","name":"report","suspend":false}' })).arg).toBe("Job report → active");
+    expect(describeTool(tool({ name: "kubeRolloutUndo", arguments: '{"kind":"Deployment","name":"api","toRevision":3}' }))).toMatchObject({
+      name: "Roll back",
+      arg: "Deployment api → revision 3",
+    });
+    expect(describeTool(tool({ name: "kubeRolloutRestart", arguments: '{"kind":"Deployment","name":"api"}' }))).toMatchObject({
+      name: "Restart",
+      arg: "Deployment api",
+    });
     expect(describeTool(tool({ name: "kubeUndo", arguments: '{"changeId":"kc-1a2b3c4d"}' }))).toMatchObject({ name: "Undo", arg: "kc-1a2b3c4d" });
     const diagnosed = describeTool(
       tool({ name: "kubeDiagnose", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "2 pods, 1 with problems" } }),

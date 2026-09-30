@@ -308,7 +308,10 @@ mod tests {
             | ToolName::KubeFieldHistory
             | ToolName::KubeDiagnose
             | ToolName::KubeScale
-            | ToolName::KubeUndo => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
             ToolName::Explore => (
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
