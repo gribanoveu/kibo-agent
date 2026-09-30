@@ -226,6 +226,15 @@ mod tests {
         }
     }
 
+    /// The web is a chat's: in a folder it is an MCP server's, on the user's
+    /// own account (`docs/24-web-search.md`).
+    #[test]
+    fn no_folder_mode_searches_the_web() {
+        for &mode in ConversationMode::ALL {
+            assert!(!offers(mode, ToolName::WebSearch), "{mode:?}");
+        }
+    }
+
     /// Every tool but a review's own — a finding needs a review to be about —
     /// and the Kubernetes role's: the agent has no cluster pinned to it.
     #[test]

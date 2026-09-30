@@ -21,6 +21,7 @@ use crate::domain::llm::{
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
 use crate::domain::result_clearing;
+use crate::domain::web_search::WebSearchFn;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
@@ -259,6 +260,9 @@ pub enum Place<'a> {
         changes: Option<&'a dyn KubeChanges>,
         /// The runbooks the prompt lists and `kubeRunbook` reads.
         runbooks: &'a [Runbook],
+        /// What `webSearch` asks; `None` without a key, and then the tool is
+        /// not offered.
+        web: Option<&'a WebSearchFn>,
     },
 }
 
@@ -895,6 +899,10 @@ fn execute_call(
             Place::Chat { runbooks, .. } => runbooks.to_vec(),
             Place::Folder { .. } => Vec::new(),
         },
+        web: match turn.place {
+            Place::Chat { web, .. } => web.cloned(),
+            Place::Folder { .. } => None,
+        },
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1295,15 +1303,20 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools) -> Ve
 fn offered(turn: &Turn) -> Vec<LlmToolDefinition> {
     match turn.place {
         Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp),
-        Place::Chat { role, .. } => tool_definitions_for_role(role),
+        Place::Chat { role, web, .. } => tool_definitions_for_role(role, web.is_some()),
     }
 }
 
 /// The tools a chat in `role` is offered.
-pub(crate) fn tool_definitions_for_role(role: ChatRole) -> Vec<LlmToolDefinition> {
+/// `web`: whether a search key is saved. Without one `webSearch` is left
+/// out — offered, it could only fail, and its schema costs every request.
+pub(crate) fn tool_definitions_for_role(role: ChatRole, web: bool) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
-        .filter(|definition| ToolName::from_wire_name(&definition.name).is_some_and(|tool| role.tools().contains(&tool)))
+        .filter(|definition| {
+            ToolName::from_wire_name(&definition.name)
+                .is_some_and(|tool| role.tools().contains(&tool) && (web || tool != ToolName::WebSearch))
+        })
         .collect()
 }
 
@@ -1933,7 +1946,7 @@ mod tests {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
-                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[] },
+                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None },
                     None => Place::Folder { scope: &self.scope, mode: self.mode },
                 },
                 approval: &self.approval,

@@ -43,6 +43,7 @@ pub mod write_plan;
 pub mod mcp;
 pub mod process;
 pub mod terminal;
+pub mod web_search;
 
 /// One row: a tool and the function that builds its schema.
 type ToolDefinitionRow = (ToolName, fn() -> LlmToolDefinition);
@@ -94,6 +95,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeRolloutUndo, cluster::rollout_undo_definition),
     (ToolName::KubeApply, cluster::apply_definition),
     (ToolName::KubeDelete, cluster::delete_definition),
+    (ToolName::WebSearch, web_search::definition),
 ];
 
 /// What the model is offered for a turn.
@@ -155,6 +157,7 @@ pub fn dispatch(
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
         ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
+        ToolCall::WebSearch(args) => web_search::web_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
         ToolCall::KubeEvents(args) => cluster::kube_events(deps.kube, args),
@@ -179,6 +182,7 @@ pub fn dispatch(
 mod definition_tests {
     use super::*;
     use crate::domain::llm::LlmToolCall;
+    use crate::domain::tools::WebSearchArgs;
     use crate::domain::tools::{
         DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
@@ -502,6 +506,14 @@ mod definition_tests {
             ToolName::KubeDelete => (
                 r#"{"kind":"ConfigMap","name":"flags"}"#,
                 vec![ToolCall::KubeDelete(KubeDeleteArgs { kind: "ConfigMap".into(), name: "flags".into(), ..Default::default() })],
+            ),
+            ToolName::WebSearch => (
+                r#"{"query":"tokio release"}"#,
+                vec![ToolCall::WebSearch(WebSearchArgs {
+                    query: "tokio release".into(),
+                    max_results: Some(3),
+                    time_range: Some(crate::domain::web_search::TimeRange::Month),
+                })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

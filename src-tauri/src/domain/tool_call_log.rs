@@ -318,6 +318,18 @@ mod tests {
             | ToolName::KubeRolloutRestart
             | ToolName::KubeRolloutUndo
             | ToolName::KubeDelete => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
+            // The query stays: what left the machine is what the log is for.
+            // A page's words are the pages' authors', not the user's record.
+            ToolName::WebSearch => (
+                None,
+                ToolResult::WebResults {
+                    hits: vec![crate::domain::web_search::WebHit {
+                        title: "Tokio".into(),
+                        url: "https://tokio.rs".into(),
+                        content: LEAK.into(),
+                    }],
+                },
+            ),
             // A manifest may carry a Secret's values: it goes as `manifest`.
             ToolName::KubeApply => (
                 Some(ToolCall::KubeApply(crate::domain::tools::KubeApplyArgs { manifest: LEAK.into() })),
