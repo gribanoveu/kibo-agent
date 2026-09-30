@@ -1,263 +1,123 @@
-//! An MCP server reached at a URL: the Streamable HTTP transport — one
-//! endpoint, a POST per message, the answer in the response as JSON or as an
-//! event stream.
+//! An MCP server reached at a URL: the Streamable HTTP transport.
 //!
-//! The protocol itself is `infra::mcp_stdio::Connection`'s; this module only
-//! moves messages, over `ureq` like the model provider — `rmcp`'s HTTP client
-//! would bring `reqwest` and `hyper`, which the data policy refuses
-//! (`docs/17-mcp-http.md`).
+//! The transport and the protocol over it are `rmcp`'s (`infra::mcp_rmcp`),
+//! on its own `reqwest` client; this module says where to connect and with which headers,
+//! and puts the transport's failures into the app's words
+//! (`docs/22-rmcp-migration.md`).
 //!
-//! Left out on purpose, each named in that document: OAuth (a 401 says so),
-//! the old HTTP+SSE transport, the GET stream for the server's own
-//! notifications, and resuming a broken stream.
+//! Left out on purpose: OAuth (a 401 says so; `docs/18-mcp-oauth.md`) and the
+//! old HTTP+SSE transport.
 
-use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::StreamableHttpClientTransport;
 use serde_json::Value;
 
 use crate::domain::mcp::{McpCallResult, McpClient, McpError, McpServerConfig, McpTool};
-use crate::infra::mcp_stdio::{Connection, Inbox, Outbox};
+use crate::infra::mcp_rmcp::{Failure, RmcpClient};
 
 /// Enough of an error body to explain it; a server that answers an error
 /// with a whole HTML page is cut here.
 const ERROR_BODY_CHARS: usize = 1000;
-/// Ending a session is a courtesy, not worth holding anything up for.
-const DELETE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// A session with a server at a URL. Dropping it ends the session on the
-/// server too, if the server keeps sessions.
+/// A conversation with a server at a URL. Dropping it ends the session on
+/// the server too, if the server keeps sessions.
 pub struct HttpServer {
-    connection: Connection,
-    http: Arc<Http>,
+    client: RmcpClient,
+    /// Why the conversation ended, for every call after it.
+    ended: Ended,
 }
 
-struct Http {
-    agent: ureq::Agent,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout: Duration,
-    /// `Mcp-Session-Id`, when the server gave one — sent with every message
-    /// after the handshake.
-    session: Mutex<Option<String>>,
-    /// The version the server agreed to, sent with every message after the
-    /// handshake, as the transport requires.
-    version: Mutex<Option<String>>,
-    inbox: Inbox,
-    /// Why the conversation ended, for every call after it.
-    ended: Mutex<Option<McpError>>,
-}
+type Ended = Arc<Mutex<Option<McpError>>>;
 
 impl HttpServer {
-    /// Completes the handshake within the server's own timeout.
+    /// Opens the conversation within the server's own timeout.
     pub fn start(config: &McpServerConfig, cancelled: &dyn Fn() -> bool) -> Result<Self, McpError> {
         let url = config.url.clone().ok_or_else(|| McpError::NotStarted("the entry has no url".into()))?;
-        let agent = crate::infra::http_agent::build_agent(None).map_err(|e| McpError::NotStarted(e.to_string()))?;
         let timeout = Duration::from_secs(config.timeout_secs());
-        let http = Arc::new(Http {
-            agent,
-            url,
-            headers: config.headers.clone(),
+        let mut headers = HashMap::new();
+        for (name, value) in &config.headers {
+            let name = http::HeaderName::try_from(name.as_str())
+                .map_err(|_| McpError::NotStarted(format!("{name:?} is not a header name")))?;
+            let value = http::HeaderValue::try_from(value.as_str())
+                .map_err(|_| McpError::NotStarted(format!("the value of {name} cannot be sent as a header")))?;
+            headers.insert(name, value);
+        }
+        // The SDK's `reqwest` is built without a TLS provider of its own; the
+        // app's is ring, as for the model provider and the cluster.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // A forgotten session is not quietly replaced: the call that met it
+        // fails, and `services::mcp_servers` starts the server again — once a
+        // turn, like a process that exited.
+        let transport = StreamableHttpClientTransportConfig::with_uri(url)
+            .custom_headers(headers)
+            .reinit_on_expired_session(false);
+
+        let ended = Ended::default();
+        let said = Arc::clone(&ended);
+        let client = RmcpClient::connect(
+            // The SDK's own HTTP client: it follows no redirect, so the
+            // entry's headers — a token, as a rule — reach this URL only.
+            || Ok(StreamableHttpClientTransport::from_config(transport)),
             timeout,
-            session: Mutex::default(),
-            version: Mutex::default(),
-            inbox: Inbox::default(),
-            ended: Mutex::default(),
-        });
-        let sender = Arc::clone(&http);
-        let send: Outbox = Arc::new(move |message| {
-            sender.send(message);
-            Ok(())
-        });
-        let ended = Arc::clone(&http);
-        let connection = Connection::with_transport(send, http.inbox.clone(), timeout, move || {
-            lock(&ended.ended).clone().unwrap_or_else(|| McpError::Unreachable("the connection ended".into()))
-        });
-        connection.initialize(cancelled)?;
-        Ok(Self { connection, http })
+            cancelled,
+            Box::new(move |failure| describe(failure, &said)),
+        )?;
+        Ok(Self { client, ended })
+    }
+
+    fn ended(&self) -> Result<(), McpError> {
+        lock(&self.ended).clone().map_or(Ok(()), Err)
     }
 }
 
 impl McpClient for HttpServer {
     fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-        self.connection.list_tools()
+        self.ended()?;
+        self.client.list_tools()
     }
 
     fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
-        self.connection.call_tool(name, arguments, cancelled)
+        self.ended()?;
+        self.client.call_tool(name, arguments, cancelled)
     }
 
     fn is_alive(&self) -> bool {
-        self.connection.is_alive()
+        self.client.is_alive() && lock(&self.ended).is_none()
     }
 }
 
-impl Drop for HttpServer {
-    fn drop(&mut self) {
-        let Some(session) = lock(&self.http.session).clone() else { return };
-        let http = Arc::clone(&self.http);
-        std::thread::spawn(move || {
-            let mut delete = http
-                .agent
-                .delete(&http.url)
-                .config()
-                .timeout_global(Some(DELETE_TIMEOUT))
-                .build()
-                .header("Mcp-Session-Id", &session);
-            for (name, value) in &http.headers {
-                delete = delete.header(name, value);
-            }
-            let _ = delete.call();
-        });
-    }
+/// What a failure of the transport means. A refusal with a status is that
+/// request's alone; a session the server forgot and a connection that broke
+/// end the conversation, for this call and every one after it.
+fn describe(failure: Failure<'_>, ended: &Mutex<Option<McpError>>) -> McpError {
+    let fatal = match failure {
+        Failure::Closed => McpError::Unreachable("the connection ended".into()),
+        Failure::Send(text) => match refusal(text) {
+            Some(refused) => return refused,
+            None if text.contains("Session expired (HTTP 404)") => McpError::Http { status: 404, body: String::new() },
+            None => McpError::Unreachable(text.to_string()),
+        },
+    };
+    lock(ended).get_or_insert(fatal).clone()
 }
 
-impl Http {
-    /// Every message goes on its own thread, so a call waiting for its
-    /// answer still sees a Stop — except the handshake's acknowledgement,
-    /// which has to reach the server before the requests sent right after it.
-    fn send(self: &Arc<Self>, message: &Value) {
-        if message["method"] == "notifications/initialized" {
-            self.exchange(message);
-            return;
-        }
-        let http = Arc::clone(self);
-        let message = message.clone();
-        std::thread::spawn(move || http.exchange(&message));
+/// The status and the start of the body of a non-2xx answer, read back out
+/// of the transport's own wording — it keeps them nowhere else. A challenge
+/// for a sign-in loses its body to the SDK, which keeps the challenge instead.
+fn refusal(text: &str) -> Option<McpError> {
+    if text.contains("Auth required") {
+        return Some(McpError::Http { status: 401, body: String::new() });
     }
-
-    /// A request's failure goes to whoever waits for it; a notification's or
-    /// a reply's has nobody to go to.
-    fn exchange(&self, message: &Value) {
-        let request = message["method"].as_str().zip(message["id"].as_u64());
-        if let Err(error) = self.post(message, request) {
-            if let Some((_, id)) = request {
-                self.inbox.fail(id, error);
-            }
-        }
+    if text.contains("Insufficient scope") {
+        return Some(McpError::Http { status: 403, body: String::new() });
     }
-
-    /// Sends one message and hands what comes back to the inbox. An error
-    /// that ends the whole conversation ends it here and returns `Ok`: every
-    /// waiter hears it through the inbox.
-    fn post(&self, message: &Value, request: Option<(&str, u64)>) -> Result<(), McpError> {
-        let mut post = self
-            .agent
-            .post(&self.url)
-            .config()
-            .timeout_global(Some(self.timeout))
-            .build()
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-        for (name, value) in &self.headers {
-            post = post.header(name, value);
-        }
-        if let Some(session) = lock(&self.session).clone() {
-            post = post.header("Mcp-Session-Id", session);
-        }
-        if let Some(version) = lock(&self.version).clone() {
-            post = post.header("MCP-Protocol-Version", version);
-        }
-        let mut response = match post.send(message.to_string()) {
-            Ok(response) => response,
-            // This request took too long; the server may still be fine.
-            Err(ureq::Error::Timeout(_)) => return Err(McpError::Timeout(self.timeout.as_secs())),
-            Err(e) => {
-                self.end(McpError::Unreachable(e.to_string()));
-                return Ok(());
-            }
-        };
-        if let Some(session) = response.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
-            *lock(&self.session) = Some(session.to_string());
-        }
-
-        let status = response.status().as_u16();
-        if !response.status().is_success() {
-            let body = response.body_mut().read_to_string().unwrap_or_default();
-            let error = McpError::Http { status, body: body.chars().take(ERROR_BODY_CHARS).collect() };
-            // The server forgot the session: nothing sent in it will be
-            // understood again, and the next call starts a new one.
-            if status == 404 && lock(&self.session).is_some() {
-                self.end(error);
-                return Ok(());
-            }
-            return Err(error);
-        }
-        let Some((method, id)) = request else { return Ok(()) };
-        if status == 202 {
-            return Err(McpError::Protocol(format!("{method} was accepted, but no answer came with it")));
-        }
-
-        let is_stream = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"));
-        if is_stream {
-            let reader = BufReader::new(response.into_body().into_reader());
-            return self.read_stream(reader, method, id);
-        }
-        let body = response.body_mut().read_to_string().map_err(|e| McpError::Protocol(e.to_string()))?;
-        let answer = serde_json::from_str(&body)
-            .map_err(|e| McpError::Protocol(format!("{method} was answered with something that is not JSON: {e}")))?;
-        if self.take(&answer, id) {
-            Ok(())
-        } else {
-            Err(McpError::Protocol(format!("{method} was answered, but not with its answer: {answer}")))
-        }
-    }
-
-    /// Server-sent events until the one that answers `id`, and not a line
-    /// further: a server may hold the stream open after it. `data:` lines
-    /// join into one message and a blank line ends it; event names, ids and
-    /// comments are not needed. The lines are joined with nothing rather than
-    /// the line break the event format puts between them — JSON needs no
-    /// separator between its tokens and allows no raw break inside a string,
-    /// so for a JSON payload the two are the same.
-    fn read_stream(&self, reader: impl BufRead, method: &str, id: u64) -> Result<(), McpError> {
-        let mut data = String::new();
-        for line in reader.lines() {
-            // `lines` takes a CRLF off as well as an LF.
-            let Ok(line) = line else { break };
-            if let Some(value) = line.strip_prefix("data:") {
-                data.push_str(value);
-            } else if line.is_empty() {
-                if let Ok(message) = serde_json::from_str::<Value>(&std::mem::take(&mut data)) {
-                    if self.take(&message, id) {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        Err(McpError::Protocol(format!("the event stream for {method} ended without its answer")))
-    }
-
-    /// Hands one message to the inbox and says whether it was the answer to
-    /// `id` — not a request of the server's own, whose ids are its own and
-    /// may be the same number. That request is answered in a message of its
-    /// own.
-    fn take(&self, message: &Value, id: u64) -> bool {
-        let answers = message.get("method").is_none() && message["id"].as_u64() == Some(id);
-        // Only `initialize` answers with a version. Kept before the inbox
-        // hands the answer on: the waiter sends the next message at once, and
-        // that one already carries it.
-        if answers {
-            if let Some(version) = message["result"]["protocolVersion"].as_str() {
-                *lock(&self.version) = Some(version.to_string());
-            }
-        }
-        if let Some(reply) = self.inbox.deliver(message) {
-            let _ = self.post(&reply, None);
-        }
-        answers
-    }
-
-    fn end(&self, error: McpError) {
-        *lock(&self.ended) = Some(error);
-        self.inbox.close();
-    }
+    let (_, answer) = text.split_once("unexpected server response: HTTP ")?;
+    let status = answer.get(..3)?.parse().ok()?;
+    let body = answer.split_once(": ").map_or("", |(_, body)| body);
+    Some(McpError::Http { status, body: body.chars().take(ERROR_BODY_CHARS).collect() })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -269,7 +129,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
-    use std::io::{Read, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::time::Instant;
 
@@ -279,6 +139,7 @@ mod tests {
     struct Seen {
         at: Instant,
         method: String,
+        path: String,
         headers: HashMap<String, String>,
         body: Value,
     }
@@ -336,7 +197,9 @@ mod tests {
         let mut reader = BufReader::new(socket.try_clone().ok()?);
         let mut first = String::new();
         reader.read_line(&mut first).ok()?;
-        let method = first.split_whitespace().next()?.to_string();
+        let mut words = first.split_whitespace();
+        let method = words.next()?.to_string();
+        let path = words.next()?.to_string();
         let mut headers = HashMap::new();
         loop {
             let mut line = String::new();
@@ -352,7 +215,7 @@ mod tests {
         let length = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
         let mut body = vec![0; length];
         reader.read_exact(&mut body).ok()?;
-        Some(Seen { at: Instant::now(), method, headers, body: serde_json::from_slice(&body).unwrap_or(Value::Null) })
+        Some(Seen { at: Instant::now(), method, path, headers, body: serde_json::from_slice(&body).unwrap_or(Value::Null) })
     }
 
     fn json_answer(request: &Seen, result: Value) -> Answer {
@@ -376,7 +239,7 @@ mod tests {
     }
 
     fn handshake(request: &Seen, session: Option<&str>) -> Answer {
-        let mut answer = json_answer(request, json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": {} } }));
+        let mut answer = json_answer(request, json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": "f", "version": "1" } }));
         if let Some(session) = session {
             answer.headers.push(("Mcp-Session-Id", session.into()));
         }
@@ -390,8 +253,14 @@ mod tests {
         if request.method == "DELETE" {
             return status(200, "");
         }
+        // The stream for what the server has to say unasked: not offered.
+        if request.method == "GET" {
+            return status(405, "");
+        }
         let id = &request.body["id"];
         match request.body["method"].as_str() {
+            // Of the `initialize` era: a request outside a session is refused.
+            Some("server/discover") => status(400, "Bad Request: no session"),
             Some("initialize") => handshake(request, Some("s-1")),
             Some("tools/list") => stream(format!(
                 ": keep-alive\r\nevent: message\r\ndata: {{\"jsonrpc\": \"2.0\", \"id\": {id},\r\ndata: \"result\": {{\"tools\": [{{\"name\": \"search\"}}]}}}}\r\n\r\n"
@@ -442,13 +311,18 @@ mod tests {
         assert_eq!(server.call_tool("search", json!({ "q": "x" }), &|| false).unwrap().text, "found it");
 
         let seen = log.lock().unwrap().clone();
-        let init = &seen[0];
-        assert_eq!(init.body["method"], "initialize");
-        assert_eq!(init.headers["accept"], "application/json, text/event-stream");
+        let probe = &seen[0];
+        assert_eq!(probe.body["method"], "server/discover", "asked first, in case the server has no handshake");
+        assert_eq!(probe.headers["authorization"], "Bearer t0k3n");
+        let at = position(&log, "initialize");
+        let init = &seen[at];
+        for accepted in ["application/json", "text/event-stream"] {
+            assert!(init.headers["accept"].contains(accepted), "{init:?}");
+        }
         assert_eq!(init.headers["content-type"], "application/json");
         assert_eq!(init.headers["authorization"], "Bearer t0k3n");
         assert!(!init.headers.contains_key("mcp-session-id") && !init.headers.contains_key("mcp-protocol-version"));
-        for later in &seen[1..] {
+        for later in &seen[at + 1..] {
             assert_eq!(later.headers["mcp-session-id"], "s-1", "{later:?}");
             assert_eq!(later.headers["mcp-protocol-version"], "2025-06-18", "{later:?}");
             assert_eq!(later.headers["authorization"], "Bearer t0k3n");
@@ -462,10 +336,6 @@ mod tests {
 
         drop(server);
         let delete = eventually(&log, |s| s.method == "DELETE");
-        assert!(
-            log.lock().unwrap().iter().all(|s| s.body["id"] != "srv-late"),
-            "the stream is left once its answer is in"
-        );
         assert_eq!((delete.headers["mcp-session-id"].as_str(), delete.headers["authorization"].as_str()), ("s-1", "Bearer t0k3n"));
     }
 
@@ -512,6 +382,46 @@ mod tests {
         assert!(err.to_string().contains("OAuth"));
     }
 
+    /// A server that challenges for a sign-in: the SDK keeps the challenge
+    /// for the OAuth that is not built yet, and the row still says what is
+    /// wanted.
+    #[test]
+    fn a_challenge_for_a_sign_in_or_for_more_rights_is_a_refusal_with_its_status() {
+        for (code, challenge) in [(401, "Bearer resource_metadata=\"https://a.example/meta\""), (403, "Bearer error=\"insufficient_scope\"")] {
+            let (url, _log) = serve(move |_| Answer { status: code, headers: vec![("WWW-Authenticate", challenge.into())], body: String::new() });
+            let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
+            assert_eq!(err, McpError::Http { status: code, body: String::new() });
+        }
+        let (url, _log) = serve(|_| Answer { status: 401, headers: vec![("WWW-Authenticate", "Bearer".into())], body: String::new() });
+        assert!(HttpServer::start(&config(&url, 5), &|| false).err().unwrap().to_string().contains("OAuth"));
+    }
+
+    /// The entry's headers are a token, as a rule, and were given for this
+    /// address: a redirect is an answer that is not success, never a second
+    /// request carrying them somewhere else.
+    #[test]
+    fn a_redirect_is_not_followed() {
+        let (url, log) = serve(|request| match request.path.as_str() {
+            "/mcp" => Answer { status: 307, headers: vec![("Location", "/elsewhere".into())], body: String::new() },
+            _ => well_behaved(request),
+        });
+        let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
+        assert!(matches!(err, McpError::Http { status: 307, .. }), "{err}");
+        assert!(log.lock().unwrap().iter().all(|s| s.path == "/mcp"), "{:#?}", log.lock().unwrap());
+    }
+
+    /// A header that cannot be sent is the entry's mistake, said before any
+    /// connection is made.
+    #[test]
+    fn a_header_that_cannot_be_sent_does_not_start_the_server() {
+        let mut entry = config("http://127.0.0.1:1/mcp", 5);
+        entry.headers.insert("X Bad Name".into(), "v".into());
+        assert!(matches!(HttpServer::start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("X Bad Name")));
+        let mut entry = config("http://127.0.0.1:1/mcp", 5);
+        entry.headers.insert("X-Token".into(), "line\nbreak".into());
+        assert!(matches!(HttpServer::start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("x-token")));
+    }
+
     /// One refused call is that call's failure, not the server's.
     #[test]
     fn an_error_status_fails_the_call_and_keeps_the_session() {
@@ -535,12 +445,31 @@ mod tests {
             _ => well_behaved(request),
         });
         let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
-        let gone = McpError::Http { status: 404, body: "unknown session".into() };
+        // The SDK reads a 404 in a session as the session's end and keeps no body.
+        let gone = McpError::Http { status: 404, body: String::new() };
         assert_eq!(server.call_tool("search", json!({}), &|| false).unwrap_err(), gone);
         assert!(!server.is_alive());
         let started = Instant::now();
         assert_eq!(server.list_tools().unwrap_err(), gone, "and every call after it");
         assert!(started.elapsed() < Duration::from_secs(5), "without waiting");
+    }
+
+    /// The SDK can replace a forgotten session by itself and send the call
+    /// again; it is told not to. The rule is the app's — a failed call is
+    /// never repeated — and a restart belongs to `services::mcp_servers`,
+    /// once a turn.
+    #[test]
+    fn a_call_that_met_a_forgotten_session_is_not_sent_again() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let (url, log) = serve(move |request| match request.body["method"].as_str() {
+            Some("tools/call") if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => status(404, "unknown session"),
+            _ => well_behaved(request),
+        });
+        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        assert!(matches!(server.call_tool("search", json!({}), &|| false), Err(McpError::Http { status: 404, .. })));
+        std::thread::sleep(Duration::from_millis(300));
+        let count = |method: &str| log.lock().unwrap().iter().filter(|s| s.body["method"] == method).count();
+        assert_eq!((count("tools/call"), count("initialize")), (1, 1));
     }
 
     /// Without a session, a 404 is the call's own — the tool, say, is
@@ -632,30 +561,42 @@ mod tests {
         assert!(server.is_alive(), "the request's own timeout does not end the session");
     }
 
-    /// Not an answer the call then waits out its timeout for — whether the
-    /// stream ends without it, the server only accepted the request, or its
-    /// JSON is something else.
+    /// A stream that ends without the answer took the call with it: reported
+    /// at once, and the server counts as gone — the restart in
+    /// `services::mcp_servers` starts a new conversation.
     #[test]
-    fn a_response_without_the_answer_fails_the_call_at_once() {
+    fn a_stream_that_ends_without_the_answer_ends_the_connection() {
         let (url, _log) = serve(|request| match request.body["method"].as_str() {
-            Some("tools/call") if request.body["params"]["name"] == "json" => Answer {
-                status: 200,
-                headers: vec![("Content-Type", "application/json".into())],
-                body: json!({ "jsonrpc": "2.0", "method": "notifications/message", "params": {} }).to_string(),
-            },
             Some("tools/call") => events(&[json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": {} })]),
-            Some("tools/list") => status(202, ""),
             _ => well_behaved(request),
         });
         let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
         let started = Instant::now();
         let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
-        assert!(matches!(&err, McpError::Protocol(m) if m.contains("ended without its answer")), "{err}");
-        let err = server.list_tools().unwrap_err();
-        assert!(matches!(&err, McpError::Protocol(m) if m.contains("accepted")), "{err}");
-        let err = server.call_tool("json", json!({}), &|| false).unwrap_err();
-        assert!(matches!(&err, McpError::Protocol(m) if m.contains("not with its answer")), "{err}");
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(matches!(err, McpError::Unreachable(_)), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(5), "waited out the timeout");
+        assert!(!server.is_alive());
+        assert_eq!(server.list_tools().unwrap_err(), err, "and every call after it");
+    }
+
+    /// A server that only accepts a request, or answers it with something
+    /// else, never answers it: the SDK keeps waiting, so the call's own
+    /// timeout is what ends it — and it is the call's failure alone.
+    #[test]
+    fn an_answer_that_never_comes_is_the_calls_timeout() {
+        let (url, _log) = serve(|request| match request.body["method"].as_str() {
+            Some("tools/call") => Answer {
+                status: 200,
+                headers: vec![("Content-Type", "application/json".into())],
+                body: json!({ "jsonrpc": "2.0", "method": "notifications/message", "params": {} }).to_string(),
+            },
+            Some("tools/list") => status(202, ""),
+            _ => well_behaved(request),
+        });
+        let server = HttpServer::start(&config(&url, 1), &|| false).unwrap();
+        assert_eq!(server.list_tools().unwrap_err(), McpError::Timeout(1), "accepted, never answered");
+        assert_eq!(server.call_tool("json", json!({}), &|| false).unwrap_err(), McpError::Timeout(1));
+        assert!(server.is_alive());
     }
 
     /// An error answer in JSON is the server's own, with its code.

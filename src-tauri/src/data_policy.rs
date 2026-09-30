@@ -10,26 +10,31 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The provider's client and the agent it is built on, the MCP servers the
-/// user gave a URL, and the cluster of a kubeconfig the user added. Anything
+/// user gave a URL (the SDK's client and the module that points it at that
+/// URL), and the cluster of a kubeconfig the user added. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/http_agent.rs",
     "src/infra/llm_providers/",
     "src/infra/mcp_http.rs",
+    "src/infra/mcp_rmcp.rs",
     "src/infra/kube_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.
 const RUST_NETWORK: &[&str] =
-    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::"];
+    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::", "use rmcp::", " rmcp::"];
 
 /// And in the window. The CSP in `tauri.conf.json` refuses these at runtime
 /// too; this catches them before anyone has to wonder why a request failed.
 const WINDOW_NETWORK: &[&str] = &["fetch(", "XMLHttpRequest", "new WebSocket", "sendBeacon", "new EventSource"];
 
 /// Crates and packages that exist to send data somewhere — HTTP clients
-/// besides the one the provider uses, and telemetry.
+/// besides the one the provider uses, and telemetry. `reqwest` is in the
+/// build all the same, under the MCP SDK (`rmcp`), which this list does not
+/// see: it reads the manifest, not the graph. What holds there is the fence
+/// above — `rmcp::` outside the two MCP modules fails.
 const RUST_DENIED: &[&str] = &[
     "reqwest", "hyper", "isahc", "attohttpc", "surf", "curl", "tungstenite", "tokio-tungstenite", "sentry",
     "opentelemetry", "posthog", "tauri-plugin-http", "tauri-plugin-websocket", "tauri-plugin-upload",

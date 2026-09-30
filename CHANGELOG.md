@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 MCP servers that speak the 2026-07-28 revision of the protocol connect; older ones work as before
+
 - 2026-09-30 The Skills panel lists the skills that are on first and the ones switched off after them, in grey
 
 - 2026-09-30 Settings → Skills: a folder opens under its row to show the skills it gave, with the hidden and switched-off ones marked

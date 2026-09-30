@@ -266,7 +266,7 @@ pub enum McpError {
 }
 
 /// 401 is how a server says it wants OAuth, which is not built yet
-/// (`docs/17-mcp-http.md`); a token in `headers` is what works today.
+/// (`docs/18-mcp-oauth.md`); a token in `headers` is what works today.
 /// 405 to a POST is almost always the old HTTP+SSE transport's `/sse`
 /// endpoint, which takes only GET and is not supported.
 fn status_hint(status: u16) -> &'static str {
@@ -285,10 +285,10 @@ fn last_output(stderr: &str) -> String {
     }
 }
 
-/// A connected server. The port between the loop and a transport: the stdio
-/// client in `infra::mcp_stdio` is one implementation, and an HTTP one (the
-/// place for `rmcp`, with OAuth) would be another — nothing above this trait
-/// learns which.
+/// A connected server. The port between the loop and a transport: a process
+/// (`infra::mcp_stdio`) and a URL (`infra::mcp_http`), both over the SDK in
+/// `infra::mcp_rmcp` — nothing above this trait learns which, or that there
+/// is an SDK.
 ///
 /// Blocking, like `LlmProvider`, and for the same reasons.
 pub trait McpClient: Send + Sync {
