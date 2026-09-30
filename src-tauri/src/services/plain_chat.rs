@@ -420,6 +420,14 @@ mod tests {
             self.0.lock().unwrap().push(change.clone());
             Ok(())
         }
+
+        fn load(&self, id: &str) -> Result<(KubeChange, serde_json::Value), String> {
+            Err(format!("there is no backup of the change {id}"))
+        }
+
+        fn history(&self) -> Result<Vec<KubeChange>, String> {
+            Ok(self.0.lock().unwrap().clone())
+        }
     }
 
     fn scaling(writes: bool, replies: Vec<ChatStreamResult>) -> Chat {

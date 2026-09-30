@@ -502,6 +502,7 @@ describe("the Kubernetes role's reads", () => {
       name: "Scale",
       arg: "Deployment api → 0",
     });
+    expect(describeTool(tool({ name: "kubeUndo", arguments: '{"changeId":"kc-1a2b3c4d"}' }))).toMatchObject({ name: "Undo", arg: "kc-1a2b3c4d" });
     const diagnosed = describeTool(
       tool({ name: "kubeDiagnose", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "2 pods, 1 with problems" } }),
     );

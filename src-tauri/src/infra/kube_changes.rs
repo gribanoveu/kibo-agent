@@ -7,7 +7,9 @@
 //! object, only where and what; unlike the tool-call log it is not a setting.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +21,10 @@ use crate::infra::{app_dir, master_key};
 
 const BACKUPS: &str = "kube-backups";
 const AUDIT: &str = "kube-audit.jsonl";
+/// How long a backup is kept, and so how long a change can be undone — the
+/// file history's term.
+pub const RETENTION_DAYS: u64 = crate::infra::file_history::RETENTION_DAYS;
+const RETENTION: Duration = Duration::from_secs(RETENTION_DAYS * 24 * 60 * 60);
 
 /// What one backup file holds, before sealing.
 #[derive(Serialize, Deserialize)]
@@ -45,7 +51,13 @@ impl KubeChanges for ChangeStore {
         let plain = Zeroizing::new(serde_json::to_vec(&backup).map_err(|e| format!("could not serialize the backup: {e}"))?);
         let key = master_key::resolve()?;
         let blob = secret_store::seal(&key, SecretPurpose::KubeBackup, &plain).map_err(|e| e.to_string())?;
-        app_dir::write_private(&backup_path(&change.id)?, &blob)
+        let path = backup_path(&change.id)?;
+        // Once a run, as the file history clears its copies.
+        static PRUNED: AtomicBool = AtomicBool::new(false);
+        if let (false, Some(dir)) = (PRUNED.swap(true, Ordering::Relaxed), path.parent()) {
+            prune(dir);
+        }
+        app_dir::write_private(&path, &blob)
     }
 
     fn audit(&self, change: &KubeChange) -> Result<(), String> {
@@ -60,6 +72,30 @@ impl KubeChanges for ChangeStore {
         }
         let mut file = options.open(&path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
         writeln!(file, "{line}").map_err(|e| format!("could not write {}: {e}", path.display()))
+    }
+
+    fn load(&self, id: &str) -> Result<(KubeChange, Value), String> {
+        load_backup(id)
+    }
+
+    fn history(&self) -> Result<Vec<KubeChange>, String> {
+        audit_log()
+    }
+}
+
+/// Whether the change's backup is still kept: past [`RETENTION_DAYS`] it is not.
+pub fn has_backup(id: &str) -> bool {
+    backup_path(id).is_ok_and(|path| path.is_file())
+}
+
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let old = entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age > RETENTION));
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -108,6 +144,7 @@ mod tests {
             generation_before: Some(4),
             generation_after: None,
             error: None,
+            undoes: None,
         }
     }
 
@@ -124,6 +161,23 @@ mod tests {
             assert!(secret_store::open(&key, SecretPurpose::ProviderApiKey, &raw).is_err(), "it opens as something else");
             assert_eq!(load_backup("kc-1").unwrap(), (change("kc-1"), secret));
             assert!(load_backup("kc-2").unwrap_err().contains("no backup"));
+        });
+    }
+
+    /// A change can be undone for thirty days: then its backup goes.
+    #[test]
+    fn a_backup_past_retention_is_cleared_and_a_fresh_one_stays() {
+        with_app_dir("kube-changes-prune", || {
+            ChangeStore.backup(&change("kc-old"), &json!({})).unwrap();
+            ChangeStore.backup(&change("kc-new"), &json!({})).unwrap();
+            let old = backup_path("kc-old").unwrap();
+            let past = SystemTime::now() - RETENTION - Duration::from_secs(60);
+            std::fs::File::options().write(true).open(&old).unwrap().set_modified(past).unwrap();
+            prune(old.parent().unwrap());
+            assert!(!has_backup("kc-old") && has_backup("kc-new"));
+            assert!(!has_backup("../settings"));
+            assert_eq!(ChangeStore.load("kc-new").unwrap().0, change("kc-new"));
+            assert_eq!(ChangeStore.history().unwrap(), []);
         });
     }
 

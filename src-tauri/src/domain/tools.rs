@@ -67,6 +67,8 @@ pub enum ToolName {
     KubeDiagnose,
     /// The first of the role's changes (K-5a): replicas, with a backup.
     KubeScale,
+    /// Puts a recorded change back from its backup (K-5b).
+    KubeUndo,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -114,6 +116,7 @@ impl ToolName {
         ToolName::KubeFieldHistory,
         ToolName::KubeDiagnose,
         ToolName::KubeScale,
+        ToolName::KubeUndo,
         ToolName::Mcp,
     ];
 
@@ -153,6 +156,7 @@ impl ToolName {
             ToolName::KubeFieldHistory => "kubeFieldHistory",
             ToolName::KubeDiagnose => "kubeDiagnose",
             ToolName::KubeScale => "kubeScale",
+            ToolName::KubeUndo => "kubeUndo",
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -193,6 +197,7 @@ impl ToolName {
                 | ToolName::RunInTerminal
                 // Changes the user's cluster.
                 | ToolName::KubeScale
+                | ToolName::KubeUndo
                 // Nothing is known about what a foreign tool does, and its
                 // server's own hints are untrusted by the specification: it
                 // asks, and it stays out of the modes that promise nothing
@@ -260,7 +265,7 @@ impl ToolName {
             // Five or six reads of the cluster — the rounds it saves.
             ToolName::KubeDiagnose => 4,
             // A read, a dry run, a backup, the change.
-            ToolName::KubeScale => 3,
+            ToolName::KubeScale | ToolName::KubeUndo => 3,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -414,7 +419,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            33,
+            34,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -476,6 +481,7 @@ mod tests {
             mutating,
             HashSet::from([
                 ToolName::KubeScale,
+                ToolName::KubeUndo,
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
@@ -994,6 +1000,10 @@ pub enum ToolError {
     /// The backup could not be written, so nothing was changed.
     #[error("nothing was changed: the backup that makes it undoable could not be written — {0}")]
     KubeBackup(String),
+    /// An undo of an object somebody else has changed since: the app does
+    /// not write over what it did not write.
+    #[error("not undone: {0}. Whether to change it again is the user's decision, not yours — tell them what you found and what it is now, and do nothing more to it unless they then ask.")]
+    KubeChangedSince(String),
     /// A Kubernetes tool in a chat with no cluster to read. The prompt's note
     /// about the user's setup says why; the model tells the user what to fix.
     #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
@@ -1055,6 +1065,7 @@ pub enum ToolCall {
     KubeFieldHistory(KubeFieldHistoryArgs),
     KubeDiagnose(KubeDiagnoseArgs),
     KubeScale(KubeScaleArgs),
+    KubeUndo(KubeUndoArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1093,6 +1104,7 @@ impl ToolCall {
             ToolCall::KubeFieldHistory(_) => ToolName::KubeFieldHistory,
             ToolCall::KubeDiagnose(_) => ToolName::KubeDiagnose,
             ToolCall::KubeScale(_) => ToolName::KubeScale,
+            ToolCall::KubeUndo(_) => ToolName::KubeUndo,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1489,6 +1501,13 @@ pub struct KubeScaleArgs {
     pub name: String,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub replicas: Option<u32>,
+}
+
+/// `kubeUndo`: a change by the id its tool answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeUndoArgs {
+    pub change_id: String,
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the

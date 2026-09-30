@@ -66,6 +66,9 @@
 .kube-path .btn {
   flex: none;
 }
+.kube-changes-title {
+  margin-top: 22px;
+}
 /* Under the controls, where the fields' inputs start. */
 .kube-actions {
   margin-left: 144px;

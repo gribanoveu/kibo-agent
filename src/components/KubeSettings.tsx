@@ -1,13 +1,15 @@
 import { useState } from "react";
-import { FolderOpen, Server, Trash2 } from "lucide-react";
+import { FolderOpen, History, Server, Trash2 } from "lucide-react";
 import { pickFile } from "../lib/dialog";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
+import { useKubeChanges } from "../hooks/useKubeChanges";
 import "./KubeSettings.css";
 
 /** Settings → Kubernetes: the kubeconfig files Chat mode's Kubernetes role knows of. */
 export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
+  const changes = useKubeChanges();
 
   const add = async () => {
     if (await kube.save(name, path)) {
@@ -93,6 +95,33 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
           </button>
         </div>
       </form>
+
+      <h3 className="settings-title kube-changes-title">Changes</h3>
+      <p className="modal-note kube-intro">
+        What Kibo changed in your clusters. Each was backed up first and can be undone for 30 days, the last change of
+        an object first: ask in a Kubernetes chat pinned to the same context and namespace, by the change's id.
+      </p>
+      {changes.length === 0 ? (
+        <p className="modal-note">Nothing yet.</p>
+      ) : (
+        <ul className="kube-list">
+          {changes.map((change) => (
+            <li key={change.id} className="kube-row">
+              <History size={14} className="kube-row-icon" />
+              <span className="kube-row-text">
+                <span className="kube-row-name">
+                  {change.kind}/{change.name} · {change.summary}
+                  {change.undoes && <span className="kube-row-badge">undo of {change.undoes}</span>}
+                  {change.error && <span className="kube-row-badge">refused</span>}
+                </span>
+                <span className="kube-row-path">
+                  {change.id} · {change.context} · {change.namespace} · {new Date(change.at).toLocaleString()}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }

@@ -18,7 +18,7 @@ use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLan
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
-use crate::services::{kubeconfigs, llm_session};
+use crate::services::{kube_changes, kubeconfigs, llm_session};
 
 use super::chat::AgentState;
 
@@ -184,6 +184,12 @@ pub fn kube_namespace_remember(kubeconfig: String, namespace: String) -> Result<
         return Err("a namespace needs a name".to_string());
     }
     kubeconfigs::remember_namespace(&kubeconfig, namespace).map_err(|e| e.to_string())
+}
+
+/// What the app changed in the user's clusters and can still put back, newest first.
+#[tauri::command]
+pub fn kube_changes() -> Result<Vec<crate::domain::kube::KubeChange>, String> {
+    kube_changes::list()
 }
 
 /// `~/.kube/config` as the shell would read it; any other path as it is.

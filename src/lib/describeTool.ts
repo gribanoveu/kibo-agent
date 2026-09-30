@@ -66,6 +66,7 @@ export const LABELS: Record<string, string> = {
   kubeFieldHistory: "Field history",
   kubeDiagnose: "Diagnose",
   kubeScale: "Scale",
+  kubeUndo: "Undo",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -135,7 +136,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
   // for it — a table, YAML, a log — shaped there for the model.
   if (block.name.startsWith("kube") && block.name in LABELS) {
     const replicas = num(args.replicas);
-    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector), replicas === undefined ? null : `→ ${replicas}`]
+    const target = [str(args.kind), str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), replicas === undefined ? null : `→ ${replicas}`]
       .filter(Boolean)
       .join(" ");
     const namespace = str(args.namespace);

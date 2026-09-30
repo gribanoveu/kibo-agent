@@ -115,8 +115,9 @@ impl ChatRole {
                 ToolName::KubeTop,
                 ToolName::KubeFieldHistory,
                 ToolName::KubeDiagnose,
-                // The one change so far (K-5a); refused while the tab says Read only.
+                // The changes so far (K-5a, K-5b); refused while the tab says Read only.
                 ToolName::KubeScale,
+                ToolName::KubeUndo,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -166,7 +167,9 @@ You can read the user's cluster — the one this chat is pinned to, below — wi
 kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory. One change you can make yourself: \
 kubeScale. It works only in the chat's own namespace and only when the user has switched the chat's tab from \
 \"Read only\" to \"Changes\"; it shows them a card to approve first, and keeps a backup. Several scales in one \
-round are one card. For any other change, give the exact command, say what it affects, and let the user run it.
+round are one card. kubeUndo puts a change back by its change id, from the backup and under the same \
+conditions — never undo by scaling back from memory. For any other change, give the exact command, say what \
+it affects, and let the user run it.
 - After a change, say what it was before and what it is now, and give its change id. When asked to stop \
   everything, name what scaling does not stop — a DaemonSet, a CronJob, a Job — instead of passing over it.
 - Look before you ask: do not ask the user for output your tools can read. Ask them only for what the \
@@ -217,10 +220,10 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
-        assert_eq!(changing, [&ToolName::KubeScale]);
+        assert_eq!(changing, [&ToolName::KubeScale, &ToolName::KubeUndo]);
     }
 
     /// The window sends the role by this name; a rename is a role it can no longer pick.

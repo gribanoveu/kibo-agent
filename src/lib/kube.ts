@@ -68,3 +68,24 @@ export function chosenContext(contexts: KubeContexts | null, pin: KubePin | null
 export function chosenNamespace(context: KubeContext | null, pin: KubePin | null): string {
   return pin?.namespace ?? context?.namespace ?? "default";
 }
+
+/** Mirrors `domain::kube::KubeChange`. */
+export type KubeChange = {
+  id: string;
+  at: string;
+  kubeconfig: string;
+  context: string;
+  namespace: string;
+  kind: string;
+  name: string;
+  tool: string;
+  summary: string;
+  error: string | null;
+  /** The change this one put back, when it is an undo. */
+  undoes: string | null;
+};
+
+/** What the app changed in the user's clusters and can still put back, newest first. */
+export async function kubeChanges(): Promise<KubeChange[]> {
+  return invoke<KubeChange[]>("kube_changes");
+}

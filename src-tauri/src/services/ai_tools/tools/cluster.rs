@@ -7,11 +7,11 @@
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::domain::kube::{resolve_kind, KubeChange, KubeKind, ListQuery, LogQuery, PinnedCluster};
+use crate::domain::kube::{resolve_kind, undoable, KubeChange, KubeKind, ListQuery, LogQuery, PinnedCluster};
 use crate::domain::kube_view::{self, cap, FieldPath, PodLog};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
-    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeScaleArgs, KubeTopArgs,
+    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeScaleArgs, KubeTopArgs, KubeUndoArgs,
     ToolCall, ToolError, ToolPreview, ToolResult,
 };
 
@@ -512,11 +512,54 @@ fn plan_scale(cluster: &PinnedCluster, args: &KubeScaleArgs) -> Result<ScalePlan
     Ok(ScalePlan { kind, object, before, after })
 }
 
+fn generation(object: &Value) -> Option<i64> {
+    object.pointer("/metadata/generation").and_then(Value::as_i64)
+}
+
+/// An undo the server has accepted as a dry run (`docs/21-kubernetes-mode.md`,
+/// decision 9): what the backup of `id` puts back, and on which object. The
+/// record decides, not the model's memory: the change happened, here, and is
+/// the last of its object; its backup is still kept; and nobody else has
+/// changed the object since, which its spec's generation tells.
+fn plan_undo(cluster: &PinnedCluster, id: &str) -> Result<(ScalePlan, String), ToolError> {
+    // The tab's switch is `plan_scale`'s to refuse, before it asks the cluster anything.
+    let refused = |why: String| invalid("kubeUndo", why);
+    let id = id.trim();
+    let changes = cluster.changes.ok_or_else(|| refused("this chat keeps no record of changes".to_string()))?;
+    let history = changes.history().map_err(refused)?;
+    let made = undoable(&history, id).map_err(refused)?;
+    if (made.kubeconfig.as_str(), made.context.as_str(), made.namespace.as_str()) != (cluster.kubeconfig, cluster.context, cluster.namespace) {
+        return Err(refused(format!(
+            "the change {id} was made in context {} · namespace {} of the kubeconfig {} — it is undone from a chat pinned there, \
+             which the user can open",
+            made.context, made.namespace, made.kubeconfig
+        )));
+    }
+    let (_, was) = changes.load(id).map_err(refused)?;
+    let kind = if made.group.is_empty() { made.kind.clone() } else { format!("{}.{}", made.kind, made.group) };
+    let args = match made.tool.as_str() {
+        "kubeScale" => {
+            let replicas = was.pointer("/spec/replicas").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(1);
+            KubeScaleArgs { kind, name: made.name.clone(), replicas: Some(replicas) }
+        }
+        other => return Err(refused(format!("a {other} change cannot be undone"))),
+    };
+    let plan = plan_scale(cluster, &args)?;
+    if generation(&plan.object) != made.generation_after {
+        return Err(ToolError::KubeChangedSince(format!(
+            "{}/{} was changed by someone else after {id} — it has {} replicas now, and the backup has {}",
+            plan.kind.kind, made.name, plan.before, plan.after
+        )));
+    }
+    Ok((plan, made.name.clone()))
+}
+
 /// A change that would be refused is refused before anyone is asked to
 /// approve it: no card for a call that cannot run. Reads pass.
 pub fn preflight(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<(), ToolError> {
     match call {
         ToolCall::KubeScale(args) => plan_scale(&cluster(kube)?, args).map(|_| ()),
+        ToolCall::KubeUndo(args) => plan_undo(&cluster(kube)?, &args.change_id).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -524,25 +567,34 @@ pub fn preflight(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<(), Too
 /// What a change would do, for its approval card: where — the first thing
 /// to read before agreeing — and what becomes of what.
 pub fn preview(kube: Option<PinnedCluster>, call: &ToolCall) -> ToolPreview {
-    let ToolCall::KubeScale(args) = call else { return ToolPreview::Nothing };
-    let planned = cluster(kube).and_then(|cluster| Ok((plan_scale(&cluster, args)?, cluster)));
+    let planned = match call {
+        ToolCall::KubeScale(args) => cluster(kube).and_then(|cluster| Ok((cluster, plan_scale(&cluster, args)?, args.name.clone(), None))),
+        ToolCall::KubeUndo(args) => cluster(kube).and_then(|cluster| {
+            let (plan, name) = plan_undo(&cluster, &args.change_id)?;
+            Ok((cluster, plan, name, Some(args.change_id.trim())))
+        }),
+        _ => return ToolPreview::Nothing,
+    };
     match planned {
-        Ok((plan, cluster)) => ToolPreview::Change {
-            place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
-            summary: format!("{}/{}: {} → {} replicas", plan.kind.kind, args.name, plan.before, plan.after),
-            notes: vec!["Can be undone: the object is backed up first, with its replica count.".to_string()],
-        },
+        Ok((cluster, plan, name, undoes)) => {
+            let what = format!("{}/{name}: {} → {} replicas", plan.kind.kind, plan.before, plan.after);
+            ToolPreview::Change {
+                place: format!("context {} · namespace {}", cluster.context, cluster.namespace),
+                summary: undoes.map_or(what.clone(), |id| format!("Undo {id} — {what}")),
+                notes: vec![match undoes {
+                    Some(_) => "Put back from the change's backup. An undo is a change too: it is backed up and can be undone.".to_string(),
+                    None => "Can be undone: the object is backed up first, with its replica count.".to_string(),
+                }],
+            }
+        }
         Err(e) => ToolPreview::Failed { reason: e.to_string() },
     }
 }
 
-/// Sets a workload's replicas (`docs/21-kubernetes-mode.md`, K-5a): dry run,
-/// backup — no backup, no change — the change, the audit line.
-pub fn kube_scale(kube: Option<PinnedCluster>, args: &KubeScaleArgs) -> Result<ToolResult, ToolError> {
-    let cluster = cluster(kube)?;
-    let plan = plan_scale(&cluster, args)?;
+/// Makes a planned scale: the backup — no backup, no change — the change,
+/// the audit line. `undoes` is the change it puts back, when it is an undo.
+fn make_scale(cluster: &PinnedCluster, plan: &ScalePlan, name: &str, undoes: Option<&str>) -> Result<ToolResult, ToolError> {
     let changes = cluster.changes.ok_or_else(|| ToolError::KubeBackup("this chat has nowhere to record changes".to_string()))?;
-    let generation = |object: &Value| object.pointer("/metadata/generation").and_then(Value::as_i64);
     let mut change = KubeChange {
         id: format!("kc-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
         at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -553,15 +605,18 @@ pub fn kube_scale(kube: Option<PinnedCluster>, args: &KubeScaleArgs) -> Result<T
         version: plan.kind.version.clone(),
         kind: plan.kind.kind.clone(),
         plural: plan.kind.plural.clone(),
-        name: args.name.clone(),
+        name: name.to_string(),
+        // What kind of change it is — and so how it is put back — whether
+        // a tool or an undo made it.
         tool: "kubeScale".to_string(),
         summary: format!("{} → {} replicas", plan.before, plan.after),
         generation_before: generation(&plan.object),
         generation_after: None,
         error: None,
+        undoes: undoes.map(str::to_string),
     };
     changes.backup(&change, &plan.object).map_err(ToolError::KubeBackup)?;
-    let done = cluster.api.patch(&plan.kind, cluster.namespace, &args.name, &scale_patch(plan.after), false);
+    let done = cluster.api.patch(&plan.kind, cluster.namespace, name, &scale_patch(plan.after), false);
     match &done {
         Ok(object) => change.generation_after = generation(object),
         Err(e) => change.error = Some(e.to_string()),
@@ -570,14 +625,30 @@ pub fn kube_scale(kube: Option<PinnedCluster>, args: &KubeScaleArgs) -> Result<T
     // written is said, not hidden behind the result.
     let audited = changes.audit(&change);
     done?;
-    let mut text = format!(
-        "{}/{} in namespace {}: {}. Change id {} — the object as it was is backed up.",
-        plan.kind.kind, args.name, cluster.namespace, change.summary, change.id
-    );
+    let what = format!("{}/{name} in namespace {}: {}", plan.kind.kind, cluster.namespace, change.summary);
+    let mut text = match undoes {
+        Some(undone) => format!("Undid {undone} — {what}. Change id {} — undoing that makes the change again.", change.id),
+        None => format!("{what}. Change id {} — the object as it was is backed up.", change.id),
+    };
     if let Err(e) = audited {
         text.push_str(&format!("\nThe audit line could not be written: {e}"));
     }
     Ok(ToolResult::Kube { text, summary: format!("{} → {}", plan.before, plan.after) })
+}
+
+/// Sets a workload's replicas (`docs/21-kubernetes-mode.md`, K-5a): dry run,
+/// backup, the change, the audit line.
+pub fn kube_scale(kube: Option<PinnedCluster>, args: &KubeScaleArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    make_scale(&cluster, &plan_scale(&cluster, args)?, &args.name, None)
+}
+
+/// Puts a change back from its backup (K-5b) — the model's tool and nobody
+/// else's: an undo is asked for in the chat, and approved on its card.
+pub fn kube_undo(kube: Option<PinnedCluster>, args: &KubeUndoArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    let (plan, name) = plan_undo(&cluster, &args.change_id)?;
+    make_scale(&cluster, &plan, &name, Some(args.change_id.trim()))
 }
 
 /// How every Kubernetes tool is told where it reads.
@@ -764,6 +835,27 @@ pub(super) fn scale_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn undo_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeUndo".to_string(),
+        description: "Put a change back by its change id — the id a changing tool answered with, or one the user names. The \
+            app restores from the backup it took before the change, so it works after the conversation has forgotten the \
+            details; use it rather than changing the object back yourself. Needs \"Changes\" on the chat's tab and the \
+            user's approval on a card, like any change, and is one itself: it answers with a new change id, and undoing \
+            that makes the change again. It refuses when the object has been changed since — by a later change of yours \
+            (undo that first) or by someone else (then the user decides what to do) — when the change was made \
+            in another cluster or namespace, and when its backup is older than 30 days."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "changeId": { "type": "string", "description": "The change to undo, e.g. kc-1a2b3c4d." }
+            },
+            "required": ["changeId"]
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,6 +894,15 @@ mod tests {
         fn audit(&self, change: &KubeChange) -> Result<(), String> {
             self.audits.lock().unwrap().push(change.clone());
             Ok(())
+        }
+
+        fn load(&self, id: &str) -> Result<(KubeChange, Value), String> {
+            let backups = self.backups.lock().unwrap();
+            backups.iter().find(|(change, _)| change.id == id).cloned().ok_or_else(|| format!("there is no backup of the change {id}"))
+        }
+
+        fn history(&self) -> Result<Vec<KubeChange>, String> {
+            Ok(self.audits.lock().unwrap().clone())
         }
     }
 
@@ -931,6 +1032,7 @@ mod tests {
         let (change, object) = &backups[0];
         assert_eq!(object["spec"]["replicas"], 3, "the backup is the object before the change");
         assert!(text.contains(&change.id));
+        assert_eq!(change.undoes, None);
         assert_eq!((change.kubeconfig.as_str(), change.context.as_str(), change.namespace.as_str()), ("prod", "eks", "orders"));
         assert_eq!((change.plural.as_str(), change.group.as_str(), change.tool.as_str()), ("deployments", "apps", "kubeScale"));
         let audits = recorded.audits.lock().unwrap();
@@ -1021,6 +1123,111 @@ mod tests {
         assert!(refused("deploy", Some(3)).contains("already has 3 replicas"));
         assert!(refused("deploy", None).contains("replicas is required"));
         assert!(recorded.backups.lock().unwrap().is_empty());
+    }
+
+    /// A cluster scaled to `now` by the change kc-1, which found 3 replicas
+    /// and left the spec at `left` — the fake's own generation is 4.
+    fn scaled(now: i64, left: i64) -> (Fake, Recorded) {
+        let (fake, recorded) = (scalable(3), Recorded::default());
+        kube_scale(writing(&fake, &recorded), &scale(now as u32)).unwrap();
+        recorded.backups.lock().unwrap()[0].0.id = "kc-1".into();
+        for audit in recorded.audits.lock().unwrap().iter_mut() {
+            audit.id = "kc-1".into();
+            audit.generation_after = Some(left);
+        }
+        (scalable(now), recorded)
+    }
+
+    fn undo_of(id: &str) -> KubeUndoArgs {
+        KubeUndoArgs { change_id: id.into() }
+    }
+
+    fn refusal(result: Result<ToolResult, ToolError>) -> String {
+        match result {
+            Err(ToolError::InvalidArguments { tool, reason }) if tool == "kubeUndo" => reason,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The backup decides what comes back, and the undo is on record as a
+    /// change of its own — dry run, backup, change, audit — naming what it undid.
+    #[test]
+    fn an_undo_puts_the_backup_back_and_is_itself_a_change() {
+        let (fake, recorded) = scaled(0, 4);
+        let done = kube_undo(writing(&fake, &recorded), &undo_of(" kc-1 ")).unwrap();
+        let ToolResult::Kube { text, summary } = done else { panic!() };
+        let id = recorded.audits.lock().unwrap()[1].id.clone();
+        assert_eq!(summary, "0 → 3");
+        assert_eq!(text, format!("Undid kc-1 — Deployment/api in namespace orders: 0 → 3 replicas. Change id {id} — undoing that makes the change again."));
+        let patches: Vec<String> = fake.asked().into_iter().filter(|a| a.starts_with("patch")).collect();
+        assert_eq!(
+            patches,
+            ["patch deployments orders api {\"spec\":{\"replicas\":3}} dry", "patch deployments orders api {\"spec\":{\"replicas\":3}}"]
+        );
+        let backups = recorded.backups.lock().unwrap();
+        assert_eq!((backups[1].0.id.as_str(), &backups[1].1["spec"]["replicas"]), (id.as_str(), &json!(0)), "what the undo found");
+        let audits = recorded.audits.lock().unwrap();
+        assert_eq!((audits[1].undoes.as_deref(), audits[1].tool.as_str(), audits[1].generation_after), (Some("kc-1"), "kubeScale", Some(5)));
+    }
+
+    /// Not over what the app did not write: a spec generation other than
+    /// the one the change left is somebody else's change, and what to do
+    /// about it is the user's to say.
+    #[test]
+    fn an_object_changed_by_someone_else_is_not_undone() {
+        let (fake, recorded) = scaled(2, 9);
+        let refused = kube_undo(writing(&fake, &recorded), &undo_of("kc-1"));
+        let Err(ToolError::KubeChangedSince(why)) = &refused else { panic!("{refused:?}") };
+        assert_eq!(why, "Deployment/api was changed by someone else after kc-1 — it has 2 replicas now, and the backup has 3");
+        assert!(refused.unwrap_err().to_string().contains("the user's decision"));
+        assert!(matches!(preflight(writing(&fake, &recorded), &ToolCall::KubeUndo(undo_of("kc-1"))), Err(ToolError::KubeChangedSince(_))));
+        assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "{:?}", fake.asked());
+        assert_eq!(recorded.backups.lock().unwrap().len(), 1);
+    }
+
+    /// Everything else that stops an undo, each said in words the model can pass on.
+    #[test]
+    fn an_undo_is_refused_read_only_elsewhere_out_of_turn_or_without_its_backup() {
+        let (fake, recorded) = scaled(0, 4);
+        let here = writing(&fake, &recorded).unwrap();
+        assert!(matches!(kube_undo(Some(PinnedCluster { writes: false, ..here }), &undo_of("kc-1")), Err(ToolError::KubeReadOnly)));
+        assert!(refusal(kube_undo(Some(PinnedCluster { changes: None, ..here }), &undo_of("kc-1"))).contains("no record"));
+        for elsewhere in [PinnedCluster { namespace: "payments", ..here }, PinnedCluster { context: "gke", ..here }, PinnedCluster { kubeconfig: "dev", ..here }] {
+            let why = refusal(kube_undo(Some(elsewhere), &undo_of("kc-1")));
+            assert!(why.contains("was made in context eks · namespace orders of the kubeconfig prod"), "{why}");
+        }
+        assert!(refusal(kube_undo(Some(here), &undo_of("kc-2"))).contains("not on record"));
+        assert!(fake.asked().is_empty(), "nothing is asked of the cluster for these: {:?}", fake.asked());
+
+        // Undone once, the change is no longer the last of its object.
+        kube_undo(Some(here), &undo_of("kc-1")).unwrap();
+        assert!(refusal(kube_undo(Some(here), &undo_of("kc-1"))).contains("already undone"));
+
+        let (fake, recorded) = scaled(0, 4);
+        recorded.audits.lock().unwrap()[0].tool = "kubeRolloutRestart".into();
+        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of("kc-1"))).contains("a kubeRolloutRestart change cannot be undone"));
+        recorded.audits.lock().unwrap()[0].tool = "kubeScale".into();
+        recorded.backups.lock().unwrap().clear();
+        assert!(refusal(kube_undo(writing(&fake, &recorded), &undo_of("kc-1"))).contains("no backup of the change kc-1"));
+    }
+
+    /// A workload whose kind has a group is found again by both; a backup
+    /// with no replicas written is the one replica that means.
+    #[test]
+    fn the_card_of_an_undo_names_the_change_and_what_comes_back() {
+        let (fake, recorded) = scaled(0, 4);
+        let shown = preview(writing(&fake, &recorded), &ToolCall::KubeUndo(undo_of("kc-1")));
+        let ToolPreview::Change { place, summary, notes } = shown else { panic!("{shown:?}") };
+        assert_eq!((place.as_str(), summary.as_str()), ("context eks · namespace orders", "Undo kc-1 — Deployment/api: 0 → 3 replicas"));
+        assert!(notes[0].starts_with("Put back from the change's backup"));
+        assert!(fake.asked().iter().all(|a| !a.starts_with("patch") || a.ends_with(" dry")), "{:?}", fake.asked());
+        assert!(fake.asked().contains(&"get deployments orders api".to_string()));
+
+        recorded.backups.lock().unwrap()[0].1 = json!({"spec": {}});
+        let shown = preview(writing(&fake, &recorded), &ToolCall::KubeUndo(undo_of("kc-1")));
+        assert!(matches!(&shown, ToolPreview::Change { summary, .. } if summary.ends_with("0 → 1 replicas")), "{shown:?}");
+        let gone = preview(writing(&fake, &recorded), &ToolCall::KubeUndo(undo_of("kc-7")));
+        assert!(matches!(&gone, ToolPreview::Failed { reason } if reason.contains("not on record")), "{gone:?}");
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

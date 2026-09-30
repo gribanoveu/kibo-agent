@@ -166,6 +166,39 @@ pub struct KubeChange {
     pub generation_after: Option<i64>,
     /// Why it failed; `None` when it did not.
     pub error: Option<String>,
+    /// The change this one put back, when it is an undo — itself a change,
+    /// with a backup, so an undo can be undone.
+    #[serde(default)]
+    pub undoes: Option<String>,
+}
+
+impl KubeChange {
+    fn same_object(&self, other: &KubeChange) -> bool {
+        let key = |c: &'_ KubeChange| (c.kubeconfig.clone(), c.context.clone(), c.namespace.clone(), c.group.clone(), c.kind.clone(), c.name.clone());
+        key(self) == key(other)
+    }
+}
+
+/// Whether the change `id` is the one to undo now, by the audit — `history`,
+/// oldest first: it happened, and nothing of the app's changed its object
+/// after it. Changes of one object come off last to first, as file edits do;
+/// an undo is the newest change of its object, so what it undid is no longer
+/// the last. Returns the audit's record — the one that knows the generation
+/// the change left. What anyone else did since is the generation's to tell.
+pub fn undoable<'h>(history: &'h [KubeChange], id: &str) -> Result<&'h KubeChange, String> {
+    let change = history.iter().rev().find(|c| c.id == id).ok_or_else(|| format!("the change {id} is not on record"))?;
+    if let Some(error) = &change.error {
+        return Err(format!("the change {id} was refused by the cluster and changed nothing: {error}"));
+    }
+    let last = history.iter().rev().find(|c| c.error.is_none() && c.same_object(change)).unwrap_or(change);
+    if last.id == change.id {
+        return Ok(change);
+    }
+    Err(if last.undoes.as_deref() == Some(id) {
+        format!("the change {id} is already undone, by {} — undoing that one makes the change again", last.id)
+    } else {
+        format!("{}/{} was changed again after {id}, by {} ({}) — undo that one first", change.kind, change.name, last.id, last.summary)
+    })
 }
 
 /// Where changes are recorded. A change that cannot be backed up does not
@@ -176,6 +209,10 @@ pub trait KubeChanges: Send + Sync {
     fn backup(&self, change: &KubeChange, object: &serde_json::Value) -> Result<(), String>;
     /// Adds the change, with how it ended, to the audit.
     fn audit(&self, change: &KubeChange) -> Result<(), String>;
+    /// The change `id` as it was planned, and the object as it was before it.
+    fn load(&self, id: &str) -> Result<(KubeChange, serde_json::Value), String>;
+    /// Every change on record, oldest first.
+    fn history(&self) -> Result<Vec<KubeChange>, String>;
 }
 
 /// What a Kubernetes chat's tools read: its cluster, and the namespace it is
@@ -362,6 +399,46 @@ mod tests {
 
     fn kind(group: &str, kind: &str, plural: &str) -> KubeKind {
         KubeKind { group: group.into(), version: "v1".into(), kind: kind.into(), plural: plural.into(), namespaced: true }
+    }
+
+    fn change(id: &str, name: &str) -> KubeChange {
+        KubeChange {
+            id: id.into(),
+            at: "2026-09-30T10:00:00Z".into(),
+            kubeconfig: "prod".into(),
+            context: "eks".into(),
+            namespace: "orders".into(),
+            group: "apps".into(),
+            version: "v1".into(),
+            kind: "Deployment".into(),
+            plural: "deployments".into(),
+            name: name.into(),
+            tool: "kubeScale".into(),
+            summary: "3 → 0 replicas".into(),
+            generation_before: Some(4),
+            generation_after: Some(5),
+            error: None,
+            undoes: None,
+        }
+    }
+
+    /// Last to first: only the newest change of an object comes off, and an
+    /// undo is itself the newest — undoing it makes the change again.
+    #[test]
+    fn only_the_last_change_of_an_object_is_undone() {
+        let failed = KubeChange { error: Some("conflict".into()), generation_after: None, ..change("kc-4", "api") };
+        let elsewhere = KubeChange { namespace: "payments".into(), ..change("kc-5", "api") };
+        let history = [change("kc-1", "api"), change("kc-2", "web"), change("kc-3", "api"), failed, elsewhere];
+        assert_eq!(undoable(&history, "kc-3").unwrap().id, "kc-3", "a failed change and another namespace's are not after it");
+        assert_eq!(undoable(&history, "kc-2").unwrap().id, "kc-2");
+        assert!(undoable(&history, "kc-1").unwrap_err().contains("by kc-3 (3 → 0 replicas) — undo that one first"));
+        assert!(undoable(&history, "kc-4").unwrap_err().contains("changed nothing: conflict"));
+        assert!(undoable(&history, "kc-9").unwrap_err().contains("not on record"));
+
+        let undo = KubeChange { undoes: Some("kc-2".into()), ..change("kc-6", "web") };
+        let history = [change("kc-2", "web"), undo];
+        assert!(undoable(&history, "kc-2").unwrap_err().contains("already undone, by kc-6"));
+        assert_eq!(undoable(&history, "kc-6").unwrap().id, "kc-6", "an undo is undone like any change");
     }
 
     #[test]

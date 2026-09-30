@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 Undo a change Kibo made to a cluster: ask the Kubernetes chat to undo it and the object is put back from its backup, for 30 days, on a card you approve — never over what someone else changed since; Settings → Kubernetes → Changes lists the changes and their ids
+
 - 2026-09-30 Let a Kubernetes chat change the cluster: switch its tab from Read only to Changes and the model can scale a Deployment, StatefulSet or ReplicaSet in the chat's namespace — each change asks on a card that names the cluster and shows the replicas before and after, and the object is backed up first
 
 - 2026-09-29 Ask the Kubernetes role why something is failing and it diagnoses it in one step: the workload's status, what is wrong with each pod, the events of it and its ReplicaSets, and the log of the crash from before its last restart — or, for a pending pod, what it asked for and which volume claim waits
