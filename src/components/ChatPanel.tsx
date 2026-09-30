@@ -10,6 +10,7 @@ import {
   FolderTree,
   FoldVertical,
   GitBranch,
+  Globe,
   ListTodo,
   MessageSquare,
   Pencil,
@@ -63,6 +64,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Status: GitBranch,
   Diff: GitBranch,
   Blame: GitBranch,
+  Web: Globe,
 };
 
 

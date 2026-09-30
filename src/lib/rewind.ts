@@ -20,6 +20,7 @@ const ACCOUNTED = new Set([
   "gitBlame",
   "gitLog",
   "semanticSearch",
+  "webSearch",
   "skill",
   "writePlan",
   "readOutput",

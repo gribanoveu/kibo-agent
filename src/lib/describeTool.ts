@@ -75,6 +75,7 @@ export const LABELS: Record<string, string> = {
   kubeRolloutUndo: "Roll back",
   kubeApply: "Apply",
   kubeDelete: "Delete object",
+  webSearch: "Web",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -225,6 +226,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.query) ?? "",
         meta: block.result === undefined ? undefined : `${matches.length} matches`,
         detail: [...also.map((q) => `also: ${q}`), ...(also.length ? [""] : []), ...lines, ...(hint ? ["", hint] : [])].join("\n"),
+      };
+    }
+
+    // The pages as the model got them: title, address, the passages.
+    case "webSearch": {
+      const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
+      return {
+        name,
+        arg: str(args.query) ?? "",
+        meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "page" : "pages"}`,
+        detail: hits.map((h, i) => `[${i + 1}] ${str(h.title) ?? ""}\n${str(h.url) ?? ""}\n${str(h.content) ?? ""}`).join("\n\n"),
       };
     }
 
@@ -556,6 +568,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Read: "Reading",
   Grep: "Searching",
   Search: "Searching the code for",
+  Web: "Searching the web for",
   List: "Listing",
   Write: "Writing",
   Edit: "Editing",
@@ -586,6 +599,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Read: (n) => `read ${n === 1 ? "a file" : `${n} files`}`,
   Grep: (n) => `searched ${n === 1 ? "a pattern" : `${n} patterns`}`,
   Search: (n) => `searched the code${n > 1 ? ` ${n} times` : ""}`,
+  Web: (n) => `searched the web${n > 1 ? ` ${n} times` : ""}`,
   List: (n) => `listed ${n === 1 ? "a folder" : `${n} folders`}`,
   Write: (n) => `wrote ${n === 1 ? "a file" : `${n} files`}`,
   Edit: (n) => `edited ${n === 1 ? "a file" : `${n} files`}`,

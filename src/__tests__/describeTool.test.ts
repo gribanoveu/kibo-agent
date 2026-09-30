@@ -232,6 +232,30 @@ describe("what each call shows", () => {
     expect(reworded.detail.split("\n")).toEqual(["also: where the index syncs", "", "a.rs:1-2"]);
   });
 
+  test("a web search shows its query, how many pages, and each page as the model got it", () => {
+    const running = tool({ name: "webSearch", arguments: '{"query":"tokio 2 release"}', result: undefined });
+    expect(describeTool(running)).toMatchObject({ name: "Web", arg: "tokio 2 release", meta: undefined, detail: "" });
+    expect(describeActive(running)).toBe("Searching the web for tokio 2 release");
+
+    const shown = describeTool(
+      tool({
+        name: "webSearch",
+        arguments: '{"query":"tokio 2 release"}',
+        result: {
+          result: "webResults",
+          hits: [
+            { title: "Tokio 2.0", url: "https://tokio.rs/blog", content: "Out in March." },
+            { title: "Changelog", url: "https://github.com/tokio-rs/tokio", content: "2.0.0" },
+          ],
+        },
+      }),
+    );
+    expect(shown).toMatchObject({ name: "Web", arg: "tokio 2 release", meta: "2 pages" });
+    expect(shown.detail).toBe(
+      "[1] Tokio 2.0\nhttps://tokio.rs/blog\nOut in March.\n\n[2] Changelog\nhttps://github.com/tokio-rs/tokio\n2.0.0",
+    );
+  });
+
   test("a loaded skill shows its instructions and the files beside them", () => {
     const shown = describeTool(
       tool({
