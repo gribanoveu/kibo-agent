@@ -66,6 +66,7 @@ export const LABELS: Record<string, string> = {
   kubeFieldHistory: "Field history",
   kubeDiagnose: "Diagnose",
   kubeWaitRollout: "Wait for rollout",
+  kubeProbe: "Probe",
   kubeScale: "Scale",
   kubeUndo: "Undo",
   kubeSuspend: "Suspend",
@@ -151,7 +152,9 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           ? `→ revision ${revision}`
           : typeof args.suspend === "boolean"
             ? `→ ${args.suspend ? "suspended" : "active"}`
-            : null;
+            : str(args.target)
+              ? `→ ${str(args.target)}`
+              : null;
     // A manifest is named by the kinds in it: `Deployment, Service`.
     const kinds = [...(str(args.manifest) ?? "").matchAll(/^kind:\s*(\S+)/gm)].map((found) => found[1]).join(", ");
     const target = [str(args.kind) ?? kinds, str(args.name) ?? str(args.pod) ?? str(args.labelSelector) ?? str(args.changeId), to]

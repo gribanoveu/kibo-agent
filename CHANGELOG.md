@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-30 The Kubernetes role checks from inside a pod whether it reaches a URL, a port or a name — resolved, open, the HTTP status, refused or timed out — without reading the response and without running anything else in the pod
+
 - 2026-09-30 The Kubernetes role waits for a rollout instead of asking again and again: after a restart, a rollback, an apply or a scale it says when the pods are up — or that the rollout is stuck or not done in time, and why
 
 - 2026-09-30 Mark a kubeconfig as production in Settings → Kubernetes: every change to its clusters then asks even for a tool you always allow, and the card says PRODUCTION first; a change's card also names what will put it back by itself — an autoscaler, Argo CD or Flux, Helm, an owner

@@ -116,6 +116,7 @@ impl ChatRole {
                 ToolName::KubeFieldHistory,
                 ToolName::KubeDiagnose,
                 ToolName::KubeWaitRollout,
+                ToolName::KubeProbe,
                 // The changes so far (K-5a–c); refused while the tab says Read only.
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
@@ -170,7 +171,7 @@ Helm, Kustomize, container images, ingress controllers and service meshes, GitOp
 Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 You can read the user's cluster — the one this chat is pinned to, below — with your tools: kubeDiagnose, \
-kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout. The changes you can make yourself: \
+kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout, kubeProbe. The changes you can make yourself: \
 kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a \
 revision), kubeApply (a manifest: create or update objects) and kubeDelete. Prefer the narrow tool to kubeApply \
 when one fits — it changes one field and says so; for kubeApply, read the object first (kubeGet) and send it \
@@ -192,6 +193,9 @@ is the user's to run: give the exact command and say what it affects.
   one call. It reports facts; the hypothesis is yours. Then go from symptom to cause — CrashLoopBackOff, \
   ImagePullBackOff, Pending, OOMKilled, failing probes — reading more only where the report points. Say \
   what each step rules out, and name the evidence for your conclusion.
+- Whether one thing reaches another — a pod its database, a Service, an outside API — is checked, not \
+  reasoned: kubeProbe runs the check from inside the pod and says whether the name resolves, the port is \
+  open, the server answers. It reads no body and runs nothing else in the pod.
 - A failing request usually runs ingress controller → Service → pods; the controller lives in its own \
   namespace (ingress-nginx), which you may read, and a mesh sidecar is the container istio-proxy.
 - Spend few calls and little text: kubeList with `fields` compares a field across many objects in one \
@@ -234,7 +238,7 @@ mod tests {
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
         assert!(ChatRole::Assistant.tools().is_empty());
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 16);
         assert!(tools.iter().all(|tool| tool.wire_name().starts_with("kube")), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
         assert_eq!(

@@ -258,4 +258,45 @@ mod tests {
         assert!(summary == "not done" && text.starts_with("Rollout of Deployment/kibo-live-wait is not done after 10s: 0 of 1 up-to-date pods available."), "{text}");
         assert!(text.contains("Pods: 1, 1 with problems."), "{text}");
     }
+
+    /// A probe from inside a pod says what it reached and what it did not
+    /// (K-6d), with whichever program the image has: `web` is nginx on
+    /// Alpine (curl), `ticker` is busybox (wget, nc, nslookup). Starts a pod
+    /// of each where none runs, and stops it again.
+    /// `KIBO_TEST_DEPLOYMENT=kibo-test/web cargo test live_cluster -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_cluster_probes_from_inside_a_pod() {
+        use crate::domain::kube::KubeApi;
+        use crate::domain::kube_view::{rollout, Rollout};
+        use crate::domain::tools::{KubeProbeArgs, ToolResult};
+        let Ok(target) = std::env::var("KIBO_TEST_DEPLOYMENT") else { return };
+        let (namespace, _) = target.split_once('/').expect("namespace/name");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+        let deployments = crate::domain::kube::resolve_kind(&api.kinds().unwrap(), "deploy").unwrap().clone();
+        let place = PinnedCluster { api: &api, namespace, kubeconfig: "local", context: "orbstack", writes: false, production: false, changes: None };
+        let scale = |name: &str, replicas: i64| {
+            api.patch(&deployments, namespace, name, &serde_json::json!({"spec": {"replicas": replicas}}), false).unwrap();
+            let up = &mut |object: &serde_json::Value| matches!(rollout("Deployment", object), Rollout::Done(_));
+            api.watch(&deployments, namespace, name, std::time::Duration::from_secs(60), &|| false, up).unwrap();
+        };
+        let was: Vec<i64> = ["web", "ticker"].iter().map(|name| api.get(&deployments, namespace, name).unwrap()["spec"]["replicas"].as_i64().unwrap()).collect();
+        scale("web", 1);
+        scale("ticker", 1);
+        let probe = |from: &str, target: &str| {
+            let args = KubeProbeArgs { kind: "deploy".into(), name: from.into(), container: None, target: target.into() };
+            let ToolResult::Kube { text, summary } = cluster::kube_probe(Some(place), &args).unwrap() else { panic!() };
+            println!("{from} -> {target}: [{summary}]\n{text}\n");
+            summary
+        };
+        let said: Vec<String> = ["web", "ticker"]
+            .iter()
+            .flat_map(|from| ["http://web/", "http://web/nope", "web:80", "web:81", "web", "http://nope.invalid/", "nope.invalid:80", "http://10.255.255.1/"].map(|to| probe(from, to)))
+            .collect();
+        scale("web", was[0]);
+        scale("ticker", was[1]);
+        assert_eq!(said[..8], ["HTTP 200", "HTTP 404", "open", "no connection", "resolves", "no name", "no name", "timed out"]);
+        assert_eq!(said[8..], ["HTTP 200", "HTTP 404", "open", "no connection", "no name", "no name", "no name", "timed out"]);
+    }
 }

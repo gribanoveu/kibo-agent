@@ -84,6 +84,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeFieldHistory, cluster::field_history_definition),
     (ToolName::KubeDiagnose, cluster::diagnose_definition),
     (ToolName::KubeWaitRollout, cluster::wait_rollout_definition),
+    (ToolName::KubeProbe, cluster::probe_definition),
     (ToolName::KubeScale, cluster::scale_definition),
     (ToolName::KubeUndo, cluster::undo_definition),
     (ToolName::KubeSuspend, cluster::suspend_definition),
@@ -160,6 +161,7 @@ pub fn dispatch(
         ToolCall::KubeFieldHistory(args) => cluster::kube_field_history(deps.kube, args),
         ToolCall::KubeDiagnose(args) => cluster::kube_diagnose(deps.kube, args),
         ToolCall::KubeWaitRollout(args) => cluster::kube_wait_rollout(deps.kube, deps.cancelled, args),
+        ToolCall::KubeProbe(args) => cluster::kube_probe(deps.kube, args),
         ToolCall::KubeScale(_)
         | ToolCall::KubeUndo(_)
         | ToolCall::KubeSuspend(_)
@@ -179,7 +181,7 @@ mod definition_tests {
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
         CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
-        KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
+        KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
     use std::collections::BTreeSet;
@@ -464,6 +466,10 @@ mod definition_tests {
             ToolName::KubeWaitRollout => (
                 r#"{"kind":"Deployment","name":"api","timeoutSeconds":60}"#,
                 vec![ToolCall::KubeWaitRollout(KubeWaitRolloutArgs { kind: "Deployment".into(), name: "api".into(), timeout_seconds: Some(60) })],
+            ),
+            ToolName::KubeProbe => (
+                r#"{"kind":"Deployment","name":"api","target":"http://orders:8080/health"}"#,
+                vec![ToolCall::KubeProbe(KubeProbeArgs { kind: "Deployment".into(), name: "api".into(), container: Some("app".into()), target: "db:5432".into() })],
             ),
             ToolName::KubeScale => (
                 r#"{"kind":"Deployment","name":"api","replicas":0}"#,

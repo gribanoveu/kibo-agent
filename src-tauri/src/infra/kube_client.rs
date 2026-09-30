@@ -15,13 +15,14 @@ use std::time::{Duration, SystemTime};
 use k8s_openapi::api::authorization::v1::{SelfSubjectRulesReview, SelfSubjectRulesReviewSpec};
 use k8s_openapi::api::core::v1::{Namespace, Pod};
 use futures_util::StreamExt;
-use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams, WatchEvent, WatchParams};
+use tokio::io::AsyncReadExt;
+use kube::api::{Api, ApiResource, AttachParams, DeleteParams, DynamicObject, ListParams, LogParams, Patch, PatchParams, PostParams, WatchEvent, WatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::core::discovery::{verbs, Scope};
 use kube::{Client, Config, Discovery};
 
 use crate::domain::kube::{
-    access_of, KubeApi, KubeContext, KubeContexts, KubeError, KubeKind, ListPage, ListQuery, LogQuery, Reach, Rule,
+    access_of, ExecOutput, KubeApi, KubeContext, KubeContexts, KubeError, KubeKind, ListPage, ListQuery, LogQuery, Reach, Rule,
 };
 use crate::infra::login_path;
 
@@ -35,6 +36,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// pod's log.
 const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often a watch with nothing to show looks at whether it was stopped.
+/// The most of either stream a command run in a pod is read for.
+const EXEC_OUTPUT_MOST: u64 = 64 * 1024;
 const STOP_CHECK: Duration = Duration::from_millis(500);
 
 /// A kubeconfig's contexts, read from the file alone — no cluster is asked.
@@ -302,6 +305,40 @@ impl KubeApi for ClusterApi {
             let params = DeleteParams { dry_run, ..Default::default() };
             dynamic(client, kind, Some(namespace)).delete(name, &params).await.map_err(cluster_error)?;
             Ok(())
+        })
+    }
+
+    fn exec(&self, namespace: &str, pod: &str, container: Option<&str>, command: &[String]) -> Result<ExecOutput, KubeError> {
+        self.within(|client| async move {
+            let params = AttachParams { container: container.map(str::to_string), stdin: false, stdout: true, stderr: true, tty: false, ..Default::default() };
+            let mut process = Api::<Pod>::namespaced(client, namespace).exec(pod, command.to_vec(), &params).await.map_err(cluster_error)?;
+            let status = process.take_status();
+            let (mut stdout, mut stderr) = (String::new(), String::new());
+            // Both at once: a program blocked writing one is not waited on
+            // for the other. Invalid UTF-8 ends the read; the rest is dropped.
+            let (out, err) = (process.stdout(), process.stderr());
+            let out = async {
+                if let Some(out) = out {
+                    let _ = out.take(EXEC_OUTPUT_MOST).read_to_string(&mut stdout).await;
+                }
+            };
+            let err = async {
+                if let Some(err) = err {
+                    let _ = err.take(EXEC_OUTPUT_MOST).read_to_string(&mut stderr).await;
+                }
+            };
+            futures_util::future::join(out, err).await;
+            let status = match status {
+                Some(status) => status.await,
+                None => None,
+            };
+            let failed = status.filter(|status| status.status.as_deref() != Some("Success"));
+            let code = failed.as_ref().map_or(0, |status| {
+                let causes = status.details.as_ref().and_then(|details| details.causes.as_deref()).unwrap_or_default();
+                let exit = causes.iter().find(|cause| cause.reason.as_deref() == Some("ExitCode"));
+                exit.and_then(|cause| cause.message.as_deref()?.parse().ok()).unwrap_or(-1)
+            });
+            Ok(ExecOutput { stdout, stderr, code, message: failed.and_then(|status| status.message).unwrap_or_default() })
         })
     }
 
@@ -584,6 +621,37 @@ users:
         assert!((2..6).contains(&started.elapsed().as_secs()), "{:?}", started.elapsed());
         let gone = api.watch(&deployments, namespace, "no-such", minute, &|| false, &mut |_| false).unwrap_err();
         assert!(matches!(gone, KubeError::NotFound(_)), "{gone:?}");
+    }
+
+    /// A command in a pod: its output, its exit code, and a program the image
+    /// does not have. Needs a running pod of one's own:
+    /// `KIBO_TEST_POD=kibo-test/<pod> cargo test live_cluster_runs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_cluster_runs_a_command_in_a_pod() {
+        let Ok(target) = std::env::var("KIBO_TEST_POD") else { return };
+        let (namespace, pod) = target.split_once('/').expect("namespace/pod");
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let api = ClusterApi::new(Arc::new(Clusters::default()), &path, "orbstack");
+        let run = |command: &[&str]| {
+            let command: Vec<String> = command.iter().map(|part| part.to_string()).collect();
+            let output = api.exec(namespace, pod, None, &command);
+            println!("{command:?} -> {output:?}");
+            output.unwrap()
+        };
+        let said = run(&["echo", "hello"]);
+        assert_eq!((said.stdout.as_str(), said.code), ("hello\n", 0));
+        let failed = run(&["sh", "-c", "echo oops >&2; exit 3"]);
+        assert_eq!((failed.stderr.as_str(), failed.code), ("oops\n", 3));
+        let absent = run(&["no-such-program"]);
+        assert_eq!(absent.code, 127, "{absent:?}");
+        for probe in [&["getent", "hosts", "kubernetes.default.svc"][..], &["nslookup", "kubernetes.default.svc"], &["nslookup", "nope.invalid"],
+                      &["nc", "-z", "-w", "3", "kubernetes.default.svc", "443"], &["nc", "-z", "-w", "3", "kubernetes.default.svc", "81"],
+                      &["wget", "-q", "-S", "-T", "5", "-O", "/dev/null", "http://localhost:80/"], &["wget", "-q", "-S", "-T", "5", "-O", "/dev/null", "http://localhost:80/nope"],
+                      &["curl", "-sS", "-o", "/dev/null", "-m", "5", "-w", "%{http_code} %{time_total}", "http://localhost:80/nope"],
+                      &["curl", "-sS", "-o", "/dev/null", "-m", "5", "-w", "%{http_code} %{time_total}", "http://localhost:81/"]] {
+            run(probe);
+        }
     }
 
     /// Nothing listens on port 1: the probe says so instead of failing the turn.

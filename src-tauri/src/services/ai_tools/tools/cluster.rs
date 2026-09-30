@@ -11,11 +11,12 @@ use serde_json::Value;
 use crate::services::text_diff::diff_stats;
 
 use crate::domain::kube::{merge_diff, resolve_kind, undoable, KubeChange, KubeError, ROLLOUT_RESTART, KubeKind, ListQuery, LogQuery, PinnedCluster};
+use crate::domain::kube_probe;
 use crate::domain::kube_view::{self, cap, FieldPath, PodLog, Rollout};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{
     ChangeDiff, FileDiffStats, KubeApplyArgs, KubeDeleteArgs,
-    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeTopArgs, KubeWaitRolloutArgs,
+    KubeDiagnoseArgs, KubeEventsArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeProbeArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeTopArgs, KubeWaitRolloutArgs,
     ToolCall, ToolError, ToolPreview, ToolResult,
 };
 
@@ -508,6 +509,62 @@ pub fn kube_wait_rollout(kube: Option<PinnedCluster>, cancelled: Option<&dyn Fn(
         Err(e) => format!("Not diagnosed: {e}"),
     };
     result(format!("{line}\n\n{why}"), summary.to_string(), "kubeDiagnose reads it on its own")
+}
+
+/// `kubeProbe`: whether a pod reaches a name, a port or a URL, asked from
+/// inside the pod with a command this app wrote — `domain::kube_probe` has
+/// them. The next command is tried only when the image lacks the one before.
+pub fn kube_probe(kube: Option<PinnedCluster>, args: &KubeProbeArgs) -> Result<ToolResult, ToolError> {
+    let cluster = cluster(kube)?;
+    let target = kube_probe::target(&args.target).map_err(|why| invalid("kubeProbe", why))?;
+    let kind = kind(&cluster, &args.kind)?;
+    let owner = cluster.api.get(&kind, cluster.namespace, &args.name)?;
+    let pod = if kind.kind == "Pod" {
+        args.name.clone()
+    } else {
+        let what = format!("{}/{}", kind.kind, args.name);
+        let selector = selector_of(&owner).ok_or_else(|| invalid("kubeProbe", format!("{what} runs no pods to probe from — name a pod or a workload")))?;
+        let query = ListQuery { namespace: Some(cluster.namespace.to_string()), label_selector: Some(selector), ..Default::default() };
+        let pods = cluster.api.list(&KubeKind::core("Pod", "pods"), &query)?.items;
+        let running = pods.iter().find(|pod| pod.pointer("/status/phase").and_then(Value::as_str) == Some("Running"));
+        let name = running.and_then(|pod| pod.pointer("/metadata/name")).and_then(Value::as_str);
+        name.ok_or_else(|| invalid("kubeProbe", format!("{what} has no running pod to probe from")))?.to_string()
+    };
+    let container = args.container.as_deref().map(str::trim).filter(|container| !container.is_empty());
+    let from = container.map_or_else(|| format!("pod {pod}"), |container| format!("pod {pod}, container {container}"));
+
+    let mut lacking = Vec::new();
+    for command in kube_probe::attempts(&target) {
+        let output = cluster.api.exec(cluster.namespace, &pod, container, &command)?;
+        if kube_probe::missing(&output) {
+            lacking.push(command[0].clone());
+            continue;
+        }
+        let (word, sentence) = kube_probe::verdict(&target, &command, &output);
+        let mut out = vec![format!("From {from} to {}: {sentence}", args.target.trim()), format!("Ran: {}", command.join(" "))];
+        // Dropped packets are what a policy looks like from inside.
+        if matches!(word.as_str(), "timed out" | "no connection") {
+            let query = ListQuery { namespace: Some(cluster.namespace.to_string()), ..Default::default() };
+            let policies = resolve_kind(&cluster.api.kinds()?, "networkpolicies").ok().and_then(|policies| cluster.api.list(policies, &query).ok());
+            let names: Vec<&str> = policies.iter().flat_map(|page| &page.items).filter_map(|policy| policy.pointer("/metadata/name")?.as_str()).collect();
+            if !names.is_empty() {
+                out.push(format!(
+                    "NetworkPolicies in namespace {}: {} — one may be dropping this (kubeGet reads them); the target's namespace may have its own.",
+                    cluster.namespace,
+                    names.join(", ")
+                ));
+            }
+        }
+        return result(out.join("\n"), word, "");
+    }
+    result(
+        format!(
+            "Not probed: the image of {from} has none of {} — probe from a pod whose image has one, or from another container of this pod (`container`).",
+            lacking.join(", ")
+        ),
+        "no tool in the image".to_string(),
+        "",
+    )
 }
 
 /// What has replicas to set. The rest are told how they are stopped instead.
@@ -1358,6 +1415,31 @@ pub(super) fn wait_rollout_definition() -> LlmToolDefinition {
     }
 }
 
+pub(super) fn probe_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "kubeProbe".to_string(),
+        description: format!(
+            "Whether a pod reaches something, checked from inside it: a URL (`http://orders:8080/health` — does the \
+             server answer, and with which status), a port (`db:5432` — is it open), or a name (`orders` — does it \
+             resolve, and to what). Answers reached, name not resolved, refused, or timed out — and names the \
+             namespace's NetworkPolicies when packets are dropped. It runs one fixed command of this app's in the \
+             container (curl or wget, nc, getent or nslookup — whichever the image has) and reads no response body; \
+             it runs nothing else there. The source is a pod or a workload (one of its running pods) in the chat's \
+             namespace; the target may be anywhere. {WHERE}"
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "description": "What to probe from: Pod, Deployment, StatefulSet, DaemonSet, Job." },
+                "name": { "type": "string" },
+                "container": { "type": "string", "description": "Default: the pod's default container." },
+                "target": { "type": "string", "description": "`http(s)://host[:port][/path]`, `host:port`, or `host`." }
+            },
+            "required": ["kind", "name", "target"]
+        }),
+    }
+}
+
 pub(super) fn scale_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "kubeScale".to_string(),
@@ -1524,6 +1606,8 @@ mod tests {
         refuses: Option<String>,
         /// What a watched object becomes, change by change.
         later: Vec<Value>,
+        /// What each program in the image answers; one not here is not in it.
+        programs: Vec<(String, crate::domain::kube::ExecOutput)>,
     }
 
     /// What was backed up and audited; `full` is a disk that takes no backup.
@@ -1693,6 +1777,12 @@ mod tests {
                 Some(why) => Err(KubeError::Cluster(why.clone())),
                 None => self.get(kind, namespace, name).map(|_| ()),
             }
+        }
+
+        fn exec(&self, namespace: &str, pod: &str, container: Option<&str>, command: &[String]) -> Result<crate::domain::kube::ExecOutput, KubeError> {
+            self.asked.lock().unwrap().push(format!("exec {namespace} {pod} {container:?} {}", command.join(" ")));
+            let absent = crate::domain::kube::ExecOutput { code: 127, ..Default::default() };
+            Ok(self.programs.iter().find(|(program, _)| program == &command[0]).map_or(absent, |(_, output)| output.clone()))
         }
 
         fn watch(&self, kind: &KubeKind, namespace: &str, name: &str, timeout: std::time::Duration, stop: &dyn Fn() -> bool, seen: &mut dyn FnMut(&Value) -> bool) -> Result<(), KubeError> {
@@ -2515,6 +2605,72 @@ spec: {ports: [{port: 80}]}
         let ToolResult::Kube { text, summary } = stopped else { panic!("{stopped:?}") };
         assert!(text.starts_with("Stopped waiting for Deployment/api — the user stopped the turn: 1 of 3 pods up to date."), "{text}");
         assert_eq!(summary, "stopped");
+    }
+
+    /// A Deployment with a pod still starting and one running, and an image
+    /// that has the `programs` given.
+    fn probing(programs: &[(&str, i32, &str)]) -> Fake {
+        let pod = |name: &str, phase: &str| json!({"metadata": {"name": name, "namespace": "orders", "labels": {"app": "api"}}, "status": {"phase": phase}});
+        let kinds = [("apps", "Deployment", "deployments"), ("", "Pod", "pods"), ("", "ConfigMap", "configmaps"), ("networking.k8s.io", "NetworkPolicy", "networkpolicies")];
+        let programs = programs.iter().map(|(program, code, stderr)| (program.to_string(), crate::domain::kube::ExecOutput { code: *code, stderr: stderr.to_string(), ..Default::default() }));
+        let fake = Fake::with(&kinds)
+            .object("deployments", rolling(3, 3))
+            .object("pods", pod("api-new", "Pending"))
+            .object("pods", json!({"metadata": {"name": "api-elsewhere", "namespace": "billing", "labels": {"app": "api"}}, "status": {"phase": "Running"}}))
+            .object("pods", pod("api-1", "Running"))
+            .object("configmaps", json!({"metadata": {"name": "flags", "namespace": "orders"}}))
+            .object("networkpolicies", json!({"metadata": {"name": "deny-all", "namespace": "orders"}}));
+        Fake { programs: programs.collect(), ..fake }
+    }
+
+    fn probe(kind: &str, name: &str, container: Option<&str>, target: &str) -> KubeProbeArgs {
+        KubeProbeArgs { kind: kind.into(), name: name.into(), container: container.map(str::to_string), target: target.into() }
+    }
+
+    /// A read: it works in a read-only chat. From a workload it is a running
+    /// pod of it; the next program is asked only when the image lacks one.
+    #[test]
+    fn a_probe_runs_in_a_running_pod_with_the_first_program_the_image_has() {
+        let fake = probing(&[("nc", 0, "")]);
+        let open = kube_probe(pinned(&fake), &probe("deploy", "api", None, "db:5432")).unwrap();
+        assert_eq!(open, ToolResult::Kube { text: "From pod api-1 to db:5432: Port 5432 on db is open.\nRan: nc -z -w 5 db 5432".into(), summary: "open".into() });
+        assert_eq!(fake.asked().last().unwrap(), "exec orders api-1 None nc -z -w 5 db 5432");
+
+        let fake = probing(&[("wget", 1, "  HTTP/1.1 503 Service Unavailable\n")]);
+        let answered = text(kube_probe(pinned(&fake), &probe("pod", "api-new", Some(" sidecar "), "http://orders/health")));
+        assert!(answered.starts_with("From pod api-new, container sidecar to http://orders/health: HTTP 503 — the server answered.\nRan: wget "), "{answered}");
+        let execs: Vec<String> = fake.asked().into_iter().filter(|asked| asked.starts_with("exec")).map(|asked| asked.split(' ').take(5).collect::<Vec<_>>().join(" ")).collect();
+        assert_eq!(execs, ["exec orders api-new Some(\"sidecar\") curl", "exec orders api-new Some(\"sidecar\") wget"]);
+
+        let bare = probing(&[]);
+        let none = kube_probe(pinned(&bare), &probe("deploy", "api", None, "db")).unwrap();
+        let ToolResult::Kube { text, summary } = none else { panic!("{none:?}") };
+        assert!(text.starts_with("Not probed: the image of pod api-1 has none of getent, nslookup — "), "{text}");
+        assert_eq!(summary, "no tool in the image");
+    }
+
+    #[test]
+    fn a_probe_that_is_dropped_names_the_namespaces_policies_and_a_refused_one_does_not() {
+        let dropped = text(kube_probe(pinned(&probing(&[("curl", 28, "curl: (28) Connection timed out")])), &probe("deploy", "api", None, "http://db/")));
+        assert!(dropped.ends_with("\nNetworkPolicies in namespace orders: deny-all — one may be dropping this (kubeGet reads them); the target's namespace may have its own."), "{dropped}");
+        let silent = text(kube_probe(pinned(&probing(&[("nc", 1, "")])), &probe("deploy", "api", None, "db:5432")));
+        assert!(silent.contains("NetworkPolicies in namespace orders: deny-all"), "{silent}");
+        let refused = text(kube_probe(pinned(&probing(&[("curl", 7, "curl: (7) Failed to connect")])), &probe("deploy", "api", None, "http://db/")));
+        assert!(refused.contains("the connection was refused") && !refused.contains("NetworkPolicies"), "{refused}");
+    }
+
+    #[test]
+    fn a_probe_is_refused_for_its_target_or_for_a_source_with_no_running_pod() {
+        let fake = probing(&[("nc", 0, "")]);
+        let reason = |args: KubeProbeArgs| invalid_reason(kube_probe(pinned(&fake), &args));
+        assert_eq!(reason(probe("deploy", "api", None, "-o/etc/passwd")), "`-o/etc/passwd` is not a host name or an IPv4 address");
+        assert_eq!(reason(probe("configmap", "flags", None, "db:5432")), "ConfigMap/flags runs no pods to probe from — name a pod or a workload");
+        assert!(fake.asked().iter().all(|asked| !asked.starts_with("exec")), "{:?}", fake.asked());
+
+        let mut starting = probing(&[("nc", 0, "")]);
+        starting.objects.retain(|(_, object)| object["metadata"]["name"] != "api-1");
+        assert_eq!(invalid_reason(kube_probe(pinned(&starting), &probe("deploy", "api", None, "db:5432"))), "Deployment/api has no running pod to probe from");
+        assert!(matches!(kube_probe(None, &probe("deploy", "api", None, "db:5432")), Err(ToolError::NoCluster)));
     }
 
     fn text(result: Result<ToolResult, ToolError>) -> String {

@@ -531,6 +531,10 @@ describe("the Kubernetes role's reads", () => {
     expect(diagnosed).toMatchObject({ name: "Diagnose", arg: "Deployment api", meta: "2 pods, 1 with problems" });
     const waited = describeTool(tool({ name: "kubeWaitRollout", arguments: '{"kind":"Deployment","name":"api"}', result: { result: "kube", text: "…", summary: "stuck" } }));
     expect(waited).toMatchObject({ name: "Wait for rollout", arg: "Deployment api", meta: "stuck" });
+    const probed = describeTool(
+      tool({ name: "kubeProbe", arguments: '{"kind":"Deployment","name":"api","target":"db:5432"}', result: { result: "kube", text: "…", summary: "refused" } }),
+    );
+    expect(probed).toMatchObject({ name: "Probe", arg: "Deployment api → db:5432", meta: "refused" });
   });
 });
 

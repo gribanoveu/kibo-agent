@@ -161,6 +161,23 @@ pub trait KubeApi: Send + Sync {
         seen(&self.get(kind, namespace, name)?);
         Ok(())
     }
+    /// Runs `command` — a program and its arguments, no shell — in a
+    /// container of a pod, with no input, and waits for it to end.
+    fn exec(&self, _namespace: &str, _pod: &str, _container: Option<&str>, _command: &[String]) -> Result<ExecOutput, KubeError> {
+        Err(KubeError::Cluster("this client runs nothing in a pod".to_string()))
+    }
+}
+
+/// How a command run in a pod ended.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+    /// 0 when it ran and succeeded.
+    pub code: i32,
+    /// What the cluster said when it did not: the program is not in the
+    /// image, or it exited with `code`.
+    pub message: String,
 }
 
 /// One change a tool made to a cluster, as the audit keeps it
