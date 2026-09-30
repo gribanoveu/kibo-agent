@@ -55,7 +55,7 @@ pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools) -> RequestFrame 
 /// tools, as `llm_chat` sends them — no skills, rules or MCP servers.
 pub fn chat_request_frame(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> RequestFrame {
     RequestFrame {
-        instructions: compaction::estimate_tokens(&[prompt::chat_system_message(role, kube, runbooks, language)]),
+        instructions: compaction::estimate_tokens(&prompt::chat_system_messages(role, kube, runbooks, language)),
         skills: 0,
         tools: compaction::estimate_tool_schema_tokens(&tool_definitions_for_role(role)),
         mcp: 0,

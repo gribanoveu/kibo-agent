@@ -361,27 +361,26 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
     }
 }
 
-/// What goes in front of a Chat mode conversation: the role, what it is told
-/// of the user's setup, the language. All settled before the conversation and
-/// the same every turn, so a request is the one before it plus the new
-/// messages — what a provider's prompt cache matches.
-pub fn chat_system_message(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> LlmMessage {
-    let mut prompt = role.prompt().to_string();
-    // Before the setup: the list changes when a file is added, the setup
-    // when a cluster stops answering — the steadier part goes first.
+/// What goes in front of a Chat mode conversation, steadiest first: the
+/// role, the runbooks it may read, the language, and last what it is told of
+/// the user's cluster — the part that changes with the chat's pin and with a
+/// cluster that stops answering. Separate messages, as the agent's are: a
+/// provider's prompt cache serves a prefix, and one that matches whole
+/// messages (DeepSeek served the tools and nothing of a single message whose
+/// last line named the namespace) still serves everything before the change.
+pub fn chat_system_messages(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>) -> Vec<LlmMessage> {
+    let mut messages = vec![LlmMessage::system(role.prompt())];
     let reads_runbooks = role.tools().contains(&crate::domain::tools::ToolName::KubeRunbook);
     if let Some(list) = runbooks::listing(runbooks).filter(|_| reads_runbooks) {
-        prompt.push_str("\n\n");
-        prompt.push_str(&list);
-    }
-    if let Some(note) = role.setup_note(kube) {
-        prompt.push_str("\n\n");
-        prompt.push_str(&note);
+        messages.push(LlmMessage::system(list));
     }
     if let Some(language) = language {
-        prompt.push_str(&format!("\n\nReply in {language}."));
+        messages.push(LlmMessage::system(format!("Reply in {language}.")));
     }
-    LlmMessage::system(prompt)
+    if let Some(note) = role.setup_note(kube) {
+        messages.push(LlmMessage::system(note));
+    }
+    messages
 }
 
 /// What goes in front of the conversation on every request.
@@ -759,20 +758,22 @@ mod tests {
         assert!(at("Write in English.") < at("Write everything you say in Russian"), "after the rules, so it wins");
     }
 
-    /// The role, then its setup, then the language — the part most likely to
-    /// change last, and nothing at all for what is not set.
+    /// The role, the runbooks, the language, and the cluster last: what
+    /// changes most comes after everything a cache can keep.
     #[test]
-    fn a_chat_is_told_its_role_then_its_setup_then_the_language() {
+    fn a_chat_is_told_its_role_its_runbooks_the_language_and_the_cluster_last() {
         let kube = KubeSetup::NotSet;
         let note = ChatRole::Kubernetes.setup_note(&kube).unwrap();
-        let said = chat_system_message(ChatRole::Kubernetes, &kube, &[], Some("Russian"));
-        assert_eq!(said.content.unwrap(), format!("{}\n\n{note}\n\nReply in Russian.", ChatRole::Kubernetes.prompt()));
+        let texts = |messages: Vec<LlmMessage>| messages.into_iter().map(|m| (m.role, m.content.unwrap())).collect::<Vec<_>>();
+        let system = |text: &str| (crate::domain::llm::LlmRole::System, text.to_string());
         let books = runbooks::merged(Vec::new());
         let list = runbooks::listing(&books).unwrap();
-        let listed = chat_system_message(ChatRole::Kubernetes, &kube, &books, None);
-        assert_eq!(listed.content.unwrap(), format!("{}\n\n{list}\n\n{note}", ChatRole::Kubernetes.prompt()));
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"))),
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian."), system(&note)]
+        );
+        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
         // A role that cannot read a runbook is not told of any.
-        let plain = chat_system_message(ChatRole::Assistant, &kube, &books, None);
-        assert_eq!(plain.content.as_deref(), Some(ChatRole::Assistant.prompt()));
+        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None)), [system(ChatRole::Assistant.prompt())]);
     }
 }

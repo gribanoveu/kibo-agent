@@ -161,9 +161,9 @@ struct Run {
     tokens_in: u64,
     tokens_cached: u64,
     tokens_out: u64,
-    /// Each request of the run: tokens in and, of them, served from the
-    /// provider's prompt cache.
-    per_round: Vec<(u64, u64)>,
+    /// Each request of the run: tokens in, of them served from the
+    /// provider's prompt cache, and tokens out.
+    per_round: Vec<(u64, u64, u64)>,
     seconds: f64,
 }
 
@@ -174,14 +174,14 @@ impl Run {
     }
 
     /// How much of what could be served from the cache was: from the second
-    /// request on, the one before it is a prefix the provider has seen. The
-    /// rest of a request — the last answer and its tools' results — is new to
-    /// it whatever the harness does. Near 100 says the prefix is stable;
+    /// request on, the one before it and its answer are a prefix the provider
+    /// has seen. The rest of a request — the tools' results — is new to it
+    /// whatever the harness does. Near 100 says the prefix is stable;
     /// lower says something before the end of the conversation changes
     /// between requests, or the provider's cache missed.
     fn prefix_cached(&self) -> (u64, u64) {
         let cached = self.per_round.iter().skip(1).map(|round| round.1).sum();
-        let cacheable = self.per_round.iter().rev().skip(1).map(|round| round.0).sum();
+        let cacheable = self.per_round.iter().rev().skip(1).map(|round| round.0 + round.2).sum();
         (cached, cacheable)
     }
 
@@ -208,7 +208,7 @@ impl Run {
             "tokensIn": self.tokens_in,
             "tokensCached": self.tokens_cached,
             "tokensOut": self.tokens_out,
-            "perRound": self.per_round.iter().map(|(sent, cached)| json!({"in": sent, "cached": cached})).collect::<Vec<_>>(),
+            "perRound": self.per_round.iter().map(|(sent, cached, out)| json!({"in": sent, "cached": cached, "out": out})).collect::<Vec<_>>(),
             "prefixCachedPercent": cached_percent(self.prefix_cached().0, self.prefix_cached().1),
             "seconds": self.seconds,
             "check": clip(&self.check_output, 600),
@@ -278,10 +278,10 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         ChatEventPayload::ContextUsage(u) => (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens)),
         _ => (i, c, o),
     });
-    let per_round: Vec<(u64, u64)> = events
+    let per_round: Vec<(u64, u64, u64)> = events
         .iter()
         .filter_map(|e| match &e.event {
-            ChatEventPayload::ContextUsage(u) => Some((u64::from(u.prompt_tokens), u64::from(u.cached_tokens))),
+            ChatEventPayload::ContextUsage(u) => Some((u64::from(u.prompt_tokens), u64::from(u.cached_tokens), u64::from(u.completion_tokens))),
             _ => None,
         })
         .collect();

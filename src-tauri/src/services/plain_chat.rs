@@ -264,10 +264,9 @@ mod tests {
         assert_eq!(done.result.text, "hello");
         let asked = chat.asked();
         let messages = &asked[0].messages;
-        assert_eq!(messages[0].role, LlmRole::System);
-        let system = messages[0].content.as_deref().unwrap();
-        assert!(system.starts_with(ChatRole::Assistant.prompt()) && system.ends_with("Reply in Russian."), "{system}");
-        assert_eq!(messages[1], LlmMessage::user("hi"));
+        assert_eq!(messages[0], LlmMessage::system(ChatRole::Assistant.prompt()));
+        assert_eq!(messages[1], LlmMessage::system("Reply in Russian."));
+        assert_eq!(messages[2], LlmMessage::user("hi"));
         assert!(asked[0].tools.is_empty());
         assert_eq!(done.history.last(), Some(&LlmMessage::assistant("hello")), "the answer closes the history");
 
@@ -284,6 +283,12 @@ mod tests {
         assert_eq!(deltas, ["he", "llo"]);
     }
 
+    /// Everything the role is told before the conversation, as one text.
+    fn system_text(messages: &[LlmMessage]) -> String {
+        let told = messages.iter().take_while(|m| m.role == LlmRole::System).filter_map(|m| m.content.clone());
+        told.collect::<Vec<_>>().join("\n\n")
+    }
+
     /// The second turn's request is the first's plus what was said since — the
     /// prefix a provider's prompt cache reuses. Anything rebuilt per turn (a
     /// date, a reordered note) would break it at the system prompt.
@@ -297,7 +302,7 @@ mod tests {
         let (a, b) = (&asked[0].messages, &asked[1].messages);
         assert_eq!(&b[..a.len()], &a[..], "the second request does not start with the first");
         assert_eq!(asked[0].tools, asked[1].tools);
-        let system = a[0].content.as_deref().unwrap();
+        let system = system_text(a);
         assert!(system.contains(&ChatRole::Kubernetes.setup_note(&chat.kube).unwrap()), "the setup was not told: {system}");
     }
 
@@ -309,7 +314,7 @@ mod tests {
         chat.runbooks = crate::domain::runbooks::merged(vec![crate::domain::runbooks::parse("quota", "Sign: pods are not created\nAsk the platform team.", true).unwrap()]);
         let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("no pods")]));
 
-        let system = chat.asked()[0].messages[0].content.clone().unwrap();
+        let system = system_text(&chat.asked()[0].messages);
         assert!(system.contains("- quota (the user's) — pods are not created") && system.contains("- spring-boot — "), "{system}");
         assert!(!system.contains("Ask the platform team."), "a runbook's text is in the prompt");
         assert_eq!(tool_result(&done.history), "Sign: pods are not created\nAsk the platform team.");
