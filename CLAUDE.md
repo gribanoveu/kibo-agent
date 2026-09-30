@@ -60,6 +60,14 @@ at the top of `services/agent_bench.rs`:
 cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… AGENT_BENCH_RUNS=3 cargo test --release agent_bench -- --ignored --nocapture
 ```
 
+The Kubernetes client has a live test against the local cluster (OrbStack's, context
+`orbstack` in `~/.kube/config`), ignored because it needs that cluster running. Run it
+after touching `infra/kube_client.rs`:
+
+```bash
+cd src-tauri && cargo test live_cluster -- --ignored --nocapture
+```
+
 ## Mutation testing
 
 New backend code is not done when `cargo test` is green — the tests have to be shown to

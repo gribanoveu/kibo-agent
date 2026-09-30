@@ -397,6 +397,37 @@ users:
         assert!(matches!(contexts(Path::new("/nowhere/config")), Err(KubeError::Kubeconfig(_))));
     }
 
+    /// The real client against a real cluster — the local one the bench uses
+    /// (OrbStack's, context `orbstack` in `~/.kube/config`). Ignored: it needs
+    /// that cluster running. `cargo test live_cluster -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_cluster_is_probed_discovered_listed_and_read() {
+        let path = dirs::home_dir().unwrap().join(".kube/config");
+        let clusters = Arc::new(Clusters::default());
+        let reach = clusters.probe(&path, "orbstack", "kube-system");
+        assert!(matches!(reach, Reach::Answered { .. }), "{reach:?}");
+
+        let api = ClusterApi::new(clusters, &path, "orbstack");
+        let kinds = api.kinds().unwrap();
+        let find = |name: &str| crate::domain::kube::resolve_kind(&kinds, name).unwrap().clone();
+        assert!(find("deploy").namespaced && !find("nodes").namespaced, "scope comes from discovery");
+
+        let query = ListQuery { namespace: Some("kube-system".into()), ..Default::default() };
+        let pods = api.list(&find("pods"), &query).unwrap().items;
+        let name = pods[0]["metadata"]["name"].as_str().expect("a pod in kube-system").to_string();
+        assert_eq!(api.get(&find("pods"), "kube-system", &name).unwrap()["metadata"]["name"], name.as_str());
+        let log = api.logs("kube-system", &name, &LogQuery { tail: Some(3), ..Default::default() }).unwrap();
+        println!("{} kinds, {} pods, log of {name}:\n{log}", kinds.len(), pods.len());
+        assert!(log.lines().all(|l| chrono::DateTime::parse_from_rfc3339(l.split(' ').next().unwrap()).is_ok()), "lines carry timestamps");
+
+        // The server's own sentence, not the client's wrapping of it.
+        let gone = api.get(&find("pods"), "kube-system", "no-such-pod").unwrap_err().to_string();
+        assert_eq!(gone, "pods \"no-such-pod\" not found");
+        let paged = api.list(&find("pods"), &ListQuery { limit: Some(1), ..Default::default() }).unwrap();
+        assert!(paged.items.len() == 1 && paged.continue_token.is_some(), "a page ends with a token when there is more");
+    }
+
     /// Nothing listens on port 1: the probe says so instead of failing the turn.
     #[test]
     fn a_cluster_that_is_not_there_is_unreachable_not_an_error() {
