@@ -7,11 +7,12 @@
   padding: 14px 16px 11px;
 }
 /* The textarea and the argument hint under it, drawn alike so the hint lines
-   up with the text: same font, same wrapping, no padding on either. */
+   up with the text: same font and scale, same wrapping. */
 .composer-input {
   position: relative;
 }
-.composer-ghost {
+/* Two classes, as `.composer textarea` has: `.chat-text` sets a size of its own. */
+.composer .composer-ghost {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -28,7 +29,6 @@
 .composer textarea {
   position: relative;
   display: block;
-  padding: 0;
   width: 100%;
   min-height: 48px;
   max-height: 120px;

@@ -181,6 +181,11 @@ export function Composer({
     area.current?.focus();
   };
 
+  // A command that takes arguments is put in the box to type them; one that
+  // takes none runs. Run bare, `/compare` would only send its prompt with its
+  // placeholders in it — and Enter again runs it once they are typed.
+  const pick = (command: SlashCommand) => (command.argumentHint ? complete(command) : run(command));
+
   return (
     <div className="composer-wrap">
       {/* Above the folder tab, which sits on the box's edge. */}
@@ -199,13 +204,14 @@ export function Composer({
       )}
       {tab}
       <section className="composer" ref={box}>
-        {menuOpen && <SlashMenu commands={offered} active={at} onPick={(c) => run(c)} />}
+        {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} />}
         <div className="composer-input">
           {/* The arguments still to type, in grey after the text: the text
               itself is drawn here too, invisibly, so the hint starts where it
-              ends. The textarea above is transparent. */}
+              ends. The textarea above is transparent. `chat-text` for the
+              chat's own font scale, which the textarea is drawn at. */}
           {hint && (
-            <div className="composer-ghost" aria-hidden="true">
+            <div className="composer-ghost chat-text" aria-hidden="true">
               <span>{text}</span>
               <span className="composer-ghost-hint">{hint}</span>
             </div>
@@ -248,7 +254,7 @@ export function Composer({
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  run(offered[at]);
+                  pick(offered[at]);
                   return;
                 }
               }

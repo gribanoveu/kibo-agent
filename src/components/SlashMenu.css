@@ -4,8 +4,8 @@
   left: 0;
   min-width: 260px;
   max-width: 420px;
-  max-height: 320px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -53,4 +53,26 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The list scrolls; the line of keys under it stays. */
+.slash-list {
+  max-height: 290px;
+  overflow-y: auto;
+}
+.slash-keys {
+  padding: 6px 9px 3px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+}
+.slash-keys kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-bubble);
+  border: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 15px;
 }

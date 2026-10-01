@@ -325,12 +325,15 @@ describe("the model chip", () => {
 });
 
 describe("slash commands", () => {
-  function withCommands(unavailable?: string) {
+  function withCommands(unavailable?: string, withArguments = false) {
     const ran: string[] = [];
     const sent: string[] = [];
     const commands = [
       { name: "compact", hint: "Fold older history", run: (args: string) => ran.push(`compact:${args}`) },
       { name: "fork", hint: "Copy the chat", unavailable, run: (args: string) => ran.push(`fork:${args}`) },
+      ...(withArguments
+        ? [{ name: "compare", hint: "Compare two files", argumentHint: "<old> <new>", run: (args: string) => ran.push(`compare:${args}`) }]
+        : []),
     ];
     render(
       <Composer
@@ -392,6 +395,34 @@ describe("slash commands", () => {
     type("/");
     fireEvent.click(screen.getByRole("option", { name: /compact/ }));
     expect(ran).toEqual(["compact:"]);
+  });
+
+  /// Run bare, a command that wants arguments would send its placeholders:
+  /// Enter or a click puts it in the box, and Enter then runs what was typed.
+  test("a command that takes arguments is put in the box, not run", () => {
+    const { ran, box, type, key } = withCommands(undefined, true);
+    type("/compar");
+    expect(document.querySelector(".slash-keys")?.textContent).toBe("Tab or Enter to fill it in, then type the arguments");
+    key("Enter");
+    expect(box.value).toBe("/compare ");
+    expect(ran).toEqual([]);
+
+    type("/compare a.ts b.ts");
+    key("Enter");
+    expect(ran).toEqual(["compare:a.ts b.ts"]);
+
+    type("/");
+    fireEvent.click(screen.getByRole("option", { name: /compare/ }));
+    expect(box.value).toBe("/compare ");
+    expect(ran).toEqual(["compare:a.ts b.ts"]);
+  });
+
+  test("the menu says what the keys do with the highlighted command", () => {
+    const { type, key } = withCommands(undefined, true);
+    type("/");
+    expect(document.querySelector(".slash-keys")?.textContent).toBe("Enter to run · Tab to fill it in");
+    key("ArrowUp");
+    expect(document.querySelector(".slash-keys")?.textContent).toBe("Tab or Enter to fill it in, then type the arguments");
   });
 
   test("Tab completes the name and leaves room for arguments", () => {
