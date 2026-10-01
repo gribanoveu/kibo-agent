@@ -38,6 +38,7 @@ use crate::domain::background::{self, BackgroundProcesses};
 use crate::domain::command_exec::{CommandEvent, CommandSink, Shell};
 use crate::domain::tools::{
     ApprovalPolicy, CodeSearchFn, ReadFiles, Task, ToolDeps, ToolName, ToolResult, ToolScope,
+    TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX,
 };
 use crate::domain::turn::{
     ChatDone, ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, DecisionError,
@@ -461,7 +462,7 @@ fn ended(mut state: State, result: ChatStreamResult) -> ChatDone {
             .map(|call| call.id.clone())
             .collect();
         for id in unrun {
-            state.history.push(tool_message(&id, "Not run: the user stopped the turn before this call.".to_string()));
+            state.history.push(tool_message(&id, format!("{TOOL_NOT_RUN_PREFIX}the user stopped the turn before this call.")));
         }
     }
     if !result.text.is_empty() {
@@ -691,7 +692,7 @@ fn run(
                         // audit trail is read for.
                         let args = parse_tool_call(call).map_or(serde_json::Value::Null, |p| tool_call_log::redact_args(&p));
                         log_call(turn, round, call, args, CallStatus::Error, Some(tool_call_log::redact_error(&e)), None, Instant::now());
-                        let message = format!("Error: {e}");
+                        let message = format!("{TOOL_ERROR_PREFIX}{e}");
                         settled.push(Settled {
                             tool: call.name.clone(),
                             arguments: call.arguments.clone(),
@@ -796,7 +797,7 @@ fn run(
                     .map_err(|e| {
                         logged_error = Some(tool_call_log::redact_error(&e));
                         error_kind = Some(loop_guard::error_kind(&e));
-                        format!("Error: {e}")
+                        format!("{TOOL_ERROR_PREFIX}{e}")
                     }),
             };
             // What a hook says about a call that ran goes to the model with
@@ -1591,9 +1592,9 @@ fn log_call(
 fn denial(decision: &ToolCallDecision) -> String {
     match &decision.reason {
         Some(reason) if !reason.trim().is_empty() => {
-            format!("Denied by the user: {reason}")
+            format!("{TOOL_DENIED_PREFIX}: {reason}")
         }
-        _ => "Denied by the user.".to_string(),
+        _ => format!("{TOOL_DENIED_PREFIX}."),
     }
 }
 

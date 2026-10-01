@@ -914,6 +914,14 @@ pub struct ToolDeps<'a> {
     pub web: Option<crate::domain::web_search::WebSearchFn>,
 }
 
+/// How a tool result begins when its call did nothing: it failed, the user
+/// refused it, or the turn stopped before it ran. Read back by the compaction's
+/// file lists (`domain::compaction::with_file_lists`), which leave out a write
+/// that never happened.
+pub const TOOL_ERROR_PREFIX: &str = "Error: ";
+pub const TOOL_DENIED_PREFIX: &str = "Denied by the user";
+pub const TOOL_NOT_RUN_PREFIX: &str = "Not run: ";
+
 /// Why a tool call could not be carried out.
 ///
 /// Data all the way to the boundary, per `AGENTS.md`: the string form exists

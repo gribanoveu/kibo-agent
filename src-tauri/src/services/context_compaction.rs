@@ -152,8 +152,9 @@ pub fn compact(
         return Ok(None);
     }
 
+    let summary = compaction::with_file_lists(summary.trim(), &history[plan.keep_head..plan.tail_start()]);
     Ok(Some(Compacted {
-        history: compaction::apply(history, plan, summary.trim()),
+        history: compaction::apply(history, plan, &summary),
         folded: plan.summarize,
     }))
 }
@@ -371,6 +372,28 @@ mod tests {
             .unwrap()
             .starts_with(SUMMARY_PREFIX));
         assert_eq!(&compacted.history[1..], &history[40 - KEEP_LAST_MESSAGES..]);
+    }
+
+    /// The summarizer never mentioned the file; the summary names it anyway,
+    /// because it is taken from the folded calls rather than from the prose.
+    #[test]
+    fn the_summary_names_the_files_the_folded_part_changed() {
+        let provider = Summarizer::saying("they were fixing the parser");
+        let mut history = vec![
+            LlmMessage { tool_calls: vec![LlmToolCall { id: "w".into(), name: "writeFile".into(), arguments: r#"{"path":"src/parser.rs"}"#.into() }], ..LlmMessage::assistant("") },
+            LlmMessage::tool_result("w", "ok"),
+        ];
+        history.extend(conversation(40));
+
+        let compacted = compact(&session(provider), &history, KEEP_LAST_MESSAGES, &|| {})
+            .unwrap()
+            .expect("a shorter history");
+
+        assert!(compacted.history[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .ends_with("they were fixing the parser\n\n<modified-files>\nsrc/parser.rs\n</modified-files>"));
     }
 
     /// The request meant to save context must not carry the tool schemas —

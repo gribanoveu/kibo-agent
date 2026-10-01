@@ -21,8 +21,8 @@
 //!   messages carried their tool calls inside them.
 
 use super::llm::{LlmMessage, LlmRole, LlmToolDefinition};
-use super::tools::ToolName;
-use std::collections::HashMap;
+use super::tools::{ToolName, TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Compaction starts once the estimate crosses this much of the context
 /// window. Early enough that the rest of the turn — a tool-calling loop can
@@ -281,6 +281,124 @@ pub fn apply(messages: &[LlmMessage], plan: CompactionPlan, summary: &str) -> Ve
 
 pub fn summary_message(summary: &str) -> LlmMessage {
     LlmMessage::user(format!("{SUMMARY_PREFIX}\n\n{summary}"))
+}
+
+/// The lists of files a summary ends with, in the order they are written.
+const MODIFIED_FILES: &str = "modified-files";
+const DELETED_FILES: &str = "deleted-files";
+const READ_FILES: &str = "read-files";
+
+/// The summary with the files the folded messages touched appended, as
+/// `<modified-files>`, `<deleted-files>` and `<read-files>` blocks of one path
+/// a line, each path as the model wrote it.
+///
+/// Built from the calls rather than asked of the summarizer: a model writing
+/// prose drops a path now and then, and the next pass starts from this
+/// summary, so a path dropped once would be gone for good. For the same reason
+/// the lists are cumulative — an earlier summary among `folded` is where they
+/// start.
+///
+/// Only calls that ran count: a failed or refused edit changed nothing. A file
+/// both read and changed is listed once, as changed. `move` leaves its source
+/// deleted and its destination modified. What a command or an MCP tool did to
+/// files is not known, and not listed.
+pub fn with_file_lists(summary: &str, folded: &[LlmMessage]) -> String {
+    let ran: HashSet<&str> = folded
+        .iter()
+        .filter(|m| m.role == LlmRole::Tool && !m.content.as_deref().is_some_and(did_nothing))
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .collect();
+
+    let mut modified = BTreeSet::new();
+    let mut deleted = BTreeSet::new();
+    let mut read = BTreeSet::new();
+    for message in folded {
+        let earlier = (message.role == LlmRole::User)
+            .then(|| message.content.as_deref()?.strip_prefix(SUMMARY_PREFIX))
+            .flatten();
+        if let Some(earlier) = earlier {
+            modified.extend(paths_in(earlier, MODIFIED_FILES));
+            deleted.extend(paths_in(earlier, DELETED_FILES));
+            read.extend(paths_in(earlier, READ_FILES));
+        }
+        for call in message.tool_calls.iter().filter(|c| ran.contains(c.id.as_str())) {
+            // The first JSON value, as the tool's own parsing takes it: a
+            // complete object with noise after it still ran.
+            let args = serde_json::Deserializer::from_str(&call.arguments)
+                .into_iter::<serde_json::Value>()
+                .next()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let field = |key: &str| args.get(key).and_then(serde_json::Value::as_str).map(str::to_string);
+            let (Some(name), Some(path)) = (ToolName::from_wire_name(&call.name), field("path")) else {
+                continue;
+            };
+            match name {
+                ToolName::ReadFile => {
+                    read.insert(path);
+                }
+                ToolName::WriteFile | ToolName::EditFile => {
+                    deleted.remove(&path);
+                    modified.insert(path);
+                }
+                ToolName::DeleteFile => {
+                    modified.remove(&path);
+                    deleted.insert(path);
+                }
+                ToolName::Move => {
+                    if let Some(to) = field("newPath") {
+                        modified.remove(&path);
+                        deleted.insert(path);
+                        deleted.remove(&to);
+                        modified.insert(to);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    read.retain(|path| !modified.contains(path) && !deleted.contains(path));
+
+    // The summarizer was shown the earlier summary, lists and all, and may
+    // copy them; only the lists built here go out.
+    let mut out = without_file_lists(summary);
+    for (tag, paths) in [(MODIFIED_FILES, &modified), (DELETED_FILES, &deleted), (READ_FILES, &read)] {
+        if !paths.is_empty() {
+            let lines: Vec<&str> = paths.iter().map(String::as_str).collect();
+            out.push_str(&format!("\n\n<{tag}>\n{}\n</{tag}>", lines.join("\n")));
+        }
+    }
+    out
+}
+
+fn did_nothing(result: &str) -> bool {
+    [TOOL_ERROR_PREFIX, TOOL_DENIED_PREFIX, TOOL_NOT_RUN_PREFIX]
+        .iter()
+        .any(|prefix| result.starts_with(prefix))
+}
+
+/// The paths of the `<tag>` block in `text`.
+fn paths_in(text: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let block = text
+        .find(&open)
+        .map(|start| &text[start + open.len()..])
+        .and_then(|rest| rest.find(&close).map(|end| &rest[..end]))
+        .unwrap_or("");
+    block.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect()
+}
+
+fn without_file_lists(summary: &str) -> String {
+    let mut text = summary.to_string();
+    for tag in [MODIFIED_FILES, DELETED_FILES, READ_FILES] {
+        let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+        while let Some(start) = text.find(&open) {
+            let Some(end) = text[start..].find(&close) else { break };
+            text.replace_range(start..start + end + close.len(), "");
+        }
+    }
+    text.trim_end().to_string()
 }
 
 /// How the provider says "this conversation no longer fits".
@@ -726,5 +844,121 @@ mod tests {
             .content
             .as_deref()
             .is_some_and(|text| text.starts_with(SUMMARY_PREFIX))
+    }
+
+    /// One call and its result: the round as the history holds it.
+    fn ran(id: &str, tool: &str, arguments: &str, result: &str) -> [LlmMessage; 2] {
+        let call = LlmToolCall { id: id.into(), name: tool.into(), arguments: arguments.into() };
+        [LlmMessage { tool_calls: vec![call], ..LlmMessage::assistant("") }, LlmMessage::tool_result(id, result)]
+    }
+
+    fn folded(rounds: &[[LlmMessage; 2]]) -> Vec<LlmMessage> {
+        rounds.iter().flatten().cloned().collect()
+    }
+
+    #[test]
+    fn the_summary_lists_the_files_its_calls_changed_deleted_and_read() {
+        let history = folded(&[
+            ran("1", "readFile", r#"{"path":"src/b.rs"}"#, "fn b() {}"),
+            ran("2", "readFile", r#"{"path":"src/a.rs"}"#, "fn a() {}"),
+            ran("3", "editFile", r#"{"path":"src/a.rs","edits":[]}"#, "{\"path\":\"src/a.rs\"}"),
+            ran("4", "writeFile", r#"{"path":"src/new.rs","content":""}"#, "ok"),
+            ran("5", "deleteFile", r#"{"path":"old.txt"}"#, "ok"),
+            ran("6", "grep", r#"{"pattern":"x","path":"src"}"#, "nothing"),
+        ]);
+
+        assert_eq!(
+            with_file_lists("The work so far.", &history),
+            "The work so far.\n\n\
+             <modified-files>\nsrc/a.rs\nsrc/new.rs\n</modified-files>\n\n\
+             <deleted-files>\nold.txt\n</deleted-files>\n\n\
+             <read-files>\nsrc/b.rs\n</read-files>"
+        );
+    }
+
+    /// A refused, failed or never-run write changed nothing, and a failed read
+    /// read nothing.
+    #[test]
+    fn a_call_that_did_nothing_is_not_listed() {
+        let history = folded(&[
+            ran("1", "editFile", r#"{"path":"a.rs"}"#, "Error: the anchor was not found"),
+            ran("2", "writeFile", r#"{"path":"b.rs"}"#, "Denied by the user: not that one"),
+            ran("3", "deleteFile", r#"{"path":"c.rs"}"#, "Not run: the user stopped the turn before this call."),
+            ran("4", "readFile", r#"{"path":"d.rs"}"#, "Error: no such file"),
+        ]);
+
+        assert_eq!(with_file_lists("Summary.", &history), "Summary.");
+    }
+
+    #[test]
+    fn a_move_deletes_its_source_and_modifies_its_destination() {
+        let history = folded(&[
+            ran("1", "writeFile", r#"{"path":"draft.md"}"#, "ok"),
+            ran("2", "move", r#"{"path":"draft.md","newPath":"docs/final.md"}"#, "ok"),
+        ]);
+
+        assert_eq!(
+            with_file_lists("S.", &history),
+            "S.\n\n<modified-files>\ndocs/final.md\n</modified-files>\n\n<deleted-files>\ndraft.md\n</deleted-files>"
+        );
+    }
+
+    /// Each path is in one list, the one its last call put it in.
+    #[test]
+    fn a_file_is_listed_as_what_happened_to_it_last() {
+        let history = folded(&[
+            ran("1", "readFile", r#"{"path":"a.rs"}"#, "x"),
+            ran("2", "writeFile", r#"{"path":"b.rs"}"#, "ok"),
+            ran("3", "deleteFile", r#"{"path":"a.rs"}"#, "ok"),
+            ran("4", "deleteFile", r#"{"path":"b.rs"}"#, "ok"),
+            ran("5", "deleteFile", r#"{"path":"c.rs"}"#, "ok"),
+            ran("6", "move", r#"{"path":"d.rs","newPath":"c.rs"}"#, "ok"),
+        ]);
+
+        assert_eq!(
+            with_file_lists("S.", &history),
+            "S.\n\n<modified-files>\nc.rs\n</modified-files>\n\n<deleted-files>\na.rs\nb.rs\nd.rs\n</deleted-files>"
+        );
+    }
+
+    /// The point of building the lists: the second pass keeps a file from the
+    /// first even though its summarizer never mentioned it — and a file
+    /// deleted then and written now is modified, not both.
+    #[test]
+    fn the_lists_of_an_earlier_summary_carry_into_the_next() {
+        let first = with_file_lists("First.", &folded(&[
+            ran("1", "editFile", r#"{"path":"kept.rs"}"#, "ok"),
+            ran("2", "deleteFile", r#"{"path":"back.rs"}"#, "ok"),
+            ran("3", "readFile", r#"{"path":"seen.rs"}"#, "x"),
+            ran("5", "deleteFile", r#"{"path":"gone.rs"}"#, "ok"),
+        ]));
+        let mut second = vec![summary_message(&first)];
+        second.extend(folded(&[ran("4", "writeFile", r#"{"path":"back.rs"}"#, "ok")]));
+
+        assert_eq!(
+            with_file_lists("Second, about something else.", &second),
+            "Second, about something else.\n\n\
+             <modified-files>\nback.rs\nkept.rs\n</modified-files>\n\n\
+             <deleted-files>\ngone.rs\n</deleted-files>\n\n\
+             <read-files>\nseen.rs\n</read-files>"
+        );
+    }
+
+    /// The summarizer was shown the earlier lists and may write them out
+    /// again; the summary still ends with one set, built from the calls.
+    #[test]
+    fn lists_the_summarizer_copied_are_replaced_not_doubled() {
+        let history = folded(&[ran("1", "editFile", r#"{"path":"a.rs"}"#, "ok")]);
+        let copied = "Done.\n\n<modified-files>\nmade-up.rs\n</modified-files>\n\n<read-files>\nb.rs\n</read-files>";
+
+        assert_eq!(with_file_lists(copied, &history), "Done.\n\n<modified-files>\na.rs\n</modified-files>");
+    }
+
+    /// The tool takes a complete object with noise after it; so do the lists.
+    #[test]
+    fn arguments_with_trailing_noise_still_name_their_file() {
+        let history = folded(&[ran("1", "writeFile", "{\"path\":\"a.rs\",\"content\":\"\"}}", "ok")]);
+
+        assert_eq!(with_file_lists("S.", &history), "S.\n\n<modified-files>\na.rs\n</modified-files>");
     }
 }
