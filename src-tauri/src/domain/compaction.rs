@@ -33,21 +33,33 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 /// `10_000 * 0.8` is not 8_000 in either float width, so a threshold written
 /// that way fires one token later than it reads, and says so only under a
 /// test that lands exactly on it.
-pub const TRIGGER_PERCENT: u64 = 80;
+pub const TRIGGER_PERCENT: u64 = 90;
 
-/// How many recent messages stay verbatim. The summary is for what the
-/// conversation was about; the tail is for what it is doing right now, and
-/// that part has to survive word for word.
-pub const KEEP_LAST_MESSAGES: usize = 12;
+/// How much of the window the verbatim tail may take. The summary is for
+/// what the conversation was about; the tail is for what it is doing right
+/// now, and that part has to survive word for word.
+///
+/// Measured in tokens, not messages: one round of an agent is its call and up
+/// to half a dozen results, so a tail of twelve messages kept a round or two
+/// and the model went back to read again every file it had been working with.
+pub const KEEP_TAIL_PERCENT: u64 = 25;
 
 /// The tail after a real overflow, rather than a predicted one: the provider
 /// has already refused, so a pass that compacts as gently as the one that
 /// failed to prevent it would just fail again.
-pub const RETRY_KEEP_LAST_MESSAGES: usize = 6;
+pub const RETRY_KEEP_TAIL_PERCENT: u64 = 10;
 
-/// Below this, compaction never runs. Summarizing a short conversation trades
-/// a request and some fidelity for almost no room.
-pub const MIN_MESSAGES: usize = KEEP_LAST_MESSAGES + 6;
+/// How much of the window the summarizer's request may fill: the folded part
+/// is shown to it whole when it fits, and cut evenly when it does not.
+pub const SUMMARY_INPUT_PERCENT: u64 = 50;
+
+/// `percent` of the window, in tokens. A window that is not configured counts
+/// as the default one: the tail and the summarizer's share need a size, and
+/// no compaction runs on its own without a configured one.
+pub fn share_of_window(context_limit: Option<u32>, percent: u64) -> usize {
+    let limit = context_limit.filter(|limit| *limit > 0).unwrap_or(crate::domain::settings::DEFAULT_CONTEXT_LIMIT);
+    (u64::from(limit) * percent / 100) as usize
+}
 
 /// What the summary message says it is. The model is told plainly that it is
 /// reading a summary rather than a transcript — a summary presented as the
@@ -206,13 +218,12 @@ impl ContextUsage {
 /// No configured limit means no: the app talks to gateways it knows nothing
 /// about, and compacting against a guessed window would throw away
 /// conversation to solve a problem that may not exist.
-pub fn should_compact(estimated_tokens: usize, context_limit: Option<u32>, messages: &[LlmMessage]) -> bool {
+///
+/// Whether there is anything worth folding is [`plan_compaction`]'s to say.
+pub fn should_compact(estimated_tokens: usize, context_limit: Option<u32>) -> bool {
     let Some(limit) = context_limit.filter(|limit| *limit > 0) else {
         return false;
     };
-    if messages.len() < MIN_MESSAGES {
-        return false;
-    }
     estimated_tokens as u64 * 100 >= u64::from(limit) * TRIGGER_PERCENT
 }
 
@@ -241,13 +252,25 @@ impl CompactionPlan {
 /// tool calls and the messages answering them. A provider refuses a history
 /// that opens with an answer to a question it cannot see, so a cut in the
 /// middle of a round does not shorten the conversation — it breaks it.
-pub fn plan_compaction(messages: &[LlmMessage], keep_last: usize) -> Option<CompactionPlan> {
+///
+/// The tail is the latest messages that fit in `keep_tail_tokens`, and never
+/// less than the last one.
+pub fn plan_compaction(messages: &[LlmMessage], keep_tail_tokens: usize) -> Option<CompactionPlan> {
     let keep_head = messages
         .iter()
         .take_while(|message| message.role == LlmRole::System)
         .count();
 
-    let floor = messages.len().saturating_sub(keep_last).max(keep_head);
+    let mut floor = messages.len();
+    let mut kept = 0;
+    while floor > keep_head {
+        let cost = estimate_message_tokens(&messages[floor - 1]);
+        if floor < messages.len() && kept + cost > keep_tail_tokens {
+            break;
+        }
+        kept += cost;
+        floor -= 1;
+    }
     let cut = safe_cut(messages, floor, keep_head)?;
 
     let summarize = cut - keep_head;
@@ -442,13 +465,20 @@ work. Plain prose and short lists only.";
 ///
 /// A file read is thirty thousand characters. Sending those verbatim to be
 /// summarized would send the very context that just overflowed — the request
-/// that is meant to make room would be the largest one of the session. What
-/// a summary needs from a tool result is that it happened and roughly what
-/// came back, and that survives truncation.
-const MAX_RENDERED_CHARS: usize = 1_500;
+/// that is meant to make room would be the largest one of the session — so
+/// when the whole does not fit in `budget_tokens`, the longest pieces are cut
+/// to one length, never below this many bytes. What a summary needs from a
+/// tool result is that it happened and roughly what came back, and that
+/// survives the cut; what fits is shown whole, so a summary can keep the
+/// names, paths and numbers a file had.
+const MIN_RENDERED_BYTES: usize = 1_500;
 
-/// The messages to be folded away, as text for the summarizer.
-pub fn render_for_summary(messages: &[LlmMessage]) -> String {
+/// The messages to be folded away, as text for the summarizer, in about
+/// `budget_tokens`.
+pub fn render_for_summary(messages: &[LlmMessage], budget_tokens: usize) -> String {
+    let cap = rendered_cap(messages, budget_tokens * CHARS_PER_TOKEN);
+    let truncate = |text: &str| truncate(text, cap);
+    let content_of = |message: &LlmMessage| truncate(message.content.as_deref().unwrap_or(""));
     let mut out = String::new();
     for message in messages {
         let line = match message.role {
@@ -479,16 +509,39 @@ pub fn render_for_summary(messages: &[LlmMessage]) -> String {
     out
 }
 
-fn content_of(message: &LlmMessage) -> String {
-    truncate(message.content.as_deref().unwrap_or(""))
+/// The length, in bytes, every piece of `messages` is cut to so that all of
+/// them fit in `budget`: no cut when they fit, otherwise the one length that
+/// leaves short pieces whole and shares what is left among the long ones.
+fn rendered_cap(messages: &[LlmMessage], budget: usize) -> usize {
+    let mut lengths: Vec<usize> = messages
+        .iter()
+        .filter(|m| m.role != LlmRole::System)
+        .flat_map(|m| m.content.as_deref().map(str::len).into_iter().chain(m.tool_calls.iter().map(|c| c.arguments.len())))
+        .collect();
+    if lengths.iter().sum::<usize>() <= budget {
+        return usize::MAX;
+    }
+    lengths.sort_unstable();
+    let mut rest = budget;
+    for (i, &length) in lengths.iter().enumerate() {
+        let share = rest / (lengths.len() - i);
+        if length > share {
+            return share.max(MIN_RENDERED_BYTES);
+        }
+        rest -= length;
+    }
+    usize::MAX
 }
 
-fn truncate(text: &str) -> String {
-    if text.chars().count() <= MAX_RENDERED_CHARS {
+fn truncate(text: &str, cap: usize) -> String {
+    if text.len() <= cap {
         return text.to_string();
     }
-    let kept: String = text.chars().take(MAX_RENDERED_CHARS).collect();
-    format!("{kept}… [{} characters omitted]", text.chars().count() - MAX_RENDERED_CHARS)
+    let mut end = cap;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [{} characters omitted]", &text[..end], text[end..].chars().count())
 }
 
 #[cfg(test)]
@@ -639,36 +692,55 @@ mod tests {
 
     #[test]
     fn nothing_is_compacted_without_a_known_window() {
-        let messages = conversation(MIN_MESSAGES);
-        assert!(!should_compact(1_000_000, None, &messages));
-        assert!(!should_compact(1_000_000, Some(0), &messages));
-    }
-
-    /// Summarizing four messages buys nothing and costs a request right as
-    /// the user is trying to say something.
-    #[test]
-    fn a_short_conversation_is_left_alone_however_big_it_is() {
-        let messages = conversation(MIN_MESSAGES - 1);
-        assert!(!should_compact(1_000_000, Some(8_000), &messages));
+        assert!(!should_compact(1_000_000, None));
+        assert!(!should_compact(1_000_000, Some(0)));
     }
 
     #[test]
     fn compaction_starts_before_the_window_is_full() {
-        let messages = conversation(MIN_MESSAGES);
         let limit = 10_000;
 
-        assert!(!should_compact(7_999, Some(limit), &messages));
-        assert!(should_compact(8_000, Some(limit), &messages));
+        assert!(!should_compact(8_999, Some(limit)));
+        assert!(should_compact(9_000, Some(limit)));
     }
 
+    /// How many messages these tests keep, and the budget that keeps exactly
+    /// that many of `messages`.
+    const KEEP: usize = 12;
+    fn tail_of(messages: &[LlmMessage], n: usize) -> usize {
+        estimate_tokens(&messages[messages.len() - n..])
+    }
+
+    /// The tail is what fits in its tokens — however many messages that is.
     #[test]
     fn the_last_messages_stay_word_for_word() {
         let messages = conversation(30);
-        let plan = plan_compaction(&messages, KEEP_LAST_MESSAGES).expect("something to fold");
+        let plan = plan_compaction(&messages, tail_of(&messages, KEEP)).expect("something to fold");
 
         assert_eq!(plan.keep_head, 0);
-        assert_eq!(plan.summarize, 30 - KEEP_LAST_MESSAGES);
-        assert_eq!(messages.len() - plan.tail_start(), KEEP_LAST_MESSAGES);
+        assert_eq!(plan.summarize, 30 - KEEP);
+        assert_eq!(messages.len() - plan.tail_start(), KEEP);
+    }
+
+    /// One big result counts for what it costs: a tail of the same tokens
+    /// keeps fewer messages when one of them is large.
+    #[test]
+    fn the_tail_is_measured_in_tokens_not_messages() {
+        let mut messages = conversation(30);
+        let budget = tail_of(&messages, KEEP);
+        messages[25] = user(&"x".repeat(budget * CHARS_PER_TOKEN / 2));
+        let plan = plan_compaction(&messages, budget).expect("something to fold");
+        assert!(messages.len() - plan.tail_start() < KEEP, "kept {}", messages.len() - plan.tail_start());
+    }
+
+    /// The last message stays whatever it costs: a tail with nothing in it
+    /// leaves the model nothing to continue from.
+    #[test]
+    fn the_last_message_stays_however_big() {
+        let mut messages = conversation(10);
+        messages.push(user(&"x".repeat(100_000)));
+        let plan = plan_compaction(&messages, 10).expect("something to fold");
+        assert_eq!(plan.tail_start(), messages.len() - 1);
     }
 
     /// The instructions are not conversation: folding them into a summary
@@ -678,7 +750,7 @@ mod tests {
         let mut messages = vec![LlmMessage::system("you are an agent")];
         messages.extend(conversation(30));
 
-        let plan = plan_compaction(&messages, KEEP_LAST_MESSAGES).expect("something to fold");
+        let plan = plan_compaction(&messages, tail_of(&messages, KEEP)).expect("something to fold");
         assert_eq!(plan.keep_head, 1);
 
         let compacted = apply(&messages, plan, "they talked about the parser");
@@ -688,8 +760,9 @@ mod tests {
 
     #[test]
     fn a_conversation_with_nothing_to_fold_is_left_alone() {
-        assert_eq!(plan_compaction(&conversation(KEEP_LAST_MESSAGES), KEEP_LAST_MESSAGES), None);
-        assert_eq!(plan_compaction(&[], KEEP_LAST_MESSAGES), None);
+        let short = conversation(KEEP);
+        assert_eq!(plan_compaction(&short, tail_of(&short, KEEP)), None);
+        assert_eq!(plan_compaction(&[], 1_000), None);
     }
 
     /// The rule the wire format adds: an answer whose question has been
@@ -704,7 +777,7 @@ mod tests {
         messages.push(answered("c1b"));
         messages.push(user("and now?"));
 
-        let plan = plan_compaction(&messages, 3).expect("something to fold");
+        let plan = plan_compaction(&messages, tail_of(&messages, 3)).expect("something to fold");
         let tail = &messages[plan.tail_start()..];
 
         assert_eq!(tail[0], calling("c1"), "the tail opens with an orphaned result");
@@ -719,17 +792,17 @@ mod tests {
         let mut messages = vec![calling("c1")];
         messages.extend((0..30).map(|_| answered("c1")));
 
-        assert_eq!(plan_compaction(&messages, 2), None);
+        assert_eq!(plan_compaction(&messages, tail_of(&messages, 2)), None);
     }
 
     #[test]
     fn the_compacted_history_is_the_head_the_summary_and_the_tail() {
         let messages = conversation(30);
-        let plan = plan_compaction(&messages, KEEP_LAST_MESSAGES).unwrap();
+        let plan = plan_compaction(&messages, tail_of(&messages, KEEP)).unwrap();
 
         let compacted = apply(&messages, plan, "they talked about the parser");
 
-        assert_eq!(compacted.len(), 1 + KEEP_LAST_MESSAGES);
+        assert_eq!(compacted.len(), 1 + KEEP);
         assert_eq!(compacted[0], summary_message("they talked about the parser"));
         assert_eq!(&compacted[1..], &messages[plan.tail_start()..]);
     }
@@ -741,13 +814,13 @@ mod tests {
         let messages = conversation(40);
         let first = apply(
             &messages,
-            plan_compaction(&messages, KEEP_LAST_MESSAGES).unwrap(),
+            plan_compaction(&messages, tail_of(&messages, KEEP)).unwrap(),
             "the parser",
         );
         let mut grown = first.clone();
         grown.extend(conversation(20));
 
-        let plan = plan_compaction(&grown, KEEP_LAST_MESSAGES).expect("something to fold");
+        let plan = plan_compaction(&grown, tail_of(&grown, KEEP)).expect("something to fold");
         assert_eq!(plan.keep_head, 0, "the summary is a message like any other");
         assert!(plan.summarize >= 1);
 
@@ -793,7 +866,7 @@ mod tests {
             assistant("done"),
         ];
 
-        let rendered = render_for_summary(&messages);
+        let rendered = render_for_summary(&messages, 1_000);
         assert!(rendered.contains("User: fix the parser"), "{rendered}");
         assert!(rendered.contains("[tool] readFile"), "{rendered}");
         assert!(rendered.contains("a.rs"), "{rendered}");
@@ -810,9 +883,31 @@ mod tests {
             ..answered("c1")
         };
 
-        let rendered = render_for_summary(&[huge]);
+        let rendered = render_for_summary(&[huge], 0);
         assert!(rendered.len() < 3_000, "{} characters", rendered.len());
         assert!(rendered.contains("characters omitted"), "{rendered}");
+    }
+
+    /// What fits is shown whole: a summary of a file it saw only the first
+    /// lines of cannot keep the names and numbers further down.
+    #[test]
+    fn what_fits_the_budget_is_summarized_from_the_whole_text() {
+        let file = LlmMessage { content: Some("x".repeat(30_000)), ..answered("c1") };
+        let rendered = render_for_summary(&[file], 10_000);
+        assert!(!rendered.contains("omitted"), "cut although it fits");
+        assert!(rendered.len() > 30_000);
+    }
+
+    /// Over the budget, the long pieces share what is left and the short ones
+    /// stay whole.
+    #[test]
+    fn over_the_budget_the_long_pieces_are_cut_and_the_short_ones_kept() {
+        let long = |id: &str| LlmMessage { content: Some("x".repeat(40_000)), ..answered(id) };
+        let messages = [user("fix the parser"), long("a"), long("b")];
+        let rendered = render_for_summary(&messages, 5_000);
+        assert!(rendered.contains("User: fix the parser"), "{rendered}");
+        assert_eq!(rendered.matches("characters omitted").count(), 2);
+        assert!((18_000..=22_000).contains(&rendered.len()), "{} bytes for a 20 000-byte budget", rendered.len());
     }
 
     /// Cutting by characters on a multi-byte string is how this kind of code
@@ -824,7 +919,7 @@ mod tests {
             ..answered("c1")
         };
 
-        let rendered = render_for_summary(&cyrillic_message(cyrillic));
+        let rendered = render_for_summary(&cyrillic_message(cyrillic), 0);
         assert!(rendered.contains("characters omitted"), "{rendered}");
     }
 
@@ -834,7 +929,7 @@ mod tests {
 
     #[test]
     fn the_system_prompt_is_not_part_of_what_is_summarized() {
-        let rendered = render_for_summary(&[LlmMessage::system("you are an agent"), user("hi")]);
+        let rendered = render_for_summary(&[LlmMessage::system("you are an agent"), user("hi")], 1_000);
         assert!(!rendered.contains("you are an agent"), "{rendered}");
         assert!(rendered.contains("User: hi"), "{rendered}");
     }

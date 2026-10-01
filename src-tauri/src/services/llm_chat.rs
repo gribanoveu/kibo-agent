@@ -19,7 +19,7 @@ use crate::domain::llm::{
     sanitize_tool_call_arguments,
 };
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
-use crate::domain::compaction::{self, RETRY_KEEP_LAST_MESSAGES};
+use crate::domain::compaction::{self, KEEP_TAIL_PERCENT, RETRY_KEEP_TAIL_PERCENT};
 use crate::domain::result_clearing;
 use crate::domain::web_search::WebSearchFn;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
@@ -543,7 +543,20 @@ fn run(
             }
             apply_steering(&events, round, &mut state.history, (turn.take_steering)());
             report_ended_processes(turn, &events, round, &mut state.history);
-            clear_stale_results(turn.place.scope(), &mut state, &mut seen_results);
+            // The window's ladder, cheapest first: old results at 85%, then a
+            // summary at 90% if clearing was not enough, then — should the
+            // provider still refuse — a harder summary in `ask_the_model`.
+            clear_stale_results(turn, &mut state, &mut seen_results);
+            let usage = request_usage(turn, &state.history);
+            if compaction::should_compact(usage.total, usage.limit) {
+                match fold(turn, &events, round, &mut state.history, &state.todos, &mut seen_results, KEEP_TAIL_PERCENT) {
+                    Ok(_) => {}
+                    // A pass that could not help leaves the history as it was:
+                    // if the request really does not fit, the provider says
+                    // so and the pass after a refusal takes over.
+                    Err(_) => {}
+                }
+            }
             restore_checklist(&mut state.history, &state.todos);
             events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
             events.emit(round, Some(format!("estimate:{round}")), ChatEventPayload::ContextEstimate(request_usage(turn, &state.history)));
@@ -554,6 +567,7 @@ fn run(
                 round,
                 &mut state.history,
                 &state.todos,
+                &mut seen_results,
             )? {
                 Some(result) => result,
                 // Cancelled during a retry wait.
@@ -1119,8 +1133,10 @@ fn explore_step(name: &str, arguments: &str) -> String {
 /// and makes the turn forget them as well. A repeat of a cleared call must
 /// come back in full rather than as "already above", and a file whose text
 /// the model no longer has must be read again before it is replaced whole.
-fn clear_stale_results(scope: Option<&ToolScope>, state: &mut State, seen_results: &mut HashMap<String, u64>) {
-    for cleared in result_clearing::plan(&state.history) {
+fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: &mut HashMap<String, u64>) {
+    let scope = turn.place.scope();
+    let usage = request_usage(turn, &state.history);
+    for cleared in result_clearing::plan(&state.history, usage.total, usage.limit) {
         state.history[cleared.index].content = Some(cleared.stub);
         seen_results.remove(&format!("{}|{}", cleared.tool, cleared.arguments));
         if ToolName::from_wire_name(&cleared.tool) != Some(ToolName::ReadFile) {
@@ -1234,6 +1250,7 @@ fn ask_the_model(
     round: u32,
     history: &mut Vec<LlmMessage>,
     todos: &[Task],
+    seen_results: &mut HashMap<String, u64>,
 ) -> Result<Option<ChatStreamResult>, TurnError> {
     let mut compacted = false;
     loop {
@@ -1251,27 +1268,41 @@ fn ask_the_model(
 
         // Harder than a proactive pass would: the window is not nearly full,
         // it is already over.
-        let started = || {
-            events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacting)
-        };
-        match context_compaction::compact(turn.session, history, RETRY_KEEP_LAST_MESSAGES, &started) {
-            Ok(Some(shorter)) => {
-                *history = shorter.history;
-                // The summary may have folded the last list away.
-                restore_checklist(history, todos);
-                events.emit(
-                    round,
-                    Some(format!("round:{round}")),
-                    ChatEventPayload::HistoryCompacted {
-                        folded: shorter.folded,
-                    },
-                );
-            }
+        match fold(turn, events, round, history, todos, seen_results, RETRY_KEEP_TAIL_PERCENT) {
+            Ok(true) => {}
             // Nothing could be folded, or the summarizer itself failed: report
             // what the model actually refused.
-            Ok(None) | Err(_) => return Err(TurnError::Provider(error)),
+            Ok(false) | Err(_) => return Err(TurnError::Provider(error)),
         }
     }
+}
+
+/// One pass over the turn's history, keeping `tail_percent` of the window
+/// word for word, said on the turn's channel as the window's own pass is.
+/// `false` when there was nothing worth folding or the summary came back
+/// empty; the history is then as it was.
+fn fold(
+    turn: &Turn,
+    events: &Events,
+    round: u32,
+    history: &mut Vec<LlmMessage>,
+    todos: &[Task],
+    seen_results: &mut HashMap<String, u64>,
+    tail_percent: u64,
+) -> Result<bool, LlmError> {
+    let started = || events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacting);
+    let tail = compaction::share_of_window(turn.session.context_limit, tail_percent);
+    let Some(shorter) = context_compaction::compact(turn.session, history, tail, &started)? else {
+        return Ok(false);
+    };
+    *history = shorter.history;
+    // What was read before the cut is gone from the history: a repeat of it
+    // must come back in full, not as "already above".
+    seen_results.clear();
+    // The summary may have folded the last list away.
+    restore_checklist(history, todos);
+    events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
+    Ok(true)
 }
 
 /// What this mode advertises. Leaving a tool out of the request is the half
@@ -2239,7 +2270,8 @@ mod tests {
             LlmMessage::tool_result("t", for_model(&ToolResult::Todo { tasks: todos.clone() })),
         ];
         history.extend(long_conversation());
-        let h = harness("chat-checklist-summary", vec![Step::Fail(too_long_error()), text("done")]);
+        let mut h = harness("chat-checklist-summary", vec![Step::Fail(too_long_error()), text("done")]);
+        h.session.context_limit = Some(WINDOW_FOR_LONG);
 
         h.run(|turn| stream(turn, history, todos)).expect("turn");
 
@@ -2766,27 +2798,35 @@ mod tests {
         )
     }
 
+    /// Forty messages of about a thousand tokens each.
     fn long_conversation() -> Vec<LlmMessage> {
+        let filler = "x".repeat(4_000);
         (0..40)
             .map(|i| {
                 if i % 2 == 0 {
-                    LlmMessage::user(format!("question {i}"))
+                    LlmMessage::user(format!("question {i} {filler}"))
                 } else {
-                    LlmMessage::assistant(format!("answer {i}"))
+                    LlmMessage::assistant(format!("answer {i} {filler}"))
                 }
             })
             .collect()
     }
+
+    /// A window the long conversation fits in with room to spare, so nothing
+    /// folds ahead of time — and a tenth of which, the tail after a refusal,
+    /// holds six of its messages.
+    const WINDOW_FOR_LONG: u32 = 70_000;
 
     /// The failure this exists for: the provider refuses because the
     /// conversation no longer fits, and the turn ends. Now it makes room and
     /// asks again, and the user never learns there was a problem.
     #[test]
     fn a_conversation_that_no_longer_fits_is_summarized_and_asked_again() {
-        let h = harness(
+        let mut h = harness(
             "loop-too-long",
             vec![Step::Fail(too_long_error()), text("done")],
         );
+        h.session.context_limit = Some(WINDOW_FOR_LONG);
 
         let outcome = h.run(|turn| stream(turn, long_conversation(), vec![]));
 
@@ -2812,15 +2852,47 @@ mod tests {
         assert_eq!(h.provider.summaries.lock().unwrap().len(), 1);
     }
 
+    /// A turn that starts near the edge folds before it asks, rather than
+    /// waiting to be refused: the summary comes first, keeping a quarter of
+    /// the window word for word, and the window is told.
+    #[test]
+    fn a_turn_over_the_mark_is_summarized_before_its_first_request() {
+        let mut h = harness("loop-fold-ahead", vec![text("done")]);
+        // 40 messages of ~1 000 tokens in 45 000: over 90% with the prompt.
+        h.session.context_limit = Some(45_000);
+
+        h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
+
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 1, "never refused, never retried");
+        assert_eq!(h.provider.summaries.lock().unwrap().len(), 1);
+        let conversation = conversation_of(&requests[0]);
+        assert!(conversation[0].content.as_deref().unwrap().contains("they were fixing the parser"), "the summary opens it");
+        // A quarter of 45 000 holds eleven of these messages.
+        assert_eq!(conversation.len(), 1 + 11);
+        let events: Vec<String> = payloads(&h.events()).into_iter().filter(|p| p.starts_with("compact")).collect();
+        assert_eq!(events, ["compacting", "compacted:29"]);
+    }
+
+    /// With room to spare nothing is folded — the mark is 90%, not "long".
+    #[test]
+    fn a_turn_with_room_is_not_summarized() {
+        let mut h = harness("loop-no-fold", vec![text("done")]);
+        h.session.context_limit = Some(WINDOW_FOR_LONG);
+        h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
+        assert!(h.provider.summaries.lock().unwrap().is_empty());
+    }
+
     /// History disappearing on its own is the thing to avoid: the model stops
     /// remembering what it was told, and nothing in the window says why. The
     /// summary takes seconds, so the start is said too, before it.
     #[test]
     fn the_transcript_is_told_that_history_was_folded_away() {
-        let h = harness(
+        let mut h = harness(
             "loop-too-long-event",
             vec![Step::Fail(too_long_error()), text("done")],
         );
+        h.session.context_limit = Some(WINDOW_FOR_LONG);
 
         h.run(|turn| stream(turn, long_conversation(), vec![]))
             .expect("finishes");
@@ -2837,10 +2909,11 @@ mod tests {
     /// more of the conversation and fail anyway.
     #[test]
     fn a_conversation_is_summarized_once_and_then_the_refusal_stands() {
-        let h = harness(
+        let mut h = harness(
             "loop-too-long-twice",
             vec![Step::Fail(too_long_error()), Step::Fail(too_long_error())],
         );
+        h.session.context_limit = Some(WINDOW_FOR_LONG);
 
         let outcome = h.run(|turn| stream(turn, long_conversation(), vec![]));
 

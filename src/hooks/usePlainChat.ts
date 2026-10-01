@@ -225,8 +225,6 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
       const now = Date.now();
       setTurn((state) => acceptEvent(state, event, now));
     });
-      // Before the turn, so the room is made once and kept, and saved with it.
-      await makeRoom(false);
       // Saved before the turn: one that fails leaves what the user said to
       // retry, not retype — and the chat is in the sidebar from its first message.
       await plainChatSave(id, role, kube, history.current, asked.blocks);

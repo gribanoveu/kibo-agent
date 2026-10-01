@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-01 A long turn folds its own history when the request reaches 90% of the context window, keeping the latest quarter of the window word for word, instead of waiting for the provider to refuse; the summary is written from the full text of what is folded
+- 2026-10-01 Old tool results are cleared only once a request fills 85% of the model's context window, not at a fixed 60k — a long task no longer reads the same files over and over
 - 2026-10-01 Beside Working… and the speed, how many tokens the turn has spent so far — 553, 1.2k, 48k
 - 2026-10-01 The context meter fills while the agent works, round by round, instead of only after the turn ends
 - 2026-10-01 The checklist item the agent is working on shows in a strip under the chat's header, with how many are done; clicking it opens the Plan tab

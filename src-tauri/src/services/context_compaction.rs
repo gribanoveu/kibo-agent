@@ -90,16 +90,12 @@ pub fn compact_if_needed(
     force: bool,
     started: &dyn Fn(),
 ) -> Result<Option<Compacted>, LlmError> {
-    let needed = force
-        || compaction::should_compact(
-            ContextUsage::new(frame, history, None).total,
-            session.context_limit,
-            history,
-        );
+    let needed = force || compaction::should_compact(ContextUsage::new(frame, history, None).total, session.context_limit);
     if !needed {
         return Ok(None);
     }
-    compact(session, history, compaction::KEEP_LAST_MESSAGES, started)
+    let tail = compaction::share_of_window(session.context_limit, compaction::KEEP_TAIL_PERCENT);
+    compact(session, history, tail, started)
 }
 
 /// One pass. `None` means the history is unchanged, for any reason: there was
@@ -114,13 +110,17 @@ pub fn compact_if_needed(
 /// summary is asked for — the one slow part, and the only point at which the
 /// window can honestly say a pass is under way. A pass that stops earlier
 /// never calls it.
+///
+/// `keep_tail_tokens` is how much of the latest conversation stays word for
+/// word — [`compaction::share_of_window`] of the window, a larger share when
+/// the pass is made ahead of time than when the provider has already refused.
 pub fn compact(
     session: &LlmSession,
     history: &[LlmMessage],
-    keep_last: usize,
+    keep_tail_tokens: usize,
     started: &dyn Fn(),
 ) -> Result<Option<Compacted>, LlmError> {
-    let Some(plan) = compaction::plan_compaction(history, keep_last) else {
+    let Some(plan) = compaction::plan_compaction(history, keep_tail_tokens) else {
         return Ok(None);
     };
     started();
@@ -130,6 +130,7 @@ pub fn compact(
             LlmMessage::system(SUMMARY_INSTRUCTIONS),
             LlmMessage::user(compaction::render_for_summary(
                 &history[plan.keep_head..plan.tail_start()],
+                compaction::share_of_window(session.context_limit, compaction::SUMMARY_INPUT_PERCENT),
             )),
         ],
         // No tools. The summarizer is asked for prose about work already done;
@@ -162,7 +163,7 @@ pub fn compact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::compaction::{KEEP_LAST_MESSAGES, SUMMARY_PREFIX};
+    use crate::domain::compaction::SUMMARY_PREFIX;
     use crate::domain::llm::{
         ChatResponse, ChatStreamResult, LlmModelInfo, LlmProvider, LlmToolCall,
     };
@@ -344,6 +345,21 @@ mod tests {
         }
     }
 
+    /// How many messages of `conversation(40)` these tests keep.
+    const KEEP: usize = 12;
+
+    /// The tail budget that keeps the last [`KEEP`] messages of
+    /// `conversation(40)` — and every message of a shorter one.
+    fn keep() -> usize {
+        let history = conversation(40);
+        compaction::estimate_tokens(&history[40 - KEEP..])
+    }
+
+    /// Forty messages of about a thousand tokens each.
+    fn long() -> Vec<LlmMessage> {
+        (0..40).map(|i| LlmMessage::user(format!("{i} {}", "x".repeat(4_000)))).collect()
+    }
+
     fn conversation(len: usize) -> Vec<LlmMessage> {
         (0..len)
             .map(|i| {
@@ -361,18 +377,18 @@ mod tests {
         let provider = Summarizer::saying("they were fixing the parser");
         let history = conversation(40);
 
-        let compacted = compact(&session(provider), &history, KEEP_LAST_MESSAGES, &|| {})
+        let compacted = compact(&session(provider), &history, keep(), &|| {})
             .unwrap()
             .expect("a shorter history");
 
-        assert_eq!(compacted.folded, 40 - KEEP_LAST_MESSAGES);
-        assert_eq!(compacted.history.len(), 1 + KEEP_LAST_MESSAGES);
+        assert_eq!(compacted.folded, 40 - KEEP);
+        assert_eq!(compacted.history.len(), 1 + KEEP);
         assert!(compacted.history[0]
             .content
             .as_deref()
             .unwrap()
             .starts_with(SUMMARY_PREFIX));
-        assert_eq!(&compacted.history[1..], &history[40 - KEEP_LAST_MESSAGES..]);
+        assert_eq!(&compacted.history[1..], &history[40 - KEEP..]);
     }
 
     /// The summarizer never mentioned the file; the summary names it anyway,
@@ -386,7 +402,7 @@ mod tests {
         ];
         history.extend(conversation(40));
 
-        let compacted = compact(&session(provider), &history, KEEP_LAST_MESSAGES, &|| {})
+        let compacted = compact(&session(provider), &history, keep(), &|| {})
             .unwrap()
             .expect("a shorter history");
 
@@ -402,7 +418,7 @@ mod tests {
     #[test]
     fn the_summarizer_is_asked_for_prose_and_nothing_else() {
         let provider = Summarizer::saying("a summary");
-        compact(&session(provider.clone()), &conversation(40), KEEP_LAST_MESSAGES, &|| {}).unwrap();
+        compact(&session(provider.clone()), &conversation(40), keep(), &|| {}).unwrap();
 
         let asked = provider.asked.lock().unwrap();
         assert_eq!(asked.len(), 1);
@@ -425,7 +441,7 @@ mod tests {
         });
 
         assert_eq!(
-            compact(&session(provider), &conversation(40), KEEP_LAST_MESSAGES, &|| {}).unwrap(),
+            compact(&session(provider), &conversation(40), keep(), &|| {}).unwrap(),
             None
         );
     }
@@ -438,7 +454,7 @@ mod tests {
         });
 
         assert_eq!(
-            compact(&session(provider), &conversation(40), KEEP_LAST_MESSAGES, &|| {}).unwrap(),
+            compact(&session(provider), &conversation(40), keep(), &|| {}).unwrap(),
             None
         );
     }
@@ -449,7 +465,7 @@ mod tests {
     fn a_short_conversation_is_not_worth_a_request() {
         let provider = Summarizer::saying("a summary");
         assert_eq!(
-            compact(&session(provider.clone()), &conversation(4), KEEP_LAST_MESSAGES, &|| {}).unwrap(),
+            compact(&session(provider.clone()), &conversation(4), keep(), &|| {}).unwrap(),
             None
         );
         assert!(provider.asked.lock().unwrap().is_empty(), "asked anyway");
@@ -461,7 +477,7 @@ mod tests {
     #[test]
     fn a_pass_says_it_started_only_when_it_asks_for_a_summary() {
         let provider = Summarizer::saying("a summary");
-        let session = session(provider.clone());
+        let session = session_with_window(provider.clone(), 10_000);
         let calls = std::cell::Cell::new(0);
         let asked_before = std::cell::Cell::new(None);
         let started = || {
@@ -469,11 +485,11 @@ mod tests {
             asked_before.set(Some(provider.asked.lock().unwrap().len()));
         };
 
-        compact(&session, &conversation(4), KEEP_LAST_MESSAGES, &started).unwrap();
+        compact(&session, &conversation(4), keep(), &started).unwrap();
         compact_if_needed(&session, bare(), &conversation(40), false, &started).unwrap();
         assert_eq!(calls.get(), 0, "said it started with nothing to fold");
 
-        compact_if_needed(&session, bare(), &conversation(40), true, &started).unwrap();
+        compact_if_needed(&session, bare(), &long(), true, &started).unwrap();
         assert_eq!(calls.get(), 1);
         assert_eq!(asked_before.get(), Some(0), "said it only after asking");
     }
@@ -485,7 +501,7 @@ mod tests {
             asked: Mutex::new(Vec::new()),
         });
 
-        assert!(compact(&session(provider), &conversation(40), KEEP_LAST_MESSAGES, &|| {}).is_err());
+        assert!(compact(&session(provider), &conversation(40), keep(), &|| {}).is_err());
     }
 
     /// The app talks to gateways it knows nothing about. Compacting against
@@ -494,25 +510,32 @@ mod tests {
     #[test]
     fn without_a_known_window_nothing_happens_on_its_own() {
         let provider = Summarizer::saying("a summary");
-        let long: Vec<LlmMessage> = (0..40)
-            .map(|i| LlmMessage::user(format!("{i} {}", "x".repeat(4_000))))
-            .collect();
 
-        assert_eq!(compact_if_needed(&session(provider.clone()), bare(), &long, false, &|| {}).unwrap(), None);
+        assert_eq!(compact_if_needed(&session(provider.clone()), bare(), &long(), false, &|| {}).unwrap(), None);
         assert!(provider.asked.lock().unwrap().is_empty());
     }
 
+    /// What stays is a quarter of the window: two of these thousand-token
+    /// messages in a 10 000-token one.
     #[test]
     fn a_conversation_filling_its_window_is_folded_before_it_fails() {
         let provider = Summarizer::saying("a summary");
-        let long: Vec<LlmMessage> = (0..40)
-            .map(|i| LlmMessage::user(format!("{i} {}", "x".repeat(4_000))))
-            .collect();
 
-        let compacted = compact_if_needed(&session_with_window(provider, 10_000), bare(), &long, false, &|| {})
+        let compacted = compact_if_needed(&session_with_window(provider, 10_000), bare(), &long(), false, &|| {})
             .unwrap()
             .expect("a shorter history");
-        assert_eq!(compacted.folded, 40 - KEEP_LAST_MESSAGES);
+        assert_eq!(compacted.folded, 38);
+    }
+
+    /// The summarizer reads what fits in half the window whole, not the
+    /// first lines of each message.
+    #[test]
+    fn the_summarizer_reads_the_folded_part_whole_when_it_fits() {
+        let provider = Summarizer::saying("a summary");
+        compact(&session_with_window(provider.clone(), 1_000_000), &long(), keep(), &|| {}).unwrap();
+        let asked = provider.asked.lock().unwrap();
+        let transcript = asked[0].messages[1].content.as_deref().unwrap();
+        assert!(!transcript.contains("omitted"), "cut although half the window holds it");
     }
 
     #[test]
@@ -569,8 +592,8 @@ mod tests {
         let session = session_with_window(provider, 200_000);
         let at = usage(&session, bare(), &history).compacts_at.expect("a known window");
 
-        assert!(!compaction::should_compact(at - 1, Some(200_000), &history));
-        assert!(compaction::should_compact(at, Some(200_000), &history));
+        assert!(!compaction::should_compact(at - 1, Some(200_000)));
+        assert!(compaction::should_compact(at, Some(200_000)));
     }
 
     /// No window means a number with no scale. Inventing one would draw a
@@ -610,7 +633,7 @@ mod tests {
     #[test]
     fn the_prompt_and_the_schemas_are_charged_for() {
         let provider = Summarizer::saying("a summary");
-        let history = conversation(40);
+        let history = long();
         let conversation_only = compaction::estimate_tokens(&history);
         let frame = frame_with(ConversationMode::Agent, &[], &[], &server());
         // Each omission would leave the others looking like a working estimate.
@@ -623,7 +646,7 @@ mod tests {
         let at = conversation_only + bare().total() + frame.mcp / 2;
         let limit = (at as u64 * 100 / compaction::TRIGGER_PERCENT) as u32;
         assert!(
-            !compaction::should_compact(conversation_only, Some(limit), &history),
+            !compaction::should_compact(conversation_only, Some(limit)),
             "the window has to be roomy for the conversation alone, or this proves nothing"
         );
         let session = session_with_window(provider, limit);
@@ -642,9 +665,9 @@ mod tests {
     #[test]
     fn asking_for_it_skips_the_threshold_but_not_the_plan() {
         let provider = Summarizer::saying("a summary");
-        let session = session(provider.clone());
+        let session = session_with_window(provider.clone(), 10_000);
 
-        assert!(compact_if_needed(&session, bare(), &conversation(40), true, &|| {})
+        assert!(compact_if_needed(&session, bare(), &long(), true, &|| {})
             .unwrap()
             .is_some());
         assert_eq!(compact_if_needed(&session, bare(), &conversation(4), true, &|| {}).unwrap(), None);
@@ -677,7 +700,7 @@ mod tests {
             });
         }
 
-        let compacted = compact(&session(provider), &history, KEEP_LAST_MESSAGES, &|| {})
+        let compacted = compact(&session(provider), &history, keep(), &|| {})
             .unwrap()
             .expect("a shorter history");
 

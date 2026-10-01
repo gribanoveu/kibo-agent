@@ -10,10 +10,16 @@
 //! changing an old message makes everything after it a cache miss, once.
 //! Hence the shape of the rule:
 //!
-//! * **Rarely.** Nothing happens below [`TRIGGER_TOKENS`] of history, where a
-//!   miss costs more than the tokens cleared would save: on DeepSeek a cached
-//!   input token is ~25× cheaper than a missed one, so clearing pays back
-//!   through the rounds that follow, not at once.
+//! * **Rarely.** Nothing happens until the request fills [`TRIGGER_PERCENT`]
+//!   of the model's window — the same estimate the context meter shows and
+//!   compaction reads. Compaction folds a conversation at 80% before a turn
+//!   starts; inside a turn nothing folds, and clearing is what keeps a long
+//!   one inside the window. Below it a miss costs more than the
+//!   tokens cleared would save: on DeepSeek a cached input token is ~25×
+//!   cheaper than a missed one, so clearing pays back through the rounds that
+//!   follow, not at once. A fixed trigger of 60k cleared a 260k window a
+//!   quarter full, and a model documenting a repository read the same files
+//!   three and four times over, each copy cleared before it was done.
 //! * **In bulk.** When it does happen, everything eligible goes at once, and
 //!   only if that is at least [`CLEAR_AT_LEAST_TOKENS`] — one miss per batch,
 //!   not one per result per round.
@@ -33,13 +39,19 @@
 //! The rules only; applying them, and what else has to forget the cleared
 //! results, is `services::llm_chat`'s.
 
-use super::compaction::{estimate_text_tokens, estimate_tokens};
+use super::compaction::estimate_text_tokens;
 use super::llm::{LlmMessage, LlmRole};
 
-/// History size, in estimated tokens, below which nothing is cleared.
-// ponytail: fixed numbers, tuned by hand; per-provider (cache price, window)
-// if the bench shows one model wanting different ones.
-pub const TRIGGER_TOKENS: usize = 60_000;
+/// How full the window the request must be before anything is cleared.
+/// A percentage for the reason compaction's is: the comparison is exact.
+// ponytail: clears everything eligible once over it; clearing oldest-first
+// down to a target would keep more of what the model may still need, if the
+// bench shows re-reads after a clearing.
+pub const TRIGGER_PERCENT: u64 = 85;
+
+/// The trigger, in estimated request tokens, for a model whose window is not
+/// configured — where there is no fraction to take.
+pub const FALLBACK_TRIGGER_TOKENS: usize = 60_000;
 
 /// The least one clearing must free, or it waits: a batch this size is worth
 /// the one cache miss it causes.
@@ -72,9 +84,15 @@ pub struct Cleared {
     pub stub: String,
 }
 
-/// The results to clear now, or none.
-pub fn plan(history: &[LlmMessage]) -> Vec<Cleared> {
-    if estimate_tokens(history) < TRIGGER_TOKENS {
+/// The results to clear now, or none. `request_tokens` is what the next
+/// request is estimated to cost whole — instructions and tools included, as
+/// `compaction::ContextUsage` counts it — and `context_limit` the window.
+pub fn plan(history: &[LlmMessage], request_tokens: usize, context_limit: Option<u32>) -> Vec<Cleared> {
+    let full = match context_limit.filter(|limit| *limit > 0) {
+        Some(limit) => request_tokens as u64 * 100 >= u64::from(limit) * TRIGGER_PERCENT,
+        None => request_tokens >= FALLBACK_TRIGGER_TOKENS,
+    };
+    if !full {
         return Vec::new();
     }
     let recent_from = recent_rounds_start(history);
@@ -129,6 +147,7 @@ fn stub(tool: &str, arguments: &str, tokens: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::compaction::estimate_tokens;
     use crate::domain::llm::LlmToolCall;
 
     fn call(id: &str, name: &str, arguments: &str) -> LlmMessage {
@@ -154,16 +173,39 @@ mod tests {
         history
     }
 
-    /// Plenty that is old and big enough to go — but the history is short,
-    /// and a cache miss would cost more than what clearing saves.
+    /// What the request costs: the history alone, in these tests.
+    fn plan_of(history: &[LlmMessage], limit: Option<u32>) -> Vec<Cleared> {
+        plan(history, estimate_tokens(history), limit)
+    }
+
+    /// Plenty that is old and big enough to go — but the request is under the
+    /// trigger, and a cache miss would cost more than what clearing saves.
     #[test]
     fn nothing_is_cleared_below_the_trigger() {
+        let history = turn(8, 10_000);
+        let tokens = estimate_tokens(&history);
+        let window = |percent: u64| Some((tokens as u64 * 100 / percent) as u32);
+        assert_eq!(plan_of(&history, window(TRIGGER_PERCENT - 1)), vec![], "under the trigger of a larger window");
+        assert!(!plan_of(&history, window(TRIGGER_PERCENT)).is_empty(), "at the trigger, the old results go");
+    }
+
+    /// The same history a 260k window holds easily is not cleared, where a
+    /// fixed 60k trigger cleared it: the size that matters is the window's.
+    #[test]
+    fn a_large_window_keeps_what_a_small_one_clears() {
+        let history = turn(8, 10_000);
+        assert!(estimate_tokens(&history) >= FALLBACK_TRIGGER_TOKENS);
+        assert_eq!(plan_of(&history, Some(260_000)), vec![]);
+        assert!(!plan_of(&history, Some(90_000)).is_empty(), "nearly full");
+    }
+
+    /// Without a window there is no fraction: the fixed trigger stands in.
+    #[test]
+    fn without_a_window_the_fallback_trigger_decides() {
         let history = turn(8, 6_000);
-        assert!(estimate_tokens(&history) < TRIGGER_TOKENS);
-        let mut longer = history.clone();
-        longer.push(LlmMessage::user(tokens(TRIGGER_TOKENS)));
-        assert!(!plan(&longer).is_empty(), "the same results over the trigger would go");
-        assert_eq!(plan(&history), vec![]);
+        assert!(estimate_tokens(&history) < FALLBACK_TRIGGER_TOKENS);
+        assert_eq!(plan_of(&history, None), vec![]);
+        assert!(!plan(&history, FALLBACK_TRIGGER_TOKENS, None).is_empty(), "the instructions count too");
     }
 
     /// Over the trigger, every old result goes in one batch; the latest
@@ -171,7 +213,7 @@ mod tests {
     #[test]
     fn over_the_trigger_old_results_go_together_and_recent_ones_stay() {
         let history = turn(8, 10_000);
-        let cleared = plan(&history);
+        let cleared = plan_of(&history, None);
         let indices: Vec<usize> = cleared.iter().map(|c| c.index).collect();
         // Rounds 0..5 are old; 5, 6 and 7 are the last three.
         assert_eq!(indices, vec![2, 4, 6, 8, 10]);
@@ -192,8 +234,8 @@ mod tests {
             history.push(call(&id, "readFile", "{}"));
             history.push(LlmMessage::tool_result(&id, tokens(20_000)));
         }
-        assert!(estimate_tokens(&history) >= TRIGGER_TOKENS);
-        assert_eq!(plan(&history), vec![]);
+        assert!(estimate_tokens(&history) >= FALLBACK_TRIGGER_TOKENS);
+        assert_eq!(plan_of(&history, None), vec![]);
     }
 
     #[test]
@@ -209,7 +251,7 @@ mod tests {
         history.push(LlmMessage::tool_result("big", tokens(30_000)));
         history.extend(turn(3, 10).into_iter().skip(1));
 
-        let cleared: Vec<String> = plan(&history).into_iter().map(|c| c.tool).collect();
+        let cleared: Vec<String> = plan_of(&history, None).into_iter().map(|c| c.tool).collect();
         assert_eq!(cleared, vec!["runCommand"]);
     }
 
@@ -218,6 +260,6 @@ mod tests {
     #[test]
     fn a_stub_is_a_function_of_the_call() {
         let history = turn(8, 10_000);
-        assert_eq!(plan(&history), plan(&history));
+        assert_eq!(plan_of(&history, None), plan_of(&history, None));
     }
 }

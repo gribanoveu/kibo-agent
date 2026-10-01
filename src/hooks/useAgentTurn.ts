@@ -282,10 +282,9 @@ export function useAgentTurn({
       unsaved.current = true;
       turnStart.current = turn.blocks.length;
       setTurn((state) => appendUserMessage(state, trimmed, Date.now(), content));
+      // Room in the window is the turn's to make, round by round; the
+      // history it hands back, folded or not, is what the next message sends.
       history.current = [...history.current, { role: "user", content }];
-      // Before the turn, so the room is made once and kept — a turn that
-      // compacts its own copy pays for the summary again on the next message.
-      await makeRoom(false);
 
       const id = `turn-${++turnId.current}`;
       lastTurn.current = { id, user: trimmed };
@@ -318,7 +317,6 @@ export function useAgentTurn({
     unsaved.current = true;
     turnStart.current = turn.blocks.length;
     setTurn((state) => appendUserMessage(state, "/review", Date.now()));
-    await makeRoom(false);
 
     const id = `turn-${++turnId.current}`;
     lastTurn.current = { id, user: "/review" };

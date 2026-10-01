@@ -54,51 +54,30 @@ afterEach(() => {
 const saved = () => calls.filter((call) => call.command === "chat_save");
 
 describe("making room before a turn", () => {
-  /// Compacting inside the turn would work once and be paid for again on the
-  /// next message: the window owns the history, so the shorter one has to be
-  /// kept here.
-  test("a shorter history is adopted and sent", async () => {
-    // What the backend returns: the summary, then the tail it was given —
-    // the message just typed among it.
-    results.chat_compact = {
-      history: [
-        { role: "user", content: "[summary] earlier" },
-        { role: "user", content: "and now?" },
-      ],
-      folded: 20,
-    };
-    results.chat_start = done("carry on");
-    const { result } = renderHook(() => useAgentTurn());
-
-    await act(async () => {
-      await result.current.send("and now?");
-    });
-
-    const started = calls.find((call) => call.command === "chat_start");
-    expect(started?.args.messages).toEqual([
-      { role: "user", content: "[summary] earlier" },
-      { role: "user", content: "and now?" },
-    ]);
-    expect(result.current.turn.blocks).toContainEqual({
-      kind: "compaction",
-      id: "compaction:1",
+  /// Room in the window is the turn's to make, round by round: nothing is
+  /// folded on the way to it, and what the turn hands back — folded or not —
+  /// is what the next message is sent with.
+  test("a message goes to the turn as it is, and the turn's history is kept", async () => {
+    results.chat_start = (args: Record<string, unknown>) => ({
       status: "done",
-      folded: 20,
+      value: { text: "ok", truncated: false, todos: [], history: [{ role: "user", content: "[summary] earlier" }, ...(args.messages as unknown[]).slice(-1)] },
     });
-  });
-
-  test("and a history that needs nothing is sent as it is", async () => {
-    results.chat_compact = null;
-    results.chat_start = done("carry on");
     const { result } = renderHook(() => useAgentTurn());
 
     await act(async () => {
       await result.current.send("hello");
     });
+    expect(calls.filter((call) => call.command === "chat_compact")).toEqual([]);
+    expect(calls.find((call) => call.command === "chat_start")?.args.messages).toEqual([{ role: "user", content: "hello" }]);
 
-    const started = calls.find((call) => call.command === "chat_start");
-    expect(started?.args.messages).toEqual([{ role: "user", content: "hello" }]);
-    expect(result.current.turn.blocks.some((b) => b.kind === "compaction")).toBe(false);
+    await act(async () => {
+      await result.current.send("and now?");
+    });
+    expect(calls.filter((call) => call.command === "chat_start")[1]?.args.messages).toEqual([
+      { role: "user", content: "[summary] earlier" },
+      { role: "user", content: "hello" },
+      { role: "user", content: "and now?" },
+    ]);
   });
 
   /// A `/` command: the transcript and the chat's name have what was typed,
