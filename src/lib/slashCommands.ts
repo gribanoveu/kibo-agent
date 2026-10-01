@@ -52,14 +52,60 @@ export function suggestCommands(commands: readonly SlashCommand[], text: string)
 }
 
 /**
- * A command file's prompt with what was typed after its name put in, for
- * every `$ARGUMENTS`. A prompt without the placeholder still gets them, after
- * a blank line: arguments typed and silently dropped are worse than ones put
- * somewhere the author did not plan for.
+ * A command file's prompt with what was typed after its name put in, as
+ * Claude Code does it, so a command written for it works here unchanged:
+ *
+ * - `$ARGUMENTS` — everything typed, as typed;
+ * - `$ARGUMENTS[N]` and `$N` — one argument, counted from 0; quotes group a
+ *   value with spaces in it (`"hello world"`). With no argument at that
+ *   position the placeholder stays as written;
+ * - `$name` — the argument at the position of `name` in the file's
+ *   `arguments`, empty when nothing was typed there;
+ * - `\$1` — a literal `$1`. One backslash only: `\\$1` keeps both and still
+ *   puts the argument in.
+ *
+ * One pass: an argument that itself says `$1` is put in as text. When no
+ * placeholder took anything, what was typed is added at the end as
+ * `ARGUMENTS: …` — typed and silently dropped is worse than put somewhere the
+ * author did not plan for.
  */
-export function expandTemplate(template: string, args: string): string {
-  if (template.includes("$ARGUMENTS")) return template.split("$ARGUMENTS").join(args);
-  return args ? `${template}\n\n${args}` : template;
+export function expandTemplate(template: string, args: string, names: readonly string[] = []): string {
+  const words = splitArguments(args);
+  const named = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const token = new RegExp(`(\\\\*)\\$(?:ARGUMENTS\\[(\\d+)\\]|(\\d+)|(${["ARGUMENTS", ...named].join("|")})(?!\\w))`, "g");
+  let took = false;
+  const expanded = template.replace(token, (whole: string, slashes: string, index?: string, digits?: string, word?: string) => {
+    if (slashes.length === 1) return whole.slice(1);
+    const value =
+      word === "ARGUMENTS" ? args : word !== undefined ? (words[names.indexOf(word)] ?? "") : words[Number(index ?? digits)];
+    if (value === undefined) return whole;
+    took = true;
+    return slashes + value;
+  });
+  return took || !args ? expanded : `${expanded}\n\nARGUMENTS: ${args}`;
+}
+
+/** What was typed, as a shell splits it: on spaces, with quotes grouping. */
+function splitArguments(text: string): string[] {
+  const words: string[] = [];
+  let word: string | null = null;
+  let quote: string | null = null;
+  for (const c of text) {
+    if (quote) {
+      if (c === quote) quote = null;
+      else word += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      word ??= "";
+    } else if (/\s/.test(c)) {
+      if (word !== null) words.push(word);
+      word = null;
+    } else {
+      word = (word ?? "") + c;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
 }
 
 /** A command as the transcript shows it: what was typed, not the prompt it sent. */
@@ -83,7 +129,7 @@ export function fileCommands(
       name: file.name,
       hint: file.description,
       argumentHint: file.argumentHint ?? undefined,
-      run: (args: string) => send(typedCommand(file.name, args), expandTemplate(file.template, args)),
+      run: (args: string) => send(typedCommand(file.name, args), expandTemplate(file.template, args, file.arguments)),
     }));
 }
 

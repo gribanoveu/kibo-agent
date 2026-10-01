@@ -1,10 +1,11 @@
 //! Commands the user writes: a Markdown file in `.kibo/commands/`, run from
 //! the composer as `/<file name>`. Its body is the message sent, with
-//! `$ARGUMENTS` standing for what was typed after the name.
+//! `$ARGUMENTS`, `$0`… and named arguments standing for what was typed after
+//! the name — put in by the frontend's `expandTemplate`.
 //!
 //! The format is Claude Code's and OpenCode's, so a command written for them
-//! works here once it is moved: optional frontmatter with `description` and
-//! `argument-hint`, the rest a prompt. What differs is only where they live —
+//! works here once it is moved: optional frontmatter with `description`,
+//! `argument-hint` and `arguments`, the rest a prompt. What differs is only where they live —
 //! this app reads its own folder and nobody else's.
 
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,10 @@ pub struct CommandFile {
     pub description: String,
     /// What the arguments are, shown after the name: `<file> [focus]`.
     pub argument_hint: Option<String>,
-    /// The prompt; `$ARGUMENTS` is replaced when it runs.
+    /// Names for the arguments by position: with `[issue, branch]`, `$issue`
+    /// is the first and `$branch` the second. Empty without `arguments`.
+    pub arguments: Vec<String>,
+    /// The prompt; its placeholders are replaced when it runs.
     pub template: String,
     pub source: CommandSource,
 }
@@ -39,6 +43,16 @@ pub struct CommandFile {
 struct Frontmatter {
     description: Option<String>,
     argument_hint: Option<String>,
+    arguments: Option<Names>,
+}
+
+/// `arguments: issue branch` or `arguments: [issue, branch]` — Claude Code
+/// takes both.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Names {
+    Words(String),
+    List(Vec<String>),
 }
 
 /// Longest description taken from a body's first line, for a file without one.
@@ -69,7 +83,12 @@ pub fn parse_command_md(stem: &str, contents: &str, source: CommandSource) -> Op
         .filter(|d| !d.is_empty())
         .unwrap_or_else(|| first_line(&template));
     let argument_hint = front.argument_hint.map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
-    Some(CommandFile { name, description, argument_hint, template, source })
+    let arguments = match front.arguments {
+        Some(Names::Words(words)) => words.split_whitespace().map(str::to_string).collect(),
+        Some(Names::List(list)) => list.into_iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect(),
+        None => Vec::new(),
+    };
+    Some(CommandFile { name, description, argument_hint, arguments, template, source })
 }
 
 /// What the composer recognises after `/`: a letter, then letters, digits,
@@ -125,6 +144,16 @@ mod tests {
         assert_eq!(command.template, "Review $ARGUMENTS carefully.");
     }
 
+    /// Claude Code takes the names as words or as a list; so does this.
+    #[test]
+    fn arguments_name_the_positions_as_words_or_as_a_list() {
+        for front in ["arguments: issue  branch", "arguments: [issue, branch]", "arguments:\n  - issue\n  - ' branch '"] {
+            let command = parse("fix", &format!("---\n{front}\n---\nFix $issue on $branch.")).unwrap();
+            assert_eq!(command.arguments, ["issue", "branch"], "{front}");
+        }
+        assert!(parse("fix", "Fix it.").unwrap().arguments.is_empty());
+    }
+
     /// Most command files are only a prompt.
     #[test]
     fn without_frontmatter_the_first_line_describes_it() {
@@ -163,6 +192,7 @@ mod tests {
             name: name.to_string(),
             description: String::new(),
             argument_hint: None,
+            arguments: Vec::new(),
             template: format!("{name} {source:?}"),
             source,
         };

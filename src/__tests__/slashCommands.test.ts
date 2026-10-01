@@ -59,16 +59,58 @@ describe("a command file", () => {
     expect(expandTemplate("Review $ARGUMENTS", "")).toBe("Review ");
   });
 
-  /// Typed and dropped would be worse than typed and put at the end.
+  /// Typed and dropped would be worse than typed and put at the end — as
+  /// Claude Code puts it.
   test("without the placeholder, keeps what was typed after the prompt", () => {
-    expect(expandTemplate("Fix the build", "only the linux job")).toBe("Fix the build\n\nonly the linux job");
+    expect(expandTemplate("Fix the build", "only the linux job")).toBe("Fix the build\n\nARGUMENTS: only the linux job");
     expect(expandTemplate("Fix the build", "")).toBe("Fix the build");
+  });
+
+  /// Claude Code's numbering: from 0, so its commands mean the same here.
+  test("puts one argument where $N or $ARGUMENTS[N] says, counting from 0", () => {
+    const migrate = "Migrate $0 from $1 to $ARGUMENTS[2].";
+    expect(expandTemplate(migrate, "SearchBar JavaScript TypeScript")).toBe("Migrate SearchBar from JavaScript to TypeScript.");
+    expect(expandTemplate("$0|$1", `"hello world" 'it''s'  second`)).toBe("hello world|its");
+    expect(expandTemplate("$1", `a "" c`)).toBe("");
+    expect(expandTemplate("A $10th", "0 1 2 3 4 5 6 7 8 9 ten")).toBe("A tenth");
+  });
+
+  /// A position nothing was typed at is left as written, and does not count
+  /// as taking the arguments — so they still arrive, at the end.
+  test("leaves a position with no argument as written", () => {
+    expect(expandTemplate("Fix $0 on $ARGUMENTS[1] or $2", "login")).toBe("Fix login on $ARGUMENTS[1] or $2");
+    expect(expandTemplate("Then $3", "a b")).toBe("Then $3\n\nARGUMENTS: a b");
+  });
+
+  test("puts a named argument at its position, empty when nothing was typed there", () => {
+    const names = ["issue", "branch"];
+    expect(expandTemplate("Fix $issue on $branch ($issues)", "123 main", names)).toBe("Fix 123 on main ($issues)");
+    expect(expandTemplate("Fix $issue on $branch.", "123", names)).toBe("Fix 123 on .");
+    expect(expandTemplate("Only $branch", "", names)).toBe("Only ");
+    expect(expandTemplate("No $issue here", "1", [])).toBe("No $issue here\n\nARGUMENTS: 1");
+    // A name is whole: `$file` is not the start of `$filename`.
+    expect(expandTemplate("$file and $filename", "a b", ["file", "filename"])).toBe("a and b");
+  });
+
+  /// One backslash makes a placeholder text; two are text themselves.
+  test("leaves an escaped placeholder as text", () => {
+    expect(expandTemplate("Costs \\$1.00, not $0", "x")).toBe("Costs $1.00, not x");
+    expect(expandTemplate("\\$ARGUMENTS[0] and \\$ARGUMENTS", "x")).toBe("$ARGUMENTS[0] and $ARGUMENTS\n\nARGUMENTS: x");
+    expect(expandTemplate("\\\\$0", "x")).toBe("\\\\x");
+    expect(expandTemplate("\\$5 stays", "")).toBe("$5 stays");
+  });
+
+  /// One pass: what was typed is never read as a template itself.
+  test("puts in an argument that looks like a placeholder as text", () => {
+    expect(expandTemplate("Summarize $0", `"$ARGUMENTS from $1"`)).toBe("Summarize $ARGUMENTS from $1");
+    expect(expandTemplate("Price: $ARGUMENTS", "$& $1")).toBe("Price: $& $1");
   });
 
   const file = (name: string, template = "Do $ARGUMENTS"): CommandFile => ({
     name,
     description: `about ${name}`,
     argumentHint: name === "review" ? "<file>" : null,
+    arguments: name === "fix" ? ["issue"] : [],
     template,
     source: "project",
   });
@@ -85,6 +127,12 @@ describe("a command file", () => {
       ["/review src/a.ts", "Do src/a.ts"],
       ["/review", "Do "],
     ]);
+  });
+
+  test("names its arguments as its file does", () => {
+    const sent: string[] = [];
+    fileCommands([file("fix", "Fix issue $issue")], commands, (_, prompt) => sent.push(prompt))[0].run("42");
+    expect(sent).toEqual(["Fix issue 42"]);
   });
 });
 

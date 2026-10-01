@@ -663,7 +663,9 @@ export type CommandFile = {
   name: string;
   description: string;
   argumentHint: string | null;
-  /** The prompt; `$ARGUMENTS` stands for what is typed after the name. */
+  /** Names for the arguments by position, from `arguments` in the frontmatter. */
+  arguments: string[];
+  /** The prompt; `expandTemplate` puts what is typed after the name into it. */
   template: string;
   source: "project" | "user";
 };
