@@ -43,6 +43,21 @@ export function commandFor(
   return command && parsed ? { command, args: parsed.args } : null;
 }
 
+/**
+ * What of a command's argument hint is still to type, to show after the text:
+ * `/compare a.ts` with `<old> <new> [focus]` gives ` <new> [focus]`. Each word
+ * typed, the one being typed included, takes one part away; quotes keep words
+ * together as they do when it runs. Empty for anything but one line naming a
+ * command that has a hint.
+ */
+export function pendingHint(commands: readonly SlashCommand[], text: string): string {
+  const typed = text.includes("\n") ? null : commandFor(commands, text);
+  const parts = typed?.command.argumentHint?.match(/<[^>]*>|\[[^\]]*\]|\S+/g) ?? [];
+  const left = parts.slice(splitArguments(typed?.args ?? "").length);
+  if (!left.length) return "";
+  return `${/\s$/.test(text) ? "" : " "}${left.join(" ")}`;
+}
+
 /** The commands offered while only a name is being typed: `/` alone offers all. */
 export function suggestCommands(commands: readonly SlashCommand[], text: string): SlashCommand[] {
   const m = new RegExp(`^\\/(${NAME})?$`, "i").exec(text);

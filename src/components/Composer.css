@@ -6,7 +6,29 @@
   border-radius: var(--radius);
   padding: 14px 16px 11px;
 }
+/* The textarea and the argument hint under it, drawn alike so the hint lines
+   up with the text: same font, same wrapping, no padding on either. */
+.composer-input {
+  position: relative;
+}
+.composer-ghost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: transparent;
+}
+.composer-ghost-hint {
+  color: var(--text-faint);
+}
 .composer textarea {
+  position: relative;
+  display: block;
+  padding: 0;
   width: 100%;
   min-height: 48px;
   max-height: 120px;

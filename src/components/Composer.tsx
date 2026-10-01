@@ -3,7 +3,7 @@ import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, X } f
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
-import { commandFor, suggestCommands, type SlashCommand } from "../lib/slashCommands";
+import { commandFor, pendingHint, suggestCommands, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
 import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
@@ -107,6 +107,7 @@ export function Composer({
   const offered = dismissed ? [] : suggestCommands(commands, text);
   const menuOpen = offered.length > 0;
   const at = Math.min(active, Math.max(offered.length - 1, 0));
+  const hint = pendingHint(commands, text);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -199,57 +200,68 @@ export function Composer({
       {tab}
       <section className="composer" ref={box}>
         {menuOpen && <SlashMenu commands={offered} active={at} onPick={(c) => run(c)} />}
-        <textarea
-          className="chat-text"
-          ref={area}
-          rows={2}
-          placeholder={
-            running
-              ? `Add something while it works — ${shortcutText("queue")} to send it after`
-              : "Describe your task…"
-          }
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setDismissed(false);
-            setActive(0);
-            grow();
-          }}
-          onKeyDown={(e) => {
-            if (menuOpen) {
-              const step = matches(e, "commandNext") ? 1 : matches(e, "commandPrev") ? -1 : 0;
-              if (step) {
-                e.preventDefault();
-                setActive((at + step + offered.length) % offered.length);
-                return;
-              }
-              if (matches(e, "commandComplete")) {
-                e.preventDefault();
-                complete(offered[at]);
-                return;
-              }
-              if (matches(e, "close")) {
-                // The menu's Escape, not the window's.
-                e.preventDefault();
-                e.stopPropagation();
-                setDismissed(true);
-                return;
-              }
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                run(offered[at]);
-                return;
-              }
+        <div className="composer-input">
+          {/* The arguments still to type, in grey after the text: the text
+              itself is drawn here too, invisibly, so the hint starts where it
+              ends. The textarea above is transparent. */}
+          {hint && (
+            <div className="composer-ghost" aria-hidden="true">
+              <span>{text}</span>
+              <span className="composer-ghost-hint">{hint}</span>
+            </div>
+          )}
+          <textarea
+            className="chat-text"
+            ref={area}
+            rows={2}
+            placeholder={
+              running
+                ? `Add something while it works — ${shortcutText("queue")} to send it after`
+                : "Describe your task…"
             }
-            if (matches(e, "queue")) {
-              e.preventDefault();
-              queue();
-            } else if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setDismissed(false);
+              setActive(0);
+              grow();
+            }}
+            onKeyDown={(e) => {
+              if (menuOpen) {
+                const step = matches(e, "commandNext") ? 1 : matches(e, "commandPrev") ? -1 : 0;
+                if (step) {
+                  e.preventDefault();
+                  setActive((at + step + offered.length) % offered.length);
+                  return;
+                }
+                if (matches(e, "commandComplete")) {
+                  e.preventDefault();
+                  complete(offered[at]);
+                  return;
+                }
+                if (matches(e, "close")) {
+                  // The menu's Escape, not the window's.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDismissed(true);
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  run(offered[at]);
+                  return;
+                }
+              }
+              if (matches(e, "queue")) {
+                e.preventDefault();
+                queue();
+              } else if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+        </div>
         <div className="composer-bar">
           <Dropdown
             title="Permission mode"

@@ -4,6 +4,7 @@ import {
   expandTemplate,
   fileCommands,
   mcpPromptCommands,
+  pendingHint,
   parseCommand,
   suggestCommands,
   type SlashCommand,
@@ -48,6 +49,40 @@ describe("the offered commands", () => {
     expect(suggestCommands(commands, " /fork")).toEqual([]);
     expect(suggestCommands(commands, "hello")).toEqual([]);
     expect(suggestCommands(commands, "")).toEqual([]);
+  });
+});
+
+describe("the argument hint in the box", () => {
+  const compare: SlashCommand = { ...command("compare"), argumentHint: "<old> <new> [focus]" };
+  const all = [compare, command("compact")];
+
+  /// Each word typed, the one being typed included, takes one part away.
+  test("shows what is still to type after the text", () => {
+    expect(pendingHint(all, "/compare")).toBe(" <old> <new> [focus]");
+    expect(pendingHint(all, "/compare ")).toBe("<old> <new> [focus]");
+    expect(pendingHint(all, "/compare src/a")).toBe(" <new> [focus]");
+    expect(pendingHint(all, "/compare a.ts b.ts ")).toBe("[focus]");
+    expect(pendingHint(all, "/compare a b c")).toBe("");
+    expect(pendingHint(all, "/compare a b c d")).toBe("");
+  });
+
+  /// As the command will read them: a quoted value is one argument.
+  test("counts a quoted value as one argument", () => {
+    expect(pendingHint(all, '/compare "my file.ts" ')).toBe("<new> [focus]");
+    expect(pendingHint(all, '/compare a b "error ha')).toBe("");
+  });
+
+  test("shows nothing for text that is not a command with a hint", () => {
+    expect(pendingHint(all, "/compact ")).toBe("");
+    expect(pendingHint(all, "/comp")).toBe("");
+    expect(pendingHint(all, "compare a")).toBe("");
+    expect(pendingHint(all, "/compare a\nmore")).toBe("");
+    expect(pendingHint([], "/compare")).toBe("");
+  });
+
+  test("splits a hint with spaces inside its brackets by bracket", () => {
+    const deploy: SlashCommand = { ...command("deploy"), argumentHint: "<target env> [--dry run] tag" };
+    expect(pendingHint([deploy], "/deploy prod ")).toBe("[--dry run] tag");
   });
 });
 

@@ -457,6 +457,13 @@ describe("slash commands", () => {
     expect(asked).toBe(1);
     expect(screen.getByRole("option").textContent).toContain("/review <file>");
 
+    // Picked, the arguments still to type show in grey after the text, and
+    // go as they are typed.
+    fireEvent.change(box, { target: { value: "/review " } });
+    expect(document.querySelector(".composer-ghost-hint")?.textContent).toBe("<file>");
+    fireEvent.change(box, { target: { value: "/review src/a.ts" } });
+    expect(document.querySelector(".composer-ghost")).toBeNull();
+
     fireEvent.change(box, { target: { value: "" } });
     fireEvent.change(box, { target: { value: "/" } });
     expect(asked).toBe(2);

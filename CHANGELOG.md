@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-01 Typing a / command shows the arguments it still wants in grey after the text, `/compare <old> <new> [focus]`, each one going as you type it
 - 2026-10-01 Your own / commands take arguments one by one, as in Claude Code: `$0`, `$1` or `$ARGUMENTS[N]` for each (quotes keep words together), names from `arguments` in the frontmatter as `$name`, and `\$1` for a literal `$1`; what no placeholder takes arrives at the end as `ARGUMENTS: …`
 - 2026-10-01 Switch single MCP tools off in the MCP tab, and set a server's tools to be found with `toolSearch` instead of declared in every request (`"exposure": "deferred"`, per tool with `toolExposure` and `*` patterns); a very large MCP result reaches the model with its middle cut and is saved whole for it to read
 - 2026-09-30 See the provider's output speed in tokens per second beside Working, live while it streams, and the session's average beside Worked for
