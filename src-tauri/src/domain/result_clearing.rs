@@ -27,7 +27,9 @@
 //!   new prefix is cached from the next round on like any other.
 //!
 //! What stays: the last [`KEEP_RECENT_ROUNDS`] rounds' results, anything
-//! under [`MIN_RESULT_TOKENS`], a loaded skill (instructions, not data), and
+//! under [`MIN_RESULT_TOKENS`], a loaded skill (instructions, not data), the
+//! results of an MCP server the user marked as kept — the caller's `kept`, for
+//! the same reason — and
 //! everything the model itself said — its reasoning included, which DeepSeek
 //! requires back in full once tools are in play.
 //!
@@ -87,7 +89,12 @@ pub struct Cleared {
 /// The results to clear now, or none. `request_tokens` is what the next
 /// request is estimated to cost whole — instructions and tools included, as
 /// `compaction::ContextUsage` counts it — and `context_limit` the window.
-pub fn plan(history: &[LlmMessage], request_tokens: usize, context_limit: Option<u32>) -> Vec<Cleared> {
+pub fn plan(
+    history: &[LlmMessage],
+    request_tokens: usize,
+    context_limit: Option<u32>,
+    kept: &dyn Fn(&str) -> bool,
+) -> Vec<Cleared> {
     let full = match context_limit.filter(|limit| *limit > 0) {
         Some(limit) => request_tokens as u64 * 100 >= u64::from(limit) * TRIGGER_PERCENT,
         None => request_tokens >= FALLBACK_TRIGGER_TOKENS,
@@ -108,7 +115,7 @@ pub fn plan(history: &[LlmMessage], request_tokens: usize, context_limit: Option
             }
             let id = message.tool_call_id.as_deref()?;
             let call = history[..index].iter().rev().flat_map(|m| &m.tool_calls).find(|c| c.id == id)?;
-            if NEVER_CLEARED.contains(&call.name.as_str()) {
+            if NEVER_CLEARED.contains(&call.name.as_str()) || kept(&call.name) {
                 return None;
             }
             let stub = stub(&call.name, &call.arguments, tokens);
@@ -175,7 +182,7 @@ mod tests {
 
     /// What the request costs: the history alone, in these tests.
     fn plan_of(history: &[LlmMessage], limit: Option<u32>) -> Vec<Cleared> {
-        plan(history, estimate_tokens(history), limit)
+        plan(history, estimate_tokens(history), limit, &|_| false)
     }
 
     /// Plenty that is old and big enough to go — but the request is under the
@@ -205,7 +212,7 @@ mod tests {
         let history = turn(8, 6_000);
         assert!(estimate_tokens(&history) < FALLBACK_TRIGGER_TOKENS);
         assert_eq!(plan_of(&history, None), vec![]);
-        assert!(!plan(&history, FALLBACK_TRIGGER_TOKENS, None).is_empty(), "the instructions count too");
+        assert!(!plan(&history, FALLBACK_TRIGGER_TOKENS, None, &|_| false).is_empty(), "the instructions count too");
     }
 
     /// Over the trigger, every old result goes in one batch; the latest
@@ -252,6 +259,22 @@ mod tests {
         history.extend(turn(3, 10).into_iter().skip(1));
 
         let cleared: Vec<String> = plan_of(&history, None).into_iter().map(|c| c.tool).collect();
+        assert_eq!(cleared, vec!["runCommand"]);
+    }
+
+    /// A tool the caller keeps is left alone like a skill — an MCP server
+    /// marked `keepResults`, whose answers are templates to follow.
+    #[test]
+    fn a_kept_tool_is_never_cleared() {
+        let mut history = turn(0, 0);
+        history.push(call("t", "mcp__kb__get_doc_template", "{}"));
+        history.push(LlmMessage::tool_result("t", tokens(30_000)));
+        history.push(call("big", "runCommand", "{}"));
+        history.push(LlmMessage::tool_result("big", tokens(30_000)));
+        history.extend(turn(3, 10).into_iter().skip(1));
+
+        let kept = |name: &str| name.starts_with("mcp__kb__");
+        let cleared: Vec<String> = plan(&history, estimate_tokens(&history), None, &kept).into_iter().map(|c| c.tool).collect();
         assert_eq!(cleared, vec!["runCommand"]);
     }
 

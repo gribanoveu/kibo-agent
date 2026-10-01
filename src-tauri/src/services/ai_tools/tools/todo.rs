@@ -18,8 +18,9 @@ const MAX_TASKS: usize = 20;
 pub fn todo(todos: &mut Vec<Task>, args: &TodoArgs) -> Result<ToolResult, ToolError> {
     let updated = match args {
         TodoArgs::Write { tasks } => write(todos, tasks)?,
-        TodoArgs::Update { id, status, note } => {
-            update(todos, id.as_deref(), status.map(Into::into), note.as_deref())?
+        TodoArgs::Update { id, ids, status, note } => {
+            let named: Vec<&str> = id.iter().chain(ids).map(String::as_str).collect();
+            update(todos, &named, status.map(Into::into), note.as_deref())?
         }
     };
     *todos = updated;
@@ -57,9 +58,11 @@ fn write(todos: &[Task], titles: &[String]) -> Result<Vec<Task>, ToolError> {
     Ok(advance(updated))
 }
 
+/// Changes the tasks `named`, or the active one when none is. All or nothing:
+/// one unknown id leaves every task as it was.
 fn update(
     todos: &[Task],
-    id: Option<&str>,
+    named: &[&str],
     status: Option<TodoStatus>,
     note: Option<&str>,
 ) -> Result<Vec<Task>, ToolError> {
@@ -71,31 +74,35 @@ fn update(
     }
     let ids = || Some(todos.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
 
-    let target = match id {
-        Some(id) => id.to_string(),
-        None => todos
+    let targets: Vec<String> = if named.is_empty() {
+        let active = todos
             .iter()
             .find(|t| t.status == TodoStatus::InProgress)
             .map(|t| t.id.clone())
             .ok_or_else(|| ToolError::TaskNotFound {
                 id: String::new(),
                 available: ids(),
-            })?,
+            })?;
+        vec![active]
+    } else {
+        named.iter().map(|id| id.to_string()).collect()
     };
 
     let mut updated = todos.to_vec();
-    let task = updated
-        .iter_mut()
-        .find(|t| t.id == target)
-        .ok_or_else(|| ToolError::TaskNotFound {
-            id: target.clone(),
-            available: ids(),
-        })?;
-    if let Some(status) = status {
-        task.status = status;
-    }
-    if let Some(note) = note {
-        task.note = Some(note.to_string());
+    for target in targets {
+        let task = updated
+            .iter_mut()
+            .find(|t| t.id == target)
+            .ok_or_else(|| ToolError::TaskNotFound {
+                id: target.clone(),
+                available: ids(),
+            })?;
+        if let Some(status) = status {
+            task.status = status;
+        }
+        if let Some(note) = note {
+            task.note = Some(note.to_string());
+        }
     }
     Ok(advance(updated))
 }
@@ -121,7 +128,7 @@ fn advance(mut tasks: Vec<Task>) -> Vec<Task> {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "todo".to_string(),
-        description: "Keep the checklist for work the user asked for that takes several steps (three or more) — not for steps you are only suggesting. One tool, two operations chosen with `op`. `write` appends new task titles to the end of the list; once every task on it is completed or cancelled, the next `write` starts a new list instead. The runtime assigns ids and activates the first task when nothing is active. `update` changes one task to `completed` or `cancelled`; those are the only statuses you may set, and the runtime activates the next task by itself. An `update` with only a `note` records progress on the task and leaves its status as it is. Omit `id` to mean the task you are on, which is what almost every update means and cannot name the wrong one. Mark a task completed alongside the last call of the step that finishes it, not in a round of updates at the end. There is no read operation because none is needed: every call returns the current list, ids and notes included, and if the conversation stops showing it, it is added again at the end. Do not use it for a one- or two-step request."
+        description: "Keep the checklist for work the user asked for that takes several steps (three or more) — not for steps you are only suggesting. One tool, two operations chosen with `op`. `write` appends new task titles to the end of the list; once every task on it is completed or cancelled, the next `write` starts a new list instead. The runtime assigns ids and activates the first task when nothing is active. `update` changes one task — or several at once with `ids`, such as duplicates to cancel — to `completed` or `cancelled`; those are the only statuses you may set, and the runtime activates the next task by itself. An `update` with only a `note` records progress on the task and leaves its status as it is. Omit `id` to mean the task you are on, which is what almost every update means and cannot name the wrong one. Mark a task completed alongside the last call of the step that finishes it, not in a round of updates at the end. There is no read operation because none is needed: every call returns the current list, ids and notes included, and if the conversation stops showing it, it is added again at the end. Do not use it for a one- or two-step request."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -150,6 +157,16 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "null"
                     ],
                     "description": "Only for op \\\"update\\\": which task to change, exactly as the list spells it. Omit it to change the active task."
+                },
+                "ids": {
+                    "type": [
+                        "array",
+                        "null"
+                    ],
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Only for op \\\"update\\\": several tasks to change the same way in one call, each id exactly as the list spells it — not a range."
                 },
                 "status": {
                     "type": [
@@ -209,9 +226,42 @@ mod tests {
     fn done(id: Option<&str>) -> TodoArgs {
         TodoArgs::Update {
             id: id.map(str::to_string),
+            ids: Vec::new(),
             status: Some(TodoUpdateStatus::Completed),
             note: None,
         }
+    }
+
+    fn cancel(ids: &[&str]) -> TodoArgs {
+        TodoArgs::Update {
+            id: None,
+            ids: ids.iter().map(|s| s.to_string()).collect(),
+            status: Some(TodoUpdateStatus::Cancelled),
+            note: Some("a duplicate".into()),
+        }
+    }
+
+    /// Duplicates go in one call, each with the note; the active task moves
+    /// on past them.
+    #[test]
+    fn several_tasks_change_in_one_call() {
+        let mut todos = Vec::new();
+        todo(&mut todos, &titles(&["a", "b", "c", "d"])).unwrap();
+        let out = tasks(todo(&mut todos, &cancel(&["t1", "t3"])));
+        assert_eq!(state(&out), [("t1", TodoStatus::Cancelled), ("t2", TodoStatus::InProgress), ("t3", TodoStatus::Cancelled), ("t4", TodoStatus::Pending)]);
+        assert_eq!(out[2].note.as_deref(), Some("a duplicate"));
+    }
+
+    /// One id that is not on the list refuses the whole call: half a batch
+    /// applied is a list the model no longer knows the state of.
+    #[test]
+    fn an_unknown_id_among_several_changes_nothing() {
+        let mut todos = Vec::new();
+        todo(&mut todos, &titles(&["a", "b"])).unwrap();
+        let before = todos.clone();
+        let err = todo(&mut todos, &cancel(&["t2", "t9..t15"])).unwrap_err();
+        assert!(err.to_string().contains("t9..t15"), "{err}");
+        assert_eq!(todos, before);
     }
 
     fn state(tasks: &[Task]) -> Vec<(&str, TodoStatus)> {
@@ -264,7 +314,7 @@ mod tests {
 
         todo(&mut todos, &done(None)).unwrap();
         // Cancelled is as closed as completed.
-        todo(&mut todos, &TodoArgs::Update { id: None, status: Some(TodoUpdateStatus::Cancelled), note: Some("not needed".into()) })
+        todo(&mut todos, &TodoArgs::Update { id: None, ids: Vec::new(), status: Some(TodoUpdateStatus::Cancelled), note: Some("not needed".into()) })
             .unwrap();
         let many: Vec<String> = (0..MAX_TASKS).map(|i| format!("task {i}")).collect();
         let fresh = tasks(todo(&mut todos, &TodoArgs::Write { tasks: many.clone() }));
@@ -332,6 +382,7 @@ mod tests {
             &mut todos,
             &TodoArgs::Update {
                 id: None,
+                ids: Vec::new(),
                 status: Some(TodoUpdateStatus::Cancelled),
                 note: Some("not needed after all".into()),
             },

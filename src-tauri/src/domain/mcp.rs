@@ -2,7 +2,8 @@
 //!
 //! The format is the `mcpServers` object Claude Desktop and Cursor use, so a
 //! configuration copied from a server's README pastes in unchanged. Fields
-//! this app adds (`weight`, `timeoutSecs`, `exposure`, `toolExposure`) sit
+//! this app adds (`weight`, `timeoutSecs`, `exposure`, `toolExposure`,
+//! `keepResults`) sit
 //! beside the standard ones, and
 //! fields it does not know — `type`, another client's own — are kept rather
 //! than dropped on the next save.
@@ -63,6 +64,12 @@ pub struct McpServerConfig {
     /// pattern where `*` is any run of characters (`delete_*`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_exposure: BTreeMap<String, Exposure>,
+    /// Its results are never cleared to save context. For a server whose
+    /// answers are instructions rather than data — templates, rules, a
+    /// style guide — which a model otherwise fetches again every few rounds
+    /// as the old copies are cleared (`domain::result_clearing`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_results: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -694,6 +701,8 @@ pub struct McpToolEntry {
     pub server: String,
     pub tool: McpTool,
     pub weight: u32,
+    /// Never cleared to save context ([`McpServerConfig::keep_results`]).
+    pub keep_results: bool,
     /// Declared only once `toolSearch` has found it ([`Exposure::Deferred`]).
     pub deferred: bool,
     pub client: Arc<dyn McpClient>,
@@ -743,6 +752,7 @@ impl McpTools {
                     server: server.name.clone(),
                     tool,
                     weight: server.config.weight(),
+                    keep_results: server.config.keep_results,
                     deferred: exposure == Exposure::Deferred,
                     client: Arc::clone(&server.client),
                 });
@@ -778,6 +788,12 @@ impl McpTools {
     /// What its server says about this tool; nothing, for a name no server has.
     pub fn hints(&self, wire_name: &str) -> McpToolHints {
         self.get(wire_name).map(|entry| entry.tool.hints).unwrap_or_default()
+    }
+
+    /// Whether this tool's results stay however full the context gets; no,
+    /// for a name no server has.
+    pub fn keeps_results(&self, wire_name: &str) -> bool {
+        self.get(wire_name).is_some_and(|entry| entry.keep_results)
     }
 
     /// What one call costs: the server's weight, or the default for a name
@@ -1100,6 +1116,22 @@ mod tests {
         assert_eq!(tools.get("mcp__github__get_file").unwrap().tool.name, "get.file", "the server is called by its own name");
         assert_eq!((tools.weight("mcp__github__search_issues"), tools.weight("mcp__db__search_issues")), (5, 3));
         assert_eq!(tools.weight("mcp__gone__x"), DEFAULT_WEIGHT);
+    }
+
+    /// `keepResults` is read from the file and answered per tool: the
+    /// server's tools keep their results, another server's and an unknown
+    /// name do not.
+    #[test]
+    fn a_server_marked_keep_results_keeps_its_tools_results() {
+        let config: McpConfig = serde_json::from_str(r#"{"mcpServers":{"kb":{"command":"x","keepResults":true},"db":{"command":"y"}}}"#).unwrap();
+        assert!(config.mcp_servers["kb"].keep_results && !config.mcp_servers["db"].keep_results);
+
+        let mut kb = server("kb", 3, &["get_doc_template"]);
+        kb.config.keep_results = true;
+        let tools = McpTools::new(vec![kb, server("db", 3, &["query"])]);
+        assert!(tools.keeps_results("mcp__kb__get_doc_template"));
+        assert!(!tools.keeps_results("mcp__db__query"));
+        assert!(!tools.keeps_results("mcp__gone__x"));
     }
 
     /// Two of a server's names that sanitize alike: the first keeps it.

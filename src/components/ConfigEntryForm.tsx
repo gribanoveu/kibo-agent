@@ -86,6 +86,7 @@ function useSubmit(text: string | undefined, write: (text: string) => Written, s
 }
 
 const TRANSPORTS: Record<McpServerFields["transport"], string> = { command: "A command", url: "At a URL" };
+const RESULTS = { cleared: "Cleared when the context fills", kept: "Kept" };
 const EXPOSURES: Record<McpServerFields["exposure"], string> = {
   direct: "Declared to the model",
   deferred: "Found with toolSearch",
@@ -171,6 +172,19 @@ export function McpServerForm({ name, text, error, onSave, onClose, onEditJson }
             { value: "hidden", label: EXPOSURES.hidden, hint: "None, but those switched on in the tab" },
           ]}
           onPick={(exposure) => setFields((f) => ({ ...f, exposure: exposure as McpServerFields["exposure"] }))}
+        />
+      </Field>
+      <Field label="Its results" menu hint="Keep them for a server that answers with templates or rules the model follows.">
+        <Dropdown
+          below
+          title="What happens to its results as the context fills"
+          label={fields.keepResults ? RESULTS.kept : RESULTS.cleared}
+          value={fields.keepResults ? "kept" : "cleared"}
+          options={[
+            { value: "cleared", label: RESULTS.cleared, hint: "Old ones are cleared like any tool's, and called again when needed" },
+            { value: "kept", label: RESULTS.kept, hint: "Never cleared — for instructions rather than data" },
+          ]}
+          onPick={(value) => setFields((f) => ({ ...f, keepResults: value === "kept" }))}
         />
       </Field>
       <Actions problem={problem} error={error} onClose={onClose} onEditJson={onEditJson} />

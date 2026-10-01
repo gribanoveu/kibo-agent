@@ -354,6 +354,13 @@ struct State {
     budget_used: u32,
     todos: Vec<Task>,
     reads: ReadFiles,
+    /// What `writePlan` last wrote in this turn; `None` until it does. The
+    /// prompt keeps the plan the turn started with — a prompt that changed
+    /// with every `writePlan` would cost a prompt cache the whole history
+    /// each time, and DeepSeek caches from the first token. The new one is in
+    /// its call's arguments, which clearing never touches; a fold that takes
+    /// the call away puts it under the summary ([`keep_plan_through_fold`]).
+    written_plan: Option<String>,
 }
 
 /// A fresh turn: run from the first round until the model stops asking for
@@ -373,6 +380,7 @@ pub fn stream(
         budget_used: 0,
         todos,
         reads: ReadFiles::default(),
+        written_plan: None,
     };
     run(turn, state, 0, None)
 }
@@ -421,6 +429,9 @@ pub fn resume(
         budget_used: checkpoint.budget_used,
         todos: checkpoint.todos,
         reads: checkpoint.reads,
+        // The window follows `writePlan` while the turn runs, so a plan
+        // written before the pause is the prompt's from here on.
+        written_plan: None,
     };
     run(turn, state, checkpoint.event_seq, Some((calls, decisions)))
 }
@@ -549,7 +560,8 @@ fn run(
             clear_stale_results(turn, &mut state, &mut seen_results);
             let usage = request_usage(turn, &state.history);
             if compaction::should_compact(usage.total, usage.limit) {
-                match fold(turn, &events, round, &mut state.history, &state.todos, &mut seen_results, KEEP_TAIL_PERCENT) {
+                let ahead = Folding { todos: &state.todos, written_plan: state.written_plan.as_deref(), tail_percent: KEEP_TAIL_PERCENT };
+                match fold(turn, &events, round, &mut state.history, ahead, &mut seen_results) {
                     Ok(_) => {}
                     // A pass that could not help leaves the history as it was:
                     // if the request really does not fit, the provider says
@@ -566,7 +578,7 @@ fn run(
                 &events,
                 round,
                 &mut state.history,
-                &state.todos,
+                Folding { todos: &state.todos, written_plan: state.written_plan.as_deref(), tail_percent: RETRY_KEEP_TAIL_PERCENT },
                 &mut seen_results,
             )? {
                 Some(result) => result,
@@ -794,6 +806,9 @@ fn run(
                         // every write, and no tool has to remember to report.
                         let watched = turn.place.scope().and_then(|scope| file_changes::before(scope, &parsed));
                         let result = execute_call(turn, round, call, &parsed, &mut state.reads, &mut state.todos);
+                        if let (Ok(_), crate::domain::tools::ToolCall::WritePlan(written)) = (&result, &parsed) {
+                            state.written_plan = Some(written.content.trim().to_string());
+                        }
                         changes = watched.map(file_changes::after).unwrap_or_default();
                         result
                     })
@@ -1136,7 +1151,8 @@ fn explore_step(name: &str, arguments: &str) -> String {
 fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: &mut HashMap<String, u64>) {
     let scope = turn.place.scope();
     let usage = request_usage(turn, &state.history);
-    for cleared in result_clearing::plan(&state.history, usage.total, usage.limit) {
+    let kept = |name: &str| turn.mcp.keeps_results(name);
+    for cleared in result_clearing::plan(&state.history, usage.total, usage.limit, &kept) {
         state.history[cleared.index].content = Some(cleared.stub);
         seen_results.remove(&format!("{}|{}", cleared.tool, cleared.arguments));
         if ToolName::from_wire_name(&cleared.tool) != Some(ToolName::ReadFile) {
@@ -1249,7 +1265,7 @@ fn ask_the_model(
     events: &Events,
     round: u32,
     history: &mut Vec<LlmMessage>,
-    todos: &[Task],
+    folding: Folding,
     seen_results: &mut HashMap<String, u64>,
 ) -> Result<Option<ChatStreamResult>, TurnError> {
     let mut compacted = false;
@@ -1268,13 +1284,22 @@ fn ask_the_model(
 
         // Harder than a proactive pass would: the window is not nearly full,
         // it is already over.
-        match fold(turn, events, round, history, todos, seen_results, RETRY_KEEP_TAIL_PERCENT) {
+        match fold(turn, events, round, history, folding, seen_results) {
             Ok(true) => {}
             // Nothing could be folded, or the summarizer itself failed: report
             // what the model actually refused.
             Ok(false) | Err(_) => return Err(TurnError::Provider(error)),
         }
     }
+}
+
+/// What a fold needs of the turn besides its history: what to put back
+/// after it, and how much to keep word for word.
+#[derive(Clone, Copy)]
+struct Folding<'a> {
+    todos: &'a [Task],
+    written_plan: Option<&'a str>,
+    tail_percent: u64,
 }
 
 /// One pass over the turn's history, keeping `tail_percent` of the window
@@ -1286,12 +1311,11 @@ fn fold(
     events: &Events,
     round: u32,
     history: &mut Vec<LlmMessage>,
-    todos: &[Task],
+    folding: Folding,
     seen_results: &mut HashMap<String, u64>,
-    tail_percent: u64,
 ) -> Result<bool, LlmError> {
     let started = || events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacting);
-    let tail = compaction::share_of_window(turn.session.context_limit, tail_percent);
+    let tail = compaction::share_of_window(turn.session.context_limit, folding.tail_percent);
     let Some(shorter) = context_compaction::compact(turn.session, history, tail, &started)? else {
         return Ok(false);
     };
@@ -1299,10 +1323,31 @@ fn fold(
     // What was read before the cut is gone from the history: a repeat of it
     // must come back in full, not as "already above".
     seen_results.clear();
-    // The summary may have folded the last list away.
-    restore_checklist(history, todos);
+    // The summary may have folded the last list, and the last plan, away.
+    keep_plan_through_fold(history, folding.written_plan);
+    restore_checklist(history, folding.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
     Ok(true)
+}
+
+/// Puts the plan this turn wrote under the summary, when the fold took its
+/// `writePlan` call away: the prompt still shows the plan the turn started
+/// with, and the call was the only place the new one was. Onto the summary
+/// rather than as a message of its own — the fold has just rewritten the
+/// history, so the cache is lost either way, and a second user message in a
+/// row is one more thing a provider may refuse.
+fn keep_plan_through_fold(history: &mut [LlmMessage], written_plan: Option<&str>) {
+    let Some(plan) = written_plan else { return };
+    let still_there = history.iter().flat_map(|m| &m.tool_calls).any(|call| call.name == ToolName::WritePlan.wire_name());
+    if still_there {
+        return;
+    }
+    let summary = history
+        .iter_mut()
+        .find(|m| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.starts_with(compaction::SUMMARY_PREFIX)));
+    if let Some(content) = summary.and_then(|m| m.content.as_mut()) {
+        content.push_str(&format!("\n\n## The plan, as last written with writePlan\n\n{plan}"));
+    }
 }
 
 /// What this mode advertises. Leaving a tool out of the request is the half
@@ -2850,6 +2895,84 @@ mod tests {
             "the summary opens the shorter conversation"
         );
         assert_eq!(h.provider.summaries.lock().unwrap().len(), 1);
+    }
+
+    /// A plan written mid-turn leaves the system prompt alone — a prompt that
+    /// changed would cost the prompt cache the whole history — and reaches
+    /// the next request through its own call.
+    #[test]
+    fn a_plan_written_in_the_turn_leaves_the_prompt_alone() {
+        let h = harness(
+            "chat-plan-kept",
+            vec![asks(vec![wants("p", "writePlan", r##"{"content":"# Notes\n\nEmployeeController: L13-L40"}"##)]), text("done")],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("document it")], vec![])).expect("turn");
+
+        let prompt_says = |request: &ChatRequest| {
+            request.messages.iter().any(|m| m.role == LlmRole::System && m.content.as_deref().is_some_and(|c| c.contains("EmployeeController: L13-L40")))
+        };
+        let requests = h.provider.requests();
+        assert!(!prompt_says(&requests[1]), "the prompt changed mid-turn");
+        let lead = lead_of(&requests[0]);
+        assert_eq!(requests[0].messages[..lead], requests[1].messages[..lead_of(&requests[1])], "the prefix moved");
+        let in_call = conversation_of(&requests[1]).iter().flat_map(|m| &m.tool_calls).any(|c| c.arguments.contains("EmployeeController: L13-L40"));
+        assert!(in_call, "the plan is in its call");
+    }
+
+    fn summarized(tail: Vec<LlmMessage>) -> Vec<LlmMessage> {
+        let mut history = vec![compaction::summary_message("they read the controllers")];
+        history.extend(tail);
+        history
+    }
+
+    /// Folded away with its call, the plan comes back under the summary; a
+    /// call still in the tail needs no copy, and a turn that wrote none adds
+    /// nothing.
+    #[test]
+    fn a_fold_that_took_the_plan_away_puts_it_under_the_summary() {
+        let summary_of = |history: &[LlmMessage]| history[0].content.clone().unwrap();
+        let bare = summary_of(&summarized(vec![]));
+
+        let mut folded = summarized(vec![LlmMessage::user("go on")]);
+        keep_plan_through_fold(&mut folded, Some("# Notes\n\nL13"));
+        assert!(summary_of(&folded).ends_with("## The plan, as last written with writePlan\n\n# Notes\n\nL13"), "{}", summary_of(&folded));
+
+        let call = LlmMessage { tool_calls: vec![wants("p", "writePlan", r#"{"content":"x"}"#)], ..LlmMessage::assistant("") };
+        let mut kept = summarized(vec![call, LlmMessage::tool_result("p", "ok")]);
+        keep_plan_through_fold(&mut kept, Some("# Notes"));
+        assert_eq!(summary_of(&kept), bare);
+
+        let mut none = summarized(vec![LlmMessage::user("go on")]);
+        keep_plan_through_fold(&mut none, None);
+        assert_eq!(summary_of(&none), bare);
+    }
+
+    /// The whole way round: a plan written, a fold that takes its call
+    /// away, and the retry that follows reads the plan under the summary.
+    #[test]
+    fn a_plan_folded_away_with_its_call_comes_back_under_the_summary() {
+        let mut h = harness(
+            "chat-plan-folded",
+            vec![
+                asks(vec![wants("p", "writePlan", r##"{"content":"# Notes\n\nEmployeeController: L13-L40"}"##)]),
+                asks(vec![wants("r", "readFile", r#"{"path":"big.txt"}"#)]),
+                Step::Fail(too_long_error()),
+                text("done"),
+            ],
+        );
+        // A tenth of it, the tail after a refusal, holds the read and not
+        // the plan's call before it.
+        h.session.context_limit = Some(90_000);
+        std::fs::write(h.root.join("big.txt"), "x".repeat(40_000)).unwrap();
+
+        h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
+
+        let requests = h.provider.requests();
+        let retry = conversation_of(requests.last().unwrap());
+        let summary = retry[0].content.as_deref().unwrap();
+        assert!(summary.contains("## The plan, as last written with writePlan"), "{}", &summary[..summary.len().min(300)]);
+        assert!(summary.contains("EmployeeController: L13-L40"));
+        assert!(!retry.iter().flat_map(|m| &m.tool_calls).any(|c| c.name == "writePlan"), "the call was not folded — this proves nothing");
     }
 
     /// A turn that starts near the edge folds before it asks, rather than

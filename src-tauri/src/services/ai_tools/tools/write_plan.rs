@@ -37,7 +37,8 @@ pub(super) fn definition() -> LlmToolDefinition {
         name: "writePlan".to_string(),
         description: "Write the plan for this conversation as a Markdown document: a title, what changes and why, the files involved, the order of the work, and the risks or open questions. \
 Each call replaces the whole plan, so send all of it. The user reads it in the Plan tab and may edit it; the version you are shown under \"Plan\" in the system prompt is the current one, including their edits. \
-Put the steps themselves in the checklist with todo as well — the plan explains, the checklist tracks."
+Put the steps themselves in the checklist with todo as well — the plan explains, the checklist tracks. \
+The plan is in every request in full, while old tool results are cleared and the older conversation is summarized as the context fills: on a long task, keep in it the facts you will need later — names, paths, line numbers — not only the steps."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",

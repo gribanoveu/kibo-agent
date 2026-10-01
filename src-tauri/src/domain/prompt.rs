@@ -137,6 +137,8 @@ pub fn mode_instructions(mode: ConversationMode) -> &'static str {
 
 You can research, change the repository and run commands. Handle the request rather than describing how it could be handled.
 
+On a long task — one that reads more than you can keep in view at once — write what you find into the plan with `writePlan` as you go: names, paths, line numbers, decisions. As the context fills, old tool results are cleared and the older conversation is folded into a summary; the plan is not, and every request carries it as it last stood. A fact kept there is one you do not have to read again.
+
 When the work has an obvious next step, end your reply with one concrete question offering it — \"Commit this?\", \"Move on to the parser?\" — naming the thing, not \"Anything else?\".",
         // Written against the failure the mode exists to prevent: an agent
         // that answers "here is the plan" and has already applied half of it.

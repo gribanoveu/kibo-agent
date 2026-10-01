@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 2026-10-01 An MCP server can be marked to keep its results (Its results → Kept, `keepResults` in mcp.json) — for templates and rules the model follows, which are then never cleared to save context
+- 2026-10-01 The agent is told to keep the facts a long task needs in its plan, and a plan written during a turn stays in every request after it, however full the context gets
+- 2026-10-01 The agent can close or cancel several checklist items in one step
 - 2026-10-01 A long turn folds its own history when the request reaches 90% of the context window, keeping the latest quarter of the window word for word, instead of waiting for the provider to refuse; the summary is written from the full text of what is folded
 - 2026-10-01 Old tool results are cleared only once a request fills 85% of the model's context window, not at a fixed 60k — a long task no longer reads the same files over and over
 - 2026-10-01 Beside Working… and the speed, how many tokens the turn has spent so far — 553, 1.2k, 48k

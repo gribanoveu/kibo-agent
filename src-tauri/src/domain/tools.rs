@@ -2088,6 +2088,12 @@ pub enum TodoArgs {
         /// is what almost every update means.
         #[serde(default)]
         id: Option<String>,
+        /// Several tasks changed the same way in one call — duplicates
+        /// cancelled, steps finished together. In the transcript that prompted
+        /// it, closing seven duplicates one call each cost seven calls, after
+        /// a first try named them `"t9..t15"` and was refused.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        ids: Vec<String>,
         /// Absent, with a `note`: progress on the task, which stays as it
         /// is. The schema the model sees has always allowed leaving it out —
         /// and models did, with a note, to record what they had found.

@@ -317,6 +317,7 @@ mod definition_tests {
                     }),
                     ToolCall::Todo(TodoArgs::Update {
                         id: Some("t1".to_string()),
+                        ids: vec!["t2".to_string()],
                         status: Some(TodoUpdateStatus::Completed),
                         note: Some("done".to_string()),
                     }),

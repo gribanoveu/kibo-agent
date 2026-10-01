@@ -43,8 +43,18 @@ describe("an MCP server", () => {
       weight: "5",
       timeoutSecs: "",
       exposure: "direct",
+      keepResults: false,
     });
     expect(readMcpServer(MCP, "nope")).toBeNull();
+  });
+
+  test("keeping its results is written only when set, and read back", () => {
+    const kept = written(writeMcpServer(MCP, null, { ...EMPTY_SERVER, name: "kb", command: "kb", keepResults: true }));
+    expect(kept.mcpServers.kb).toEqual({ command: "kb", keepResults: true });
+    const file = text(kept);
+    expect(readMcpServer(file, "kb")!.keepResults).toBe(true);
+    const back = written(writeMcpServer(file, "kb", { ...readMcpServer(file, "kb")!, keepResults: false }));
+    expect(back.mcpServers.kb).toEqual({ command: "kb" });
   });
 
   test("how its tools are reached is written only when not the default, and per-tool entries stay", () => {
