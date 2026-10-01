@@ -351,9 +351,11 @@ button.turn-processes:hover {
   overflow-wrap: break-word;
 }
 
-/* A run of calls, folded to one line until asked. */
+/* A run of calls, folded to one line until asked. The line the agent wrote
+   just before it says what the run is for, so it sits close above and the
+   space goes below. */
 .tool-run {
-  margin: 6px 0 8px;
+  margin: 4px 0 14px;
 }
 .tool-run > summary {
   display: flex;
@@ -632,6 +634,11 @@ button.turn-processes:hover {
   color: var(--text-faint);
   opacity: 0;
   transition: opacity 0.15s;
+}
+/* Narration between runs is not the answer: no copy line kept under it, or
+   the empty room pushes it away from the run it introduces. */
+.msg:has(~ .tool-run) > .bubble-foot {
+  display: none;
 }
 .user-msg:hover .bubble-foot,
 .msg:hover > .bubble-foot,
