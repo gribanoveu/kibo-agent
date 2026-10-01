@@ -16,6 +16,46 @@
   padding: 12px 18px 10px;
   border-bottom: 1px solid var(--border-soft);
 }
+/* The checklist item in progress: one line under the header, the whole
+   strip a button to the Plan tab. */
+.current-task {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 18px;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.current-task:hover:not(:disabled) {
+  color: var(--text);
+}
+.current-task:disabled {
+  cursor: default;
+}
+.current-task-mark {
+  flex: none;
+  color: var(--accent);
+}
+.current-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.current-task-count {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
 .chat-head h1 {
   font-size: var(--fs-lg);
   font-weight: 600;

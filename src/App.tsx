@@ -541,6 +541,7 @@ export default function App() {
                 onExport={exportOpenChat}
                 onImplement={conversation.value === "plan" ? implement : undefined}
                 onOpenPlan={() => openTab("plan")}
+                checklist={agent.checklist}
                 onOpenProcess={(id) => {
                   openTab("terminal");
                   setProcessFocus({ id });

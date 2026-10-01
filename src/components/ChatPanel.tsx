@@ -4,6 +4,7 @@ import {
   Brain,
   Loader2,
   ChevronRight,
+  CircleDot,
   FileText,
   Folder,
   FileDiff,
@@ -47,6 +48,7 @@ import {
   type FileDiffStats,
   type ToolPreview,
   type McpAnswer,
+  type Task,
 } from "../lib/chat";
 import "./ChatPanel.css";
 
@@ -635,6 +637,8 @@ type Props = {
   onImplement?: () => void;
   /** Opens the Plan tab, where the plan is read and edited before handing it over. */
   onOpenPlan?: () => void;
+  /** The agent's checklist; the task in progress, if any, sits in a strip under the header. */
+  checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
   /** Opens the Agents tab on the helper run an `explore` call was. */
@@ -768,6 +772,7 @@ export function ChatPanel({
   onDecide,
   onOpenRepo,
   onImplement,
+  checklist = [],
   onOpenPlan,
   onOpenProcess,
   onOpenAgent,
@@ -862,6 +867,7 @@ export function ChatPanel({
           )}
         </div>
       </header>
+      <CurrentTask checklist={checklist} onOpen={onOpenPlan} />
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
         {groups.length === 0 ? (
@@ -1054,4 +1060,24 @@ function renderBlock(
         </div>
       );
   }
+}
+
+/**
+ * The checklist item the agent is on, in a strip under the header — the Plan
+ * tab may be closed, and this is where the eye already is. Nothing while no
+ * item is in progress: a list only waiting, or all done, is not news.
+ */
+function CurrentTask({ checklist, onOpen }: { checklist: Task[]; onOpen?: () => void }) {
+  const index = checklist.findIndex((task) => task.status === "inProgress");
+  if (index < 0) return null;
+  const done = checklist.filter((task) => task.status === "completed").length;
+  return (
+    <button type="button" className="current-task" onClick={onOpen} disabled={!onOpen} title="Show the plan">
+      <CircleDot size={13} className="current-task-mark" aria-label="In progress" />
+      <span className="current-task-title">{checklist[index].title}</span>
+      <span className="current-task-count">
+        {done}/{checklist.length}
+      </span>
+    </button>
+  );
 }

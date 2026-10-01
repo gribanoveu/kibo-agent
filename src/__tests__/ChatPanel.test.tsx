@@ -28,6 +28,42 @@ const panel = (
     />,
   );
 
+describe("the task in progress", () => {
+  const task = (id: string, title: string, status: "pending" | "inProgress" | "completed") => ({ id, title, status });
+
+  test("sits under the header with how far the list is, and opens the plan", () => {
+    let opened = 0;
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenPlan={() => opened++}
+        checklist={[task("1", "read", "completed"), task("2", "fix the parser", "inProgress"), task("3", "test", "pending")]}
+      />,
+    );
+    const strip = screen.getByTitle("Show the plan");
+    expect(strip.textContent).toContain("fix the parser");
+    expect(strip.textContent).toContain("1/3");
+    fireEvent.click(strip);
+    expect(opened).toBe(1);
+  });
+
+  test("is not there while nothing is in progress", () => {
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        checklist={[task("1", "read", "completed"), task("2", "test", "pending")]}
+      />,
+    );
+    expect(screen.queryByTitle("Show the plan")).toBeNull();
+  });
+});
+
 describe("handing a plan to Agent mode", () => {
   const answered = [
     { kind: "user", id: "u0", text: "plan the fix" },
