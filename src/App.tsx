@@ -271,8 +271,8 @@ export default function App() {
     closeFile: viewer.active ? () => viewer.active && viewer.close(viewer.active) : undefined,
   });
 
-  // A plan the agent has just finished writing is shown, once, when its turn
-  // ends — not mid-turn, while it is still filling in the checklist.
+  // A plan the agent has just written is shown, once, as soon as it lands —
+  // the turn may go on carrying it out for a long while.
   useEffect(() => {
     if (agent.planWritten > 0) openTab("plan");
   }, [agent.planWritten]);

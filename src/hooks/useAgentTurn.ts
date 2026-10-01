@@ -78,9 +78,9 @@ export function useAgentTurn({
   const [checklist, setChecklist] = useState<Task[]>([]);
   const [plan, setPlanState] = useState<string | null>(null);
   const planRef = useRef<string | null>(null);
-  // Counts the turns that finished having written a plan — the window opens
-  // the Plan tab on each. A count, not a flag: two plans in a row are two
-  // openings, and opening a saved chat is none.
+  // Counts the plans written — the window opens the Plan tab on each, as the
+  // call lands rather than when its turn ends. A count, not a flag: two plans
+  // in a row are two openings, and opening a saved chat is none.
   const [planWritten, setPlanWritten] = useState(0);
   // Where the running turn's blocks begin — what `writtenPlan` looks at.
   const turnStart = useRef(0);
@@ -141,13 +141,21 @@ export function useAgentTurn({
     }
   }, [keepTodos]);
 
-  // The checklist while the turn works: the turn hands its list back only when
-  // it ends, so until then the Plan tab follows the `todo` calls themselves.
+  // The checklist and the plan while the turn works: the turn hands its list
+  // back only when it ends, so until then the Plan tab follows the `todo` and
+  // `writePlan` calls themselves. A plan is shown as soon as it is written —
+  // a long turn can spend most of its time carrying it out.
   useEffect(() => {
     if (turn.status !== "running" && turn.status !== "awaitingApproval") return;
-    const live = writtenChecklist(turn.blocks.slice(turnStart.current));
+    const blocks = turn.blocks.slice(turnStart.current);
+    const live = writtenChecklist(blocks);
     if (live) setChecklist(live);
-  }, [turn.status, turn.blocks]);
+    const written = writtenPlan(blocks);
+    if (written !== null && written !== planRef.current) {
+      keepPlan(written);
+      setPlanWritten((n) => n + 1);
+    }
+  }, [turn.status, turn.blocks, keepPlan]);
 
   // A new chat is in the sidebar from its first message, not from the end of
   // its first turn — which a review can take minutes to reach. Only the
@@ -170,9 +178,9 @@ export function useAgentTurn({
     unsaved.current = false;
 
     const written = writtenPlan(turn.blocks.slice(turnStart.current));
+    // Already counted while the turn ran, unless it ended within one render.
+    if (written !== null && written !== planRef.current) setPlanWritten((n) => n + 1);
     if (written !== null) keepPlan(written);
-    // Stopped halfway, the plan is not ready to be read.
-    if (written !== null && turn.status === "done") setPlanWritten((n) => n + 1);
     const id = chatId ?? crypto.randomUUID();
     setChatId(id);
     if (lastTurn.current) {

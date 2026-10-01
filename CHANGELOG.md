@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-01 The Plan tab opens with the agent's plan as soon as it is written, while the turn is still carrying it out, instead of after the turn ends
 - 2026-10-01 A turn that runs into its limits keeps its work: "continue" goes on from where it stopped instead of starting the task over
 - 2026-10-01 Set how many rounds and how much tool budget one agent turn may spend, in Settings → Agent
 - 2026-10-01 In the / menu, Enter puts a command that takes arguments in the box for you to type them, instead of running it without; a line under the menu says what Enter and Tab do with the highlighted command
