@@ -1,11 +1,11 @@
-import { useState, type ComponentProps } from "react";
-import { Bell, Bot, Check, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
+import { Fragment, useState, type ComponentProps } from "react";
+import { Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { KubeSettings } from "./KubeSettings";
 import { WebSearchSettings } from "./WebSearchSettings";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
-import type { RememberScope, ReplyLanguage, SkillSourceItem, SkillsView } from "../lib/chat";
+import { DEFAULT_TURN_LIMITS, type RememberScope, type ReplyLanguage, type SkillSourceItem, type SkillsView, type TurnLimits } from "../lib/chat";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
@@ -18,6 +18,7 @@ import "./Settings.css";
 const SECTIONS = [
   { id: "models", label: "Models", icon: Bot },
   { id: "language", label: "Language", icon: Languages },
+  { id: "agent", label: "Agent", icon: Gauge },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "skills", label: "Skills", icon: Sparkles },
@@ -104,6 +105,9 @@ type Props = {
   /** What the model writes its replies in. */
   replyLanguage: ReplyLanguage;
   onReplyLanguage: (language: ReplyLanguage) => void;
+  /** How far one agent turn may run before it stops. */
+  turnLimits: TurnLimits;
+  onTurnLimits: (limits: TurnLimits) => void;
   theme: ThemeChoice;
   onThemeMode: (mode: Mode) => void;
   onThemePalette: (theme: Theme) => void;
@@ -130,6 +134,8 @@ export function Settings({
   onDebugLogging,
   replyLanguage,
   onReplyLanguage,
+  turnLimits,
+  onTurnLimits,
   theme,
   onThemeMode,
   onThemePalette,
@@ -190,6 +196,14 @@ export function Settings({
               </div>
             </div>
             <p className="modal-note settings-hint">{LANGUAGES.find((l) => l.value === replyLanguage)?.hint}</p>
+          </>
+        )}
+
+        {section === "agent" && (
+          <>
+            <h3 className="settings-title">Agent</h3>
+            {/* Keyed on the saved values, so a save or a reset redraws the fields from them. */}
+            <TurnLimitsFields key={`${turnLimits.rounds}/${turnLimits.budget}`} limits={turnLimits} onSave={onTurnLimits} />
           </>
         )}
 
@@ -475,5 +489,69 @@ function ThemePreview({ theme }: { theme: Theme }) {
         </span>
       </span>
     </span>
+  );
+}
+
+const LIMIT_FIELDS: { key: keyof TurnLimits; label: string; hint: string }[] = [
+  { key: "rounds", label: "Rounds per turn", hint: "Model↔tool round trips." },
+  {
+    key: "budget",
+    label: "Tool budget per turn",
+    hint: "Weighted calls: a file read costs 1, a search across the repository more.",
+  },
+];
+
+/**
+ * The two ceilings of a turn, saved as a field is left. An empty field or a
+ * zero is not a limit: it goes back to the saved value.
+ */
+function TurnLimitsFields({ limits, onSave }: { limits: TurnLimits; onSave: (limits: TurnLimits) => void }) {
+  const [draft, setDraft] = useState({ rounds: String(limits.rounds), budget: String(limits.budget) });
+  const commit = () => {
+    const next = { rounds: Number(draft.rounds), budget: Number(draft.budget) };
+    if (next.rounds < 1 || next.budget < 1) {
+      setDraft({ rounds: String(limits.rounds), budget: String(limits.budget) });
+    } else if (next.rounds !== limits.rounds || next.budget !== limits.budget) {
+      onSave(next);
+    }
+  };
+  const isDefault = limits.rounds === DEFAULT_TURN_LIMITS.rounds && limits.budget === DEFAULT_TURN_LIMITS.budget;
+
+  return (
+    <>
+      {LIMIT_FIELDS.map(({ key, label, hint }) => (
+        <Fragment key={key}>
+          <div className="modal-field">
+            <label htmlFor={`turn-limit-${key}`}>{label}</label>
+            <input
+              id={`turn-limit-${key}`}
+              type="text"
+              inputMode="numeric"
+              value={draft[key]}
+              placeholder={String(DEFAULT_TURN_LIMITS[key])}
+              onChange={(e) => setDraft({ ...draft, [key]: e.target.value.replace(/\D/g, "") })}
+              onBlur={commit}
+            />
+          </div>
+          <p className="modal-note settings-hint">
+            {hint} Default {DEFAULT_TURN_LIMITS[key]}.
+          </p>
+        </Fragment>
+      ))}
+      <p className="modal-note settings-hint">
+        A turn stops at whichever runs out first and says so; asking it to continue starts a new count. Raise them for
+        a long task you are watching; a model stuck in a loop spends all of it.
+      </p>
+      {!isDefault && (
+        <div className="modal-field">
+          <label />
+          <div>
+            <button className="btn btn-ghost" type="button" onClick={() => onSave(DEFAULT_TURN_LIMITS)}>
+              Back to defaults
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

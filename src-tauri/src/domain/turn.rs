@@ -46,6 +46,11 @@ pub struct ChatDone {
     /// Always valid to send on: a turn stopped between a round and its calls
     /// keeps what that round said, not the calls it never ran.
     pub history: Vec<LlmMessage>,
+    /// The rounds run, when the turn stopped at the user's turn limits rather
+    /// than finishing. An end like any other: the history is kept, so
+    /// "continue" picks up where the work stopped instead of starting over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_reached: Option<u32>,
 }
 
 /// A whole round paused, unexecuted — and the entire state needed to continue.

@@ -802,7 +802,7 @@ mod tests {
 
     fn next_prompt_turn(state: &AgentState, id: &str, events: &[ChatEventPayload]) {
         events.iter().for_each(|event| state.observe(event));
-        let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new() };
+        let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new(), limit_reached: None };
         state.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
     }
 

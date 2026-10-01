@@ -17,6 +17,7 @@ const SOURCES: SkillsView["sources"] = [
 const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
+  const limits: { rounds: number; budget: number }[] = [];
   const sizes: string[] = [];
   const modes: string[] = [];
   const palettes: string[] = [];
@@ -43,6 +44,8 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       onDebugLogging={(enabled) => logging.push(enabled)}
       replyLanguage="auto"
       onReplyLanguage={(language) => languages.push(language)}
+      turnLimits={{ rounds: 60, budget: 250 }}
+      onTurnLimits={(next) => limits.push(next)}
       theme={{ mode: "system", light: "light", dark: "one-dark" }}
       onThemeMode={(mode) => modes.push(mode)}
       onThemePalette={(theme) => palettes.push(theme)}
@@ -56,10 +59,25 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
     />,
   );
-  return { logging, languages, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
+  return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
 };
 
 describe("the settings dialog", () => {
+  test("a turn limit is saved as its field is left, and a zero goes back to the saved value", () => {
+    const { limits } = dialog();
+    fireEvent.click(screen.getByText("Agent"));
+    const rounds = screen.getByLabelText("Rounds per turn") as HTMLInputElement;
+
+    fireEvent.change(rounds, { target: { value: "0" } });
+    fireEvent.blur(rounds);
+    expect(limits).toEqual([]);
+    expect(rounds.value).toBe("60");
+
+    fireEvent.change(rounds, { target: { value: "200" } });
+    fireEvent.blur(rounds);
+    expect(limits).toEqual([{ rounds: 200, budget: 250 }]);
+  });
+
   test("opens on the model provider, one section at a time", () => {
     dialog();
     expect(screen.getByText("Model provider")).toBeDefined();

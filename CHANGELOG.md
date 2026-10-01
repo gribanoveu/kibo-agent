@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-01 A turn that runs into its limits keeps its work: "continue" goes on from where it stopped instead of starting the task over
+- 2026-10-01 Set how many rounds and how much tool budget one agent turn may spend, in Settings → Agent
 - 2026-10-01 In the / menu, Enter puts a command that takes arguments in the box for you to type them, instead of running it without; a line under the menu says what Enter and Tab do with the highlighted command
 - 2026-10-01 Typing a / command shows the arguments it still wants in grey after the text, `/compare <old> <new> [focus]`, each one going as you type it
 - 2026-10-01 Your own / commands take arguments one by one, as in Claude Code: `$0`, `$1` or `$ARGUMENTS[N]` for each (quotes keep words together), names from `arguments` in the frontmatter as `$name`, and `\$1` for a literal `$1`; what no placeholder takes arrives at the end as `ARGUMENTS: …`

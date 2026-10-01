@@ -10,7 +10,9 @@ import {
   setDebugLogging,
   setKeyStore,
   setReplyLanguage,
+  setTurnLimits,
   type KeyStore,
+  type TurnLimits,
   type ReplyLanguage,
   type LlmSettings,
   type ProviderConfig,
@@ -75,6 +77,7 @@ export function useLlmSettings() {
     (language: ReplyLanguage) => guard(() => setReplyLanguage(language)),
     [guard],
   );
+  const turnLimits = useCallback((limits: TurnLimits) => guard(() => setTurnLimits(limits)), [guard]);
 
   // What each provider serves, asked when the model menu opens: a live call
   // per provider, so not on every render. A provider that does not answer
@@ -128,6 +131,7 @@ export function useLlmSettings() {
     keyStore,
     debugLogging,
     replyLanguage,
+    turnLimits,
     models: modelChoices(settings, served),
     loadModels,
     pickModel,

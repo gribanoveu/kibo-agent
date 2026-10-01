@@ -103,6 +103,33 @@ pub struct LlmSettings {
     pub debug_logging: bool,
     /// What the model writes its replies in.
     pub reply_language: ReplyLanguage,
+    /// How far one agent turn may run before it stops and asks to continue.
+    pub turn_limits: TurnLimits,
+}
+
+/// The ceilings of one agent turn's tool loop, raised by a user who knows a
+/// task needs more — a long refactor, a big review — and lowered to keep a
+/// model on a short leash.
+///
+/// Two of them, and the second is not a duplicate of the first: `budget` is
+/// counted in `ToolName::loop_weight` units, so sixty cheap reads and sixty
+/// repository-wide searches are not the same amount of work, and it is the
+/// one that binds in practice. `rounds` is the backstop beside it — a tool
+/// whose weight is misconfigured to zero would otherwise make the loop
+/// unstoppable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TurnLimits {
+    /// Model↔tool round trips.
+    pub rounds: u32,
+    /// Weighted tool calls.
+    pub budget: u32,
+}
+
+impl Default for TurnLimits {
+    fn default() -> Self {
+        Self { rounds: 60, budget: 250 }
+    }
 }
 
 /// The language the model is told to write in — answers, plans, findings,

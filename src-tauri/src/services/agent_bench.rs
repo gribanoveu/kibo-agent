@@ -109,6 +109,7 @@ pub(super) fn session() -> LlmSession {
         debug_logging: false,
         context_limit: Some(DEFAULT_CONTEXT_LIMIT),
         reply_language: None,
+        limits: Default::default(),
     }
 }
 
@@ -323,6 +324,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         history.iter().filter(|m| m.content.as_deref().is_some_and(|c| c.starts_with(STUB_PREFIX))).count()
     };
     let (ended, answer, cleared) = match outcome {
+        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => ("exhausted".to_string(), done.result.text, stubs(&done.history)),
         Ok(ChatStreamOutcome::Done(done)) => ("done".to_string(), done.result.text, stubs(&done.history)),
         Ok(ChatStreamOutcome::Cancelled(done)) => ("cancelled".to_string(), done.result.text, stubs(&done.history)),
         Ok(ChatStreamOutcome::PendingApproval(_)) => ("paused".to_string(), String::new(), 0),

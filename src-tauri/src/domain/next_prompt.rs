@@ -389,7 +389,7 @@ mod tests {
     }
 
     fn done(todos: Vec<Task>) -> ChatStreamOutcome {
-        ChatStreamOutcome::Done(ChatDone { result: ChatStreamResult::default(), todos, history: Vec::new() })
+        ChatStreamOutcome::Done(ChatDone { result: ChatStreamResult::default(), todos, history: Vec::new(), limit_reached: None })
     }
 
     fn input_after(events: &[ChatEventPayload]) -> String {
@@ -482,6 +482,7 @@ mod tests {
             result: ChatStreamResult::default(),
             todos: vec![task(TodoStatus::Completed), task(TodoStatus::Pending)],
             history: Vec::new(),
+            limit_reached: None,
         });
         assert_eq!(
             turn.finish(&ended).expect("ended").model_input("сделай в /home/me/x", "/home/me"),

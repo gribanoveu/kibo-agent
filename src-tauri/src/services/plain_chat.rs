@@ -195,6 +195,7 @@ mod tests {
                 debug_logging: false,
                 context_limit: None,
                 reply_language: language,
+                limits: Default::default(),
             },
             script,
             kube: KubeSetup::NotSet,

@@ -188,6 +188,7 @@ pub fn run() {
             commands::settings::llm_active_provider_set,
             commands::settings::llm_debug_logging_set,
             commands::settings::llm_reply_language_set,
+            commands::settings::llm_turn_limits_set,
             commands::settings::kube_settings_get,
             commands::settings::kubeconfig_save,
             commands::settings::kubeconfig_remove,

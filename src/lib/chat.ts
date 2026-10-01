@@ -66,6 +66,8 @@ export type TurnResult = {
   todos: Task[];
   /** The conversation as the turn left it, calls and results included — what the next message is sent with. */
   history: LlmMessage[];
+  /** Rounds run, when the turn stopped at the turn limits instead of finishing. */
+  limitReached?: number | null;
 };
 
 export type Outcome =
@@ -384,6 +386,11 @@ export function withLanguageReminder(prompt: string, language: ReplyLanguage): s
   return `${prompt}\n\n[Reply in ${name}.]`;
 }
 
+/** Mirrors `domain::settings::TurnLimits`: how far one agent turn may run. */
+export type TurnLimits = { rounds: number; budget: number };
+
+export const DEFAULT_TURN_LIMITS: TurnLimits = { rounds: 60, budget: 250 };
+
 /** Mirrors `infra::master_key::KeyStore`: where the key the API keys are sealed under is kept. */
 export type KeyStore = "file" | "keychain";
 
@@ -392,6 +399,7 @@ export type LlmSettings = {
   activeProviderId: string | null;
   debugLogging: boolean;
   replyLanguage: ReplyLanguage;
+  turnLimits: TurnLimits;
   keyStore: KeyStore;
 };
 
@@ -399,7 +407,7 @@ export type LlmSettings = {
 export type Readiness = { workspace: string | null; provider: string | null; hasKey: boolean };
 
 export async function llmSettings(): Promise<LlmSettings> {
-  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", keyStore: "file" };
+  if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", turnLimits: DEFAULT_TURN_LIMITS, keyStore: "file" };
   return invoke<LlmSettings>("llm_settings_get");
 }
 
@@ -472,6 +480,12 @@ export async function setDebugLogging(enabled: boolean): Promise<void> {
 export async function setReplyLanguage(language: ReplyLanguage): Promise<void> {
   requireBackend();
   return invoke<void>("llm_reply_language_set", { language });
+}
+
+/** From the next turn on; each limit is at least 1. */
+export async function setTurnLimits(limits: TurnLimits): Promise<void> {
+  requireBackend();
+  return invoke<void>("llm_turn_limits_set", { limits });
 }
 
 /** A live call, so it is also what proves the URL and the key are both right. */

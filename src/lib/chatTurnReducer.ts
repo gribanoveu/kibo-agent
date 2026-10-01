@@ -289,12 +289,19 @@ export function acceptOutcome(state: TurnState, outcome: Outcome, now = Date.now
       ],
     };
   }
-  return {
+  const ended: TurnState = {
     ...compactionEnded(state, null),
     status: outcome.status === "cancelled" ? "cancelled" : "done",
     checkpoint: null,
     retrying: null,
   };
+  const rounds = outcome.value.limitReached;
+  return rounds
+    ? appendNotice(
+        ended,
+        `The turn stopped at its limit after ${rounds} rounds. Its work is kept — say "continue" to go on from here, or raise the limits in Settings → Agent.`,
+      )
+    : ended;
 }
 
 /** Removes the pause once it has been answered, so the card does not linger. */

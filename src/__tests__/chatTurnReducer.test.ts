@@ -240,6 +240,16 @@ describe("pausing", () => {
     expect(state.checkpoint).toEqual(checkpoint);
   });
 
+  test("a turn stopped at its limits ends with a notice saying its work is kept; a finished one adds none", () => {
+    const result = { text: "", truncated: false, todos: [], history: [] };
+    const stopped = acceptOutcome(emptyTurn(), { status: "done", value: { ...result, limitReached: 27 } });
+    expect(stopped.status).toBe("done");
+    expect(kinds(stopped)).toEqual(["notice"]);
+    expect((stopped.blocks[0] as { text: string }).text).toContain("after 27 rounds");
+
+    expect(kinds(acceptOutcome(emptyTurn(), { status: "done", value: result }))).toEqual([]);
+  });
+
   test("answering it clears the card", () => {
     let state = acceptOutcome(emptyTurn(), { status: "pendingApproval", value: checkpoint });
     state = clearApproval(state);

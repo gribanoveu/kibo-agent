@@ -257,6 +257,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
     let outcome = plain_chat::start(&chat, vec![LlmMessage::user(task.prompt.clone())]);
     let seconds = started.elapsed().as_secs_f64();
     let (ended, answer, history) = match outcome {
+        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => ("exhausted".to_string(), done.result.text, done.history),
         Ok(ChatStreamOutcome::Done(done)) => ("done".to_string(), done.result.text, done.history),
         Ok(ChatStreamOutcome::Cancelled(done)) => ("cancelled".to_string(), done.result.text, done.history),
         Ok(ChatStreamOutcome::PendingApproval(paused)) => ("paused".to_string(), String::new(), paused.history),

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use secrecy::SecretString;
 
 use crate::domain::llm::{LlmError, LlmProvider};
-use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, DEFAULT_CONTEXT_LIMIT};
+use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, TurnLimits, DEFAULT_CONTEXT_LIMIT};
 use crate::infra::{llm_credentials_store, llm_providers, settings_store};
 
 pub struct LlmSession {
@@ -29,6 +29,8 @@ pub struct LlmSession {
     /// What the model is told to write in; `None` tells it nothing. See
     /// `domain::settings::ReplyLanguage`.
     pub reply_language: Option<&'static str>,
+    /// How far an agent turn on this session may run.
+    pub limits: TurnLimits,
 }
 
 /// The session for `provider_id`, or for the active provider when `None`.
@@ -59,6 +61,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
         debug_logging: settings.debug_logging,
         context_limit: Some(config.context_limit.unwrap_or(DEFAULT_CONTEXT_LIMIT)),
         reply_language: settings.reply_language.name(),
+        limits: settings.turn_limits,
     })
 }
 
@@ -160,6 +163,12 @@ pub fn set_debug_logging(enabled: bool) -> Result<(), SettingsError> {
 pub fn set_reply_language(language: ReplyLanguage) -> Result<(), SettingsError> {
     let mut settings = settings_store::load()?;
     settings.llm.reply_language = language;
+    settings_store::save(&settings)
+}
+
+pub fn set_turn_limits(limits: TurnLimits) -> Result<(), SettingsError> {
+    let mut settings = settings_store::load()?;
+    settings.llm.turn_limits = limits;
     settings_store::save(&settings)
 }
 

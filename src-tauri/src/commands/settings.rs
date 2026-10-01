@@ -14,7 +14,7 @@ use tauri::State;
 use std::path::{Path, PathBuf};
 
 use crate::domain::kube::{KubeContexts, KubePin};
-use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage};
+use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
@@ -38,6 +38,7 @@ pub struct LlmSettingsView {
     active_provider_id: Option<String>,
     debug_logging: bool,
     reply_language: ReplyLanguage,
+    turn_limits: TurnLimits,
     /// Where the key the API keys are sealed under is kept.
     key_store: KeyStore,
 }
@@ -57,6 +58,7 @@ pub fn llm_settings_get() -> Result<LlmSettingsView, String> {
         active_provider_id: settings.active_provider_id,
         debug_logging: settings.debug_logging,
         reply_language: settings.reply_language,
+        turn_limits: settings.turn_limits,
         key_store: master_key::store(),
     })
 }
@@ -151,6 +153,16 @@ pub fn llm_debug_logging_set(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn llm_reply_language_set(language: ReplyLanguage) -> Result<(), String> {
     llm_session::set_reply_language(language).map_err(|e| e.to_string())
+}
+
+/// How far an agent turn may run, from the next turn on.
+#[tauri::command]
+pub fn llm_turn_limits_set(limits: TurnLimits) -> Result<(), String> {
+    // A zero would end every turn before its first round.
+    if limits.rounds == 0 || limits.budget == 0 {
+        return Err("turn limits are at least 1".to_string());
+    }
+    llm_session::set_turn_limits(limits).map_err(|e| e.to_string())
 }
 
 /// The kubeconfig files Chat mode's Kubernetes role knows of, and the one picked.

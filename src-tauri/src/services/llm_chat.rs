@@ -55,19 +55,6 @@ use crate::services::ai_tools::tools::{dispatch, tool_definitions};
 use crate::services::context_compaction;
 use crate::services::llm_session::LlmSession;
 
-/// How many model↔tool round trips one turn may run.
-///
-/// A backstop beside [`MAX_TOOL_BUDGET`], not a duplicate of it: a tool whose
-/// weight is misconfigured to zero would otherwise make the loop unstoppable,
-/// and a model stuck in a cycle must not be able to hold the UI in "thinking"
-/// forever.
-pub const MAX_TOOL_ITERATIONS: usize = 60;
-
-/// The weighted ceiling, and the one that binds in practice. Counted in
-/// [`ToolName::loop_weight`] units so that sixty cheap reads and sixty
-/// repository-wide searches are not treated as the same amount of work.
-pub const MAX_TOOL_BUDGET: u32 = 250;
-
 /// How many times one turn answers an empty reply with a nudge rather than
 /// ending. One: a model that says nothing twice running is not going to be
 /// talked round by a third note, and each costs a round.
@@ -320,8 +307,6 @@ impl SteeringQueue {
 pub enum TurnError {
     #[error("{0}")]
     Provider(#[from] LlmError),
-    #[error("the assistant did not finish within {rounds} rounds of tool calls. Ask it to continue if it still has work to do.")]
-    Exhausted { rounds: u32 },
     #[error("cannot resume: {0}")]
     BadResume(String),
     #[error(transparent)]
@@ -468,7 +453,7 @@ fn ended(mut state: State, result: ChatStreamResult) -> ChatDone {
     if !result.text.is_empty() {
         state.history.push(LlmMessage::assistant(result.text.clone()));
     }
-    ChatDone { result, todos: state.todos, history: state.history }
+    ChatDone { result, todos: state.todos, history: state.history, limit_reached: None }
 }
 
 /// The loop both entry points run.
@@ -507,10 +492,13 @@ fn run(
         if (turn.cancelled)() {
             return Ok(ChatStreamOutcome::Cancelled(ended(state, ChatStreamResult::default())));
         }
-        if state.round >= MAX_TOOL_ITERATIONS as u32 || state.budget_used >= MAX_TOOL_BUDGET {
-            return Err(TurnError::Exhausted {
-                rounds: state.round,
-            });
+        // The ceilings are the user's (`domain::settings::TurnLimits`).
+        let limits = turn.session.limits;
+        // Checked at the top of a round, so every call the last round asked
+        // for has run and been answered: the history is whole.
+        if state.round >= limits.rounds || state.budget_used >= limits.budget {
+            let rounds = state.round;
+            return Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), ..ended(state, ChatStreamResult::default()) }));
         }
         state.round += 1;
         let round = state.round;
@@ -543,7 +531,7 @@ fn run(
             }
             if turn.place.mode() == Some(ConversationMode::Review) {
                 let used = crate::domain::review::Budget { rounds: round - 1, weight: state.budget_used };
-                let limit = crate::domain::review::Budget { rounds: MAX_TOOL_ITERATIONS as u32, weight: MAX_TOOL_BUDGET };
+                let limit = crate::domain::review::Budget { rounds: limits.rounds, weight: limits.budget };
                 if let Some(said) = crate::domain::review::wrap_up(used, limit, &state.history) {
                     state.history.push(note(turn, said));
                     events.emit(
@@ -1093,6 +1081,9 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
     };
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
+        Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), .. })) => failed(format!(
+            "the helper used up its {rounds} rounds without answering. Give it a narrower task, or look yourself."
+        )),
         Ok(ChatStreamOutcome::Done(done)) if !done.result.text.trim().is_empty() => (AgentState::Done, Ok(done.result.text)),
         Ok(ChatStreamOutcome::Done(_)) => failed("the helper finished without an answer".to_string()),
         Ok(ChatStreamOutcome::Cancelled(_)) if (turn.cancelled)() => {
@@ -1103,9 +1094,6 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
             Err("the user stopped the helper before it answered. Carry on without it; do not start it again for the same question unless the user asks".to_string()),
         ),
         Ok(ChatStreamOutcome::PendingApproval(_)) => failed("the helper asked for a call that needs approval".to_string()),
-        Err(TurnError::Exhausted { rounds }) => failed(format!(
-            "the helper used up its {rounds} rounds without answering. Give it a narrower task, or look yourself."
-        )),
         Err(e) => failed(e.to_string()),
     };
     agents.finish(id, state, answer.as_ref().ok().cloned());
@@ -1888,6 +1876,7 @@ mod tests {
                 debug_logging: false,
                 context_limit: None,
                 reply_language: None,
+                limits: Default::default(),
             },
             provider,
             scope: ToolScope::new(&root).expect("a scope over the temp root"),
@@ -3421,10 +3410,10 @@ mod tests {
     // -------------------------------------------------------------- ceilings
 
     /// A model that never stops asking for tools must not hold the turn open
-    /// forever.
+    /// forever — and it is the user's ceiling that stops it.
     #[test]
-    fn a_turn_that_never_finishes_is_cut_off() {
-        let steps = (0..MAX_TOOL_ITERATIONS + 1)
+    fn a_turn_that_never_finishes_is_cut_off_at_the_set_rounds() {
+        let steps = (0..10)
             .map(|i| {
                 asks(vec![wants(
                     &format!("c{i}"),
@@ -3433,14 +3422,46 @@ mod tests {
                 )])
             })
             .collect();
-        let h = harness("loop-ceiling", steps);
+        let mut h = harness("loop-ceiling", steps);
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 3, budget: 250 };
 
-        let err = h
-            .run(|turn| stream(turn, vec![LlmMessage::user("loop forever")], vec![]))
-            .expect_err("is cut off");
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("loop forever")], vec![])).expect("ends");
 
-        assert!(matches!(err, TurnError::Exhausted { .. }), "{err}");
-        assert!(h.provider.requests().len() <= MAX_TOOL_ITERATIONS);
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done, got {outcome:?}") };
+        assert_eq!(done.limit_reached, Some(3));
+        assert_eq!(h.provider.requests().len(), 3);
+        // The work survives the stop: every round's call and its result are
+        // in the history "continue" is sent with, not only the first message.
+        let calls: Vec<&str> = done.history.iter().flat_map(|m| m.tool_calls.iter().map(|c| c.id.as_str())).collect();
+        let results: Vec<&str> = done.history.iter().filter_map(|m| m.tool_call_id.as_deref()).collect();
+        assert_eq!(calls, ["c0", "c1", "c2"]);
+        assert_eq!(results, ["c0", "c1", "c2"]);
+    }
+
+    /// The weighted budget is the user's too: three cheap calls a round
+    /// spend a budget of five within two rounds.
+    #[test]
+    fn a_turn_is_cut_off_at_the_set_budget() {
+        let steps = (0..10)
+            .map(|i| asks((0..3).map(|j| wants(&format!("c{i}-{j}"), "createDirectory", &format!(r#"{{"path":"d{i}-{j}"}}"#))).collect()))
+            .collect();
+        let mut h = harness("budget-ceiling", steps);
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 5 };
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("loop forever")], vec![])).expect("ends");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done, got {outcome:?}") };
+        assert_eq!(done.limit_reached, Some(2));
+    }
+
+    /// A turn that ends on its own says nothing about limits — the window
+    /// would otherwise tell the user to continue a finished task.
+    #[test]
+    fn a_finished_turn_reached_no_limit() {
+        let h = harness("no-ceiling", vec![text("done")]);
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("ends");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done, got {outcome:?}") };
+        assert_eq!(done.limit_reached, None);
     }
 
     // ------------------------------------------------------- what the model reads
@@ -4782,7 +4803,7 @@ mod tests {
     /// agent's turn never is.
     #[test]
     fn a_long_review_is_asked_once_to_wrap_up_and_an_agent_turn_never() {
-        let limit = MAX_TOOL_ITERATIONS as u32 * crate::domain::review::WRAP_UP_AT_PERCENT / 100;
+        let limit = crate::domain::settings::TurnLimits::default().rounds * crate::domain::review::WRAP_UP_AT_PERCENT / 100;
         let mut review = reading("chat-wrap-up-review", limit + 2);
         review.mode = ConversationMode::Review;
         review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");

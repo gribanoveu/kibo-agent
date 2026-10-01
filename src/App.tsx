@@ -47,7 +47,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
+import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -734,6 +734,8 @@ export default function App() {
           onDebugLogging={llm.debugLogging}
           replyLanguage={llm.settings?.replyLanguage ?? "auto"}
           onReplyLanguage={llm.replyLanguage}
+          turnLimits={llm.settings?.turnLimits ?? DEFAULT_TURN_LIMITS}
+          onTurnLimits={llm.turnLimits}
           theme={theme.choice}
           onThemeMode={theme.setMode}
           onThemePalette={theme.setPalette}

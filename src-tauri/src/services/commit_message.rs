@@ -90,6 +90,7 @@ mod tests {
             debug_logging: false,
             context_limit: None,
             reply_language: None,
+            limits: Default::default(),
         };
         (session, writer)
     }
