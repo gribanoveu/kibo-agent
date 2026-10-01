@@ -76,6 +76,7 @@ export const LABELS: Record<string, string> = {
   kubeApply: "Apply",
   kubeDelete: "Delete object",
   webSearch: "Web",
+  toolSearch: "Find tools",
 };
 
 /** `mcp__<server>__<tool>` as `server · tool`; `null` for any other name. */
@@ -237,6 +238,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.query) ?? "",
         meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "page" : "pages"}`,
         detail: hits.map((h, i) => `[${i + 1}] ${str(h.title) ?? ""}\n${str(h.url) ?? ""}\n${str(h.content) ?? ""}`).join("\n\n"),
+      };
+    }
+
+    // Which MCP tools were declared from here on, by their server's name for them.
+    case "toolSearch": {
+      const tools = Array.isArray(result.tools) ? (result.tools as Json[]) : [];
+      return {
+        name,
+        arg: str(args.query) ?? "",
+        meta: block.result === undefined ? undefined : `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`,
+        detail: tools.map((t) => `${toolLabel(str(t.name) ?? "")} — ${str(t.description) ?? ""}`).join("\n"),
       };
     }
 
@@ -569,6 +581,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Grep: "Searching",
   Search: "Searching the code for",
   Web: "Searching the web for",
+  "Find tools": "Finding tools for",
   List: "Listing",
   Write: "Writing",
   Edit: "Editing",

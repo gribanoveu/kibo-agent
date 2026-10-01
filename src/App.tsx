@@ -449,6 +449,7 @@ export default function App() {
         if (next) void mcp.save(next);
       },
       onToggle: mcp.setEnabled,
+      onToggleTool: mcp.setToolShown,
       onOpen: mcp.connect,
       onEditFile: () => setMcpDialog("json"),
     },

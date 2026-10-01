@@ -42,8 +42,19 @@ describe("an MCP server", () => {
       headers: "",
       weight: "5",
       timeoutSecs: "",
+      exposure: "direct",
     });
     expect(readMcpServer(MCP, "nope")).toBeNull();
+  });
+
+  test("how its tools are reached is written only when not the default, and per-tool entries stay", () => {
+    const deferred = written(writeMcpServer(MCP, null, { ...EMPTY_SERVER, name: "big", command: "big", exposure: "deferred" }));
+    expect(deferred.mcpServers.big).toEqual({ command: "big", exposure: "deferred" });
+    const withTools = text({ mcpServers: { big: { command: "big", exposure: "hidden", toolExposure: { find: "direct" } } } });
+    expect(readMcpServer(withTools, "big")!.exposure).toBe("hidden");
+    const back = written(writeMcpServer(withTools, "big", { ...readMcpServer(withTools, "big")!, exposure: "direct" }));
+    expect(back.mcpServers.big).toEqual({ command: "big", toolExposure: { find: "direct" } });
+    expect(readMcpServer(text({ mcpServers: { x: { command: "x", exposure: "codemode" } } }), "x")!.exposure).toBe("direct");
   });
 
   test("an edit stays in its place and keeps what the form has no field for", () => {

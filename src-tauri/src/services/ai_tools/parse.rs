@@ -70,6 +70,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "kubeApply" => ToolCall::KubeApply(args(call)?),
         "kubeDelete" => ToolCall::KubeDelete(args(call)?),
         "webSearch" => ToolCall::WebSearch(args(call)?),
+        "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to
         // get wrong. Whatever it sent alongside is ignored rather than refused.
         "gitStatus" => ToolCall::GitStatus,

@@ -206,6 +206,7 @@ pub fn run() {
             commands::mcp::mcp_config_get,
             commands::mcp::mcp_config_save,
             commands::mcp::mcp_server_set_enabled,
+            commands::mcp::mcp_tool_set_shown,
             commands::mcp::mcp_server_connect,
             commands::mcp::mcp_prompts,
             commands::mcp::mcp_prompt_get,

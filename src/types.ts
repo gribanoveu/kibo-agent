@@ -23,7 +23,8 @@ export type PanelItem = {
   enabled?: boolean;
   /** Drawn grey: there, but not in use. */
   dim?: boolean;
-  rows?: { name: string; desc: string }[];
+  /** `enabled` gives a row its own switch, and an off row is drawn grey. `id` is what the switch reports; `name` when absent. */
+  rows?: { id?: string; name: string; desc: string; enabled?: boolean }[];
   note?: string;
   source?: string;
 };

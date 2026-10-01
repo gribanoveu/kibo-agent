@@ -31,6 +31,14 @@ mock.module("@tauri-apps/api/core", () => ({
       );
       return Promise.resolve(structuredClone(disk));
     }
+    if (command === "mcp_tool_set_shown") {
+      disk.servers = disk.servers.map((s) =>
+        s.name === args!.server && s.state.state === "running"
+          ? { ...s, state: { ...s.state, tools: s.state.tools.map((t) => (t.name === args!.tool ? { ...t, exposure: args!.shown ? "deferred" : "hidden" } : t)) } }
+          : s,
+      );
+      return Promise.resolve(structuredClone(disk));
+    }
     if (command === "mcp_server_set_enabled") {
       disk.servers = disk.servers.map((s) => (s.name === args!.name ? { ...s, enabled: args!.enabled as boolean } : s));
       return Promise.resolve(structuredClone(disk));
@@ -86,6 +94,15 @@ describe("useMcp", () => {
     await act(() => result.current.setEnabled("github", false));
     expect(result.current.view?.servers[0].enabled).toBe(false);
     expect(calls).toContain("mcp_server_set_enabled");
+  });
+
+  test("a tool's switch shows what the backend decided, not a guess", async () => {
+    const { result } = renderHook(() => useMcp(true));
+    await settle();
+    await act(() => result.current.setToolShown("github", "search_code", true));
+    const github = result.current.view!.servers[0].state;
+    expect(github.state === "running" && github.tools[1].exposure).toBe("deferred");
+    expect(calls).toContain("mcp_tool_set_shown");
   });
 
   test("opening a server's row starts it and its tools arrive", async () => {
@@ -149,6 +166,7 @@ describe("the MCP tab", () => {
         view={view}
         error={null}
         onToggle={onToggle}
+        onToggleTool={(server, tool, shown) => actions.push(`${shown ? "show" : "hide"} ${server}.${tool}`)}
         onOpen={onOpen}
         onAdd={onAdd}
         onEditServer={(name) => actions.push(`edit ${name}`)}
@@ -248,6 +266,25 @@ describe("the MCP tab", () => {
     fireEvent.click(screen.getByText("http://quiet.lan/mcp"));
     expect(screen.getAllByText(/It tells the model/)).toHaveLength(1, "a server that said nothing has nothing quoted");
     expect(screen.getAllByText(new RegExp(warning))).toHaveLength(2);
+  });
+
+  test("each tool has its own switch, a hidden one drawn off and counted, a deferred one marked", () => {
+    const github = disk.servers[0];
+    if (github.state.state !== "running") throw new Error("fixture");
+    const tools = github.state.tools;
+    panel({
+      ...disk,
+      servers: [{ ...github, state: { ...github.state, tools: [{ ...tools[0], exposure: "hidden" }, { ...tools[1], exposure: "deferred" }, tools[2]] } }],
+    });
+    expect(screen.getByText("3 tools · 1 hidden")).toBeTruthy();
+    fireEvent.click(screen.getByText("npx -y server-github"));
+    expect(screen.getByText("search_code · via search")).toBeTruthy();
+    const hidden = screen.getByLabelText("create_issue: hidden from the model");
+    expect(hidden.getAttribute("aria-pressed")).toBe("false");
+    expect(hidden.closest(".tool-row")!.className).toContain("off");
+    fireEvent.click(hidden);
+    fireEvent.click(screen.getByLabelText("search_code: offered to the model"));
+    expect(actions).toEqual(["show github.create_issue", "hide github.search_code"], "by the server's own name, not the marked one");
   });
 
   test("opening a server that has not started asks for it, and only on the way open", () => {

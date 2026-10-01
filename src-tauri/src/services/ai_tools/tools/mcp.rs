@@ -2,8 +2,15 @@
 //! and so the same approval gate, budget and log, as every built-in tool.
 //! Decisions behind it: `docs/06-port-plan.md`, stage 7, "Решения по MCP".
 
+use crate::domain::command_exec::{truncate_output, MAX_OUTPUT_CHARS};
 use crate::domain::mcp::McpError;
 use crate::domain::tools::{McpCallArgs, ToolDeps, ToolError, ToolResult};
+use crate::infra::command_output_store;
+
+/// Past this, a result keeps its beginning and its end and loses the middle,
+/// as a command's output does: one answer the size of a table dump would
+/// otherwise take the turn's whole context.
+pub const MAX_RESULT_CHARS: usize = MAX_OUTPUT_CHARS;
 
 pub fn mcp(args: &McpCallArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     // A name no connected server has: a guess, or a server that has gone
@@ -16,10 +23,30 @@ pub fn mcp(args: &McpCallArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         None => entry.client.call_tool(&entry.tool.name, args.arguments.clone(), cancelled),
     };
     match called {
-        Ok(result) if result.is_error => Err(ToolError::McpToolFailed(result.text)),
-        Ok(result) => Ok(ToolResult::Mcp { text: result.text }),
+        Ok(result) if result.is_error => Err(ToolError::McpToolFailed(fit(result.text))),
+        Ok(result) => Ok(ToolResult::Mcp { text: fit(result.text) }),
         Err(error @ McpError::Cancelled) => Err(ToolError::McpUnavailable(error.to_string())),
         Err(error) => Err(ToolError::McpUnavailable(format!("\"{}\": {error}", entry.server))),
+    }
+}
+
+/// `text` cut to [`MAX_RESULT_CHARS`], the whole of it saved where the
+/// model can read the middle — with `runCommand`, since the file is outside
+/// the workspace — rather than call the tool again. A save that fails leaves
+/// the cut as it is.
+fn fit(text: String) -> String {
+    let (cut, truncated) = truncate_output(&text, MAX_RESULT_CHARS);
+    if !truncated {
+        return text;
+    }
+    match command_output_store::save(&text, "") {
+        Some(path) => format!(
+            "{cut}\n[The whole result, {} characters, is saved at {} — read the part you need there with runCommand \
+             (grep, head, tail) rather than calling the tool again.]",
+            text.chars().count(),
+            path.display()
+        ),
+        None => cut,
     }
 }
 
@@ -44,6 +71,8 @@ mod tests {
             self.asked.lock().unwrap().push((name.to_string(), arguments));
             match name {
                 "ok" => Ok(McpCallResult { text: "done".into(), is_error: false }),
+                "big" => Ok(McpCallResult { text: big(), is_error: false }),
+                "big_error" => Ok(McpCallResult { text: big(), is_error: true }),
                 "fails" => Ok(McpCallResult { text: "no such issue".into(), is_error: true }),
                 "waits" if cancelled() => Err(McpError::Cancelled),
                 _ => Err(McpError::Exited { code: Some(1), stderr: String::new() }),
@@ -68,9 +97,9 @@ mod tests {
         let tool = |name: &str| McpTool { name: name.into(), input_schema: json!({}), ..Default::default() };
         McpTools::new(vec![ConnectedServer {
             name: "gh".into(),
-            weight: 3,
+            config: Default::default(),
             client,
-            tools: vec![tool("ok"), tool("fails"), tool("waits"), tool("dies"), tool("asks")],
+            tools: vec![tool("ok"), tool("fails"), tool("waits"), tool("dies"), tool("asks"), tool("big"), tool("big_error")],
             instructions: None,
         }])
     }
@@ -95,6 +124,29 @@ mod tests {
         assert!(matches!(mcp(&call("mcp__gh__fails"), &deps), Err(ToolError::McpToolFailed(t)) if t == "no such issue"));
         let err = mcp(&call("mcp__gh__dies"), &deps).unwrap_err();
         assert!(matches!(&err, ToolError::McpUnavailable(m) if m.contains("\"gh\"") && m.contains("exited")), "{err}");
+    }
+
+    /// A line each, far past the limit, carriage returns kept.
+    fn big() -> String {
+        (0..20_000).map(|i| format!("row {i}\r")).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The ends reach the model, and the whole is on disk where the result
+    /// says — a failure's text as well as an answer's.
+    #[test]
+    fn a_large_result_is_cut_in_the_middle_and_saved_whole() {
+        crate::testing::with_app_dir("mcp-big-result", || {
+            let deps = ToolDeps { mcp: deps(Arc::new(Scripted::default())), ..ToolDeps::default() };
+            let ToolResult::Mcp { text } = mcp(&call("mcp__gh__big"), &deps).unwrap() else { panic!() };
+            assert!(text.chars().count() < MAX_RESULT_CHARS + 500, "{}", text.len());
+            assert!(text.starts_with("row 0") && text.contains("row 19999"), "both ends");
+            let path = text.split("is saved at ").nth(1).and_then(|rest| rest.split(" — ").next()).expect("the path");
+            assert_eq!(std::fs::read_to_string(path).unwrap(), big(), "the whole, as the server sent it");
+
+            let Err(ToolError::McpToolFailed(error)) = mcp(&call("mcp__gh__big_error"), &deps) else { panic!() };
+            assert!(error.contains("is saved at"), "cut too");
+        });
+        assert_eq!(fit("a\rb".into()), "a\rb", "under the limit, untouched");
     }
 
     #[test]

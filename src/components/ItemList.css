@@ -171,6 +171,11 @@
   font-family: var(--font-mono);
   color: var(--text);
 }
+.tool-row.off .tname,
+.tool-row.off .tdesc {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
 .tool-row .tdesc {
   flex: 1;
   min-width: 0;

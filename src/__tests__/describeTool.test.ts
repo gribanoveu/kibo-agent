@@ -256,6 +256,21 @@ describe("what each call shows", () => {
     );
   });
 
+  test("a tool search shows its query and the tools it declared, by server", () => {
+    const running = tool({ name: "toolSearch", arguments: '{"query":"create issue"}', result: undefined });
+    expect(describeTool(running)).toMatchObject({ name: "Find tools", arg: "create issue", meta: undefined });
+    expect(describeActive(running)).toBe("Finding tools for create issue");
+
+    const shown = describeTool(
+      tool({
+        name: "toolSearch",
+        arguments: '{"query":"create issue"}',
+        result: { result: "toolsFound", tools: [{ name: "mcp__gh__create_issue", server: "gh", description: "Opens an issue" }] },
+      }),
+    );
+    expect(shown).toMatchObject({ meta: "1 tool", detail: "gh · create_issue — Opens an issue" });
+  });
+
   test("a loaded skill shows its instructions and the files beside them", () => {
     const shown = describeTool(
       tool({

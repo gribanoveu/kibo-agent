@@ -47,12 +47,18 @@ pub fn save_text(text: &str) -> Result<McpConfig, McpConfigError> {
 /// The switch in the tab. Rewrites the file from the parsed config, so this
 /// one — unlike a save from the editor — does reformat it.
 pub fn set_enabled(name: &str, enabled: bool) -> Result<McpConfig, McpConfigError> {
+    change(name, |server| server.disabled = !enabled)
+}
+
+/// A tool's switch in the tab: offered to the model or hidden. Reformats the
+/// file, as [`set_enabled`] does.
+pub fn set_tool_shown(name: &str, tool: &str, shown: bool) -> Result<McpConfig, McpConfigError> {
+    change(name, |server| server.show_tool(tool, shown))
+}
+
+fn change(name: &str, edit: impl FnOnce(&mut mcp::McpServerConfig)) -> Result<McpConfig, McpConfigError> {
     let mut config = load()?;
-    config
-        .mcp_servers
-        .get_mut(name)
-        .ok_or_else(|| McpConfigError::NotFound(name.to_string()))?
-        .disabled = !enabled;
+    edit(config.mcp_servers.get_mut(name).ok_or_else(|| McpConfigError::NotFound(name.to_string()))?);
     let text = serde_json::to_string_pretty(&config).map_err(|e| McpConfigError::Write(e.to_string()))?;
     app_dir::write_private(&path()?, format!("{text}\n").as_bytes()).map_err(McpConfigError::Write)?;
     Ok(config)
@@ -101,6 +107,17 @@ mod tests {
             assert_eq!(config.mcp_servers["a"].extra["type"], "stdio", "the rest of the entry survives");
             assert!(!set_enabled("a", true).unwrap().mcp_servers["a"].disabled);
             assert!(matches!(set_enabled("b", true), Err(McpConfigError::NotFound(_))));
+        });
+    }
+
+    #[test]
+    fn a_tool_is_hidden_and_shown_by_name() {
+        with_app_dir("mcp-config-tool", || {
+            save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
+            assert_eq!(set_tool_shown("a", "wipe", false).unwrap().mcp_servers["a"].exposure_of("wipe"), mcp::Exposure::Hidden);
+            assert_eq!(load().unwrap().mcp_servers["a"].exposure_of("wipe"), mcp::Exposure::Hidden, "on disk");
+            assert!(set_tool_shown("a", "wipe", true).unwrap().mcp_servers["a"].tool_exposure.is_empty());
+            assert!(matches!(set_tool_shown("b", "wipe", true), Err(McpConfigError::NotFound(_))));
         });
     }
 

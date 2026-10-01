@@ -688,11 +688,21 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<v
 
 // ---------------------------------------------------------------- MCP servers
 
+/** Mirrors `domain::mcp::Exposure`: declared to the model, found through `toolSearch`, or not offered. */
+export type McpExposure = "direct" | "deferred" | "hidden";
+
 /**
  * Mirrors `domain::mcp::McpToolInfo`: one tool a running server offers. `readOnly` and `destructive`
- * are the server's own word about it — shown, never trusted.
+ * are the server's own word about it — shown, never trusted. `exposure` is the user's entry's.
  */
-export type McpToolInfo = { name: string; description: string; title?: string | null; readOnly?: boolean; destructive?: boolean };
+export type McpToolInfo = {
+  name: string;
+  description: string;
+  title?: string | null;
+  readOnly?: boolean;
+  destructive?: boolean;
+  exposure?: McpExposure;
+};
 
 /** Mirrors `domain::mcp::McpServerState`: what the server's process is doing. */
 export type McpServerState =
@@ -792,6 +802,12 @@ export async function connectMcpServer(name: string): Promise<McpView> {
 export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpView> {
   requireBackend();
   return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
+}
+
+/** Offers one tool of a server to the model, or hides it; the server keeps running. */
+export async function setMcpToolShown(server: string, tool: string, shown: boolean): Promise<McpView> {
+  requireBackend();
+  return invoke<McpView>("mcp_tool_set_shown", { server, tool, shown });
 }
 
 // ---------------------------------------------------------------- plain chat

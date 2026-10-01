@@ -2,21 +2,22 @@
 //!
 //! The format is the `mcpServers` object Claude Desktop and Cursor use, so a
 //! configuration copied from a server's README pastes in unchanged. Fields
-//! this app adds (`weight`, `timeoutSecs`) sit beside the standard ones, and
+//! this app adds (`weight`, `timeoutSecs`, `exposure`, `toolExposure`) sit
+//! beside the standard ones, and
 //! fields it does not know — `type`, another client's own — are kept rather
 //! than dropped on the next save.
 //!
 //! Decisions behind this (names, approval, failure, weight, log) are in
 //! `docs/06-port-plan.md`, stage 7, "Решения по MCP".
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
-use crate::domain::llm::LlmToolDefinition;
+use crate::domain::llm::{LlmMessage, LlmToolDefinition};
 
 /// Loop weight of one call when the server does not say: as much as a
 /// `grep`. Nothing is known about what a foreign tool costs, and the
@@ -55,6 +56,13 @@ pub struct McpServerConfig {
     /// Cline's and Cursor's spelling for a server kept but not started.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
+    /// How the model reaches this server's tools; `direct` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<Exposure>,
+    /// `exposure` for single tools, by the server's name for the tool or a
+    /// pattern where `*` is any run of characters (`delete_*`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_exposure: BTreeMap<String, Exposure>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -67,6 +75,79 @@ impl McpServerConfig {
     pub fn timeout_secs(&self) -> u64 {
         self.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS)
     }
+
+    /// How the model reaches `tool`: its own entry in `toolExposure`, else
+    /// the longest pattern there that matches it, else the server's.
+    ///
+    /// Longest rather than first: the map is read back sorted, so the order
+    /// the user wrote is gone — and the longer pattern is the one that says
+    /// more about this tool.
+    pub fn exposure_of(&self, tool: &str) -> Exposure {
+        if let Some(exposure) = self.tool_exposure.get(tool) {
+            return *exposure;
+        }
+        self.tool_exposure
+            .iter()
+            .filter(|(pattern, _)| pattern.contains('*') && glob_matches(pattern, tool))
+            .max_by_key(|(pattern, _)| pattern.len())
+            .map(|(_, exposure)| *exposure)
+            .unwrap_or_else(|| self.exposure.unwrap_or_default())
+    }
+
+    /// The tab's switch on one tool: offered to the model or not. Writes no
+    /// more than it has to — an entry the server's rule would give anyway is
+    /// removed — and turning a tool on gives it the server's way of being
+    /// reached, or `direct` under a hidden server.
+    pub fn show_tool(&mut self, tool: &str, shown: bool) {
+        self.tool_exposure.remove(tool);
+        if shown == (self.exposure_of(tool) != Exposure::Hidden) {
+            return;
+        }
+        let exposure = match (shown, self.exposure.unwrap_or_default()) {
+            (false, _) => Exposure::Hidden,
+            (true, Exposure::Hidden) => Exposure::Direct,
+            (true, server) => server,
+        };
+        self.tool_exposure.insert(tool.to_string(), exposure);
+    }
+
+    /// The entry with what decides only the model's view of the server taken
+    /// out: two entries equal here run the same process, and changing the
+    /// rest does not restart it.
+    pub fn launch(&self) -> McpServerConfig {
+        McpServerConfig { exposure: None, tool_exposure: BTreeMap::new(), ..self.clone() }
+    }
+}
+
+/// How the model reaches an MCP tool.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Exposure {
+    /// Its schema in every request, like a built-in tool's.
+    #[default]
+    Direct,
+    /// Not declared until `toolSearch` finds it; from then on, for the rest
+    /// of the conversation, as `direct`. For a server whose tools would cost
+    /// every request more than they are used.
+    Deferred,
+    /// Not offered at all, and refused if called from memory.
+    Hidden,
+}
+
+/// `*` is any run of characters, and nothing else is special.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = name.strip_prefix(first) else { return false };
+    let mut parts: Vec<&str> = parts.collect();
+    let Some(last) = parts.pop() else { return rest.is_empty() };
+    for part in parts {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
 }
 
 /// One row of the MCP tab.
@@ -121,11 +202,13 @@ pub struct McpToolInfo {
     pub title: Option<String>,
     #[serde(flatten)]
     pub hints: McpToolHints,
+    /// How the model reaches it, by its server's entry.
+    pub exposure: Exposure,
 }
 
-impl From<&McpTool> for McpToolInfo {
-    fn from(tool: &McpTool) -> Self {
-        Self { name: tool.name.clone(), description: tool.description.clone(), title: tool.title.clone(), hints: tool.hints }
+impl McpToolInfo {
+    pub fn new(tool: &McpTool, exposure: Exposure) -> Self {
+        Self { name: tool.name.clone(), description: tool.description.clone(), title: tool.title.clone(), hints: tool.hints, exposure }
     }
 }
 
@@ -580,22 +663,24 @@ pub fn question(params: &Value) -> Option<McpQuestion> {
 
 // ------------------------------------------------------ the turn's view
 
-/// A server that answered: what it is called, what a call to it costs, and
-/// what it offers.
+/// A server that answered: what it is called, its entry — what a call to
+/// it costs, how its tools are reached — and what it offers.
 pub struct ConnectedServer {
     pub name: String,
-    pub weight: u32,
+    pub config: McpServerConfig,
     pub client: Arc<dyn McpClient>,
     pub tools: Vec<McpTool>,
     pub instructions: Option<String>,
 }
 
-/// What one server tells the model about its tools, cut to
-/// [`MAX_INSTRUCTION_CHARS`].
+/// What the prompt says about one server: what it tells the model about its
+/// tools, cut to [`MAX_INSTRUCTION_CHARS`], and how many of its tools are
+/// left for `toolSearch` to find. A server with neither is not mentioned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerInstructions {
+pub struct ServerNote {
     pub server: String,
-    pub text: String,
+    pub instructions: Option<String>,
+    pub deferred: usize,
 }
 
 /// A server's instructions ride in every request of every turn; one that
@@ -609,6 +694,8 @@ pub struct McpToolEntry {
     pub server: String,
     pub tool: McpTool,
     pub weight: u32,
+    /// Declared only once `toolSearch` has found it ([`Exposure::Deferred`]).
+    pub deferred: bool,
     pub client: Arc<dyn McpClient>,
 }
 
@@ -617,52 +704,75 @@ pub struct McpToolEntry {
 #[derive(Clone, Default)]
 pub struct McpTools {
     entries: Arc<Vec<McpToolEntry>>,
-    instructions: Arc<Vec<ServerInstructions>>,
+    notes: Arc<Vec<ServerNote>>,
 }
 
 /// What providers accept as a tool name, OpenAI's and Anthropic's alike.
 pub const MAX_TOOL_NAME_CHARS: usize = 64;
+
+/// What `toolSearch` is called by — here as well as in `domain::tools`,
+/// since finding what it loaded means reading its calls in the history.
+pub const TOOL_SEARCH: &str = "toolSearch";
 
 impl McpTools {
     /// Names every tool `mcp__<server key>__<tool>`. A name past the length
     /// limit is cut and given a hash of the whole, so two long names that
     /// share a beginning stay two names. A tool whose name collides with one
     /// already taken — two spellings a server offers that sanitize alike —
-    /// is left out rather than made to shadow the first.
+    /// is left out rather than made to shadow the first. A hidden tool is
+    /// not here at all: called from memory, it is a name no server has.
     pub fn new(servers: Vec<ConnectedServer>) -> Self {
         let mut taken = std::collections::HashSet::new();
         let mut entries = Vec::new();
-        let mut instructions = Vec::new();
+        let mut notes = Vec::new();
         for server in servers {
-            if let Some(text) = server.instructions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
-                let text = text.chars().take(MAX_INSTRUCTION_CHARS).collect();
-                instructions.push(ServerInstructions { server: server.name.clone(), text });
-            }
             let key = server_key(&server.name);
+            let mut deferred = 0;
             for tool in server.tools {
+                let exposure = server.config.exposure_of(&tool.name);
+                if exposure == Exposure::Hidden {
+                    continue;
+                }
                 let wire_name = tool_wire_name(&key, &tool.name);
                 if !taken.insert(wire_name.clone()) {
                     continue;
                 }
+                deferred += usize::from(exposure == Exposure::Deferred);
                 entries.push(McpToolEntry {
                     wire_name,
                     server: server.name.clone(),
                     tool,
-                    weight: server.weight,
+                    weight: server.config.weight(),
+                    deferred: exposure == Exposure::Deferred,
                     client: Arc::clone(&server.client),
                 });
             }
+            let instructions = server
+                .instructions
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| text.chars().take(MAX_INSTRUCTION_CHARS).collect());
+            if instructions.is_some() || deferred > 0 {
+                notes.push(ServerNote { server: server.name, instructions, deferred });
+            }
         }
-        Self { entries: Arc::new(entries), instructions: Arc::new(instructions) }
+        Self { entries: Arc::new(entries), notes: Arc::new(notes) }
     }
 
     pub fn get(&self, wire_name: &str) -> Option<&McpToolEntry> {
         self.entries.iter().find(|entry| entry.wire_name == wire_name)
     }
 
-    /// What the connected servers say about their tools, for the prompt.
-    pub fn instructions(&self) -> &[ServerInstructions] {
-        &self.instructions
+    /// What the prompt says about the connected servers.
+    pub fn notes(&self) -> &[ServerNote] {
+        &self.notes
+    }
+
+    /// Whether any tool waits for `toolSearch` — without one, the search is
+    /// not offered.
+    pub fn has_deferred(&self) -> bool {
+        self.entries.iter().any(|entry| entry.deferred)
     }
 
     /// What its server says about this tool; nothing, for a name no server has.
@@ -676,12 +786,15 @@ impl McpTools {
         self.get(wire_name).map_or(DEFAULT_WEIGHT, |entry| entry.weight)
     }
 
-    /// The schemas the model is shown. The description says which server a
-    /// tool belongs to: the model otherwise has no way to tell `search` on
-    /// one from `search` on another, or either from a built-in tool.
-    pub fn definitions(&self) -> Vec<LlmToolDefinition> {
+    /// The schemas the model is shown: every direct tool, and the deferred
+    /// ones `toolSearch` has found (`loaded`, see [`loaded_tools`]). The
+    /// description says which server a tool belongs to: the model otherwise
+    /// has no way to tell `search` on one from `search` on another, or either
+    /// from a built-in tool.
+    pub fn definitions(&self, loaded: &HashSet<String>) -> Vec<LlmToolDefinition> {
         self.entries
             .iter()
+            .filter(|entry| !entry.deferred || loaded.contains(&entry.wire_name))
             .map(|entry| LlmToolDefinition {
                 name: entry.wire_name.clone(),
                 description: format!("[MCP server \"{}\"] {}", entry.server, entry.tool.description),
@@ -689,6 +802,63 @@ impl McpTools {
             })
             .collect()
     }
+
+    /// The deferred tools that best match `query`, best first, at most
+    /// `limit`. A word of the query found in the tool's name counts three
+    /// times one found in its title, description or server's name; a query
+    /// that is a tool's whole name puts that tool first.
+    ///
+    /// Words, not meaning: the model writes the query knowing it is searching
+    /// names and descriptions, and a server's own words are what it can use.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<&McpToolEntry> {
+        let query = query.trim().to_lowercase();
+        let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+        let mut scored: Vec<(usize, &McpToolEntry)> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.deferred)
+            .map(|entry| {
+                let name = format!("{} {}", entry.wire_name, entry.tool.name).to_lowercase();
+                let about = format!(
+                    "{} {} {}",
+                    entry.tool.title.as_deref().unwrap_or_default(),
+                    entry.tool.description,
+                    entry.server
+                )
+                .to_lowercase();
+                let exact = query == entry.tool.name.to_lowercase() || query == entry.wire_name.to_lowercase();
+                let score = usize::from(exact) * 1000
+                    + words.iter().map(|w| 3 * usize::from(name.contains(w)) + usize::from(about.contains(w))).sum::<usize>();
+                (score, entry)
+            })
+            .filter(|(score, _)| *score > 0)
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.wire_name.cmp(&b.1.wire_name)));
+        scored.into_iter().take(limit).map(|(_, entry)| entry).collect()
+    }
+}
+
+/// The MCP tools `toolSearch` has found so far in this conversation: every
+/// `mcp__…` name in its results. Read from the history rather than kept
+/// beside it, so a rewound or branched chat has exactly what its own history
+/// found, and a history whose search was folded into a summary searches
+/// again. Only a deferred tool's name changes anything: [`McpTools::definitions`]
+/// declares no name it does not have.
+pub fn loaded_tools(history: &[LlmMessage]) -> HashSet<String> {
+    let searches: HashSet<&str> = history
+        .iter()
+        .flat_map(|message| &message.tool_calls)
+        .filter(|call| call.name == TOOL_SEARCH)
+        .map(|call| call.id.as_str())
+        .collect();
+    history
+        .iter()
+        .filter(|message| message.tool_call_id.as_deref().is_some_and(|id| searches.contains(id)))
+        .filter_map(|message| message.content.as_deref())
+        .flat_map(|text| text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')))
+        .filter(|word| word.starts_with(crate::domain::tools::MCP_PREFIX))
+        .map(str::to_string)
+        .collect()
 }
 
 fn tool_wire_name(server_key: &str, tool: &str) -> String {
@@ -904,7 +1074,7 @@ mod tests {
     fn server(name: &str, weight: u32, tools: &[&str]) -> ConnectedServer {
         ConnectedServer {
             name: name.into(),
-            weight,
+            config: McpServerConfig { weight: Some(weight), ..Default::default() },
             client: Arc::new(Nothing),
             tools: tools
                 .iter()
@@ -923,7 +1093,7 @@ mod tests {
     #[test]
     fn tools_are_named_for_their_server_and_described_as_its() {
         let tools = McpTools::new(vec![server("GitHub", 5, &["search_issues", "get.file"]), server("db", 3, &["search_issues"])]);
-        let definitions = tools.definitions();
+        let definitions = tools.definitions(&HashSet::new());
         let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["mcp__github__search_issues", "mcp__github__get_file", "mcp__db__search_issues"]);
         assert_eq!(definitions[0].description, "[MCP server \"GitHub\"] does search_issues");
@@ -936,7 +1106,7 @@ mod tests {
     #[test]
     fn a_name_already_taken_is_not_offered_twice() {
         let tools = McpTools::new(vec![server("s", 3, &["a.b", "a_b"])]);
-        assert_eq!(tools.definitions().len(), 1);
+        assert_eq!(tools.definitions(&HashSet::new()).len(), 1);
         assert_eq!(tools.get("mcp__s__a_b").unwrap().tool.name, "a.b");
     }
 
@@ -945,7 +1115,7 @@ mod tests {
     fn a_long_name_is_cut_to_the_limit_and_stays_distinct() {
         let long = "x".repeat(80);
         let tools = McpTools::new(vec![server("s", 3, &[&format!("{long}_one"), &format!("{long}_two")])]);
-        let names: Vec<String> = tools.definitions().into_iter().map(|d| d.name).collect();
+        let names: Vec<String> = tools.definitions(&HashSet::new()).into_iter().map(|d| d.name).collect();
         assert!(names.iter().all(|n| n.len() == MAX_TOOL_NAME_CHARS && n.starts_with("mcp__s__xxx")), "{names:?}");
         assert_ne!(names[0], names[1]);
         assert_eq!(tool_wire_name("s", &format!("{long}_one")), names[0], "stable");
@@ -958,13 +1128,162 @@ mod tests {
         let with = |name: &str, text: Option<&str>| ConnectedServer { instructions: text.map(str::to_string), ..server(name, 3, &[]) };
         let long = "x".repeat(MAX_INSTRUCTION_CHARS + 500);
         let tools = McpTools::new(vec![with("a", Some("  Search first.\n")), with("b", None), with("c", Some("  ")), with("d", Some(&long))]);
-        assert_eq!(
-            tools.instructions(),
-            [
-                ServerInstructions { server: "a".into(), text: "Search first.".into() },
-                ServerInstructions { server: "d".into(), text: "x".repeat(MAX_INSTRUCTION_CHARS) },
-            ]
-        );
+        let note = |server: &str, text: String| ServerNote { server: server.into(), instructions: Some(text), deferred: 0 };
+        assert_eq!(tools.notes(), [note("a", "Search first.".into()), note("d", "x".repeat(MAX_INSTRUCTION_CHARS))]);
+    }
+
+    fn exposed(server: &str, tools: &[&str], exposure: Option<Exposure>, per_tool: &[(&str, Exposure)]) -> ConnectedServer {
+        let mut connected = self::server(server, 3, tools);
+        connected.config.exposure = exposure;
+        connected.config.tool_exposure = per_tool.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        connected
+    }
+
+    #[test]
+    fn a_pattern_is_a_glob_of_stars_and_nothing_else() {
+        for (pattern, name) in [("*", "x"), ("get_*", "get_file"), ("get_*", "get_"), ("*_repo", "delete_repo"), ("a*b*c", "a-b-c"), ("a?", "a?")] {
+            assert!(glob_matches(pattern, name), "{pattern} ~ {name}");
+        }
+        for (pattern, name) in [("get_*", "list_get_x"), ("*_repo", "repo"), ("a*a", "a"), ("a*b*c", "a-c-b"), ("a*b*b", "a-b"), ("*_repo", "delete_repo_x"), ("a?", "ab"), ("x", "xy")] {
+            assert!(!glob_matches(pattern, name), "{pattern} !~ {name}");
+        }
+    }
+
+    #[test]
+    fn a_tools_own_entry_beats_the_longest_pattern_which_beats_the_server() {
+        let config = McpServerConfig {
+            exposure: Some(Exposure::Deferred),
+            tool_exposure: [("get_*", Exposure::Direct), ("get_secret*", Exposure::Hidden), ("get_secret_meta", Exposure::Direct)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(config.exposure_of("get_file"), Exposure::Direct);
+        assert_eq!(config.exposure_of("get_secret_key"), Exposure::Hidden, "the longer pattern");
+        assert_eq!(config.exposure_of("get_secret_meta"), Exposure::Direct, "its own entry");
+        assert_eq!(config.exposure_of("search"), Exposure::Deferred, "the server's");
+        assert_eq!(McpServerConfig::default().exposure_of("x"), Exposure::Direct, "direct when nothing is said");
+    }
+
+    #[test]
+    fn exposure_is_read_and_written_in_the_files_spelling() {
+        let config = parse(r#"{"mcpServers":{"gh":{"command":"x","exposure":"deferred","toolExposure":{"delete_*":"hidden"}}}}"#).unwrap();
+        let gh = &config.mcp_servers["gh"];
+        assert_eq!((gh.exposure, gh.exposure_of("delete_repo")), (Some(Exposure::Deferred), Exposure::Hidden));
+        assert!(gh.extra.is_empty(), "known fields, not someone else's");
+        let written = serde_json::to_value(gh).unwrap();
+        assert_eq!((written["exposure"].clone(), written["toolExposure"]["delete_*"].clone()), (json!("deferred"), json!("hidden")));
+        assert!(serde_json::to_value(McpServerConfig::default()).unwrap().get("toolExposure").is_none(), "nothing written for nothing said");
+    }
+
+    #[test]
+    fn the_switch_writes_only_what_differs_from_the_servers_rule() {
+        let mut config = McpServerConfig { tool_exposure: [("delete_*".to_string(), Exposure::Hidden)].into(), ..Default::default() };
+        config.show_tool("search", false);
+        assert_eq!(config.tool_exposure.get("search"), Some(&Exposure::Hidden));
+        config.show_tool("search", true);
+        assert_eq!(config.tool_exposure.get("search"), None, "back to the server's rule, not an entry saying it");
+        config.show_tool("delete_branch", true);
+        assert_eq!(config.exposure_of("delete_branch"), Exposure::Direct, "over the pattern");
+
+        let mut deferred = McpServerConfig { exposure: Some(Exposure::Deferred), ..Default::default() };
+        deferred.show_tool("a", false);
+        deferred.show_tool("a", true);
+        assert_eq!(deferred.exposure_of("a"), Exposure::Deferred, "on again is the server's way");
+        assert!(deferred.tool_exposure.is_empty());
+        deferred.tool_exposure.insert("delete_*".into(), Exposure::Hidden);
+        deferred.show_tool("delete_branch", true);
+        assert_eq!(deferred.exposure_of("delete_branch"), Exposure::Deferred, "over a pattern too");
+
+        let mut hidden = McpServerConfig { exposure: Some(Exposure::Hidden), ..Default::default() };
+        hidden.show_tool("a", true);
+        assert_eq!(hidden.exposure_of("a"), Exposure::Direct, "a hidden server's tool, on, is declared");
+        hidden.show_tool("a", true);
+        assert_eq!(hidden.exposure_of("a"), Exposure::Direct, "twice is once");
+    }
+
+    #[test]
+    fn exposure_does_not_change_what_is_launched() {
+        let entry = McpServerConfig { command: "x".into(), weight: Some(2), ..Default::default() };
+        let changed = McpServerConfig { exposure: Some(Exposure::Hidden), tool_exposure: [("a".into(), Exposure::Direct)].into(), ..entry.clone() };
+        assert_eq!(entry.launch(), changed.launch());
+        assert_ne!(entry.launch(), McpServerConfig { command: "y".into(), ..entry.clone() }.launch());
+    }
+
+    #[test]
+    fn hidden_tools_are_gone_and_deferred_ones_wait_for_the_search() {
+        let tools = McpTools::new(vec![
+            exposed("gh", &["search", "get_file", "delete_repo"], Some(Exposure::Deferred), &[("search", Exposure::Direct), ("delete_*", Exposure::Hidden)]),
+            exposed("db", &["query"], None, &[]),
+        ]);
+        let declared = |loaded: &[&str]| -> Vec<String> {
+            tools.definitions(&loaded.iter().map(|s| s.to_string()).collect()).into_iter().map(|d| d.name).collect()
+        };
+        assert_eq!(declared(&[]), ["mcp__gh__search", "mcp__db__query"]);
+        assert_eq!(declared(&["mcp__gh__get_file", "mcp__gh__delete_repo"]), ["mcp__gh__search", "mcp__gh__get_file", "mcp__db__query"]);
+        assert!(tools.get("mcp__gh__delete_repo").is_none(), "called from memory, it is unknown");
+        assert!(tools.get("mcp__gh__get_file").is_some(), "a deferred tool can be called");
+        assert!(tools.has_deferred());
+        assert_eq!(tools.notes(), [ServerNote { server: "gh".into(), instructions: None, deferred: 1 }]);
+        assert!(!McpTools::new(vec![server("db", 3, &["q"])]).has_deferred());
+    }
+
+    /// A hidden tool does not take a name a visible one sanitizes to.
+    #[test]
+    fn a_hidden_tool_does_not_take_a_name() {
+        let tools = McpTools::new(vec![exposed("s", &["a.b", "a_b"], None, &[("a.b", Exposure::Hidden)])]);
+        assert_eq!(tools.get("mcp__s__a_b").unwrap().tool.name, "a_b");
+    }
+
+    #[test]
+    fn the_search_ranks_the_name_over_the_description_and_finds_only_deferred_tools() {
+        let mut gh = exposed("gh", &["search_code", "get_file", "list_issues", "create_issue"], Some(Exposure::Deferred), &[("create_issue", Exposure::Direct)]);
+        gh.tools[1].description = "Reads a file's contents from a repository; can search by path".into();
+        gh.tools[2].title = Some("Issue list".into());
+        let tools = McpTools::new(vec![gh]);
+        let found = |query: &str, limit: usize| -> Vec<&str> { tools.search(query, limit).iter().map(|e| e.tool.name.as_str()).collect() };
+        assert_eq!(found("search", 5), ["search_code", "get_file"], "name before description");
+        assert_eq!(found("issue", 5), ["list_issues"], "a direct tool is already declared");
+        assert_eq!(found("Issue list", 5), ["list_issues"], "by title, any case");
+        assert_eq!(found("gh", 5), ["get_file", "list_issues", "search_code"], "by server, then by name");
+        assert_eq!(found("gh", 2).len(), 2);
+        assert_eq!(found("mcp__gh__get_file", 5)[0], "get_file");
+        assert!(found("deploy", 5).is_empty());
+        assert!(found("   ", 5).is_empty());
+    }
+
+    /// Ties go by name, so each rule has to beat the order the names give.
+    #[test]
+    fn a_word_in_the_name_and_the_whole_name_outrank_the_alphabet() {
+        let mut gh = exposed("gh", &["a_report", "issue_get", "a_get_file", "get_file"], Some(Exposure::Deferred), &[]);
+        gh.tools[0].description = "Each issue, in one report".into();
+        gh.tools[1].description = "Reads one".into();
+        let tools = McpTools::new(vec![gh]);
+        let first = |query: &str| tools.search(query, 5)[0].tool.name.clone();
+        assert_eq!(first("issue"), "issue_get", "the name's word, over the description's");
+        assert_eq!(first("get_file"), "get_file", "the whole name, over one with the same words");
+    }
+
+    #[test]
+    fn what_was_loaded_is_read_from_the_searches_in_the_history() {
+        use crate::domain::llm::{LlmRole, LlmToolCall};
+        let calls = |calls: &[(&str, &str)]| LlmMessage {
+            role: LlmRole::Assistant,
+            content: None,
+            tool_call_id: None,
+            tool_calls: calls.iter().map(|(id, name)| LlmToolCall { id: id.to_string(), name: name.to_string(), arguments: String::new() }).collect(),
+            native_content: None,
+        };
+        let history = [
+            calls(&[("s1", TOOL_SEARCH), ("r1", "readFile")]),
+            LlmMessage::tool_result("s1", "Found:\n- `mcp__gh__get_file` (gh): reads\n- mcp__gh__list-issues: lists"),
+            LlmMessage::tool_result("r1", "mcp__gh__from_a_file"),
+            LlmMessage::user("call mcp__gh__typed_by_user"),
+        ];
+        let loaded = loaded_tools(&history);
+        assert_eq!(loaded, ["mcp__gh__get_file", "mcp__gh__list-issues"].map(String::from).into());
+        assert!(loaded_tools(&history[1..]).is_empty(), "a result without its call is not a search's");
     }
 
     #[test]

@@ -41,10 +41,12 @@ pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools) -> RequestFrame 
     let skills = prompt::skills_block(ctx.skills).map_or(0, |list| compaction::estimate_tokens(&[LlmMessage::system(list)]));
     let system = compaction::estimate_tokens(&prompt::system_messages(ctx));
     // A server's instructions are in the prompt and are the server's cost.
-    let said = prompt::mcp_block(ctx.mcp_instructions).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
-    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp)
+    let said = prompt::mcp_block(ctx.mcp_servers).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
+    // Before the conversation: a deferred tool its `toolSearch` found is not
+    // counted. `toolSearch` is there for the servers, and is theirs.
+    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[])
         .into_iter()
-        .partition(|definition| ToolName::from_wire_name(&definition.name) == Some(ToolName::Mcp));
+        .partition(|definition| matches!(ToolName::from_wire_name(&definition.name), Some(ToolName::Mcp | ToolName::ToolSearch)));
     RequestFrame {
         instructions: system.saturating_sub(skills).saturating_sub(said),
         skills,
@@ -183,7 +185,7 @@ mod tests {
                 plan: None,
                 worktree_of: None,
                 language: None,
-                mcp_instructions: mcp.instructions(),
+                mcp_servers: mcp.notes(),
             },
             mcp,
         )
@@ -208,7 +210,7 @@ mod tests {
     fn server() -> McpTools {
         McpTools::new(vec![ConnectedServer {
             name: "tracker".into(),
-            weight: 1,
+            config: crate::domain::mcp::McpServerConfig { weight: Some(1), ..Default::default() },
             client: Arc::new(Idle),
             tools: vec![McpTool {
                 name: "find".into(),
@@ -250,7 +252,7 @@ mod tests {
         let said = "Search before you open. ".repeat(40);
         let talkative = McpTools::new(vec![ConnectedServer {
             name: "tracker".into(),
-            weight: 1,
+            config: crate::domain::mcp::McpServerConfig { weight: Some(1), ..Default::default() },
             client: Arc::new(Idle),
             tools: vec![],
             instructions: Some(said),
@@ -258,6 +260,20 @@ mod tests {
         let with_words = frame_with(ConversationMode::Agent, &[], &[], &talkative);
         assert!(with_words.mcp > 200, "a server's instructions are its cost: {with_words:?}");
         assert_eq!(with_words.instructions, base.instructions, "and not the prompt's");
+
+        let deferred = McpTools::new(vec![ConnectedServer {
+            name: "tracker".into(),
+            config: crate::domain::mcp::McpServerConfig {
+                exposure: Some(crate::domain::mcp::Exposure::Deferred),
+                ..Default::default()
+            },
+            client: Arc::new(Idle),
+            tools: vec![McpTool { name: "find".into(), description: "Finds issues. ".repeat(200), ..Default::default() }],
+            instructions: None,
+        }]);
+        let waiting = frame_with(ConversationMode::Agent, &[], &[], &deferred);
+        assert!(waiting.mcp > 0 && waiting.mcp < with_server.mcp, "the search and the list, not the schema: {waiting:?}");
+        assert_eq!(waiting.tools, base.tools, "the search is the servers' cost");
 
         let plan = frame_with(ConversationMode::Plan, &[], &[], &server());
         assert_eq!(plan.mcp, 0, "Plan offers no server's tools");

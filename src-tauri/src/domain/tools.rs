@@ -82,6 +82,9 @@ pub enum ToolName {
     KubeDelete,
     /// A chat's search of the web (`docs/24-web-search.md`).
     WebSearch,
+    /// Finds the MCP tools left out of the request (`Exposure::Deferred`)
+    /// and declares them from the next round on.
+    ToolSearch,
     /// Every tool of every connected MCP server. One variant for all of them:
     /// their names are the servers' and arrive at run time, so the identity
     /// that matters beyond this — for "always allow", for the weight — is
@@ -139,6 +142,7 @@ impl ToolName {
         ToolName::KubeApply,
         ToolName::KubeDelete,
         ToolName::WebSearch,
+        ToolName::ToolSearch,
         ToolName::Mcp,
     ];
 
@@ -188,6 +192,7 @@ impl ToolName {
             ToolName::KubeApply => "kubeApply",
             ToolName::KubeDelete => "kubeDelete",
             ToolName::WebSearch => "webSearch",
+            ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
         }
@@ -266,7 +271,9 @@ impl ToolName {
             | ToolName::ReadTerminal
             | ToolName::RunInTerminal
             // Checked against a diff in memory.
-            | ToolName::ReportFinding => 1,
+            | ToolName::ReportFinding
+            // A scan of the connected servers' tool lists, in memory.
+            | ToolName::ToolSearch => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.
@@ -469,7 +476,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            43,
+            44,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1159,6 +1166,7 @@ pub enum ToolCall {
     KubeApply(KubeApplyArgs),
     KubeDelete(KubeDeleteArgs),
     WebSearch(WebSearchArgs),
+    ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
 }
 
@@ -1207,6 +1215,7 @@ impl ToolCall {
             ToolCall::KubeApply(_) => ToolName::KubeApply,
             ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::WebSearch(_) => ToolName::WebSearch,
+            ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
     }
@@ -1448,6 +1457,28 @@ pub enum ToolResult {
     Kube { text: String, summary: String },
     /// `webSearch`: the pages found, in the service's order.
     WebResults { hits: Vec<crate::domain::web_search::WebHit> },
+    /// `toolSearch`: the MCP tools found, best first — declared from the
+    /// next round on.
+    ToolsFound { tools: Vec<FoundTool> },
+}
+
+/// One MCP tool `toolSearch` found: the name it is called by now, its
+/// server, and what the server says it does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundTool {
+    pub name: String,
+    pub server: String,
+    pub description: String,
+}
+
+/// `toolSearch`. `limit` is the tool's default when absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSearchArgs {
+    pub query: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub limit: Option<u32>,
 }
 
 /// `webSearch`. `maxResults` is the tool's default when absent.

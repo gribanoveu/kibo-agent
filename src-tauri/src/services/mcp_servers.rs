@@ -70,7 +70,7 @@ impl McpServers {
                 pool.cwd = Some(cwd.to_path_buf());
             }
             let wanted = runnable(config);
-            pool.slots.retain(|name, slot| wanted.get(name) == Some(&slot.config));
+            pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
             let missing: Vec<_> = wanted.into_iter().filter(|(name, _)| !pool.slots.contains_key(name)).collect();
             for (name, config) in &missing {
                 pool.slots.insert(name.clone(), Slot { config: config.clone(), state: SlotState::Starting });
@@ -180,7 +180,7 @@ impl McpServers {
                 pool.slots.clear();
                 pool.cwd = Some(cwd.to_path_buf());
             }
-            let known = pool.slots.get(name).is_some_and(|slot| slot.config == entry);
+            let known = pool.slots.get_mut(name).is_some_and(|slot| keep(slot, Some(&entry)));
             if !known {
                 pool.slots.insert(name.to_string(), Slot { config: entry.clone(), state: SlotState::Starting });
             }
@@ -234,7 +234,7 @@ impl McpServers {
     /// stop it.
     pub fn prune(&self, config: &McpConfig) {
         let wanted = runnable(config);
-        lock(&self.pool).slots.retain(|name, slot| wanted.get(name) == Some(&slot.config));
+        lock(&self.pool).slots.retain(|name, slot| keep(slot, wanted.get(name)));
     }
 
     /// What the tab says about a server whose entry is `entry` now. A server
@@ -242,13 +242,13 @@ impl McpServers {
     /// reported as not started.
     pub fn state(&self, name: &str, entry: &McpServerConfig) -> McpServerState {
         let pool = lock(&self.pool);
-        let Some(slot) = pool.slots.get(name).filter(|slot| &slot.config == entry) else {
+        let Some(slot) = pool.slots.get(name).filter(|slot| slot.config.launch() == entry.launch()) else {
             return McpServerState::NotStarted;
         };
         match &slot.state {
             SlotState::Starting => McpServerState::Starting,
             SlotState::Running { server, tools, .. } if server.is_alive() => McpServerState::Running {
-                tools: tools.iter().map(McpToolInfo::from).collect(),
+                tools: tools.iter().map(|tool| McpToolInfo::new(tool, entry.exposure_of(&tool.name))).collect(),
                 instructions: server.instructions(),
             },
             SlotState::Running { server, .. } => McpServerState::Exited {
@@ -308,7 +308,7 @@ fn connected(pool: &Pool) -> McpTools {
         .filter_map(|(name, slot)| match &slot.state {
             SlotState::Running { server, tools, .. } => Some(ConnectedServer {
                 name: name.clone(),
-                weight: slot.config.weight(),
+                config: slot.config.clone(),
                 client: Arc::clone(server) as Arc<dyn McpClient>,
                 tools: tools.clone(),
                 instructions: server.instructions(),
@@ -317,6 +317,19 @@ fn connected(pool: &Pool) -> McpTools {
         })
         .collect();
     McpTools::new(servers)
+}
+
+/// Whether a running slot stays for `wanted`, its entry now: it does while
+/// the entry starts the same process, and takes on the rest of it — which
+/// tools the model sees is not a reason to restart a server.
+fn keep(slot: &mut Slot, wanted: Option<&McpServerConfig>) -> bool {
+    match wanted {
+        Some(wanted) if wanted.launch() == slot.config.launch() => {
+            slot.config = wanted.clone();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The entries that would start: switched on, and with nothing wrong that
@@ -654,6 +667,26 @@ mod tests {
         assert_eq!(starts.load(Ordering::SeqCst), 1, "and not started");
     }
 
+    /// An entry changed only in what the model sees is the same process: a
+    /// turn and the tab's start both keep it, and both read the new rule.
+    #[test]
+    fn a_change_of_exposure_does_not_restart_the_server() {
+        let (servers, starts) = servers();
+        let before = config(&[("a", "ok")]);
+        servers.for_turn(&before, &cwd(), NO);
+        let mut after = before.clone();
+        after.mcp_servers.get_mut("a").unwrap().show_tool("crash", false);
+        assert!(
+            matches!(servers.state("a", &after.mcp_servers["a"]), McpServerState::Running { .. }),
+            "the file changed outside the app: still the running server"
+        );
+
+        let McpServerState::Running { tools, .. } = servers.connect("a", &after, &cwd()) else { panic!("not running") };
+        assert_eq!(tools[1].exposure, crate::domain::mcp::Exposure::Hidden);
+        assert!(servers.for_turn(&after, &cwd(), NO).get("mcp__a__crash").is_none());
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+    }
+
     /// A server started from the tab is the one the next turn uses.
     #[test]
     fn a_turn_keeps_the_server_the_tab_started() {
@@ -671,7 +704,7 @@ mod tests {
         let mut config = config(&[("a", "ok"), ("b", "ok"), ("c", "")]);
         config.mcp_servers.get_mut("b").unwrap().disabled = true;
         let tools = servers.for_turn(&config, &cwd(), NO);
-        assert_eq!(tools.definitions().len(), 2, "a's two tools, and nothing from b or c");
+        assert_eq!(tools.definitions(&Default::default()).len(), 2, "a's two tools, and nothing from b or c");
         assert_eq!(starts.load(Ordering::SeqCst), 1, "only a");
 
         config.mcp_servers.get_mut("a").unwrap().args = vec!["--new".into()];
@@ -703,7 +736,7 @@ mod tests {
         let mut config = config(&[("a", "ok")]);
         let turn = {
             let (servers, config) = (Arc::clone(&servers), config.clone());
-            std::thread::spawn(move || servers.for_turn(&config, &cwd(), NO).definitions().len())
+            std::thread::spawn(move || servers.for_turn(&config, &cwd(), NO).definitions(&Default::default()).len())
         };
         while servers.state("a", &config.mcp_servers["a"]) != McpServerState::Starting {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -763,6 +796,7 @@ mod tests {
                 description: "Wipes".into(),
                 title: Some("Wipe everything".into()),
                 hints: crate::domain::mcp::McpToolHints { read_only: false, destructive: true },
+                exposure: crate::domain::mcp::Exposure::Direct,
             },
             "the tab shows what the server says about it"
         );
@@ -775,14 +809,14 @@ mod tests {
         let (servers, _) = servers();
         let config = config(&[("a", "ok")]);
         let tools = servers.for_turn(&config, &cwd(), NO);
-        assert_eq!(tools.instructions()[0].text, "Echo first. (run 1)");
+        assert_eq!(tools.notes()[0].instructions.as_deref().unwrap(), "Echo first. (run 1)");
         call(&tools, "crash").unwrap_err();
         assert_eq!(call(&tools, "echo").unwrap(), "run 2");
         assert!(tools.get("mcp__a__wipe").is_none(), "the turn keeps the list it was given");
 
         let next = servers.for_turn(&config, &cwd(), NO);
         assert!(next.get("mcp__a__wipe").is_some(), "the list of the process that died");
-        assert_eq!(next.instructions()[0].text, "Echo first. (run 2)");
+        assert_eq!(next.notes()[0].instructions.as_deref().unwrap(), "Echo first. (run 2)");
     }
 
     /// The composer's list: the prompts of the servers running here, and a

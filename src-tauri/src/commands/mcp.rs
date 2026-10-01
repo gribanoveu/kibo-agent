@@ -58,6 +58,18 @@ pub fn mcp_server_set_enabled(
     changed(mcp_config::set_enabled(&name, enabled).map_err(|e| e.to_string())?, &servers)
 }
 
+/// A tool's switch in the tab. Its server keeps running: what the model is
+/// offered is read from the file at the next turn.
+#[tauri::command]
+pub fn mcp_tool_set_shown(
+    server: String,
+    tool: String,
+    shown: bool,
+    servers: State<'_, Arc<McpServers>>,
+) -> Result<McpView, String> {
+    changed(mcp_config::set_tool_shown(&server, &tool, shown).map_err(|e| e.to_string())?, &servers)
+}
+
 /// Starts one server now, without an Agent turn, so that opening its row in
 /// the tab shows what it offers — the user checking a server they just
 /// configured should not have to send a message first.
@@ -144,6 +156,41 @@ mod tests {
             let shown = changed(off, &servers).unwrap();
             assert_eq!(shown.servers[0].state, McpServerState::NotStarted);
             assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted, "stopped");
+        });
+    }
+
+    struct Two;
+    impl McpClient for Two {
+        fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
+            Ok(["find", "wipe"].map(|name| McpTool { name: name.into(), ..Default::default() }).to_vec())
+        }
+        fn call_tool(&self, _: &str, _: serde_json::Value, _: &dyn Fn() -> bool) -> Result<mcp::McpCallResult, McpError> {
+            Err(McpError::Cancelled)
+        }
+    }
+
+    /// Hiding a tool is not a reason to restart its server, and the row shows
+    /// the tool hidden at once.
+    #[test]
+    fn a_tools_switch_leaves_the_server_running() {
+        crate::testing::with_app_dir("cmd-mcp-tool-switch", || {
+            let config = mcp_config::save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
+            let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&starts);
+            let servers = McpServers::new(Arc::new(move |_, _, _| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Arc::new(Two) as Arc<dyn McpClient>)
+            }));
+            let root = crate::testing::temp_dir("cmd-mcp-tool-switch-root");
+            servers.for_turn(&config, &root, &|| false);
+
+            let hidden = changed(mcp_config::set_tool_shown("a", "wipe", false).unwrap(), &servers).unwrap();
+            let McpServerState::Running { tools, .. } = &hidden.servers[0].state else { panic!("{:?}", hidden.servers[0].state) };
+            assert_eq!(tools.iter().map(|t| t.exposure).collect::<Vec<_>>(), [mcp::Exposure::Direct, mcp::Exposure::Hidden]);
+
+            let next = servers.for_turn(&mcp_config::load().unwrap(), &root, &|| false);
+            assert!(next.get("mcp__a__wipe").is_none() && next.get("mcp__a__find").is_some(), "the next turn reads the switch");
+            assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1, "not restarted");
         });
     }
 }

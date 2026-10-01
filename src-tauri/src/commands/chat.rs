@@ -458,7 +458,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             worktree_of: worktree_of.as_deref(),
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
-            mcp_instructions: mcp.instructions(),
+            mcp_servers: mcp.notes(),
         },
         &mcp,
     )

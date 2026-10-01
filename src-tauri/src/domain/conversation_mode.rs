@@ -108,6 +108,8 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::WritePlan,
                 // Agent only: nothing says a foreign tool changes nothing.
                 ToolName::Mcp,
+                // Where the MCP tools are, so is the way to the deferred ones.
+                ToolName::ToolSearch,
                 ToolName::Explore,
             ]);
         }

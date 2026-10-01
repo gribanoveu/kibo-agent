@@ -86,6 +86,11 @@ function useSubmit(text: string | undefined, write: (text: string) => Written, s
 }
 
 const TRANSPORTS: Record<McpServerFields["transport"], string> = { command: "A command", url: "At a URL" };
+const EXPOSURES: Record<McpServerFields["exposure"], string> = {
+  direct: "Declared to the model",
+  deferred: "Found with toolSearch",
+  hidden: "Hidden",
+};
 
 /** `name` is the server being edited, `null` for a new one. */
 export function McpServerForm({ name, text, error, onSave, onClose, onEditJson }: Common & { name: string | null }) {
@@ -150,6 +155,24 @@ export function McpServerForm({ name, text, error, onSave, onClose, onEditJson }
           <input className="entry-input" inputMode="numeric" value={fields.timeoutSecs} onChange={set("timeoutSecs")} />
         </Field>
       </div>
+      <Field label="Its tools" menu hint="Single tools are switched in the server's row in the MCP tab.">
+        <Dropdown
+          below
+          title="How the model reaches its tools"
+          label={EXPOSURES[fields.exposure]}
+          value={fields.exposure}
+          options={[
+            { value: "direct", label: EXPOSURES.direct, hint: "In every request, like a built-in tool" },
+            {
+              value: "deferred",
+              label: EXPOSURES.deferred,
+              hint: "Only the server's name in every request; the model searches for the tools it needs",
+            },
+            { value: "hidden", label: EXPOSURES.hidden, hint: "None, but those switched on in the tab" },
+          ]}
+          onPick={(exposure) => setFields((f) => ({ ...f, exposure: exposure as McpServerFields["exposure"] }))}
+        />
+      </Field>
       <Actions problem={problem} error={error} onClose={onClose} onEditJson={onEditJson} />
     </form>
   );

@@ -379,6 +379,14 @@ mod tests {
                     command: "npm run dev".into(),
                 },
             ),
+            // What was searched and found stays: names of tools and what
+            // their servers say they do, nobody's content.
+            ToolName::ToolSearch => (
+                None,
+                ToolResult::ToolsFound {
+                    tools: vec![crate::domain::tools::FoundTool { name: "mcp__gh__get_file".into(), server: "gh".into(), description: "Reads".into() }],
+                },
+            ),
             ToolName::Mcp => (
                 Some(ToolCall::Mcp(McpCallArgs {
                     name: "mcp__db__query".into(),

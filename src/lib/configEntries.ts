@@ -4,6 +4,8 @@
 // has no field for (`disabled`, Claude Code's extra keys) is carried over
 // untouched.
 
+import type { McpExposure } from "./chat";
+
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -46,7 +48,11 @@ export type McpServerFields = {
   headers: string;
   weight: string;
   timeoutSecs: string;
+  /** How the model reaches its tools; `direct`, the default, is written as nothing. */
+  exposure: McpExposure;
 };
+
+const EXPOSURES: McpExposure[] = ["direct", "deferred", "hidden"];
 
 export const EMPTY_SERVER: McpServerFields = {
   name: "",
@@ -58,6 +64,7 @@ export const EMPTY_SERVER: McpServerFields = {
   headers: "",
   weight: "",
   timeoutSecs: "",
+  exposure: "direct",
 };
 
 const pairs = (value: unknown, separator: string) =>
@@ -80,6 +87,7 @@ export function readMcpServer(text: string, name: string): McpServerFields | nul
     headers: pairs(server.headers, ": "),
     weight: server.weight === undefined ? "" : String(server.weight),
     timeoutSecs: server.timeoutSecs === undefined ? "" : String(server.timeoutSecs),
+    exposure: EXPOSURES.find((e) => e === server.exposure) ?? "direct",
   };
 }
 
@@ -146,7 +154,7 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   for (const n of [weight, timeoutSecs]) if (isObject(n)) return n as { error: string };
 
   const kept = previous !== null && isObject(servers[previous]) ? servers[previous] : {};
-  const { command: _c, args: _a, env: _e, url: _u, headers: _h, weight: _w, timeoutSecs: _t, ...rest } = kept;
+  const { command: _c, args: _a, env: _e, url: _u, headers: _h, weight: _w, timeoutSecs: _t, exposure: _x, ...rest } = kept;
   // A `type` saying the entry is at a URL would contradict a command; one at
   // a URL gets its own `type` from `transport`.
   if (rest.type === "http" || rest.type === "sse") delete rest.type;
@@ -155,6 +163,7 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
     ...how,
     ...(weight !== undefined ? { weight } : {}),
     ...(timeoutSecs !== undefined ? { timeoutSecs } : {}),
+    ...(fields.exposure !== "direct" ? { exposure: fields.exposure } : {}),
   };
   const entries = Object.entries(servers);
   const at = previous === null ? -1 : entries.findIndex(([key]) => key === previous);

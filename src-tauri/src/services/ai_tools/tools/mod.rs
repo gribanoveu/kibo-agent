@@ -44,6 +44,7 @@ pub mod mcp;
 pub mod process;
 pub mod terminal;
 pub mod web_search;
+pub mod tool_search;
 
 /// One row: a tool and the function that builds its schema.
 type ToolDefinitionRow = (ToolName, fn() -> LlmToolDefinition);
@@ -96,6 +97,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeApply, cluster::apply_definition),
     (ToolName::KubeDelete, cluster::delete_definition),
     (ToolName::WebSearch, web_search::definition),
+    (ToolName::ToolSearch, tool_search::definition),
 ];
 
 /// What the model is offered for a turn.
@@ -158,6 +160,7 @@ pub fn dispatch(
         ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
+        ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
         ToolCall::KubeEvents(args) => cluster::kube_events(deps.kube, args),
@@ -514,6 +517,10 @@ mod definition_tests {
                     max_results: Some(3),
                     time_range: Some(crate::domain::web_search::TimeRange::Month),
                 })],
+            ),
+            ToolName::ToolSearch => (
+                r#"{"query":"create issue"}"#,
+                vec![ToolCall::ToolSearch(crate::domain::tools::ToolSearchArgs { query: "create issue".into(), limit: Some(3) })],
             ),
             ToolName::Mcp => unreachable!("an MCP tool's schema is its server's; see built_in()"),
         }

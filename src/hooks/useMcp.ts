@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { connectMcpServer, mcpConfig, saveMcpConfig, setMcpServerEnabled, type McpView } from "../lib/chat";
+import { connectMcpServer, mcpConfig, saveMcpConfig, setMcpServerEnabled, setMcpToolShown, type McpView } from "../lib/chat";
 
 /**
  * The MCP configuration, re-read whenever the tab or the editor opens: the
@@ -47,6 +47,17 @@ export function useMcp(visible: boolean, refreshKey?: unknown) {
     }
   }, [reload]);
 
+  /** One tool's switch. Not drawn ahead of the answer: whether it ends up direct or deferred is the backend's to say. */
+  const setToolShown = useCallback(async (server: string, tool: string, shown: boolean) => {
+    try {
+      setView(await setMcpToolShown(server, tool, shown));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+      await reload();
+    }
+  }, [reload]);
+
   /**
    * Starts one server to list its tools, for a row the user just opened.
    * The row says "starting" meanwhile: a first `npx` run takes seconds.
@@ -62,5 +73,5 @@ export function useMcp(visible: boolean, refreshKey?: unknown) {
     }
   }, [reload]);
 
-  return { view, error, save, setEnabled, connect };
+  return { view, error, save, setEnabled, setToolShown, connect };
 }

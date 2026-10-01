@@ -16,7 +16,7 @@ import { TerminalPanel } from "./TerminalPanel";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
-import type { FileTarget, HooksView, McpServerState, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
+import type { FileTarget, HooksView, McpServerState, McpToolInfo, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
 import type { AsideTab, PanelItem } from "../types";
 import type { Block } from "../lib/chatTurnReducer";
 import type { AgentFocus } from "../lib/describeTool";
@@ -78,6 +78,8 @@ export type McpListProps = {
   view: McpView | null;
   error: string | null;
   onToggle: (name: string, enabled: boolean) => void;
+  /** A tool offered to the model or hidden from it. */
+  onToggleTool: (server: string, tool: string, shown: boolean) => void;
   /** Opening a server's row starts it, so the row can list its tools. */
   onOpen: (name: string) => void;
   /** A new server, one server, or the whole file. */
@@ -114,6 +116,13 @@ function mcpItems(view: McpView | null): PanelItem[] {
   );
 }
 
+/** "12 tools", and how many of them the model does not see. */
+function toolCount(tools: McpToolInfo[]): string {
+  const hidden = tools.filter((t) => t.exposure === "hidden").length;
+  const all = `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
+  return hidden ? `${all} · ${hidden} hidden` : all;
+}
+
 /** What the process is doing, for a server that is switched on. */
 function mcpState(state: McpServerState, warning: string | null): Partial<PanelItem> {
   switch (state.state) {
@@ -123,11 +132,16 @@ function mcpState(state: McpServerState, warning: string | null): Partial<PanelI
       return { status: { label: "starting", tone: "off" }, meta: "Asking it for its tools" };
     case "running":
       return {
-        status: { label: `${state.tools.length} ${state.tools.length === 1 ? "tool" : "tools"}`, tone: "ok" },
+        status: { label: toolCount(state.tools), tone: "ok" },
         rows: state.tools.map((tool) => ({
+          id: tool.name,
           // The server's word about its own tool, said as such by where it stands: beside the name.
-          name: tool.name + (tool.destructive ? " · destructive" : tool.readOnly ? " · read-only" : ""),
+          name:
+            tool.name +
+            (tool.destructive ? " · destructive" : tool.readOnly ? " · read-only" : "") +
+            (tool.exposure === "deferred" ? " · via search" : ""),
           desc: tool.title ? `${tool.title} — ${tool.description}` : tool.description,
+          enabled: tool.exposure !== "hidden",
         })),
         // What the server tells the model is said on the user's behalf, so the user can read it.
         ...(state.instructions
@@ -141,7 +155,7 @@ function mcpState(state: McpServerState, warning: string | null): Partial<PanelI
   }
 }
 
-export function McpList({ view, error, onToggle, onOpen, onAdd, onEditServer, onRemoveServer, onEditFile }: McpListProps) {
+export function McpList({ view, error, onToggle, onToggleTool, onOpen, onAdd, onEditServer, onRemoveServer, onEditFile }: McpListProps) {
   const items = mcpItems(view);
   return (
     <>
@@ -153,6 +167,7 @@ export function McpList({ view, error, onToggle, onOpen, onAdd, onEditServer, on
         addLabel="Add MCP server"
         onAdd={onAdd}
         onToggle={onToggle}
+        onToggleRow={onToggleTool}
         onOpen={onOpen}
         onEdit={onEditServer}
         onRemove={onRemoveServer}

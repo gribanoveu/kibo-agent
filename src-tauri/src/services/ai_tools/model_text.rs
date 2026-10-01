@@ -113,7 +113,22 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Explored { text, .. } => text.clone(),
         ToolResult::Kube { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
+        ToolResult::ToolsFound { tools } => found_tools(tools),
     }
+}
+
+/// The full names, so the next round's declarations and the model's calls
+/// agree — and so `domain::mcp::loaded_tools` can read them back.
+fn found_tools(tools: &[crate::domain::tools::FoundTool]) -> String {
+    if tools.is_empty() {
+        return "No tool matched. Search with other words — the action and the thing it acts on — or a server's name."
+            .to_string();
+    }
+    let mut out = String::from("Declared to you from your next step on; call them as ordinary tools:");
+    for tool in tools {
+        out.push_str(&format!("\n- `{}` ({}): {}", tool.name, tool.server, tool.description));
+    }
+    out
 }
 
 /// Numbered, so the answer can point at a page; fenced off as the pages'

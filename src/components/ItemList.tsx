@@ -6,12 +6,13 @@ import "./ItemList.css";
 type ItemProps = {
   item: PanelItem;
   onToggle?: (id: string, enabled: boolean) => void;
+  onToggleRow?: (id: string, row: string, enabled: boolean) => void;
   onOpen?: (id: string) => void;
   onEdit?: (id: string) => void;
   onRemove?: (id: string) => void;
 };
 
-function Item({ item, onToggle, onOpen, onEdit, onRemove }: ItemProps) {
+function Item({ item, onToggle, onToggleRow, onOpen, onEdit, onRemove }: ItemProps) {
   const [open, setOpen] = useState(false);
   // Removing asks once more, in the row itself: it rewrites the user's file.
   const [confirming, setConfirming] = useState(false);
@@ -65,9 +66,18 @@ function Item({ item, onToggle, onOpen, onEdit, onRemove }: ItemProps) {
       {open && (
         <div className="item-detail">
           {item.rows?.map((row) => (
-            <div className="tool-row" key={row.name}>
+            <div className={`tool-row${row.enabled === false ? " off" : ""}`} key={row.id ?? row.name}>
               <span className="tname">{row.name}</span>
               <span className="tdesc">{row.desc}</span>
+              {row.enabled !== undefined && onToggleRow && (
+                <button
+                  type="button"
+                  className={`toggle${row.enabled ? " on" : ""}`}
+                  aria-pressed={row.enabled}
+                  aria-label={`${row.id ?? row.name}: ${row.enabled ? "offered to the model" : "hidden from the model"}`}
+                  onClick={() => onToggleRow(item.id, row.id ?? row.name, !row.enabled)}
+                />
+              )}
             </div>
           ))}
           {item.note &&
@@ -122,6 +132,8 @@ type Props = {
   onAdd?: () => void;
   /** Without it the items have no switch: the list cannot change what it shows. */
   onToggle?: (id: string, enabled: boolean) => void;
+  /** A switch on each row of an item's detail that has `enabled`. */
+  onToggleRow?: (id: string, row: string, enabled: boolean) => void;
   /** Called when a row is expanded, for details that are fetched rather than held. */
   onOpen?: (id: string) => void;
   /** Per-row actions in the expanded row. Remove asks to confirm first. */
@@ -139,6 +151,7 @@ export function ItemList({
   addLabel,
   onAdd,
   onToggle,
+  onToggleRow,
   onOpen,
   onEdit,
   onRemove,
@@ -159,7 +172,15 @@ export function ItemList({
       </div>
       {items.length === 0 && <div className="empty">{emptyLabel}</div>}
       {items.map((item) => (
-        <Item key={item.id} item={item} onToggle={onToggle} onOpen={onOpen} onEdit={onEdit} onRemove={onRemove} />
+        <Item
+          key={item.id}
+          item={item}
+          onToggle={onToggle}
+          onToggleRow={onToggleRow}
+          onOpen={onOpen}
+          onEdit={onEdit}
+          onRemove={onRemove}
+        />
       ))}
       {addLabel && (
         <button className="add-btn" type="button" onClick={onAdd}>

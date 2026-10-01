@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-01 Switch single MCP tools off in the MCP tab, and set a server's tools to be found with `toolSearch` instead of declared in every request (`"exposure": "deferred"`, per tool with `toolExposure` and `*` patterns); a very large MCP result reaches the model with its middle cut and is saved whole for it to read
 - 2026-09-30 See the provider's output speed in tokens per second beside Working, live while it streams, and the session's average beside Worked for
 
 ## v0.3.1-alfa — 2026-09-30

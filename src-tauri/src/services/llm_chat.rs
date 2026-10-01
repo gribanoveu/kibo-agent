@@ -1249,7 +1249,7 @@ fn ask_the_model(
     loop {
         let request = ChatRequest {
             messages: request_messages(turn, history),
-            tools: offered(turn),
+            tools: offered(turn, history),
             model: turn.session.model.clone(),
         };
         let error = match stream_one_round(turn, events, round, request) {
@@ -1288,21 +1288,27 @@ fn ask_the_model(
 /// of the gate the model can see; [`preflight_tool_call`] is the half it
 /// cannot, and both are needed — a model that used `writeFile` earlier in a
 /// conversation calls it again from memory when the mode narrows.
-pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools) -> Vec<LlmToolDefinition> {
+///
+/// `history` is the conversation so far: the deferred MCP tools a `toolSearch`
+/// in it found are declared with the rest. `toolSearch` itself only while
+/// some tool waits for it — offered with nothing to find, it costs every
+/// request its schema for nothing.
+pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
-        .chain(mcp.definitions())
+        .chain(mcp.definitions(&crate::domain::mcp::loaded_tools(history)))
         .filter(|definition| {
-            ToolName::from_wire_name(&definition.name)
-                .is_some_and(|tool| conversation_mode::offers(mode, tool))
+            ToolName::from_wire_name(&definition.name).is_some_and(|tool| {
+                conversation_mode::offers(mode, tool) && (tool != ToolName::ToolSearch || mcp.has_deferred())
+            })
         })
         .collect()
 }
 
 /// What the turn advertises: the mode's tools in a folder, the role's in a chat.
-fn offered(turn: &Turn) -> Vec<LlmToolDefinition> {
+fn offered(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
     match turn.place {
-        Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp),
+        Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp, history),
         Place::Chat { role, web, .. } => tool_definitions_for_role(role, web.is_some()),
     }
 }
@@ -1325,7 +1331,7 @@ pub(crate) fn tool_definitions_for_role(role: ChatRole, web: bool) -> Vec<LlmToo
 /// reports one.
 pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
     compaction::estimate_tokens(&request_messages(turn, history))
-        + compaction::estimate_tool_schema_tokens(&offered(turn))
+        + compaction::estimate_tool_schema_tokens(&offered(turn, history))
 }
 
 /// The request's messages: what the model is told, then the conversation.
@@ -1356,7 +1362,7 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
         plan: turn.plan,
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
-        mcp_instructions: turn.mcp.instructions(),
+        mcp_servers: turn.mcp.notes(),
     };
     let mut messages = prompt::system_messages(&context);
     messages.extend_from_slice(history);
@@ -3545,8 +3551,9 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own and the Kubernetes role's;
-        // MCP tools come from servers, and none is connected.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 2 - ChatRole::Kubernetes.tools().len());
+        // MCP tools come from servers, and none is connected — so neither is
+        // `toolSearch`, with nothing to find.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 3 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -3850,7 +3857,7 @@ mod tests {
         };
         h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
             name: "tracker".into(),
-            weight,
+            config: crate::domain::mcp::McpServerConfig { weight: Some(weight), ..Default::default() },
             client: Arc::new(Echo),
             tools: vec![
                 tool("find", McpToolHints::default()),
@@ -3909,6 +3916,77 @@ mod tests {
         let outcome = plain.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
         let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else { panic!("it ran unasked") };
         assert_eq!(pending.calls[0].reason, None, "a tool its server said nothing about has no note");
+    }
+
+    /// The same server, deferred but for `find`, and `purge` hidden.
+    fn with_deferred(h: Harness) -> Harness {
+        use crate::domain::mcp::Exposure;
+        let mut h = h;
+        let tool = |name: &str| crate::domain::mcp::McpTool {
+            name: name.into(),
+            description: format!("{name}s issues."),
+            input_schema: serde_json::json!({"type": "object"}),
+            ..Default::default()
+        };
+        h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
+            name: "tracker".into(),
+            config: crate::domain::mcp::McpServerConfig {
+                exposure: Some(Exposure::Deferred),
+                tool_exposure: [("find".to_string(), Exposure::Direct), ("purge".to_string(), Exposure::Hidden)].into(),
+                ..Default::default()
+            },
+            client: Arc::new(Echo),
+            tools: vec![tool("find"), tool("list"), tool("purge")],
+            instructions: None,
+        }]);
+        h
+    }
+
+    /// A deferred tool is not in the request until `toolSearch` has found
+    /// it, and is from the next round on — in this turn and the next.
+    #[test]
+    fn a_deferred_tool_is_declared_once_the_search_has_found_it() {
+        let script = vec![
+            asks(vec![wants("s1", "toolSearch", r#"{"query":"list"}"#)]),
+            asks(vec![wants("m1", "mcp__tracker__list", "{}")]),
+            text("done"),
+        ];
+        let h = with_deferred(harness("mcp-deferred", script));
+        let history = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = h.provider.requests();
+        let names = |i: usize| requests[i].tools.iter().map(|t| t.name.clone()).filter(|n| n.contains("tracker") || n == "toolSearch").collect::<Vec<_>>();
+        assert_eq!(names(0), ["toolSearch", "mcp__tracker__find"]);
+        assert_eq!(names(1), ["toolSearch", "mcp__tracker__find", "mcp__tracker__list"]);
+        let ran = requests[2].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("m1")).unwrap();
+        assert!(ran.content.as_deref().unwrap().contains("list got"), "{:?}", ran.content);
+        let said = requests[0].messages.iter().filter_map(|m| m.content.as_deref()).find(|c| c.contains("## MCP servers")).expect("said");
+        assert!(said.contains("### tracker — 1 tool found with toolSearch"), "{said}");
+
+        let ChatStreamOutcome::Done(done) = history else { panic!("paused") };
+        let next = with_deferred(harness("mcp-deferred-next", vec![text("again")]));
+        next.run(|turn| stream(turn, done.history.clone(), vec![])).expect("finishes");
+        assert!(next.provider.requests()[0].tools.iter().any(|t| t.name == "mcp__tracker__list"), "the next turn keeps it");
+    }
+
+    /// A hidden tool is not offered, not found, and refused when called
+    /// from memory; without deferred tools there is no search.
+    #[test]
+    fn a_hidden_tool_is_nowhere_and_the_search_only_comes_with_something_to_find() {
+        let script = vec![
+            asks(vec![wants("s1", "toolSearch", r#"{"query":"purge"}"#), wants("m1", "mcp__tracker__purge", "{}")]),
+            text("done"),
+        ];
+        let h = with_deferred(harness("mcp-hidden", script));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = h.provider.requests();
+        assert!(requests[0].tools.iter().all(|t| t.name != "mcp__tracker__purge"));
+        let result = |id: &str| requests[1].messages.iter().find(|m| m.tool_call_id.as_deref() == Some(id)).unwrap().content.clone().unwrap();
+        assert!(result("s1").starts_with("No tool matched"), "{}", result("s1"));
+        assert!(result("m1").contains("mcp__tracker__purge") && !result("m1").contains("purge got"), "{}", result("m1"));
+
+        let plain = with_server(harness("mcp-no-search", vec![text("hi")]), 3);
+        plain.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        assert!(plain.provider.requests()[0].tools.iter().all(|t| t.name != "toolSearch"));
     }
 
     /// Offered in Agent beside the built-in tools; not in Plan, which
@@ -3987,7 +4065,7 @@ mod tests {
             let mut h = harness(label, vec![asks(vec![wants("m1", "mcp__tracker__login", "{}")]), text("done")]);
             h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
                 name: "tracker".into(),
-                weight: 3,
+                config: Default::default(),
                 client: Arc::new(Asks),
                 tools: vec![crate::domain::mcp::McpTool { name: "login".into(), input_schema: serde_json::json!({}), ..Default::default() }],
                 instructions: None,
@@ -4058,7 +4136,7 @@ mod tests {
         let mut h = harness("mcp-stop", vec![asks(vec![wants("m1", "mcp__slow__wait", "{}")])]);
         h.mcp = McpTools::new(vec![crate::domain::mcp::ConnectedServer {
             name: "slow".into(),
-            weight: 3,
+            config: Default::default(),
             client: Arc::new(WaitsForStop(h.cancel_after.clone())),
             tools: vec![crate::domain::mcp::McpTool { name: "wait".into(), input_schema: serde_json::json!({}), ..Default::default() }],
             instructions: None,
