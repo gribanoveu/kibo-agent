@@ -125,7 +125,7 @@ fn estimate_message_tokens(message: &LlmMessage) -> usize {
 /// not an empty window. `skills` and `mcp` are apart because each is the
 /// user's to switch off, and each is both a fixed part — a list, the schemas —
 /// and what it brought into the conversation: a loaded skill, a tool's result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextUsage {
     /// The system prompt but the skills list: instructions, the mode, the

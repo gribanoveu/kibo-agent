@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { ChatPanel, Preview, Transcript, formatDuration } from "../components/ChatPanel";
+import { ChatPanel, Preview, Transcript, formatDuration, formatTokens } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
 
 // The transcript's own rules: who a block belongs to, and what the approval
@@ -352,6 +352,18 @@ describe("how long the agent worked", () => {
       "12s",
       "1m 23s",
       "1h 5m",
+    ]);
+  });
+
+  test("tokens read as the clock says them", () => {
+    expect([553, 1_000, 1_234, 12_345, 99_990, 123_456, 1_234_567].map(formatTokens)).toEqual([
+      "553",
+      "1k",
+      "1.2k",
+      "12.3k",
+      "100k",
+      "123k",
+      "1.2M",
     ]);
   });
 

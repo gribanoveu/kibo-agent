@@ -585,7 +585,9 @@ export function useAgentTurn({
     turn,
     chatId,
     error,
-    context,
+    // While the turn works, its own figure: the window's history is the one
+    // the turn started from.
+    context: busy ? (turn.estimate ?? context) : context,
     send,
     review,
     queued,

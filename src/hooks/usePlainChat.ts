@@ -325,7 +325,9 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
     kube,
     setPin,
     error,
-    context,
+    // While the turn works, its own figure: the window's history is the one
+    // the turn started from.
+    context: busy ? (turn.estimate ?? context) : context,
     send,
     decide,
     stop,

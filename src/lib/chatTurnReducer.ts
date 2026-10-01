@@ -1,6 +1,7 @@
 import {
   type ChatUsage,
   type Checkpoint,
+  type ContextUsage,
   type FileChange,
   type McpAnswer,
   type McpQuestion,
@@ -86,6 +87,10 @@ export type TurnState = {
   /** Events that arrived early, kept until the gap in front of them is filled. */
   buffered: TurnEvent[];
   usage: ChatUsage | null;
+  /** Tokens the turn's requests have spent so far, in and out, every round's summed; a pause does not reset it. */
+  spent: number;
+  /** What the running turn's next request costs, said before each round; `null` until it says. */
+  estimate: ContextUsage | null;
   retrying: { attempt: number; maxAttempts: number; delaySeconds: number } | null;
   /** Set when the turn pauses; sent back verbatim to continue it. */
   checkpoint: Checkpoint | null;
@@ -106,6 +111,8 @@ export const emptyTurn = (): TurnState => ({
   lastSeq: 0,
   buffered: [],
   usage: null,
+  spent: 0,
+  estimate: null,
   retrying: null,
   checkpoint: null,
   runningSince: null,
@@ -192,6 +199,9 @@ export function appendUserMessage(state: TurnState, text: string, now = Date.now
     // replay, and the answer would never appear.
     lastSeq: 0,
     buffered: [],
+    // The last turn's figure; the window's own, read as this one starts, is newer.
+    estimate: null,
+    spent: 0,
     blocks: [
       ...state.blocks,
       { kind: "user", id: `user:${state.blocks.length}`, text, ...(sent !== undefined && sent !== text && { sent }) },
@@ -470,7 +480,14 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState 
       };
 
     case "contextUsage":
-      return { ...state, usage: event.payload };
+      return {
+        ...state,
+        usage: event.payload,
+        spent: state.spent + event.payload.promptTokens + event.payload.completionTokens,
+      };
+
+    case "contextEstimate":
+      return { ...state, estimate: event.payload };
 
     case "retrying":
       return { ...state, retrying: event.payload };

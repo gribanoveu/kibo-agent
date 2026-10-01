@@ -336,6 +336,10 @@ pub enum ChatEventPayload {
     /// resends the whole history, this is the authoritative context size, not
     /// a per-round statistic.
     ContextUsage(ChatUsage),
+    /// What the request about to be sent will cost, estimated the way the
+    /// window's meter estimates it between turns — sent before each round so
+    /// the meter fills while the turn works, not only once it ends.
+    ContextEstimate(crate::domain::compaction::ContextUsage),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-01 Beside Working… and the speed, how many tokens the turn has spent so far — 553, 1.2k, 48k
+- 2026-10-01 The context meter fills while the agent works, round by round, instead of only after the turn ends
 - 2026-10-01 The checklist item the agent is working on shows in a strip under the chat's header, with how many are done; clicking it opens the Plan tab
 - 2026-10-01 The Plan tab opens with the agent's plan as soon as it is written, while the turn is still carrying it out, instead of after the turn ends
 - 2026-10-01 A turn that runs into its limits keeps its work: "continue" goes on from where it stopped instead of starting the task over

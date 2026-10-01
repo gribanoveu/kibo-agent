@@ -546,6 +546,7 @@ fn run(
             clear_stale_results(turn.place.scope(), &mut state, &mut seen_results);
             restore_checklist(&mut state.history, &state.todos);
             events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
+            events.emit(round, Some(format!("estimate:{round}")), ChatEventPayload::ContextEstimate(request_usage(turn, &state.history)));
 
             let result = match ask_the_model(
                 turn,
@@ -1340,11 +1341,19 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
             return messages;
         }
     };
-    let context = prompt::TurnContext {
+    let today = Local::now().format("%e %B %Y").to_string();
+    let mut messages = prompt::system_messages(&turn_context(turn, scope, mode, &today));
+    messages.extend_from_slice(history);
+    messages
+}
+
+/// What a request in the open folder is told before the conversation.
+fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode, today: &'a str) -> prompt::TurnContext<'a> {
+    prompt::TurnContext {
         mode,
         workspace: scope.root(),
         shell: turn.shell_described,
-        today: &Local::now().format("%e %B %Y").to_string(),
+        today,
         unattended: turn.approval.skip_all,
         skills: turn.skills,
         rules: turn.rules,
@@ -1352,10 +1361,23 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
+    }
+}
+
+/// The next request's cost by part, as `context_compaction::usage` reports it
+/// to the meter between turns — the same arithmetic, over the turn's own
+/// history.
+fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
+    let frame = match turn.place {
+        Place::Folder { scope, mode } => {
+            let today = Local::now().format("%e %B %Y").to_string();
+            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp)
+        }
+        Place::Chat { role, kube, runbooks, web, .. } => {
+            context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some())
+        }
     };
-    let mut messages = prompt::system_messages(&context);
-    messages.extend_from_slice(history);
-    messages
+    context_compaction::usage(turn.session, frame, history)
 }
 
 /// Puts the checklist back into the history when the history no longer shows
@@ -1982,6 +2004,7 @@ mod tests {
                 ChatEventPayload::ToolCall(c) => format!("toolCall:{}", c.id),
                 ChatEventPayload::ToolResult(r) => format!("toolResult:{}", r.id),
                 ChatEventPayload::ContextUsage(_) => "contextUsage".to_string(),
+                ChatEventPayload::ContextEstimate(_) => "estimate".to_string(),
                 ChatEventPayload::SteeringApplied { id, .. } => format!("steering:{id}"),
                 ChatEventPayload::CommandOutput { id, .. } => format!("commandOutput:{id}"),
                 ChatEventPayload::HistoryCompacted { folded } => format!("compacted:{folded}"),
@@ -2905,10 +2928,12 @@ mod tests {
             payloads(&events),
             [
                 "roundStarted",
+                "estimate",
                 "roundCompleted",
                 "toolCall:c1",
                 "toolResult:c1",
                 "roundStarted",
+                "estimate",
                 "delta",
                 "roundCompleted",
             ]
@@ -2917,6 +2942,28 @@ mod tests {
         assert_eq!(seqs, (1..=events.len() as u64).collect::<Vec<_>>());
         assert_eq!(events[0].round, 1);
         assert_eq!(events.last().unwrap().round, 2);
+    }
+
+    /// The meter follows the turn: each round says what its request costs, and
+    /// the second carries the first's call and result on top.
+    #[test]
+    fn each_round_says_what_its_request_costs() {
+        let h = harness(
+            "loop-estimate",
+            vec![asks(vec![wants("c1", "createDirectory", r#"{"path":"a"}"#)]), text("ok")],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+
+        let totals: Vec<usize> = h
+            .events()
+            .iter()
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::ContextEstimate(usage) => Some(usage.total),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(totals.len(), 2, "{totals:?}");
+        assert!(totals[0] > 0 && totals[1] > totals[0], "{totals:?}");
     }
 
     // ------------------------------------------------------------- approval

@@ -250,6 +250,28 @@ describe("pausing", () => {
     expect(kinds(acceptOutcome(emptyTurn(), { status: "done", value: result }))).toEqual([]);
   });
 
+  test("what the turn's rounds spent adds up, and the next turn starts from nothing", () => {
+    const usage = (promptTokens: number, completionTokens: number, cachedTokens: number) => ({
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      cachedTokens,
+    });
+    let state = appendUserMessage(emptyTurn(), "go", 1_000);
+    state = acceptEvent(state, { turnId: "t", seq: 1, round: 1, type: "contextUsage", payload: usage(1_000, 50, 0) });
+    state = acceptEvent(state, { turnId: "t", seq: 2, round: 2, type: "contextUsage", payload: usage(1_200, 30, 900) });
+    expect(state.spent).toBe(2_280);
+    expect(appendUserMessage(state, "more", 2_000).spent).toBe(0);
+  });
+
+  test("the estimate a round sends is kept until the next turn starts", () => {
+    const estimate = { instructions: 1, skills: 0, tools: 2, mcp: 0, conversation: 7, total: 10, limit: 100, compactsAt: 80 };
+    let state = appendUserMessage(emptyTurn(), "go", 1_000);
+    state = acceptEvent(state, { turnId: "t", seq: 1, round: 1, type: "contextEstimate", payload: estimate });
+    expect(state.estimate).toEqual(estimate);
+    expect(appendUserMessage(state, "more", 2_000).estimate).toBeNull();
+  });
+
   test("answering it clears the card", () => {
     let state = acceptOutcome(emptyTurn(), { status: "pendingApproval", value: checkpoint });
     state = clearApproval(state);

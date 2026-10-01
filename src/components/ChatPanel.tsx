@@ -401,6 +401,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+/** A token count as the clock says it: 553, 1.2k, 12.3k, 123k, 1.2M. */
+export function formatTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  const [value, unit] = n < 1_000_000 ? [n / 1000, "k"] : [n / 1_000_000, "M"];
+  // One decimal while it says something; past 100 it is noise.
+  return `${value < 100 ? Number(value.toFixed(1)) : Math.round(value)}${unit}`;
+}
+
 /**
  * "· 2 processes running" beside the clock: background processes outlive the
  * turn, and without this a server left running is out of sight. A click
@@ -437,6 +445,17 @@ function Speed({ rate, prefix = "" }: { rate: number | null; prefix?: string }) 
   );
 }
 
+/** "· 48.2k tokens" beside the speed: what the turn's requests have spent, every round's. */
+function Spent({ spent }: { spent: number }) {
+  if (spent === 0) return null;
+  return (
+    <>
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">{formatTokens(spent)} tokens</span>
+    </>
+  );
+}
+
 /** The session's average output speed, or `null` before anything was timed. */
 const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
 
@@ -467,6 +486,7 @@ function WorkingClock({
       <span className="turn-clock-text">Working…</span>{" "}
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
       {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
+      <Spent spent={turn.spent} />
       {children}
     </div>
   );

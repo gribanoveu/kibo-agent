@@ -98,6 +98,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "mcpQuestion"; payload: { id: string; call: string; server: string; question: McpQuestion } }
   | { type: "mcpQuestionClosed"; payload: { id: string; action: McpAnswer["action"] } }
   | { type: "contextUsage"; payload: ChatUsage }
+  | { type: "contextEstimate"; payload: ContextUsage }
 );
 
 /**
