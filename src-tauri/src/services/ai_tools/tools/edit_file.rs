@@ -1,6 +1,8 @@
 //! `editFile` — anchored replacements inside a file that already exists.
 //!
-//! Exact and all-or-nothing. Every anchor is looked up in the file's original
+//! Exact and all-or-nothing — except that an anchor with no exact match is
+//! tried once more ignoring line-end whitespace and typographic punctuation
+//! ([`find_loosely`]), as pi does. Every anchor is looked up in the file's original
 //! content, never in the output of an earlier edit in the same call, which is
 //! what makes a batch independent of its own ordering. An anchor that matches
 //! nothing, matches more than once, or overlaps another edit's region rejects
@@ -149,21 +151,93 @@ fn line_endings_differ(content: &str, old: &str) -> Option<ToolError> {
 /// exact match was refused.
 fn find_unique(content: &str, old: &str) -> Result<(usize, usize), ToolError> {
     let mut occurrences = content.match_indices(old);
+    let (start, end) = match occurrences.next() {
+        Some((start, _)) => {
+            let count = 1 + occurrences.count();
+            if count > 1 {
+                return Err(ToolError::EditTextAmbiguous(old.to_string(), count));
+            }
+            (start, start + old.len())
+        }
+        None => {
+            if let Some(mismatch) = line_endings_differ(content, old) {
+                return Err(mismatch);
+            }
+            find_loosely(content, old)?.ok_or_else(|| ToolError::EditTextNotFound {
+                text: old.to_string(),
+                nearest: closest_line(content, old),
+            })?
+        }
+    };
+    if let Some(word) = split_word(content, start, end) {
+        return Err(ToolError::EditInsideWord(old.to_string(), word));
+    }
+    Ok((start, end))
+}
+
+/// The anchor's single occurrence once both sides are [`loosened`], as a range
+/// of the original `content` — `None` when there is none.
+///
+/// What a model gets wrong without meaning anything by it: whitespace at the
+/// end of a line it cannot see, and the typographic quotes, dashes and spaces
+/// it writes back as ASCII. Only the matched range is replaced; the rest of the
+/// file keeps its bytes, curly quotes and trailing spaces included. The match
+/// still has to be unique, under the same error as an exact one.
+fn find_loosely(content: &str, old: &str) -> Result<Option<(usize, usize)>, ToolError> {
+    let (wanted, _) = loosened(old, false);
+    let (text, origin) = loosened(content, true);
+    let mut occurrences = text.match_indices(&wanted);
     let Some((start, _)) = occurrences.next() else {
-        return Err(line_endings_differ(content, old).unwrap_or_else(|| ToolError::EditTextNotFound {
-            text: old.to_string(),
-            nearest: closest_line(content, old),
-        }));
+        return Ok(None);
     };
     let count = 1 + occurrences.count();
     if count > 1 {
         return Err(ToolError::EditTextAmbiguous(old.to_string(), count));
     }
-    let end = start + old.len();
-    if let Some(word) = split_word(content, start, end) {
-        return Err(ToolError::EditInsideWord(old.to_string(), word));
+    // To where the next kept character begins: whitespace stripped from the
+    // end of the anchor's last line goes with it.
+    Ok(Some((origin[start], origin[start + wanted.len()])))
+}
+
+/// `text` without whitespace at the ends of its lines and with typographic
+/// quotes, dashes and spaces made ASCII, plus where each of its bytes came
+/// from in `text` — one more entry than bytes, the last being `text.len()`.
+///
+/// Line breaks stay as they are: which ending an edit meant is
+/// [`in_endings`]'s business, and a guess here would undo its refusal in a
+/// mixed file.
+///
+/// `file` says the end of `text` is the end of a line. An anchor's last line
+/// with no break after it is not: `x – ` may stop before the ` 1` of `x - 1`,
+/// and losing its space would double the one its replacement brings.
+fn loosened(text: &str, file: bool) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(text.len());
+    let mut origin = Vec::with_capacity(text.len() + 1);
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n').trim_end_matches('\r');
+        let kept = if file || line.ends_with('\n') { body.trim_end_matches(char::is_whitespace) } else { body };
+        let pieces = kept.char_indices().map(|(i, c)| (i, ascii(c))).chain(
+            line[body.len()..].char_indices().map(|(i, c)| (body.len() + i, c)),
+        );
+        for (offset, c) in pieces {
+            out.push(c);
+            origin.extend(std::iter::repeat_n(line_start + offset, c.len_utf8()));
+        }
+        line_start += line.len();
     }
-    Ok((start, end))
+    origin.push(text.len());
+    (out, origin)
+}
+
+fn ascii(c: char) -> char {
+    match c {
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+        '\u{201C}'..='\u{201F}' => '"',
+        '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
+        '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => ' ',
+        c => c,
+    }
 }
 
 /// The line of `content` most like the anchor's first non-blank one: the one
@@ -422,6 +496,89 @@ mod tests {
         let (scope, _, mut reads) = fixture("edit-absent", "a: 1\nb: 2\n");
         let err = edit_file(&scope, &edits(&[("a: 9\r\nb: 2", "x")]), &mut reads).expect_err("absent");
         assert!(matches!(err, ToolError::EditTextNotFound { .. }), "{err}");
+    }
+
+    /// Whitespace at the end of a line is invisible in a read: the anchor
+    /// still matches without it, and only the matched lines lose theirs.
+    #[test]
+    fn an_anchor_matches_past_trailing_whitespace_it_could_not_see() {
+        let (scope, root, mut reads) = fixture("edit-trailing", "fn a() {  \n    x();\t\n}\nkeep  \n");
+
+        edit_file(&scope, &edits(&[("fn a() {\n    x();", "fn b() {\n    y();")]), &mut reads).expect("a loose match");
+
+        assert_eq!(on_disk(&root), "fn b() {\n    y();\n}\nkeep  \n");
+    }
+
+    /// The model writes ASCII; the file keeps its typography everywhere the
+    /// edit does not reach — and the other way round.
+    #[test]
+    fn typographic_quotes_dashes_and_spaces_match_their_ascii() {
+        let body = "say(\u{201C}hi\u{201D}); // a \u{2013} b\nother \u{2018}q\u{2019}\u{00A0}x\n";
+        let (scope, root, mut reads) = fixture("edit-typography", body);
+        edit_file(&scope, &edits(&[("say(\"hi\");", "say(\"bye\");")]), &mut reads).expect("curly quotes");
+        assert_eq!(on_disk(&root), "say(\"bye\"); // a \u{2013} b\nother \u{2018}q\u{2019}\u{00A0}x\n");
+
+        edit_file(&scope, &edits(&[("'q' x", "'r' x")]), &mut reads).expect("curly quotes and a no-break space");
+        assert_eq!(on_disk(&root), "say(\"bye\"); // a \u{2013} b\nother 'r' x\n");
+
+        let (scope, root, mut reads) = fixture("edit-typography-back", "a - b\n");
+        edit_file(&scope, &edits(&[("a \u{2014} b", "c")]), &mut reads).expect("an em dash in the anchor");
+        assert_eq!(on_disk(&root), "c\n");
+    }
+
+    /// Space at the end of an anchor that ends mid-line is the anchor's own:
+    /// dropping it would double the space its replacement brings.
+    #[test]
+    fn an_anchor_ending_mid_line_keeps_its_last_space() {
+        let (scope, root, mut reads) = fixture("edit-mid-line", "x - 1\n");
+
+        edit_file(&scope, &edits(&[("x \u{2013} ", "y - ")]), &mut reads).expect("a loose match");
+
+        assert_eq!(on_disk(&root), "y - 1\n");
+    }
+
+    /// The map back to the file is by byte: text in another script before the
+    /// match moves every offset after it.
+    #[test]
+    fn a_loose_match_after_multibyte_text_lands_where_it_was_found() {
+        let (scope, root, mut reads) = fixture("edit-loose-multibyte", "привет \u{201C}мир\u{201D}\n");
+
+        edit_file(&scope, &edits(&[("\"мир\"", "x")]), &mut reads).expect("curly quotes after Cyrillic");
+
+        assert_eq!(on_disk(&root), "привет x\n");
+    }
+
+    /// The end of the file ends a line too.
+    #[test]
+    fn a_last_line_without_a_break_loses_its_trailing_space_with_the_match() {
+        let (scope, root, mut reads) = fixture("edit-loose-eof", "a\nsay(\u{201C}x\u{201D})  ");
+
+        edit_file(&scope, &edits(&[("say(\"x\")", "y")]), &mut reads).expect("at the end of the file");
+
+        assert_eq!(on_disk(&root), "a\ny");
+    }
+
+    #[test]
+    fn a_loose_match_in_a_crlf_file_keeps_crlf() {
+        let (scope, root, mut reads) = fixture("edit-loose-crlf", "a  \r\nb\r\nc\r\n");
+
+        edit_file(&scope, &edits(&[("a\nb", "x\ny")]), &mut reads).expect("trailing spaces before CRLF");
+
+        assert_eq!(on_disk(&root), "x\r\ny\r\nc\r\n");
+    }
+
+    /// Loose or not, an anchor names one place and whole words.
+    #[test]
+    fn a_loose_match_is_held_to_the_same_rules() {
+        let (scope, root, mut reads) = fixture("edit-loose-rules", "\"x\"\n\"x\"\nlet total = a \u{2014} b;\n");
+
+        let err = edit_file(&scope, &edits(&[("\u{201C}x\u{201D}", "y")]), &mut reads).expect_err("twice");
+        assert!(matches!(err, ToolError::EditTextAmbiguous(_, 2)), "{err}");
+        let err = edit_file(&scope, &edits(&[("otal = a - b", "y")]), &mut reads).expect_err("inside a word");
+        assert!(matches!(&err, ToolError::EditInsideWord(_, w) if w == "total = a \u{2014} b"), "{err}");
+        let err = edit_file(&scope, &edits(&[("a + b", "y")]), &mut reads).expect_err("absent");
+        assert!(matches!(err, ToolError::EditTextNotFound { .. }), "{err}");
+        assert_eq!(on_disk(&root), "\"x\"\n\"x\"\nlet total = a \u{2014} b;\n", "left untouched");
     }
 
     /// A unique anchor inside a word would rewrite part of a name: `line on`
