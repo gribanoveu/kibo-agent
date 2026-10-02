@@ -76,7 +76,7 @@ impl WorkspaceIndex {
         let watched = Arc::clone(&indexer);
         let watch_sink = Arc::clone(sink);
         // Errors reach the window through the sink; nothing here to do with them.
-        let watcher = FileWatcher::start(root, move || drop(watched.sync(&watch_sink)));
+        let watcher = FileWatcher::start_tree(root, move || drop(watched.sync(&watch_sink)));
 
         let first = Arc::clone(&indexer);
         let first_sink = Arc::clone(sink);
