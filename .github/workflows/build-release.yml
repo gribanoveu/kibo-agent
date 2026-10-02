@@ -100,6 +100,8 @@ jobs:
       # сообщения коммита вместо тега (так в релиз 0.6.1 уехал один trailer
       # Co-Authored-By). Первые две строки - заголовок тега и пустая строка за
       # ним - отбрасываются: заголовок уже стоит в названии релиза.
+      # За ним - раздел CHANGELOG.md этой версии (`## <тег> — <дата>`) с того же
+      # коммита, если в сообщении тега его ещё нет.
       - name: Release notes from the tag message
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,6 +109,14 @@ jobs:
           sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.sha')
           gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.message' \
             | tail -n +3 > "$RUNNER_TEMP/notes.md"
+          gh api "repos/$GITHUB_REPOSITORY/contents/CHANGELOG.md?ref=$GITHUB_REF_NAME" \
+            -H "Accept: application/vnd.github.raw" \
+            | awk -v tag="## $GITHUB_REF_NAME " 'index($0, tag) == 1 {f = 1; next} /^## / {f = 0} f && NF' \
+            > "$RUNNER_TEMP/changes.md"
+          if [ -s "$RUNNER_TEMP/changes.md" ] && ! grep -q '^## Changelog' "$RUNNER_TEMP/notes.md"; then
+            printf '\n## Changelog\n\n' >> "$RUNNER_TEMP/notes.md"
+            cat "$RUNNER_TEMP/changes.md" >> "$RUNNER_TEMP/notes.md"
+          fi
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
