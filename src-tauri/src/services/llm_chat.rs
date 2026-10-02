@@ -5,7 +5,7 @@
 //! rule here is pure and takes no provider, which is what makes it testable
 //! without a model at the other end.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1549,15 +1549,32 @@ fn stream_one_round(
                 },
             );
         };
+        // How much of each call has been reported, and whether its name had.
+        // Providers hand over a call's arguments whole on every chunk — and
+        // OpenAI's every call of the round with it — so sending them on as
+        // they come costs the square of a written file on the way to the
+        // window. Only what is new goes, and a call nothing was added to is
+        // not repeated.
+        let reported: RefCell<HashMap<String, (usize, bool)>> = RefCell::default();
         let on_tool_call_delta = |id: &str, name: &str, arguments: &str| {
             produced_output.set(true);
+            let mut reported = reported.borrow_mut();
+            let before = reported.get(id).copied();
+            let (sent, named) = before.unwrap_or((0, false));
+            // The arguments only ever grow; `get` rather than slicing keeps a
+            // provider that broke that from panicking the turn.
+            let new = arguments.get(sent..).unwrap_or("");
+            if before.is_some() && new.is_empty() && (named || name.is_empty()) {
+                return;
+            }
+            reported.insert(id.to_string(), (arguments.len().max(sent), named || !name.is_empty()));
             events.emit(
                 round,
                 Some(format!("round:{round}:tool:{id}")),
                 ChatEventPayload::ToolCallDelta(ToolCallEvent {
                     id: id.to_string(),
                     name: name.to_string(),
-                    arguments: arguments.to_string(),
+                    arguments: new.to_string(),
                 }),
             );
         };
@@ -1802,6 +1819,9 @@ mod tests {
         /// Answers, and the user types while it does. The only way to queue a
         /// note *during* a turn when the provider is synchronous.
         ReplyWhileTheUserTypes(ChatStreamResult, &'static str),
+        /// Streams calls as providers do — each chunk every call of the
+        /// round, its arguments whole so far — then answers.
+        ReplyStreamingCalls(Vec<Vec<(&'static str, &'static str, &'static str)>>, ChatStreamResult),
     }
 
     fn text_while_typing(answer: &str, note: &'static str) -> Step {
@@ -1887,7 +1907,7 @@ mod tests {
             request: ChatRequest,
             on_delta: &dyn Fn(&str),
             _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            on_tool_call_delta: &dyn Fn(&str, &str, &str),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             self.requests.lock().unwrap().push(request);
@@ -1908,6 +1928,14 @@ mod tests {
                 Step::StreamThenFail(chunk, error) => {
                     on_delta(chunk);
                     Err(error)
+                }
+                Step::ReplyStreamingCalls(chunks, result) => {
+                    for chunk in chunks {
+                        for (id, name, arguments) in chunk {
+                            on_tool_call_delta(id, name, arguments);
+                        }
+                    }
+                    Ok(result)
                 }
                 Step::ReplyWhileTheUserTypes(result, note) => {
                     if let Some(queue) = self.steering.lock().unwrap().as_ref() {
@@ -4571,6 +4599,44 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, ["/review a.rs", "and b.rs"]);
+    }
+
+    /// A call's arguments reach the window once each: what is new since the
+    /// last chunk, never the whole again, and nothing for a call that did not
+    /// grow. A name that comes after the first chunk still gets through.
+    #[test]
+    fn streamed_call_arguments_are_reported_as_what_is_new() {
+        let chunks = vec![
+            vec![("a", "read", "")],
+            vec![("a", "read", r#"{"pa"#)],
+            vec![("a", "read", r#"{"path":"x"}"#), ("b", "grep", "")],
+            vec![("a", "read", r#"{"path":"x"}"#), ("b", "grep", "{}")],
+            vec![("c", "", "{")],
+            vec![("c", "list", "{")],
+            vec![("c", "list", "{")],
+        ];
+        let h = harness("call-deltas", vec![Step::ReplyStreamingCalls(chunks, ChatStreamResult { text: "ok".into(), ..Default::default() })]);
+
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+
+        let reported: Vec<(String, String, String)> = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::ToolCallDelta(call) => Some((call.id, call.name, call.arguments)),
+                _ => None,
+            })
+            .collect();
+        let expected = [
+            ("a", "read", ""),
+            ("a", "read", r#"{"pa"#),
+            ("a", "read", r#"th":"x"}"#),
+            ("b", "grep", ""),
+            ("b", "grep", "{}"),
+            ("c", "", "{"),
+            ("c", "list", ""),
+        ];
+        assert_eq!(reported, expected.map(|(i, n, a)| (i.to_string(), n.to_string(), a.to_string())));
     }
 
     #[test]

@@ -336,12 +336,8 @@ function timeStream(state: TurnState, event: TurnEvent, now: number): TurnState 
     case "delta":
     case "reasoning":
       return streamed(state, event.payload.delta.length, now);
-    case "toolCallDelta": {
-      // A call's arguments arrive whole each time: what is new is the growth.
-      const { id, arguments: args } = event.payload;
-      const before = state.blocks.find((b) => b.kind === "tool" && b.id === id);
-      return streamed(state, Math.max(0, args.length - (before?.kind === "tool" ? before.arguments.length : 0)), now);
-    }
+    case "toolCallDelta":
+      return streamed(state, event.payload.arguments.length, now);
     case "contextUsage": {
       const ms = state.streamSince === null ? 0 : now - state.streamSince;
       const tokens = event.payload.completionTokens;
@@ -442,12 +438,13 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState 
         ],
       };
 
+    // A delta carries what is new; the call itself, the whole arguments.
     case "toolCallDelta":
     case "toolCall":
       return upsertTool(state, event.round, event.payload.id, (block) => ({
         ...block,
         name: event.payload.name || block.name,
-        arguments: event.payload.arguments,
+        arguments: event.type === "toolCallDelta" ? block.arguments + event.payload.arguments : event.payload.arguments,
       }));
 
     case "toolResult":

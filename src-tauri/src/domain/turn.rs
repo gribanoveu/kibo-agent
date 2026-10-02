@@ -276,9 +276,11 @@ pub enum ChatEventPayload {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         truncated: bool,
     },
-    /// A call's arguments are still arriving. Always followed by `ToolCall`
-    /// with the same id unless the turn is cancelled first, and the JSON may
-    /// be incomplete until then.
+    /// A call's arguments are still arriving: `arguments` is what came since
+    /// the last delta for this id, to be appended — never the whole again.
+    /// Always followed by `ToolCall` with the same id and the whole arguments
+    /// unless the turn is cancelled first, and the JSON may be incomplete
+    /// until then.
     ToolCallDelta(ToolCallEvent),
     /// A call is about to run. Always followed by exactly one `ToolResult`
     /// with the same id: listeners pair them by it, so the order is a

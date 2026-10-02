@@ -111,19 +111,20 @@ describe("tool calls", () => {
     expect(tool.status).toBe("done");
   });
 
-  test("arguments still arriving are replaced, not appended", () => {
+  test("arguments still arriving are appended, and the call itself replaces them", () => {
     seq = 0;
-    const state = run([
+    const deltas = [
       ev({ type: "toolCallDelta", payload: { id: "c1", name: "writeFile", arguments: '{"pa' } }),
-      ev({
-        type: "toolCallDelta",
-        payload: { id: "c1", name: "writeFile", arguments: '{"path":"a.rs"}' },
-      }),
-    ]);
-
-    const tool = state.blocks[0] as Extract<Block, { kind: "tool" }>;
+      ev({ type: "toolCallDelta", payload: { id: "c1", name: "", arguments: 'th":"a.rs"}' } }),
+    ];
+    const streaming = run(deltas);
+    const tool = streaming.blocks[0] as Extract<Block, { kind: "tool" }>;
     expect(tool.arguments).toBe('{"path":"a.rs"}');
-    expect(state.blocks).toHaveLength(1);
+    expect(tool.name).toBe("writeFile");
+    expect(streaming.blocks).toHaveLength(1);
+
+    const called = run([...deltas, ev({ type: "toolCall", payload: { id: "c1", name: "writeFile", arguments: '{"path":"b.rs"}' } })]);
+    expect((called.blocks[0] as Extract<Block, { kind: "tool" }>).arguments).toBe('{"path":"b.rs"}');
   });
 
   test("a failed call says so and carries the message the model got", () => {
@@ -580,9 +581,9 @@ describe("speed", () => {
       [ev({ type: "delta", payload: { delta: "x".repeat(400) } }), 1_000],
       [ev({ type: "contextUsage", payload: usage }), 2_000],
       [ev({ type: "roundStarted", round: 2 }), 2_100],
-      // Arguments come whole each time: 30 characters, then 30 more.
+      // Arguments come as what is new: 30 characters, then 30 more.
       [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "a".repeat(30) } }), 3_000],
-      [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "a".repeat(60) } }), 3_500],
+      [ev({ type: "toolCallDelta", round: 2, payload: { id: "c", name: "read", arguments: "a".repeat(30) } }), 3_500],
       [ev({ type: "delta", round: 2, payload: { delta: "y".repeat(60) } }), 4_000],
     ];
     const state = at.reduce((s, [event, now]) => acceptEvent(s, event, now), emptyTurn());
