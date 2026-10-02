@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, X } from "lucide-react";
+import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, MessageSquareReply, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
@@ -38,6 +38,10 @@ type Props = {
   /** What is waiting for the turn to end; a row taken out goes back to the box. */
   queued?: { id: number; text: string }[];
   onUnqueue?: (id: number) => void;
+  /** Notes sent into the running turn that no round has read yet; one taken
+      back goes to the box. */
+  steered?: { id: string; text: string }[];
+  onWithdraw?: (id: string) => void;
   onStop: () => void;
   running: boolean;
   /** Both chips live above this component: the backend has to be told, and a
@@ -78,6 +82,8 @@ export function Composer({
   onQueue,
   queued = [],
   onUnqueue,
+  steered = [],
+  onWithdraw,
   onStop,
   running,
   conversation,
@@ -189,8 +195,19 @@ export function Composer({
   return (
     <div className="composer-wrap">
       {/* Above the folder tab, which sits on the box's edge. */}
-      {queued.length > 0 && (
+      {(steered.length > 0 || queued.length > 0) && (
         <ul className="composer-queue" aria-label="Queued messages">
+          {/* The notes first: they reach the agent at its next step, the
+              queue only after the turn. */}
+          {steered.map((note) => (
+            <li key={note.id} title="Reaches the agent at its next step">
+              <MessageSquareReply size={13} />
+              <span className="composer-queue-text">{note.text}</span>
+              <button type="button" title="Take back to the message box" aria-label="Take back to the message box" onClick={() => onWithdraw?.(note.id)}>
+                <X size={13} />
+              </button>
+            </li>
+          ))}
           {queued.map((item) => (
             <li key={item.id}>
               <CornerDownRight size={13} />

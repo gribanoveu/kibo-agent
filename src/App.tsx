@@ -589,6 +589,8 @@ export default function App() {
                 onQueue={agent.queue}
                 queued={agent.queued}
                 onUnqueue={agent.unqueue}
+                steered={agent.steered}
+                onWithdraw={agent.withdraw}
                 focus={composerFocus}
                 onStop={agent.cancel}
                 running={agent.turn.status === "running"}

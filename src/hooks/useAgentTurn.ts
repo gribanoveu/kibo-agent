@@ -5,6 +5,7 @@ import { changesFrom } from "../lib/rewind";
 import {
   answerMcpQuestion,
   cancelChat,
+  cancelSteer,
   type McpAnswer,
   compactHistory,
   contextUsage,
@@ -55,6 +56,9 @@ import {
 
 /** A message waiting for the running turn to end, to be sent as the next one. */
 export type Queued = { id: number; text: string };
+
+/** A note typed into the running turn, until a round of it reads the note. */
+export type Steered = { id: string; text: string };
 
 export function useAgentTurn({
   onSaved,
@@ -109,6 +113,14 @@ export function useAgentTurn({
   const compacting = useRef(false);
   const [queued, setQueued] = useState<Queued[]>([]);
   const queueSeq = useRef(0);
+  // Notes sent into the running turn. One leaves the list when the transcript
+  // shows it read — derived from the blocks, so the event and the answer to
+  // `steer` may arrive in either order.
+  const [sentNotes, setSentNotes] = useState<Steered[]>([]);
+  const steered = useMemo(() => {
+    const read = new Set(turn.blocks.flatMap((block) => (block.kind === "steer" ? [block.id] : [])));
+    return sentNotes.filter((note) => !read.has(`steer:${note.id}`));
+  }, [sentNotes, turn.blocks]);
   // The next-prompt journal: the turn started by `send` and what started it,
   // then the row it was journaled as — a promise, since a queued message can
   // be sent before the row is written.
@@ -271,7 +283,8 @@ export function useAgentTurn({
       if (!trimmed) return;
 
       if (turn.status === "running") {
-        await steerCommand(content, content === trimmed ? undefined : trimmed);
+        const id = await steerCommand(content, content === trimmed ? undefined : trimmed);
+        setSentNotes((notes) => [...notes, { id, text: trimmed }]);
         return;
       }
 
@@ -345,24 +358,45 @@ export function useAgentTurn({
     [queued],
   );
 
-  const giveBackQueue = useCallback(() => {
-    if (queued.length === 0) return;
-    setQueued([]);
-    giveBackRef.current?.(queued.map((q) => q.text).join("\n\n"));
-  }, [queued]);
+  /**
+   * Takes a note back from the running turn, into the composer. A round that
+   * read it first wins: what the model was told cannot be unsaid, and the
+   * transcript already shows it.
+   */
+  const withdraw = useCallback(
+    async (id: string) => {
+      const note = sentNotes.find((n) => n.id === id);
+      if (!note) return;
+      setSentNotes((notes) => notes.filter((n) => n.id !== id));
+      try {
+        if (await cancelSteer(id)) giveBackRef.current?.(note.text);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [sentNotes],
+  );
 
   // A turn that finished sends the next queued message. One that was stopped
   // or failed gives the queue back instead: what was meant to follow it may
   // no longer be what the user wants, and starting it unasked is worse than
-  // an extra Enter. After the save effect above, which it would otherwise
+  // an extra Enter. A note the turn never read goes back either way — the
+  // next turn does not take it. One hand-back, not two: the composer keeps
+  // only the last. After the save effect above, which it would otherwise
   // find already marked unsaved.
   useEffect(() => {
-    if (queued.length === 0 || (turn.status !== "done" && turn.status !== "cancelled")) return;
-    if (turn.status === "cancelled" || error !== null) return giveBackQueue();
+    if (turn.status !== "done" && turn.status !== "cancelled") return;
+    if (queued.length === 0 && sentNotes.length === 0) return;
+    const back = steered.map((note) => note.text);
+    setSentNotes([]);
+    const stopped = turn.status === "cancelled" || error !== null;
+    if (stopped) back.push(...queued.map((q) => q.text));
+    if (back.length > 0) giveBackRef.current?.(back.join("\n\n"));
+    if (stopped || queued.length === 0) return setQueued([]);
     const [next, ...rest] = queued;
     setQueued(rest);
     void send(next.text);
-  }, [turn.status, error, queued, send, giveBackQueue]);
+  }, [turn.status, error, queued, sentNotes, steered, send]);
 
   /** Answers the approval card. `always` widens the policy before continuing. */
   const decide = useCallback(
@@ -591,6 +625,8 @@ export function useAgentTurn({
     queued,
     queue,
     unqueue,
+    steered,
+    withdraw,
     decide,
     cancel,
     answerQuestion,

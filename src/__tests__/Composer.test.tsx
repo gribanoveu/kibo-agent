@@ -548,10 +548,15 @@ describe("the box's focus", () => {
 });
 
 describe("the queue", () => {
-  function queueing(running: boolean, queued: { id: number; text: string }[] = []) {
+  function queueing(
+    running: boolean,
+    queued: { id: number; text: string }[] = [],
+    steered: { id: string; text: string }[] = [],
+  ) {
     const sent: string[] = [];
     const held: string[] = [];
     const taken: number[] = [];
+    const withdrawn: string[] = [];
     const ran: string[] = [];
     render(
       <Composer
@@ -559,6 +564,8 @@ describe("the queue", () => {
         onQueue={(text) => held.push(text)}
         queued={queued}
         onUnqueue={(id) => taken.push(id)}
+        steered={steered}
+        onWithdraw={(id) => withdrawn.push(id)}
         onStop={() => {}}
         running={running}
         conversation="agent"
@@ -580,7 +587,7 @@ describe("the queue", () => {
       fireEvent.change(box, { target: { value: text } });
       fireEvent.keyDown(box, { code: "Enter", key: "Enter", altKey: true });
     };
-    return { sent, held, taken, ran, box, altEnter };
+    return { sent, held, taken, withdrawn, ran, box, altEnter };
   }
 
   test("Alt+Enter during a turn holds the message instead of steering with it", () => {
@@ -614,5 +621,16 @@ describe("the queue", () => {
     expect([...list.querySelectorAll(".composer-queue-text")].map((el) => el.textContent)).toEqual(["first", "second"]);
     fireEvent.click(screen.getAllByRole("button", { name: "Back to the message box" })[1]);
     expect(taken).toEqual([2]);
+  });
+
+  /// A note sent into the turn is listed above the queue — it is read sooner —
+  /// and taking it back is its own action, not the queue's.
+  test("a note the turn has not read yet is listed first, and can be taken back", () => {
+    const { taken, withdrawn } = queueing(true, [{ id: 1, text: "then the docs" }], [{ id: "n-1", text: "use the helper" }]);
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect([...list.querySelectorAll(".composer-queue-text")].map((el) => el.textContent)).toEqual(["use the helper", "then the docs"]);
+    fireEvent.click(screen.getByRole("button", { name: "Take back to the message box" }));
+    expect(withdrawn).toEqual(["n-1"]);
+    expect(taken).toEqual([]);
   });
 });

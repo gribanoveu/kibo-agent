@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-02 A message sent to the agent mid-turn waits above the message box until the agent reads it, and can be taken back into the box until then; one the turn never read comes back to the box when the turn ends
+
 ## v0.4.0-alfa — 2026-10-02
 
 - 2026-10-02 Code search shows the one documentation passage that outranks all the code, fifth, even when the model did not ask for documentation; the identifiers the model gives in `fts` are searched beside the words of its question instead of replacing them

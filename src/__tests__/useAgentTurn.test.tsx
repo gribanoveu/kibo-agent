@@ -747,6 +747,95 @@ describe("the queue", () => {
     expect(result.current.queued.map((q) => q.text)).toEqual(["two"]);
   });
 
+  /** Starts a held turn and sends `note` into it; the backend calls it `note-1`. */
+  async function steeredTurn(given: string[]) {
+    const turn = heldTurn();
+    results.chat_steer = "note-1";
+    const hook = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void hook.result.current.send("fix it"));
+    await waitFor(() => expect(hook.result.current.turn.status).toBe("running"));
+    await act(async () => {
+      await hook.result.current.send("use the helper");
+    });
+    const turnId = started()[0].args.turnId;
+    const read = () =>
+      act(() => emit({ turnId, seq: 1, round: 1, type: "steeringApplied", payload: { id: "note-1", text: "use the helper" } }));
+    return { ...hook, turn, read };
+  }
+
+  test("a note sent into the turn is listed until a round reads it", async () => {
+    const { result, read } = await steeredTurn([]);
+    expect(result.current.steered).toEqual([{ id: "note-1", text: "use the helper" }]);
+
+    read();
+    expect(result.current.steered).toEqual([]);
+    expect(result.current.turn.blocks.some((block) => block.kind === "steer")).toBe(true);
+  });
+
+  test("a note taken back before it is read goes back to the box", async () => {
+    const given: string[] = [];
+    const { result } = await steeredTurn(given);
+    results.chat_cancel_steer = true;
+
+    await act(() => result.current.withdraw("note-1"));
+    expect(calls.find((call) => call.command === "chat_cancel_steer")?.args).toEqual({ id: "note-1" });
+    expect(given).toEqual(["use the helper"]);
+    expect(result.current.steered).toEqual([]);
+  });
+
+  /// A round took it while the user reached for the button: the model has it,
+  /// and the transcript will show it, so the box does not get it back too.
+  test("a note a round already took is not given back", async () => {
+    const given: string[] = [];
+    const { result } = await steeredTurn(given);
+    results.chat_cancel_steer = false;
+
+    await act(() => result.current.withdraw("note-1"));
+    expect(given).toEqual([]);
+    expect(result.current.steered).toEqual([]);
+  });
+
+  /// One hand-back, not two: the composer keeps only the last text it is given.
+  test("a stopped turn gives back the unread note together with the queue", async () => {
+    const given: string[] = [];
+    const { result, turn } = await steeredTurn(given);
+    act(() => result.current.queue("then the docs"));
+
+    await act(async () => turn.end("cancelled"));
+    await waitFor(() => expect(given).toEqual(["use the helper\n\nthen the docs"]));
+    expect(result.current.steered).toEqual([]);
+  });
+
+  test("a stopped turn gives back an unread note with nothing queued", async () => {
+    const given: string[] = [];
+    const { result, turn } = await steeredTurn(given);
+
+    await act(async () => turn.end("cancelled"));
+    await waitFor(() => expect(given).toEqual(["use the helper"]));
+    expect(result.current.steered).toEqual([]);
+  });
+
+  test("a finished turn gives back a note it never read, and still sends the queue", async () => {
+    const given: string[] = [];
+    const { result, turn } = await steeredTurn(given);
+    act(() => result.current.queue("then the docs"));
+
+    await act(async () => turn.end("done"));
+    await waitFor(() => expect(started()).toHaveLength(2));
+    expect(given).toEqual(["use the helper"]);
+    expect((started()[1].args.messages as { content: string }[]).at(-1)?.content).toBe("then the docs");
+  });
+
+  test("a note the turn read is not given back when it ends", async () => {
+    const given: string[] = [];
+    const { result, turn, read } = await steeredTurn(given);
+    read();
+
+    await act(async () => turn.end("done"));
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+    expect(given).toEqual([]);
+  });
+
   /// The turn, its answer and its queue belong to the chat on screen: a new
   /// chat would take them over, so it waits for the turn to stop.
   test("a new chat is refused while the turn runs, and the queue stays", async () => {
