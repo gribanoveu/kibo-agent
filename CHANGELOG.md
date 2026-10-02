@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-02 Code search shows the one documentation passage that outranks all the code, fifth, even when the model did not ask for documentation; the identifiers the model gives in `fts` are searched beside the words of its question instead of replacing them
 - 2026-10-01 An MCP server can be marked to keep its results (Its results → Kept, `keepResults` in mcp.json) — for templates and rules the model follows, which are then never cleared to save context
 - 2026-10-01 The agent is told to keep the facts a long task needs in its plan, and a plan written during a turn stays in every request after it, however full the context gets
 - 2026-10-01 The agent can close or cancel several checklist items in one step

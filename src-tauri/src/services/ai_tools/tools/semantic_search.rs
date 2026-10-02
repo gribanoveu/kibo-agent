@@ -63,7 +63,7 @@ When a question is not in the code's language, or you are unsure how the code pu
 they are searched in the same call, which finds more than any one of them and costs less than a search each. \
 Searching documentation written in another language, write the query in that language. \
 Put the identifiers you expect the code to use in fts (sendNotification, RetryPolicy), not the words of the question. \
-Documentation is left out unless you set includeDocs; glob and exclude narrow the search to paths, as in grep. \
+Documentation is left out unless you set includeDocs — but for one passage that outranks all the code, listed fifth; glob and exclude narrow the search to paths, as in grep. \
 If meta.hint is present, follow it. Use grep instead when you need every occurrence of an exact string. \
 Returns at most {MAX_TOP_K} matches."
         ),

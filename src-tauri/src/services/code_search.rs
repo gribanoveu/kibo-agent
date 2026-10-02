@@ -49,6 +49,22 @@ const RRF_K: f32 = 3.0;
 /// place on questions whose words the code does not use.
 const LEXICAL_WEIGHT: f32 = 1.5;
 
+/// The weight of the model's own `fts` words, ranked beside the query's words
+/// rather than instead of them. Bench, 2026-10-02 (26 Russian questions as
+/// deepseek-flash put them, 21 with `fts`), code answers in the top five: 17
+/// of 22 with `fts` replacing the query's words, 20 beside them at 1.5, 21 at
+/// 0.5, 22 at 0.25 and with `fts` ignored. Kept above nothing: `fts` is the
+/// one way to ask for an exact error message or key.
+const FTS_WEIGHT: f32 = 0.5;
+
+/// Where documentation that outranks all the code goes when `includeDocs` is
+/// not set: one passage, fifth, so the code above it keeps its places. Bench,
+/// 2026-10-02, the 93 questions without `includeDocs`: answers in the docs in
+/// the top five 1 → 7 of 15, code answers unchanged (31 first, 64 in the top
+/// five of 78). First instead cost the code 4 of its first places; second or
+/// third kept them but lowered its MRR (0.549, 0.553 against 0.557).
+const UNASKED_DOC_SLOT: usize = 4;
+
 /// Prose — Markdown, AsciiDoc, plain text — is long, and long text shares a
 /// few words and a general drift with most questions. Scaled down, not out:
 /// harder than this and questions answered by documentation lose.
@@ -81,12 +97,14 @@ const MAX_PER_FILE: usize = 2;
 /// fewer matches than asked for.
 const FILTERED_SLACK: usize = 2;
 
-/// `fts`, when given, is what the word ranking searches instead of `query` —
-/// unless it has no searchable word in it, in which case `query` is: a model
-/// that asked for more precision must not lose the ranking for it.
+/// `fts`, when given, is ranked by words beside `query`'s own words, at
+/// [`FTS_WEIGHT`]: a model that asked for more precision must not lose the
+/// ranking for a wrong guess.
 ///
-/// `filter.include_docs` false leaves documentation out (`is_documentation`);
-/// the hint then says how many matches that cost, so the model can ask again.
+/// `filter.include_docs` false leaves documentation out (`is_documentation`),
+/// all but one passage that outranks all the code, which comes fifth
+/// ([`UNASKED_DOC_SLOT`]); the hint then says how many matches were left
+/// out, so the model can ask again.
 /// `filter.paths` keeps only the files it allows.
 pub fn search(
     indexer: &RepoIndexer,
@@ -151,12 +169,12 @@ pub fn search_many(
             }
         };
         let own = if i == 0 { fts.and_then(|terms| fts5_query(&terms.join(" "))) } else { None };
-        let lexical: Vec<ChunkId> = match own.or_else(|| fts5_query(query)) {
-            Some(fts) => store.search_bm25(&fts, candidates)?.into_iter().map(|(id, _)| id).collect(),
-            None => Vec::new(),
-        };
         lists.push((semantic, MatchSource::Semantic, 1.0));
-        lists.push((lexical, MatchSource::Lexical, LEXICAL_WEIGHT));
+        for (words, weight) in [(own, FTS_WEIGHT), (fts5_query(query), LEXICAL_WEIGHT)] {
+            let Some(words) = words else { continue };
+            let lexical: Vec<ChunkId> = store.search_bm25(&words, candidates)?.into_iter().map(|(id, _)| id).collect();
+            lists.push((lexical, MatchSource::Lexical, weight));
+        }
     }
     if lists.iter().any(|(list, source, _)| *source == MatchSource::Semantic && !list.is_empty()) {
         tiers_used.push(MatchSource::Semantic);
@@ -180,6 +198,7 @@ pub fn search_many(
     let mut seen = HashSet::new();
     let mut matches = Vec::with_capacity(top_k);
     let mut docs_left_out: Vec<(ChunkMetadata, MatchSource)> = Vec::new();
+    let mut unasked_doc: Option<(ChunkMetadata, MatchSource)> = None;
     let mut paths_left_out = 0;
     let mut per_file: HashMap<String, usize> = HashMap::new();
     let mut later = Vec::new();
@@ -195,7 +214,11 @@ pub fn search_many(
             continue;
         }
         if !include_docs && is_documentation(&chunk.file_id.0) {
-            docs_left_out.push((chunk, source));
+            if matches.is_empty() && unasked_doc.is_none() {
+                unasked_doc = Some((chunk, source));
+            } else {
+                docs_left_out.push((chunk, source));
+            }
             continue;
         }
         let Some(found) = resolved_match(indexer, chunk, source) else { continue };
@@ -211,6 +234,17 @@ pub fn search_many(
     }
     let room = top_k - matches.len();
     matches.extend(later.into_iter().take(room));
+    match unasked_doc {
+        // No code at all: it heads the documentation given instead, below.
+        Some(doc) if matches.is_empty() => docs_left_out.insert(0, doc),
+        Some((chunk, source)) => {
+            if let Some(doc) = resolved_match(indexer, chunk, source) {
+                matches.insert(UNASKED_DOC_SLOT.min(matches.len()), doc);
+                matches.truncate(top_k);
+            }
+        }
+        None => {}
+    }
     // No code at all — a folder of notes, say: the documentation left out is
     // the answer there is, and a second search to ask for it only costs a round.
     let docs_instead = matches.is_empty() && !docs_left_out.is_empty();
@@ -554,6 +588,7 @@ mod tests {
         let result = search(&indexer, "gizmo stuff", None, 1, &code()).unwrap();
 
         assert_eq!(summary(&result).first().map(|(name, _)| name.as_str()), Some("run"), "{:?}", summary(&result));
+        assert_eq!(result.matches.len(), 1, "{:?}", summary(&result));
     }
 
     /// The nearest commits count, and no more than a few of them: a query
@@ -1028,6 +1063,39 @@ mod tests {
         // Nothing searchable in `fts`: the query's own words are used.
         let noise = ["!!".to_string()];
         assert_eq!(search(&indexer, "what does gizmo do", Some(&noise), 5, &all()).unwrap().matches.len(), 1);
+    }
+
+    /// A wrong word in `fts` does not cost the query's own words their match.
+    #[test]
+    fn fts_is_searched_beside_the_query_words() {
+        let model = Arc::new(FakeModel::default());
+        let indexer = indexed("search-fts-beside", &[("a.rs", "fn gizmo() {}\n")], Arc::clone(&model));
+        model.fail.store(true, Ordering::SeqCst);
+
+        let wrong = ["sprocket".to_string()];
+        let found = search(&indexer, "what does gizmo do", Some(&wrong), 5, &all()).unwrap();
+        assert_eq!(found.matches.len(), 1, "{:?}", summary(&found));
+    }
+
+    /// Without `includeDocs`, documentation that outranks all the code still
+    /// comes — once, fifth, below the code it would otherwise displace.
+    #[test]
+    fn documentation_above_all_the_code_comes_fifth_unasked() {
+        let mut files: Vec<(String, String)> =
+            (0..6).map(|i| (format!("f{i}.rs"), format!("fn f{i}() {{ widget }}\n"))).collect();
+        files.push(("notes.md".into(), "# Gizmo widget\n\ngizmo widget gizmo widget gizmo widget\n".into()));
+        files.push(("more.md".into(), "# Other\n\nwidget\n".into()));
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+        let indexer = indexed("search-docs-unasked", &files, Arc::default());
+
+        let everything = search(&indexer, "gizmo widget", None, 10, &all()).unwrap();
+        assert_eq!(everything.matches[0].path, "notes.md", "{:?}", summary(&everything));
+
+        let code = search(&indexer, "gizmo widget", None, 10, &code()).unwrap();
+        let paths: Vec<&str> = code.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths.iter().filter(|p| p.ends_with(".md")).count(), 1, "{paths:?}");
+        assert_eq!(paths[UNASKED_DOC_SLOT], "notes.md", "{paths:?}");
+        assert!(code.meta.hint.unwrap_or_default().contains("1 documentation match was left out (more.md)"));
     }
 
     /// Never embedded because the model would not load: nothing to search by
