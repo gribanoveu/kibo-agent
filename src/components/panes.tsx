@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import {
   BookText,
   ClipboardList,
@@ -12,7 +12,6 @@ import {
 import { ChangesPanel } from "./ChangesPanel";
 import { FilesPanel } from "./FilesPanel";
 import { ItemList } from "./ItemList";
-import { TerminalPanel } from "./TerminalPanel";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
@@ -395,6 +394,10 @@ function FilesPane({ active, workspace, chatBlocks, openFile, onOpenFile }: Pane
 // them. Adding one is an id in `ASIDE_TABS` and an entry here — nothing else
 // names a pane. `dock` is where the menu opens it; each dock shows one pane. There is no tab strip: eight icons in a 300px column were
 // unreadable, and only one of them is opened often.
+// The terminal brings xterm, a quarter of the app's script, and is opened
+// far less often than the app is: it is loaded the first time it is shown.
+const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
+
 export const PANES: PaneDef[] = [
   { id: "changes", label: "Changes", icon: FileDiff, dock: "right", Component: ({ active, workspace, onNotify, commitDraft, openFile, onOpenFile }) => <ChangesPanel active={active} workspace={workspace} onNotify={onNotify} openFile={openFile} onOpenFile={onOpenFile} {...commitDraft} /> },
   { id: "plan", label: "Plan", icon: ClipboardList, dock: "right", Component: ({ plan }) => <PlanPanel {...plan} /> },
@@ -403,5 +406,10 @@ export const PANES: PaneDef[] = [
   { id: "skills", label: "Skills", icon: Sparkles, dock: "right", Component: SkillsPane },
   { id: "mcp", label: "MCP", icon: Plug, dock: "right", Component: ({ mcp }) => <McpList {...mcp} /> },
   { id: "hooks", label: "Hooks", icon: Webhook, dock: "right", Component: ({ hooks }) => <HooksList {...hooks} /> },
-  { id: "terminal", label: "Terminal", icon: SquareTerminal, dock: "bottom", Component: TerminalPanel },
+  { id: "terminal", label: "Terminal", icon: SquareTerminal, dock: "bottom", Component: (ctx) => (
+      <Suspense fallback={null}>
+        <TerminalPanel {...ctx} />
+      </Suspense>
+    ),
+  },
 ];
