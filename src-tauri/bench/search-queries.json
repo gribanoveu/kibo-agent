@@ -1,5 +1,5 @@
 {
-  "about": "Questions with known answers for the code-search quality bench (services/search_bench.rs). `expect` lists acceptable answers: a file, and optionally the declaration (a substring of the chunk's qualified name). Answers were checked by reading the code. Repositories not found on disk are skipped. Questions marked `\"answer\": \"docs\"` are answered by documentation, so that a ranking which buries prose is caught; `\"caller\"` name an identifier whose use, not declaration, is the answer.",
+  "about": "Questions with known answers for the code-search quality bench (services/search_bench.rs). `expect` lists acceptable answers: a file, and optionally the declaration (a substring of the chunk's qualified name). Answers were checked by reading the code. Repositories not found on disk are skipped. Questions marked `\"answer\": \"docs\"` are answered by documentation, so that a ranking which buries prose is caught; `\"caller\"` name an identifier whose use, not declaration, is the answer.  is how the agent itself put a Russian question to semanticSearch (deepseek-flash, 2026-10-02, the first call of a turn asked \"<question> — где это в коде? Назови файл.\"); the bench asks it that way too, beside the question alone. Questions the agent answered without semanticSearch have none.",
   "repos": [
     {
       "name": "kibo-agent",
@@ -23,7 +23,20 @@
               "path": "src-tauri/src/infra/file_watcher.rs",
               "name": "dispatch"
             }
-          ]
+          ],
+          "agent": {
+            "query": "watch workspace files and debounce reindex after saves",
+            "queries": [
+              "debounce file change events before starting index sync",
+              "throttle watcher events reindex delay",
+              "notify watcher debounce delay milliseconds"
+            ],
+            "fts": [
+              "debounce",
+              "watcher",
+              "Duration"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -43,7 +56,14 @@
               "path": "src-tauri/src/infra/process_runner.rs",
               "name": "kill_tree"
             }
-          ]
+          ],
+          "agent": {
+            "query": "kill child processes when a command times out",
+            "queries": [
+              "run command with timeout and kill process tree",
+              "process group kill on timeout"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -73,7 +93,19 @@
               "path": "src-tauri/src/infra/local_embeddings.rs",
               "name": "IdleCell"
             }
-          ]
+          ],
+          "agent": {
+            "query": "unload embedding model from memory when idle",
+            "queries": [
+              "drop local embedding model after idle timeout",
+              "idle unload memory model",
+              "выгрузить модель эмбеддингов при простое"
+            ],
+            "fts": [
+              "unload",
+              "idle"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -93,7 +125,20 @@
               "path": "src-tauri/src/infra/master_key.rs",
               "name": "load_or_create"
             }
-          ]
+          ],
+          "agent": {
+            "query": "master key stored when keychain is unavailable fallback storage",
+            "queries": [
+              "keyring unavailable fallback file master key",
+              "secure storage master key generation and read",
+              "запасное хранилище мастер-ключа если связка ключей недоступна"
+            ],
+            "fts": [
+              "master_key",
+              "keychain",
+              "keyring"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -113,7 +158,20 @@
               "path": "src-tauri/src/domain/tools.rs",
               "name": "ReadFiles"
             }
-          ]
+          ],
+          "agent": {
+            "query": "refuse writeFile when the file changed on disk since it was read",
+            "queries": [
+              "file modified since read, write refused, read before write",
+              "staleness check mtime readFile writeFile tool"
+            ],
+            "fts": [
+              "writeFile",
+              "editFile",
+              "readFile",
+              "stale"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -145,7 +203,20 @@
             {
               "path": "src-tauri/src/services/context_compaction.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "compact conversation history when context window overflows",
+            "queries": [
+              "summarize older messages when token limit exceeded",
+              "history compaction threshold tokens",
+              "context overflow truncate messages"
+            ],
+            "fts": [
+              "compact",
+              "compaction",
+              "context"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -174,7 +245,10 @@
             {
               "path": "src-tauri/src/domain/llm_retry.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "retry the request to the LLM provider after the connection dropped or failed"
+          }
         },
         {
           "lang": "en",
@@ -213,7 +287,19 @@
             {
               "path": "src-tauri/src/services/ai_tools/resolve.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "validate and canonicalize a path from the frontend against the opened repo root, reject paths escaping the workspace",
+            "queries": [
+              "path traversal check reject path outside repo root",
+              "resolve tool path sandboxed to workspace root"
+            ],
+            "fts": [
+              "canonicalize",
+              "repo_root",
+              "workspace_root"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -282,7 +368,15 @@
               "path": "src-tauri/src/domain/chunk_index.rs",
               "name": "split"
             }
-          ]
+          ],
+          "agent": {
+            "query": "split a large code chunk into smaller pieces before embedding",
+            "fts": [
+              "chunk",
+              "split",
+              "chunks"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -446,7 +540,17 @@
             {
               "path": "src-tauri/src/services/spellcheck.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "spell check in document, highlight misspelled words",
+            "queries": [
+              "spellcheck dictionary hunspell",
+              "орфография проверка правописания документа"
+            ],
+            "fts": [
+              "spell"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -465,7 +569,19 @@
             {
               "path": "src-tauri/src/services/calendar_sync.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "calendar events synchronization",
+            "queries": [
+              "sync calendar events with remote provider",
+              "calendar sync service",
+              "iCalendar ICS event sync"
+            ],
+            "fts": [
+              "calendar",
+              "sync"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -483,7 +599,18 @@
             {
               "path": "src-tauri/src/services/reference_rewrite.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "update links in documents after file rename",
+            "queries": [
+              "rename file and update references in other documents",
+              "find references to renamed file across repo and rewrite them",
+              "refactor links on move/rename"
+            ],
+            "fts": [
+              "rename"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -510,7 +637,14 @@
             {
               "path": "src-tauri/src/services/standards_rules.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "standards checker for method description document",
+            "fts": [
+              "standards",
+              "method-spec"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -530,7 +664,19 @@
               "path": "src-tauri/src/services/memory_pipeline.rs",
               "name": "reconcile_with_neighbors"
             }
-          ]
+          ],
+          "agent": {
+            "query": "don't save a memory fact if a similar one already exists, skip duplicate memory",
+            "queries": [
+              "memory fact deduplication similarity threshold",
+              "skip saving memory when duplicate found",
+              "сохранить факт памяти похожий уже есть"
+            ],
+            "fts": [
+              "memory",
+              "duplicate"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -558,7 +704,15 @@
             {
               "path": "src-tauri/src/services/git_clone.rs"
             }
-          ]
+          ],
+          "agent": {
+            "query": "clone a git repository from a URL",
+            "fts": [
+              "clone",
+              "clone_repo",
+              "git2"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -588,7 +742,15 @@
               "path": "METRICS.md"
             }
           ],
-          "answer": "docs"
+          "answer": "docs",
+          "agent": {
+            "query": "metrics event contract type definition",
+            "queries": [
+              "MetricEvent struct enum serialize",
+              "metrics telemetry event payload contract",
+              "событие метрики контракт"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -728,7 +890,18 @@
             {
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/consumer/NotificationConsumer.java"
             }
-          ]
+          ],
+          "agent": {
+            "query": "Kafka listener consuming FNS decisions for notifications",
+            "queries": [
+              "@KafkaListener decision notification FNS",
+              "Kafka consumer solution ФНС уведомление",
+              "KafkaDecisionConsumer handle decision message"
+            ],
+            "fts": [
+              "KafkaListener"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -738,7 +911,20 @@
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/repository/NotificationDocPackRepository.java",
               "name": "findReadyToSend"
             }
-          ]
+          ],
+          "agent": {
+            "query": "select notification packages ready to be sent to FNS (Federal Tax Service)",
+            "queries": [
+              "find packages ready for sending to tax authority",
+              "выборка пакетов уведомлений готовых к отправке в ФНС",
+              "repository query for outgoing notification packages with status ready"
+            ],
+            "fts": [
+              "ФНС",
+              "готов",
+              "пакет"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -748,7 +934,20 @@
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/domain/NotificationDocPack.java",
               "name": "scheduleRetry"
             }
-          ]
+          ],
+          "agent": {
+            "query": "retry sending batch with exponential backoff growing delay",
+            "queries": [
+              "повторная отправка пакета с растущей задержкой",
+              "retry policy backoff",
+              "scheduled retry failed notification batch"
+            ],
+            "fts": [
+              "backoff",
+              "retry",
+              "RetryPolicy"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -758,7 +957,20 @@
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/gateway/MksPermissionsApiGateway.java",
               "name": "getManagerXPin"
             }
-          ]
+          ],
+          "agent": {
+            "query": "find organization head / director for rights check",
+            "queries": [
+              "получить руководителя организации для проверки прав",
+              "check rights for organization head",
+              "руководитель организации проверка прав доступа"
+            ],
+            "fts": [
+              "head",
+              "руководитель",
+              "director"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -767,7 +979,18 @@
             {
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/service/PdfGenerationService.java"
             }
-          ]
+          ],
+          "agent": {
+            "query": "generate PDF notification from template",
+            "queries": [
+              "publish document pdf notification",
+              "render pdf template to byte array"
+            ],
+            "fts": [
+              "pdf",
+              "Pdf"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -777,7 +1000,20 @@
               "path": "src/docs/asciidoc/db.adoc"
             }
           ],
-          "answer": "docs"
+          "answer": "docs",
+          "agent": {
+            "query": "MongoDB collection description constants names",
+            "queries": [
+              "collection name constants for mongo documents",
+              "описание коллекций MongoDB",
+              "MongoCollection bean configuration"
+            ],
+            "fts": [
+              "@Document",
+              "collection"
+            ],
+            "includeDocs": true
+          }
         },
         {
           "lang": "en",
@@ -849,7 +1085,18 @@
             {
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/utility/FileNameGenerator.java"
             }
-          ]
+          ],
+          "agent": {
+            "query": "notification file name generation",
+            "queries": [
+              "формирование имени файла уведомления",
+              "fileName notification pdf build",
+              "generate filename for notification document"
+            ],
+            "fts": [
+              "fileName"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -869,7 +1116,18 @@
               "path": "src/main/java/ru/alfabank/corp/api/wowtax/service/CallbackService.java",
               "name": "updateDocumentStatus"
             }
-          ]
+          ],
+          "agent": {
+            "query": "update document status from callback webhook",
+            "queries": [
+              "callback controller update status",
+              "обновление статуса документа по колбэку"
+            ],
+            "fts": [
+              "callback",
+              "status"
+            ]
+          }
         },
         {
           "lang": "en",
@@ -898,7 +1156,15 @@
               "path": "src/docs/asciidoc/index.adoc"
             }
           ],
-          "answer": "docs"
+          "answer": "docs",
+          "agent": {
+            "query": "access model for service methods, authorization check on service method invocation",
+            "queries": [
+              "модель доступа к методам сервиса",
+              "service method access control model",
+              "method security access model roles permissions"
+            ]
+          }
         },
         {
           "lang": "ru",
@@ -911,7 +1177,15 @@
               "path": "src/docs/asciidoc/CompositeException.adoc"
             }
           ],
-          "answer": "docs"
+          "answer": "docs",
+          "agent": {
+            "query": "global exception handler for REST controllers returning error response",
+            "queries": [
+              "@RestControllerAdvice exception handler",
+              "обработка ошибок сервиса",
+              "custom exception handling and error code mapping"
+            ]
+          }
         },
         {
           "lang": "en",

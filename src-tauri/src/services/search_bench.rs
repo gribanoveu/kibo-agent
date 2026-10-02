@@ -53,6 +53,20 @@ struct Query {
     answer: String,
     q: String,
     expect: Vec<Expect>,
+    /// How the agent itself put the question to `semanticSearch`, when it did.
+    agent: Option<AgentAsk>,
+}
+
+/// One `semanticSearch` call as the agent made it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentAsk {
+    query: String,
+    #[serde(default)]
+    queries: Vec<String>,
+    fts: Option<Vec<String>>,
+    #[serde(default)]
+    include_docs: bool,
 }
 
 #[derive(Deserialize)]
@@ -148,25 +162,27 @@ fn open(repo: &Repo, root: &Path, model: &str, provider: Arc<dyn EmbeddingProvid
 /// ranking alone (with the cosine of its first hit and of its top result),
 /// how long the tool's search took, and whether it called its result weak.
 fn ask(indexer: &RepoIndexer, query: &Query) -> (Rank, Rank, Option<(Rank, f32, Option<f32>)>, Duration, bool) {
-    ask_as(indexer, query, &[&query.q])
+    // Documentation is searched when the answer is documentation — what a
+    // model asking that question should set `includeDocs` for.
+    ask_as(indexer, query, &[&query.q], None, query.answer == "docs")
 }
 
 /// [`ask`] with the question put as `wordings` — several in one call, as a
-/// model sending `queries` would.
+/// model sending `queries` would — and the call's own `fts` and `includeDocs`.
 fn ask_as(
     indexer: &RepoIndexer,
     query: &Query,
     wordings: &[&str],
+    fts: Option<&[String]>,
+    include_docs: bool,
 ) -> (Rank, Rank, Option<(Rank, f32, Option<f32>)>, Duration, bool) {
     // Timed as the tool calls it; ranked from a longer list, so that the
     // bench's own files, dropped below, do not take a place.
     let started = Instant::now();
-    // Documentation is searched when the answer is documentation — what a
-    // model asking that question sets `includeDocs` for.
-    let filter = SearchFilter { include_docs: query.answer == "docs", ..SearchFilter::default() };
-    code_search::search_many(indexer, wordings, None, code_search::DEFAULT_TOP_K, &filter).unwrap();
+    let filter = SearchFilter { include_docs, ..SearchFilter::default() };
+    code_search::search_many(indexer, wordings, fts, code_search::DEFAULT_TOP_K, &filter).unwrap();
     let spent = started.elapsed();
-    let mut result = code_search::search_many(indexer, wordings, None, 20, &filter).unwrap();
+    let mut result = code_search::search_many(indexer, wordings, fts, 20, &filter).unwrap();
     let weak = result.meta.weak;
     result.matches.retain(|m| !is_bench(&m.path));
     result.matches.truncate(10);
@@ -273,10 +289,28 @@ fn search_bench() {
                     if query.lang == "ru" {
                         let english = repo.queries.iter().find(|q| q.lang == "en" && answer_of(q) == answer_of(query));
                         if let Some(english) = english {
-                            let (file, decl, ..) = ask_as(&indexer, query, &[&query.q, &english.q]);
+                            let (file, decl, ..) =
+                                ask_as(&indexer, query, &[&query.q, &english.q], None, query.answer == "docs");
                             by_lang.entry("pairs: ru+en in one call".to_string()).or_default().add(file, decl);
                         }
                     }
+                }
+                // Without `includeDocs`, as a model that does not set it asks.
+                let (bare, bare_decl, ..) = ask_as(&indexer, query, &[&query.q], None, false);
+                let kind = if query.answer == "docs" { "docs" } else { "code" };
+                by_lang.entry("no includeDocs: all".to_string()).or_default().add(bare, bare_decl);
+                by_lang.entry(format!("no includeDocs: {kind}")).or_default().add(bare, bare_decl);
+                // As the agent asked it: its wordings, and its `includeDocs`
+                // rather than the one the answer calls for.
+                if let Some(agent) = &query.agent {
+                    let wordings: Vec<&str> =
+                        std::iter::once(agent.query.as_str()).chain(agent.queries.iter().map(String::as_str)).collect();
+                    let (asked, asked_decl, ..) =
+                        ask_as(&indexer, query, &wordings, agent.fts.as_deref(), agent.include_docs);
+                    let kind = if query.answer.is_empty() { "code" } else { query.answer.as_str() };
+                    by_lang.entry(format!("agent: {} question alone", query.lang)).or_default().add(file, decl);
+                    by_lang.entry(format!("agent: {} as asked", query.lang)).or_default().add(asked, asked_decl);
+                    by_lang.entry(format!("agent: {} as asked, {kind}", query.lang)).or_default().add(asked, asked_decl);
                 }
                 let show = |r: Rank| r.map_or("-".to_string(), |r| r.to_string());
                 let meaning = meaning.map_or(String::new(), |(rank, top, hit)| {
