@@ -110,7 +110,8 @@ export const CHAT_TURN_EVENT = "chat:turn-event";
 
 // ------------------------------------------------------------- the commands
 
-const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/** Whether the desktop app is around: a plain browser (`bun run dev`) has no backend. */
+export const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /** Outside the app there is no backend. Say so, rather than let `invoke` fail with its own wording. */
 function requireBackend() {
@@ -404,9 +405,6 @@ export type LlmSettings = {
   keyStore: KeyStore;
 };
 
-/** What a turn still needs before it can start. Asked before sending, not discovered by failing. */
-export type Readiness = { workspace: string | null; provider: string | null; hasKey: boolean };
-
 export async function llmSettings(): Promise<LlmSettings> {
   if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", turnLimits: DEFAULT_TURN_LIMITS, keyStore: "file" };
   return invoke<LlmSettings>("llm_settings_get");
@@ -502,11 +500,6 @@ export async function listModels(id?: string): Promise<string[]> {
 export async function probeModels(provider: ProviderConfig, apiKey: string | null): Promise<string[]> {
   requireBackend();
   return invoke<string[]>("llm_models_probe", { provider, apiKey });
-}
-
-export async function readiness(): Promise<Readiness> {
-  if (!inTauri()) return { workspace: null, provider: null, hasKey: false };
-  return invoke<Readiness>("agent_readiness");
 }
 
 /** The same for a chat's card: a change to its pinned cluster, dry-run there. */

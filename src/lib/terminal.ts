@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { inTauri } from "./chat";
 
 // The user's own shells, in the Terminal tab — `src-tauri/src/commands/terminal.rs`.
 
@@ -14,8 +15,6 @@ export type TerminalInfo = { id: number; shell: string; state: TerminalState };
  * its shell ended, or it was closed. A signal to read the list again.
  */
 export const TERMINAL_EVENT = "terminals:changed";
-
-const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function onTerminalChanged(handler: (id: number) => void): Promise<UnlistenFn> {
   if (!inTauri()) return () => {};

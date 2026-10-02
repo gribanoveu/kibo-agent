@@ -5,136 +5,82 @@
 //! code and its end. The protocol over the two pipes is `rmcp`'s
 //! (`infra::mcp_rmcp`), which is handed them once the process runs.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
-
-use crate::domain::mcp::{McpAnswer, McpCallResult, McpClient, McpError, McpPrompt, McpQuestion, McpServerConfig, McpTool};
+use crate::domain::mcp::{McpError, McpServerConfig};
 use crate::infra::mcp_rmcp::{Failure, RmcpClient};
 use crate::infra::process_runner::{kill_tree, set_process_group};
+use crate::sync::lock;
 
 /// Lines of the server's stderr kept to explain an exit.
 const STDERR_LINES: usize = 20;
 const STDERR_LINE_CHARS: usize = 500;
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    // A panic elsewhere while holding it leaves the value usable; a poisoned
-    // lock is not a reason to stop talking to the server.
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
+/// The server's process. Dropping it kills the process and everything it
+/// started — `npx` runs the real server as a child, and killing only `npx`
+/// would leave that one behind.
+struct Process(Mutex<Child>);
 
-/// A running server process and the session with it. Dropping it kills the
-/// process and everything it started — `npx` runs the real server as a
-/// child, and killing only `npx` would leave that one behind.
-///
-/// The process is this module's own — its group, its `PATH`, its stderr, its
-/// exit code; the SDK in `infra::mcp_rmcp` is handed the two pipes and speaks
-/// the protocol over them.
-pub struct StdioServer {
-    child: Arc<Mutex<Child>>,
-    client: RmcpClient,
-}
-
-impl StdioServer {
-    /// Starts the process in `cwd` and opens the session, within the
-    /// server's own timeout — a first `npx` run downloads the package.
-    pub fn start(config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool) -> Result<Self, McpError> {
-        let mut command = Command::new(&config.command);
-        // Before the entry's own `env`, which may set a `PATH` of its own.
-        crate::infra::login_path::apply(&mut command);
-        command
-            .args(&config.args)
-            .envs(&config.env)
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        set_process_group(&mut command);
-        let mut child = command.spawn().map_err(|e| McpError::NotStarted(format!("{}: {e}", config.command)))?;
-
-        let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            stop(&mut child);
-            return Err(McpError::NotStarted("its standard streams were not available".into()));
-        };
-        let tail = keep_tail(stderr);
-        let child = Arc::new(Mutex::new(child));
-        let exited = Arc::clone(&child);
-        // Whatever the pipes report, what happened is that the process went.
-        let describe = move |_: Failure<'_>| McpError::Exited {
-            code: exit_code(&exited),
-            stderr: lock(&tail).iter().cloned().collect::<Vec<_>>().join("\n"),
-        };
-        let pipes = || {
-            let not_started = |e: std::io::Error| McpError::NotStarted(e.to_string());
-            Ok((
-                tokio::process::ChildStdout::from_std(stdout).map_err(not_started)?,
-                tokio::process::ChildStdin::from_std(stdin).map_err(not_started)?,
-            ))
-        };
-        let timeout = Duration::from_secs(config.timeout_secs());
-        match RmcpClient::connect(pipes, timeout, cancelled, Box::new(describe)) {
-            Ok(client) => Ok(Self { child, client }),
-            Err(error) => {
-                stop(&mut lock(&child));
-                Err(error)
-            }
-        }
-    }
-}
-
-impl McpClient for StdioServer {
-    fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-        self.client.list_tools()
-    }
-
-    fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
-        self.client.call_tool(name, arguments, cancelled)
-    }
-
-    /// The stream closing is how an exit shows first; the process is asked
-    /// too, for one that is gone while its stdout is still held open by a
-    /// child of its own.
-    fn call_tool_asking(
-        &self,
-        name: &str,
-        arguments: Value,
-        cancelled: &dyn Fn() -> bool,
-        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
-    ) -> Result<McpCallResult, McpError> {
-        self.client.call_tool_asking(name, arguments, cancelled, ask)
-    }
-
-    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
-        self.client.list_prompts()
-    }
-
-    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
-        self.client.get_prompt(name, arguments)
-    }
-
-    fn instructions(&self) -> Option<String> {
-        self.client.instructions()
-    }
-
-    fn tools_stale(&self) -> bool {
-        self.client.tools_stale()
-    }
-
-    fn is_alive(&self) -> bool {
-        self.client.is_alive() && matches!(lock(&self.child).try_wait(), Ok(None))
-    }
-}
-
-impl Drop for StdioServer {
+impl Drop for Process {
     fn drop(&mut self) {
-        stop(&mut lock(&self.child));
+        stop(&mut lock(&self.0));
     }
+}
+
+/// Starts the process in `cwd` and opens the session with it, within the
+/// server's own timeout — a first `npx` run downloads the package. The
+/// process lives as long as the client: its group, its `PATH`, its stderr and
+/// its exit code are this module's, and the SDK is handed the two pipes.
+pub fn start(config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool) -> Result<RmcpClient, McpError> {
+    let mut command = Command::new(&config.command);
+    // Before the entry's own `env`, which may set a `PATH` of its own.
+    crate::infra::login_path::apply(&mut command);
+    command
+        .args(&config.args)
+        .envs(&config.env)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    set_process_group(&mut command);
+    let mut child = command.spawn().map_err(|e| McpError::NotStarted(format!("{}: {e}", config.command)))?;
+
+    let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        stop(&mut child);
+        return Err(McpError::NotStarted("its standard streams were not available".into()));
+    };
+    let tail = keep_tail(stderr);
+    let process = Arc::new(Process(Mutex::new(child)));
+    let (exited, tail_too) = (Arc::clone(&process), Arc::clone(&tail));
+    // Whatever the pipes report, what happened is that the process went.
+    let describe = move |_: Failure<'_>| gone(&exited, &tail);
+    // The stream closing is how an exit shows first; the process is asked
+    // too, for one that is gone while its stdout is still held open by a
+    // child of its own.
+    let ended = move || {
+        let running = matches!(lock(&process.0).try_wait(), Ok(None));
+        (!running).then(|| gone(&process, &tail_too))
+    };
+    let pipes = || {
+        let not_started = |e: std::io::Error| McpError::NotStarted(e.to_string());
+        Ok((
+            tokio::process::ChildStdout::from_std(stdout).map_err(not_started)?,
+            tokio::process::ChildStdin::from_std(stdin).map_err(not_started)?,
+        ))
+    };
+    let timeout = Duration::from_secs(config.timeout_secs());
+    // A failure drops both closures, and with them the process.
+    RmcpClient::connect(pipes, timeout, cancelled, Box::new(describe), Box::new(ended))
+}
+
+fn gone(process: &Process, tail: &Mutex<VecDeque<String>>) -> McpError {
+    McpError::Exited { code: exit_code(&process.0), stderr: lock(tail).iter().cloned().collect::<Vec<_>>().join("\n") }
 }
 
 fn stop(child: &mut Child) {
@@ -182,7 +128,9 @@ fn keep_tail(stderr: impl std::io::Read + Send + 'static) -> Arc<Mutex<VecDeque<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::mcp::{McpAnswer, McpClient};
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn sh(script: &str, timeout_secs: u64) -> McpServerConfig {
         McpServerConfig {
@@ -210,7 +158,7 @@ mod tests {
         let dir = crate::testing::temp_dir("mcp-stdio-process");
         // `env` is where a server's token lives; it has to reach the process.
         let config = McpServerConfig { env: [("MCP_TEST_TOKEN".to_string(), "t0k3n".to_string())].into(), ..sh(script, 5) };
-        let server = StdioServer::start(&config, &dir, &|| false).unwrap();
+        let server = start(&config, &dir, &|| false).unwrap();
         assert_eq!(server.instructions().as_deref(), Some("Say hi."));
         assert!(!server.tools_stale());
         assert_eq!(server.call_tool("hi", json!({}), &|| false).unwrap().text, "hello t0k3n");
@@ -236,7 +184,7 @@ mod tests {
             read _
         "#;
         let dir = crate::testing::temp_dir("mcp-stdio-prompts");
-        let server = StdioServer::start(&sh(script, 5), &dir, &|| false).unwrap();
+        let server = start(&sh(script, 5), &dir, &|| false).unwrap();
         assert_eq!(server.list_prompts().unwrap()[0].name, "greet");
         assert_eq!(server.get_prompt("greet", &BTreeMap::new()).unwrap(), "Hello.");
         let asked = std::sync::Mutex::new(Vec::new());
@@ -256,7 +204,7 @@ mod tests {
     #[test]
     fn a_process_that_dies_reports_its_code_and_stderr() {
         let dir = crate::testing::temp_dir("mcp-stdio-dies");
-        let result = StdioServer::start(&sh("echo 'Error: GITHUB_TOKEN is not set' >&2; exit 7", 5), &dir, &|| false);
+        let result = start(&sh("echo 'Error: GITHUB_TOKEN is not set' >&2; exit 7", 5), &dir, &|| false);
         let Err(err) = result else { panic!("started") };
         assert_eq!(err, McpError::Exited { code: Some(7), stderr: "Error: GITHUB_TOKEN is not set".into() });
     }
@@ -267,7 +215,7 @@ mod tests {
     #[test]
     fn only_the_last_lines_of_stderr_are_kept() {
         let dir = crate::testing::temp_dir("mcp-stdio-tail");
-        let result = StdioServer::start(&sh("for i in $(seq 1 30); do echo line $i >&2; done; exit 1", 5), &dir, &|| false);
+        let result = start(&sh("for i in $(seq 1 30); do echo line $i >&2; done; exit 1", 5), &dir, &|| false);
         let Err(McpError::Exited { stderr, .. }) = result else { panic!("expected an exit") };
         let lines: Vec<&str> = stderr.lines().collect();
         assert_eq!(lines.len(), STDERR_LINES);
@@ -286,7 +234,7 @@ mod tests {
             read call; echo 'crashed' >&2; exit 2
         "#;
         let dir = crate::testing::temp_dir("mcp-stdio-alive");
-        let server = StdioServer::start(&sh(script, 5), &dir, &|| false).unwrap();
+        let server = start(&sh(script, 5), &dir, &|| false).unwrap();
         assert!(server.is_alive());
         let err = server.call_tool("hi", json!({}), &|| false).unwrap_err();
         assert_eq!(err, McpError::Exited { code: Some(2), stderr: "crashed".into() });
@@ -306,13 +254,12 @@ mod tests {
             exit 0
         "#;
         let dir = crate::testing::temp_dir("mcp-stdio-orphan");
-        let server = StdioServer::start(&sh(script, 5), &dir, &|| false).unwrap();
+        let server = start(&sh(script, 5), &dir, &|| false).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while server.is_alive() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(!server.is_alive());
-        assert!(server.client.is_alive(), "the stream alone would not have told");
     }
 
     /// A server that runs but never opens the session is not left running:
@@ -329,7 +276,7 @@ mod tests {
             sleep 300"#,
             pid_file.display()
         );
-        let Err(err) = StdioServer::start(&sh(&script, 5), &dir, &|| false) else { panic!("started") };
+        let Err(err) = start(&sh(&script, 5), &dir, &|| false) else { panic!("started") };
         assert!(matches!(&err, McpError::Handshake(m) if m.contains("no token")), "{err}");
         let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the server outlived its failed start");
@@ -339,7 +286,7 @@ mod tests {
     fn a_command_that_does_not_exist_is_not_started() {
         let dir = crate::testing::temp_dir("mcp-stdio-missing");
         let config = McpServerConfig { command: "definitely-not-a-command-4f2a".into(), ..Default::default() };
-        assert!(matches!(StdioServer::start(&config, &dir, &|| false), Err(McpError::NotStarted(m)) if m.contains("definitely-not")));
+        assert!(matches!(start(&config, &dir, &|| false), Err(McpError::NotStarted(m)) if m.contains("definitely-not")));
     }
 
     /// Dropping the server takes its children with it: `npx` is only the
@@ -356,7 +303,7 @@ mod tests {
             read _; wait"#,
             pid_file.display()
         );
-        let server = StdioServer::start(&sh(&script, 5), &dir, &|| false).unwrap();
+        let server = start(&sh(&script, 5), &dir, &|| false).unwrap();
         let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
         assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "the grandchild runs");
 

@@ -48,7 +48,6 @@ use crate::infra::app_dir;
 pub const KEY_LEN: usize = 32;
 pub type MasterKey = Zeroizing<[u8; KEY_LEN]>;
 
-const KEYRING_SERVICE: &str = "com.kibo.agent";
 const KEYRING_USER: &str = "master-key";
 const KEY_FILE: &str = "master.key";
 /// Records *where* the key went, so a later run can tell "no key yet" from
@@ -231,7 +230,7 @@ fn record(store: KeyStore) -> Result<(), String> {
 /// secret they have stored undecryptable.
 #[cfg(not(test))]
 mod backend {
-    use super::{KEYRING_SERVICE, KEYRING_USER};
+    const KEYRING_SERVICE: &str = "com.kibo.agent";
 
     fn entry(user: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(KEYRING_SERVICE, user).map_err(|e| e.to_string())
@@ -254,12 +253,6 @@ mod backend {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
-    }
-
-    // Referenced so the constant is not dead in this build.
-    #[allow(dead_code)]
-    fn _key_user() -> &'static str {
-        KEYRING_USER
     }
 }
 

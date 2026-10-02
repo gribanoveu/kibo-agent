@@ -1,4 +1,5 @@
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { inTauri } from "./chat";
 import type { TurnStatus } from "./chatTurnReducer";
 import type { Sound } from "./sounds";
 
@@ -55,7 +56,6 @@ export function soundFor(attention: Attention, prefs: AlertPrefs): Sound | null 
 
 // As `lib/window.ts` has it; not imported from there, which would bring the
 // window API along for nothing.
-const inTauri = () => "__TAURI_INTERNALS__" in window;
 
 /**
  * A system notification, only while the window is in the background — in

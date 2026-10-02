@@ -8,114 +8,57 @@
 //! Left out on purpose: OAuth (a 401 says so; `docs/18-mcp-oauth.md`) and the
 //! old HTTP+SSE transport.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
-use serde_json::Value;
 
-use crate::domain::mcp::{McpAnswer, McpCallResult, McpClient, McpError, McpPrompt, McpQuestion, McpServerConfig, McpTool};
+use crate::domain::mcp::{McpError, McpServerConfig};
 use crate::infra::mcp_rmcp::{Failure, RmcpClient};
+use crate::sync::lock;
 
 /// Enough of an error body to explain it; a server that answers an error
 /// with a whole HTML page is cut here.
 const ERROR_BODY_CHARS: usize = 1000;
-/// A conversation with a server at a URL. Dropping it ends the session on
-/// the server too, if the server keeps sessions.
-pub struct HttpServer {
-    client: RmcpClient,
-    /// Why the conversation ended, for every call after it.
-    ended: Ended,
-}
 
-type Ended = Arc<Mutex<Option<McpError>>>;
-
-impl HttpServer {
-    /// Opens the conversation within the server's own timeout.
-    pub fn start(config: &McpServerConfig, cancelled: &dyn Fn() -> bool) -> Result<Self, McpError> {
-        let url = config.url.clone().ok_or_else(|| McpError::NotStarted("the entry has no url".into()))?;
-        let timeout = Duration::from_secs(config.timeout_secs());
-        let mut headers = HashMap::new();
-        for (name, value) in &config.headers {
-            let name = http::HeaderName::try_from(name.as_str())
-                .map_err(|_| McpError::NotStarted(format!("{name:?} is not a header name")))?;
-            let value = http::HeaderValue::try_from(value.as_str())
-                .map_err(|_| McpError::NotStarted(format!("the value of {name} cannot be sent as a header")))?;
-            headers.insert(name, value);
-        }
-        // The SDK's `reqwest` is built without a TLS provider of its own; the
-        // app's is ring, as for the model provider and the cluster.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        // A forgotten session is not quietly replaced: the call that met it
-        // fails, and `services::mcp_servers` starts the server again — once a
-        // turn, like a process that exited.
-        let transport = StreamableHttpClientTransportConfig::with_uri(url)
-            .custom_headers(headers)
-            .reinit_on_expired_session(false);
-
-        let ended = Ended::default();
-        let said = Arc::clone(&ended);
-        let client = RmcpClient::connect(
-            // The SDK's own HTTP client: it follows no redirect, so the
-            // entry's headers — a token, as a rule — reach this URL only.
-            || Ok(StreamableHttpClientTransport::from_config(transport)),
-            timeout,
-            cancelled,
-            Box::new(move |failure| describe(failure, &said)),
-        )?;
-        Ok(Self { client, ended })
+/// Opens a conversation with a server at a URL, within the server's own
+/// timeout. Dropping it ends the session on the server too, if the server
+/// keeps sessions.
+pub fn start(config: &McpServerConfig, cancelled: &dyn Fn() -> bool) -> Result<RmcpClient, McpError> {
+    let url = config.url.clone().ok_or_else(|| McpError::NotStarted("the entry has no url".into()))?;
+    let timeout = Duration::from_secs(config.timeout_secs());
+    let mut headers = HashMap::new();
+    for (name, value) in &config.headers {
+        let name = http::HeaderName::try_from(name.as_str())
+            .map_err(|_| McpError::NotStarted(format!("{name:?} is not a header name")))?;
+        let value = http::HeaderValue::try_from(value.as_str())
+            .map_err(|_| McpError::NotStarted(format!("the value of {name} cannot be sent as a header")))?;
+        headers.insert(name, value);
     }
+    // The SDK's `reqwest` is built without a TLS provider of its own; the
+    // app's is ring, as for the model provider and the cluster.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    // A forgotten session is not quietly replaced: the call that met it
+    // fails, and `services::mcp_servers` starts the server again — once a
+    // turn, like a process that exited.
+    let transport = StreamableHttpClientTransportConfig::with_uri(url)
+        .custom_headers(headers)
+        .reinit_on_expired_session(false);
 
-    fn ended(&self) -> Result<(), McpError> {
-        lock(&self.ended).clone().map_or(Ok(()), Err)
-    }
-}
-
-impl McpClient for HttpServer {
-    fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-        self.ended()?;
-        self.client.list_tools()
-    }
-
-    fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
-        self.ended()?;
-        self.client.call_tool(name, arguments, cancelled)
-    }
-
-    fn call_tool_asking(
-        &self,
-        name: &str,
-        arguments: Value,
-        cancelled: &dyn Fn() -> bool,
-        ask: &dyn Fn(&McpQuestion) -> McpAnswer,
-    ) -> Result<McpCallResult, McpError> {
-        self.ended()?;
-        self.client.call_tool_asking(name, arguments, cancelled, ask)
-    }
-
-    fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
-        self.ended()?;
-        self.client.list_prompts()
-    }
-
-    fn get_prompt(&self, name: &str, arguments: &BTreeMap<String, String>) -> Result<String, McpError> {
-        self.ended()?;
-        self.client.get_prompt(name, arguments)
-    }
-
-    fn instructions(&self) -> Option<String> {
-        self.client.instructions()
-    }
-
-    fn tools_stale(&self) -> bool {
-        self.client.tools_stale()
-    }
-
-    fn is_alive(&self) -> bool {
-        self.client.is_alive() && lock(&self.ended).is_none()
-    }
+    // Why the conversation ended, for every call after it.
+    let ended: Arc<Mutex<Option<McpError>>> = Arc::default();
+    let said = Arc::clone(&ended);
+    RmcpClient::connect(
+        // The SDK's own HTTP client: it follows no redirect, so the
+        // entry's headers — a token, as a rule — reach this URL only.
+        || Ok(StreamableHttpClientTransport::from_config(transport)),
+        timeout,
+        cancelled,
+        Box::new(move |failure| describe(failure, &said)),
+        Box::new(move || lock(&ended).clone()),
+    )
 }
 
 /// What a failure of the transport means. A refusal with a status is that
@@ -149,13 +92,12 @@ fn refusal(text: &str) -> Option<McpError> {
     Some(McpError::Http { status, body: body.chars().take(ERROR_BODY_CHARS).collect() })
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::mcp::{McpAnswer, McpClient, McpQuestion};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -337,7 +279,7 @@ mod tests {
     #[test]
     fn a_session_is_started_used_and_ended() {
         let (url, log) = serve(well_behaved);
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         assert_eq!(server.list_tools().unwrap()[0].name, "search", "an event over several data: lines");
         assert_eq!(server.instructions().as_deref(), Some("Search first."));
         assert!(!server.tools_stale());
@@ -388,7 +330,7 @@ mod tests {
             }
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         server.list_tools().unwrap();
         let at = |method: &str| {
             let index = position(&log, method);
@@ -404,7 +346,7 @@ mod tests {
             Some("initialize") => handshake(request, None),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         server.list_tools().unwrap();
         drop(server);
         std::thread::sleep(Duration::from_millis(200));
@@ -415,7 +357,7 @@ mod tests {
     #[test]
     fn a_server_that_wants_a_sign_in_does_not_start_and_says_why() {
         let (url, _log) = serve(|_| status(401, "missing bearer token"));
-        let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
+        let Err(err) = start(&config(&url, 5), &|| false) else { panic!("started") };
         assert_eq!(err, McpError::Http { status: 401, body: "missing bearer token".into() });
         assert!(err.to_string().contains("OAuth"));
     }
@@ -444,7 +386,7 @@ mod tests {
             Some("tools/call") => json_answer(request, json!({ "content": [{ "type": "text", "text": "in" }] })),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         assert_eq!(server.list_prompts().unwrap()[0].name, "greet");
         assert_eq!(server.get_prompt("greet", &BTreeMap::new()).unwrap(), "Hello.");
         let agreed = |_: &McpQuestion| McpAnswer::Accept { content: Default::default() };
@@ -467,11 +409,11 @@ mod tests {
     fn a_challenge_for_a_sign_in_or_for_more_rights_is_a_refusal_with_its_status() {
         for (code, challenge) in [(401, "Bearer resource_metadata=\"https://a.example/meta\""), (403, "Bearer error=\"insufficient_scope\"")] {
             let (url, _log) = serve(move |_| Answer { status: code, headers: vec![("WWW-Authenticate", challenge.into())], body: String::new() });
-            let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
+            let Err(err) = start(&config(&url, 5), &|| false) else { panic!("started") };
             assert_eq!(err, McpError::Http { status: code, body: String::new() });
         }
         let (url, _log) = serve(|_| Answer { status: 401, headers: vec![("WWW-Authenticate", "Bearer".into())], body: String::new() });
-        assert!(HttpServer::start(&config(&url, 5), &|| false).err().unwrap().to_string().contains("OAuth"));
+        assert!(start(&config(&url, 5), &|| false).err().unwrap().to_string().contains("OAuth"));
     }
 
     /// The entry's headers are a token, as a rule, and were given for this
@@ -483,7 +425,7 @@ mod tests {
             "/mcp" => Answer { status: 307, headers: vec![("Location", "/elsewhere".into())], body: String::new() },
             _ => well_behaved(request),
         });
-        let Err(err) = HttpServer::start(&config(&url, 5), &|| false) else { panic!("started") };
+        let Err(err) = start(&config(&url, 5), &|| false) else { panic!("started") };
         assert!(matches!(err, McpError::Http { status: 307, .. }), "{err}");
         assert!(log.lock().unwrap().iter().all(|s| s.path == "/mcp"), "{:#?}", log.lock().unwrap());
     }
@@ -494,10 +436,10 @@ mod tests {
     fn a_header_that_cannot_be_sent_does_not_start_the_server() {
         let mut entry = config("http://127.0.0.1:1/mcp", 5);
         entry.headers.insert("X Bad Name".into(), "v".into());
-        assert!(matches!(HttpServer::start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("X Bad Name")));
+        assert!(matches!(start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("X Bad Name")));
         let mut entry = config("http://127.0.0.1:1/mcp", 5);
         entry.headers.insert("X-Token".into(), "line\nbreak".into());
-        assert!(matches!(HttpServer::start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("x-token")));
+        assert!(matches!(start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("x-token")));
     }
 
     /// One refused call is that call's failure, not the server's.
@@ -507,7 +449,7 @@ mod tests {
             Some("tools/call") => status(500, &"x".repeat(5000)),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
         assert_eq!(err, McpError::Http { status: 500, body: "x".repeat(ERROR_BODY_CHARS) }, "the body is cut");
         assert!(server.is_alive());
@@ -522,7 +464,7 @@ mod tests {
             Some("tools/call") => status(404, "unknown session"),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        let server = start(&config(&url, 30), &|| false).unwrap();
         // The SDK reads a 404 in a session as the session's end and keeps no body.
         let gone = McpError::Http { status: 404, body: String::new() };
         assert_eq!(server.call_tool("search", json!({}), &|| false).unwrap_err(), gone);
@@ -543,7 +485,7 @@ mod tests {
             Some("tools/call") if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => status(404, "unknown session"),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        let server = start(&config(&url, 30), &|| false).unwrap();
         assert!(matches!(server.call_tool("search", json!({}), &|| false), Err(McpError::Http { status: 404, .. })));
         std::thread::sleep(Duration::from_millis(300));
         let count = |method: &str| log.lock().unwrap().iter().filter(|s| s.body["method"] == method).count();
@@ -559,7 +501,7 @@ mod tests {
             Some("tools/call") => status(404, "not here"),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         assert!(matches!(server.call_tool("search", json!({}), &|| false), Err(McpError::Http { status: 404, .. })));
         assert!(server.is_alive());
     }
@@ -572,7 +514,7 @@ mod tests {
             Some("tools/call") => status(0, ""),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        let server = start(&config(&url, 30), &|| false).unwrap();
         let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
         assert!(matches!(err, McpError::Unreachable(_)), "{err}");
         assert!(!server.is_alive());
@@ -582,7 +524,7 @@ mod tests {
     #[test]
     fn a_server_nobody_listens_for_is_unreachable() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let result = HttpServer::start(&config(&format!("http://127.0.0.1:{port}/mcp"), 5), &|| false);
+        let result = start(&config(&format!("http://127.0.0.1:{port}/mcp"), 5), &|| false);
         assert!(matches!(result, Err(McpError::Unreachable(_))), "{:?}", result.err());
     }
 
@@ -595,7 +537,7 @@ mod tests {
             }
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        let server = start(&config(&url, 30), &|| false).unwrap();
         let started = Instant::now();
         let stop_after = started + Duration::from_millis(100);
         assert_eq!(server.call_tool("slow", json!({}), &|| Instant::now() > stop_after), Err(McpError::Cancelled));
@@ -615,7 +557,7 @@ mod tests {
             Some("tools/call") => status(1, ""),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 1), &|| false).unwrap();
+        let server = start(&config(&url, 1), &|| false).unwrap();
         assert_eq!(server.call_tool("hang", json!({}), &|| false), Err(McpError::Timeout(1)));
         let closed = eventually(&log, |s| s.method == "CLOSED");
         assert_eq!(closed.body["method"], "tools/call");
@@ -631,7 +573,7 @@ mod tests {
             }
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 1), &|| false).unwrap();
+        let server = start(&config(&url, 1), &|| false).unwrap();
         let started = Instant::now();
         assert_eq!(server.call_tool("slow", json!({}), &|| false), Err(McpError::Timeout(1)));
         assert!(started.elapsed() < Duration::from_millis(2500));
@@ -648,7 +590,7 @@ mod tests {
             Some("tools/call") => events(&[json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": {} })]),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 30), &|| false).unwrap();
+        let server = start(&config(&url, 30), &|| false).unwrap();
         let started = Instant::now();
         let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
         assert!(matches!(err, McpError::Unreachable(_)), "{err}");
@@ -671,7 +613,7 @@ mod tests {
             Some("tools/list") => status(202, ""),
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 1), &|| false).unwrap();
+        let server = start(&config(&url, 1), &|| false).unwrap();
         assert_eq!(server.list_tools().unwrap_err(), McpError::Timeout(1), "accepted, never answered");
         assert_eq!(server.call_tool("json", json!({}), &|| false).unwrap_err(), McpError::Timeout(1));
         assert!(server.is_alive());
@@ -689,7 +631,7 @@ mod tests {
             },
             _ => well_behaved(request),
         });
-        let server = HttpServer::start(&config(&url, 5), &|| false).unwrap();
+        let server = start(&config(&url, 5), &|| false).unwrap();
         assert_eq!(
             server.call_tool("nope", json!({}), &|| false),
             Err(McpError::Server { code: -32602, message: "unknown tool".into() })

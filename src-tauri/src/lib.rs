@@ -6,6 +6,7 @@ mod data_policy;
 #[cfg(test)]
 mod testing;
 pub mod services;
+mod sync;
 #[cfg(target_os = "macos")]
 mod window_frame;
 
@@ -81,9 +82,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
             |config, cwd, cancelled| {
                 Ok(match config.url {
-                    Some(_) => std::sync::Arc::new(infra::mcp_http::HttpServer::start(config, cancelled)?)
+                    Some(_) => std::sync::Arc::new(infra::mcp_http::start(config, cancelled)?)
                         as std::sync::Arc<dyn domain::mcp::McpClient>,
-                    None => std::sync::Arc::new(infra::mcp_stdio::StdioServer::start(config, cwd, cancelled)?),
+                    None => std::sync::Arc::new(infra::mcp_stdio::start(config, cwd, cancelled)?),
                 })
             },
         ))))
@@ -201,7 +202,6 @@ pub fn run() {
             commands::settings::kube_runbooks,
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
-            commands::settings::agent_readiness,
             commands::skills::skills_list,
             commands::slash_commands::slash_commands_list,
             commands::mcp::mcp_config_get,

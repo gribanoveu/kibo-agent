@@ -13,7 +13,7 @@
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use crate::domain::terminal::{
     Scrollback, TerminalChanged, TerminalError, TerminalEventSink, TerminalInfo, TerminalOutputSink, TerminalScreen,
     TerminalSize, TerminalState, UserTerminals, SCREEN_HISTORY,
 };
+use crate::sync::lock;
 
 /// Output is handed to the screen at most once a frame. The first chunk after
 /// a quiet spell goes at once — an echoed key is not held back — and `yes` is
@@ -94,10 +95,6 @@ impl Entry {
         }
         false
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Terminals {

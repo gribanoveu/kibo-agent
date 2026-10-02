@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -22,6 +22,7 @@ use crate::domain::mcp::{
     items, prompt_arguments, ConnectedServer, McpAnswer, McpCallResult, McpClient, McpConfig, McpError, McpPrompt,
     McpQuestion, McpServerConfig, McpServerState, McpTool, McpToolInfo, McpTools,
 };
+use crate::sync::lock;
 
 /// Starts one server in a folder and completes its handshake — the stdio
 /// process in the app, a scripted client in tests.
@@ -424,10 +425,6 @@ impl McpClient for Supervised {
     fn tools_stale(&self) -> bool {
         self.restarted.load(Ordering::SeqCst) || lock(&self.current).tools_stale()
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

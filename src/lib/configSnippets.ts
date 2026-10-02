@@ -84,8 +84,8 @@ function locate(text: string): { at: number; message: string } | null {
   }
 }
 
-type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
+export type Json = Record<string, unknown>;
+export const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** A snippet as READMEs print it: a whole object, or just `"name": {…},` cut out of one. */
 function parseLoose(text: string): unknown {
@@ -101,7 +101,7 @@ function parseLoose(text: string): unknown {
 }
 
 /** The file being edited, if it is an object — the only shape a snippet can join. */
-function parseFile(text: string): Json | null {
+export function parseFile(text: string): Json | null {
   try {
     const file: unknown = JSON.parse(text.trim() || "{}");
     return isObject(file) ? file : null;
@@ -110,7 +110,7 @@ function parseFile(text: string): Json | null {
   }
 }
 
-const stringify = (file: Json) => `${JSON.stringify(file, null, 2)}\n`;
+export const stringify = (file: Json) => `${JSON.stringify(file, null, 2)}\n`;
 
 export type Merged = { text: string; message: string };
 

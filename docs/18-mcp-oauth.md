@@ -110,7 +110,7 @@
 
 ### F-7.4j — подключение
 
-- `HttpServer` получает источник токена: подставляет `Authorization`; на `401` обновляет
+- `mcp_http::start` получает источник токена: подставляет `Authorization`; на `401` обновляет
   токен и повторяет запрос один раз; иначе `McpError::NeedsSignIn`.
 - `McpServerState::NeedsSignIn`: пул не запускает такой сервер ход за ходом, как `Failed`.
 - Команды: `mcp_server_sign_in(name)` (асинхронная, `spawn_blocking`, отменяемая),

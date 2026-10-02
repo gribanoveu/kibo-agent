@@ -35,6 +35,7 @@ use crate::domain::command_exec::{
     MAX_OUTPUT_CHARS, Shell, ShellFound, collapse_redraws, truncate_output,
 };
 use crate::infra::command_output_store;
+use crate::sync::lock;
 
 /// How often the child is checked while waiting. Short enough that a timeout
 /// is accurate to a blink, long enough not to spin a core.
@@ -243,10 +244,6 @@ impl Target {
             Target::Feed(_) => String::new(),
         }
     }
-}
-
-fn lock(target: &Mutex<Target>) -> std::sync::MutexGuard<'_, Target> {
-    target.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Reads one stream to EOF on its own thread, reporting as it goes — into

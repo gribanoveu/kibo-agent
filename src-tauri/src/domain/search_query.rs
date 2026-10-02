@@ -179,26 +179,6 @@ pub fn english_stem(token: &str) -> String {
     lower
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MatchTightness {
-    None,
-    Stem,
-    Exact,
-}
-
-/// `CollectNotificationService` against `notifications` is a stem match;
-/// against itself, exact.
-pub fn symbol_name_matches_token(symbol_name: &str, token: &str) -> MatchTightness {
-    if symbol_name.eq_ignore_ascii_case(token) {
-        return MatchTightness::Exact;
-    }
-    let stem = english_stem(token);
-    if stem.len() >= MIN_STEM_LEN && symbol_name.to_ascii_lowercase().contains(&stem) {
-        return MatchTightness::Stem;
-    }
-    MatchTightness::None
-}
-
 /// Whether a directory or file name in `relative_path` is, or contains, the
 /// token — `workspace_scanner` finds `src-tauri/src/infra/workspace_scanner.rs`.
 pub fn path_segment_matches(relative_path: &str, token: &str) -> bool {
@@ -507,15 +487,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------ matching
-
-    #[test]
-    fn a_symbol_name_matches_exactly_or_by_stem() {
-        assert_eq!(symbol_name_matches_token("UserService", "userservice"), MatchTightness::Exact);
-        assert_eq!(symbol_name_matches_token("CollectNotificationService", "notifications"), MatchTightness::Stem);
-        assert_eq!(symbol_name_matches_token("UserService", "notifications"), MatchTightness::None);
-        // A stem too short to mean anything matches nothing.
-        assert_eq!(symbol_name_matches_token("Users", "use"), MatchTightness::None);
-    }
 
     #[test]
     fn a_plural_s_is_the_only_thing_stemmed() {

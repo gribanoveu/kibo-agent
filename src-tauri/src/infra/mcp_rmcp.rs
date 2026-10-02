@@ -46,6 +46,7 @@ use crate::domain::mcp::{
     prompt, question, render_content, render_prompt, McpAnswer, McpCallResult, McpClient, McpError, McpPrompt,
     McpQuestion, McpTool, McpToolHints,
 };
+use crate::sync::lock;
 
 /// How often a waiting call looks at its stop flag.
 const POLL: Duration = Duration::from_millis(50);
@@ -66,6 +67,10 @@ pub enum Failure<'a> {
 }
 
 pub type Describe = Box<dyn Fn(Failure<'_>) -> McpError + Send + Sync>;
+/// Why the conversation is over, if what lies under the transport says so —
+/// a process that exited, a session that ended. Asked before every request
+/// and by `is_alive`; dropped with the client, and with it whatever it holds.
+pub type Ended = Box<dyn Fn() -> Option<McpError> + Send + Sync>;
 
 /// A question the server sent on its own, and where its answer goes.
 type Asked = (McpQuestion, oneshot::Sender<McpAnswer>);
@@ -77,6 +82,7 @@ pub struct RmcpClient {
     peer: Peer<RoleClient>,
     timeout: Duration,
     describe: Describe,
+    ended: Ended,
     /// The server said its tools or prompts changed since they were read.
     lists_changed: Arc<AtomicBool>,
     /// Until when the server said the list it gave may be kept; `None` when
@@ -152,6 +158,7 @@ impl RmcpClient {
         timeout: Duration,
         cancelled: &dyn Fn() -> bool,
         describe: Describe,
+        ended: Ended,
     ) -> Result<Self, McpError>
     where
         T: IntoTransport<RoleClient, E, A>,
@@ -182,6 +189,7 @@ impl RmcpClient {
             _service: service,
             timeout,
             describe,
+            ended,
             lists_changed,
             tools_fresh_until: Mutex::default(),
             desk,
@@ -200,6 +208,9 @@ impl RmcpClient {
         cancelled: &dyn Fn() -> bool,
         asking: Option<&mut Asking<'_>>,
     ) -> Result<Value, McpError> {
+        if let Some(ended) = (self.ended)() {
+            return Err(ended);
+        }
         tauri::async_runtime::block_on(async {
             let mut handle = self
                 .peer
@@ -331,7 +342,7 @@ impl McpClient for RmcpClient {
     }
 
     fn is_alive(&self) -> bool {
-        !self.peer.is_transport_closed()
+        !self.peer.is_transport_closed() && (self.ended)().is_none()
     }
 
     fn instructions(&self) -> Option<String> {
@@ -457,10 +468,6 @@ async fn wait<F: Future + Unpin>(
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,7 +517,7 @@ mod tests {
             }
         });
         let gone = |_: Failure<'_>| McpError::Exited { code: Some(3), stderr: "gone".into() };
-        let client = RmcpClient::connect(|| Ok(tokio::io::split(ours)), timeout, cancelled, Box::new(gone));
+        let client = RmcpClient::connect(|| Ok(tokio::io::split(ours)), timeout, cancelled, Box::new(gone), Box::new(|| None));
         (client, seen)
     }
 

@@ -122,7 +122,7 @@ mod tests {
 
     /// Answers every search with one match carrying `text`, and records what
     /// it was asked.
-    fn deps_answering(text: &str) -> (ToolDeps, Asked) {
+    fn deps_answering(text: &str) -> (ToolDeps<'_>, Asked) {
         let asked: Asked = Arc::default();
         let record = Arc::clone(&asked);
         let text = text.to_string();

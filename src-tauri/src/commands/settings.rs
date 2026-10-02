@@ -20,8 +20,6 @@ use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::{kube_changes, kubeconfigs, llm_session};
 
-use super::chat::AgentState;
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderView {
@@ -294,32 +292,6 @@ pub async fn llm_models_probe(provider: ProviderConfig, api_key: Option<String>)
     })
     .await
     .map_err(|e| format!("the request thread failed: {e}"))?
-}
-
-/// Whether a turn could start right now, and if not, what is missing. Asked
-/// before sending rather than discovered as a failed turn.
-#[tauri::command]
-pub fn agent_readiness(state: State<'_, Arc<AgentState>>) -> Readiness {
-    let workspace = super::chat::workspace_current(state);
-    let provider = settings_store::load()
-        .ok()
-        .and_then(|settings| settings.llm.active().cloned());
-    Readiness {
-        has_key: provider
-            .as_ref()
-            .map(|p| llm_credentials_store::has_api_key(&p.id))
-            .unwrap_or(false),
-        provider: provider.map(|p| p.id),
-        workspace,
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Readiness {
-    pub workspace: Option<String>,
-    pub provider: Option<String>,
-    pub has_key: bool,
 }
 
 #[cfg(test)]

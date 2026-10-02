@@ -243,12 +243,6 @@ impl IndexStore {
         Ok(())
     }
 
-    pub fn delete_meta(&self, key: &str) -> Result<(), IndexStoreError> {
-        let conn = self.lock()?;
-        conn.execute("DELETE FROM meta WHERE key = ?1", params![key])?;
-        Ok(())
-    }
-
     /// Every row, gone. The full-text table is emptied by hand: it is a
     /// virtual table, so no foreign key reaches it and no cascade will.
     pub fn wipe(&self) -> Result<(), IndexStoreError> {
@@ -531,27 +525,6 @@ impl IndexStore {
         Ok(())
     }
 
-    pub fn delete_embedding(
-        &self,
-        chunk_id: &ChunkId,
-        model_id: &str,
-    ) -> Result<(), IndexStoreError> {
-        let conn = self.lock()?;
-        conn.execute(
-            "DELETE FROM embeddings WHERE chunk_id = ?1 AND model_id = ?2",
-            params![chunk_id.0, model_id],
-        )?;
-        Ok(())
-    }
-
-    /// Forgets one model's vectors and leaves every other model's alone —
-    /// for when that model's weights changed underneath the index.
-    pub fn clear_embeddings(&self, model_id: &str) -> Result<(), IndexStoreError> {
-        let conn = self.lock()?;
-        conn.execute("DELETE FROM embeddings WHERE model_id = ?1", params![model_id])?;
-        Ok(())
-    }
-
     /// Everything this model has embedded: chunk id, the hash of the chunk it
     /// was made from, and the vector — what a sync diffs against and what a
     /// search ranks.
@@ -579,51 +552,6 @@ impl IndexStore {
             {
                 out.push((ChunkId(chunk_id), hash, vector));
             }
-        }
-        Ok(out)
-    }
-
-    /// Replaces what an indexer found in this file.
-    ///
-    /// Kept so a cold start can reuse the symbols of a file whose hash has
-    /// not changed instead of parsing the whole repository again — which on a
-    /// large tree is the difference between an index that is ready and one
-    /// that is still thinking.
-    pub fn replace_symbols_for_file(
-        &self,
-        file_id: &FileId,
-        symbols: &[Symbol],
-    ) -> Result<(), IndexStoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction()?;
-        write_symbols(&tx, file_id, symbols)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Every stored symbol, grouped by the file it came from.
-    pub fn load_all_symbols(&self) -> Result<HashMap<FileId, Vec<Symbol>>, IndexStoreError> {
-        let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT file_id, name, start_line, end_line, start_byte, end_byte FROM symbols",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                FileId(row.get(0)?),
-                Symbol {
-                    name: row.get(1)?,
-                    start_line: row.get(2)?,
-                    end_line: row.get(3)?,
-                    start_byte: row.get(4)?,
-                    end_byte: row.get(5)?,
-                },
-            ))
-        })?;
-
-        let mut out: HashMap<FileId, Vec<Symbol>> = HashMap::new();
-        for row in rows {
-            let (file_id, symbol) = row?;
-            out.entry(file_id).or_default().push(symbol);
         }
         Ok(out)
     }
@@ -1045,8 +973,6 @@ mod tests {
         store.write_meta("k", "one").unwrap();
         store.write_meta("k", "two").unwrap();
         assert_eq!(store.read_meta("k").unwrap().as_deref(), Some("two"));
-        store.delete_meta("k").unwrap();
-        assert_eq!(store.read_meta("k").unwrap(), None);
     }
 
     // --------------------------------------------------------------- files
@@ -1370,7 +1296,7 @@ mod tests {
 
         assert_eq!(store.load_all_files().unwrap()[&FileId("a.md".into())].hash, blake3::hash(b"v1"));
         assert_eq!(store.load_all_chunks().unwrap().len(), 1);
-        assert_eq!(store.load_all_symbols().unwrap()[&FileId("a.md".into())].len(), 1);
+        assert_eq!(count(&store, "symbols"), 1);
         assert_eq!(store.search_bm25("fresh", 10).unwrap().len(), 1);
     }
 
@@ -1632,32 +1558,6 @@ mod tests {
         assert_eq!(embedded(&store, "two")[0].2, vector(0.2));
     }
 
-    #[test]
-    fn clearing_one_model_leaves_the_other_alone() {
-        let (store, _dir) = store("store-embeddings-clear");
-        with_two_chunks(&store);
-        embed(&store, "one", "a.md#0-1", b"a", 0.1);
-        embed(&store, "two", "a.md#1-2", b"b", 0.2);
-
-        store.clear_embeddings("one").unwrap();
-
-        assert!(embedded(&store, "one").is_empty());
-        assert_eq!(embedded(&store, "two").len(), 1);
-    }
-
-    #[test]
-    fn deleting_one_record_leaves_the_same_chunk_under_another_model() {
-        let (store, _dir) = store("store-embeddings-delete");
-        with_two_chunks(&store);
-        embed(&store, "one", "a.md#0-1", b"a", 0.1);
-        embed(&store, "two", "a.md#0-1", b"b", 0.2);
-
-        store.delete_embedding(&ChunkId("a.md#0-1".into()), "one").unwrap();
-
-        assert!(embedded(&store, "one").is_empty());
-        assert_eq!(embedded(&store, "two").len(), 1);
-    }
-
     /// An unreadable hash, an unreadable vector, or a vector of another width
     /// makes the chunk look un-embedded, so it is done again — and does not
     /// fail the load of every other row with it.
@@ -1729,20 +1629,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn symbols_round_trip_grouped_by_their_file() {
-        let (store, _dir) = store("store-symbols");
-        store.upsert_files(&[file("a.md", "x"), file("b.md", "y")]).unwrap();
-        store
-            .replace_symbols_for_file(&FileId("a.md".into()), &[symbol("One", 0), symbol("Two", 10)])
-            .unwrap();
-        store
-            .replace_symbols_for_file(&FileId("b.md".into()), &[symbol("Other", 0)])
-            .unwrap();
-
-        let loaded = store.load_all_symbols().unwrap();
-        assert_eq!(loaded[&FileId("a.md".into())], vec![symbol("One", 0), symbol("Two", 10)]);
-        assert_eq!(loaded[&FileId("b.md".into())].len(), 1);
+    fn symbol_names(store: &IndexStore) -> Vec<String> {
+        let conn = store.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name FROM symbols ORDER BY start_byte").unwrap();
+        stmt.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect()
     }
 
     /// Re-parsing a file replaces what was found in it. Symbols have no id of
@@ -1750,13 +1640,12 @@ mod tests {
     #[test]
     fn re_parsing_a_file_replaces_its_symbols() {
         let (store, _dir) = store("store-symbols-replace");
-        store.upsert_files(&[file("a.md", "x")]).unwrap();
-        let id = FileId("a.md".into());
+        let a = file("a.md", "x");
 
-        store.replace_symbols_for_file(&id, &[symbol("Old", 0), symbol("Gone", 5)]).unwrap();
-        store.replace_symbols_for_file(&id, &[symbol("New", 0)]).unwrap();
+        store.replace_file(&a, &[symbol("Old", 0), symbol("Gone", 5)], &[]).unwrap();
+        store.replace_file(&a, &[symbol("New", 0)], &[]).unwrap();
 
-        assert_eq!(store.load_all_symbols().unwrap()[&id], vec![symbol("New", 0)]);
+        assert_eq!(symbol_names(&store), ["New"]);
     }
 
     /// A file with nothing in it has no symbols, and saying so has to clear
@@ -1765,12 +1654,11 @@ mod tests {
     #[test]
     fn a_file_that_lost_its_symbols_has_them_removed() {
         let (store, _dir) = store("store-symbols-empty");
-        store.upsert_files(&[file("a.md", "x")]).unwrap();
-        let id = FileId("a.md".into());
+        let a = file("a.md", "x");
 
-        store.replace_symbols_for_file(&id, &[symbol("Heading", 0)]).unwrap();
-        store.replace_symbols_for_file(&id, &[]).unwrap();
+        store.replace_file(&a, &[symbol("Heading", 0)], &[]).unwrap();
+        store.replace_file(&a, &[], &[]).unwrap();
 
-        assert!(store.load_all_symbols().unwrap().is_empty());
+        assert!(symbol_names(&store).is_empty());
     }
 }

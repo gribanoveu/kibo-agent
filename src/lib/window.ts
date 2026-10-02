@@ -1,10 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { inTauri } from "./chat";
 
 // The window is undecorated and transparent (tauri.conf.json), so the app's own
 // titlebar drives it. Components call these wrappers, never the API directly.
 // Outside Tauri (plain `bun run dev`) there is no window to drive — no-op instead
 // of throwing, so the UI stays previewable in a browser.
-const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // On macOS the window keeps its native frame with the title bar hidden
 // (tauri.macos.conf.json): the OS draws the traffic lights, the corners and the

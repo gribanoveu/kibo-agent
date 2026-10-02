@@ -51,8 +51,8 @@ pub(super) fn definition() -> LlmToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::tools::{ReadFileArgs, ReadFiles, ToolCall, ToolDeps};
-    use crate::services::ai_tools::tools::{execute_tool, read_file::read_file};
+    use crate::domain::tools::{ReadFiles, ToolCall, ToolDeps};
+    use crate::services::ai_tools::tools::execute_tool;
     use crate::testing::temp_dir;
     use std::path::PathBuf;
 
@@ -67,16 +67,6 @@ mod tests {
         let path = root.join(relative);
         std::fs::create_dir_all(path.parent().expect("has a parent")).expect("dirs are creatable");
         std::fs::write(path, body).expect("file is writable");
-    }
-
-    fn agent_reads(scope: &ToolScope, reads: &mut ReadFiles, path: &str, range: Option<(u32, u32)>) {
-        let args = ReadFileArgs {
-            path: path.to_string(),
-            start_line: range.map(|(s, _)| s),
-            end_line: range.map(|(_, e)| e),
-            outline: None,
-        };
-        read_file(scope, &args, reads).expect("read succeeds");
     }
 
     #[test]

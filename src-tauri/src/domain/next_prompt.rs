@@ -9,7 +9,7 @@
 //! the script under the same name, and the golden string in the tests is the
 //! one the script's `selftest` pins.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -37,8 +37,6 @@ static TEST_RX: LazyLock<Regex> = LazyLock::new(|| {
 /// exits 0.
 static TEST_FAIL_RX: LazyLock<Regex> = LazyLock::new(|| rx(r"\b[1-9]\d* (?:fail|failed|failing|failures?)\b|\bFAILED\b"));
 static COMMIT_RX: LazyLock<Regex> = LazyLock::new(|| rx(r"\bgit\b[^|;&]*\bcommit\b"));
-static IDENT_RX: LazyLock<Regex> = LazyLock::new(|| rx(r"`([^`\n]+)`|([A-Za-z_][\w./-]*\w)"));
-static NAME_LIKE_RX: LazyLock<Regex> = LazyLock::new(|| rx(r"[_./\d]|[a-z][A-Z]"));
 /// Where a reply splits into sentences. The script's `(?<=[.!?…])\s+|\n+`
 /// without the lookbehind, which this engine lacks: only where the last match
 /// ends matters, and that is the same.
@@ -109,24 +107,6 @@ pub fn model_input(mode: &str, outcome: &str, commit: bool, tests: &str, todo: &
         tail(user, USER_MAX),
         tail(reply, AGENT_MAX),
     )
-}
-
-/// Code-like names: `backticked`, or words with `_ . /`, digits or camelCase.
-pub fn names(text: &str) -> BTreeSet<String> {
-    IDENT_RX
-        .captures_iter(text)
-        .filter_map(|c| match (c.get(1), c.get(2)) {
-            (Some(tick), _) => Some(tick.as_str().to_string()),
-            (None, Some(word)) if NAME_LIKE_RX.is_match(word.as_str()) => Some(word.as_str().to_string()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Names a suggestion uses that its input never mentions. Non-empty means it
-/// is not shown: a small model cannot know them, it invents them.
-pub fn novel_names(suggestion: &str, input: &str) -> BTreeSet<String> {
-    names(suggestion).into_iter().filter(|n| !input.contains(n.as_str())).collect()
 }
 
 /// `done/total` of the checklist, cancelled items left out; empty without one.
@@ -324,14 +304,6 @@ mod tests {
         let long = format!("Итог. {}?", "x".repeat(300));
         assert_eq!(offer(&long).chars().count(), OFFER_MAX);
         assert!(offer(&long).ends_with("x?"), "kept from the tail");
-    }
-
-    #[test]
-    fn names_the_input_lacks_are_novel() {
-        assert!(novel_names("поставь GitCompareArrows", "есть `GitCompareArrows`").is_empty());
-        assert_eq!(novel_names("открой utils.py", "поправил main.py"), BTreeSet::from(["utils.py".to_string()]));
-        assert!(novel_names("давай далее, сделай коммит", "").is_empty());
-        assert_eq!(names("`x y` a_b fooBar v2 plain"), BTreeSet::from(["x y", "a_b", "fooBar", "v2"].map(String::from)));
     }
 
     #[test]

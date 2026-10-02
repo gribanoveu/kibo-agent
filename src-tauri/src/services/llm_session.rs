@@ -106,11 +106,6 @@ pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -
     Ok(provider.list_models()?.into_iter().map(|m| m.id).collect())
 }
 
-/// Every configured provider, in the order the user added them.
-pub fn list_providers() -> Result<Vec<ProviderConfig>, SettingsError> {
-    Ok(settings_store::load()?.llm.providers)
-}
-
 /// Adds a provider, or replaces the one with the same id in place.
 ///
 /// In place, rather than remove-and-append: an edit must not move the entry to
@@ -377,7 +372,7 @@ mod tests {
             save_provider(provider("openai", Some("gpt"))).unwrap();
             save_provider(provider("local", Some("qwen"))).unwrap();
 
-            let providers = list_providers().unwrap();
+            let providers = settings_store::load().unwrap().llm.providers;
             assert_eq!(
                 providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
                 ["local", "openai"],
@@ -397,7 +392,7 @@ mod tests {
 
             remove_provider("local").unwrap();
 
-            assert!(list_providers().unwrap().is_empty());
+            assert!(settings_store::load().unwrap().llm.providers.is_empty());
             assert!(!llm_credentials_store::has_api_key("local"));
         });
     }

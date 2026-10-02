@@ -10,7 +10,7 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -19,6 +19,7 @@ use crate::domain::background::{
     ProcessOutput, ProcessState, MAX_FINISHED, MAX_RUNNING,
 };
 use crate::domain::command_exec::{truncate_output, Shell, MAX_OUTPUT_CHARS};
+use crate::sync::lock;
 
 use super::process_runner::{kill_tree, set_process_group};
 
@@ -62,10 +63,6 @@ impl Registry {
     fn entry(&mut self, id: u32) -> Result<&mut Entry, BackgroundError> {
         self.entries.iter_mut().find(|e| e.info.id == id).ok_or(BackgroundError::NotFound(id))
     }
-}
-
-fn lock(registry: &Mutex<Registry>) -> MutexGuard<'_, Registry> {
-    registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Processes {

@@ -5,20 +5,7 @@
 // untouched.
 
 import type { McpExposure } from "./chat";
-
-type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
-
-function parseFile(text: string): Json | null {
-  try {
-    const file: unknown = JSON.parse(text.trim() || "{}");
-    return isObject(file) ? file : null;
-  } catch {
-    return null;
-  }
-}
-
-const stringify = (file: Json) => `${JSON.stringify(file, null, 2)}\n`;
+import { isObject, parseFile, stringify, type Json } from "./configSnippets";
 
 export type Written = { text: string } | { error: string };
 
