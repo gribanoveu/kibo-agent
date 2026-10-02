@@ -781,6 +781,12 @@ export type McpPromptItem = {
 };
 
 /** The prompts of the servers running for the open folder; none are started to be asked. */
+/** The same, once the servers not running yet are started — slow the first time: a server may be downloaded. */
+export async function startMcpPrompts(): Promise<McpPromptItem[]> {
+  requireBackend();
+  return invoke<McpPromptItem[]>("mcp_prompts_start");
+}
+
 export async function mcpPrompts(): Promise<McpPromptItem[]> {
   if (!inTauri()) return [];
   return invoke<McpPromptItem[]>("mcp_prompts");

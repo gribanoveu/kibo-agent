@@ -3,7 +3,7 @@ import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, Messa
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
-import { commandFor, pendingHint, suggestCommands, type SlashCommand } from "../lib/slashCommands";
+import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
 import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
@@ -72,6 +72,8 @@ type Props = {
   commands?: SlashCommand[];
   /** Called as the `/` menu opens — for commands read from files, which change outside the app. */
   onCommandsOpen?: () => void;
+  /** Said at the end of the `/` menu while more commands are on their way; keeps it open meanwhile. */
+  pendingCommands?: string;
   /** Each change puts the cursor in the box. */
   focus?: number;
 };
@@ -101,6 +103,7 @@ export function Composer({
   onCompact,
   commands = [],
   onCommandsOpen,
+  pendingCommands,
   focus = 0,
 }: Props) {
   const [text, setText] = useState("");
@@ -111,7 +114,9 @@ export function Composer({
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
   const offered = dismissed ? [] : suggestCommands(commands, text);
-  const menuOpen = offered.length > 0;
+  // Open while more commands are coming, even if none typed so far matches
+  // yet: the prompt being typed may be one of them.
+  const menuOpen = offered.length > 0 || (!!pendingCommands && !dismissed && typingCommandName(text));
   const at = Math.min(active, Math.max(offered.length - 1, 0));
   const hint = pendingHint(commands, text);
 
@@ -221,7 +226,7 @@ export function Composer({
       )}
       {tab}
       <section className="composer" ref={box}>
-        {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} />}
+        {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} pending={pendingCommands} />}
         <div className="composer-input">
           {/* The arguments still to type, in grey after the text: the text
               itself is drawn here too, invisibly, so the hint starts where it
@@ -251,13 +256,15 @@ export function Composer({
             }}
             onKeyDown={(e) => {
               if (menuOpen) {
-                const step = matches(e, "commandNext") ? 1 : matches(e, "commandPrev") ? -1 : 0;
+                // Only the line saying more is coming: nothing to move to or
+                // pick, and Enter does what it does with the menu closed.
+                const step = offered.length === 0 ? 0 : matches(e, "commandNext") ? 1 : matches(e, "commandPrev") ? -1 : 0;
                 if (step) {
                   e.preventDefault();
                   setActive((at + step + offered.length) % offered.length);
                   return;
                 }
-                if (matches(e, "commandComplete")) {
+                if (offered.length > 0 && matches(e, "commandComplete")) {
                   e.preventDefault();
                   complete(offered[at]);
                   return;
@@ -269,7 +276,7 @@ export function Composer({
                   setDismissed(true);
                   return;
                 }
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (offered.length > 0 && e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   pick(offered[at]);
                   return;

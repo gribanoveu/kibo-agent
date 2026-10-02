@@ -59,6 +59,11 @@ export function pendingHint(commands: readonly SlashCommand[], text: string): st
 }
 
 /** The commands offered while only a name is being typed: `/` alone offers all. */
+/** Whether `text` is `/` and the start of a name — what the menu is open for. */
+export function typingCommandName(text: string): boolean {
+  return new RegExp(`^\\/(${NAME})?$`, "i").test(text);
+}
+
 export function suggestCommands(commands: readonly SlashCommand[], text: string): SlashCommand[] {
   const m = new RegExp(`^\\/(${NAME})?$`, "i").exec(text);
   if (!m) return [];

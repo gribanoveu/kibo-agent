@@ -8,6 +8,8 @@ type Props = {
   active: number;
   /** Puts a command that takes arguments in the box, runs any other. */
   onPick: (command: SlashCommand) => void;
+  /** A line under the list while more commands are on their way. */
+  pending?: string;
 };
 
 /**
@@ -17,7 +19,7 @@ type Props = {
  * and this one is opened by typing and leaves the focus in the box, which
  * drives it — the arrow keys, Tab, Enter and Escape are handled there.
  */
-export function SlashMenu({ commands, active, onPick }: Props) {
+export function SlashMenu({ commands, active, onPick, pending }: Props) {
   const takesArguments = !!commands[active]?.argumentHint;
   return (
     <div className="slash-menu">
@@ -42,8 +44,14 @@ export function SlashMenu({ commands, active, onPick }: Props) {
             <span className="slash-hint">{command.unavailable ?? command.hint}</span>
           </button>
         ))}
+        {pending && (
+          <div className="slash-pending" role="status">
+            {pending}
+          </div>
+        )}
       </div>
       {/* What the keys do with the command the arrows are on. */}
+      {commands.length > 0 && (
       <div className="slash-keys" aria-hidden="true">
         {takesArguments ? (
           <>
@@ -56,6 +64,7 @@ export function SlashMenu({ commands, active, onPick }: Props) {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

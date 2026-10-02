@@ -325,7 +325,7 @@ describe("the model chip", () => {
 });
 
 describe("slash commands", () => {
-  function withCommands(unavailable?: string, withArguments = false) {
+  function withCommands(unavailable?: string, withArguments = false, pending?: string) {
     const ran: string[] = [];
     const sent: string[] = [];
     const commands = [
@@ -352,6 +352,7 @@ describe("slash commands", () => {
         usage={null}
         onCompact={() => {}}
         commands={commands}
+        pendingCommands={pending}
       />,
     );
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
@@ -508,6 +509,41 @@ describe("slash commands", () => {
     key("Enter");
     expect(ran).toEqual([]);
     expect(box.value).toBe("/fork");
+  });
+
+  /// The servers' prompts are on their way: the menu says so under what it
+  /// has, and stays open for a name none of those matches — it may be one of
+  /// the prompts.
+  test("while more commands are coming the menu says so, and stays open for a name nothing matches yet", () => {
+    const { type } = withCommands(undefined, false, "Loading MCP prompts…");
+    type("/");
+    expect(screen.getByRole("status").textContent).toBe("Loading MCP prompts…");
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+
+    type("/gre");
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(screen.getByRole("status").textContent).toBe("Loading MCP prompts…");
+
+    type("/gre who");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("with nothing coming, a name nothing matches closes the menu", () => {
+    const { type } = withCommands();
+    type("/gre");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  /// Nothing to pick while only the line is shown: the keys do what they do
+  /// with the menu closed.
+  test("Enter with only the waiting line sends the text, and the arrows move nothing", () => {
+    const { type, key, sent, ran } = withCommands(undefined, false, "Loading MCP prompts…");
+    type("/gre");
+    key("ArrowDown");
+    key("Tab");
+    key("Enter");
+    expect(sent).toEqual(["/gre"]);
+    expect(ran).toEqual([]);
   });
 });
 

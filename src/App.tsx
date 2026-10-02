@@ -610,8 +610,9 @@ export default function App() {
                 commands={commands}
                 onCommandsOpen={() => {
                   commandFiles.reload();
-                  serverPrompts.reload();
+                  serverPrompts.start();
                 }}
+                pendingCommands={serverPrompts.starting ? "Loading MCP prompts…" : undefined}
               />
             </>
           ) : (

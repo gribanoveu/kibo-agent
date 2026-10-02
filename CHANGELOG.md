@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-02 The `/` menu offers the MCP servers' prompts without a first turn or a visit to the MCP tab: opening it starts the servers not running yet, and "Loading MCP prompts…" stands under the commands until their prompts arrive
 - 2026-10-02 A message sent to the agent mid-turn waits above the message box until the agent reads it, and can be taken back into the box until then; one the turn never read comes back to the box when the turn ends
 
 ## v0.4.0-alfa — 2026-10-02

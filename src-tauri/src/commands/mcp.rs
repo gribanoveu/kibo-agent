@@ -103,11 +103,40 @@ pub struct McpPromptItem {
 }
 
 /// The prompts of the servers running for the open folder. Starts nothing:
-/// a server's prompts are offered once a turn or the tab has started it.
+/// a server's prompts are offered once a turn, the tab or the `/` menu has
+/// started it.
 #[tauri::command]
 pub fn mcp_prompts(state: State<'_, Arc<AgentState>>, servers: State<'_, Arc<McpServers>>) -> Vec<McpPromptItem> {
     let Ok(workspace) = state.workspace() else { return Vec::new() };
-    servers.prompts(&workspace).into_iter().map(|(server, prompt)| McpPromptItem { server, prompt }).collect()
+    prompt_items(&servers, &workspace)
+}
+
+/// The same, once the servers not running yet are started — what the `/`
+/// menu asks as it opens: typing `/` is asking what there is, and a server's
+/// prompts should not wait for a first turn or the tab. A configuration that
+/// does not parse starts nothing, as for a turn.
+///
+/// Off the event loop: a first `npx` run can take the server's whole
+/// timeout, and the menu shows the other commands meanwhile.
+#[tauri::command]
+pub async fn mcp_prompts_start(
+    state: State<'_, Arc<AgentState>>,
+    servers: State<'_, Arc<McpServers>>,
+) -> Result<Vec<McpPromptItem>, String> {
+    let workspace = state.workspace()?;
+    let servers = Arc::clone(&servers);
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(config) = mcp_config::load() {
+            servers.for_turn(&config, &workspace, &|| false);
+        }
+        prompt_items(&servers, &workspace)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn prompt_items(servers: &McpServers, workspace: &std::path::Path) -> Vec<McpPromptItem> {
+    servers.prompts(workspace).into_iter().map(|(server, prompt)| McpPromptItem { server, prompt }).collect()
 }
 
 /// A prompt written with what was typed after its name — the text the

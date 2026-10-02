@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -23,6 +24,9 @@ use crate::domain::mcp::{
     McpQuestion, McpServerConfig, McpServerState, McpTool, McpToolInfo, McpTools,
 };
 use crate::sync::lock;
+
+/// How often a turn looks whether a server someone else is starting is up.
+const STARTING_POLL: Duration = Duration::from_millis(50);
 
 /// Starts one server in a folder and completes its handshake — the stdio
 /// process in the app, a scripted client in tests.
@@ -92,21 +96,34 @@ impl McpServers {
             handles.into_iter().filter_map(|handle| handle.join().ok()).collect()
         });
 
-        self.refresh_stale(cwd);
-
-        let mut pool = lock(&self.pool);
-        for (name, state) in started {
-            // Switched off or edited while it started: `prune` has removed
-            // the slot, and the server just started is dropped — which stops
-            // it.
-            let Some(slot) = pool.slots.get_mut(&name) else { continue };
-            match state {
-                Some(state) => slot.state = state,
-                None => {
-                    pool.slots.remove(&name);
+        {
+            let mut pool = lock(&self.pool);
+            for (name, state) in started {
+                // Switched off or edited while it started: `prune` has removed
+                // the slot, and the server just started is dropped — which
+                // stops it.
+                let Some(slot) = pool.slots.get_mut(&name) else { continue };
+                match state {
+                    Some(state) => slot.state = state,
+                    None => {
+                        pool.slots.remove(&name);
+                    }
                 }
             }
         }
+
+        // A server someone else is starting — the `/` menu, the tab, another
+        // turn — is waited for: skipped, this turn would run without its
+        // tools. Its start is bounded by the server's own timeout.
+        // ponytail: polled, not signalled — a Condvar on the pool if the
+        // 50 ms ever shows.
+        while !cancelled() && lock(&self.pool).slots.values().any(|slot| matches!(slot.state, SlotState::Starting)) {
+            std::thread::sleep(STARTING_POLL);
+        }
+
+        self.refresh_stale(cwd);
+
+        let pool = lock(&self.pool);
         for slot in pool.slots.values() {
             if let SlotState::Running { server, .. } = &slot.state {
                 server.restarted.store(false, Ordering::SeqCst);
@@ -538,6 +555,61 @@ mod tests {
 
     fn cwd() -> PathBuf {
         PathBuf::from("/work")
+    }
+
+    /// Servers whose start holds until `release` is sent to.
+    fn gated() -> (McpServers, std::sync::mpsc::Sender<()>) {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Mutex::new(gate);
+        let start: Start = Arc::new(move |_, _, _| {
+            let _ = lock(&gate).recv();
+            Ok(Process::started(1))
+        });
+        (McpServers::new(start), release)
+    }
+
+    fn starting(servers: &McpServers, config: &McpConfig) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while servers.state("a", &config.mcp_servers["a"]) != McpServerState::Starting {
+            assert!(std::time::Instant::now() < deadline, "the start never began");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The `/` menu or the tab started it a moment ago, and a turn begins: the
+    /// turn does not start it again, and does not go without its tools either.
+    #[test]
+    fn a_turn_waits_for_a_server_someone_else_is_starting() {
+        let (servers, release) = gated();
+        let servers = Arc::new(servers);
+        let config = config(&[("a", "ok")]);
+        let (by_tab, cfg) = (Arc::clone(&servers), config.clone());
+        let tab = std::thread::spawn(move || by_tab.connect("a", &cfg, &cwd()));
+        starting(&servers, &config);
+
+        let (by_turn, cfg) = (Arc::clone(&servers), config.clone());
+        let turn = std::thread::spawn(move || by_turn.for_turn(&cfg, &cwd(), NO).get("mcp__a__echo").is_some());
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!turn.is_finished(), "the turn went on without the server");
+
+        release.send(()).unwrap();
+        tab.join().unwrap();
+        assert!(turn.join().unwrap(), "the turn has no tools from the server it waited for");
+    }
+
+    #[test]
+    fn a_stop_ends_the_wait() {
+        let (servers, release) = gated();
+        let servers = Arc::new(servers);
+        let config = config(&[("a", "ok")]);
+        let (by_tab, cfg) = (Arc::clone(&servers), config.clone());
+        let tab = std::thread::spawn(move || by_tab.connect("a", &cfg, &cwd()));
+        starting(&servers, &config);
+
+        let tools = servers.for_turn(&config, &cwd(), &|| true);
+        assert!(tools.get("mcp__a__echo").is_none());
+        release.send(()).unwrap();
+        tab.join().unwrap();
     }
 
     #[test]

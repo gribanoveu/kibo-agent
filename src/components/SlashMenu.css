@@ -54,6 +54,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.slash-pending {
+  padding: 6px 9px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
 /* The list scrolls; the line of keys under it stays. */
 .slash-list {
   max-height: 290px;

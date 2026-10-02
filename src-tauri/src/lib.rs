@@ -210,6 +210,7 @@ pub fn run() {
             commands::mcp::mcp_tool_set_shown,
             commands::mcp::mcp_server_connect,
             commands::mcp::mcp_prompts,
+            commands::mcp::mcp_prompts_start,
             commands::mcp::mcp_prompt_get,
             commands::chat::chat_answer_mcp_question,
             commands::hooks::hooks_config_get,
