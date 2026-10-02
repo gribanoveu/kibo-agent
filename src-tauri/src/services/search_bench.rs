@@ -182,6 +182,8 @@ fn ask_as(
         .position(|m| query.expect.iter().any(|e| e.declaration(&m.path, m.name.as_deref())))
         .map(|i| i + 1);
 
+    dump(indexer, query, wordings, &filter);
+
     let meaning = indexer.search_meaning(&query.q, 20).ok().filter(|hits| !hits.is_empty()).map(|hits| {
         let top = hits[0].1;
         let first = hits.iter().enumerate().find_map(|(i, (id, score))| {
@@ -191,6 +193,44 @@ fn ask_as(
         (first.map(|(r, _)| r), top, first.map(|(_, s)| s))
     });
     (file, decl, meaning, spent, weak)
+}
+
+/// How many candidates [`dump`] writes per question: what a reranker would
+/// reorder before the top ten is cut.
+const DUMP_CANDIDATES: usize = 40;
+
+/// With `SEARCH_BENCH_DUMP=<file>`, one JSON line per question asked: the
+/// question, its wordings, its expected answers, and the tool's top
+/// [`DUMP_CANDIDATES`] in order with their full text — so a reranker can be
+/// tried on the same candidates outside the app (`docs/13-reranker-research.md`).
+fn dump(indexer: &RepoIndexer, query: &Query, wordings: &[&str], filter: &SearchFilter) {
+    let Some(path) = std::env::var_os("SEARCH_BENCH_DUMP") else { return };
+    // Only the run with vectors: the words-only one asks the same questions.
+    if indexer.status().embedded == 0 {
+        return;
+    }
+    let mut result = code_search::search_many(indexer, wordings, None, DUMP_CANDIDATES, filter).unwrap();
+    result.matches.retain(|m| !is_bench(&m.path));
+    let candidates: Vec<serde_json::Value> = result
+        .matches
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "path": m.path, "name": m.name, "start": m.start_line, "end": m.end_line,
+                "source": format!("{:?}", m.source), "text": m.text,
+            })
+        })
+        .collect();
+    let expect: Vec<serde_json::Value> =
+        query.expect.iter().map(|e| serde_json::json!({ "path": e.path, "name": e.name })).collect();
+    let line = serde_json::json!({
+        "root": indexer.root().file_name().map(|n| n.to_string_lossy().to_string()),
+        "lang": query.lang, "answer": query.answer, "q": query.q, "wordings": wordings,
+        "expect": expect, "candidates": candidates,
+    });
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    writeln!(file, "{line}").unwrap();
 }
 
 /// A question's answer as a key: its acceptable files, in order.
