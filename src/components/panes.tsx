@@ -15,7 +15,7 @@ import { ItemList } from "./ItemList";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
-import type { FileTarget, HooksView, McpServerState, McpToolInfo, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
+import type { FileTarget, HooksView, McpServerItem, McpServerState, McpToolInfo, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
 import type { AsideTab, PanelItem } from "../types";
 import type { Block } from "../lib/chatTurnReducer";
 import type { AgentFocus } from "../lib/describeTool";
@@ -88,9 +88,14 @@ export type McpListProps = {
   onEditFile: () => void;
 };
 
-/** A server that cannot start says why and has no switch, like a broken skill. */
+/**
+ * A server that cannot start says why and has no switch, like a broken skill.
+ * As with skills, the ones on come first and the ones off after them, grey.
+ */
 function mcpItems(view: McpView | null): PanelItem[] {
-  return (view?.servers ?? []).map((server) =>
+  const off = (s: McpServerItem) => !s.error && !s.enabled;
+  const servers = [...(view?.servers ?? [])].sort((a, b) => Number(off(a)) - Number(off(b)));
+  return servers.map((server) =>
     server.error
       ? {
           id: server.name,
@@ -108,6 +113,7 @@ function mcpItems(view: McpView | null): PanelItem[] {
           title: server.name,
           desc: server.command,
           enabled: server.enabled,
+          dim: !server.enabled,
           // The process's own trouble, when it has one, says more than the entry's.
           note: server.warning ?? undefined,
           ...(server.enabled ? mcpState(server.state, server.warning) : {}),

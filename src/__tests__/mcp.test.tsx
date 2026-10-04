@@ -188,6 +188,18 @@ describe("the MCP tab", () => {
     expect(toggled).toEqual([["github", false]]);
   });
 
+  test("the ones switched off come after the ones on, and are drawn grey", () => {
+    const entry = (name: string, enabled: boolean) =>
+      ({ name, command: `npx ${name}`, enabled, error: null, warning: null, state: { state: "notStarted" } }) as const;
+    const { container } = panel({
+      ...disk,
+      servers: [entry("alpha", false), entry("beta", true), entry("gamma", false), entry("delta", true)],
+    });
+    const rows = [...container.querySelectorAll(".item")];
+    expect(rows.map((r) => r.querySelector(".item-title")?.textContent)).toEqual(["beta", "delta", "alpha", "gamma"]);
+    expect(rows.map((r) => r.classList.contains("dim"))).toEqual([false, false, true, true]);
+  });
+
   test("a switched-on server says what its process is doing", () => {
     const server = disk.servers[0];
     panel({
