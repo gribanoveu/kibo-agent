@@ -23,17 +23,21 @@
   align-items: center;
   gap: 10px;
   padding: 0 14px;
+  position: relative;
 }
+/* Centred on the window, not on the room the controls leave. */
 .titlebar-title {
-  flex: 1;
-  margin-left: 4px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
   font-size: var(--fs-sm);
   color: var(--text-faint);
 }
 /* Level with the native traffic lights, which sit above the bar's middle. */
 .window.native-frame .titlebar-title {
-  position: relative;
-  top: -5px;
+  transform: translate(-50%, -5px);
 }
 .titlebar-title span {
   color: var(--text-dim);
