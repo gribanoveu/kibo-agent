@@ -128,7 +128,7 @@ export function FileViewer({
   /** Long lines wrap rather than scroll sideways — Settings → Appearance. */
   wrap: boolean;
   /**
-   * One heading row, for the docs layout: how to show the file sits beside
+   * One heading row, for the IDE layout: how to show the file sits beside
    * its tab, the path is the tab's tooltip, and Escape closes them all.
    */
   compact?: boolean;

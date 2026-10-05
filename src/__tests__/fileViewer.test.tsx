@@ -167,7 +167,7 @@ describe("FileViewer", () => {
 
   test("Markdown also reads as it renders, and unchanged opens that way", async () => {
     view = { old: "# Title\n\nSome *text*.\n", new: "# Title\n\nSome *text*.\n", unviewable: null };
-    await open({ path: "docs/README.md", side: "worktree" });
+    await open({ path: "ide/README.md", side: "worktree" });
     expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
     expect(document.querySelector(".file-viewer-preview h1")?.textContent).toBe("Title");
     fireEvent.click(screen.getByRole("tab", { name: "File" }));
@@ -256,7 +256,7 @@ describe("FileViewer", () => {
     expect(wrapped()).toBe(false);
   });
 
-  /// The docs layout's one row: the controls beside the tabs, the path left to the tab's tooltip.
+  /// The IDE layout's one row: the controls beside the tabs, the path left to the tab's tooltip.
   test("compact, the heading is one row and the file still reads as before", async () => {
     let closed = 0;
     await open(undefined, () => closed++, true, true);

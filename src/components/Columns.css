@@ -1,31 +1,37 @@
-/* The docs layout: the file takes what the tree and the chat leave, and the
+/* The IDE layout: the file takes what the tree and the chat leave, and the
    chat is as wide as it was dragged. Its minimum stays `.main`'s (App.css). */
-.window.docs .main {
+.window.ide .main {
   flex: 0 1 var(--chat-width, 480px);
 }
+/* No chat list: the chat header's title is the menu of chats (ChatSwitcher).
+   Hidden, not unmounted — the sidebar holds the shortcuts dialog (⌘/). */
+.window.ide .sidebar,
+.window.ide .sidebar + .panel-resize-handle {
+  display: none;
+}
 /* The column holds only the top pane here: hidden, it goes. */
-.window.docs.aside-hidden .dock-column {
+.window.ide.aside-hidden .dock-column {
   display: none;
 }
 /* The file over the bottom dock, as an editor puts its terminal. */
-.docs-middle {
+.ide-middle {
   flex: 1 5 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-.docs-middle > .file-viewer {
+.ide-middle > .file-viewer {
   flex: 1;
   min-height: 0;
 }
 /* Under the file the bottom dock keeps its height even with the tree hidden,
    which in the column would hand it the whole of it (AsidePanel.css). */
-.window.docs .docs-middle > .aside-bottom {
+.window.ide .ide-middle > .aside-bottom {
   flex: none;
   max-height: 70%;
 }
 /* The middle with no file open: it keeps the chat on the right. */
-.docs-empty {
+.ide-empty {
   flex: 1;
   min-height: 0;
   display: flex;

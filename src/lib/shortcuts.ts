@@ -35,7 +35,7 @@ export const SHORTCUTS = {
   settings: { label: "Settings", group: "General", combos: [{ code: "Comma", mod: true }] },
   shortcuts: { label: "Keyboard shortcuts", group: "General", combos: [{ code: "Slash", mod: true }] },
   close: { label: "Close a dialog, menu or file viewer", group: "General", combos: [{ code: "Escape" }] },
-  docsLayout: { label: "Docs layout: files, the file and the chat side by side", group: "General", combos: [{ code: "KeyD", mod: true, shift: true }] },
+  ideLayout: { label: "IDE layout: files, the file and the chat side by side", group: "General", combos: [{ code: "KeyD", mod: true, shift: true }] },
   ...PANE_SHORTCUTS,
   focusInput: { label: "Go to the message box", group: "Chat", combos: [{ code: "KeyL", mod: true }] },
   send: { label: "Send the message", group: "Chat", combos: [{ code: "Enter" }] },

@@ -260,7 +260,7 @@ describe("the folder tree", () => {
         blocks={[]}
         openFile={{ path: "src/main.rs", side: "worktree" }}
         onOpenFile={() => {}}
-        docs
+        ide
       />,
     );
     await settle();

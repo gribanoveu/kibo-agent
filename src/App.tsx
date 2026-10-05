@@ -13,6 +13,7 @@ import { ToolLog } from "./components/ToolLog";
 import { ConfigFileEditor } from "./components/ConfigFileEditor";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
+import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { WindowControls } from "./components/WindowControls";
 import { useAgentTurn } from "./hooks/useAgentTurn";
@@ -46,7 +47,7 @@ import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { changesShown, docsDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { changesShown, ideDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
@@ -105,8 +106,8 @@ export default function App() {
   const [mode, setMode] = useStoredState<AppMode>("atlas-mode", "agent", isAppMode);
   const agentMode = mode === "agent";
   // Files left, the file in the middle, the chat right: for reading and writing documents.
-  const [docsLayout, setDocsLayout] = useStoredState("atlas-docs-layout", false, isBoolean);
-  const docs = agentMode && docsLayout;
+  const [ideLayout, setIdeLayout] = useStoredState("atlas-ide-layout", false, isBoolean);
+  const ide = agentMode && ideLayout;
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -182,8 +183,8 @@ export default function App() {
   // What the column shows: what was opened, while it fits.
   const topHidden = asideHidden || !dockFits || !agentMode;
   const bottomShown = dockFits && agentMode ? bottomTab : null;
-  // In the docs layout the bottom dock sits under the file, not in the column.
-  const dockShown = !topHidden || (bottomShown !== null && !docs);
+  // In the IDE layout the bottom dock sits under the file, not in the column.
+  const dockShown = !topHidden || (bottomShown !== null && !ide);
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
@@ -243,7 +244,7 @@ export default function App() {
   });
 
   // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: docs };
+  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
     // gives way, or the pane would open out of sight.
@@ -252,14 +253,10 @@ export default function App() {
     setAsideHidden(next.topHidden);
     setBottomTab(next.bottom);
   };
-  // The tree is what the layout is for: it opens with it, in the dock now on
-  // the left, and the chat list folds to its rail to leave the file the room.
-  const toggleDocs = () => {
-    if (!docsLayout) {
-      setDocks(docsDocks(docks));
-      setCollapsed(true);
-    }
-    setDocsLayout(!docsLayout);
+  // The tree is what the layout is for: it opens with it, in the dock now on the left.
+  const toggleIde = () => {
+    if (!ideLayout) setDocks(ideDocks(docks));
+    setIdeLayout(!ideLayout);
   };
   const openTab = (next: AsideTab) =>
     setDocks(openPane(docks, next, PANES.find((p) => p.id === next)?.dock ?? "right"));
@@ -288,7 +285,7 @@ export default function App() {
     focusInput: focusComposer,
     sidebar: toggleSidebar,
     settings: () => openSettings(),
-    docsLayout: agentMode ? toggleDocs : undefined,
+    ideLayout: agentMode ? toggleIde : undefined,
     // Not ⌘W: once the last tab is gone, the next press would close the window.
     closeFile: viewer.active ? () => viewer.active && viewer.close(viewer.active) : undefined,
   });
@@ -298,6 +295,9 @@ export default function App() {
   useEffect(() => {
     if (agent.planWritten > 0) openTab("plan");
   }, [agent.planWritten]);
+
+  const selectChat = (id: string) =>
+    void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
 
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
@@ -457,7 +457,7 @@ export default function App() {
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
     workspace: workspace.path,
-    docs,
+    ide,
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
@@ -508,6 +508,12 @@ export default function App() {
         <>
           <ChatPanel
             title={openChat?.title ?? null}
+            heading={
+              ide ? (
+                <ChatSwitcher title={openChat?.title ?? null} chats={history.chats} activeChat={agent.chatId} onSelect={selectChat} onNew={newChat} />
+              ) : undefined
+            }
+            onOpenSettings={ide ? () => openSettings() : undefined}
             branched={Boolean(openChat?.branchedFrom)}
             workspace={workspace.path}
             turn={agent.turn}
@@ -518,8 +524,8 @@ export default function App() {
             onToggleAside={() => setDocks(toggleChanges(docks))}
             terminalOpen={bottomShown === "terminal"}
             onToggleTerminal={() => setDocks(toggleTerminal(docks))}
-            docsLayout={docs}
-            onToggleDocs={toggleDocs}
+            ideLayout={ide}
+            onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
             onImplement={conversation.value === "plan" ? implement : undefined}
@@ -627,7 +633,7 @@ export default function App() {
       onClose={viewer.close}
       onCloseAll={viewer.closeAll}
       wrap={wrapLines}
-      compact={docs}
+      compact={ide}
     />
   ) : null;
   const topPane = (
@@ -638,7 +644,7 @@ export default function App() {
   );
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${docs ? " docs" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -662,9 +668,7 @@ export default function App() {
           onMode={setMode}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
-          onSelectChat={(id) =>
-            void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY))
-          }
+          onSelectChat={selectChat}
           onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
@@ -686,7 +690,7 @@ export default function App() {
           onResizeEnd={(size) => panels.endResize("sidebar", size)}
         />
 
-        <Columns docs={docs} chat={chat} viewer={fileViewer} top={topPane} bottom={bottomPane || null} topShown={!topHidden} panels={panels} />
+        <Columns ide={ide} chat={chat} viewer={fileViewer} top={topPane} bottom={bottomPane || null} topShown={!topHidden} panels={panels} />
       </div>
 
       <FolderSwitchDialog

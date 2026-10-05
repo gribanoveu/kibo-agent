@@ -30,8 +30,8 @@ export type PaneContext = {
   /** On screen right now. A pane asks the backend only while it is. */
   active: boolean;
   workspace: string | null;
-  /** The window is in the docs layout: the Files pane shows the tree. */
-  docs: boolean;
+  /** The window is in the IDE layout: the Files pane shows the tree. */
+  ide: boolean;
   onNotify: (msg: string) => void;
   /** The commit message being written in Changes. */
   commitDraft: { message: string; onMessage: (message: string) => void };
@@ -392,8 +392,8 @@ function RulesPane({ active, workspace }: PaneContext) {
 // ─── Files ─────────────────────────────────────────────────────────────────
 
 // Filled by its own command wrapper once that command exists.
-function FilesPane({ active, workspace, docs, chatBlocks, openFile, onOpenFile }: PaneContext) {
-  return <FilesPanel active={active} blocks={chatBlocks} workspace={workspace} openFile={openFile} onOpenFile={onOpenFile} docs={docs} />;
+function FilesPane({ active, workspace, ide, chatBlocks, openFile, onOpenFile }: PaneContext) {
+  return <FilesPanel active={active} blocks={chatBlocks} workspace={workspace} openFile={openFile} onOpenFile={onOpenFile} ide={ide} />;
 }
 
 // ─── The registry ──────────────────────────────────────────────────────────

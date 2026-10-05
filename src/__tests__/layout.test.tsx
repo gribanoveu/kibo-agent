@@ -197,12 +197,12 @@ describe("the columns", () => {
   function Draft() {
     return <input aria-label="draft" />;
   }
-  const columns = (docs: boolean, viewer: boolean, bottom = false) => {
+  const columns = (ide: boolean, viewer: boolean, bottom = false) => {
     const { result } = renderHook(() => usePanelSizes({}));
     return (
       <div data-testid="body">
         <Columns
-          docs={docs}
+          ide={ide}
           chat={<main key="chat" className="main"><Draft /></main>}
           viewer={viewer ? <section key="viewer" className="file-viewer" /> : null}
           top={<aside className="aside-right" />}
@@ -216,21 +216,21 @@ describe("the columns", () => {
   const names = (parent: Element) => [...parent.children].map((el) => el.getAttribute("aria-label") ?? el.className);
   const order = () => names(screen.getByTestId("body"));
 
-  test("chat first, then the file and the panes; the docs layout turns it around", () => {
+  test("chat first, then the file and the panes; the IDE layout turns it around", () => {
     const { rerender } = render(columns(false, true, true));
     expect(order()).toEqual(["main", "Resize the file viewer", "file-viewer", "Resize the side panel", "dock-column"]);
     expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right", "Resize the bottom panel", "aside-bottom"]);
     fireEvent.change(screen.getByLabelText("draft"), { target: { value: "half a sentence" } });
 
     rerender(columns(true, true, true));
-    expect(order()).toEqual(["dock-column", "Resize the side panel", "docs-middle", "Resize the chat", "main"]);
+    expect(order()).toEqual(["dock-column", "Resize the side panel", "ide-middle", "Resize the chat", "main"]);
     expect((screen.getByLabelText("draft") as HTMLInputElement).value).toBe("half a sentence");
     // The tree alone on the left; the bottom dock under the file, as an editor's terminal.
     expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right"]);
-    expect(names(document.querySelector(".docs-middle")!)).toEqual(["file-viewer", "Resize the bottom panel", "aside-bottom"]);
+    expect(names(document.querySelector(".ide-middle")!)).toEqual(["file-viewer", "Resize the bottom panel", "aside-bottom"]);
 
     // No file open: the middle still holds the chat on the right.
     rerender(columns(true, false));
-    expect(names(document.querySelector(".docs-middle")!)).toEqual(["docs-empty"]);
+    expect(names(document.querySelector(".ide-middle")!)).toEqual(["ide-empty"]);
   });
 });

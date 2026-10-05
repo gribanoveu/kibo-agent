@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changesShown, docsDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
+import { changesShown, ideDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
 
 const docks = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({ top, topHidden, bottom });
 
@@ -50,7 +50,7 @@ describe("the Terminal button", () => {
   });
 });
 
-describe("the docs layout", () => {
+describe("the IDE layout", () => {
   const swapping = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({
     ...docks(top, topHidden, bottom),
     swap: true,
@@ -64,7 +64,7 @@ describe("the docs layout", () => {
   });
 
   test("opens on the tree, keeping only Terminal under the file", () => {
-    expect(docsDocks(docks("changes", true, "plan"))).toEqual(docks("files", false));
-    expect(docsDocks(docks("mcp", false, "terminal"))).toEqual(docks("files", false, "terminal"));
+    expect(ideDocks(docks("changes", true, "plan"))).toEqual(docks("files", false));
+    expect(ideDocks(docks("mcp", false, "terminal"))).toEqual(docks("files", false, "terminal"));
   });
 });

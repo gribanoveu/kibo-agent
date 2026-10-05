@@ -20,7 +20,7 @@ export const PANEL_LIMITS: Record<PanelKey, { min: number; max: number; initial:
   // heading's badge, counts, Diff/File/Preview and the arrows take 400; the
   // rest is the path's.
   viewer: { min: 440, max: 1400, initial: 560 },
-  // The chat right of the file in the docs layout. Elsewhere it takes what the
+  // The chat right of the file in the IDE layout. Elsewhere it takes what the
   // panels leave, and only its minimum counts.
   chat: { min: 400, max: 1000, initial: 480 },
 };

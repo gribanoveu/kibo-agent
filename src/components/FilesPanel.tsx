@@ -16,8 +16,8 @@ type Props = {
   /** The file the viewer shows: its row is marked. */
   openFile: FileTarget | null;
   onOpenFile: (target: FileTarget, pin?: boolean) => void;
-  /** The docs layout, where the tree is what the panel is for: it turns to it. */
-  docs?: boolean;
+  /** The IDE layout, where the tree is what the panel is for: it turns to it. */
+  ide?: boolean;
 };
 
 /** As a file explorer marks them, with the word in the tooltip. */
@@ -139,12 +139,12 @@ const TOUCH_LABEL: Record<Touch, string> = {
 };
 
 /** The Files tab: the files the agent worked with in this chat, or the open folder as a tree. */
-export function FilesPanel({ active, blocks, workspace, openFile, onOpenFile, docs = false }: Props) {
+export function FilesPanel({ active, blocks, workspace, openFile, onOpenFile, ide = false }: Props) {
   const shown = openFile?.side === "worktree" ? openFile.path : null;
-  const [view, setView] = useState<"chat" | "folder">(docs ? "folder" : "chat");
+  const [view, setView] = useState<"chat" | "folder">(ide ? "folder" : "chat");
   useEffect(() => {
-    if (docs) setView("folder");
-  }, [docs]);
+    if (ide) setView("folder");
+  }, [ide]);
   const files = touchedFiles(blocks, workspace);
   // The tree is read only while its own tab is the one showing.
   const tree = {

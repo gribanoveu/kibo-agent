@@ -5,7 +5,7 @@ export type Docks = {
   top: AsideTab;
   topHidden: boolean;
   bottom: AsideTab | null;
-  /** The docs layout: a pane for the top takes the top's place, as an editor's side bar switches views. */
+  /** The IDE layout: a pane for the top takes the top's place, as an editor's side bar switches views. */
   swap?: boolean;
 };
 
@@ -21,8 +21,8 @@ export function openPane(docks: Docks, pane: AsideTab, dock: "right" | "bottom")
   return { ...docks, top: pane, topHidden: false };
 }
 
-/** Entering the docs layout: the tree on top, and under the file only what goes there anyway. */
-export const docsDocks = (docks: Docks): Docks => ({
+/** Entering the IDE layout: the tree on top, and under the file only what goes there anyway. */
+export const ideDocks = (docks: Docks): Docks => ({
   top: "files",
   topHidden: false,
   bottom: docks.bottom === "terminal" ? "terminal" : null,
