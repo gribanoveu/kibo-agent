@@ -23,6 +23,8 @@ const ALIASES: Record<string, string> = {
   docker: "dockerfile",
   make: "makefile",
   md: "markdown",
+  adoc: "asciidoc",
+  asc: "asciidoc",
   h: "c",
   hpp: "cpp",
   mjs: "javascript",
