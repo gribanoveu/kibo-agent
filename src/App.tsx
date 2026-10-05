@@ -298,8 +298,6 @@ export default function App() {
     sidebar: toggleSidebar,
     settings: () => openSettings(),
     ideLayout: agentMode ? toggleIde : undefined,
-    // Not ⌘W: once the last tab is gone, the next press would close the window.
-    closeFile: viewer.active ? () => viewer.active && viewer.close(viewer.active) : undefined,
   });
 
   // A plan the agent has just written is shown, once, as soon as it lands —
@@ -646,6 +644,7 @@ export default function App() {
       onCloseAll={viewer.closeAll}
       wrap={wrapLines}
       compact={ide}
+      edits={viewer.edits}
     />
   ) : null;
   const topPane = (

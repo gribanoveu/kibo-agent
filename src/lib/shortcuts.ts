@@ -47,7 +47,7 @@ export const SHORTCUTS = {
   closeFile: { label: "Close the file tab", group: "Files", combos: [{ code: "KeyE", mod: true }] },
   nextFile: { label: "Next changed file", group: "Files", combos: [{ code: "ArrowDown", alt: true }] },
   prevFile: { label: "Previous changed file", group: "Files", combos: [{ code: "ArrowUp", alt: true }] },
-  save: { label: "Save the config file", group: "Files", combos: [{ code: "KeyS", mod: true }] },
+  save: { label: "Save the file or the config file", group: "Files", combos: [{ code: "KeyS", mod: true }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

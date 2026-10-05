@@ -1,0 +1,11 @@
+/* Fills the viewer's body; CodeMirror scrolls inside it. */
+.file-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-editor .cm-editor {
+  flex: 1;
+  min-height: 0;
+}

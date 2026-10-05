@@ -69,18 +69,54 @@ export function openFilesReducer(state: OpenFiles, action: Action): OpenFiles {
 }
 
 /**
+ * An edit not saved yet, by the file it is for: closing its tab, switching
+ * layouts or folders keeps it, and opening the file again shows it. `base` is
+ * the file as it was on disk when the edit began — what saving checks the
+ * disk against — or `null` once the user chose to keep an edit of a file
+ * deleted since.
+ */
+export type Draft = { base: string | null; text: string };
+
+type DraftAction =
+  | { kind: "edit"; key: string; base: string | null; text: string }
+  | { kind: "rebase"; key: string; base: string | null }
+  | { kind: "drop"; key: string };
+
+/** An editor hands its text back with `\n`; the file on disk may have `\r\n`. */
+const sameText = (base: string | null, text: string) => base !== null && base.replace(/\r\n/g, "\n") === text;
+
+/**
  * The tabs on screen and the other layout's, put away: the IDE layout and the
  * chat's each keep their own, and switching swaps them. A folder opened
- * elsewhere empties both — "Close all" only the ones on screen.
+ * elsewhere empties both — "Close all" only the ones on screen. Drafts are
+ * kept through all of it, each under its folder and path.
  */
-type Viewer = { shown: OpenFiles; other: OpenFiles };
+type Viewer = { shown: OpenFiles; other: OpenFiles; drafts: Record<string, Draft> };
 
-export function viewerReducer(state: Viewer, action: Action | { kind: "swap" } | { kind: "reset" }): Viewer {
+export function viewerReducer(state: Viewer, action: Action | DraftAction | { kind: "swap" } | { kind: "reset" }): Viewer {
+  const without = (key: string) => {
+    const { [key]: _, ...drafts } = state.drafts;
+    return { ...state, drafts };
+  };
   switch (action.kind) {
     case "swap":
-      return { shown: state.other, other: state.shown };
+      return { ...state, shown: state.other, other: state.shown };
     case "reset":
-      return { shown: none, other: none };
+      return { ...state, shown: none, other: none };
+    // An edit back to what is on disk is no edit: the file reads as saved.
+    case "edit": {
+      const base = state.drafts[action.key]?.base ?? action.base;
+      if (sameText(base, action.text)) return without(action.key);
+      return { ...state, drafts: { ...state.drafts, [action.key]: { base, text: action.text } } };
+    }
+    case "rebase": {
+      const draft = state.drafts[action.key];
+      if (!draft) return state;
+      if (sameText(action.base, draft.text)) return without(action.key);
+      return { ...state, drafts: { ...state.drafts, [action.key]: { ...draft, base: action.base } } };
+    }
+    case "drop":
+      return action.key in state.drafts ? without(action.key) : state;
     default: {
       const shown = openFilesReducer(state.shown, action);
       return shown === state.shown ? state : { ...state, shown };
@@ -88,9 +124,12 @@ export function viewerReducer(state: Viewer, action: Action | { kind: "swap" } |
   }
 }
 
+/** A draft's key: the same path in another folder is another file. */
+export const draftKey = (workspace: string | null, path: string) => `${workspace ?? ""}\0${path}`;
+
 /** The files open in the viewer beside the chat; a folder opened elsewhere closes them all. */
 export function useOpenFiles(workspace: string | null) {
-  const [state, dispatch] = useReducer(viewerReducer, { shown: none, other: none });
+  const [state, dispatch] = useReducer(viewerReducer, { shown: none, other: none, drafts: {} });
   useEffect(() => dispatch({ kind: "reset" }), [workspace]);
   // Stable, so a callback built on them does not re-render every answer.
   const actions = useMemo(
@@ -105,8 +144,27 @@ export function useOpenFiles(workspace: string | null) {
     }),
     [],
   );
-  return { ...state.shown, ...actions };
+  // This folder's drafts by path, and what changes them.
+  const edits = useMemo(() => {
+    const prefix = draftKey(workspace, "");
+    const drafts: Record<string, Draft> = {};
+    for (const [key, draft] of Object.entries(state.drafts)) {
+      if (key.startsWith(prefix)) drafts[key.slice(prefix.length)] = draft;
+    }
+    return {
+      drafts,
+      /** `base` is the file on disk now; a draft already begun keeps its own. */
+      edit: (path: string, base: string | null, text: string) =>
+        dispatch({ kind: "edit", key: draftKey(workspace, path), base, text }),
+      /** Keeps the edit over what is on disk now: the next save writes over it. */
+      rebase: (path: string, base: string | null) => dispatch({ kind: "rebase", key: draftKey(workspace, path), base }),
+      drop: (path: string) => dispatch({ kind: "drop", key: draftKey(workspace, path) }),
+    };
+  }, [state.drafts, workspace]);
+  return { ...state.shown, ...actions, edits };
 }
+
+export type Edits = ReturnType<typeof useOpenFiles>["edits"];
 
 /**
  * The path in the open folder a link in an answer names — `src/a.ts`,

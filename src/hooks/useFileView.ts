@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fileView, onGitChanged, onIndexEvent, type FileTarget, type FileView } from "../lib/chat";
 
 /**
@@ -9,6 +9,8 @@ import { fileView, onGitChanged, onIndexEvent, type FileTarget, type FileView } 
 export function useFileView(target: FileTarget | null, workspace: string | null) {
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The read of the file showing now, for a caller that knows it changed.
+  const reload = useRef<() => Promise<void>>(async () => {});
   const path = target?.path;
   const side = target?.side;
 
@@ -28,6 +30,7 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
           setError(String(e));
         },
       );
+    reload.current = load;
     setView(null);
     void load();
     const stops: (() => void)[] = [];
@@ -40,5 +43,5 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
     };
   }, [path, side, workspace]);
 
-  return { view, error };
+  return { view, error, reload: () => reload.current() };
 }

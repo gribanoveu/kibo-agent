@@ -272,8 +272,9 @@ describe("FileViewer", () => {
     expect(rows()).toHaveLength(11);
     fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
     expect(rows()).toHaveLength(9);
+    // Escape is a key the editor's user presses for other things: it closes nothing here.
     fireEvent.keyDown(row, { key: "Escape" });
-    expect(closed).toBe(1);
+    expect(closed).toBe(0);
   });
 
   test("compact, a changed Markdown file opens as it renders", async () => {
