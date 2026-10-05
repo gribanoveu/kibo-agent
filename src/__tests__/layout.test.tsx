@@ -223,7 +223,8 @@ describe("the columns", () => {
     fireEvent.change(screen.getByLabelText("draft"), { target: { value: "half a sentence" } });
 
     rerender(columns(true, true, true));
-    expect(order()).toEqual(["dock-column", "Resize the side panel", "ide-middle", "Resize the chat", "main"]);
+    // With a file, the middle's minimum is the viewer's, not every open tab's width.
+    expect(order()).toEqual(["dock-column", "Resize the side panel", "ide-middle has-file", "Resize the chat", "main"]);
     expect((screen.getByLabelText("draft") as HTMLInputElement).value).toBe("half a sentence");
     // The tree alone on the left; the bottom dock under the file, as an editor's terminal.
     expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right"]);
@@ -232,5 +233,6 @@ describe("the columns", () => {
     // No file open: the middle still holds the chat on the right.
     rerender(columns(true, false));
     expect(names(document.querySelector(".ide-middle")!)).toEqual(["ide-empty"]);
+    expect(document.querySelector(".ide-middle")!.className).toBe("ide-middle");
   });
 });

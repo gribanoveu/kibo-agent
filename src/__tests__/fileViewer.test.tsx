@@ -167,7 +167,7 @@ describe("FileViewer", () => {
 
   test("Markdown also reads as it renders, and unchanged opens that way", async () => {
     view = { old: "# Title\n\nSome *text*.\n", new: "# Title\n\nSome *text*.\n", unviewable: null };
-    await open({ path: "ide/README.md", side: "worktree" });
+    await open({ path: "docs/README.md", side: "worktree" });
     expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
     expect(document.querySelector(".file-viewer-preview h1")?.textContent).toBe("Title");
     fireEvent.click(screen.getByRole("tab", { name: "File" }));
@@ -257,7 +257,7 @@ describe("FileViewer", () => {
   });
 
   /// The IDE layout's one row: the controls beside the tabs, the path left to the tab's tooltip.
-  test("compact, the heading is one row and the file still reads as before", async () => {
+  test("compact, the heading is one row and a changed file opens whole", async () => {
     let closed = 0;
     await open(undefined, () => closed++, true, true);
     expect(document.querySelector(".file-viewer-head")).toBeNull();
@@ -267,8 +267,19 @@ describe("FileViewer", () => {
     expect(row.textContent).toContain("+1");
     expect(screen.queryByTitle("Close all")).toBeNull();
     expect(screen.getByRole("tab", { name: "main.rs" }).closest("[title]")?.getAttribute("title")).toBe("src/main.rs");
+    // Opened to be read: the whole file with its change in place, the diff a click away.
+    expect(screen.getByRole("tab", { name: "File" }).getAttribute("aria-selected")).toBe("true");
+    expect(rows()).toHaveLength(11);
+    fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
     expect(rows()).toHaveLength(9);
     fireEvent.keyDown(row, { key: "Escape" });
     expect(closed).toBe(1);
+  });
+
+  test("compact, a changed Markdown file opens as it renders", async () => {
+    view = { old: "# Title\n", new: "# Title\n\nMore.\n", unviewable: null };
+    await open({ path: "docs/README.md", side: "unstaged" }, () => {}, true, true);
+    expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.querySelector(".file-viewer-preview h1")?.textContent).toBe("Title");
   });
 });

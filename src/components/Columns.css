@@ -13,12 +13,19 @@
 .window.ide.aside-hidden .dock-column {
   display: none;
 }
-/* The file over the bottom dock, as an editor puts its terminal. */
+/* The file over the bottom dock, as an editor puts its terminal. Its
+   minimum is set, not taken from what it holds: that would be every open
+   tab's width, and a row of tabs would push the chat out of the window. With
+   a file, the viewer's own minimum (FileViewer.css); without, none. */
 .ide-middle {
   flex: 1 5 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.ide-middle.has-file {
+  min-width: 440px;
 }
 .ide-middle > .file-viewer {
   flex: 1;

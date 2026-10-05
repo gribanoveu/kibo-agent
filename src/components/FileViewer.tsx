@@ -128,8 +128,9 @@ export function FileViewer({
   /** Long lines wrap rather than scroll sideways — Settings → Appearance. */
   wrap: boolean;
   /**
-   * One heading row, for the IDE layout: how to show the file sits beside
-   * its tab, the path is the tab's tooltip, and Escape closes them all.
+   * The IDE layout's viewer: a file opens whole rather than as its diff, and
+   * the heading is one row — how to show the file sits beside its tab, the
+   * path is the tab's tooltip, and Escape closes them all.
    */
   compact?: boolean;
 }) {
@@ -146,7 +147,9 @@ export function FileViewer({
     const next = stepThrough(changes, target, by);
     if (next) onActivate(next);
   };
-  const [mode, setMode] = useState<Mode>("diff");
+  // Beside the chat a file is opened to see what changed in it; in the IDE
+  // layout, to be read — as it renders when it is Markdown, whole otherwise.
+  const [mode, setMode] = useState<Mode>(compact ? "preview" : "diff");
   const text = view && !view.unviewable ? view : null;
   const changed = !!text && text.old !== text.new;
   const markdown = languageOf(target.path) === "markdown";

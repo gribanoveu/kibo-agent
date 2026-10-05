@@ -50,7 +50,7 @@ export function Columns({ ide, chat, viewer, top, topShown, bottom, panels }: Pr
         {top}
       </div>,
       topShown && dockHandle,
-      <div key="middle" className="ide-middle">
+      <div key="middle" className={`ide-middle${viewer ? " has-file" : ""}`}>
         {viewer ?? <div className="ide-empty">Pick a file in the tree to read it here.</div>}
         {bottom && bottomHandle}
         {bottom}
