@@ -141,6 +141,7 @@ pub fn run() {
             commands::git::git_worktree_remove,
             commands::git::file_view,
             commands::files::workspace_list,
+            commands::files::file_write,
             commands::chat::workspace_recent,
             commands::chat::workspace_index_status,
             commands::chat::chat_start,
