@@ -593,3 +593,77 @@ describe("speed", () => {
     expect(liveSpeed(state, 3_900)).toBeNull();
   });
 });
+
+describe("cache misses", () => {
+  const MIN = 60_000;
+  // One request as a turn of its own: sent at `sentAt`, answered at `endedAt`.
+  const request = (
+    state: TurnState,
+    { prompt, cached, sentAt, endedAt = sentAt + 1_000, model = "a/one" }: { prompt: number; cached: number; sentAt: number; endedAt?: number; model?: string },
+  ) => {
+    state = appendUserMessage(state, "go", sentAt);
+    state = acceptEvent(state, { turnId: "t", seq: 1, round: 1, type: "roundStarted" }, sentAt, model);
+    const payload = { promptTokens: prompt, completionTokens: 10, totalTokens: prompt + 10, cachedTokens: cached };
+    return acceptEvent(state, { turnId: "t", seq: 2, round: 1, type: "contextUsage", payload }, endedAt, model);
+  };
+  const notices = (state: TurnState) => text(state, "notice");
+  const warm = (prompt = 90_000) => request(emptyTurn(), { prompt, cached: 1_000, sentAt: 0 });
+
+  test("a prompt read back from the cache says nothing", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 89_000, sentAt: MIN }))).toEqual([]);
+  });
+
+  test("a pause past the cache's life is named as the cause", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 6_000, sentAt: 7 * MIN }))).toEqual([
+      "Cache miss after 7 min idle — ~84k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("the pause is counted to when the request was sent, not to its answer", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 6_000, sentAt: 2 * MIN, endedAt: 9 * MIN }))).toEqual([
+      "Cache miss — ~84k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("a model switch is named, and takes precedence over a pause", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 0, sentAt: 9 * MIN, model: "b/two" }))).toEqual([
+      "Cache miss after the model switch — ~90k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("only what both prompts shared is counted", () => {
+    // The new prompt is shorter: 40k of it was in the last one, 10k came from the cache.
+    expect(notices(request(warm(), { prompt: 40_000, cached: 10_000, sentAt: MIN }))).toEqual([
+      "Cache miss — ~30k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("a small miss is not worth a line", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 70_001, sentAt: MIN }))).toEqual([]);
+  });
+
+  test("a provider that never reported its cache is not judged by a zero", () => {
+    const silent = request(emptyTurn(), { prompt: 90_000, cached: 0, sentAt: 0 });
+    expect(notices(request(silent, { prompt: 95_000, cached: 0, sentAt: 9 * MIN }))).toEqual([]);
+  });
+
+  test("once a provider has reported its cache, every zero after is a full miss", () => {
+    const missed = request(warm(), { prompt: 95_000, cached: 0, sentAt: MIN });
+    expect(notices(request(missed, { prompt: 99_000, cached: 0, sentAt: 2 * MIN }))).toHaveLength(2);
+  });
+
+  test("the first report of a cache already tells a miss", () => {
+    const silent = request(emptyTurn(), { prompt: 90_000, cached: 0, sentAt: 0 });
+    expect(notices(request(silent, { prompt: 95_000, cached: 30_000, sentAt: MIN }))).toHaveLength(1);
+  });
+
+  test("a folded history starts over: its first request is not a miss", () => {
+    const folded = compactionEnded(warm(), { folded: 12 });
+    expect(notices(request(folded, { prompt: 95_000, cached: 0, sentAt: MIN }))).toEqual([]);
+  });
+
+  test("a pass that gave up keeps the history, and the comparison", () => {
+    const failed = compactionEnded(warm(), null);
+    expect(notices(request(failed, { prompt: 95_000, cached: 0, sentAt: MIN }))).toHaveLength(1);
+  });
+});

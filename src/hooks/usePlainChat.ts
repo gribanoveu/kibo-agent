@@ -86,8 +86,12 @@ export function chatBlocks(saved: unknown, messages: LlmMessage[]): Block[] {
  * approval cards arrive as the agent's do and are drawn the same way. As with
  * the agent, the window keeps both halves: the blocks a reader sees and the
  * messages the model is sent again.
+ *
+ * `model` is the one turns run on — `acceptEvent` says when a cache miss came with a switch.
  */
-export function usePlainChat(lastKubeconfig: string | null = null) {
+export function usePlainChat(lastKubeconfig: string | null = null, model?: string) {
+  const modelRef = useRef(model);
+  modelRef.current = model;
   const [chats, setChats] = useState<ChatSummary[]>([]);
   // Which chat is open, so the next launch opens it again. Null until the first message is saved.
   const [chatId, setChatId] = useStoredState<string | null>("plain-chat-open", null, isId);
@@ -223,7 +227,7 @@ export function usePlainChat(lastKubeconfig: string | null = null) {
       subscribed.current = await onTurnEvent(turnId.current, (event) => {
       // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
       const now = Date.now();
-      setTurn((state) => acceptEvent(state, event, now));
+      setTurn((state) => acceptEvent(state, event, now, modelRef.current));
     });
       // Saved before the turn: one that fails leaves what the user said to
       // retry, not retype — and the chat is in the sidebar from its first message.

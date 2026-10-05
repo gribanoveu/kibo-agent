@@ -103,7 +103,10 @@ export default function App() {
   const agentMode = mode === "agent";
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
-  const plain = usePlainChat(kube.active?.name ?? null);
+  const llm = useLlmSettings();
+  // The model turns run on, for saying a cache miss came with a switch.
+  const model = llm.models.current?.label;
+  const plain = usePlainChat(kube.active?.name ?? null, model);
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
   const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
@@ -186,6 +189,7 @@ export default function App() {
   // Counted in the chat beside the turn's clock: they outlive the turn.
   const runningProcesses = useRunningProcesses();
   const agent = useAgentTurn({
+    model,
     onSaved: history.refresh,
     onGiveBack: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
   });
@@ -219,7 +223,6 @@ export default function App() {
   const skillSources = useSkills(settingsOpen, workspace.path);
   const commandFiles = useCommandFiles(workspace.path);
   const serverPrompts = useMcpPrompts(workspace.path, agent.turn.status);
-  const llm = useLlmSettings();
   const theme = useTheme();
   const fontSize = useChatFontSize();
   const panels = usePanelSizes({

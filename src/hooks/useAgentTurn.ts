@@ -61,9 +61,12 @@ export type Queued = { id: number; text: string };
 export type Steered = { id: string; text: string };
 
 export function useAgentTurn({
+  model,
   onSaved,
   onGiveBack,
 }: {
+  /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
+  model?: string;
   onSaved?: () => void;
   /** Queued text that will not be sent after all, for the composer to take back. */
   onGiveBack?: (text: string) => void;
@@ -128,6 +131,8 @@ export function useAgentTurn({
   const journaled = useRef<Promise<string | null> | null>(null);
   const giveBackRef = useRef(onGiveBack);
   giveBackRef.current = onGiveBack;
+  const modelRef = useRef(model);
+  modelRef.current = model;
 
   useEffect(() => () => subscribed.current?.(), []);
 
@@ -136,7 +141,7 @@ export function useAgentTurn({
     const off = await onTurnEvent(id, (event) => {
       // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
       const now = Date.now();
-      setTurn((state) => acceptEvent(state, event, now));
+      setTurn((state) => acceptEvent(state, event, now, modelRef.current));
     });
     subscribed.current = off;
   }, []);

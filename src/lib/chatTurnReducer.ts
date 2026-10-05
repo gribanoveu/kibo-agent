@@ -103,6 +103,10 @@ export type TurnState = {
   /** The provider's output speed: the last round's tokens per second, and the
       session's tokens, streaming time and characters it averages over. */
   speed: { last: number | null; tokens: number; ms: number; chars: number };
+  /** What telling a cache miss needs: the last request's prompt, model and end,
+      when the one under way was sent, and whether the provider has ever said
+      what it read from its cache — until it has, a zero says nothing. */
+  cache: { last: { promptTokens: number; model?: string; endedAt: number } | null; sentAt: number | null; reported: boolean };
 };
 
 export const emptyTurn = (): TurnState => ({
@@ -119,6 +123,7 @@ export const emptyTurn = (): TurnState => ({
   streamSince: null,
   streamChars: 0,
   speed: { last: null, tokens: 0, ms: 0, chars: 0 },
+  cache: { last: null, sentAt: null, reported: false },
 });
 
 /**
@@ -171,6 +176,8 @@ export function compactionStarted(state: TurnState): TurnState {
  * start may never have been seen — and one that did not is nothing to show.
  */
 export function compactionEnded(state: TurnState, end: { folded: number } | null): TurnState {
+  // A shorter history is a new prompt: its first request is not a miss.
+  if (end) state = { ...state, cache: { ...state.cache, last: null } };
   const at = state.blocks.map((b) => b.kind === "compaction" && b.status === "running").lastIndexOf(true);
   if (at < 0) {
     if (!end) return state;
@@ -249,10 +256,12 @@ export function restoredTurn(blocks: Block[]): TurnState {
  * runner's reader threads, where the turn's cursor does not exist. It belongs
  * to the call named in its payload and is ordered against nothing. An MCP
  * server's question is sent from inside its call too, and is keyed by its id.
+ *
+ * `model` is the one the turn runs on, for saying a cache miss came with a switch.
  */
-export function acceptEvent(state: TurnState, event: TurnEvent, now = Date.now()): TurnState {
+export function acceptEvent(state: TurnState, event: TurnEvent, now = Date.now(), model?: string): TurnState {
   if (event.type === "commandOutput" || event.type === "mcpQuestion" || event.type === "mcpQuestionClosed") {
-    return applyEvent(state, event, now);
+    return applyEvent(state, event, now, model);
   }
 
   if (event.seq <= state.lastSeq) return state;
@@ -260,7 +269,7 @@ export function acceptEvent(state: TurnState, event: TurnEvent, now = Date.now()
     return { ...state, buffered: [...state.buffered, event] };
   }
 
-  let next = applyEvent({ ...state, lastSeq: event.seq }, event, now);
+  let next = applyEvent({ ...state, lastSeq: event.seq }, event, now, model);
 
   // The gap is filled; anything that was waiting on it may now apply, in order.
   let progressed = true;
@@ -272,6 +281,7 @@ export function acceptEvent(state: TurnState, event: TurnEvent, now = Date.now()
         { ...next, lastSeq: ready.seq, buffered: next.buffered.filter((e) => e !== ready) },
         ready,
         now,
+        model,
       );
       progressed = true;
     }
@@ -364,7 +374,7 @@ function streamed(state: TurnState, chars: number, now: number): TurnState {
   return { ...state, streamSince: state.streamSince ?? now, streamChars: state.streamChars + chars };
 }
 
-function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState {
+function applyEvent(state: TurnState, event: TurnEvent, now: number, model?: string): TurnState {
   state = timeStream(state, event, now);
   switch (event.type) {
     case "roundStarted":
@@ -373,7 +383,8 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState 
       // round. Stated as an event rather than inferred, because a round that
       // ended in prose and was followed by another had its two answers
       // concatenated mid-sentence, permanently.
-      return { ...state, retrying: null };
+      // When it was sent, too: a cache miss counts the pause before it.
+      return { ...state, retrying: null, cache: { ...state.cache, sentAt: now } };
 
     case "delta":
       return appendText(state, "message", event.round, event.payload.delta);
@@ -476,12 +487,17 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState 
         ),
       };
 
-    case "contextUsage":
-      return {
+    case "contextUsage": {
+      const { promptTokens, cachedTokens = 0 } = event.payload;
+      const miss = cacheMiss(state.cache, event.payload, model);
+      const next = {
         ...state,
         usage: event.payload,
-        spent: state.spent + event.payload.promptTokens + event.payload.completionTokens,
+        spent: state.spent + promptTokens + event.payload.completionTokens,
+        cache: { last: { promptTokens, model, endedAt: now }, sentAt: null, reported: state.cache.reported || cachedTokens > 0 },
       };
+      return miss ? appendNotice(next, miss) : next;
+    }
 
     case "contextEstimate":
       return { ...state, estimate: event.payload };
@@ -492,6 +508,32 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number): TurnState 
     default:
       return state;
   }
+}
+
+/** Idle longer than this, a provider's prompt cache has likely expired — Anthropic's lives five minutes. */
+const CACHE_TTL_MS = 5 * 60_000;
+/** A smaller miss is not worth a line in the transcript. */
+const MISS_WORTH_SAYING = 20_000;
+
+/**
+ * Says so when a request paid full price for a prompt the last one had already
+ * sent — the part both shared, less what came from the cache. The cause is
+ * named only when it was seen: a model switch, or a pause past the cache's
+ * life. A provider that never reported its cache is not judged by a zero.
+ */
+function cacheMiss(cache: TurnState["cache"], usage: ChatUsage, model?: string): string | null {
+  const cached = usage.cachedTokens ?? 0;
+  if (!cache.last || !(cache.reported || cached > 0)) return null;
+  const missed = Math.min(cache.last.promptTokens, usage.promptTokens) - cached;
+  if (missed < MISS_WORTH_SAYING) return null;
+  const idle = (cache.sentAt ?? cache.last.endedAt) - cache.last.endedAt;
+  const why =
+    model !== cache.last.model
+      ? " after the model switch"
+      : idle >= CACHE_TTL_MS
+        ? ` after ${Math.round(idle / 60_000)} min idle`
+        : "";
+  return `Cache miss${why} — ~${Math.round(missed / 1000)}k tokens of the prompt were sent again at full price`;
 }
 
 function appendText(
