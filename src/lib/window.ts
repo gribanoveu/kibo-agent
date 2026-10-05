@@ -15,3 +15,15 @@ export const minimizeWindow = () => inTauri() && getCurrentWindow().minimize();
 export const toggleMaximizeWindow = () => inTauri() && getCurrentWindow().toggleMaximize();
 export const closeWindow = () => inTauri() && getCurrentWindow().close();
 export const startWindowDrag = () => inTauri() && getCurrentWindow().startDragging();
+
+/**
+ * Before the window closes — its button, ⌘W, ⌘Q: `keep` resolves to whether
+ * it stays open. One that fails lets it close. Returns the unsubscribe.
+ */
+export function onWindowClose(keep: () => Promise<boolean>): () => void {
+  if (!inTauri()) return () => {};
+  const unlisten = getCurrentWindow().onCloseRequested(async (event) => {
+    if (await keep().catch(() => false)) event.preventDefault();
+  });
+  return () => void unlisten.then((stop) => stop());
+}

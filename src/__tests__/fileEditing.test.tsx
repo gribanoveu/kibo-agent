@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { EditorView } from "@codemirror/view";
 import { language } from "@codemirror/language";
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { IS_MAC } from "../lib/shortcuts";
 import type { FileTarget } from "../lib/chat";
 
@@ -22,6 +23,8 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "file_write") {
       const { path, expected, content } = args as { path: string; expected: string | null; content: string };
       writes.push({ path, expected, content });
+      // What is there already is saved, whatever it was made on.
+      if (disk[path] === content) return Promise.resolve({ kind: "saved" });
       if (expected !== null && disk[path] !== expected) return Promise.resolve({ kind: "changedOnDisk" });
       disk[path] = content;
       return Promise.resolve({ kind: "saved" });
@@ -40,6 +43,22 @@ mock.module("@tauri-apps/api/event", () => ({
     return Promise.resolve(() => listeners.get(channel)!.delete(handler));
   },
 }));
+// The window's close button, ⌘W or ⌘Q: whether the window stayed open.
+let closeRequested: ((event: { preventDefault: () => void }) => Promise<void>) | null = null;
+mock.module("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onCloseRequested: (handler: typeof closeRequested) => {
+      closeRequested = handler;
+      return Promise.resolve(() => void (closeRequested = null));
+    },
+  }),
+}));
+async function closeWindow() {
+  let kept = false;
+  await act(() => closeRequested!({ preventDefault: () => void (kept = true) }));
+  return kept;
+}
+
 /** The agent wrote a file: the folder's watcher says so, and the viewer reads again. */
 const agentWrites = (path: string, text: string) => {
   disk[path] = text;
@@ -260,6 +279,82 @@ describe("editing in the IDE layout", () => {
     await ide([{ path: "src/Main.java", side: "worktree" }]);
     for (let i = 0; i < 50 && !editor().state.facet(language); i++) await settle(10);
     expect(editor().state.facet(language)?.name).toBe("java");
+  });
+
+  test("closing the window saves what is being typed, past the draft passed up before it", async () => {
+    await ide();
+    await type("Mine.\n");
+    act(() => editor().focus());
+    act(() => editor().dispatch({ changes: { from: editor().state.doc.length, insert: "More." } }));
+    expect(await closeWindow()).toBe(false);
+    expect(disk["docs/a.adoc"]).toBe("= Title\nMine.\nMore.");
+  });
+
+  test("closing the window saves another tab's edit that can be saved by now", async () => {
+    await ide([doc, other]);
+    fireEvent.click(tab("a.adoc"));
+    await showing("= Title\n");
+    await type("Draft.\n");
+    disk["docs/a.adoc"] = "= Title\nThe agent's.\n";
+    fireEvent.click(tab("b.adoc"));
+    await showing("= B\n");
+    await type("Mine.\n");
+    act(() => editor().focus());
+    // Put back as the edit began from.
+    disk["docs/a.adoc"] = "= Title\n";
+    expect(await closeWindow()).toBe(false);
+    expect(disk["docs/a.adoc"]).toBe("= Title\nDraft.\n");
+    expect(disk["docs/b.adoc"]).toBe("= B\nMine.\n");
+  });
+
+  test("closing the window saves another tab's edit; one that cannot be saved keeps it open, once", async () => {
+    await ide([doc, other]);
+    fireEvent.click(tab("a.adoc"));
+    await showing("= Title\n");
+    await type("Draft.\n");
+    disk["docs/a.adoc"] = "= Title\nThe agent's.\n";
+    fireEvent.click(tab("b.adoc"));
+    await showing("= B\n");
+    await type("Mine.\n");
+    act(() => editor().focus());
+
+    expect(await closeWindow()).toBe(true);
+    expect(disk["docs/b.adoc"]).toBe("= B\nMine.\n");
+    expect(disk["docs/a.adoc"]).toBe("= Title\nThe agent's.\n");
+    // Its tab comes up, saying why, and what closing again does.
+    await showing("= Title\nDraft.\n");
+    expect(screen.getByRole("alert").textContent).toContain("Changed on disk");
+    expect(screen.getByRole("alert").textContent).toContain("Close the window again");
+    expect(await closeWindow()).toBe(false);
+  });
+
+  test("closing the window with nothing typed writes nothing", async () => {
+    await ide([doc, other]);
+    expect(await closeWindow()).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
+  test("⌘F opens the search in the file, and Escape closes it", async () => {
+    await ide();
+    act(() => void fireEvent.keyDown(editor().contentDOM, { code: "KeyF", key: "f", ...MOD }));
+    const field = document.querySelector<HTMLInputElement>(".cm-search input[name=search]");
+    expect(field).toBeTruthy();
+    act(() => void fireEvent.keyDown(field!, { code: "Escape", key: "Escape" }));
+    expect(document.querySelector(".cm-search")).toBeNull();
+  });
+
+  test("⌘G and ⇧⌘G step through the matches", async () => {
+    await ide();
+    await type("Title. Title.");
+    const at = () => editor().state.selection.main.from;
+    act(() => editor().dispatch({ selection: { anchor: 0 }, effects: setSearchQuery.of(new SearchQuery({ search: "Title" })) }));
+    const key = (shift: boolean) => act(() => void fireEvent.keyDown(editor().contentDOM, { code: "KeyG", key: "g", shiftKey: shift, ...MOD }));
+    key(false);
+    expect(at()).toBe(2);
+    key(false);
+    expect(at()).toBe(8);
+    key(true);
+    expect(at()).toBe(2);
   });
 
   test("a pause in typing saves it", async () => {

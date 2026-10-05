@@ -31,6 +31,10 @@ mock.module("@tauri-apps/api/event", () => ({
   },
 }));
 
+mock.module("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onCloseRequested: () => Promise.resolve(() => {}) }),
+}));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;

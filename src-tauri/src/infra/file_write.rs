@@ -39,13 +39,19 @@ pub fn write(root: &Path, path: &str, expected: Option<&str>, content: &str) -> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(io(e)),
     };
+    let ending = on_disk.as_deref().and_then(line_ending);
+    let text = in_endings(content, ending);
+    // Already there — this save landed before, and the window had not heard
+    // yet — is saved, whatever it was made on.
+    if on_disk.as_deref() == Some(&*text) {
+        return Ok(FileSave::Saved);
+    }
     if let Some(expected) = expected {
         if on_disk.as_deref() != Some(expected) {
             return Ok(FileSave::ChangedOnDisk);
         }
     }
-    let ending = on_disk.as_deref().and_then(line_ending);
-    fs::write(&full, in_endings(content, ending).as_bytes()).map_err(io)?;
+    fs::write(&full, text.as_bytes()).map_err(io)?;
     Ok(FileSave::Saved)
 }
 
@@ -86,6 +92,14 @@ mod tests {
         fs::remove_file(dir.join("docs/a.adoc")).unwrap();
         assert_eq!(write(&dir, "docs/a.adoc", Some("= Title\n\nText.\n"), "mine\n"), Ok(FileSave::ChangedOnDisk));
         assert!(!dir.join("docs/a.adoc").exists());
+    }
+
+    #[test]
+    fn a_text_already_on_disk_is_saved_whatever_it_was_made_on() {
+        let dir = folder();
+        fs::write(dir.join("docs/a.adoc"), "mine\r\n").unwrap();
+        assert_eq!(write(&dir, "docs/a.adoc", Some("= Title\n\nText.\n"), "mine\n"), Ok(FileSave::Saved));
+        assert_eq!(read(&dir, "docs/a.adoc"), "mine\r\n");
     }
 
     #[test]

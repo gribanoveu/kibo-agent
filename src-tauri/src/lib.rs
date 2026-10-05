@@ -24,6 +24,29 @@ fn window_state() -> tauri_plugin_window_state::StateFlags {
     flags
 }
 
+/// The menu bar's Quit, given to the window to decide. The platform's own
+/// ends the app without asking it — tao has no `applicationShouldTerminate`
+/// — and the window saves the files typed into before it goes.
+#[cfg(target_os = "macos")]
+const QUIT: &str = "quit";
+
+/// Tauri's default menu, its app menu's last item, Quit, swapped for one that
+/// closes the window instead — which, the only one, ends the app.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(first)) = menu.items()?.into_iter().next() {
+        let items = first.items()?;
+        if let Some(MenuItemKind::Predefined(quit)) = items.last() {
+            let text = quit.text()?;
+            first.remove_at(items.len() - 1)?;
+            first.append(&MenuItem::with_id(app, QUIT, text, true, Some("CmdOrCtrl+Q"))?)?;
+        }
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -59,6 +82,21 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Err(e) = window_frame::save(window) {
                 eprintln!("window size and position not saved: {e}");
+            }
+        }
+    });
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu).on_menu_event(|app, event| {
+        use tauri::Manager;
+        if event.id() == QUIT {
+            match app.get_webview_window("main") {
+                Some(window) => {
+                    if let Err(e) = window.close() {
+                        eprintln!("the window did not close: {e}");
+                        app.exit(0);
+                    }
+                }
+                None => app.exit(0),
             }
         }
     });

@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
+import { closeSearchPanel, findNext, findPrevious, openSearchPanel, search } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
@@ -88,6 +89,20 @@ const colours = HighlightStyle.define([
   { tag: t.invalid, color: "var(--red)" },
 ]);
 
+// Search's keys by the registry rather than its own keymap, so the shortcuts
+// dialog lists them; in the editor and in the search panel alike.
+const searchKeys: KeyBinding = {
+  scope: "editor search-panel",
+  any: (view, e) =>
+    matches(e, "find")
+      ? openSearchPanel(view)
+      : matches(e, "findNext")
+        ? findNext(view)
+        : matches(e, "findPrevious")
+          ? findPrevious(view)
+          : matches(e, "close") && closeSearchPanel(view),
+};
+
 const wrapping = new Compartment();
 const syntax = new Compartment();
 const lines = (wrap: boolean) => (wrap ? EditorView.lineWrapping : []);
@@ -130,7 +145,8 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
           history(),
           drawSelection(),
           highlightActiveLine(),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          keymap.of([searchKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          search({ top: true }),
           syntax.of(own ?? []),
           syntaxHighlighting(colours),
           theme,
