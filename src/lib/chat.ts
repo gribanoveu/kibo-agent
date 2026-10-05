@@ -974,6 +974,16 @@ export async function rewindPreview(changes: FileChange[]): Promise<FileRewind[]
   return invoke<FileRewind[]>("rewind_preview", { changes });
 }
 
+/**
+ * The message standing for the part of a chat being rewound away from —
+ * `messages`, from the rewound one on — told as what was tried. `null` when
+ * the summary came back empty. One request to the model.
+ */
+export async function branchSummary(messages: LlmMessage[]): Promise<LlmMessage | null> {
+  requireBackend();
+  return invoke<LlmMessage | null>("chat_branch_summary", { messages });
+}
+
 /** Puts them back, each file checked again right before it is written. */
 export async function rewindApply(changes: FileChange[]): Promise<FileRewind[]> {
   requireBackend();

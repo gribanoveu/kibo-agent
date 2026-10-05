@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-05 A rewind can keep a summary of what was tried after the message — "Rewind with a summary" — so the next attempt knows what did not work and why, while the files still go back
 - 2026-10-05 A folder with skills or `/` commands of its own asks once whether to trust it, and loads them only if you do; `/trust` asks again. `AGENTS.md` and `CLAUDE.md` are read either way
 - 2026-10-05 When a request sends the prompt again at full price instead of reading it from the provider's cache, a line in the chat says how much and why, when the cause was seen: a pause past the cache's life or a model switch
 - 2026-10-04 The agent reads several files in one call — one Read row lists them and opens on each under its own header — instead of a shell loop over `cat` that needed a re-read before every edit

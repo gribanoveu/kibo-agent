@@ -409,6 +409,20 @@ pub async fn chat_compact(
     .map_err(|e| format!("the compaction thread failed: {e}"))?
 }
 
+/// The message that stands for the part of a chat being rewound away from —
+/// `messages`, from the rewound message on — for the window to add after the
+/// conversation it keeps. `None` when the summary came back empty.
+#[tauri::command]
+pub async fn chat_branch_summary(messages: Vec<LlmMessage>) -> Result<Option<LlmMessage>, String> {
+    // A request to the provider: off the IPC loop, as a compaction's.
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        context_compaction::summarize_branch(&session, &messages).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("the summary thread failed: {e}"))?
+}
+
 /// What the next request will cost, for the window's meter.
 ///
 /// Asked rather than computed there: the numbers on the meter have to be the

@@ -68,6 +68,20 @@ describe("the rewind dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
     expect(confirmed).toBe(true);
   });
+
+  test("each way of rewinding says whether to keep a summary", () => {
+    const asked: boolean[] = [];
+    render(<RewindDialog asked={{ bubbleId: "u1", files: [], unrecorded: 0 }} onConfirm={(s) => asked.push(s)} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Rewind with a summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+    expect(asked).toEqual([true, false]);
+  });
+
+  test("while the summary is written, nothing else can be pressed", () => {
+    render(<RewindDialog asked={{ bubbleId: "u1", files: [], unrecorded: 0 }} summarizing onConfirm={() => {}} onClose={() => {}} />);
+    const buttons = ["Cancel", "Summarizing…", "Rewind"].map((name) => screen.getByRole("button", { name }) as HTMLButtonElement);
+    expect(buttons.map((b) => b.disabled)).toEqual([true, true, true]);
+  });
 });
 
 describe("the rewind button", () => {
@@ -86,5 +100,56 @@ describe("the rewind button", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
     expect(asked).toEqual(["u0"]);
+  });
+});
+
+describe("asking for a rewind", () => {
+  test("with a summary the question stays up, and cannot be closed, until the rewind is done", async () => {
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useRewind } = await import("../hooks/useRewind");
+    let finish = () => {};
+    const rewound: [string, boolean | undefined][] = [];
+    const { result } = renderHook(() =>
+      useRewind({
+        preview: async () => ({ files: [], unrecorded: 0 }),
+        rewind: (id, summarize) => {
+          rewound.push([id, summarize]);
+          return new Promise((done) => (finish = () => done([])));
+        },
+        notify: () => {},
+      }),
+    );
+    await act(() => result.current.ask("u1"));
+    let confirmed: Promise<void> = Promise.resolve();
+    act(() => {
+      confirmed = result.current.confirm(true);
+    });
+    expect(result.current.summarizing).toBe(true);
+    act(() => result.current.close());
+    expect(result.current.asked).not.toBeNull();
+    await act(async () => {
+      finish();
+      await confirmed;
+    });
+    expect(rewound).toEqual([["u1", true]]);
+    expect(result.current.summarizing).toBe(false);
+    expect(result.current.asked).toBeNull();
+  });
+
+  test("without one it closes at once", async () => {
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useRewind } = await import("../hooks/useRewind");
+    const rewound: [string, boolean | undefined][] = [];
+    const { result } = renderHook(() =>
+      useRewind({
+        preview: async () => ({ files: [], unrecorded: 0 }),
+        rewind: async (id, summarize) => (rewound.push([id, summarize]), []),
+        notify: () => {},
+      }),
+    );
+    await act(() => result.current.ask("u1"));
+    await act(() => result.current.confirm(false));
+    expect(rewound).toEqual([["u1", undefined]]);
+    expect(result.current.asked).toBeNull();
   });
 });

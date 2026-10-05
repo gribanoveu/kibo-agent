@@ -19,6 +19,7 @@ import {
   steer as steerCommand,
   alwaysAllow,
   reviewStart,
+  branchSummary,
   rewindApply,
   rewindPreview,
   type ContextUsage,
@@ -572,12 +573,28 @@ export function useAgentTurn({
    * composer. Files first — a rewind that could not reach them leaves the
    * conversation as it was. Returns how each file went, or `null` when
    * nothing was done.
+   *
+   * With `summarize`, what is cut off is told to the model first, and the
+   * summary follows the conversation kept: the next attempt knows what was
+   * tried and why it did not work. A summary that fails stops the rewind.
    */
   const rewind = useCallback(
-    async (bubbleId: string) => {
+    async (bubbleId: string, summarize = false) => {
       if (turn.status !== "done" && turn.status !== "cancelled") return null;
       const cut = branchAt(turn.blocks, history.current, bubbleId);
       if (!cut) return null;
+      let summary: LlmMessage | null = null;
+      if (summarize) {
+        const before = history.current;
+        try {
+          summary = await branchSummary(before.slice(cut.history.length));
+        } catch (e) {
+          setError(String(e));
+          return null;
+        }
+        // The chat moved on while the summary was written: the cut is stale.
+        if (history.current !== before) return null;
+      }
       const { changes } = changesFrom(turn.blocks, bubbleId);
       let files: FileRewind[] = [];
       try {
@@ -588,13 +605,13 @@ export function useAgentTurn({
       }
       subscribed.current?.();
       subscribed.current = null;
-      history.current = cut.history;
+      history.current = summary ? [...cut.history, summary] : cut.history;
       keepTodos([]);
       keepPlan(writtenPlan(cut.blocks));
       unsaved.current = true;
       turnStart.current = cut.blocks.length;
       setError(null);
-      setTurn(appendNotice(restoredTurn(cut.blocks), rewoundNotice(files)));
+      setTurn(appendNotice(restoredTurn(cut.blocks), rewoundNotice(files, summary !== null)));
       const text = cut.text;
       setDraft((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
       refreshContext();
@@ -651,11 +668,15 @@ export function useAgentTurn({
 }
 
 /** What the transcript says where a rewind cut it. */
-export function rewoundNotice(files: FileRewind[]): string {
+export function rewoundNotice(files: FileRewind[], summarized = false): string {
   const back = files.filter((file) => file.skip === null).length;
   const left = files.length - back;
   const plural = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
-  if (files.length === 0) return "Rewound to before this message — no files to put back";
-  if (left === 0) return `Rewound to before this message — ${plural(back)} put back`;
-  return `Rewound to before this message — ${plural(back)} put back, ${plural(left)} left as ${left === 1 ? "it is" : "they are"}`;
+  const said =
+    files.length === 0
+      ? "Rewound to before this message — no files to put back"
+      : left === 0
+        ? `Rewound to before this message — ${plural(back)} put back`
+        : `Rewound to before this message — ${plural(back)} put back, ${plural(left)} left as ${left === 1 ? "it is" : "they are"}`;
+  return summarized ? `${said}; the agent keeps a summary of what was tried` : said;
 }

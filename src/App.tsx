@@ -721,7 +721,12 @@ export default function App() {
         onDecide={(trusted) => void trust.decide(trusted)}
         onClose={trust.close}
       />
-      <RewindDialog asked={rewinding.asked} onConfirm={() => void rewinding.confirm()} onClose={rewinding.close} />
+      <RewindDialog
+        asked={rewinding.asked}
+        summarizing={rewinding.summarizing}
+        onConfirm={(summarize) => void rewinding.confirm(summarize)}
+        onClose={rewinding.close}
+      />
       <WorktreeRemoveDialog
         asked={worktreeRemoval.asked}
         onConfirm={() => void worktreeRemoval.confirm()}

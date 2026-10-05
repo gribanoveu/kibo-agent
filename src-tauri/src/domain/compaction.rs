@@ -306,6 +306,17 @@ pub fn summary_message(summary: &str) -> LlmMessage {
     LlmMessage::user(format!("{SUMMARY_PREFIX}\n\n{summary}"))
 }
 
+/// What a branch summary says it is: the part of the conversation the user
+/// rewound away from (`docs/27-pi-ideas.md`, item 6). The files went back
+/// with it, which the model is told too — the summary is what was tried,
+/// not what is on disk.
+pub const BRANCH_SUMMARY_PREFIX: &str =
+    "[Summary of a conversation branch the user rewound away from; the files it changed were put back]";
+
+pub fn branch_summary_message(summary: &str) -> LlmMessage {
+    LlmMessage::user(format!("{BRANCH_SUMMARY_PREFIX}\n\n{summary}"))
+}
+
 /// The lists of files a summary ends with, in the order they are written.
 const MODIFIED_FILES: &str = "modified-files";
 const DELETED_FILES: &str = "deleted-files";
@@ -462,6 +473,22 @@ and failed, and anything the agent must not forget to do. Be specific — \
 names, paths, error messages. Do not add advice, do not speculate, and do \
 not describe the conversation ('the user asked…'); write the state of the \
 work. Plain prose and short lists only.";
+
+/// The summarizer's instructions for a rewound branch. Unlike
+/// [`SUMMARY_INSTRUCTIONS`] the work it describes is undone — what is worth
+/// keeping is why it did not work and what was learned on the way. No file
+/// lists either, for the same reason: every file in them was put back.
+pub const BRANCH_SUMMARY_INSTRUCTIONS: &str = "\
+You are summarizing part of a conversation between a user and a coding agent \
+that the user abandoned: they rewound the chat to before it to try again, and \
+every file the agent changed in it was put back as it was. Write a summary in \
+English of what the next attempt should know: what was being attempted, what \
+was tried and how it turned out — errors, dead ends, why it did not work —, \
+what was learned about the code (names, paths, behaviour), and any decisions \
+or preferences the user stated. Do not describe changes to files as if they \
+were still there. Be specific — names, paths, error messages. Do not add \
+advice, do not speculate, and do not describe the conversation ('the user \
+asked…'). Plain prose and short lists only.";
 
 /// The longest any one message is rendered at for the summarizer.
 ///

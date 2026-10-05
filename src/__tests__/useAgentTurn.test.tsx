@@ -1008,6 +1008,48 @@ describe("rewinding", () => {
     expect(saved()[0].args).toMatchObject({ id: "kept", messages: [] });
   });
 
+  test("with a summary, the part cut off is told to the model and kept after the conversation", async () => {
+    const summary = { role: "user", content: "[Summary of a conversation branch]\n\nb.rs was tried and failed" };
+    results.chat_branch_summary = summary;
+    results.rewind_apply = [];
+    const { result } = await opened();
+    await act(async () => {
+      await result.current.rewind("user:1", true);
+    });
+
+    expect(calls.find((call) => call.command === "chat_branch_summary")?.args).toEqual({ messages: record.messages.slice(2) });
+    expect(result.current.draft?.text).toBe("second");
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({
+      kind: "notice",
+      text: "Rewound to before this message — no files to put back; the agent keeps a summary of what was tried",
+    });
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args).toMatchObject({ messages: [...record.messages.slice(0, 2), summary] });
+  });
+
+  test("a summary that failed stops the rewind before the files", async () => {
+    results.chat_branch_summary = new Error("the provider is down");
+    const { result } = await opened();
+    await act(async () => {
+      await result.current.rewind("user:1", true);
+    });
+    expect(result.current.error).toBe("the provider is down");
+    expect(calls.some((call) => call.command === "rewind_apply")).toBe(false);
+    expect(result.current.turn.blocks).toHaveLength(record.blocks.length);
+  });
+
+  test("an empty summary still rewinds, and says nothing of one", async () => {
+    results.chat_branch_summary = null;
+    results.rewind_apply = [];
+    const { result } = await opened();
+    await act(async () => {
+      await result.current.rewind("user:1", true);
+    });
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({ text: "Rewound to before this message — no files to put back" });
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args).toMatchObject({ messages: record.messages.slice(0, 2) });
+  });
+
   test("a rewind that could not reach the files leaves the chat as it was", async () => {
     results.rewind_apply = new Error("no folder is open");
     const { result } = await opened();

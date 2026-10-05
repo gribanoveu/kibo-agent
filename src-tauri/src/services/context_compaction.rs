@@ -6,7 +6,7 @@
 //! how much to keep and this either comes back with a shorter history or with
 //! nothing at all.
 
-use crate::domain::compaction::{self, ContextUsage, RequestFrame, SUMMARY_INSTRUCTIONS};
+use crate::domain::compaction::{self, ContextUsage, RequestFrame, BRANCH_SUMMARY_INSTRUCTIONS, SUMMARY_INSTRUCTIONS};
 use crate::domain::llm::{ChatRequest, LlmError, LlmMessage};
 use crate::domain::mcp::McpTools;
 use crate::domain::prompt;
@@ -125,11 +125,35 @@ pub fn compact(
     };
     started();
 
+    let folded = &history[plan.keep_head..plan.tail_start()];
+    let Some(summary) = summarize(session, SUMMARY_INSTRUCTIONS, folded)? else {
+        return Ok(None);
+    };
+    let summary = compaction::with_file_lists(&summary, folded);
+    Ok(Some(Compacted {
+        history: compaction::apply(history, plan, &summary),
+        folded: plan.summarize,
+    }))
+}
+
+/// The message that stands for a branch the user rewound away from, to follow
+/// the conversation it was cut from. `None` when there is nothing to tell —
+/// no messages, or an empty summary.
+pub fn summarize_branch(session: &LlmSession, abandoned: &[LlmMessage]) -> Result<Option<LlmMessage>, LlmError> {
+    if abandoned.is_empty() {
+        return Ok(None);
+    }
+    Ok(summarize(session, BRANCH_SUMMARY_INSTRUCTIONS, abandoned)?.map(|summary| compaction::branch_summary_message(&summary)))
+}
+
+/// `messages` summarized as `instructions` say, trimmed; `None` when it came
+/// back empty.
+fn summarize(session: &LlmSession, instructions: &str, messages: &[LlmMessage]) -> Result<Option<String>, LlmError> {
     let request = ChatRequest {
         messages: vec![
-            LlmMessage::system(SUMMARY_INSTRUCTIONS),
+            LlmMessage::system(instructions),
             LlmMessage::user(compaction::render_for_summary(
-                &history[plan.keep_head..plan.tail_start()],
+                messages,
                 compaction::share_of_window(session.context_limit, compaction::SUMMARY_INPUT_PERCENT),
             )),
         ],
@@ -149,15 +173,7 @@ pub fn compact(
 
     let summary = response?.content.unwrap_or_default();
     // An empty summary is not a short history, it is a deleted one.
-    if summary.trim().is_empty() {
-        return Ok(None);
-    }
-
-    let summary = compaction::with_file_lists(summary.trim(), &history[plan.keep_head..plan.tail_start()]);
-    Ok(Some(Compacted {
-        history: compaction::apply(history, plan, &summary),
-        folded: plan.summarize,
-    }))
+    Ok(Some(summary.trim().to_string()).filter(|summary| !summary.is_empty()))
 }
 
 #[cfg(test)]
@@ -411,6 +427,37 @@ mod tests {
             .as_deref()
             .unwrap()
             .ends_with("they were fixing the parser\n\n<modified-files>\nsrc/parser.rs\n</modified-files>"));
+    }
+
+    /// A rewound branch is told as what was tried, under its own prefix and
+    /// instructions, and without the file lists: its files were put back.
+    #[test]
+    fn a_rewound_branch_is_summarized_as_what_was_tried() {
+        let provider = Summarizer::saying("  the parser fix broke the lexer tests  ");
+        let abandoned = [
+            LlmMessage::user("fix the parser"),
+            LlmMessage { tool_calls: vec![LlmToolCall { id: "w".into(), name: "writeFile".into(), arguments: r#"{"path":"src/parser.rs"}"#.into() }], ..LlmMessage::assistant("") },
+            LlmMessage::tool_result("w", "ok"),
+        ];
+        let message = summarize_branch(&session(provider.clone()), &abandoned).unwrap().expect("a summary");
+        assert_eq!(message.role, LlmMessage::user("").role);
+        assert_eq!(
+            message.content.as_deref(),
+            Some(format!("{}\n\nthe parser fix broke the lexer tests", compaction::BRANCH_SUMMARY_PREFIX).as_str())
+        );
+        let asked = provider.asked.lock().unwrap();
+        assert!(asked[0].tools.is_empty());
+        assert_eq!(asked[0].messages[0].content.as_deref(), Some(BRANCH_SUMMARY_INSTRUCTIONS));
+        assert!(asked[0].messages[1].content.as_deref().unwrap().contains("fix the parser"));
+    }
+
+    #[test]
+    fn a_branch_with_nothing_in_it_or_an_empty_summary_is_no_message() {
+        let provider = Summarizer::saying("a summary");
+        assert_eq!(summarize_branch(&session(provider.clone()), &[]).unwrap(), None);
+        assert!(provider.asked.lock().unwrap().is_empty(), "nothing asked for nothing");
+        let silent = Summarizer::saying("   ");
+        assert_eq!(summarize_branch(&session(silent), &[LlmMessage::user("go")]).unwrap(), None);
     }
 
     /// The request meant to save context must not carry the tool schemas —
