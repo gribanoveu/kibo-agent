@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-05 Add a docs layout (⇧⌘D, or the book button in the chat header): the file tree on the left, the open file in the middle, the chat on the right; other panels take the tree's place and Terminal opens under the file; AsciiDoc files (`.adoc`) are highlighted
+
 ## v0.5.0-alfa — 2026-10-05
 
 - 2026-10-05 A rewind can keep a summary of what was tried after the message — "Rewind with a summary" — so the next attempt knows what did not work and why, while the files still go back

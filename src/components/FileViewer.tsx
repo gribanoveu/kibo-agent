@@ -113,6 +113,7 @@ export function FileViewer({
   onClose,
   onCloseAll,
   wrap,
+  compact = false,
 }: {
   files: FileTarget[];
   active: FileTarget;
@@ -126,6 +127,11 @@ export function FileViewer({
   onCloseAll: () => void;
   /** Long lines wrap rather than scroll sideways — Settings → Appearance. */
   wrap: boolean;
+  /**
+   * One heading row, for the docs layout: how to show the file sits beside
+   * its tab, the path is the tab's tooltip, and Escape closes them all.
+   */
+  compact?: boolean;
 }) {
   const { view, error } = useFileView(target, workspace);
   // The changed files, in the order the Changes panel lists them, to step
@@ -161,6 +167,38 @@ export function FileViewer({
   const rows = useMemo(() => (colours ? paintRows(plain, colours.old, colours.next) : plain), [plain, colours]);
   const add = rows.filter((row) => row.kind === "add").length;
   const del = rows.filter((row) => row.kind === "del").length;
+  const controls = (
+    <>
+      {SIDE[target.side] && <span className="file-viewer-side">{SIDE[target.side]}</span>}
+      <span className="file-viewer-stat">
+        {add > 0 && <span className="add">+{add}</span>}
+        {del > 0 && <span className="del">-{del}</span>}
+      </span>
+      <Tabs
+        label="Show"
+        value={shown}
+        onChange={setMode}
+        tabs={[
+          { id: "diff", label: "Diff", disabled: !changed, title: changed ? undefined : "No changes" },
+          { id: "file", label: "File" },
+          ...(markdown ? [{ id: "preview" as const, label: "Preview" }] : []),
+        ]}
+      />
+      {changes.length > 0 && (
+        <span className="file-viewer-step">
+          <button type="button" className="iconbtn" title="Previous changed file (Alt+↑)" onClick={() => step(-1)}>
+            <ChevronUp size={14} />
+          </button>
+          <span className="file-viewer-step-count">
+            {at < 0 ? "–" : at + 1} / {changes.length}
+          </span>
+          <button type="button" className="iconbtn" title="Next changed file (Alt+↓)" onClick={() => step(1)}>
+            <ChevronDown size={14} />
+          </button>
+        </span>
+      )}
+    </>
+  );
 
   return (
     <section
@@ -184,43 +222,22 @@ export function FileViewer({
           onPin={onPin}
           onClose={onClose}
         />
-        <button type="button" className="iconbtn" title="Close all" onClick={onCloseAll}>
-          <X size={14} />
-        </button>
-      </div>
-      <div className="file-viewer-head">
-        <div className="file-viewer-title" title={target.path}>
-          <bdi>{target.path}</bdi>
-        </div>
-        {SIDE[target.side] && <span className="file-viewer-side">{SIDE[target.side]}</span>}
-        <span className="file-viewer-stat">
-          {add > 0 && <span className="add">+{add}</span>}
-          {del > 0 && <span className="del">-{del}</span>}
-        </span>
-        <Tabs
-          label="Show"
-          value={shown}
-          onChange={setMode}
-          tabs={[
-            { id: "diff", label: "Diff", disabled: !changed, title: changed ? undefined : "No changes" },
-            { id: "file", label: "File" },
-            ...(markdown ? [{ id: "preview" as const, label: "Preview" }] : []),
-          ]}
-        />
-        {changes.length > 0 && (
-          <span className="file-viewer-step">
-            <button type="button" className="iconbtn" title="Previous changed file (Alt+↑)" onClick={() => step(-1)}>
-              <ChevronUp size={14} />
-            </button>
-            <span className="file-viewer-step-count">
-              {at < 0 ? "–" : at + 1} / {changes.length}
-            </span>
-            <button type="button" className="iconbtn" title="Next changed file (Alt+↓)" onClick={() => step(1)}>
-              <ChevronDown size={14} />
-            </button>
-          </span>
+        {compact ? (
+          controls
+        ) : (
+          <button type="button" className="iconbtn" title="Close all" onClick={onCloseAll}>
+            <X size={14} />
+          </button>
         )}
       </div>
+      {!compact && (
+        <div className="file-viewer-head">
+          <div className="file-viewer-title" title={target.path}>
+            <bdi>{target.path}</bdi>
+          </div>
+          {controls}
+        </div>
+      )}
       <div className="file-viewer-body">
         {error ? (
           <div className="file-viewer-note">{error}</div>

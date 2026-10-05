@@ -1,7 +1,13 @@
 import type { AsideTab } from "../types";
 
 /** What the column right of the chat shows: a pane on top (hidden or not) and one under it, or none. */
-export type Docks = { top: AsideTab; topHidden: boolean; bottom: AsideTab | null };
+export type Docks = {
+  top: AsideTab;
+  topHidden: boolean;
+  bottom: AsideTab | null;
+  /** The docs layout: a pane for the top takes the top's place, as an editor's side bar switches views. */
+  swap?: boolean;
+};
 
 /**
  * Opens a pane without closing the one already open: on top when the top is
@@ -11,9 +17,16 @@ export type Docks = { top: AsideTab; topHidden: boolean; bottom: AsideTab | null
  */
 export function openPane(docks: Docks, pane: AsideTab, dock: "right" | "bottom"): Docks {
   if (docks.bottom === pane || (docks.top === pane && !docks.topHidden)) return docks;
-  if (dock === "bottom" || !docks.topHidden) return { ...docks, bottom: pane };
+  if (dock === "bottom" || (!docks.topHidden && !docks.swap)) return { ...docks, bottom: pane };
   return { ...docks, top: pane, topHidden: false };
 }
+
+/** Entering the docs layout: the tree on top, and under the file only what goes there anyway. */
+export const docsDocks = (docks: Docks): Docks => ({
+  top: "files",
+  topHidden: false,
+  bottom: docks.bottom === "terminal" ? "terminal" : null,
+});
 
 /** A pane's button or shortcut: shown anywhere, it hides it; otherwise it opens it like the menu would. */
 export function togglePane(docks: Docks, pane: AsideTab, dock: "right" | "bottom"): Docks {

@@ -167,12 +167,21 @@
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-.file-viewer-head .tabs {
+.file-viewer-head .tabs,
+.file-viewer-tabs .tabs {
   flex: none;
   margin: 0;
 }
-.file-viewer-head .tab {
+.file-viewer-head .tab,
+.file-viewer-tabs .tab {
   padding: 3px 10px;
+}
+/* Compact: the controls share the tabs' row, level with the tabs' text. */
+.file-viewer-tabs > .tabs,
+.file-viewer-tabs > .file-viewer-stat,
+.file-viewer-tabs > .file-viewer-side,
+.file-viewer-tabs > .file-viewer-step {
+  margin-bottom: 5px;
 }
 .file-viewer-body {
   flex: 1;

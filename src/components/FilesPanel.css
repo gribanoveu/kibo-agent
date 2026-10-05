@@ -123,7 +123,7 @@
 .tree-chev svg {
   transition: transform 0.15s;
 }
-.tree-row.open .tree-chev svg {
+.tree-row.expanded .tree-chev svg {
   transform: rotate(90deg);
 }
 .tree-icon {

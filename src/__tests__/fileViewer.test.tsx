@@ -46,7 +46,12 @@ beforeEach(() => {
   changes = { staged: [], unstaged: [] };
 });
 
-async function open(target: FileTarget = { path: "src/main.rs", side: "unstaged" }, onCloseAll = () => {}, wrap = true) {
+async function open(
+  target: FileTarget = { path: "src/main.rs", side: "unstaged" },
+  onCloseAll = () => {},
+  wrap = true,
+  compact = false,
+) {
   const shown = render(
     <FileViewer
       files={[target]}
@@ -58,6 +63,7 @@ async function open(target: FileTarget = { path: "src/main.rs", side: "unstaged"
       onClose={() => {}}
       onCloseAll={onCloseAll}
       wrap={wrap}
+      compact={compact}
     />,
   );
   await settle();
@@ -248,5 +254,21 @@ describe("FileViewer", () => {
     shown.unmount();
     await open(undefined, () => {}, false);
     expect(wrapped()).toBe(false);
+  });
+
+  /// The docs layout's one row: the controls beside the tabs, the path left to the tab's tooltip.
+  test("compact, the heading is one row and the file still reads as before", async () => {
+    let closed = 0;
+    await open(undefined, () => closed++, true, true);
+    expect(document.querySelector(".file-viewer-head")).toBeNull();
+    const row = document.querySelector(".file-viewer-tabs")!;
+    expect(row.querySelector(".tabs")?.textContent).toBe("DiffFile");
+    expect(row.textContent).toContain("Unstaged");
+    expect(row.textContent).toContain("+1");
+    expect(screen.queryByTitle("Close all")).toBeNull();
+    expect(screen.getByRole("tab", { name: "main.rs" }).closest("[title]")?.getAttribute("title")).toBe("src/main.rs");
+    expect(rows()).toHaveLength(9);
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(closed).toBe(1);
   });
 });

@@ -1,0 +1,40 @@
+/* The docs layout: the file takes what the tree and the chat leave, and the
+   chat is as wide as it was dragged. Its minimum stays `.main`'s (App.css). */
+.window.docs .main {
+  flex: 0 1 var(--chat-width, 480px);
+}
+/* The column holds only the top pane here: hidden, it goes. */
+.window.docs.aside-hidden .dock-column {
+  display: none;
+}
+/* The file over the bottom dock, as an editor puts its terminal. */
+.docs-middle {
+  flex: 1 5 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.docs-middle > .file-viewer {
+  flex: 1;
+  min-height: 0;
+}
+/* Under the file the bottom dock keeps its height even with the tree hidden,
+   which in the column would hand it the whole of it (AsidePanel.css). */
+.window.docs .docs-middle > .aside-bottom {
+  flex: none;
+  max-height: 70%;
+}
+/* The middle with no file open: it keeps the chat on the right. */
+.docs-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+}

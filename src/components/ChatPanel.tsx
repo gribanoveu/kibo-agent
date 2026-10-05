@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
+  BookOpen,
   Brain,
   Loader2,
   ChevronRight,
@@ -643,6 +644,9 @@ type Props = {
   /** Whether Terminal is showing; its own header button, beside Changes', shows and hides it. */
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
+  /** Whether the window is laid out for documents: files left, the file in the middle, the chat right. */
+  docsLayout?: boolean;
+  onToggleDocs?: () => void;
   /** Shows the side panel on one particular panel — the rest of that menu. */
   onOpenPanel?: (tab: AsideTab) => void;
   /** The open chat's title; `null` for one not saved yet. */
@@ -784,6 +788,8 @@ export function ChatPanel({
   onToggleAside,
   terminalOpen = false,
   onToggleTerminal,
+  docsLayout = false,
+  onToggleDocs,
   onOpenPanel,
   title = null,
   branched = false,
@@ -863,6 +869,17 @@ export function ChatPanel({
             </span>
           )}
           {menu.length > 0 && <ChatMenu items={menu} />}
+          {onToggleDocs && (
+            <button
+              type="button"
+              className={`iconbtn aside-button${docsLayout ? " on" : ""}`}
+              title={`${docsLayout ? "Leave the docs layout" : "Docs layout: files, the file and the chat"} (${shortcutText("docsLayout")})`}
+              aria-pressed={docsLayout}
+              onClick={onToggleDocs}
+            >
+              <BookOpen size={15} />
+            </button>
+          )}
           {onToggleTerminal && (
             <button
               type="button"

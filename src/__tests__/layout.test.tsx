@@ -4,6 +4,7 @@ import { isBoolean, useStoredState } from "../hooks/useStoredState";
 import { PANEL_LIMITS, roomFor, usePanelSizes } from "../hooks/usePanelSizes";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { PanelResizeHandle } from "../components/PanelResizeHandle";
+import { Columns } from "../components/Columns";
 import { isAsideTab } from "../types";
 
 afterEach(() => localStorage.clear());
@@ -76,7 +77,13 @@ describe("panel widths", () => {
   test("the file viewer is sized too, and widths stored before it existed are kept", () => {
     localStorage.setItem("atlas-panel-widths", JSON.stringify({ sidebar: 300, aside: 400, bottom: 200 }));
     const { result } = renderHook(() => usePanelSizes({}));
-    expect(result.current.widths).toEqual({ sidebar: 300, aside: 400, bottom: 200, viewer: PANEL_LIMITS.viewer.initial });
+    expect(result.current.widths).toEqual({
+      sidebar: 300,
+      aside: 400,
+      bottom: 200,
+      viewer: PANEL_LIMITS.viewer.initial,
+      chat: PANEL_LIMITS.chat.initial,
+    });
     act(() => result.current.resizeViewerBy(100));
     expect(result.current.widths.viewer).toBe(PANEL_LIMITS.viewer.initial + 100);
     act(() => result.current.resizeViewerBy(-5000));
@@ -182,5 +189,48 @@ describe("the resize handle", () => {
       });
     }
     expect(ends).toEqual([111, 333, 222]);
+  });
+});
+
+describe("the columns", () => {
+  /// Keeps what was typed: switching layouts must move the chat, not draw it anew.
+  function Draft() {
+    return <input aria-label="draft" />;
+  }
+  const columns = (docs: boolean, viewer: boolean, bottom = false) => {
+    const { result } = renderHook(() => usePanelSizes({}));
+    return (
+      <div data-testid="body">
+        <Columns
+          docs={docs}
+          chat={<main key="chat" className="main"><Draft /></main>}
+          viewer={viewer ? <section key="viewer" className="file-viewer" /> : null}
+          top={<aside className="aside-right" />}
+          topShown
+          bottom={bottom ? <aside className="aside-bottom" /> : null}
+          panels={result.current}
+        />
+      </div>
+    );
+  };
+  const names = (parent: Element) => [...parent.children].map((el) => el.getAttribute("aria-label") ?? el.className);
+  const order = () => names(screen.getByTestId("body"));
+
+  test("chat first, then the file and the panes; the docs layout turns it around", () => {
+    const { rerender } = render(columns(false, true, true));
+    expect(order()).toEqual(["main", "Resize the file viewer", "file-viewer", "Resize the side panel", "dock-column"]);
+    expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right", "Resize the bottom panel", "aside-bottom"]);
+    fireEvent.change(screen.getByLabelText("draft"), { target: { value: "half a sentence" } });
+
+    rerender(columns(true, true, true));
+    expect(order()).toEqual(["dock-column", "Resize the side panel", "docs-middle", "Resize the chat", "main"]);
+    expect((screen.getByLabelText("draft") as HTMLInputElement).value).toBe("half a sentence");
+    // The tree alone on the left; the bottom dock under the file, as an editor's terminal.
+    expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right"]);
+    expect(names(document.querySelector(".docs-middle")!)).toEqual(["file-viewer", "Resize the bottom panel", "aside-bottom"]);
+
+    // No file open: the middle still holds the chat on the right.
+    rerender(columns(true, false));
+    expect(names(document.querySelector(".docs-middle")!)).toEqual(["docs-empty"]);
   });
 });

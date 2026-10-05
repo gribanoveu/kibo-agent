@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import type { FileStatus, FileTarget, TreeEntry } from "../lib/chat";
 import type { Block } from "../lib/chatTurnReducer";
@@ -16,6 +16,8 @@ type Props = {
   /** The file the viewer shows: its row is marked. */
   openFile: FileTarget | null;
   onOpenFile: (target: FileTarget, pin?: boolean) => void;
+  /** The docs layout, where the tree is what the panel is for: it turns to it. */
+  docs?: boolean;
 };
 
 /** As a file explorer marks them, with the word in the tooltip. */
@@ -103,7 +105,7 @@ function FolderRow({ entry, depth, tree }: { entry: TreeEntry; depth: number; tr
     <div>
       <button
         type="button"
-        className={`tree-row dir${open ? " open" : ""}`}
+        className={`tree-row dir${open ? " expanded" : ""}`}
         style={{ "--depth": depth } as CSSProperties}
         aria-expanded={open}
         title={last.path}
@@ -137,9 +139,12 @@ const TOUCH_LABEL: Record<Touch, string> = {
 };
 
 /** The Files tab: the files the agent worked with in this chat, or the open folder as a tree. */
-export function FilesPanel({ active, blocks, workspace, openFile, onOpenFile }: Props) {
+export function FilesPanel({ active, blocks, workspace, openFile, onOpenFile, docs = false }: Props) {
   const shown = openFile?.side === "worktree" ? openFile.path : null;
-  const [view, setView] = useState<"chat" | "folder">("chat");
+  const [view, setView] = useState<"chat" | "folder">(docs ? "folder" : "chat");
+  useEffect(() => {
+    if (docs) setView("folder");
+  }, [docs]);
   const files = touchedFiles(blocks, workspace);
   // The tree is read only while its own tab is the one showing.
   const tree = {
