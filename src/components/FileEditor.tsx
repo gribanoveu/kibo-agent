@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { markdown } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
@@ -42,15 +43,17 @@ const QUIET_MS = 250;
  */
 const AUTOSAVE_MS = 3000;
 
-// The documents analysts write; everything else is plain text with line numbers.
-function language(path: string): Extension {
+// The documents analysts write, ready at once; any other language CodeMirror
+// knows by the file's name is loaded when a file of it opens, and until then,
+// or if it is none of them, the text is plain.
+function language(path: string): Extension | null {
   switch (languageOf(path)) {
     case "markdown":
       return markdown();
     case "asciidoc":
       return StreamLanguage.define(asciidoc);
     default:
-      return [];
+      return null;
   }
 }
 
@@ -79,10 +82,14 @@ const colours = HighlightStyle.define([
   { tag: [t.string, t.monospace, t.literal], color: "var(--green)" },
   { tag: t.quote, color: "var(--text-dim)", fontStyle: "italic" },
   { tag: [t.list, t.special(t.variableName), t.modifier, t.tagName], color: "var(--amber)" },
+  { tag: [t.typeName, t.className, t.namespace], color: "var(--amber)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName, t.attributeName], color: "var(--accent)" },
+  { tag: [t.number, t.bool, t.null, t.atom, t.escape], color: "var(--red)" },
   { tag: t.invalid, color: "var(--red)" },
 ]);
 
 const wrapping = new Compartment();
+const syntax = new Compartment();
 const lines = (wrap: boolean) => (wrap ? EditorView.lineWrapping : []);
 
 /** A file of the open folder, editable: CodeMirror, with the language of the documents it is for. */
@@ -112,6 +119,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
 
   // One editor per file: the viewer keys this component by its path.
   useEffect(() => {
+    const own = language(path);
     const editor = new EditorView({
       parent: host.current!,
       state: EditorState.create({
@@ -123,7 +131,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
           drawSelection(),
           highlightActiveLine(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-          language(path),
+          syntax.of(own ?? []),
           syntaxHighlighting(colours),
           theme,
           wrapping.of(lines(wrap)),
@@ -139,6 +147,12 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
       }),
     });
     view.current = editor;
+    if (!own)
+      LanguageDescription.matchFilename(languages, path.slice(path.lastIndexOf("/") + 1))
+        ?.load()
+        .then((support) => view.current === editor && editor.dispatch({ effects: syntax.reconfigure(support) }))
+        // A chunk that failed to load leaves the text plain.
+        .catch(() => {});
     return () => {
       save();
       editor.destroy();

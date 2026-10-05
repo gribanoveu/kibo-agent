@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { EditorView } from "@codemirror/view";
+import { language } from "@codemirror/language";
 import { IS_MAC } from "../lib/shortcuts";
 import type { FileTarget } from "../lib/chat";
 
@@ -252,6 +253,13 @@ describe("editing in the IDE layout", () => {
     await showing("= Title\n");
     expect(disk["docs/b.adoc"]).toBe("= B\nB, edited.\n");
     expect(unsaved()).toBe(0);
+  });
+
+  test("a file of another language is highlighted once its language loads", async () => {
+    disk["src/Main.java"] = "class Main {}\n";
+    await ide([{ path: "src/Main.java", side: "worktree" }]);
+    for (let i = 0; i < 50 && !editor().state.facet(language); i++) await settle(10);
+    expect(editor().state.facet(language)?.name).toBe("java");
   });
 
   test("a pause in typing saves it", async () => {

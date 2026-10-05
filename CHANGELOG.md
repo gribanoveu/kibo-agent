@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-05 Highlight code in the IDE layout's editor — Java, Kotlin, YAML, XML, SQL, JSON, shell and the rest CodeMirror knows by the file's name, each language loaded the first time a file of it opens
 - 2026-10-05 Edit files in the IDE layout, with AsciiDoc and Markdown highlighted: a change is saved 3 seconds after you stop typing, when you click away, switch or close the tab, or press ⌘S — only when there is one; a tab with unsaved changes is marked, and when the agent changes the file you are editing you choose to load its version or keep yours
 - 2026-10-05 In the IDE layout the chat list is a menu in the chat header, with New chat on top, and Settings is in its "⋮" menu; the sidebar leaves the room to the file
 - 2026-10-05 Add an IDE layout (⇧⌘D, or the code button in the chat header): the file tree on the left, the open file in the middle, the chat on the right; other panels take the tree's place and Terminal opens under the file, and leaving it puts back the panels that were open before; each layout keeps its own open files; AsciiDoc files (`.adoc`) are highlighted
