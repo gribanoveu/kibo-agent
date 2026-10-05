@@ -1,0 +1,81 @@
+name: Tests
+
+# The checks from CLAUDE.md on both platforms the app ships for: the release
+# workflow only builds, and code that touches paths or line endings behaves
+# differently on Windows. Ignored tests (the model, the benches, the live
+# cluster) stay out, as they do locally.
+# On what lands in main, and on a pull request when it is opened.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Vite bundle (shiki, mermaid) exceeds the default heap on CI runners.
+      NODE_OPTIONS: --max-old-space-size=8192
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The embedding model's weights are LFS objects (~80 MB), and the default
+      # test run checks they are real files. Kept between runs by their ids, so
+      # the LFS bandwidth is paid once per model change, not once per push.
+      - name: List LFS objects
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-ids
+
+      - name: LFS cache
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-ids') }}
+
+      - name: Pull LFS objects
+        run: git lfs pull
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup NASM (needed by git2 vendored OpenSSL build)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # `tsc` and the bundle: `tauri::generate_context!` needs `dist` to compile.
+      - name: Type-check and build the frontend
+        run: bun run build
+
+      - name: Frontend tests
+        run: bun test
+
+      - name: Rust check
+        working-directory: src-tauri
+        run: cargo check --locked
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked
