@@ -411,6 +411,9 @@ mod tests {
         // A skill's companion file shares the tool with a different shape.
         let file = ToolResult::SkillFile { name: "release".into(), path: "a.md".into(), content: LEAK.into() };
         assert!(!redact_result(&file).to_string().contains(LEAK));
+        // So does `readFile` with `paths`.
+        let read = crate::domain::tools::ReadOne { path: "a.rs".into(), content: LEAK.into(), end_line: 1, total_lines: 1, truncated: false, error: None };
+        assert!(!redact_result(&ToolResult::Files { files: vec![read] }).to_string().contains(LEAK));
     }
 
     /// What an MCP call's log line keeps: which tool, which fields, how big.

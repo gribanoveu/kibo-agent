@@ -18,6 +18,25 @@ const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, {
 });
 
 describe("what each call shows", () => {
+  test("a read of several files names them and opens on each under its header", () => {
+    const running = describeTool(tool({ arguments: '{"paths":["a.rs","b.rs"]}', status: "running" }));
+    expect(running).toMatchObject({ name: "Read", arg: "a.rs, b.rs", meta: "2 files" });
+    const done = describeTool(
+      tool({
+        arguments: '{"paths":["a.rs","b.rs"]}',
+        result: {
+          result: "files",
+          files: [
+            { path: "a.rs", content: "fn a() {}\n", endLine: 1, totalLines: 1 },
+            { path: "b.rs", content: "", endLine: 0, totalLines: 0, error: "not found: b.rs" },
+          ],
+        },
+      }),
+    );
+    expect(done).toMatchObject({ arg: "a.rs, b.rs", meta: "2 files" });
+    expect(done.detail).toBe("==> a.rs <==\nfn a() {}\n\n==> b.rs: not found: b.rs <==\n");
+  });
+
   test("a background start shows its number, not an exit code", () => {
     const waiting = describeTool(tool({ name: "runCommand", arguments: '{"command":"npm run dev","background":true}', status: "running" }));
     expect(waiting).toMatchObject({ name: "Bash", arg: "npm run dev", meta: "background" });

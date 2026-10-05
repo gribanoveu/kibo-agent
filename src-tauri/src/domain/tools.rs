@@ -431,6 +431,17 @@ mod tests {
     use super::*;
     use crate::testing::temp_dir;
 
+    /// What a cleared read forgets and a summary lists: `path`, then `paths`,
+    /// one string standing for a list of one, an empty name for none.
+    #[test]
+    fn a_read_names_its_path_then_its_paths() {
+        let names = |args: &str| read_paths(&serde_json::from_str(args).unwrap());
+        assert_eq!(names(r#"{"path":"a","paths":["b","c"]}"#), ["a", "b", "c"]);
+        assert_eq!(names(r#"{"paths":"b"}"#), ["b"]);
+        assert_eq!(names(r#"{"path":"","paths":["", "c"]}"#), ["c"]);
+        assert!(names(r#"{"pattern":"x"}"#).is_empty());
+    }
+
     /// The reads ride in the approval checkpoint through the webview, where
     /// every JSON number is a double. What comes back must still vouch for
     /// the file it was taken from, or an approved edit is refused as stale.
@@ -1265,6 +1276,8 @@ pub enum ToolResult {
         #[serde(default)]
         truncated: bool,
     },
+    /// `readFile` with `paths`: each file in the order asked.
+    Files { files: Vec<ReadOne> },
     /// `readFile` with `outline`: the file's shape rather than its text.
     /// Empty `entries` for a language with no parser, or a file declaring
     /// nothing — `totalLines` still says what reading it would cost.
@@ -1773,8 +1786,14 @@ pub struct SkillArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileArgs {
-    /// Path relative to the scope root.
+    /// Path relative to the scope root. Empty when only `paths` was sent.
+    #[serde(default)]
     pub path: String,
+    /// Several files, each read whole, in one call — what the model otherwise
+    /// asked a shell `for f in …; cat -n` loop for (263 of 1779 logged calls).
+    /// `path`, when also sent, is read first.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub paths: Option<Vec<String>>,
     /// 1-indexed, inclusive. `None` reads from the start. Out-of-range values
     /// are clamped rather than rejected.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
@@ -1786,6 +1805,41 @@ pub struct ReadFileArgs {
     /// text. The range is ignored: there is no text to slice.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub outline: Option<bool>,
+}
+
+/// The files a `readFile` call's raw arguments name: `path`, then `paths` —
+/// a list, or one string as the parser also takes it.
+pub fn read_paths(args: &serde_json::Value) -> Vec<String> {
+    let many = match args.get("paths") {
+        Some(serde_json::Value::Array(items)) => items.iter().collect(),
+        Some(one) => vec![one],
+        None => Vec::new(),
+    };
+    args.get("path")
+        .into_iter()
+        .chain(many)
+        .filter_map(serde_json::Value::as_str)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// One file of a `readFile` with `paths`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOne {
+    /// As the model asked for it.
+    pub path: String,
+    /// Lines `1..=end_line` of it; empty when `error` is set.
+    pub content: String,
+    pub end_line: u32,
+    pub total_lines: u32,
+    /// Stopped before the end: the call's shared read limit ran out.
+    #[serde(default)]
+    pub truncated: bool,
+    /// Why this one file could not be read. The others still were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// One declaration or heading of a `readFile` outline, with the lines it

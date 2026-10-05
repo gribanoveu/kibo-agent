@@ -108,6 +108,7 @@ mod tests {
     fn agent_reads(scope: &ToolScope, reads: &mut ReadFiles, path: &str, range: Option<(u32, u32)>) {
         let args = ReadFileArgs {
             path: path.to_string(),
+            paths: None,
             start_line: range.map(|(s, _)| s),
             end_line: range.map(|(_, e)| e),
             outline: None,

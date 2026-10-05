@@ -55,6 +55,14 @@ export function touchedFiles(blocks: Block[], root: string | null): TouchedFile[
       touch(to, "moved", moved);
       continue;
     }
+    if (block.name === "readFile" && Array.isArray(result.files)) {
+      // Several at once: each one that was read, not one that failed.
+      for (const file of result.files as Json[]) {
+        const path = relative(text(file.path), root);
+        if (path && !file.error) touch(path, "read");
+      }
+      continue;
+    }
     const path = relative(text(result.path) ?? text(args.path), root);
     if (!path) continue;
     const what = TOUCH[block.name];

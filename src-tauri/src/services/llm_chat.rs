@@ -121,7 +121,7 @@ pub fn dedupe_repeat_result(
     content: String,
 ) -> String {
     let note = match result {
-        Some(ToolResult::File { .. }) => REPEAT_READ_NOTE,
+        Some(ToolResult::File { .. } | ToolResult::Files { .. }) => REPEAT_READ_NOTE,
         Some(ToolResult::GrepResults { .. }) => REPEAT_SEARCH_NOTE,
         _ => return content,
     };
@@ -1159,14 +1159,12 @@ fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: &mut HashMa
             continue;
         }
         // A path that no longer resolves has nothing left to forget.
-        let path = serde_json::from_str::<serde_json::Value>(&cleared.arguments)
-            .ok()
-            .and_then(|args| args.get("path").and_then(|p| p.as_str()).map(str::to_string));
-        let relative = path.zip(scope).and_then(|(path, scope)| {
-            resolve_existing(scope, &path).and_then(|resolved| relative_to_root(scope, &resolved)).ok()
-        });
-        if let Some(relative) = relative {
-            state.reads.forget_whole(&relative);
+        let Some(scope) = scope else { continue };
+        let args = serde_json::from_str(&cleared.arguments).unwrap_or_default();
+        for path in crate::domain::tools::read_paths(&args) {
+            if let Ok(relative) = resolve_existing(scope, &path).and_then(|resolved| relative_to_root(scope, &resolved)) {
+                state.reads.forget_whole(&relative);
+            }
         }
     }
 }
@@ -2177,13 +2175,18 @@ mod tests {
     #[test]
     fn the_same_read_twice_is_replaced_by_a_note() {
         let mut seen = HashMap::new();
-        let call = call("readFile", r#"{"path":"a.rs"}"#);
+        let one = call("readFile", r#"{"path":"a.rs"}"#);
 
-        let first = dedupe_repeat_result(&mut seen, &call, Some(&file("x")), "x".to_string());
-        let second = dedupe_repeat_result(&mut seen, &call, Some(&file("x")), "x".to_string());
+        let first = dedupe_repeat_result(&mut seen, &one, Some(&file("x")), "x".to_string());
+        let second = dedupe_repeat_result(&mut seen, &one, Some(&file("x")), "x".to_string());
 
         assert_eq!(first, "x");
         assert_eq!(second, REPEAT_READ_NOTE);
+
+        let many = call("readFile", r#"{"paths":["a.rs","b.rs"]}"#);
+        let files = ToolResult::Files { files: vec![] };
+        dedupe_repeat_result(&mut seen, &many, Some(&files), "ab".to_string());
+        assert_eq!(dedupe_repeat_result(&mut seen, &many, Some(&files), "ab".to_string()), REPEAT_READ_NOTE);
     }
 
     /// The gate that makes this safe after a write: the file changed, so the
@@ -2455,39 +2458,42 @@ mod tests {
     /// read comes back in full rather than as "already above".
     #[test]
     fn a_cleared_read_is_gone_from_the_history_and_from_the_turn() {
-        let read = |id: &str, path: &str| wants(id, "readFile", &format!(r#"{{"path":"{path}"}}"#));
-        let h = harness(
-            "chat-clearing",
-            vec![
-                asks(vec![read("r1", "a.txt")]),
-                asks(vec![read("r2", "b.txt")]),
-                asks(vec![read("r3", "c.txt")]),
-                asks(vec![read("r4", "d.txt")]),
-                asks(vec![wants("w", "writeFile", r#"{"path":"a.txt","content":"new"}"#)]),
-                asks(vec![read("r5", "a.txt")]),
-                text("done"),
-            ],
-        );
-        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
-            std::fs::write(h.root.join(name), name.repeat(90_000 / name.len())).unwrap();
+        // The first read as one path, then as one of `paths`: either is forgotten.
+        for (label, first) in [("chat-clearing", r#"{"path":"a.txt"}"#), ("chat-clearing-paths", r#"{"paths":["a.txt"]}"#)] {
+            let read = |id: &str, path: &str| wants(id, "readFile", &format!(r#"{{"path":"{path}"}}"#));
+            let h = harness(
+                label,
+                vec![
+                    asks(vec![wants("r1", "readFile", first)]),
+                    asks(vec![read("r2", "b.txt")]),
+                    asks(vec![read("r3", "c.txt")]),
+                    asks(vec![read("r4", "d.txt")]),
+                    asks(vec![wants("w", "writeFile", r#"{"path":"a.txt","content":"new"}"#)]),
+                    asks(vec![read("r5", "a.txt")]),
+                    text("done"),
+                ],
+            );
+            for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+                std::fs::write(h.root.join(name), name.repeat(90_000 / name.len())).unwrap();
+            }
+
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+            let requests = h.provider.requests();
+
+            // Round 5 is the first to start over the trigger: a.txt's result is
+            // the one old enough to go.
+            let fifth = tool_contents(&requests[4]);
+            assert!(fifth[0].starts_with(result_clearing::STUB_PREFIX), "{}", &fifth[0][..80]);
+            assert!(fifth[1..].iter().all(|c| c.starts_with("All 1 lines")), "the last three rounds stay");
+            assert!(!tool_contents(&requests[3])[0].starts_with(result_clearing::STUB_PREFIX), "not before the trigger");
+
+            let sixth = tool_contents(&requests[5]);
+            assert!(sixth.last().unwrap().contains("only read part of a.txt"), "{}", sixth.last().unwrap());
+            assert_eq!(std::fs::read_to_string(h.root.join("a.txt")).unwrap().len(), 90_000, "not written");
+
+            let seventh = tool_contents(&requests[6]);
+            assert!(seventh.last().unwrap().starts_with("All 1 lines"), "read again in full");
         }
-
-        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        let requests = h.provider.requests();
-
-        // Round 5 is the first to start over the trigger: a.txt's result is
-        // the one old enough to go.
-        let fifth = tool_contents(&requests[4]);
-        assert!(fifth[0].starts_with(result_clearing::STUB_PREFIX), "{}", &fifth[0][..80]);
-        assert!(fifth[1..].iter().all(|c| c.starts_with("All 1 lines")), "the last three rounds stay");
-        assert!(tool_contents(&requests[3])[0].starts_with("All 1 lines"), "not before the trigger");
-
-        let sixth = tool_contents(&requests[5]);
-        assert!(sixth.last().unwrap().contains("only read part of a.txt"), "{}", sixth.last().unwrap());
-        assert_eq!(std::fs::read_to_string(h.root.join("a.txt")).unwrap().len(), 90_000, "not written");
-
-        let seventh = tool_contents(&requests[6]);
-        assert!(seventh.last().unwrap().starts_with("All 1 lines"), "read again in full");
     }
 
     /// Only results the model can re-derive from the transcript are worth

@@ -174,6 +174,20 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
 
   switch (block.name) {
     case "readFile": {
+      // Several files: named in the row, each under its own header when opened.
+      const paths = [str(args.path), ...(Array.isArray(args.paths) ? args.paths.map(str) : [str(args.paths)])].filter(
+        (path): path is string => !!path,
+      );
+      if (Array.isArray(result.files) || Array.isArray(args.paths)) {
+        const files = Array.isArray(result.files) ? (result.files as Json[]) : [];
+        const count = files.length || paths.length;
+        return {
+          name,
+          arg: paths.join(", "),
+          meta: `${count} ${count === 1 ? "file" : "files"}`,
+          detail: files.map((f) => `==> ${str(f.path)}${f.error ? `: ${str(f.error)}` : ""} <==\n${str(f.content) ?? ""}`).join("\n"),
+        };
+      }
       if (Array.isArray(result.entries)) {
         const entries = result.entries as Json[];
         return {

@@ -38,6 +38,23 @@ describe("touchedFiles", () => {
     ]);
   });
 
+  test("a read of several files touches each one that was read", () => {
+    const files = touchedFiles(
+      [
+        call("readFile", { paths: ["a.ts", "gone.ts", "b.ts"] }, {
+          result: "files",
+          files: [
+            { path: "a.ts", content: "" },
+            { path: "gone.ts", content: "", error: "not found: gone.ts" },
+            { path: "./b.ts", content: "" },
+          ],
+        }),
+      ],
+      "/repo",
+    );
+    expect(files.map((f) => f.path)).toEqual(["b.ts", "a.ts"]);
+  });
+
   test("a failed call did nothing, and a call that touches no file is not a file", () => {
     const files = touchedFiles(
       [

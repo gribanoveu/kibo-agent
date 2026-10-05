@@ -23,7 +23,7 @@ use std::fs;
 
 use crate::domain::chunk_index::qualified_name;
 use crate::domain::repo_index::{detect_language, extension_of};
-use crate::domain::tools::{OutlineEntry, ReadFileArgs, ReadFiles, ToolError, ToolResult, ToolScope};
+use crate::domain::tools::{ReadOne, OutlineEntry, ReadFileArgs, ReadFiles, ToolError, ToolResult, ToolScope};
 use crate::infra::language_indexers::indexer_for;
 
 use super::super::resolve::{relative_to_root, resolve_existing};
@@ -47,11 +47,21 @@ const DATA_WHOLE_BYTES: usize = 20_000;
 // ponytail: extensions only; `app.log.1` and extensionless dumps read as text.
 const DATA_EXTENSIONS: &[&str] = &[".log", ".csv", ".tsv", ".jsonl", ".ndjson"];
 
+/// The most files one `paths` call reads. Their text shares one
+/// [`MAX_READ_BYTES`], so this bounds the list, not the size.
+pub const MAX_READ_PATHS: usize = 20;
+
 pub fn read_file(
     scope: &ToolScope,
     args: &ReadFileArgs,
     reads: &mut ReadFiles,
 ) -> Result<ToolResult, ToolError> {
+    if let Some(paths) = &args.paths {
+        return read_files(scope, args, paths, reads);
+    }
+    if args.path.is_empty() {
+        return Err(invalid("give `path`, or `paths` for several files"));
+    }
     let path = resolve_existing(scope, &args.path)?;
     if !path.is_file() {
         return Err(ToolError::NotAFile(args.path.clone()));
@@ -73,7 +83,7 @@ pub fn read_file(
         && content.len() > DATA_WHOLE_BYTES
         && DATA_EXTENSIONS.contains(&extension_of(&args.path).as_str());
     let max_lines = if data { DATA_HEAD_LINES } else { MAX_READ_LINES };
-    let result = slice_lines(&content, args.start_line, args.end_line, max_lines);
+    let result = slice_lines(&content, args.start_line, args.end_line, max_lines, MAX_READ_BYTES);
     let whole = asked_whole && !matches!(result, ToolResult::File { truncated: true, .. });
     reads.record(&relative, &content, whole);
     Ok(result)
@@ -83,6 +93,75 @@ pub fn read_file(
 /// uses — on this one file, so it works before any sync and in a folder that
 /// is not indexed at all.
 ///
+fn invalid(reason: &str) -> ToolError {
+    ToolError::InvalidArguments { tool: "readFile".to_string(), reason: reason.to_string() }
+}
+
+/// Each file whole, in the order asked, `path` first. One that cannot be read
+/// says why in its own entry: a for-loop over `cat` would have gone on to the
+/// next file too, and failing the call would cost the ones that were fine.
+fn read_files(
+    scope: &ToolScope,
+    args: &ReadFileArgs,
+    paths: &[String],
+    reads: &mut ReadFiles,
+) -> Result<ToolResult, ToolError> {
+    if args.start_line.is_some() || args.end_line.is_some() || args.outline == Some(true) {
+        return Err(invalid(
+            "`paths` reads each file whole; for a range or an outline, read that one file with `path`",
+        ));
+    }
+    let mut asked: Vec<&str> = Vec::new();
+    for path in std::iter::once(args.path.as_str()).chain(paths.iter().map(String::as_str)) {
+        if !path.is_empty() && !asked.contains(&path) {
+            asked.push(path);
+        }
+    }
+    if asked.len() > MAX_READ_PATHS {
+        return Err(invalid(&format!("at most {MAX_READ_PATHS} files in one call — split the list")));
+    }
+    let mut budget = MAX_READ_BYTES;
+    let files = asked.into_iter().map(|path| read_whole(scope, path, &mut budget, reads)).collect();
+    Ok(ToolResult::Files { files })
+}
+
+/// One file of a `paths` call, cut to what is left of the call's budget.
+fn read_whole(scope: &ToolScope, path: &str, budget: &mut usize, reads: &mut ReadFiles) -> ReadOne {
+    let entry = |content: String, end_line, total_lines, truncated, error: Option<ToolError>| ReadOne {
+        path: path.to_string(),
+        content,
+        end_line,
+        total_lines,
+        truncated,
+        error: error.map(|e| e.to_string()),
+    };
+    let read = resolve_existing(scope, path).and_then(|resolved| {
+        if !resolved.is_file() {
+            return Err(ToolError::NotAFile(path.to_string()));
+        }
+        let content = fs::read_to_string(&resolved).map_err(ToolError::Io)?;
+        Ok((relative_to_root(scope, &resolved)?, content))
+    });
+    let (relative, content) = match read {
+        Ok(read) => read,
+        Err(e) => return entry(String::new(), 0, 0, false, Some(e)),
+    };
+    let total_lines = content.lines().count() as u32;
+    // Spent: not a byte of it was sent, so nothing is recorded either.
+    if *budget == 0 && total_lines > 0 {
+        return entry(String::new(), 0, total_lines, true, None);
+    }
+    let data = content.len() > DATA_WHOLE_BYTES && DATA_EXTENSIONS.contains(&extension_of(path).as_str());
+    let max_lines = if data { DATA_HEAD_LINES } else { MAX_READ_LINES };
+    let ToolResult::File { content: text, end_line, truncated, .. } = slice_lines(&content, None, None, max_lines, *budget)
+    else {
+        unreachable!("slice_lines returns a file")
+    };
+    *budget = budget.saturating_sub(text.len());
+    reads.record(&relative, &content, !truncated);
+    entry(text, end_line, total_lines, truncated, None)
+}
+
 /// Not a read: nothing is recorded, so an outline does not unlock a write.
 /// The model has seen names and line numbers, not the text it would replace.
 fn outline(path: &str, content: &str) -> ToolResult {
@@ -99,7 +178,7 @@ fn outline(path: &str, content: &str) -> ToolResult {
 }
 
 /// Clamps the requested range into the file rather than erroring, and stops
-/// at the read limit: `max_lines`, and [`MAX_READ_BYTES`].
+/// at the read limit: `max_lines`, and `max_bytes`.
 ///
 /// A whole file within the limit is handed back byte-identical to what was
 /// read — no split-and-rejoin round trip for the common case, which would
@@ -109,10 +188,10 @@ fn outline(path: &str, content: &str) -> ToolResult {
 /// `start_line` after each is independently clamped into `[1, total_lines]`,
 /// `end_line` rises to `start_line` and one line comes back — still an answer,
 /// where an error would only have cost a round trip.
-fn slice_lines(content: &str, start_line: Option<u32>, end_line: Option<u32>, max_lines: u32) -> ToolResult {
+fn slice_lines(content: &str, start_line: Option<u32>, end_line: Option<u32>, max_lines: u32, max_bytes: usize) -> ToolResult {
     let total_lines = content.lines().count() as u32;
     let whole = start_line.is_none() && end_line.is_none();
-    if whole && total_lines <= max_lines && content.len() <= MAX_READ_BYTES {
+    if whole && total_lines <= max_lines && content.len() <= max_bytes {
         return ToolResult::File {
             content: content.to_string(),
             start_line: if total_lines == 0 { 0 } else { 1 },
@@ -143,7 +222,7 @@ fn slice_lines(content: &str, start_line: Option<u32>, end_line: Option<u32>, ma
     let mut taken: u32 = 0;
     let mut bytes = 0;
     for line in &lines[(start - 1) as usize..asked_end as usize] {
-        if taken == max_lines || bytes + line.len() + 1 > MAX_READ_BYTES {
+        if taken == max_lines || bytes + line.len() + 1 > max_bytes {
             break;
         }
         bytes += line.len() + 1;
@@ -157,7 +236,7 @@ fn slice_lines(content: &str, start_line: Option<u32>, end_line: Option<u32>, ma
         // on a character boundary.
         end = start;
         let line = lines[(start - 1) as usize];
-        let mut cut = MAX_READ_BYTES;
+        let mut cut = max_bytes;
         while !line.is_char_boundary(cut) {
             cut -= 1;
         }
@@ -181,14 +260,25 @@ fn slice_lines(content: &str, start_line: Option<u32>, end_line: Option<u32>, ma
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "readFile".to_string(),
-        description: "Read one file by its path relative to the workspace root, optionally restricted to a line range, or ask for its outline instead. Paths returned by grep and listFiles are already rooted correctly — pass them back unchanged. A range outside the file is cut to fit, and the result says so. Reading is also what unlocks writing: writeFile and deleteFile refuse a file this turn has not read in full, and an outline does not count. To read several files, call readFile for each in the same response — they run together, in one round. One read returns at most 2000 lines or 100 KB; a longer file or range stops there, and the result says so. A log or data file (.log, .csv, .tsv, .jsonl, .ndjson) over 20 KB read without a range stops after 50 lines — enough to see its format; grep it for the rest."
+        description: "Read a file by its path relative to the workspace root, optionally restricted to a line range, or ask for its outline instead. To read several files whole, pass them all in `paths` — one call, each file under its own header — rather than a shell loop over cat. Paths returned by grep and listFiles are already rooted correctly — pass them back unchanged. A range outside the file is cut to fit, and the result says so. Reading is also what unlocks writing: writeFile and deleteFile refuse a file this turn has not read in full, and an outline does not count. One call returns at most 2000 lines or 100 KB, shared by all of `paths`; a longer file stops there, and the result says so. A log or data file (.log, .csv, .tsv, .jsonl, .ndjson) over 20 KB read without a range stops after 50 lines — enough to see its format; grep it for the rest."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "File path relative to the workspace root."
+                    "description": "File path relative to the workspace root. Give this or paths."
+                },
+                "paths": {
+                    "type": [
+                        "array",
+                        "null"
+                    ],
+                    "items": {
+                        "type": "string"
+                    },
+                    "maxItems": MAX_READ_PATHS,
+                    "description": "Several files to read whole, in this order, at most 20. Takes no startLine, endLine or outline: for those, read one file with path."
                 },
                 "startLine": {
                     "type": [
@@ -214,9 +304,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "description": "When true, return the file's declarations and headings with the lines each spans, plus its total line count, instead of its text. Use it on a large file you need only part of: read the outline, then read the one range that matters. Ignores startLine/endLine, and does not unlock a write."
                 }
             },
-            "required": [
-                "path"
-            ]
+            "required": []
         }),
     }
 }
@@ -246,6 +334,7 @@ mod tests {
     fn args(path: &str, start: Option<u32>, end: Option<u32>) -> ReadFileArgs {
         ReadFileArgs {
             path: path.to_string(),
+            paths: None,
             start_line: start,
             end_line: end,
             outline: None,
@@ -527,7 +616,7 @@ mod tests {
     // ------------------------------------------------------------ outline
 
     fn outline_of(scope: &ToolScope, path: &str, reads: &mut ReadFiles) -> (Vec<(String, u32, u32)>, u32) {
-        let args = ReadFileArgs { path: path.into(), start_line: Some(2), end_line: Some(2), outline: Some(true) };
+        let args = ReadFileArgs { path: path.into(), paths: None, start_line: Some(2), end_line: Some(2), outline: Some(true) };
         match read_file(scope, &args, reads).unwrap() {
             ToolResult::FileOutline { entries, total_lines, .. } => {
                 (entries.into_iter().map(|e| (e.name, e.start_line, e.end_line)).collect(), total_lines)
@@ -572,5 +661,106 @@ mod tests {
         let mut reads = ReadFiles::default();
         outline_of(&scope, "file.txt", &mut reads);
         assert!(reads.check("file.txt", "fn a() {}\n", true).is_err());
+    }
+
+    fn many(path: &str, paths: &[&str]) -> ReadFileArgs {
+        ReadFileArgs {
+            path: path.to_string(),
+            paths: Some(paths.iter().map(|p| p.to_string()).collect()),
+            ..ReadFileArgs::default()
+        }
+    }
+
+    fn unwrap_files(result: ToolResult) -> Vec<crate::domain::tools::ReadOne> {
+        match result {
+            ToolResult::Files { files } => files,
+            other => panic!("expected files, got {other:?}"),
+        }
+    }
+
+    /// `path` first, then `paths` in their order, a repeat read once; each a
+    /// whole read, so each unlocks a write as a one-file read would.
+    #[test]
+    fn paths_reads_each_file_whole_in_order() {
+        let (scope, root) = fixture("read-many", "one\n");
+        std::fs::write(root.join("b.txt"), "b1\nb2\n").unwrap();
+        std::fs::write(root.join("c.txt"), "c1").unwrap();
+        let mut reads = ReadFiles::default();
+        let files = unwrap_files(read_file(&scope, &many("c.txt", &["file.txt", "b.txt", "c.txt"]), &mut reads).unwrap());
+        let got: Vec<_> = files.iter().map(|f| (f.path.as_str(), f.content.as_str(), f.end_line, f.total_lines, f.truncated)).collect();
+        assert_eq!(got, vec![("c.txt", "c1", 1, 1, false), ("file.txt", "one\n", 1, 1, false), ("b.txt", "b1\nb2\n", 2, 2, false)]);
+        assert_eq!(reads.check("b.txt", "b1\nb2\n", true), Ok(()));
+        assert_eq!(reads.check("c.txt", "c1", true), Ok(()));
+    }
+
+    /// One missing file is its own entry's error; the rest are still read.
+    #[test]
+    fn a_file_that_cannot_be_read_does_not_fail_the_others() {
+        let (scope, root) = fixture("read-many-missing", "one\n");
+        std::fs::create_dir(root.join("dir")).unwrap();
+        let files = unwrap_files(read(&scope, &many("", &["nope.txt", "dir", "file.txt", "../out.txt"])).unwrap());
+        assert!(files[0].error.as_deref().is_some_and(|e| e.contains("nope.txt")), "{:?}", files[0]);
+        assert!(files[1].error.as_deref().is_some_and(|e| e.contains("not a file")), "{:?}", files[1]);
+        assert_eq!((files[2].content.as_str(), files[2].error.as_deref()), ("one\n", None));
+        assert!(files[3].error.is_some(), "outside the folder: {:?}", files[3]);
+    }
+
+    /// The files share one read limit: the one that crosses it is cut and is a
+    /// partial read; the one after it is not read at all, and not recorded.
+    #[test]
+    fn paths_share_one_read_limit() {
+        let line = format!("{}\n", "x".repeat(99));
+        let big = line.repeat(MAX_READ_BYTES / 100 - 10);
+        let (scope, root) = fixture("read-many-limit", &big);
+        std::fs::write(root.join("b.txt"), line.repeat(20)).unwrap();
+        std::fs::write(root.join("c.txt"), "c\n").unwrap();
+        let mut reads = ReadFiles::default();
+        let files = unwrap_files(read_file(&scope, &many("", &["file.txt", "b.txt", "c.txt"]), &mut reads).unwrap());
+        assert!(!files[0].truncated);
+        assert_eq!((files[1].end_line, files[1].total_lines, files[1].truncated), (10, 20, true));
+        assert_eq!((files[2].content.as_str(), files[2].end_line, files[2].total_lines, files[2].truncated), ("", 0, 1, true));
+        let sent: usize = files.iter().map(|f| f.content.len()).sum();
+        assert!(sent <= MAX_READ_BYTES, "{sent}");
+        assert_eq!(reads.check("file.txt", &big, true), Ok(()));
+        assert!(reads.check("b.txt", &line.repeat(20), true).is_err(), "a cut read is a partial one");
+        assert!(reads.check("c.txt", "c\n", true).is_err(), "an unsent file was not read");
+    }
+
+    /// A large log in a list stops at its head, as it does read alone.
+    #[test]
+    fn a_large_log_in_paths_stops_at_its_head() {
+        let (scope, root) = fixture("read-many-log", "one\n");
+        std::fs::write(root.join("app.log"), "line of a log\n".repeat(5_000)).unwrap();
+        let files = unwrap_files(read(&scope, &many("", &["app.log"])).unwrap());
+        assert_eq!((files[0].end_line, files[0].truncated), (DATA_HEAD_LINES, true));
+    }
+
+    #[test]
+    fn paths_refuses_what_only_fits_one_file() {
+        let (scope, _) = fixture("read-many-refused", "one\n");
+        let ranged = ReadFileArgs { start_line: Some(1), ..many("", &["file.txt"]) };
+        let outline = ReadFileArgs { outline: Some(true), ..many("", &["file.txt"]) };
+        let names: Vec<String> = (0..=MAX_READ_PATHS).map(|n| format!("f{n}.txt")).collect();
+        let too_many = many("", &names.iter().map(String::as_str).collect::<Vec<_>>());
+        for refused in [ranged, outline, too_many, ReadFileArgs::default()] {
+            assert!(
+                matches!(read(&scope, &refused), Err(ToolError::InvalidArguments { .. })),
+                "{refused:?}"
+            );
+        }
+        let at_limit = many("", &names[..MAX_READ_PATHS].iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(read(&scope, &at_limit).is_ok(), "the limit itself is allowed");
+    }
+
+    /// As the model sends it: one string for a list of one, no `path`.
+    #[test]
+    fn paths_parses_without_path() {
+        let call = crate::domain::llm::LlmToolCall {
+            id: "c".into(),
+            name: "readFile".into(),
+            arguments: r#"{"paths":"a.rs"}"#.into(),
+        };
+        let parsed = crate::services::ai_tools::parse::parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ReadFile(many("", &["a.rs"])));
     }
 }

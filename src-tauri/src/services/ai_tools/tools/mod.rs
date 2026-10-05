@@ -243,6 +243,7 @@ mod definition_tests {
                 r#"{"path":"a.rs"}"#,
                 vec![ToolCall::ReadFile(ReadFileArgs {
                     path: path(),
+                    paths: Some(vec!["b.rs".to_string()]),
                     start_line: Some(1),
                     end_line: Some(9),
                     outline: Some(false),

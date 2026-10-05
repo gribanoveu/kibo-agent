@@ -353,13 +353,15 @@ pub fn with_file_lists(summary: &str, folded: &[LlmMessage]) -> String {
                 .and_then(Result::ok)
                 .unwrap_or_default();
             let field = |key: &str| args.get(key).and_then(serde_json::Value::as_str).map(str::to_string);
-            let (Some(name), Some(path)) = (ToolName::from_wire_name(&call.name), field("path")) else {
+            let name = ToolName::from_wire_name(&call.name);
+            if name == Some(ToolName::ReadFile) {
+                read.extend(crate::domain::tools::read_paths(&args));
+                continue;
+            }
+            let (Some(name), Some(path)) = (name, field("path")) else {
                 continue;
             };
             match name {
-                ToolName::ReadFile => {
-                    read.insert(path);
-                }
                 ToolName::WriteFile | ToolName::EditFile => {
                     deleted.remove(&path);
                     modified.insert(path);
@@ -960,6 +962,7 @@ mod tests {
             ran("4", "writeFile", r#"{"path":"src/new.rs","content":""}"#, "ok"),
             ran("5", "deleteFile", r#"{"path":"old.txt"}"#, "ok"),
             ran("6", "grep", r#"{"pattern":"x","path":"src"}"#, "nothing"),
+            ran("7", "readFile", r#"{"paths":["src/c.rs","src/a.rs"]}"#, "==> src/c.rs"),
         ]);
 
         assert_eq!(
@@ -967,7 +970,7 @@ mod tests {
             "The work so far.\n\n\
              <modified-files>\nsrc/a.rs\nsrc/new.rs\n</modified-files>\n\n\
              <deleted-files>\nold.txt\n</deleted-files>\n\n\
-             <read-files>\nsrc/b.rs\n</read-files>"
+             <read-files>\nsrc/b.rs\nsrc/c.rs\n</read-files>"
         );
     }
 

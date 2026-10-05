@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::domain::background::ProcessOutput;
 use crate::domain::code_search::{CodeMatch, SearchMeta};
 use crate::domain::command_exec::CommandOutput;
-use crate::domain::tools::{BlameHunk, GitFileDiff, GitFileStatus, GitUpstream, LogCommit, GrepMatch, OutlineEntry, Task, ToolResult};
+use crate::domain::tools::{BlameHunk, ReadOne, GitFileDiff, GitFileStatus, GitUpstream, LogCommit, GrepMatch, OutlineEntry, Task, ToolResult};
 use crate::domain::prompt::{checklist_rows, CHECKLIST_LEGEND};
 use crate::services::ai_tools::tools::list_files::render_file_tree;
 use crate::services::ai_tools::tools::git::MAX_DIFF_CHARS;
@@ -26,6 +26,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::File { content, start_line, end_line, total_lines, clamped, truncated } => {
             file(content, *start_line, *end_line, *total_lines, *clamped, *truncated)
         }
+        ToolResult::Files { files: read } => files(read),
         ToolResult::FileOutline { path, entries, total_lines } => outline(path, entries, *total_lines),
         ToolResult::GrepResults { matches, truncated, total, total_files, total_is_floor, skipped } => {
             grep(matches, *truncated, *total, *total_files, *total_is_floor, skipped)
@@ -162,6 +163,33 @@ fn file(content: &str, start: u32, end: u32, total: u32, clamped: bool, truncate
         String::new()
     };
     format!("{head}{cut}{limit}:\n{content}")
+}
+
+/// Each file under a `==> path <==` header, as `head` prints several — the
+/// form a model already reads as "the next file starts here".
+fn files(read: &[ReadOne]) -> String {
+    let mut out = String::new();
+    for file in read {
+        let path = &file.path;
+        let head = match (&file.error, file.total_lines, file.end_line) {
+            (Some(error), _, _) => format!("==> {path}: {error} <=="),
+            (None, 0, _) => format!("==> {path}: empty <=="),
+            (None, total, 0) => format!(
+                "==> {path} ({total} lines): not read — this call's read limit was spent; read it in another call <=="
+            ),
+            (None, total, end) if file.truncated => format!(
+                "==> {path}: lines 1-{end} of {total} (stopped at the read limit — read on with path and startLine) <=="
+            ),
+            (None, total, _) => format!("==> {path} (all {total} lines) <=="),
+        };
+        out.push_str(&head);
+        out.push('\n');
+        out.push_str(&file.content);
+        if !file.content.is_empty() && !file.content.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn outline(path: &str, entries: &[OutlineEntry], total: u32) -> String {
@@ -487,6 +515,35 @@ mod tests {
         let shown = for_model(&ToolResult::FileDeleted { path: "a.txt".into(), diff });
         assert!(shown.starts_with("Deleted a.txt (+0 -2 lines)\n```diff\n"), "{shown}");
         assert!(shown.contains("-one\n-two"), "{shown}");
+    }
+
+    #[test]
+    fn several_files_read_each_under_its_own_header() {
+        let one = |path: &str, content: &str, end_line, total_lines, truncated, error: Option<&str>| crate::domain::tools::ReadOne {
+            path: path.into(),
+            content: content.into(),
+            end_line,
+            total_lines,
+            truncated,
+            error: error.map(str::to_string),
+        };
+        let shown = for_model(&ToolResult::Files {
+            files: vec![
+                one("a.rs", "fn a() {}", 1, 1, false, None),
+                one("b.rs", "", 0, 0, false, Some("not found: b.rs")),
+                one("c.rs", "", 0, 0, false, None),
+                one("d.rs", "1\n2\n", 2, 9, true, None),
+                one("e.rs", "", 0, 4, true, None),
+            ],
+        });
+        assert_eq!(
+            shown,
+            "==> a.rs (all 1 lines) <==\nfn a() {}\n\
+             ==> b.rs: not found: b.rs <==\n\
+             ==> c.rs: empty <==\n\
+             ==> d.rs: lines 1-2 of 9 (stopped at the read limit — read on with path and startLine) <==\n1\n2\n\
+             ==> e.rs (4 lines): not read — this call's read limit was spent; read it in another call <==\n"
+        );
     }
 
     #[test]
