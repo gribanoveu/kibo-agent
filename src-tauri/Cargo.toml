@@ -1,6 +1,6 @@
 [package]
 name = "kibo-agent"
-version = "0.4.0"
+version = "0.5.0"
 # GPL because `domain::command_risk` builds on sh-guard's rules (GPL-3.0-only).
 license = "GPL-3.0-only"
 description = "A Tauri App"
