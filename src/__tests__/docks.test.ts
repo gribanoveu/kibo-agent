@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changesShown, ideDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
+import { changesShown, ideDocks, isSavedDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
 
 const docks = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({ top, topHidden, bottom });
 
@@ -66,5 +66,15 @@ describe("the IDE layout", () => {
   test("opens on the tree, keeping only Terminal under the file", () => {
     expect(ideDocks(docks("changes", true, "plan"))).toEqual(docks("files", false));
     expect(ideDocks(docks("mcp", false, "terminal"))).toEqual(docks("files", false, "terminal"));
+  });
+});
+
+describe("the panes kept from before the IDE layout", () => {
+  test("come back whole or not at all", () => {
+    expect(isSavedDocks(null)).toBe(true);
+    expect(isSavedDocks(docks("plan", false, "terminal"))).toBe(true);
+    expect(isSavedDocks(docks("changes", true))).toBe(true);
+    for (const broken of ["plan", { top: "gone", topHidden: false, bottom: null }, { top: "plan", bottom: null }, { top: "plan", topHidden: true, bottom: "gone" }])
+      expect(isSavedDocks(broken)).toBe(false);
   });
 });

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - 2026-10-05 In the IDE layout the chat list is a menu in the chat header, with New chat on top, and Settings is in its "⋮" menu; the sidebar leaves the room to the file
-- 2026-10-05 Add an IDE layout (⇧⌘D, or the three-columns button in the chat header): the file tree on the left, the open file in the middle, the chat on the right; other panels take the tree's place and Terminal opens under the file; AsciiDoc files (`.adoc`) are highlighted
+- 2026-10-05 Add an IDE layout (⇧⌘D, or the code button in the chat header): the file tree on the left, the open file in the middle, the chat on the right; other panels take the tree's place and Terminal opens under the file, and leaving it puts back the panels that were open before; each layout keeps its own open files; AsciiDoc files (`.adoc`) are highlighted
 
 ## v0.5.0-alfa — 2026-10-05
 

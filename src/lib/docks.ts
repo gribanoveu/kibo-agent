@@ -1,4 +1,4 @@
-import type { AsideTab } from "../types";
+import { isAsideTab, type AsideTab } from "../types";
 
 /** What the column right of the chat shows: a pane on top (hidden or not) and one under it, or none. */
 export type Docks = {
@@ -42,3 +42,11 @@ export const changesShown = (docks: Docks) =>
 
 /** The header's Terminal button: Terminal only ever sits in the bottom dock. */
 export const toggleTerminal = (docks: Docks) => togglePane(docks, "terminal", "bottom");
+
+/** The panes as they were before the IDE layout, kept to go back to: stored, so only a whole one is trusted. */
+export const isSavedDocks = (value: unknown): value is Docks | null => {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const v = value as Docks;
+  return isAsideTab(v.top) && typeof v.topHidden === "boolean" && (v.bottom === null || isAsideTab(v.bottom));
+};

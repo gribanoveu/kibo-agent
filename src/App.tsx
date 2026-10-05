@@ -47,7 +47,7 @@ import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { changesShown, ideDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
@@ -253,9 +253,21 @@ export default function App() {
     setAsideHidden(next.topHidden);
     setBottomTab(next.bottom);
   };
-  // The tree is what the layout is for: it opens with it, in the dock now on the left.
+  // The tree is what the layout is for: it opens with it, in the dock now on the
+  // left. Leaving puts back the panes the user had open — as asked for, not as
+  // the window's width last let them show.
+  const [beforeIde, setBeforeIde] = useStoredState<Docks | null>("atlas-docks-before-ide", null, isSavedDocks);
   const toggleIde = () => {
-    if (!ideLayout) setDocks(ideDocks(docks));
+    if (!ideLayout) {
+      setBeforeIde({ top: tab, topHidden: asideHidden, bottom: bottomTab });
+      setDocks(ideDocks(docks));
+    } else if (beforeIde) {
+      setTab(beforeIde.top);
+      setAsideHidden(beforeIde.topHidden);
+      setBottomTab(beforeIde.bottom);
+    }
+    // Each layout keeps its own files open.
+    viewer.swap();
     setIdeLayout(!ideLayout);
   };
   const openTab = (next: AsideTab) =>

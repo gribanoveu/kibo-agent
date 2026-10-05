@@ -68,10 +68,30 @@ export function openFilesReducer(state: OpenFiles, action: Action): OpenFiles {
   }
 }
 
+/**
+ * The tabs on screen and the other layout's, put away: the IDE layout and the
+ * chat's each keep their own, and switching swaps them. A folder opened
+ * elsewhere empties both — "Close all" only the ones on screen.
+ */
+type Viewer = { shown: OpenFiles; other: OpenFiles };
+
+export function viewerReducer(state: Viewer, action: Action | { kind: "swap" } | { kind: "reset" }): Viewer {
+  switch (action.kind) {
+    case "swap":
+      return { shown: state.other, other: state.shown };
+    case "reset":
+      return { shown: none, other: none };
+    default: {
+      const shown = openFilesReducer(state.shown, action);
+      return shown === state.shown ? state : { ...state, shown };
+    }
+  }
+}
+
 /** The files open in the viewer beside the chat; a folder opened elsewhere closes them all. */
 export function useOpenFiles(workspace: string | null) {
-  const [state, dispatch] = useReducer(openFilesReducer, none);
-  useEffect(() => dispatch({ kind: "closeAll" }), [workspace]);
+  const [state, dispatch] = useReducer(viewerReducer, { shown: none, other: none });
+  useEffect(() => dispatch({ kind: "reset" }), [workspace]);
   // Stable, so a callback built on them does not re-render every answer.
   const actions = useMemo(
     () => ({
@@ -80,10 +100,12 @@ export function useOpenFiles(workspace: string | null) {
       pin: (target: FileTarget) => dispatch({ kind: "pin", target }),
       close: (target: FileTarget) => dispatch({ kind: "close", target }),
       closeAll: () => dispatch({ kind: "closeAll" }),
+      /** Shows the other layout's tabs, putting these away until the next swap. */
+      swap: () => dispatch({ kind: "swap" }),
     }),
     [],
   );
-  return { ...state, ...actions };
+  return { ...state.shown, ...actions };
 }
 
 /**

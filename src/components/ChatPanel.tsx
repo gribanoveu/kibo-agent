@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   Brain,
-  Columns3,
   Loader2,
   ChevronRight,
+  Code,
   CircleDot,
   FileText,
   Folder,
@@ -896,7 +896,7 @@ export function ChatPanel({
               aria-pressed={ideLayout}
               onClick={onToggleIde}
             >
-              <Columns3 size={15} />
+              <Code size={15} />
             </button>
           )}
           {onToggleTerminal && (
