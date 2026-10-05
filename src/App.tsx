@@ -52,6 +52,8 @@ import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
+import { FolderTrustDialog } from "./components/FolderTrustDialog";
+import { useFolderTrust } from "./hooks/useFolderTrust";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { BranchConflictDialog } from "./components/BranchConflictDialog";
 import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
@@ -222,6 +224,8 @@ export default function App() {
   // pane reads the same list for itself while it is open.
   const skillSources = useSkills(settingsOpen, workspace.path);
   const commandFiles = useCommandFiles(workspace.path);
+  // The folder's own commands are listed only once it is trusted.
+  const trust = useFolderTrust(workspace.path, commandFiles.reload);
   const serverPrompts = useMcpPrompts(workspace.path, agent.turn.status);
   const theme = useTheme();
   const fontSize = useChatFontSize();
@@ -334,6 +338,12 @@ export default function App() {
           ? "Switch to Agent mode — it writes files"
           : undefined,
       run: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
+    },
+    {
+      name: "trust",
+      hint: "Trust this folder with its own skills and / commands, or stop trusting it",
+      unavailable: !workspace.path ? "Open a folder first" : undefined,
+      run: trust.ask,
     },
   ];
   // `send` is declared further down; the arrow reaches it when a command runs.
@@ -703,6 +713,13 @@ export default function App() {
         folder={workspace.path}
         onStopAgent={agent.cancel}
         onClose={folderSwitch.close}
+      />
+      <FolderTrustDialog
+        trust={trust.trust}
+        open={trust.asking}
+        error={trust.error}
+        onDecide={(trusted) => void trust.decide(trusted)}
+        onClose={trust.close}
       />
       <RewindDialog asked={rewinding.asked} onConfirm={() => void rewinding.confirm()} onClose={rewinding.close} />
       <WorktreeRemoveDialog

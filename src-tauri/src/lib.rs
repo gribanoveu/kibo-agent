@@ -204,6 +204,8 @@ pub fn run() {
             commands::settings::llm_models_probe,
             commands::skills::skills_list,
             commands::slash_commands::slash_commands_list,
+            commands::folder_trust::folder_trust_get,
+            commands::folder_trust::folder_trust_set,
             commands::mcp::mcp_config_get,
             commands::mcp::mcp_config_save,
             commands::mcp::mcp_server_set_enabled,

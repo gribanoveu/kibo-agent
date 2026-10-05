@@ -20,6 +20,7 @@ mod agent_bench;
 #[cfg(test)]
 mod kube_bench;
 pub mod skills;
+pub mod folder_trust;
 pub mod project_rules;
 pub mod mcp_questions;
 pub mod mcp_servers;

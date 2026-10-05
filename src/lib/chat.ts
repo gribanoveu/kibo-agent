@@ -684,6 +684,24 @@ export async function commandFilesList(): Promise<CommandFile[]> {
   return invoke<CommandFile[]>("slash_commands_list");
 }
 
+/**
+ * Whether the open folder is trusted with its own skills and `/` commands:
+ * `folder` is the one answered (the repository's root), `needed` whether it has
+ * any, `trusted` the answer — `null` when never asked.
+ */
+export type FolderTrust = { folder: string; needed: boolean; trusted: boolean | null };
+
+/** `null` while no folder is open. */
+export async function folderTrust(): Promise<FolderTrust | null> {
+  if (!inTauri()) return null;
+  return invoke<FolderTrust | null>("folder_trust_get");
+}
+
+export async function setFolderTrust(trusted: boolean): Promise<void> {
+  requireBackend();
+  return invoke<void>("folder_trust_set", { trusted });
+}
+
 /** A skills folder read or not, for every repository. */
 export async function setSkillSourceEnabled(id: SkillSourceItem["id"], enabled: boolean): Promise<void> {
   requireBackend();

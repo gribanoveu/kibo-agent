@@ -186,10 +186,34 @@ pub struct AppSettings {
     /// file rather than per name, so turning off one repository's
     /// `AGENTS.md` leaves every other repository's alone.
     pub rules: OptOut,
+    /// Whether to trust each folder the user was asked about: its own skills
+    /// and `/` commands are read only once trusted.
+    pub folder_trust: FolderTrust,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
     /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
     pub kube: KubeSettings,
+}
+
+/// The user's answer per folder, by canonical path. A repository's skills and
+/// commands are text its author wrote for the agent — a skill can tell it to
+/// run a script of the repository's — so a folder cloned from somewhere is not
+/// read until the user says it may be. As pi does
+/// (`docs/27-pi-ideas.md`, item 5), a decision covers the folders inside it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FolderTrust(std::collections::BTreeMap<String, bool>);
+
+impl FolderTrust {
+    /// The answer for `folder`: its own, or that of the nearest folder above it
+    /// with one. `None` — never asked.
+    pub fn decision(&self, folder: &std::path::Path) -> Option<bool> {
+        folder.ancestors().find_map(|dir| self.0.get(&dir.display().to_string()).copied())
+    }
+
+    pub fn set(&mut self, folder: &std::path::Path, trusted: bool) {
+        self.0.insert(folder.display().to_string(), trusted);
+    }
 }
 
 /// The kubeconfig files the Kubernetes role can be pointed at — by path, never
@@ -548,5 +572,31 @@ mod tests {
         assert_eq!(typed[0], "ns5");
         assert_eq!(typed.iter().filter(|n| *n == "ns5").count(), 1);
         assert!(!typed.contains(&"ns0".to_string()), "the oldest stayed");
+    }
+
+    #[test]
+    fn a_folder_takes_its_own_answer_or_the_nearest_one_above_it() {
+        use std::path::Path;
+        let mut trust = FolderTrust::default();
+        assert_eq!(trust.decision(Path::new("/work/app")), None, "never asked");
+        trust.set(Path::new("/work"), true);
+        trust.set(Path::new("/work/vendor"), false);
+        assert_eq!(trust.decision(Path::new("/work")), Some(true));
+        assert_eq!(trust.decision(Path::new("/work/app/src")), Some(true), "inside a trusted one");
+        assert_eq!(trust.decision(Path::new("/work/vendor/lib")), Some(false), "the nearest answer wins");
+        assert_eq!(trust.decision(Path::new("/elsewhere")), None);
+        assert_eq!(trust.decision(Path::new("/workshop")), None, "a sibling with the same prefix is not inside");
+        trust.set(Path::new("/work/vendor"), true);
+        assert_eq!(trust.decision(Path::new("/work/vendor")), Some(true), "an answer changed is replaced");
+    }
+
+    #[test]
+    fn the_answers_are_saved_as_a_map_of_paths() {
+        let mut settings = AppSettings::default();
+        settings.folder_trust.set(std::path::Path::new("/work"), false);
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["folderTrust"], serde_json::json!({ "/work": false }));
+        let back: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(back, settings);
     }
 }

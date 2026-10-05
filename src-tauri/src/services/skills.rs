@@ -29,9 +29,11 @@ struct Found {
 
 /// Every skill folder in the order a name is looked up: the open folder's
 /// `.claude/skills` and `.agents/skills` — a repository's skill knows that
-/// repository — then the user's, the app's own before other agents'.
+/// repository — then the user's, the app's own before other agents'. The
+/// folder's own only once the user trusts it (`services::folder_trust`).
 fn found(workspace: Option<&Path>, sources: &OptOut) -> Result<Vec<Found>, SkillError> {
     let mut all = Vec::new();
+    let workspace = crate::services::folder_trust::readable(workspace);
     if let Some(workspace) = workspace.filter(|_| sources.is_enabled(PROJECT_SOURCE)) {
         let root = skills_store::project_root(workspace);
         for dir in skills_store::project_dirs(workspace) {
@@ -181,6 +183,7 @@ mod tests {
         let dirs = skills_store::project_dirs(&ws);
         write_skill_in(&dirs[0], "release", "The repository's release.", "");
         write_skill_in(&dirs[1], "lint", "Lints.", "");
+        crate::services::folder_trust::set(&ws, true).unwrap();
         ws
     }
 
@@ -223,6 +226,20 @@ mod tests {
         });
     }
 
+    /// A folder not trusted, or not trusted yet, has no skills of its own:
+    /// neither offered to the model nor listed.
+    #[test]
+    fn an_untrusted_repositorys_skills_are_not_read() {
+        with_app_dir("skills-svc-untrusted", || {
+            let ws = repository("skills-svc-untrusted-ws");
+            write_skill("review", "Reviews a diff.", "");
+            crate::services::folder_trust::set(&ws, false).unwrap();
+            assert_eq!(names(&enabled_catalog(Some(&ws)).unwrap()), ["review"]);
+            let listed = list(Some(&ws)).unwrap().skills;
+            assert_eq!(listed.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["review"]);
+        });
+    }
+
     /// Opened at a package of a monorepo: the package's skills, then the
     /// root's, the package's winning a name they share. A package's skill that
     /// links to one at the root stays inside the repository and is read.
@@ -239,6 +256,7 @@ mod tests {
             let own = package.join(".agents/skills");
             write_skill_in(&own, "release", "The package's release.", "");
             std::os::unix::fs::symlink(root_skills.join("lint"), own.join("lint")).unwrap();
+            crate::services::folder_trust::set(&package, true).unwrap();
 
             let catalog = enabled_catalog(Some(&package)).unwrap();
             assert_eq!(names(&catalog), ["lint", "release"]);

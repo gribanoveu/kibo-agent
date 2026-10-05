@@ -56,6 +56,11 @@ mod tests {
             skills: crate::domain::settings::OptOut { disabled: vec!["release".to_string()] },
             skill_sources: crate::domain::settings::OptOut { disabled: vec!["agents".to_string()] },
             rules: crate::domain::settings::OptOut { disabled: vec!["/repo/AGENTS.md".to_string()] },
+            folder_trust: {
+                let mut trust = crate::domain::settings::FolderTrust::default();
+                trust.set(std::path::Path::new("/repo"), true);
+                trust
+            },
             tool_log: crate::domain::settings::ToolLogSettings { enabled: false },
             approval: crate::domain::settings::ApprovalMemory {
                 remember: crate::domain::settings::RememberScope::Repository,

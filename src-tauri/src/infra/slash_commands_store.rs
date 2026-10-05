@@ -15,7 +15,7 @@ use crate::infra::{app_dir, skills_store};
 /// be sent as one message.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
-fn commands_dir(root: &Path) -> PathBuf {
+pub fn commands_dir(root: &Path) -> PathBuf {
     root.join(".kibo").join("commands")
 }
 

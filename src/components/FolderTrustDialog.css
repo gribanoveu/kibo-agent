@@ -1,0 +1,18 @@
+.trust-text {
+  margin: 0 0 10px;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.trust-text:last-child {
+  margin-bottom: 0;
+}
+.trust-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.trust-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--red);
+}
