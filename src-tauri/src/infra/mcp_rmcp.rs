@@ -68,7 +68,8 @@ pub enum Failure<'a> {
 
 pub type Describe = Box<dyn Fn(Failure<'_>) -> McpError + Send + Sync>;
 /// Why the conversation is over, if what lies under the transport says so —
-/// a process that exited, a session that ended. Asked before every request
+/// a process that exited, a session that ended. Asked before every request,
+/// every [`POLL`] while the handshake or a request waits,
 /// and by `is_alive`; dropped with the client, and with it whatever it holds.
 pub type Ended = Box<dyn Fn() -> Option<McpError> + Send + Sync>;
 
@@ -147,6 +148,8 @@ impl ClientHandler for Listener {
 enum Stop {
     Cancelled,
     TimedOut,
+    /// What lies under the transport is gone, though the stream may not say so.
+    Ended(McpError),
 }
 
 impl RmcpClient {
@@ -178,10 +181,11 @@ impl RmcpClient {
         let listener = Listener { config, lists_changed: Arc::clone(&lists_changed), desk: Arc::clone(&desk) };
         let service = tauri::async_runtime::block_on(async {
             let mut serving = Box::pin(listener.serve_with_lifecycle(transport()?, lifecycle));
-            match wait(&mut serving, timeout, cancelled, None).await {
+            match wait(&mut serving, timeout, cancelled, &ended, None).await {
                 Ok(served) => served.map_err(|e| handshake_error(e, &describe)),
                 Err(Stop::Cancelled) => Err(McpError::Cancelled),
                 Err(Stop::TimedOut) => Err(McpError::Timeout(timeout.as_secs())),
+                Err(Stop::Ended(error)) => Err(error),
             }
         })?;
         Ok(Self {
@@ -217,7 +221,7 @@ impl RmcpClient {
                 .send_cancellable_request(request, PeerRequestOptions::no_options())
                 .await
                 .map_err(|e| self.error(e))?;
-            let stop = match wait(&mut handle.rx, self.timeout, cancelled, asking).await {
+            let stop = match wait(&mut handle.rx, self.timeout, cancelled, &self.ended, asking).await {
                 Ok(Ok(Ok(result))) => return serde_json::to_value(result).map_err(|e| McpError::Protocol(e.to_string())),
                 Ok(Ok(Err(error))) => return Err(self.error(error)),
                 Ok(Err(_)) => return Err((self.describe)(Failure::Closed)),
@@ -228,6 +232,8 @@ impl RmcpClient {
             let (reason, error) = match stop {
                 Stop::Cancelled => ("cancelled by the user", McpError::Cancelled),
                 Stop::TimedOut => ("timed out", McpError::Timeout(self.timeout.as_secs())),
+                // Nobody is left to tell.
+                Stop::Ended(error) => return Err(error),
             };
             let _ = tokio::time::timeout(CANCEL_GRACE, handle.cancel(Some(reason.into()))).await;
             Err(error)
@@ -433,13 +439,16 @@ fn handshake_error(error: ClientInitializeError, describe: &Describe) -> McpErro
     }
 }
 
-/// `future`, unless the deadline or the stop flag comes first. A question
+/// `future`, unless the deadline, the stop flag or the end of what lies under
+/// the transport comes first — the last for a process that exited while a
+/// child of its own holds its stdout open, so the stream never closes. A question
 /// the server asks meanwhile is put through `asking`, and the deadline moves
 /// by however long the user took: that time is not the server's.
 async fn wait<F: Future + Unpin>(
     future: &mut F,
     limit: Duration,
     cancelled: &dyn Fn() -> bool,
+    ended: &Ended,
     mut asking: Option<&mut Asking<'_>>,
 ) -> Result<F::Output, Stop> {
     let deadline = tokio::time::sleep(limit);
@@ -462,6 +471,9 @@ async fn wait<F: Future + Unpin>(
             _ = poll.tick() => {
                 if cancelled() {
                     return Err(Stop::Cancelled);
+                }
+                if let Some(error) = ended() {
+                    return Err(Stop::Ended(error));
                 }
             }
         }

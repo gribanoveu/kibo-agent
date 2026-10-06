@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-06 An MCP server that exits while starting or during a call is reported as exited within a second or so, not after its timeout, even when something it started keeps its output open
 - 2026-10-06 Source listings in AsciiDoc are coloured by their language, and the IDE layout keeps the tree and the file a little narrower before hiding them
 - 2026-10-06 A right click no longer offers the browser's Reload and Inspect Element; fields, the editor and selected text keep Cut, Copy and Paste
 - 2026-10-06 Open a PlantUML diagram the whole window over with a click, to zoom (buttons, Fit, 100%) and drag about

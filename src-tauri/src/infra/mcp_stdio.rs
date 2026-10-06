@@ -254,6 +254,18 @@ mod tests {
         assert!(began.elapsed() < STDERR_GRACE * 5, "waited on the child: {:?}", began.elapsed());
     }
 
+    /// An exit during the handshake is seen by the process, not by the
+    /// stream: here a child holds stdout open and nothing ever closes it.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_exits_during_the_handshake_is_reported_at_once() {
+        let dir = crate::testing::temp_dir("mcp-stdio-exits-early");
+        let started = Instant::now();
+        let result = start(&sh("sleep 30 & exit 3", 30), &dir, &|| false);
+        assert!(matches!(result, Err(McpError::Exited { code: Some(3), .. })), "{:?}", result.err());
+        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
     /// Only the end of a long stderr is kept — enough to explain an exit,
     /// not a whole log held in memory.
     #[cfg(unix)]
@@ -284,6 +296,25 @@ mod tests {
         let err = server.call_tool("hi", json!({}), &|| false).unwrap_err();
         assert_eq!(err, McpError::Exited { code: Some(2), stderr: "crashed".into() });
         assert!(!server.is_alive());
+    }
+
+    /// The same during a call: the call ends with the process, not with the
+    /// server's timeout.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_exits_during_a_call_is_reported_at_once() {
+        let script = r#"
+            read discover; echo '{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"Method not found"}}'
+            read init; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"sh","version":"1"}}}'
+            read initialized
+            read call; sleep 30 & exit 4
+        "#;
+        let dir = crate::testing::temp_dir("mcp-stdio-exits-on-call");
+        let server = start(&sh(script, 30), &dir, &|| false).unwrap();
+        let started = Instant::now();
+        let result = server.call_tool("hi", json!({}), &|| false);
+        assert!(matches!(result, Err(McpError::Exited { code: Some(4), .. })), "{:?}", result.err());
+        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
     }
 
     /// Its stdout still open — held by a child it left behind — while the
