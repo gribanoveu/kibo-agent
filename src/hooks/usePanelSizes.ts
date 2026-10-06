@@ -34,15 +34,15 @@ const GAP = 10;
  * How wide the window must be to hold these panels side by side at their
  * minimums: the sidebar (or its rail), the chat, and the file viewer and the
  * column right of it when they are open. `frame` is the window's own border,
- * both sides — none where the OS draws it.
+ * both sides — none where the OS draws it. The IDE layout has no sidebar, nor
+ * the gap after it: the chat header holds the list of chats.
  */
-export function roomFor({ rail, viewer, dock, frame }: { rail: boolean; viewer: boolean; dock: boolean; frame: number }) {
-  const sidebar = rail ? (PANEL_LIMITS.sidebar.rail ?? 0) : PANEL_LIMITS.sidebar.min;
+export function roomFor({ rail, viewer, dock, frame, ide = false }: { rail: boolean; viewer: boolean; dock: boolean; frame: number; ide?: boolean }) {
+  const sidebar = ide ? 0 : (rail ? (PANEL_LIMITS.sidebar.rail ?? 0) : PANEL_LIMITS.sidebar.min) + GAP;
   return (
     frame +
     2 * GAP +
     sidebar +
-    GAP +
     CHAT_MIN +
     (viewer ? GAP + PANEL_LIMITS.viewer.min : 0) +
     (dock ? GAP + PANEL_LIMITS.aside.min : 0)

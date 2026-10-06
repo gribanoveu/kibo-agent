@@ -137,6 +137,14 @@ describe("room for the panels", () => {
     expect(roomFor({ rail: true, viewer: true, dock: true, frame: 2 })).toBe(1210);
     expect(roomFor({ rail: false, viewer: true, dock: false, frame: 0 })).toBe(1060);
   });
+
+  /// No sidebar there, rail or not, nor the gap after it: the tree, the file
+  /// and the chat are all that stand side by side.
+  test("the IDE layout counts no sidebar", () => {
+    expect(roomFor({ rail: true, viewer: true, dock: true, frame: 2, ide: true })).toBe(1142);
+    expect(roomFor({ rail: false, viewer: true, dock: true, frame: 2, ide: true })).toBe(1142);
+    expect(roomFor({ rail: false, viewer: false, dock: false, frame: 2, ide: true })).toBe(422);
+  });
 });
 
 describe("a media query", () => {

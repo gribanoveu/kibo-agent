@@ -179,13 +179,13 @@ export default function App() {
   const frame = nativeFrame ? 0 : 2;
   // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
   const viewerOpen = agentMode && viewer.active !== null;
-  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame })}px)`);
+  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
   // What the column shows: what was opened, while it fits.
   const topHidden = asideHidden || !dockFits || !agentMode;
   const bottomShown = dockFits && agentMode ? bottomTab : null;
   // In the IDE layout the bottom dock sits under the file, not in the column.
   const dockShown = !topHidden || (bottomShown !== null && !ide);
-  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame })}px)`);
+  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;

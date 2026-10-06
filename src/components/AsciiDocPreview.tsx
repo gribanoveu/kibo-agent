@@ -10,6 +10,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { asciidocHtml } from "../lib/asciidoc";
 import { fileView } from "../lib/chat";
 import { plantumlSvg } from "../lib/plantuml";
+import { highlight, type Token } from "../lib/highlight";
 import { DiagramView } from "./DiagramView";
 import "./AsciiDocPreview.css";
 
@@ -72,8 +73,42 @@ export const PlantumlPreview = ({ text }: { text: string }) => (
   </div>
 );
 
-// What `asciidoc.ts` marked as a diagram is drawn; any other block as it is.
+/** A `[source,lang]` listing's code, coloured once its grammar has loaded. */
+function Listing({ lang, source }: { lang: string; source: string }) {
+  const [tokens, setTokens] = useState<Token[][] | null>(null);
+  useEffect(() => {
+    let current = true;
+    setTokens(null);
+    void highlight(source, lang).then((done) => current && setTokens(done));
+    return () => {
+      current = false;
+    };
+  }, [source, lang]);
+  return (
+    <code className={`language-${lang}`}>
+      {tokens
+        ? tokens.map((line, i) => (
+            <Fragment key={i}>
+              {i > 0 && "\n"}
+              {line.map((token, j) => (
+                <span key={j} style={token.htmlStyle}>
+                  {token.content}
+                </span>
+              ))}
+            </Fragment>
+          ))
+        : source}
+    </code>
+  );
+}
+
+// What `asciidoc.ts` marked as a diagram is drawn, a listing's code coloured;
+// anything else as it is.
 const components = {
+  code: ({ node, ...props }: ComponentProps<"code"> & { node?: HastElement }) => {
+    const lang = /(?:^| )language-(\S+)/.exec(props.className ?? "")?.[1];
+    return node && lang ? <Listing lang={lang} source={text(node)} /> : <code {...props} />;
+  },
   div: ({ node, ...props }: ComponentProps<"div"> & { node?: HastElement }) =>
     node && [node.properties.className].flat().includes("plantuml") ? <Diagram source={text(node).replace(/^\n+|\n+$/g, "")} /> : <div {...props} />,
 };

@@ -493,6 +493,21 @@ describe("editing in the IDE layout", () => {
     await showing("@startuml\nA -> B\n@enduml\n");
   });
 
+  test("a source listing in an AsciiDoc file is coloured by its language; one without stays as written", async () => {
+    disk["docs/a.adoc"] = "[source,java]\n----\nclass Order {}\nclass Line {}\n----\n\n----\nplain text\n----\n";
+    render(<Ide open={[doc]} />);
+    for (let i = 0; i < 300 && !document.querySelector(".adoc pre"); i++) await settle(10);
+    // Then the grammar's colours, well inside the test's own time limit.
+    for (let i = 0; i < 100 && !document.querySelector(".adoc pre code span"); i++) await settle(10);
+    const [java, plain] = [...document.querySelectorAll(".adoc pre")];
+    const code = java.querySelector("code")!;
+    expect(code.className).toBe("language-java");
+    expect(code.textContent).toBe("class Order {}\nclass Line {}");
+    expect([...code.querySelectorAll("span")].find((span) => span.textContent === "class")?.getAttribute("style")).toContain("--shiki-dark");
+    expect(plain.textContent).toBe("plain text");
+    expect(plain.querySelector("span")).toBeNull();
+  });
+
   test("a pause in typing saves it", async () => {
     await ide();
     await type("Mine.\n");

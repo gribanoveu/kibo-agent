@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-06 Source listings in AsciiDoc are coloured by their language, and the IDE layout keeps the tree and the file a little narrower before hiding them
 - 2026-10-06 A right click no longer offers the browser's Reload and Inspect Element; fields, the editor and selected text keep Cut, Copy and Paste
 - 2026-10-06 Open a PlantUML diagram the whole window over with a click, to zoom (buttons, Fit, 100%) and drag about
 - 2026-10-06 See a PlantUML file (`.puml`, `.plantuml`, `.pu`, `.iuml`, `.wsd`) drawn, under Preview — in the IDE layout it opens that way

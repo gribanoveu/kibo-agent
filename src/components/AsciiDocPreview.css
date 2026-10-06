@@ -98,6 +98,13 @@
   background: none;
   font-size: inherit;
 }
+/* A listing's colours, both themes' carried by each token (lib/highlight.ts). */
+:root[data-scheme="light"] .adoc pre code span {
+  color: var(--shiki-light);
+}
+:root:not([data-scheme="light"]) .adoc pre code span {
+  color: var(--shiki-dark);
+}
 
 .adoc .quoteblock,
 .adoc .verseblock {
