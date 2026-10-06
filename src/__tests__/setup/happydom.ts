@@ -18,11 +18,13 @@ GlobalRegistrator.register();
 // it, and `@testing-library/react` wants the DOM globals at module-load time.
 const { cleanup } = await import("@testing-library/react");
 
-// The real module first, so it fixes the export set. Bun keeps the exports
+// The real modules first, so they fix the export set. Bun keeps the exports
 // of whichever version of a module was loaded first and later `mock.module`
 // calls only replace their values: were a test's stand-in the first, with
 // just `invoke`, an import of `Channel` anywhere would fail to link in every
-// file after it.
+// file after it — and with just `listen`, `@tauri-apps/api/window`, which
+// imports `once` and the rest, in every file loaded after that test.
 await import("@tauri-apps/api/core");
+await import("@tauri-apps/api/event");
 
 afterEach(cleanup);

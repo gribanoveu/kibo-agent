@@ -7,6 +7,7 @@ use std::path::{Component, Path};
 use git2::{Repository, Status, StatusOptions};
 
 use crate::domain::file_tree::{FileStatus, FileTreeError, FolderListing, TreeEntry, MAX_ENTRIES};
+use crate::domain::tools::canonicalize_plain;
 use crate::infra::workspace_scanner::scan_entries;
 
 /// `dir` is relative to `root`; empty is `root` itself.
@@ -15,7 +16,7 @@ pub fn list(root: &Path, dir: &str) -> Result<FolderListing, FileTreeError> {
     if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
         return Err(FileTreeError::InvalidPath(dir.to_string()));
     }
-    let root = root.canonicalize().map_err(|e| FileTreeError::Io(root.display().to_string(), e.to_string()))?;
+    let root = canonicalize_plain(root).map_err(|e| FileTreeError::Io(root.display().to_string(), e.to_string()))?;
     let folder = root.join(rel);
     if !folder.is_dir() {
         return Err(FileTreeError::InvalidPath(dir.to_string()));
@@ -45,7 +46,7 @@ pub fn list(root: &Path, dir: &str) -> Result<FolderListing, FileTreeError> {
 /// a repository: an ordinary folder lists the same, unmarked.
 fn git_changes(root: &Path, dir: &str) -> HashMap<String, FileStatus> {
     let Ok(repo) = Repository::discover(root) else { return HashMap::new() };
-    let Some(workdir) = repo.workdir().and_then(|w| w.canonicalize().ok()) else { return HashMap::new() };
+    let Some(workdir) = repo.workdir().and_then(|w| canonicalize_plain(w).ok()) else { return HashMap::new() };
     // The open folder may sit inside the repository: git speaks from its top.
     let Ok(prefix) = root.strip_prefix(&workdir) else { return HashMap::new() };
     let prefix = prefix.to_string_lossy().replace('\\', "/");

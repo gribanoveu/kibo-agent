@@ -41,3 +41,4 @@ pub mod git_changes;
 pub mod git_branches;
 pub mod commit_message;
 pub mod file_tree;
+pub mod file_write;

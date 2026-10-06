@@ -1,0 +1,78 @@
+/* Fills the viewer's body; CodeMirror scrolls inside it. */
+.file-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-editor .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The search panel, in the window's colours rather than CodeMirror's own
+   (whose buttons, themed light or dark, outrank a theme's rule: hence the
+   longer selectors). */
+.file-editor .cm-editor .cm-panels {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.file-editor .cm-editor .cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+.file-editor .cm-editor .cm-panel.cm-search {
+  padding: 6px 28px 6px 10px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.file-editor .cm-editor .cm-panel.cm-search .cm-textfield {
+  background: var(--bg-window);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font: inherit;
+  outline: none;
+}
+.file-editor .cm-editor .cm-panel.cm-search .cm-textfield:focus {
+  border-color: var(--accent);
+}
+.file-editor .cm-editor .cm-panel.cm-search .cm-button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: inherit;
+}
+.file-editor .cm-editor .cm-panel.cm-search .cm-button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.file-editor .cm-editor .cm-panel.cm-search label {
+  color: var(--text-dim);
+  font-size: inherit;
+}
+.file-editor .cm-editor .cm-panel.cm-search input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 4px 0 0;
+  vertical-align: -1px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.file-editor .cm-editor .cm-panel.cm-search input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.file-editor .cm-editor .cm-panel.cm-search button[name="close"] {
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.file-editor .cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--amber) 25%, transparent);
+}
+.file-editor .cm-editor .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--amber) 55%, transparent);
+}

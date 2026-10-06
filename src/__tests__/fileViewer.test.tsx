@@ -31,6 +31,10 @@ mock.module("@tauri-apps/api/event", () => ({
   },
 }));
 
+mock.module("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onCloseRequested: () => Promise.resolve(() => {}) }),
+}));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -46,7 +50,12 @@ beforeEach(() => {
   changes = { staged: [], unstaged: [] };
 });
 
-async function open(target: FileTarget = { path: "src/main.rs", side: "unstaged" }, onCloseAll = () => {}, wrap = true) {
+async function open(
+  target: FileTarget = { path: "src/main.rs", side: "unstaged" },
+  onCloseAll = () => {},
+  wrap = true,
+  compact = false,
+) {
   const shown = render(
     <FileViewer
       files={[target]}
@@ -58,6 +67,7 @@ async function open(target: FileTarget = { path: "src/main.rs", side: "unstaged"
       onClose={() => {}}
       onCloseAll={onCloseAll}
       wrap={wrap}
+      compact={compact}
     />,
   );
   await settle();
@@ -248,5 +258,33 @@ describe("FileViewer", () => {
     shown.unmount();
     await open(undefined, () => {}, false);
     expect(wrapped()).toBe(false);
+  });
+
+  /// The IDE layout's one row: the controls beside the tabs, the path left to the tab's tooltip.
+  test("compact, the heading is one row and a changed file opens whole", async () => {
+    let closed = 0;
+    await open(undefined, () => closed++, true, true);
+    expect(document.querySelector(".file-viewer-head")).toBeNull();
+    const row = document.querySelector(".file-viewer-tabs")!;
+    expect(row.querySelector(".tabs")?.textContent).toBe("DiffFile");
+    expect(row.textContent).toContain("Unstaged");
+    expect(row.textContent).toContain("+1");
+    expect(screen.queryByTitle("Close all")).toBeNull();
+    expect(screen.getByRole("tab", { name: "main.rs" }).closest("[title]")?.getAttribute("title")).toBe("src/main.rs");
+    // Opened to be read: the whole file with its change in place, the diff a click away.
+    expect(screen.getByRole("tab", { name: "File" }).getAttribute("aria-selected")).toBe("true");
+    expect(rows()).toHaveLength(11);
+    fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+    expect(rows()).toHaveLength(9);
+    // Escape is a key the editor's user presses for other things: it closes nothing here.
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(closed).toBe(0);
+  });
+
+  test("compact, a changed Markdown file opens as it renders", async () => {
+    view = { old: "# Title\n", new: "# Title\n\nMore.\n", unviewable: null };
+    await open({ path: "docs/README.md", side: "unstaged" }, () => {}, true, true);
+    expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.querySelector(".file-viewer-preview h1")?.textContent).toBe("Title");
   });
 });

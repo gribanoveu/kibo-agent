@@ -4,6 +4,7 @@ import { isBoolean, useStoredState } from "../hooks/useStoredState";
 import { PANEL_LIMITS, roomFor, usePanelSizes } from "../hooks/usePanelSizes";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { PanelResizeHandle } from "../components/PanelResizeHandle";
+import { Columns } from "../components/Columns";
 import { isAsideTab } from "../types";
 
 afterEach(() => localStorage.clear());
@@ -76,7 +77,13 @@ describe("panel widths", () => {
   test("the file viewer is sized too, and widths stored before it existed are kept", () => {
     localStorage.setItem("atlas-panel-widths", JSON.stringify({ sidebar: 300, aside: 400, bottom: 200 }));
     const { result } = renderHook(() => usePanelSizes({}));
-    expect(result.current.widths).toEqual({ sidebar: 300, aside: 400, bottom: 200, viewer: PANEL_LIMITS.viewer.initial });
+    expect(result.current.widths).toEqual({
+      sidebar: 300,
+      aside: 400,
+      bottom: 200,
+      viewer: PANEL_LIMITS.viewer.initial,
+      chat: PANEL_LIMITS.chat.initial,
+    });
     act(() => result.current.resizeViewerBy(100));
     expect(result.current.widths.viewer).toBe(PANEL_LIMITS.viewer.initial + 100);
     act(() => result.current.resizeViewerBy(-5000));
@@ -130,6 +137,14 @@ describe("room for the panels", () => {
     expect(roomFor({ rail: true, viewer: true, dock: true, frame: 2 })).toBe(1210);
     expect(roomFor({ rail: false, viewer: true, dock: false, frame: 0 })).toBe(1060);
   });
+
+  /// No sidebar there, rail or not, nor the gap after it: the tree, the file
+  /// and the chat are all that stand side by side.
+  test("the IDE layout counts no sidebar", () => {
+    expect(roomFor({ rail: true, viewer: true, dock: true, frame: 2, ide: true })).toBe(1142);
+    expect(roomFor({ rail: false, viewer: true, dock: true, frame: 2, ide: true })).toBe(1142);
+    expect(roomFor({ rail: false, viewer: false, dock: false, frame: 2, ide: true })).toBe(422);
+  });
 });
 
 describe("a media query", () => {
@@ -182,5 +197,50 @@ describe("the resize handle", () => {
       });
     }
     expect(ends).toEqual([111, 333, 222]);
+  });
+});
+
+describe("the columns", () => {
+  /// Keeps what was typed: switching layouts must move the chat, not draw it anew.
+  function Draft() {
+    return <input aria-label="draft" />;
+  }
+  const columns = (ide: boolean, viewer: boolean, bottom = false) => {
+    const { result } = renderHook(() => usePanelSizes({}));
+    return (
+      <div data-testid="body">
+        <Columns
+          ide={ide}
+          chat={<main key="chat" className="main"><Draft /></main>}
+          viewer={viewer ? <section key="viewer" className="file-viewer" /> : null}
+          top={<aside className="aside-right" />}
+          topShown
+          bottom={bottom ? <aside className="aside-bottom" /> : null}
+          panels={result.current}
+        />
+      </div>
+    );
+  };
+  const names = (parent: Element) => [...parent.children].map((el) => el.getAttribute("aria-label") ?? el.className);
+  const order = () => names(screen.getByTestId("body"));
+
+  test("chat first, then the file and the panes; the IDE layout turns it around", () => {
+    const { rerender } = render(columns(false, true, true));
+    expect(order()).toEqual(["main", "Resize the file viewer", "file-viewer", "Resize the side panel", "dock-column"]);
+    expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right", "Resize the bottom panel", "aside-bottom"]);
+    fireEvent.change(screen.getByLabelText("draft"), { target: { value: "half a sentence" } });
+
+    rerender(columns(true, true, true));
+    // With a file, the middle's minimum is the viewer's, not every open tab's width.
+    expect(order()).toEqual(["dock-column", "Resize the side panel", "ide-middle has-file", "Resize the chat", "main"]);
+    expect((screen.getByLabelText("draft") as HTMLInputElement).value).toBe("half a sentence");
+    // The tree alone on the left; the bottom dock under the file, as an editor's terminal.
+    expect(names(document.querySelector(".dock-column")!)).toEqual(["aside-right"]);
+    expect(names(document.querySelector(".ide-middle")!)).toEqual(["file-viewer", "Resize the bottom panel", "aside-bottom"]);
+
+    // No file open: the middle still holds the chat on the right.
+    rerender(columns(true, false));
+    expect(names(document.querySelector(".ide-middle")!)).toEqual(["ide-empty"]);
+    expect(document.querySelector(".ide-middle")!.className).toBe("ide-middle");
   });
 });

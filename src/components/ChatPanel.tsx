@@ -4,6 +4,7 @@ import {
   Brain,
   Loader2,
   ChevronRight,
+  Code,
   CircleDot,
   FileText,
   Folder,
@@ -17,6 +18,7 @@ import {
   Pencil,
   Download,
   Search,
+  Settings,
   ShieldAlert,
   ShipWheel,
   Terminal,
@@ -643,10 +645,17 @@ type Props = {
   /** Whether Terminal is showing; its own header button, beside Changes', shows and hides it. */
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
+  /** Whether the window is laid out for documents: files left, the file in the middle, the chat right. */
+  ideLayout?: boolean;
+  onToggleIde?: () => void;
   /** Shows the side panel on one particular panel — the rest of that menu. */
   onOpenPanel?: (tab: AsideTab) => void;
   /** The open chat's title; `null` for one not saved yet. */
   title?: string | null;
+  /** Drawn in place of the title — the IDE layout's menu of chats. */
+  heading?: ReactNode;
+  /** Settings from the "…" menu, where the window has no sidebar to open them from. */
+  onOpenSettings?: () => void;
   /** Whether the open chat was branched off another one; its header icon says so. */
   branched?: boolean;
   workspace: string | null;
@@ -784,8 +793,12 @@ export function ChatPanel({
   onToggleAside,
   terminalOpen = false,
   onToggleTerminal,
+  ideLayout = false,
+  onToggleIde,
   onOpenPanel,
   title = null,
+  heading,
+  onOpenSettings,
   branched = false,
   workspace,
   turn,
@@ -831,13 +844,25 @@ export function ChatPanel({
           onSelect: () => onOpenPanel(id),
         }))
       : []),
+    ...(onOpenSettings
+      ? [
+          {
+            id: "settings",
+            label: "Settings",
+            icon: <Settings size={14} />,
+            shortcut: shortcutText("settings"),
+            divided: Boolean(onOpenPanel),
+            onSelect: onOpenSettings,
+          },
+        ]
+      : []),
     ...(onExport
       ? [
           {
             id: "export",
             label: "Export as Markdown…",
             icon: <Download size={14} />,
-            divided: Boolean(onOpenPanel),
+            divided: Boolean(onOpenPanel) && !onOpenSettings,
             onSelect: onExport,
           },
         ]
@@ -853,7 +878,7 @@ export function ChatPanel({
           ) : (
             <MessageSquare size={15} className="head-icon" aria-hidden />
           )}
-          <h1 title={title ?? undefined}>{title ?? "New chat"}</h1>
+          {heading ?? <h1 title={title ?? undefined}>{title ?? "New chat"}</h1>}
         </div>
         <div className="head-right">
           {turn.retrying && (
@@ -863,6 +888,17 @@ export function ChatPanel({
             </span>
           )}
           {menu.length > 0 && <ChatMenu items={menu} />}
+          {onToggleIde && (
+            <button
+              type="button"
+              className={`iconbtn aside-button${ideLayout ? " on" : ""}`}
+              title={`${ideLayout ? "Leave the IDE layout" : "IDE layout: files, the file and the chat"} (${shortcutText("ideLayout")})`}
+              aria-pressed={ideLayout}
+              onClick={onToggleIde}
+            >
+              <Code size={15} />
+            </button>
+          )}
           {onToggleTerminal && (
             <button
               type="button"

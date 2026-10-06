@@ -1,0 +1,226 @@
+/* An AsciiDoc file as it renders (`AsciiDocPreview.tsx`): asciidoctor's own
+   markup, in the window's colours. Sizes are in `em`, so it follows the size
+   of whatever holds it. */
+
+.adoc > :first-child {
+  margin-top: 0;
+}
+
+.adoc h1,
+.adoc h2,
+.adoc h3,
+.adoc h4,
+.adoc h5,
+.adoc h6 {
+  margin: 1.1em 0 0.5em;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.adoc h1 { font-size: 1.5em; }
+.adoc h2 { font-size: 1.3em; padding-bottom: 0.2em; border-bottom: 1px solid var(--border-soft); }
+.adoc h3 { font-size: 1.15em; }
+.adoc h4 { font-size: 1.05em; }
+.adoc h5,
+.adoc h6 { font-size: 1em; }
+
+.adoc p {
+  margin: 0.6em 0;
+}
+.adoc strong {
+  font-weight: 600;
+}
+.adoc a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+.adoc a:hover {
+  text-decoration-color: currentColor;
+}
+.adoc img {
+  max-width: 100%;
+}
+.adoc hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.adoc ul,
+.adoc ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.adoc ul { list-style: disc; }
+.adoc ol { list-style: decimal; }
+.adoc li > p {
+  margin: 0.2em 0;
+}
+.adoc dt {
+  margin-top: 0.5em;
+  font-weight: 600;
+}
+.adoc dd {
+  margin: 0.2em 0 0.4em 1.5em;
+}
+
+/* A block's title: `.Title` above a listing, a table, an example. */
+.adoc .title {
+  margin: 0.8em 0 0.3em;
+  color: var(--text-dim);
+  font-size: 0.93em;
+  font-style: italic;
+}
+
+.adoc code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+  background: var(--bg-bubble);
+}
+.adoc pre {
+  margin: 0.6em 0;
+  padding: 0.6em 0.9em;
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-panel-soft);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  line-height: 1.55;
+}
+.adoc pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+/* A listing's colours, both themes' carried by each token (lib/highlight.ts). */
+:root[data-scheme="light"] .adoc pre code span {
+  color: var(--shiki-light);
+}
+:root:not([data-scheme="light"]) .adoc pre code span {
+  color: var(--shiki-dark);
+}
+
+.adoc .quoteblock,
+.adoc .verseblock {
+  margin: 0.6em 0;
+  padding: 0.4em 0.9em;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+}
+.adoc .quoteblock .attribution {
+  margin-top: 0.3em;
+  font-size: 0.93em;
+}
+.adoc .exampleblock > .content,
+.adoc .sidebarblock > .content {
+  margin: 0.6em 0;
+  padding: 0.6em 0.9em;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.adoc .sidebarblock > .content {
+  background: var(--bg-panel-soft);
+}
+
+/* NOTE, TIP, IMPORTANT, CAUTION, WARNING: a label beside the text. */
+.adoc .admonitionblock {
+  margin: 0.6em 0;
+}
+.adoc .admonitionblock > table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.adoc .admonitionblock td {
+  padding: 0.4em 0.8em;
+  vertical-align: top;
+  border: none;
+}
+.adoc .admonitionblock td.icon {
+  width: 1%;
+  border-right: 3px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.adoc .admonitionblock td.icon .title {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  font-style: normal;
+}
+.adoc .admonitionblock.warning td.icon,
+.adoc .admonitionblock.caution td.icon {
+  border-right-color: var(--red);
+  color: var(--red);
+}
+.adoc .admonitionblock.important td.icon {
+  border-right-color: var(--amber);
+  color: var(--amber);
+}
+.adoc .admonitionblock.tip td.icon {
+  border-right-color: var(--green);
+  color: var(--green);
+}
+
+.adoc table.tableblock {
+  margin: 0.6em 0;
+  border-collapse: collapse;
+  font-size: 0.93em;
+}
+.adoc table.tableblock > caption {
+  text-align: left;
+}
+.adoc th.tableblock,
+.adoc td.tableblock {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.adoc th.tableblock {
+  background: var(--bg-panel-soft);
+  font-weight: 600;
+}
+.adoc td.tableblock > p {
+  margin: 0;
+}
+
+/* The table of contents asciidoctor writes when the document asks for one. */
+.adoc .toc {
+  margin: 0.6em 0 1em;
+  padding: 0.5em 0.9em;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+}
+.adoc .toc ul {
+  list-style: none;
+  padding-left: 1em;
+}
+.adoc .toc > :first-child {
+  font-weight: 600;
+}
+
+/* A PlantUML diagram: the engine draws it on white, whatever the theme. */
+.adoc .adoc-diagram {
+  display: block;
+  max-width: 100%;
+  margin: 0.6em 0;
+  padding: 0.6em;
+  border: none;
+  border-radius: 7px;
+  background: white;
+  cursor: zoom-in;
+}
+.adoc .adoc-diagram img {
+  display: block;
+  max-width: 100%;
+}

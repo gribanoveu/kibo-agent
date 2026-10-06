@@ -145,10 +145,12 @@ fn the_window_may_reach_nothing_but_the_app() {
     for (directive, sources) in csp {
         for source in sources.as_str().unwrap().split_whitespace() {
             // Exact sources, not a pattern: `https:` or `*` would pass any
-            // rule that only looked for a host.
+            // rule that only looked for a host. `'wasm-unsafe-eval'` reaches
+            // nothing: it lets the app's own WebAssembly compile — Graphviz,
+            // which PlantUML diagrams are laid out with.
             let allowed = [
-                "'self'", "'none'", "'unsafe-inline'", "data:", "asset:", "ipc:", "http://ipc.localhost",
-                "http://asset.localhost",
+                "'self'", "'none'", "'unsafe-inline'", "'wasm-unsafe-eval'", "data:", "asset:", "ipc:",
+                "http://ipc.localhost", "http://asset.localhost",
             ]
             .contains(&source);
             assert!(allowed, "csp {directive} lets the window reach {source}");

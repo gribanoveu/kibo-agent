@@ -1,7 +1,13 @@
-import type { AsideTab } from "../types";
+import { isAsideTab, type AsideTab } from "../types";
 
 /** What the column right of the chat shows: a pane on top (hidden or not) and one under it, or none. */
-export type Docks = { top: AsideTab; topHidden: boolean; bottom: AsideTab | null };
+export type Docks = {
+  top: AsideTab;
+  topHidden: boolean;
+  bottom: AsideTab | null;
+  /** The IDE layout: a pane for the top takes the top's place, as an editor's side bar switches views. */
+  swap?: boolean;
+};
 
 /**
  * Opens a pane without closing the one already open: on top when the top is
@@ -11,9 +17,16 @@ export type Docks = { top: AsideTab; topHidden: boolean; bottom: AsideTab | null
  */
 export function openPane(docks: Docks, pane: AsideTab, dock: "right" | "bottom"): Docks {
   if (docks.bottom === pane || (docks.top === pane && !docks.topHidden)) return docks;
-  if (dock === "bottom" || !docks.topHidden) return { ...docks, bottom: pane };
+  if (dock === "bottom" || (!docks.topHidden && !docks.swap)) return { ...docks, bottom: pane };
   return { ...docks, top: pane, topHidden: false };
 }
+
+/** Entering the IDE layout: the tree on top, and under the file only what goes there anyway. */
+export const ideDocks = (docks: Docks): Docks => ({
+  top: "files",
+  topHidden: false,
+  bottom: docks.bottom === "terminal" ? "terminal" : null,
+});
 
 /** A pane's button or shortcut: shown anywhere, it hides it; otherwise it opens it like the menu would. */
 export function togglePane(docks: Docks, pane: AsideTab, dock: "right" | "bottom"): Docks {
@@ -29,3 +42,11 @@ export const changesShown = (docks: Docks) =>
 
 /** The header's Terminal button: Terminal only ever sits in the bottom dock. */
 export const toggleTerminal = (docks: Docks) => togglePane(docks, "terminal", "bottom");
+
+/** The panes as they were before the IDE layout, kept to go back to: stored, so only a whole one is trusted. */
+export const isSavedDocks = (value: unknown): value is Docks | null => {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const v = value as Docks;
+  return isAsideTab(v.top) && typeof v.topHidden === "boolean" && (v.bottom === null || isAsideTab(v.bottom));
+};

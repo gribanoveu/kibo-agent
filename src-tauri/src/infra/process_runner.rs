@@ -444,6 +444,7 @@ mod tests {
         assert_eq!(probe_shell(&failing), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn input_and_environment_reach_the_command() {
         let dir = temp_dir("run-input");
@@ -479,6 +480,7 @@ mod tests {
         assert!(!out.succeeded());
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_two_streams_stay_apart() {
         let out = run_in(&temp_dir("run-streams"), "echo out; echo err >&2");
@@ -525,6 +527,7 @@ mod tests {
         assert!(!out.stdout.contains("got"), "{}", out.stdout);
     }
 
+    #[cfg(unix)]
     #[test]
     fn output_is_streamed_as_it_arrives() {
         let seen: Arc<Mutex<Vec<CommandEvent>>> = Arc::new(Mutex::new(Vec::new()));
@@ -551,6 +554,7 @@ mod tests {
         assert_eq!(out.stdout.trim(), "one");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_flood_of_output_is_cut_and_says_so() {
         let out = run_in(
@@ -594,6 +598,7 @@ mod tests {
     /// Found by a mutation run: with the group kill removed, the timeout tests
     /// took thirty seconds instead of one, which is the same mechanism seen
     /// from the other side.
+    #[cfg(unix)]
     #[test]
     fn a_command_that_leaves_something_running_still_returns() {
         let before = Instant::now();
@@ -621,6 +626,7 @@ mod tests {
     /// The one test here that waits in real time: the grandchild has to be
     /// given its chance to write before the absence of the file means
     /// anything.
+    #[cfg(unix)]
     #[test]
     fn a_timeout_kills_the_grandchildren_too() {
         let dir = temp_dir("run-tree");

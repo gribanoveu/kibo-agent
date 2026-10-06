@@ -170,6 +170,7 @@ mod tests {
 
     /// The point of the tool: the model finds out that the thing it changed
     /// does not work.
+    #[cfg(unix)]
     #[test]
     fn a_failing_command_comes_back_as_a_result_with_its_output() {
         let root = temp_dir("cmd-failing");

@@ -1,0 +1,15 @@
+/* Reads as the header's title, and is cut like it when long: a flex row all
+   the way down, so each level can shrink below its text. */
+.chat-switcher,
+.chat-switcher .dropdown-wrap {
+  min-width: 0;
+  display: flex;
+}
+.chat-switcher .chip {
+  min-width: 0;
+  margin-left: -7px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}

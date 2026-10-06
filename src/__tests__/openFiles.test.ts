@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fileLinkPath, openFilesReducer, stepThrough, type OpenFiles } from "../hooks/useOpenFiles";
+import { draftKey, fileLinkPath, openFilesReducer, stepThrough, viewerReducer, type OpenFiles } from "../hooks/useOpenFiles";
 import type { FileTarget } from "../lib/chat";
 
 // The viewer's tabs: one per file and side, a single preview tab that the
@@ -55,6 +55,70 @@ describe("open files", () => {
     expect(run([{ kind: "close", target: a }], three)).toEqual({ files: [b, c], active: c, preview: null });
     expect(run([{ kind: "close", target: aStaged }], three)).toBe(three);
     expect(run([{ kind: "closeAll" }], three)).toEqual(empty);
+  });
+});
+
+describe("each layout's own tabs", () => {
+  type ViewerStep = Parameters<typeof viewerReducer>[1];
+  const viewer = (actions: ViewerStep[]) => actions.reduce(viewerReducer, { shown: empty, other: empty, drafts: {} });
+
+  test("switching puts the tabs away and brings back the other layout's, as they were left", () => {
+    const chat = viewer([keep(a), click(b)]);
+    const ide = viewer([keep(a), click(b), { kind: "swap" }]);
+    expect(ide.shown).toEqual(empty);
+    const back = [keep(c), { kind: "swap" } as const].reduce(viewerReducer, ide);
+    expect(back.shown).toEqual(chat.shown);
+    expect([{ kind: "swap" } as const].reduce(viewerReducer, back).shown).toEqual({ files: [c], active: c, preview: null });
+  });
+
+  test("Close all closes the tabs on screen; another folder empties both", () => {
+    const put = viewer([keep(a), { kind: "swap" }, keep(c)]);
+    expect(viewerReducer(put, { kind: "closeAll" })).toEqual({ shown: empty, other: { files: [a], active: a, preview: null }, drafts: {} });
+    expect(viewerReducer(put, { kind: "reset" })).toEqual({ shown: empty, other: empty, drafts: {} });
+  });
+});
+
+describe("drafts", () => {
+  type ViewerStep = Parameters<typeof viewerReducer>[1];
+  const key = draftKey("/repo", "docs/a.adoc");
+  const drafts = (actions: ViewerStep[]) => actions.reduce(viewerReducer, { shown: empty, other: empty, drafts: {} }).drafts;
+  const edit = (text: string, base: string | null = "= A\r\n"): ViewerStep => ({ kind: "edit", key, base, text });
+
+  test("keep the file as it was when the edit began, however often it is edited after", () => {
+    expect(drafts([edit("= A\nmore\n"), edit("= A\nmore still\n", "= A\r\nthe agent's\r\n")])).toEqual({
+      [key]: { base: "= A\r\n", text: "= A\nmore still\n" },
+    });
+  });
+
+  test("an edit back to what is on disk is none, the file's CRLF notwithstanding", () => {
+    expect(drafts([edit("= A\nmore\n"), edit("= A\n")])).toEqual({});
+    // A file gone from disk has nothing to come back to.
+    expect(drafts([edit("", null)])).toEqual({ [key]: { base: null, text: "" } });
+  });
+
+  test("kept over the disk's new version, and gone once that is what it says", () => {
+    const kept = drafts([edit("mine\n"), { kind: "rebase", key, base: "theirs\n" }]);
+    expect(kept).toEqual({ [key]: { base: "theirs\n", text: "mine\n" } });
+    expect(drafts([edit("mine\n"), { kind: "rebase", key, base: "mine\n" }])).toEqual({});
+    expect(drafts([edit("mine\n"), { kind: "drop", key }])).toEqual({});
+    // Kept over a file deleted since, it stays over nothing as it is typed on.
+    expect(drafts([edit("mine\n"), { kind: "rebase", key, base: null }, edit("mine, more\n", "mine\n")])).toEqual({
+      [key]: { base: null, text: "mine, more\n" },
+    });
+  });
+
+  test("changing nothing leaves the state as it was", () => {
+    const start = { shown: empty, other: empty, drafts: {} };
+    expect(viewerReducer(start, edit("= A\n"))).toBe(start);
+    expect(viewerReducer(start, { kind: "drop", key })).toBe(start);
+    const begun = viewerReducer(start, edit("mine\n"));
+    expect(viewerReducer(begun, edit("mine\n", "= A\r\nthe agent's\r\n"))).toBe(begun);
+  });
+
+  test("outlive the tabs: closing them all, switching layouts or folders keeps them", () => {
+    const steps: ViewerStep[] = [edit("mine\n"), { kind: "closeAll" }, { kind: "swap" }, { kind: "reset" }];
+    expect(drafts(steps)).toEqual({ [key]: { base: "= A\r\n", text: "mine\n" } });
+    expect(draftKey("/other", "docs/a.adoc")).not.toBe(key);
   });
 });
 

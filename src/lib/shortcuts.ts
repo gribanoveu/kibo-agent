@@ -34,7 +34,8 @@ export const SHORTCUTS = {
   sidebar: { label: "Show or hide the sidebar", group: "General", combos: [{ code: "KeyB", mod: true }] },
   settings: { label: "Settings", group: "General", combos: [{ code: "Comma", mod: true }] },
   shortcuts: { label: "Keyboard shortcuts", group: "General", combos: [{ code: "Slash", mod: true }] },
-  close: { label: "Close a dialog, menu or file viewer", group: "General", combos: [{ code: "Escape" }] },
+  close: { label: "Close a dialog, menu, the file viewer or the search in a file", group: "General", combos: [{ code: "Escape" }] },
+  ideLayout: { label: "IDE layout: files, the file and the chat side by side", group: "General", combos: [{ code: "KeyD", mod: true, shift: true }] },
   ...PANE_SHORTCUTS,
   focusInput: { label: "Go to the message box", group: "Chat", combos: [{ code: "KeyL", mod: true }] },
   send: { label: "Send the message", group: "Chat", combos: [{ code: "Enter" }] },
@@ -46,7 +47,10 @@ export const SHORTCUTS = {
   closeFile: { label: "Close the file tab", group: "Files", combos: [{ code: "KeyE", mod: true }] },
   nextFile: { label: "Next changed file", group: "Files", combos: [{ code: "ArrowDown", alt: true }] },
   prevFile: { label: "Previous changed file", group: "Files", combos: [{ code: "ArrowUp", alt: true }] },
-  save: { label: "Save the config file", group: "Files", combos: [{ code: "KeyS", mod: true }] },
+  save: { label: "Save the file or the config file", group: "Files", combos: [{ code: "KeyS", mod: true }] },
+  find: { label: "Find and replace in the file", group: "Files", combos: [{ code: "KeyF", mod: true }] },
+  findNext: { label: "Next match", group: "Files", combos: [{ code: "KeyG", mod: true }, { code: "F3" }] },
+  findPrevious: { label: "Previous match", group: "Files", combos: [{ code: "KeyG", mod: true, shift: true }, { code: "F3", shift: true }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

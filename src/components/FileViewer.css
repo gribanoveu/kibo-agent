@@ -167,12 +167,21 @@
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-.file-viewer-head .tabs {
+.file-viewer-head .tabs,
+.file-viewer-tabs .tabs {
   flex: none;
   margin: 0;
 }
-.file-viewer-head .tab {
+.file-viewer-head .tab,
+.file-viewer-tabs .tab {
   padding: 3px 10px;
+}
+/* Compact: the controls share the tabs' row, level with the tabs' text. */
+.file-viewer-tabs > .tabs,
+.file-viewer-tabs > .file-viewer-stat,
+.file-viewer-tabs > .file-viewer-side,
+.file-viewer-tabs > .file-viewer-step {
+  margin-bottom: 5px;
 }
 .file-viewer-body {
   flex: 1;
@@ -205,5 +214,32 @@
   padding: 16px 22px 24px;
   font-size: var(--fs-md);
   line-height: 1.6;
+  color: var(--text);
+}
+
+/* An edit not saved: a dot after the name, as editors mark it. */
+.file-tab-unsaved {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  align-self: center;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+/* Over the file being edited: it changed on disk, or the save failed. */
+.file-viewer-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  font-size: var(--fs-sm);
+}
+.file-viewer-banner-text {
+  flex: 1;
+  min-width: 0;
   color: var(--text);
 }

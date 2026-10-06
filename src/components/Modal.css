@@ -26,6 +26,16 @@
 .modal.wide {
   width: min(880px, 100%);
 }
+.modal.full {
+  width: 100%;
+  height: 100%;
+}
+.modal.full .modal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+}
 .modal-head,
 .modal-foot {
   flex: none;

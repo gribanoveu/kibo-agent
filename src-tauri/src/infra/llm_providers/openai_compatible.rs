@@ -1026,6 +1026,11 @@ pub(super) mod tests {
             );
             let _ = socket.write_all(response.as_bytes());
             let _ = socket.flush();
+            // Closed with the request's rest unread, Windows resets the
+            // connection, and the client loses what was sent before it
+            // (`os error 10054`). Done writing, read on until the client goes.
+            let _ = socket.shutdown(std::net::Shutdown::Write);
+            let _ = std::io::copy(&mut socket, &mut std::io::sink());
         });
         (format!("http://127.0.0.1:{port}"), handle)
     }

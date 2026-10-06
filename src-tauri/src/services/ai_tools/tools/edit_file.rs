@@ -15,6 +15,7 @@
 //! into another model call, with that cost and that variance. A failed anchor
 //! is already a precise, actionable error; the model can widen it and retry.
 
+use crate::domain::file_write::{in_endings, line_ending};
 use crate::domain::llm::LlmToolDefinition;
 use std::borrow::Cow;
 use std::fs;
@@ -103,33 +104,6 @@ fn exact_match_ranges<'a>(
         }
     }
     Ok(ranges)
-}
-
-/// The file's line ending, when every line break in it is the same one.
-/// `None` for a file with no line breaks, or with both kinds.
-fn line_ending(content: &str) -> Option<&'static str> {
-    let crlf = content.matches("\r\n").count();
-    match (crlf, content.matches('\n').count()) {
-        (0, 0) => None,
-        (0, _) => Some("\n"),
-        (crlf, lf) if crlf == lf => Some("\r\n"),
-        _ => None,
-    }
-}
-
-/// `text` with every line break made `ending`, the file's own.
-///
-/// A model cannot reliably send `\r` in its arguments: it reads a CRLF file
-/// with the `\r`s invisible and writes its anchor with `\n`. Asked to resend
-/// with CRLF, it went around `editFile` through a shell command instead, at
-/// twice the rounds (`agent_bench`, `crlf-edit`). A file with a single line
-/// ending leaves no doubt which one an edit meant, so the edit gets it.
-fn in_endings<'a>(text: &'a str, ending: Option<&str>) -> Cow<'a, str> {
-    match ending {
-        Some("\r\n") if text.contains('\n') => Cow::Owned(text.replace("\r\n", "\n").replace('\n', "\r\n")),
-        Some("\n") if text.contains('\r') => Cow::Owned(text.replace("\r\n", "\n")),
-        _ => Cow::Borrowed(text),
-    }
 }
 
 /// Whether `old` would have matched with the file's line endings — reached

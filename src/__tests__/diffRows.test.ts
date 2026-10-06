@@ -120,6 +120,7 @@ describe("a file's language", () => {
     expect(languageOf("a/b/App.tsx")).toBe("tsx");
     expect(languageOf("include/x.h")).toBe("c");
     expect(languageOf("docs/README.md")).toBe("markdown");
+    expect(languageOf("src/main/doc/asciidoc/index.adoc")).toBe("asciidoc");
     expect(languageOf("Dockerfile")).toBe("dockerfile");
     expect(languageOf("docker/Makefile")).toBe("makefile");
     expect(languageOf(".gitignore")).toBe(null);

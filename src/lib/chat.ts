@@ -1229,6 +1229,19 @@ export async function fileView(target: FileTarget): Promise<FileView> {
   return invoke<FileView>("file_view", target);
 }
 
+/** Mirrors `domain::file_write::FileSave`: changed on disk since it was opened, nothing was written. */
+export type FileSave = { kind: "saved" } | { kind: "changedOnDisk" };
+
+/**
+ * Saves a file of the open folder, by its path in it, over `expected` — the
+ * text it was opened with — or, `null`, over whatever is there now. `root` is
+ * the folder the edit was made in: another one open by now, nothing is written.
+ */
+export async function fileWrite(root: string, path: string, expected: string | null, content: string): Promise<FileSave> {
+  requireBackend();
+  return invoke<FileSave>("file_write", { root, path, expected, content });
+}
+
 // ---------------------------------------------------------------- file tree
 
 /** Mirrors `domain::file_tree`. A deleted file is not listed: it is not on disk. */

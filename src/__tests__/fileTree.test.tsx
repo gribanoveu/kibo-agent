@@ -249,4 +249,26 @@ describe("the folder tree", () => {
       { path: "src/main.rs", side: "worktree", pin: true },
     ]);
   });
+
+  /// Only the file the viewer shows is marked: an unfolded folder on the way
+  /// to it is not drawn as open too.
+  test("the shown file is marked, the folders unfolded above it are not", async () => {
+    render(
+      <FilesPanel
+        active
+        workspace="/repo"
+        blocks={[]}
+        openFile={{ path: "src/main.rs", side: "worktree" }}
+        onOpenFile={() => {}}
+        ide
+      />,
+    );
+    await settle();
+    fireEvent.click(screen.getByText("src"));
+    await settle();
+    const src = screen.getByText("src").closest("button")!;
+    expect(src.className).not.toContain("open");
+    expect(src.className).toContain("expanded");
+    expect(screen.getByText("main.rs").closest("button")!.className).toContain("open");
+  });
 });

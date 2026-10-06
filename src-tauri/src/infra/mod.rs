@@ -36,6 +36,7 @@ pub mod git_head;
 pub mod git_branches;
 pub mod git_changes;
 pub mod file_tree;
+pub mod file_write;
 pub mod git_history;
 pub mod recent_workspaces;
 pub mod kube_changes;

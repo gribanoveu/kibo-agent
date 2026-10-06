@@ -12,6 +12,8 @@ import { Settings, type SettingsSection } from "./components/Settings";
 import { ToolLog } from "./components/ToolLog";
 import { ConfigFileEditor } from "./components/ConfigFileEditor";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
+import { Columns } from "./components/Columns";
+import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { WindowControls } from "./components/WindowControls";
 import { useAgentTurn } from "./hooks/useAgentTurn";
@@ -45,7 +47,7 @@ import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { changesShown, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
@@ -103,6 +105,9 @@ export default function App() {
   // arriving while Agent is shown.
   const [mode, setMode] = useStoredState<AppMode>("atlas-mode", "agent", isAppMode);
   const agentMode = mode === "agent";
+  // Files left, the file in the middle, the chat right: for reading and writing documents.
+  const [ideLayout, setIdeLayout] = useStoredState("atlas-ide-layout", false, isBoolean);
+  const ide = agentMode && ideLayout;
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -174,12 +179,13 @@ export default function App() {
   const frame = nativeFrame ? 0 : 2;
   // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
   const viewerOpen = agentMode && viewer.active !== null;
-  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame })}px)`);
+  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
   // What the column shows: what was opened, while it fits.
   const topHidden = asideHidden || !dockFits || !agentMode;
   const bottomShown = dockFits && agentMode ? bottomTab : null;
-  const dockShown = !topHidden || bottomShown !== null;
-  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame })}px)`);
+  // In the IDE layout the bottom dock sits under the file, not in the column.
+  const dockShown = !topHidden || (bottomShown !== null && !ide);
+  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
@@ -238,14 +244,34 @@ export default function App() {
   });
 
   // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  const docks: Docks = { top: tab, topHidden, bottom: bottomShown };
+  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
+  const putDocks = (next: Docks) => {
+    setTab(next.top);
+    setAsideHidden(next.topHidden);
+    setBottomTab(next.bottom);
+  };
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
     // gives way, or the pane would open out of sight.
     if (!dockFits && (!next.topHidden || next.bottom)) viewer.closeAll();
-    setTab(next.top);
-    setAsideHidden(next.topHidden);
-    setBottomTab(next.bottom);
+    putDocks(next);
+  };
+  // The tree is what the layout is for: it opens with it, in the dock now on the
+  // left. Leaving puts back the panes the user had open — as asked for, not as
+  // the window's width last let them show.
+  const [beforeIde, setBeforeIde] = useStoredState<Docks | null>("atlas-docks-before-ide", null, isSavedDocks);
+  // Not through `setDocks` either way: there a pane with no room closes the
+  // files, and these are the layout's own, put away by the swap below.
+  const toggleIde = () => {
+    if (!ideLayout) {
+      setBeforeIde({ top: tab, topHidden: asideHidden, bottom: bottomTab });
+      putDocks(ideDocks(docks));
+    } else if (beforeIde) {
+      putDocks(beforeIde);
+    }
+    // Each layout keeps its own files open.
+    viewer.swap();
+    setIdeLayout(!ideLayout);
   };
   const openTab = (next: AsideTab) =>
     setDocks(openPane(docks, next, PANES.find((p) => p.id === next)?.dock ?? "right"));
@@ -274,8 +300,7 @@ export default function App() {
     focusInput: focusComposer,
     sidebar: toggleSidebar,
     settings: () => openSettings(),
-    // Not ⌘W: once the last tab is gone, the next press would close the window.
-    closeFile: viewer.active ? () => viewer.active && viewer.close(viewer.active) : undefined,
+    ideLayout: agentMode ? toggleIde : undefined,
   });
 
   // A plan the agent has just written is shown, once, as soon as it lands —
@@ -283,6 +308,9 @@ export default function App() {
   useEffect(() => {
     if (agent.planWritten > 0) openTab("plan");
   }, [agent.planWritten]);
+
+  const selectChat = (id: string) =>
+    void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
 
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
@@ -442,6 +470,7 @@ export default function App() {
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
     workspace: workspace.path,
+    ide,
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
@@ -486,15 +515,157 @@ export default function App() {
     },
   };
 
+  const chat = (
+    <main key="chat" className="main">
+      {agentMode ? (
+        <>
+          <ChatPanel
+            title={openChat?.title ?? null}
+            heading={
+              ide ? (
+                <ChatSwitcher title={openChat?.title ?? null} chats={history.chats} activeChat={agent.chatId} onSelect={selectChat} onNew={newChat} />
+              ) : undefined
+            }
+            onOpenSettings={ide ? () => openSettings() : undefined}
+            branched={Boolean(openChat?.branchedFrom)}
+            workspace={workspace.path}
+            turn={agent.turn}
+            onDecide={agent.decide}
+            onAnswerQuestion={agent.answerQuestion}
+            onOpenRepo={chooseFolder}
+            asideOpen={changesShown(docks)}
+            onToggleAside={() => setDocks(toggleChanges(docks))}
+            terminalOpen={bottomShown === "terminal"}
+            onToggleTerminal={() => setDocks(toggleTerminal(docks))}
+            ideLayout={ide}
+            onToggleIde={toggleIde}
+            onOpenPanel={openTab}
+            onExport={exportOpenChat}
+            onImplement={conversation.value === "plan" ? implement : undefined}
+            onOpenPlan={() => openTab("plan")}
+            checklist={agent.checklist}
+            onOpenProcess={(id) => {
+              openTab("terminal");
+              setProcessFocus({ id });
+            }}
+            onOpenAgent={(agent) => {
+              openTab("terminal");
+              setAgentFocus({ ...agent });
+            }}
+            runningProcesses={runningProcesses.map((process) => process.id)}
+            onPasteCommand={workspace.path ? pasteInTerminal : undefined}
+            onOpenFile={workspace.path ? openFileLink : undefined}
+            branchable={agent.branchable}
+            onBranch={agent.branch}
+            onRewind={(id) => void rewinding.ask(id)}
+            onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
+          />
+          <Composer
+            tab={
+              <FolderTab
+                path={workspace.path}
+                recent={workspace.recent}
+                onOpenFolder={openFolder}
+                onPickFolder={chooseFolder}
+                onRemoveWorktree={worktreeRemoval.ask}
+                branch={branch}
+                worktreeOf={worktreeOf}
+                index={index}
+                changes={changeTotals}
+                onOpenChanges={() => openTab("changes")}
+                branchPicker={
+                  unstarted
+                    ? {
+                        branches: branchPicker.branches,
+                        onOpen: branchPicker.load,
+                        onPick: (name) => void branchPicker.pick(name),
+                        worktree: branchPicker.worktree,
+                        base: branchPicker.base,
+                        onWorktree: branchPicker.setWorktree,
+                      }
+                    : undefined
+                }
+              />
+            }
+            onSend={send}
+            onQueue={agent.queue}
+            queued={agent.queued}
+            onUnqueue={agent.unqueue}
+            steered={agent.steered}
+            onWithdraw={agent.withdraw}
+            focus={composerFocus}
+            onStop={agent.cancel}
+            running={agent.turn.status === "running"}
+            conversation={conversation.value}
+            onConversation={pickConversation}
+            unattended={approval.unattended}
+            onUnattended={pickUnattended}
+            draft={agent.draft}
+            quote={quote}
+            models={llm.models}
+            onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
+            onEffort={llm.pickEffort}
+            onLoadModels={llm.loadModels}
+            context={agent.context}
+            usage={agent.turn.usage}
+            onCompact={compactNow}
+            commands={commands}
+            onCommandsOpen={() => {
+              commandFiles.reload();
+              serverPrompts.start();
+            }}
+            pendingCommands={serverPrompts.starting ? "Loading MCP prompts…" : undefined}
+          />
+        </>
+      ) : (
+        <PlainChat
+          chat={plain}
+          focus={composerFocus}
+          models={llm.models}
+          onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
+          onEffort={llm.pickEffort}
+          onLoadModels={llm.loadModels}
+          kube={kube}
+          onSetUpKube={() => openSettings("kubernetes")}
+          onCompact={async () => {
+            if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
+          }}
+        />
+      )}
+    </main>
+  );
+  const fileViewer = agentMode && viewer.active ? (
+    <FileViewer
+      key="viewer"
+      files={viewer.files}
+      active={viewer.active}
+      preview={viewer.preview}
+      workspace={workspace.path}
+      onActivate={viewer.open}
+      onPin={viewer.pin}
+      onClose={viewer.close}
+      onCloseAll={viewer.closeAll}
+      wrap={wrapLines}
+      compact={ide}
+      edits={viewer.edits}
+    />
+  ) : null;
+  const topPane = (
+    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
+  );
+  const bottomPane = bottomShown && (
+    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
+  );
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
           "--aside-width": `${panels.widths.aside}px`,
           "--bottom-height": `${panels.widths.bottom}px`,
           "--viewer-width": `${panels.widths.viewer}px`,
+          "--chat-width": `${panels.widths.chat}px`,
         } as React.CSSProperties
       }
     >
@@ -511,9 +682,7 @@ export default function App() {
           onMode={setMode}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
-          onSelectChat={(id) =>
-            void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY))
-          }
+          onSelectChat={selectChat}
           onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
@@ -535,177 +704,7 @@ export default function App() {
           onResizeEnd={(size) => panels.endResize("sidebar", size)}
         />
 
-        <main className="main">
-          {agentMode ? (
-            <>
-              <ChatPanel
-                title={openChat?.title ?? null}
-                branched={Boolean(openChat?.branchedFrom)}
-                workspace={workspace.path}
-                turn={agent.turn}
-                onDecide={agent.decide}
-                onAnswerQuestion={agent.answerQuestion}
-                onOpenRepo={chooseFolder}
-                asideOpen={changesShown(docks)}
-                onToggleAside={() => setDocks(toggleChanges(docks))}
-                terminalOpen={bottomShown === "terminal"}
-                onToggleTerminal={() => setDocks(toggleTerminal(docks))}
-                onOpenPanel={openTab}
-                onExport={exportOpenChat}
-                onImplement={conversation.value === "plan" ? implement : undefined}
-                onOpenPlan={() => openTab("plan")}
-                checklist={agent.checklist}
-                onOpenProcess={(id) => {
-                  openTab("terminal");
-                  setProcessFocus({ id });
-                }}
-                onOpenAgent={(agent) => {
-                  openTab("terminal");
-                  setAgentFocus({ ...agent });
-                }}
-                runningProcesses={runningProcesses.map((process) => process.id)}
-                onPasteCommand={workspace.path ? pasteInTerminal : undefined}
-                onOpenFile={workspace.path ? openFileLink : undefined}
-                branchable={agent.branchable}
-                onBranch={agent.branch}
-                onRewind={(id) => void rewinding.ask(id)}
-                onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
-              />
-              <Composer
-                tab={
-                  <FolderTab
-                    path={workspace.path}
-                    recent={workspace.recent}
-                    onOpenFolder={openFolder}
-                    onPickFolder={chooseFolder}
-                    onRemoveWorktree={worktreeRemoval.ask}
-                    branch={branch}
-                    worktreeOf={worktreeOf}
-                    index={index}
-                    changes={changeTotals}
-                    onOpenChanges={() => openTab("changes")}
-                    branchPicker={
-                      unstarted
-                        ? {
-                            branches: branchPicker.branches,
-                            onOpen: branchPicker.load,
-                            onPick: (name) => void branchPicker.pick(name),
-                            worktree: branchPicker.worktree,
-                            base: branchPicker.base,
-                            onWorktree: branchPicker.setWorktree,
-                          }
-                        : undefined
-                    }
-                  />
-                }
-                onSend={send}
-                onQueue={agent.queue}
-                queued={agent.queued}
-                onUnqueue={agent.unqueue}
-                steered={agent.steered}
-                onWithdraw={agent.withdraw}
-                focus={composerFocus}
-                onStop={agent.cancel}
-                running={agent.turn.status === "running"}
-                conversation={conversation.value}
-                onConversation={pickConversation}
-                unattended={approval.unattended}
-                onUnattended={pickUnattended}
-                draft={agent.draft}
-                quote={quote}
-                models={llm.models}
-                onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
-                onEffort={llm.pickEffort}
-                onLoadModels={llm.loadModels}
-                context={agent.context}
-                usage={agent.turn.usage}
-                onCompact={compactNow}
-                commands={commands}
-                onCommandsOpen={() => {
-                  commandFiles.reload();
-                  serverPrompts.start();
-                }}
-                pendingCommands={serverPrompts.starting ? "Loading MCP prompts…" : undefined}
-              />
-            </>
-          ) : (
-            <PlainChat
-              chat={plain}
-              focus={composerFocus}
-              models={llm.models}
-              onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
-              onEffort={llm.pickEffort}
-              onLoadModels={llm.loadModels}
-              kube={kube}
-              onSetUpKube={() => openSettings("kubernetes")}
-              onCompact={async () => {
-                if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
-              }}
-            />
-          )}
-        </main>
-
-        {agentMode && viewer.active && (
-          <>
-            <PanelResizeHandle
-              invert
-              ariaLabel="Resize the file viewer"
-              onResize={panels.resizeViewerBy}
-              onResizeEnd={(size) => panels.endResize("viewer", size)}
-            />
-            <FileViewer
-              files={viewer.files}
-              active={viewer.active}
-              preview={viewer.preview}
-              workspace={workspace.path}
-              onActivate={viewer.open}
-              onPin={viewer.pin}
-              onClose={viewer.close}
-              onCloseAll={viewer.closeAll}
-              wrap={wrapLines}
-            />
-          </>
-        )}
-
-        {dockShown && (
-          <PanelResizeHandle
-            invert
-            ariaLabel="Resize the side panel"
-            onResize={panels.resizeAsideBy}
-            onResizeEnd={(size) => panels.endResize("aside", size)}
-          />
-        )}
-
-        {/* The column right of the chat: the pane from the header's button on
-            top, the bottom dock under it. Either may be closed; the column
-            goes when both are. */}
-        <div className="dock-column">
-          <AsidePanel
-            tab={tab}
-            dock="right"
-            ctx={{ ...panes, active: !topHidden }}
-            onClose={() => setAsideHidden(true)}
-          />
-          {bottomShown && (
-            <>
-              {!topHidden && (
-                <PanelResizeHandle
-                  axis="y"
-                  invert
-                  ariaLabel="Resize the bottom panel"
-                  onResize={panels.resizeBottomBy}
-                  onResizeEnd={(size) => panels.endResize("bottom", size)}
-                />
-              )}
-              <AsidePanel
-                tab={bottomShown}
-                dock="bottom"
-                ctx={{ ...panes, active: true }}
-                onClose={() => setBottomTab(null)}
-              />
-            </>
-          )}
-        </div>
+        <Columns ide={ide} chat={chat} viewer={fileViewer} top={topPane} bottom={bottomPane || null} topShown={!topHidden} panels={panels} />
       </div>
 
       <FolderSwitchDialog

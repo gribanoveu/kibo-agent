@@ -82,6 +82,7 @@ k8s-openapi = { version = "0.28.0", features = ["latest"] }
 tokio = { version = "1", default-features = false, features = ["time", "io-util", "process", "macros", "sync"] }
 futures-util = { version = "0.3", default-features = false }
 rmcp = { version = "3.5", default-features = false, features = ["client", "reqwest-tls-no-provider", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
+dunce = "1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

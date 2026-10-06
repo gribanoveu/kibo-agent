@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changesShown, openPane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
+import { changesShown, ideDocks, isSavedDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
 
 const docks = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({ top, topHidden, bottom });
 
@@ -47,5 +47,34 @@ describe("the Terminal button", () => {
     expect(toggleTerminal(docks("plan", false, "changes"))).toEqual(docks("plan", false, "terminal"));
     expect(toggleTerminal(docks("plan", true))).toEqual(docks("plan", true, "terminal"));
     expect(toggleTerminal(docks("plan", false, "terminal"))).toEqual(docks("plan", false, null));
+  });
+});
+
+describe("the IDE layout", () => {
+  const swapping = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({
+    ...docks(top, topHidden, bottom),
+    swap: true,
+  });
+
+  test("a pane takes the top's place instead of going under it; Terminal still goes under", () => {
+    expect(openPane(swapping("files", false, "terminal"), "plan", "right")).toMatchObject(docks("plan", false, "terminal"));
+    expect(toggleChanges(swapping("files", false))).toMatchObject(docks("changes", false));
+    expect(togglePane(swapping("plan", false), "files", "right")).toMatchObject(docks("files", false));
+    expect(toggleTerminal(swapping("files", false))).toMatchObject(docks("files", false, "terminal"));
+  });
+
+  test("opens on the tree, keeping only Terminal under the file", () => {
+    expect(ideDocks(docks("changes", true, "plan"))).toEqual(docks("files", false));
+    expect(ideDocks(docks("mcp", false, "terminal"))).toEqual(docks("files", false, "terminal"));
+  });
+});
+
+describe("the panes kept from before the IDE layout", () => {
+  test("come back whole or not at all", () => {
+    expect(isSavedDocks(null)).toBe(true);
+    expect(isSavedDocks(docks("plan", false, "terminal"))).toBe(true);
+    expect(isSavedDocks(docks("changes", true))).toBe(true);
+    for (const broken of ["plan", { top: "gone", topHidden: false, bottom: null }, { top: "plan", bottom: null }, { top: "plan", topHidden: true, bottom: "gone" }])
+      expect(isSavedDocks(broken)).toBe(false);
   });
 });

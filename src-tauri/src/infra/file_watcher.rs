@@ -178,7 +178,10 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::mpsc::Sender;
 
-    const QUICK: Duration = Duration::from_millis(80);
+    /// The quiet period the tests run with. Their sleeps are fractions of it
+    /// and must not stretch past it: at 80 ms a macOS CI runner, busy with the
+    /// rest of the suite, slept a 20 ms gap through it and fired mid-burst.
+    const QUICK: Duration = Duration::from_millis(400);
 
     fn modified(path: &str) -> notify::Result<Event> {
         Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(PathBuf::from("/repo").join(path)))
