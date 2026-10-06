@@ -465,6 +465,16 @@ describe("editing in the IDE layout", () => {
     expect(page).toContain("Unresolved diagram: flows/none.puml");
   });
 
+  test("a PlantUML file opens drawn, its text a tab away", async () => {
+    disk["docs/flow.puml"] = "@startuml\nA -> B\n@enduml\n";
+    render(<Ide open={[{ path: "docs/flow.puml", side: "worktree" }]} />);
+    for (let i = 0; i < 100 && !document.querySelector(".adoc img"); i++) await settle(10);
+    const img = document.querySelector<HTMLImageElement>(".adoc img.adoc-diagram")!;
+    expect(decodeURIComponent(img.src.split(",")[1])).toBe("<svg>@startuml\nA -> B\n@enduml</svg>");
+    await toEdit();
+    await showing("@startuml\nA -> B\n@enduml\n");
+  });
+
   test("a pause in typing saves it", async () => {
     await ide();
     await type("Mine.\n");

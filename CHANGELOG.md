@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-06 See a PlantUML file (`.puml`, `.plantuml`, `.pu`, `.iuml`, `.wsd`) drawn, under Preview — in the IDE layout it opens that way
 - 2026-10-06 See PlantUML diagrams in AsciiDoc files — `[plantuml]` blocks, includes in them and `plantuml::file.puml[]`, drawn on this machine
 - 2026-10-05 Read AsciiDoc files as they render, includes put in — in the IDE layout they open that way, File to edit
 - 2026-10-05 Find and replace in a file in the IDE layout (⌘F, ⌘G and ⇧⌘G for the next and previous match), and edits are saved when the window closes — its button, ⌘W or ⌘Q; one that cannot be saved keeps the window open once, on its tab

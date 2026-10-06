@@ -51,6 +51,13 @@ function Diagram({ source }: { source: string }) {
   );
 }
 
+/** A PlantUML file as it draws. */
+export const PlantumlPreview = ({ text }: { text: string }) => (
+  <div className="adoc">
+    <Diagram source={text.replace(/\n+$/, "")} />
+  </div>
+);
+
 // What `asciidoc.ts` marked as a diagram is drawn; any other block as it is.
 const components = {
   div: ({ node, ...props }: ComponentProps<"div"> & { node?: HastElement }) =>

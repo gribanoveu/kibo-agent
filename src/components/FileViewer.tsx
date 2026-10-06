@@ -6,7 +6,7 @@ import { highlight, languageOf } from "../lib/highlight";
 import { fileWrite, type FileSide, type FileTarget } from "../lib/chat";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
-import { AsciiDocPreview } from "./AsciiDocPreview";
+import { AsciiDocPreview, PlantumlPreview } from "./AsciiDocPreview";
 import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
@@ -163,12 +163,15 @@ export function FileViewer({
     if (next) onActivate(next);
   };
   // Beside the chat a file is opened to see what changed in it; in the IDE
-  // layout, to be read — as it renders when it is Markdown or AsciiDoc, whole otherwise.
+  // layout, to be read — as it renders when it is Markdown, AsciiDoc or a
+  // diagram, whole otherwise.
   const [mode, setMode] = useState<Mode>(compact ? "preview" : "diff");
   const text = view && !view.unviewable ? view : null;
   const changed = !!text && text.old !== text.new;
   const language = languageOf(target.path);
-  const renders = language === "markdown" || language === "asciidoc";
+  // Shiki has no PlantUML, so a diagram is known by its name.
+  const diagram = /\.(puml|plantuml|pu|iuml|wsd)$/i.test(target.path);
+  const renders = language === "markdown" || language === "asciidoc" || diagram;
   // Only the ways this file can be shown: no diff without changes, no preview
   // but for a document — which, unchanged, reads best as it renders.
   const shown: Mode =
@@ -427,7 +430,9 @@ export function FileViewer({
             <div className="file-viewer-note">Deleted — nothing to preview.</div>
           ) : (
             <div className="file-viewer-preview">
-              {language === "asciidoc" ? (
+              {diagram ? (
+                <PlantumlPreview text={draft?.text ?? view.new} />
+              ) : language === "asciidoc" ? (
                 <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} />
               ) : (
                 <Markdown text={draft?.text ?? view.new} streaming={false} />
