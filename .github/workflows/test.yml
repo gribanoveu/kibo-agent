@@ -4,12 +4,13 @@ name: Tests
 # workflow only builds, and code that touches paths or line endings behaves
 # differently on Windows. Ignored tests (the model, the benches, the live
 # cluster) stay out, as they do locally.
-# On what lands in main, and on a pull request when it is opened.
+# On what lands in main, and on a pull request: when it is opened, reopened,
+# and on every push to it — a commit after the first is checked too.
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: tests-${{ github.ref }}
