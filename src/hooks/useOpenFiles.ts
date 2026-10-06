@@ -84,7 +84,7 @@ type DraftAction =
   | { kind: "drop"; key: string };
 
 /** An editor hands its text back with `\n`; the file on disk may have `\r\n`. */
-const sameText = (base: string | null, text: string) => base !== null && base.replace(/\r\n/g, "\n") === text;
+export const sameText = (base: string | null, text: string) => base !== null && base.replace(/\r\n/g, "\n") === text;
 
 /**
  * The tabs on screen and the other layout's, put away: the IDE layout and the

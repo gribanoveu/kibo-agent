@@ -7,7 +7,7 @@ import { fileWrite, type FileSide, type FileTarget } from "../lib/chat";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { AsciiDocPreview, PlantumlPreview } from "./AsciiDocPreview";
-import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
+import { sameFile, sameText, stepThrough, type Edits } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
 import { matches } from "../lib/shortcuts";
@@ -198,7 +198,7 @@ export function FileViewer({
    */
   const persist = (file: FileTarget, text: string, from: string | null, conflict: boolean) => {
     const path = file.path;
-    if (from !== null && from.replace(/\r\n/g, "\n") === text) {
+    if (sameText(from, text)) {
       if (!inflight.current) unsaved.current.delete(path);
       return;
     }

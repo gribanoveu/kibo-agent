@@ -9,6 +9,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
 import { languageOf } from "../lib/highlight";
+import { sameText } from "../hooks/useOpenFiles";
 import { matches } from "../lib/shortcuts";
 import "./FileEditor.css";
 
@@ -185,7 +186,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
     if (!editor || pending.current !== undefined) return;
     base.current = text;
     // The editor holds `\n` whatever the file has.
-    if (editor.state.doc.toString() === text.replace(/\r\n/g, "\n")) return;
+    if (sameText(text, editor.state.doc.toString())) return;
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: text },
       // Undo goes back through the user's edits, not to the file before the agent's.
