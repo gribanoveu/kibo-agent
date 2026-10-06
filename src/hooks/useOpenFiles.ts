@@ -106,7 +106,8 @@ export function viewerReducer(state: Viewer, action: Action | DraftAction | { ki
       return { ...state, shown: none, other: none };
     // An edit back to what is on disk is no edit: the file reads as saved.
     case "edit": {
-      const base = state.drafts[action.key]?.base ?? action.base;
+      // Not `??`: a draft kept over a file deleted since has `null` for its base.
+      const base = action.key in state.drafts ? state.drafts[action.key].base : action.base;
       if (sameText(base, action.text)) return without(action.key);
       return { ...state, drafts: { ...state.drafts, [action.key]: { base, text: action.text } } };
     }

@@ -101,6 +101,10 @@ describe("drafts", () => {
     expect(kept).toEqual({ [key]: { base: "theirs\n", text: "mine\n" } });
     expect(drafts([edit("mine\n"), { kind: "rebase", key, base: "mine\n" }])).toEqual({});
     expect(drafts([edit("mine\n"), { kind: "drop", key }])).toEqual({});
+    // Kept over a file deleted since, it stays over nothing as it is typed on.
+    expect(drafts([edit("mine\n"), { kind: "rebase", key, base: null }, edit("mine, more\n", "mine\n")])).toEqual({
+      [key]: { base: null, text: "mine, more\n" },
+    });
   });
 
   test("outlive the tabs: closing them all, switching layouts or folders keeps them", () => {
