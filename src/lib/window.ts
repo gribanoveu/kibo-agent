@@ -27,3 +27,17 @@ export function onWindowClose(keep: () => Promise<boolean>): () => void {
   });
   return () => void unlisten.then((stop) => stop());
 }
+
+/**
+ * Whether a right click gets the webview's own menu. Not on the window at
+ * large: there it is Reload and Inspect Element, a browser's, not the app's.
+ * In a field or the editor it is the platform's Cut, Copy and Paste, and over
+ * selected text its Copy — kept. In a dev build ⇧ brings it back anywhere,
+ * for the inspector.
+ */
+export function nativeMenu(e: MouseEvent, dev = import.meta.env.DEV): boolean {
+  if (dev && e.shiftKey) return true;
+  const target = e.target instanceof Element ? e.target : null;
+  if (target?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return true;
+  return !!window.getSelection()?.toString();
+}
