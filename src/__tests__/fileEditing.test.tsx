@@ -453,7 +453,7 @@ describe("editing in the IDE layout", () => {
     render(<Ide open={[doc]} />);
     for (let i = 0; i < 500 && document.querySelectorAll(".adoc img").length < 3; i++) await settle(10);
     expect(drawn).toEqual(["A -> B", "C -> D", "@startuml\nE -> F\n@enduml", "broken ->"]);
-    const images = [...document.querySelectorAll<HTMLImageElement>(".adoc img.adoc-diagram")];
+    const images = [...document.querySelectorAll<HTMLImageElement>(".adoc .adoc-diagram img")];
     expect(images.map((img) => decodeURIComponent(img.src.split(",")[1]))).toEqual([
       "<svg>A -> B</svg>",
       "<svg>C -> D</svg>",
@@ -469,8 +469,26 @@ describe("editing in the IDE layout", () => {
     disk["docs/flow.puml"] = "@startuml\nA -> B\n@enduml\n";
     render(<Ide open={[{ path: "docs/flow.puml", side: "worktree" }]} />);
     for (let i = 0; i < 100 && !document.querySelector(".adoc img"); i++) await settle(10);
-    const img = document.querySelector<HTMLImageElement>(".adoc img.adoc-diagram")!;
+    const img = document.querySelector<HTMLImageElement>(".adoc .adoc-diagram img")!;
     expect(decodeURIComponent(img.src.split(",")[1])).toBe("<svg>@startuml\nA -> B\n@enduml</svg>");
+    // A click opens it the whole window over, fitted, to zoom.
+    fireEvent.click(screen.getByTitle("Open larger"));
+    const dialog = screen.getByRole("dialog", { name: "Diagram" });
+    expect(dialog.querySelector<HTMLImageElement>(".diagram-view img")?.src).toBe(img.src);
+    const level = () => dialog.querySelector(".diagram-zoom-level")?.textContent;
+    expect(level()).toBe("Fit");
+    fireEvent.click(screen.getByLabelText("Zoom in"));
+    expect(level()).toBe("125%");
+    fireEvent.click(screen.getByLabelText("Zoom out"));
+    fireEvent.click(screen.getByLabelText("Zoom out"));
+    expect(level()).toBe("80%");
+    fireEvent.click(screen.getByText("Fit"));
+    expect(level()).toBe("Fit");
+    fireEvent.click(screen.getByText("100%"));
+    expect(level()).toBe("100%");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
     await toEdit();
     await showing("@startuml\nA -> B\n@enduml\n");
   });

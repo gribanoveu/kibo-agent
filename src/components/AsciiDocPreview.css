@@ -205,8 +205,15 @@
 /* A PlantUML diagram: the engine draws it on white, whatever the theme. */
 .adoc .adoc-diagram {
   display: block;
+  max-width: 100%;
   margin: 0.6em 0;
   padding: 0.6em;
+  border: none;
   border-radius: 7px;
   background: white;
+  cursor: zoom-in;
+}
+.adoc .adoc-diagram img {
+  display: block;
+  max-width: 100%;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentProps, type MouseEvent } from "react";
 import type { Element as HastElement, Nodes } from "hast";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { createPortal } from "react-dom";
 import { parseFragment } from "parse5";
 import { fromParse5 } from "hast-util-from-parse5";
 import { defaultSchema, sanitize, type Schema } from "hast-util-sanitize";
@@ -9,6 +10,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { asciidocHtml } from "../lib/asciidoc";
 import { fileView } from "../lib/chat";
 import { plantumlSvg } from "../lib/plantuml";
+import { DiagramView } from "./DiagramView";
 import "./AsciiDocPreview.css";
 
 // GitHub's rules — no script, handler, style or frame, ids prefixed so a
@@ -27,7 +29,7 @@ const text = (node: Nodes): string =>
 /**
  * A PlantUML diagram as the engine draws it: an image, so its SVG runs
  * nothing and styles nothing outside it. Its source until then, or with what
- * the engine said when it could not.
+ * the engine said when it could not. A click opens it the whole window over.
  */
 function Diagram({ source }: { source: string }) {
   const [svg, setSvg] = useState<string | null>(null);
@@ -42,7 +44,19 @@ function Diagram({ source }: { source: string }) {
       current = false;
     };
   }, [source]);
-  if (svg) return <img className="adoc-diagram" alt="PlantUML diagram" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} />;
+  const [large, setLarge] = useState(false);
+  if (svg) {
+    const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    return (
+      <>
+        <button type="button" className="adoc-diagram" title="Open larger" onClick={() => setLarge(true)}>
+          <img alt="PlantUML diagram" src={src} />
+        </button>
+        {/* Out of the document, whose styles would reach into it. */}
+        {large && createPortal(<DiagramView src={src} onClose={() => setLarge(false)} />, document.body)}
+      </>
+    );
+  }
   return (
     <div className="listingblock">
       {error && <div className="title">Could not draw the diagram: {error}</div>}

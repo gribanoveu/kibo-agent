@@ -1,0 +1,40 @@
+/* The diagram, on the white the engine draws for. A large one scrolls; the
+   auto margins centre a small one without cutting a large one's edge off. */
+.diagram-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  padding: 16px;
+  background: white;
+  cursor: grab;
+}
+.diagram-view:active {
+  cursor: grabbing;
+}
+.diagram-view img {
+  flex: none;
+  margin: auto;
+  max-width: none;
+}
+.diagram-view.fitted img {
+  flex: 0 1 auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.diagram-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.diagram-zoom-level {
+  min-width: 4em;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
