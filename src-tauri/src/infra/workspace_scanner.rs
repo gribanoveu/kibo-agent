@@ -17,6 +17,8 @@ use std::time::SystemTime;
 
 use ignore::{WalkBuilder, WalkState};
 
+use crate::domain::tools::canonicalize_plain;
+
 #[derive(Debug, Clone)]
 pub struct ScannedFile {
     pub path: PathBuf,
@@ -40,7 +42,7 @@ pub struct ScannedEntry {
 /// `max_depth` follows `WalkBuilder`'s convention: `root` is depth 0, its
 /// direct children depth 1. `None` is unlimited.
 pub fn scan_files(root: &Path, max_depth: Option<usize>) -> io::Result<Vec<ScannedFile>> {
-    let root = root.canonicalize()?;
+    let root = canonicalize_plain(root)?;
 
     let (tx, rx) = mpsc::channel::<ScannedFile>();
     builder(&root, max_depth).build_parallel().run(|| {
@@ -84,7 +86,7 @@ pub fn scan_files(root: &Path, max_depth: Option<usize>) -> io::Result<Vec<Scann
 /// Serial rather than parallel: a listing is depth-capped in practice, and the
 /// ordering work is the same either way.
 pub fn scan_entries(root: &Path, max_depth: Option<usize>) -> io::Result<Vec<ScannedEntry>> {
-    let root = root.canonicalize()?;
+    let root = canonicalize_plain(root)?;
 
     let mut entries = Vec::new();
     for entry in builder(&root, max_depth).build() {
@@ -158,7 +160,7 @@ mod tests {
         write(&dir, "b.txt", "b");
         write(&dir, "a.txt", "a");
         write(&dir, "sub/c.txt", "c");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         let files = scan_files(&root, None).unwrap();
 
@@ -173,7 +175,7 @@ mod tests {
         write(&dir, "keep.rs", "fn main() {}");
         write(&dir, "noisy.log", "spam");
         write(&dir, "target/debug/build", "binary");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         let files = scan_files(&root, None).unwrap();
 
@@ -188,7 +190,7 @@ mod tests {
         let dir = temp_dir("scan-dotfiles");
         write(&dir, ".github/workflows/ci.yml", "on: push");
         write(&dir, ".eslintrc", "{}");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         let files = scan_files(&root, None).unwrap();
 
@@ -204,7 +206,7 @@ mod tests {
         write(&dir, ".git/objects/ab/cdef", "binary");
         write(&dir, ".git/config", "[core]");
         write(&dir, "src/main.rs", "fn main() {}");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         let files = scan_files(&root, None).unwrap();
 
@@ -218,7 +220,7 @@ mod tests {
         write(&dir, "top.txt", "0");
         write(&dir, "one/mid.txt", "1");
         write(&dir, "one/two/deep.txt", "2");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         assert_eq!(names(&root, &scan_files(&root, Some(1)).unwrap()), ["top.txt"]);
         assert_eq!(
@@ -232,7 +234,7 @@ mod tests {
     fn entries_include_directories_but_never_the_root() {
         let dir = temp_dir("scan-entries");
         write(&dir, "sub/file.txt", "x");
-        let root = dir.canonicalize().unwrap();
+        let root = canonicalize_plain(&dir).unwrap();
 
         let entries = scan_entries(&root, None).unwrap();
         let listed: Vec<(String, bool)> = entries

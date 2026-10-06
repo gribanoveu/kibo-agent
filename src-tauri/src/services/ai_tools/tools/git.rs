@@ -443,9 +443,9 @@ fn open(scope: &ToolScope) -> Result<Repository, ToolError> {
 fn scope_prefix(scope: &ToolScope, repo: &Repository) -> Result<String, ToolError> {
     let workdir = repo
         .workdir()
-        .ok_or_else(|| ToolError::Git("a bare repository has no working tree".into()))?
-        .canonicalize()
-        .map_err(ToolError::Io)?;
+        .ok_or_else(|| ToolError::Git("a bare repository has no working tree".into()))?;
+    // Plain, as the scope's root is: on Windows `canonicalize` adds `\\?\`.
+    let workdir = crate::domain::tools::canonicalize_plain(workdir).map_err(ToolError::Io)?;
     match scope.root().strip_prefix(&workdir) {
         Ok(rel) if rel.as_os_str().is_empty() => Ok(String::new()),
         Ok(rel) => Ok(format!("{}/", rel.to_string_lossy().replace('\\', "/"))),

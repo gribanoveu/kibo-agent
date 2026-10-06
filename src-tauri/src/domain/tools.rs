@@ -730,7 +730,7 @@ mod tests {
 
         let scope = ToolScope::new(&dir.join("nested").join("..")).expect("root resolves");
 
-        assert_eq!(scope.root(), dir.canonicalize().expect("dir resolves"));
+        assert_eq!(scope.root(), canonicalize_plain(&dir).expect("dir resolves"));
         assert!(!scope.root().to_string_lossy().contains(".."));
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -85,7 +85,7 @@ pub fn sync(
     store: &IndexStore,
     options: &ChunkBuildOptions,
 ) -> Result<SyncReport, RepoSyncError> {
-    let root = root.canonicalize().map_err(RepoSyncError::Scan)?;
+    let root = crate::domain::tools::canonicalize_plain(root).map_err(RepoSyncError::Scan)?;
     let scanned = scan_files(&root, None).map_err(RepoSyncError::Scan)?;
     let known = store.load_all_files()?;
     let backfill = store.derived_needs_backfill()?;
