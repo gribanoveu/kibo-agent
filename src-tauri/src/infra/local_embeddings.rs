@@ -553,18 +553,20 @@ mod tests {
     }
 
     /// Use resets the clock: a value in steady use is loaded once and never
-    /// dropped between two uses.
+    /// dropped between two uses. The uses span more than one idle period, and
+    /// each gap is a tenth of it: at 30 ms to 120 ms, a CI runner busy with
+    /// the rest of the suite slept past the period and loaded it twice.
     #[test]
     fn a_value_in_use_is_loaded_once_and_stays() {
         let loads = std::sync::atomic::AtomicUsize::new(0);
-        let cell = IdleCell::new(Duration::from_millis(120));
-        for _ in 0..10 {
+        let cell = IdleCell::new(Duration::from_millis(600));
+        for _ in 0..15 {
             cell.get_or_load(|| {
                 loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             })
             .unwrap();
-            thread::sleep(Duration::from_millis(30));
+            thread::sleep(Duration::from_millis(60));
         }
         assert_eq!(loads.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
