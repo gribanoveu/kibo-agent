@@ -11,6 +11,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@asciidoctor/core": "^4.0.6",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.12.4",
@@ -30,8 +31,12 @@
     "@xterm/xterm": "^6.0.0",
     "codemirror-asciidoc": "^2.0.1",
     "diff": "^9",
+    "hast-util-from-parse5": "^8.0.3",
+    "hast-util-sanitize": "^5.0.2",
+    "hast-util-to-jsx-runtime": "^2.3.6",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.45.0",
+    "parse5": "^7.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "shiki": "^4.4.3",

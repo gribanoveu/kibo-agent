@@ -6,6 +6,7 @@ import { highlight, languageOf } from "../lib/highlight";
 import { fileWrite, type FileSide, type FileTarget } from "../lib/chat";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
+import { AsciiDocPreview } from "./AsciiDocPreview";
 import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
@@ -162,15 +163,16 @@ export function FileViewer({
     if (next) onActivate(next);
   };
   // Beside the chat a file is opened to see what changed in it; in the IDE
-  // layout, to be read — as it renders when it is Markdown, whole otherwise.
+  // layout, to be read — as it renders when it is Markdown or AsciiDoc, whole otherwise.
   const [mode, setMode] = useState<Mode>(compact ? "preview" : "diff");
   const text = view && !view.unviewable ? view : null;
   const changed = !!text && text.old !== text.new;
-  const markdown = languageOf(target.path) === "markdown";
+  const language = languageOf(target.path);
+  const renders = language === "markdown" || language === "asciidoc";
   // Only the ways this file can be shown: no diff without changes, no preview
-  // but for Markdown — which, unchanged, reads best as it renders.
+  // but for a document — which, unchanged, reads best as it renders.
   const shown: Mode =
-    mode === "diff" && !changed ? (markdown ? "preview" : "file") : mode === "preview" && !markdown ? "file" : mode;
+    mode === "diff" && !changed ? (renders ? "preview" : "file") : mode === "preview" && !renders ? "file" : mode;
   // Only a file of the open folder is edited — not a side of a diff.
   const draftOf = (file: FileTarget) => (file.side === "worktree" ? edits?.drafts[file.path] : undefined);
   const draft = draftOf(target);
@@ -307,7 +309,7 @@ export function FileViewer({
         tabs={[
           { id: "diff", label: "Diff", disabled: !changed, title: changed ? undefined : "No changes" },
           { id: "file", label: "File" },
-          ...(markdown ? [{ id: "preview" as const, label: "Preview" }] : []),
+          ...(renders ? [{ id: "preview" as const, label: "Preview" }] : []),
         ]}
       />
       {changes.length > 0 && (
@@ -425,7 +427,11 @@ export function FileViewer({
             <div className="file-viewer-note">Deleted — nothing to preview.</div>
           ) : (
             <div className="file-viewer-preview">
-              <Markdown text={draft?.text ?? view.new} streaming={false} />
+              {language === "asciidoc" ? (
+                <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} />
+              ) : (
+                <Markdown text={draft?.text ?? view.new} streaming={false} />
+              )}
             </div>
           )
         ) : rows.length === 0 ? (

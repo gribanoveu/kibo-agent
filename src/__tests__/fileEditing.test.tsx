@@ -13,6 +13,7 @@ import type { FileTarget } from "../lib/chat";
 
 let disk: Record<string, string | null>;
 let writes: { path: string; expected: string | null; content: string }[];
+let opened: string[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -43,6 +44,13 @@ mock.module("@tauri-apps/api/event", () => ({
     return Promise.resolve(() => listeners.get(channel)!.delete(handler));
   },
 }));
+mock.module("@tauri-apps/plugin-opener", () => ({
+  openUrl: (url: string) => {
+    opened.push(url);
+    return Promise.resolve();
+  },
+}));
+
 // The window's close button, ⌘W or ⌘Q: whether the window stayed open.
 let closeRequested: ((event: { preventDefault: () => void }) => Promise<void>) | null = null;
 mock.module("@tauri-apps/api/window", () => ({
@@ -107,7 +115,14 @@ function Ide({ open }: { open: FileTarget[] }) {
 
 async function ide(open: FileTarget[] = [doc]) {
   render(<Ide open={open} />);
-  // The file's read, then the editor's lazy load.
+  // A document opens as it renders: to the file's text, to edit it — which
+  // the viewer keeps for the tabs after. Then the editor's lazy load.
+  await toEdit();
+}
+async function toEdit() {
+  await settle(10);
+  const file = screen.queryByRole("tab", { name: "File" });
+  if (file) fireEvent.click(file);
   for (let i = 0; i < 5 && !document.querySelector(".cm-editor"); i++) await settle(10);
 }
 const editor = () => EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
@@ -214,6 +229,7 @@ describe("editing in the IDE layout", () => {
     expect(disk["docs/a.adoc"]).toBe("= Title\nMine.\n");
     expect(screen.getByTestId("closed")).toBeTruthy();
     fireEvent.click(screen.getByText("Open again"));
+    await toEdit();
     await showing("= Title\nMine.\n");
     expect(unsaved()).toBe(0);
 
@@ -355,6 +371,49 @@ describe("editing in the IDE layout", () => {
     expect(at()).toBe(8);
     key(true);
     expect(at()).toBe(2);
+  });
+
+  test("an AsciiDoc file opens as it renders, its includes put in and its HTML made safe", async () => {
+    disk["docs/a.adoc"] = [
+      "= Title",
+      "",
+      "include::parts/one.adoc[]",
+      "",
+      "https://example.com[out] and <<_two,in>>",
+      "",
+      "++++",
+      '<script>window.hacked = 1</script><img src="x" onerror="window.hacked = 1"><p id="root" style="position: fixed">raw</p>',
+      "++++",
+      "",
+    ].join("\n");
+    disk["docs/parts/one.adoc"] = "== One\n\ninclude::two.adoc[]\n";
+    disk["docs/parts/two.adoc"] = "== Two\n\nIncluded twice over.\n";
+    render(<Ide open={[doc]} />);
+    // The converter loads the first time; cold, in a full run, that takes a while.
+    for (let i = 0; i < 500 && !document.querySelector(".adoc p"); i++) await settle(10);
+    const page = document.querySelector(".adoc")!;
+    expect([...page.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual(["Title", "One", "Two"]);
+    expect(page.textContent).toContain("Included twice over.");
+    // The classes the look is drawn by stay.
+    expect(page.querySelectorAll(".sect1").length).toBe(2);
+    expect(page.querySelector("script")).toBeNull();
+    expect(page.querySelector("img")?.getAttribute("onerror")).toBeNull();
+    const raw = [...page.querySelectorAll("p")].find((p) => p.textContent === "raw")!;
+    expect(raw.getAttribute("style")).toBeNull();
+    expect(raw.id).toBe("user-content-root");
+
+    let scrolled: Element | null = null;
+    const scroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled = this;
+    };
+    fireEvent.click(screen.getByText("in"));
+    Element.prototype.scrollIntoView = scroll;
+    expect((scrolled as Element | null)?.textContent).toBe("Two");
+    opened = [];
+    fireEvent.click(screen.getByText("out"));
+    await settle(10);
+    expect(opened).toEqual(["https://example.com"]);
   });
 
   test("a pause in typing saves it", async () => {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-05 Read AsciiDoc files as they render, includes put in — in the IDE layout they open that way, File to edit
 - 2026-10-05 Find and replace in a file in the IDE layout (⌘F, ⌘G and ⇧⌘G for the next and previous match), and edits are saved when the window closes — its button, ⌘W or ⌘Q; one that cannot be saved keeps the window open once, on its tab
 - 2026-10-05 Highlight code in the IDE layout's editor — Java, Kotlin, YAML, XML, SQL, JSON, shell and the rest CodeMirror knows by the file's name, each language loaded the first time a file of it opens
 - 2026-10-05 Edit files in the IDE layout, with AsciiDoc and Markdown highlighted: a change is saved 3 seconds after you stop typing, when you click away, switch or close the tab, or press ⌘S — only when there is one; a tab with unsaved changes is marked, and when the agent changes the file you are editing you choose to load its version or keep yours
