@@ -1,3 +1,5 @@
+import type { AbstractBlock, BlockMacroProcessorDslInterface } from "@asciidoctor/core";
+
 /**
  * The folder's path `target` names from the file `from`, as an `include::`
  * means it: beside `from`, or from the folder's top when it starts with `/`.
@@ -32,6 +34,27 @@ export async function asciidocHtml(text: string, path: string, read: (path: stri
       // ponytail: `lines=` and `tag=` are not applied — the whole file goes in.
       reader.pushInclude(content ?? `Unresolved include: ${target}`, resolved, resolved, 1, attrs);
     });
+  });
+  // A PlantUML diagram — `[plantuml]` over a block, or `plantuml::file.puml[]`
+  // — is kept as its source, marked for the preview to draw.
+  registry.block("plantuml", function () {
+    this.onContexts("listing", "literal", "open");
+    this.process(function (parent, reader, attrs) {
+      return this.createBlock(parent, "listing", reader.getLines(), { ...attrs, role: "plantuml" });
+    });
+  });
+  // The types have a macro's block come back at once; the parser awaits it,
+  // which reading the file takes.
+  const diagramFile = async function (this: BlockMacroProcessorDslInterface, parent: AbstractBlock, target: string, attrs: object) {
+    // ponytail: from the file shown, not from an included one the macro is in.
+    const resolved = includePath(path, target);
+    const source = resolved === null ? null : await read(resolved).catch(() => null);
+    return source === null
+      ? this.createBlock(parent, "paragraph", `Unresolved diagram: ${target}`, {})
+      : this.createBlock(parent, "listing", source, { ...attrs, role: "plantuml" });
+  };
+  registry.blockMacro("plantuml", function () {
+    this.process(diagramFile as never);
   });
   const doc = await load(text, { safe: "server", extension_registry: registry, attributes: { showtitle: true } });
   return doc.convert();

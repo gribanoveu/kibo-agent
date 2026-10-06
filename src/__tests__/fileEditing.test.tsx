@@ -51,6 +51,15 @@ mock.module("@tauri-apps/plugin-opener", () => ({
   },
 }));
 
+// The diagram engine is seven megabytes of browser code: here, its source back as an SVG.
+const drawn: string[] = [];
+mock.module("../lib/plantuml", () => ({
+  plantumlSvg: (source: string) => {
+    drawn.push(source);
+    return source.includes("broken") ? Promise.reject(new Error("Syntax error")) : Promise.resolve(`<svg>${source}</svg>`);
+  },
+}));
+
 // The window's close button, ⌘W or ⌘Q: whether the window stayed open.
 let closeRequested: ((event: { preventDefault: () => void }) => Promise<void>) | null = null;
 mock.module("@tauri-apps/api/window", () => ({
@@ -414,6 +423,46 @@ describe("editing in the IDE layout", () => {
     fireEvent.click(screen.getByText("out"));
     await settle(10);
     expect(opened).toEqual(["https://example.com"]);
+  });
+
+  test("PlantUML in an AsciiDoc file is drawn: a block, its include, a macro; one that fails shows its source", async () => {
+    disk["docs/a.adoc"] = [
+      "[plantuml]",
+      "----",
+      "A -> B",
+      "----",
+      "",
+      "[plantuml]",
+      "....",
+      "include::flows/c.puml[]",
+      "....",
+      "",
+      "plantuml::flows/d.puml[]",
+      "",
+      "[plantuml]",
+      "----",
+      "broken ->",
+      "----",
+      "",
+      "plantuml::flows/none.puml[]",
+      "",
+    ].join("\n");
+    disk["docs/flows/c.puml"] = "C -> D\n";
+    disk["docs/flows/d.puml"] = "@startuml\nE -> F\n@enduml\n";
+    drawn.length = 0;
+    render(<Ide open={[doc]} />);
+    for (let i = 0; i < 500 && document.querySelectorAll(".adoc img").length < 3; i++) await settle(10);
+    expect(drawn).toEqual(["A -> B", "C -> D", "@startuml\nE -> F\n@enduml", "broken ->"]);
+    const images = [...document.querySelectorAll<HTMLImageElement>(".adoc img.adoc-diagram")];
+    expect(images.map((img) => decodeURIComponent(img.src.split(",")[1]))).toEqual([
+      "<svg>A -> B</svg>",
+      "<svg>C -> D</svg>",
+      "<svg>@startuml\nE -> F\n@enduml</svg>",
+    ]);
+    const page = document.querySelector(".adoc")!.textContent;
+    expect(page).toContain("Could not draw the diagram: Error: Syntax error");
+    expect(page).toContain("broken ->");
+    expect(page).toContain("Unresolved diagram: flows/none.puml");
   });
 
   test("a pause in typing saves it", async () => {

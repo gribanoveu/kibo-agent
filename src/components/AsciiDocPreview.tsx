@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type ComponentProps, type MouseEvent } from "react";
+import type { Element as HastElement, Nodes } from "hast";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { parseFragment } from "parse5";
 import { fromParse5 } from "hast-util-from-parse5";
@@ -7,6 +8,7 @@ import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { asciidocHtml } from "../lib/asciidoc";
 import { fileView } from "../lib/chat";
+import { plantumlSvg } from "../lib/plantuml";
 import "./AsciiDocPreview.css";
 
 // GitHub's rules — no script, handler, style or frame, ids prefixed so a
@@ -18,6 +20,42 @@ const schema: Schema = {
   attributes: { ...defaultSchema.attributes, "*": [...(defaultSchema.attributes?.["*"] ?? []), "className"] },
 };
 const PREFIX = defaultSchema.clobberPrefix ?? "";
+
+const text = (node: Nodes): string =>
+  node.type === "text" ? node.value : "children" in node ? node.children.map(text).join("") : "";
+
+/**
+ * A PlantUML diagram as the engine draws it: an image, so its SVG runs
+ * nothing and styles nothing outside it. Its source until then, or with what
+ * the engine said when it could not.
+ */
+function Diagram({ source }: { source: string }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    plantumlSvg(source).then(
+      (done) => current && setSvg(done),
+      (e) => current && setError(String(e)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [source]);
+  if (svg) return <img className="adoc-diagram" alt="PlantUML diagram" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} />;
+  return (
+    <div className="listingblock">
+      {error && <div className="title">Could not draw the diagram: {error}</div>}
+      <pre>{source}</pre>
+    </div>
+  );
+}
+
+// What `asciidoc.ts` marked as a diagram is drawn; any other block as it is.
+const components = {
+  div: ({ node, ...props }: ComponentProps<"div"> & { node?: HastElement }) =>
+    node && [node.properties.className].flat().includes("plantuml") ? <Diagram source={text(node).replace(/^\n+|\n+$/g, "")} /> : <div {...props} />,
+};
 
 const readFile = (path: string) => fileView({ path, side: "worktree" }).then((view) => view.new);
 
@@ -36,7 +74,7 @@ export function AsciiDocPreview({ text, path }: { text: string; path: string }) 
     };
   }, [text, path]);
   const content = useMemo(
-    () => html !== null && toJsxRuntime(sanitize(fromParse5(parseFragment(html)), schema), { Fragment, jsx, jsxs }),
+    () => html !== null && toJsxRuntime(sanitize(fromParse5(parseFragment(html)), schema), { Fragment, jsx, jsxs, components, passNode: true }),
     [html],
   );
 

@@ -144,6 +144,12 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
+.adoc .admonitionblock td.icon .title {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  font-style: normal;
+}
 .adoc .admonitionblock.warning td.icon,
 .adoc .admonitionblock.caution td.icon {
   border-right-color: var(--red);
@@ -194,4 +200,13 @@
 }
 .adoc .toc > :first-child {
   font-weight: 600;
+}
+
+/* A PlantUML diagram: the engine draws it on white, whatever the theme. */
+.adoc .adoc-diagram {
+  display: block;
+  margin: 0.6em 0;
+  padding: 0.6em;
+  border-radius: 7px;
+  background: white;
 }
