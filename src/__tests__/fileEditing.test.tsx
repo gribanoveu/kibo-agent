@@ -143,7 +143,9 @@ async function toEdit() {
   await settle(10);
   const file = screen.queryByRole("tab", { name: "File" });
   if (file) fireEvent.click(file);
-  for (let i = 0; i < 5 && !document.querySelector(".cm-editor"); i++) await settle(10);
+  // The first test pays for loading CodeMirror cold — on a Windows runner,
+  // past the 50 ms this once allowed.
+  for (let i = 0; i < 500 && !document.querySelector(".cm-editor"); i++) await settle(10);
 }
 const editor = () => EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
 const shown = () => editor().state.doc.toString();
