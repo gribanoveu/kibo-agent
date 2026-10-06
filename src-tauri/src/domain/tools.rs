@@ -826,48 +826,12 @@ impl ToolScope {
     }
 }
 
-/// `canonicalize` in the form a path may leave this process in — without the
-/// Windows extended-length prefix.
+/// `canonicalize` in the form a path may leave this process in: on Windows
+/// without the `\\?\` prefix — which libgit2 rejects, and which no plain path
+/// starts with — wherever the path stays valid without it. One too long for
+/// that, or with a reserved name (`CON`), keeps it rather than being corrupted.
 pub(crate) fn canonicalize_plain(path: &Path) -> std::io::Result<PathBuf> {
-    path.canonicalize().map(strip_verbatim)
-}
-
-/// Strips the Windows `\\?\` prefix `canonicalize` returns, turning
-/// `\\?\C:\repos\x` back into `C:\repos\x`.
-///
-/// Verbatim paths are not universally understood — libgit2 rejects them — and
-/// the string ends up in config files and in every path the UI shows. On
-/// non-Windows targets there is no such prefix and the path passes through.
-fn strip_verbatim(path: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        use std::path::{Component, Prefix};
-
-        let mut components = path.components();
-        let Some(Component::Prefix(prefix)) = components.next() else {
-            return path;
-        };
-        let rebuilt_root = match prefix.kind() {
-            Prefix::VerbatimDisk(letter) => format!("{}:\\", letter as char),
-            Prefix::VerbatimUNC(server, share) => format!(
-                "\\\\{}\\{}\\",
-                server.to_string_lossy(),
-                share.to_string_lossy()
-            ),
-            // `\\?\` over a device path has no plain equivalent — leave it
-            // alone rather than corrupt it.
-            _ => return path,
-        };
-        let mut out = PathBuf::from(rebuilt_root);
-        for component in components {
-            if !matches!(component, Component::RootDir) {
-                out.push(component);
-            }
-        }
-        return out;
-    }
-    #[cfg(not(windows))]
-    path
+    dunce::canonicalize(path)
 }
 
 /// What a call would do, worked out without doing it.
