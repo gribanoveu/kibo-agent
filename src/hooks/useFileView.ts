@@ -10,7 +10,7 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The read of the file showing now, for a caller that knows it changed.
-  const reload = useRef<() => Promise<void>>(async () => {});
+  const reload = useRef<{ path: string; side: string; load: () => Promise<FileView | null> } | null>(null);
   const path = target?.path;
   const side = target?.side;
 
@@ -20,17 +20,19 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
     const load = () =>
       fileView({ path, side }).then(
         (next) => {
-          if (!live) return;
+          if (!live) return null;
           setView(next);
           setError(null);
+          return next;
         },
         (e) => {
-          if (!live) return;
+          if (!live) return null;
           setView(null);
           setError(String(e));
+          return null;
         },
       );
-    reload.current = load;
+    reload.current = { path, side, load };
     setView(null);
     void load();
     const stops: (() => void)[] = [];
@@ -43,5 +45,13 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
     };
   }, [path, side, workspace]);
 
-  return { view, error, reload: () => reload.current() };
+  /**
+   * Reads `file` again, if it is the one showing: what was read, or `null`
+   * when it could not be, or another file is showing by now.
+   */
+  const again = async (file: FileTarget) => {
+    const shown = reload.current;
+    return shown && shown.path === file.path && shown.side === file.side ? shown.load() : null;
+  };
+  return { view, error, reload: again };
 }

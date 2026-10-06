@@ -14,6 +14,8 @@ import type { FileTarget } from "../lib/chat";
 let disk: Record<string, string | null>;
 let writes: { path: string; expected: string | null; content: string }[];
 let opened: string[] = [];
+// Set, a write lands only when it resolves: a slow disk, for typing during one.
+let slowDisk: Promise<void> | null = null;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -24,11 +26,14 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "file_write") {
       const { path, expected, content } = args as { path: string; expected: string | null; content: string };
       writes.push({ path, expected, content });
-      // What is there already is saved, whatever it was made on.
-      if (disk[path] === content) return Promise.resolve({ kind: "saved" });
-      if (expected !== null && disk[path] !== expected) return Promise.resolve({ kind: "changedOnDisk" });
-      disk[path] = content;
-      return Promise.resolve({ kind: "saved" });
+      const write = () => {
+        // What is there already is saved, whatever it was made on.
+        if (disk[path] === content) return { kind: "saved" };
+        if (expected !== null && disk[path] !== expected) return { kind: "changedOnDisk" };
+        disk[path] = content;
+        return { kind: "saved" };
+      };
+      return slowDisk ? slowDisk.then(write) : Promise.resolve(write());
     }
     if (command === "git_changes") return Promise.resolve({ staged: [], unstaged: [] });
     return Promise.resolve(null);
@@ -157,6 +162,7 @@ const unsaved = () => document.querySelectorAll(".file-tab-unsaved").length;
 beforeEach(() => {
   disk = { "docs/a.adoc": "= Title\n", "docs/b.adoc": "= B\n" };
   writes = [];
+  slowDisk = null;
 });
 
 describe("editing in the IDE layout", () => {
@@ -171,6 +177,27 @@ describe("editing in the IDE layout", () => {
     expect(writes).toEqual([{ path: "docs/a.adoc", expected: "= Title\n", content: "= Title\nMore.\n" }]);
     expect(unsaved()).toBe(0);
     expect(shown()).toBe("= Title\nMore.\n");
+  });
+
+  test("typing on while a save is being written keeps what was typed, as an edit still to save", async () => {
+    await ide();
+    await type("Mine.\n");
+    let land = () => {};
+    slowDisk = new Promise((resolve) => (land = resolve));
+    save();
+    await type("More.");
+    slowDisk = null;
+    land();
+    await settle(10);
+    expect(disk["docs/a.adoc"]).toBe("= Title\nMine.\n");
+    expect(shown()).toBe("= Title\nMine.\nMore.");
+    expect(unsaved()).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    save();
+    await settle(10);
+    expect(writes.at(-1)).toEqual({ path: "docs/a.adoc", expected: "= Title\nMine.\n", content: "= Title\nMine.\nMore." });
+    expect(disk["docs/a.adoc"]).toBe("= Title\nMine.\nMore.");
+    expect(unsaved()).toBe(0);
   });
 
   test("typed back to what is on disk, it is not an edit, and saving writes nothing", async () => {

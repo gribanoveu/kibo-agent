@@ -214,10 +214,14 @@ export function FileViewer({
     const run = (async () => {
       try {
         const saved = (await fileWrite(path, from, text)).kind === "saved";
-        if (sameFile(file, target)) await reload();
+        const now = await reload(file);
         if (saved) {
           unsaved.current.delete(path);
-          edits?.drop(path);
+          // Typed on while it was written: what came after stays a draft, now
+          // over the text just saved. A tab not on screen had no one typing.
+          const disk = now && !now.unviewable ? now.new : null;
+          if (disk !== null) edits?.rebase(path, disk);
+          else edits?.drop(path);
         } else {
           unsaved.current.add(path);
         }
