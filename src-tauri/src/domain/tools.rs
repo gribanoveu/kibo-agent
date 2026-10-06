@@ -809,7 +809,9 @@ impl ToolScope {
     /// Canonicalizes `root`. Fails if it does not exist — an access boundary
     /// that cannot be resolved must not silently become "anywhere".
     pub fn new(root: &Path) -> Result<Self, ToolError> {
-        let root = root.canonicalize().map_err(|e| match e.kind() {
+        // Plain, as every path checked against it is: on Windows `canonicalize`
+        // gives `\\?\C:\…`, which no `C:\…` path starts with.
+        let root = canonicalize_plain(root).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => ToolError::NotFound(root.display().to_string()),
             _ => ToolError::Io(e),
         })?;
@@ -822,6 +824,50 @@ impl ToolScope {
     pub fn root(&self) -> &Path {
         &self.root
     }
+}
+
+/// `canonicalize` in the form a path may leave this process in — without the
+/// Windows extended-length prefix.
+pub(crate) fn canonicalize_plain(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize().map(strip_verbatim)
+}
+
+/// Strips the Windows `\\?\` prefix `canonicalize` returns, turning
+/// `\\?\C:\repos\x` back into `C:\repos\x`.
+///
+/// Verbatim paths are not universally understood — libgit2 rejects them — and
+/// the string ends up in config files and in every path the UI shows. On
+/// non-Windows targets there is no such prefix and the path passes through.
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return path;
+        };
+        let rebuilt_root = match prefix.kind() {
+            Prefix::VerbatimDisk(letter) => format!("{}:\\", letter as char),
+            Prefix::VerbatimUNC(server, share) => format!(
+                "\\\\{}\\{}\\",
+                server.to_string_lossy(),
+                share.to_string_lossy()
+            ),
+            // `\\?\` over a device path has no plain equivalent — leave it
+            // alone rather than corrupt it.
+            _ => return path,
+        };
+        let mut out = PathBuf::from(rebuilt_root);
+        for component in components {
+            if !matches!(component, Component::RootDir) {
+                out.push(component);
+            }
+        }
+        return out;
+    }
+    #[cfg(not(windows))]
+    path
 }
 
 /// What a call would do, worked out without doing it.
