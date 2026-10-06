@@ -471,6 +471,11 @@ describe("editing in the IDE layout", () => {
       "",
       "https://example.com[out] and <<_two,in>>",
       "",
+      "NOTE: Read me.",
+      "",
+      "[.modal-backdrop.tip]",
+      "Over the window.",
+      "",
       "++++",
       '<script>window.hacked = 1</script><img src="x" onerror="window.hacked = 1"><p id="root" style="position: fixed">raw</p>',
       "++++",
@@ -484,8 +489,11 @@ describe("editing in the IDE layout", () => {
     const page = document.querySelector(".adoc")!;
     expect([...page.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual(["Title", "One", "Two"]);
     expect(page.textContent).toContain("Included twice over.");
-    // The classes the look is drawn by stay.
-    expect(page.querySelectorAll(".sect1").length).toBe(2);
+    // The classes the look is drawn by stay; any other, the window's own among them, goes.
+    expect(page.querySelector(".admonitionblock.note")?.textContent).toContain("Read me.");
+    const role = [...page.querySelectorAll("p")].find((p) => p.textContent === "Over the window.")!.parentElement!;
+    expect(role.className).toBe("tip");
+    expect(page.querySelector(".modal-backdrop, .sect1, .paragraph")).toBeNull();
     expect(page.querySelector("script")).toBeNull();
     expect(page.querySelector("img")?.getAttribute("onerror")).toBeNull();
     const raw = [...page.querySelectorAll("p")].find((p) => p.textContent === "raw")!;

@@ -14,13 +14,21 @@ import { highlight, type Token } from "../lib/highlight";
 import { DiagramView } from "./DiagramView";
 import "./AsciiDocPreview.css";
 
+// The classes asciidoctor marks its blocks with that the look is drawn by
+// (AsciiDocPreview.css), or that are read below — and no others: the window's
+// CSS is global, and a document's own role, `[.modal-backdrop]`, would be
+// drawn as the window's. A listing's `language-*` is GitHub's rule for `code`.
+const CLASSES = [
+  "title", "content", "icon", "toc", "attribution", "quoteblock", "verseblock", "exampleblock", "sidebarblock",
+  "admonitionblock", "note", "tip", "important", "caution", "warning", "tableblock", "plantuml",
+];
+
 // GitHub's rules — no script, handler, style or frame, ids prefixed so a
-// document cannot shadow the window's — plus the classes asciidoctor marks
-// its blocks with, which the look is drawn by.
+// document cannot shadow the window's — plus those classes.
 const schema: Schema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "colgroup", "col"],
-  attributes: { ...defaultSchema.attributes, "*": [...(defaultSchema.attributes?.["*"] ?? []), "className"] },
+  attributes: { ...defaultSchema.attributes, "*": [...(defaultSchema.attributes?.["*"] ?? []), ["className", ...CLASSES]] },
 };
 const PREFIX = defaultSchema.clobberPrefix ?? "";
 
