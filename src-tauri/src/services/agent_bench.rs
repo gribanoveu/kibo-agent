@@ -285,6 +285,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let sleep = |d: Duration| std::thread::sleep(d);
     let steering = SteeringQueue::default();
     let take_steering = || steering.take();
+    let notes_typed = || steering.typed();
     let shell = Shell::default();
     let shell_described = describe_shell(&shell.program, probe_shell(&shell).as_ref());
     let approval = ApprovalPolicy { skip_all: true, ..ApprovalPolicy::default() };
@@ -302,6 +303,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         shell: &shell,
         shell_described: &shell_described,
         take_steering: &take_steering,
+        notes_typed: &notes_typed,
         search: Some(search),
         skills: &[],
         rules: &rules,

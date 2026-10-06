@@ -344,7 +344,7 @@ mod tests {
                 ToolResult::Skill { name: "release".into(), instructions: LEAK.into(), files: vec![], from: String::new() },
             ),
             ToolName::ReadOutput => (
-                Some(ToolCall::ReadOutput(crate::domain::tools::ProcessArgs { id: Some(1) })),
+                Some(ToolCall::ReadOutput(crate::domain::tools::ReadOutputArgs { id: Some(1), ..Default::default() })),
                 ToolResult::ProcessOutput(crate::domain::background::ProcessOutput {
                     process: process(),
                     output: LEAK.into(),

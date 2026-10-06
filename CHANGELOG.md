@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-06 A message written while the agent waits on a long command — a build, a test run — is answered right away: the command goes on in the background and the agent comes back to it, instead of the message waiting until the command ends
+
 ## v0.6.0 — 2026-10-06
 
 - 2026-10-06 An MCP server that exits while starting or during a call is reported as exited within a second or so, not after its timeout, even when something it started keeps its output open

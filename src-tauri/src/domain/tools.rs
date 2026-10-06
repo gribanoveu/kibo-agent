@@ -910,6 +910,9 @@ pub struct ToolDeps<'a> {
     /// The turn's stop button, for a tool that waits on someone else — an
     /// MCP call. `None` never stops.
     pub cancelled: Option<&'a dyn Fn() -> bool>,
+    /// How many notes the user has typed in this turn, a count that only
+    /// grows; a wait ends early when it changes. `None` never does.
+    pub notes_typed: Option<&'a dyn Fn() -> u64>,
     /// Puts an MCP server's question (the server's name, the question) to
     /// the user and waits for the answer; `None` where nobody is there to
     /// ask, and the question is declined.
@@ -1171,7 +1174,7 @@ pub enum ToolCall {
     SemanticSearch(SemanticSearchArgs),
     Skill(SkillArgs),
     WritePlan(WritePlanArgs),
-    ReadOutput(ProcessArgs),
+    ReadOutput(ReadOutputArgs),
     StopProcess(ProcessArgs),
     ReadTerminal(ReadTerminalArgs),
     RunInTerminal(RunInTerminalArgs),
@@ -1541,6 +1544,16 @@ pub struct McpCallArgs {
 pub struct ProcessArgs {
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
     pub id: Option<u32>,
+}
+
+/// `readOutput`: which process, and how long to wait for it to end first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOutputArgs {
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub id: Option<u32>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub wait_seconds: Option<u32>,
 }
 
 /// `readTerminal`: which terminal — the newest when absent — and how many

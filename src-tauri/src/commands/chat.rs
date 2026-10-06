@@ -747,6 +747,7 @@ where
         let cancelled = || state.cancel.load(Ordering::SeqCst);
         let sleep = |d: Duration| std::thread::sleep(d);
         let take_steering = || state.steering.take();
+        let notes_typed = || state.steering.typed();
         let shell = Shell::default();
         let shell_described = crate::domain::command_exec::describe_shell(
             &shell.program,
@@ -778,6 +779,7 @@ where
             cancelled: &cancelled,
             sleep: &sleep,
             take_steering: &take_steering,
+            notes_typed: &notes_typed,
             shell: &shell,
             shell_described: &shell_described,
             search,

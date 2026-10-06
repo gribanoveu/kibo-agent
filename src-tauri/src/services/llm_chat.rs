@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -187,6 +188,9 @@ pub struct Turn<'a> {
     /// leave the queue in the same step, or a round that is retried or
     /// interrupted can deliver it twice.
     pub take_steering: &'a (dyn Fn() -> Vec<SteeringNote> + Sync),
+    /// [`SteeringQueue::typed`]: a command waited on steps aside to the
+    /// background when it changes, so a note is not left waiting behind it.
+    pub notes_typed: &'a (dyn Fn() -> u64 + Sync),
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
@@ -278,15 +282,25 @@ impl<'a> Place<'a> {
 /// its own lock. A poisoned lock is recovered rather than propagated: losing
 /// the queue must not take down a turn that is otherwise fine.
 #[derive(Default)]
-pub struct SteeringQueue(Mutex<Vec<SteeringNote>>);
+pub struct SteeringQueue {
+    notes: Mutex<Vec<SteeringNote>>,
+    typed: AtomicU64,
+}
 
 impl SteeringQueue {
     pub fn push(&self, note: SteeringNote) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(note);
+        self.notes.lock().unwrap_or_else(|e| e.into_inner()).push(note);
+        self.typed.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn take(&self) -> Vec<SteeringNote> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()))
+        std::mem::take(&mut *self.notes.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// How many notes were ever pushed — a count that only grows, so a
+    /// wait can tell a note typed during it from one already waiting.
+    pub fn typed(&self) -> u64 {
+        self.typed.load(Ordering::SeqCst)
     }
 
     /// Removes the note with this id, if it is still queued.
@@ -296,7 +310,7 @@ impl SteeringQueue {
     /// unsaid, and the answer is what lets the caller tell "withdrawn" from
     /// "too late".
     pub fn cancel(&self, id: &str) -> bool {
-        let mut notes = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut notes = self.notes.lock().unwrap_or_else(|e| e.into_inner());
         let before = notes.len();
         notes.retain(|note| note.id != id);
         notes.len() != before
@@ -908,6 +922,7 @@ fn execute_call(
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
+        notes_typed: Some(turn.notes_typed),
         ask: turn.questions.is_some().then_some(&ask as _),
         processes: turn.processes.clone(),
         terminals: turn.terminals.clone(),
@@ -1094,6 +1109,7 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         shell: turn.shell,
         shell_described: turn.shell_described,
         take_steering: &no_steering,
+        notes_typed: &|| 0,
         search: turn.search.clone(),
         skills: turn.skills,
         rules: turn.rules,
@@ -2059,7 +2075,9 @@ mod tests {
             let sleep = move |d: Duration| slept.lock().unwrap().push(d);
             let shell = Shell::default();
             let queue = self.steering.clone();
+            let typed = self.steering.clone();
             let take_steering = move || queue.take();
+            let notes_typed = move || typed.typed();
             let logged = self.logged.clone();
             let log_call = move |entry: ToolCallLogEntry| logged.lock().unwrap().push(entry);
             let turn = Turn {
@@ -2073,6 +2091,7 @@ mod tests {
                 cancelled: &cancelled,
                 sleep: &sleep,
                 take_steering: &take_steering,
+                notes_typed: &notes_typed,
                 search: self.search.clone(),
                 shell: &shell,
                 shell_described: &self.shell_described,
@@ -3936,6 +3955,38 @@ mod tests {
         let said = tool_contents(&h.provider.requests()[1]);
         assert!(said[0].starts_with("Started background process #1 in "), "{said:?}");
         assert!(processes.list()[0].running());
+    }
+
+    /// "Is it going all right?" typed during a build is answered during it:
+    /// the build steps aside to the background and the note reaches the
+    /// next round, instead of both waiting for the build to end.
+    #[cfg(unix)]
+    #[test]
+    fn a_note_typed_during_a_command_is_answered_while_it_runs() {
+        let mut h = harness(
+            "steer-during-command",
+            vec![
+                asks(vec![wants("c1", "runCommand", r#"{"command":"echo building; sleep 30","timeoutSeconds":60}"#)]),
+                text("all fine, still building"),
+            ],
+        );
+        let processes = Arc::new(crate::infra::background::Processes::default());
+        h.processes = Some(processes.clone());
+        let steering = h.steering.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            steering.push(SteeringNote::user("is it going all right?"));
+        });
+
+        let started = Instant::now();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("build it")], vec![])).expect("finishes");
+
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        let second = &h.provider.requests()[1];
+        assert!(tool_contents(second)[0].starts_with("Still running"), "{:?}", tool_contents(second));
+        assert!(user_messages(second).iter().any(|m| m.contains("is it going all right?")), "{:?}", user_messages(second));
+        assert!(processes.list()[0].running());
+        processes.stop(1).unwrap();
     }
 
     /// A dev server that died between turns is news the model gets before

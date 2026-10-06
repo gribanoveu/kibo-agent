@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::domain::background::{BackgroundProcesses, Feed, ProcessInfo};
+use crate::domain::background::{BackgroundProcesses, Feed, MAX_RUNNING, ProcessInfo};
 use crate::domain::command_exec::{
     CommandError, CommandEvent, CommandOutput, CommandRequest, CommandSink, OutputStream,
     MAX_OUTPUT_CHARS, Shell, ShellFound, collapse_redraws, truncate_output,
@@ -60,8 +60,8 @@ pub fn run(
 #[derive(Debug)]
 pub enum Ran {
     Finished(CommandOutput),
-    /// Still running at its timeout, it went on as this background process
-    /// — after `after_ms` in the foreground.
+    /// Still running at its timeout, or when `woken` said so, it went on as
+    /// this background process — after `after_ms` in the foreground.
     Moved { process: ProcessInfo, after_ms: u64 },
 }
 
@@ -70,6 +70,11 @@ pub enum Ran {
 /// needed longer, or a server started without `background`, goes on instead
 /// of being lost with everything it did. Killed after all when `processes`
 /// is full.
+///
+/// It moves before its timeout too once `woken` says so — the user wrote
+/// something, and the turn is not to sit on it until the build ends — but
+/// only while there is room: what has room only at the timeout is moved or
+/// killed then, as ever.
 pub fn run_or_move(
     shell: &Shell,
     request: &CommandRequest,
@@ -77,14 +82,22 @@ pub fn run_or_move(
     shown_cwd: &str,
     events: Option<&CommandSink>,
     processes: &dyn BackgroundProcesses,
+    woken: &dyn Fn() -> bool,
 ) -> Result<Ran, CommandError> {
     let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, shown_cwd, backlog).ok();
-    run_inner(shell, request, cwd, events, None, &[], Some(&adopt))
+    // ponytail: room is checked before `adopt`, which ends the child when
+    // full; a process started in between kills the command. Make `adopt`
+    // hand the child back on refusal if that window ever matters.
+    let early = || woken() && processes.list().iter().filter(|p| p.running()).count() < MAX_RUNNING;
+    run_inner(shell, request, cwd, events, None, &[], Some((&adopt, &early)))
 }
 
 /// Takes a child at its deadline, with what it wrote so far; `None` when it
 /// was refused, and the child ended.
 type Adopt<'a> = &'a dyn Fn(Child, &str) -> Option<(ProcessInfo, [Feed; 2])>;
+
+/// [`Adopt`], and whether to hand the child over before its deadline.
+type Move<'a> = (Adopt<'a>, &'a dyn Fn() -> bool);
 
 /// [`run`], with `input` written to the command's stdin and closed, and
 /// `env` added to its environment — what a hook is given.
@@ -109,7 +122,7 @@ fn run_inner(
     events: Option<&CommandSink>,
     input: Option<&str>,
     env: &[(&str, &str)],
-    adopt: Option<Adopt>,
+    moves: Option<Move>,
 ) -> Result<Ran, CommandError> {
     if !cwd.is_dir() {
         return Err(CommandError::Cwd(format!(
@@ -170,9 +183,9 @@ fn run_inner(
             Ok(None) => {}
             Err(e) => return Err(CommandError::Io(e.to_string())),
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || moves.is_some_and(|(_, early)| early()) {
             timed_out = true;
-            if let Some(adopt) = adopt {
+            if let Some((adopt, _)) = moves {
                 // Both streams held while it changes hands, so no chunk falls
                 // between the backlog and the feeds.
                 let mut out = lock(&stdout_to);
@@ -381,7 +394,7 @@ mod tests {
             Some((info, [feed(), feed()]))
         };
 
-        let ran = run_inner(&Shell::default(), &ask("echo before; sleep 1.3; echo after", Some(1)), &temp_dir("run-move"), None, None, &[], Some(&adopt))
+        let ran = run_inner(&Shell::default(), &ask("echo before; sleep 1.3; echo after", Some(1)), &temp_dir("run-move"), None, None, &[], Some((&adopt, &|| false)))
             .unwrap();
         assert!(matches!(ran, Ran::Moved { .. }), "{ran:?}");
         let (mut child, backlog) = adopted.lock().unwrap().take().unwrap();

@@ -33,11 +33,16 @@ pub fn run_command(
         return Ok(ToolResult::ProcessStarted(processes.start(&deps.shell, &request.command, &cwd, shown)?));
     }
 
+    // A note typed while it runs moves it to the background, so the model
+    // hears the note now; one typed before it started has to wait its turn,
+    // or every call after a note would be moved, each running beside the last.
+    let typed = deps.notes_typed.map(|count| (count, count()));
+    let woken = || typed.is_some_and(|(count, at)| count() != at);
     // With nowhere to move to — a hook, a test — the timeout kills as it always did.
     let ran = match deps.processes.as_deref() {
         Some(processes) => {
             let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
-            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes)
+            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes, &woken)
         }
         None => process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished),
     };
@@ -58,7 +63,7 @@ pub fn run_command(
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "runCommand".to_string(),
-        description: format!("Run a shell command in the workspace — build, test, lint, inspect. It runs under `/bin/sh -c` (`cmd.exe /C` on Windows), not the user's shell; what that sh really is here, the prompt says under \"Shell for commands\". A line that works here is not thereby portable: a script meant to run elsewhere is checked with a linter, not by running it here. The exit code, stdout and stderr all come back; a non-zero exit is an ordinary answer, not a failure of the call. The exit code is the whole line's — in `a; b` it is `b`'s, so use `&&` when an earlier failure matters. Output is streamed as it is produced; stdout and stderr are cut separately: past {MAX_OUTPUT_CHARS} characters, a stream keeps its first and its last {half} characters and drops the middle, and the mark there says how many lines (or characters, when a long line was cut) went. Both streams are then saved whole, outside the workspace, for {days} days: the result names the file — grep, head or tail it for what the cut left out instead of running the command again. A command still running at its timeout is not killed: the call returns and the command goes on as a background process — do not run it again, read it with readOutput. For something that has to keep running — a dev server, a watcher — set background: the call returns at once with a process number, readOutput reads what it writes, stopProcess ends it, and you are told when one ends on its own.", half = MAX_OUTPUT_CHARS / 2, days = crate::infra::command_output_store::RETENTION_DAYS),
+        description: format!("Run a shell command in the workspace — build, test, lint, inspect. It runs under `/bin/sh -c` (`cmd.exe /C` on Windows), not the user's shell; what that sh really is here, the prompt says under \"Shell for commands\". A line that works here is not thereby portable: a script meant to run elsewhere is checked with a linter, not by running it here. The exit code, stdout and stderr all come back; a non-zero exit is an ordinary answer, not a failure of the call. The exit code is the whole line's — in `a; b` it is `b`'s, so use `&&` when an earlier failure matters. Output is streamed as it is produced; stdout and stderr are cut separately: past {MAX_OUTPUT_CHARS} characters, a stream keeps its first and its last {half} characters and drops the middle, and the mark there says how many lines (or characters, when a long line was cut) went. Both streams are then saved whole, outside the workspace, for {days} days: the result names the file — grep, head or tail it for what the cut left out instead of running the command again. A command still running at its timeout, or when the user writes to you while it runs, is not killed: the call returns and the command goes on as a background process — do not run it again, read it with readOutput, which can wait for it to end. For something that has to keep running — a dev server, a watcher — set background: the call returns at once with a process number, readOutput reads what it writes, stopProcess ends it, and you are told when one ends on its own.", half = MAX_OUTPUT_CHARS / 2, days = crate::infra::command_output_store::RETENTION_DAYS),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
