@@ -380,6 +380,30 @@ describe("editing in the IDE layout", () => {
     expect(await closeWindow()).toBe(false);
   });
 
+  test("an edit after the window was kept open asks again: closing leaves unsaved only straight after", async () => {
+    await ide([doc, other]);
+    fireEvent.click(tab("a.adoc"));
+    await showing("= Title\n");
+    await type("Draft.\n");
+    disk["docs/a.adoc"] = "= Title\nThe agent's.\n";
+    fireEvent.click(tab("b.adoc"));
+    await showing("= B\n");
+    expect(await closeWindow()).toBe(true);
+    await showing("= Title\nDraft.\n");
+
+    await type("More.\n");
+    expect(screen.getByRole("alert").textContent).not.toContain("Close the window again");
+    expect(await closeWindow()).toBe(true);
+    expect(await closeWindow()).toBe(false);
+
+    // Kept over a version already gone by then: not saved, and asked about again.
+    disk["docs/a.adoc"] = "= Title\nThe agent's again.\n";
+    fireEvent.click(screen.getByText("Keep mine"));
+    await settle(10);
+    expect(disk["docs/a.adoc"]).toBe("= Title\nThe agent's again.\n");
+    expect(await closeWindow()).toBe(true);
+  });
+
   test("closing the window with nothing typed writes nothing", async () => {
     await ide([doc, other]);
     expect(await closeWindow()).toBe(false);

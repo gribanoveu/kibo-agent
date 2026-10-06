@@ -265,7 +265,8 @@ export function FileViewer({
 
   // Closing the window saves every edit of the folder first, the one being
   // typed included. One that cannot be saved keeps the window open, once: its
-  // tab comes up with the banner saying why, and closing again leaves it.
+  // tab comes up with the banner saying why, and closing again leaves it —
+  // unless the user did something about it in between: typed, or kept theirs.
   const [leaving, setLeaving] = useState(false);
   const beforeClose = useRef(async () => false);
   beforeClose.current = async () => {
@@ -399,6 +400,7 @@ export function FileViewer({
                 type="button"
                 className="btn btn-ghost"
                 onClick={() => {
+                  setLeaving(false);
                   edits?.rebase(target.path, onDisk);
                   if (draft) persist(target, draft.text, onDisk, false);
                 }}
@@ -417,7 +419,10 @@ export function FileViewer({
               path={target.path}
               text={draft?.text ?? onDisk ?? ""}
               wrap={wrap}
-              onChange={(text, base) => edits!.edit(target.path, base, text)}
+              onChange={(text, base) => {
+                setLeaving(false);
+                edits!.edit(target.path, base, text);
+              }}
               onSave={save}
             />
           </Suspense>
