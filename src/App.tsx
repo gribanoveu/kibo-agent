@@ -245,26 +245,29 @@ export default function App() {
 
   // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
   const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
+  const putDocks = (next: Docks) => {
+    setTab(next.top);
+    setAsideHidden(next.topHidden);
+    setBottomTab(next.bottom);
+  };
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
     // gives way, or the pane would open out of sight.
     if (!dockFits && (!next.topHidden || next.bottom)) viewer.closeAll();
-    setTab(next.top);
-    setAsideHidden(next.topHidden);
-    setBottomTab(next.bottom);
+    putDocks(next);
   };
   // The tree is what the layout is for: it opens with it, in the dock now on the
   // left. Leaving puts back the panes the user had open — as asked for, not as
   // the window's width last let them show.
   const [beforeIde, setBeforeIde] = useStoredState<Docks | null>("atlas-docks-before-ide", null, isSavedDocks);
+  // Not through `setDocks` either way: there a pane with no room closes the
+  // files, and these are the layout's own, put away by the swap below.
   const toggleIde = () => {
     if (!ideLayout) {
       setBeforeIde({ top: tab, topHidden: asideHidden, bottom: bottomTab });
-      setDocks(ideDocks(docks));
+      putDocks(ideDocks(docks));
     } else if (beforeIde) {
-      setTab(beforeIde.top);
-      setAsideHidden(beforeIde.topHidden);
-      setBottomTab(beforeIde.bottom);
+      putDocks(beforeIde);
     }
     // Each layout keeps its own files open.
     viewer.swap();
