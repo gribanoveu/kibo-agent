@@ -101,6 +101,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         shell: &shell,
         shell_described: "",
         take_steering: &take_steering,
+        notes_typed: &|| 0,
         search: None,
         skills: &[],
         rules: &[],

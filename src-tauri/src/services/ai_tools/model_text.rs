@@ -393,6 +393,7 @@ fn blame(path: &str, hunks: &[BlameHunk], truncated: bool) -> String {
 fn command(output: &CommandOutput) -> String {
     let took = took(output.duration_ms);
     let head = match (output.timed_out, output.exit_code) {
+        _ if output.stopped => format!("Stopped by the user{took} and killed, with everything it started."),
         (true, _) => format!("Timed out{took} and was killed, with everything it started."),
         (false, Some(code)) => format!("Exit code {code}{took}"),
         (false, None) => format!("Ended by a signal{took}, with no exit code."),
@@ -671,6 +672,7 @@ mod tests {
                 stderr: stderr.into(),
                 exit_code,
                 timed_out,
+                stopped: false,
                 truncated: false,
                 duration_ms: 0,
                 full_output: None,
@@ -680,6 +682,8 @@ mod tests {
         assert_eq!(out("", "boom\n", Some(1), false), "Exit code 1\nstderr:\nboom");
         assert_eq!(out("", "", None, true), "Timed out and was killed, with everything it started.\n(no output)");
         assert_eq!(out("", "", None, false), "Ended by a signal, with no exit code.\n(no output)");
+        let stopped = for_model(&ToolResult::CommandRan(CommandOutput { stopped: true, ..CommandOutput::default() }));
+        assert_eq!(stopped, "Stopped by the user and killed, with everything it started.\n(no output)");
     }
 
     /// A cut result points at the saved whole, so the middle is read, not re-run.

@@ -190,7 +190,7 @@ mod definition_tests {
         DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
-        CreateDirectoryArgs, ProcessArgs, ReadTerminalArgs, RunInTerminalArgs,
+        CreateDirectoryArgs, ProcessArgs, ReadOutputArgs, ReadTerminalArgs, RunInTerminalArgs,
         KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
@@ -399,7 +399,7 @@ mod definition_tests {
                     query: Some("fix".to_string()),
                 })],
             ),
-            ToolName::ReadOutput => (r#"{"id":1}"#, vec![ToolCall::ReadOutput(ProcessArgs { id: Some(1) })]),
+            ToolName::ReadOutput => (r#"{"id":1,"waitSeconds":5}"#, vec![ToolCall::ReadOutput(ReadOutputArgs { id: Some(1), wait_seconds: Some(5) })]),
             ToolName::StopProcess => (r#"{"id":1}"#, vec![ToolCall::StopProcess(ProcessArgs { id: Some(1) })]),
             ToolName::ReadTerminal => (
                 r#"{"id":"2","lines":40}"#,

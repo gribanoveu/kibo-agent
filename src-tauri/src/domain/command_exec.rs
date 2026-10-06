@@ -171,6 +171,9 @@ pub struct CommandOutput {
     #[serde(default)]
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    /// Killed because the user pressed Stop while it ran.
+    #[serde(default)]
+    pub stopped: bool,
     /// Either stream had its middle dropped. Stated separately from the
     /// markers inside the text so a reader does not have to search for them.
     pub truncated: bool,
