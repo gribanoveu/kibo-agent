@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-06 Stop ends a command the agent is waiting on at once, with everything it started, and its card says "stopped" — before, the turn went on until the command finished or reached its timeout
+
 - 2026-10-06 A message written while the agent waits on a long command — a build, a test run — is answered right away: the command goes on in the background and the agent comes back to it, instead of the message waiting until the command ends
 
 ## v0.6.0 — 2026-10-06

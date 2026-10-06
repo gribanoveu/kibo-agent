@@ -291,6 +291,25 @@ mod tests {
         assert_eq!((out.stdout.as_str(), out.exit_code), ("done\n", Some(0)));
     }
 
+    /// Stop during a build kills it and what it started, at once: it is not
+    /// moved to the background, and what it wrote so far comes back.
+    #[test]
+    fn stop_kills_a_running_command() {
+        let root = temp_dir("tool-stop");
+        let processes = Arc::new(Processes::default());
+        let stop_at = Instant::now() + Duration::from_secs(1);
+        let stop = || Instant::now() >= stop_at;
+        let deps = ToolDeps { processes: Some(processes.clone()), cancelled: Some(&stop), ..ToolDeps::default() };
+
+        let ToolResult::CommandRan(out) = run(&root, &deps, foreground("echo building; sleep 30 & wait", 60)).unwrap() else {
+            panic!("expected it killed");
+        };
+        assert!(stop_at.elapsed() < Duration::from_secs(3), "{:?}", stop_at.elapsed());
+        assert!(out.stopped && !out.timed_out && out.exit_code.is_none(), "{out:?}");
+        assert_eq!(out.stdout, "building\n");
+        assert!(processes.list().is_empty(), "nothing went to the background");
+    }
+
     fn wait_for(id: u32, seconds: u32) -> ToolCall {
         ToolCall::ReadOutput(ReadOutputArgs { id: Some(id), wait_seconds: Some(seconds) })
     }

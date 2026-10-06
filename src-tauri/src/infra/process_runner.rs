@@ -75,6 +75,11 @@ pub enum Ran {
 /// something, and the turn is not to sit on it until the build ends — but
 /// only while there is room: what has room only at the timeout is moved or
 /// killed then, as ever.
+///
+/// Once `stop` says so — the user pressed Stop — it is killed instead, with
+/// everything it started: a command the user wants stopped may be the very
+/// thing they want stopped, and is not to run on in the background.
+#[allow(clippy::too_many_arguments)]
 pub fn run_or_move(
     shell: &Shell,
     request: &CommandRequest,
@@ -83,13 +88,14 @@ pub fn run_or_move(
     events: Option<&CommandSink>,
     processes: &dyn BackgroundProcesses,
     woken: &dyn Fn() -> bool,
+    stop: &dyn Fn() -> bool,
 ) -> Result<Ran, CommandError> {
     let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, shown_cwd, backlog).ok();
     // ponytail: room is checked before `adopt`, which ends the child when
     // full; a process started in between kills the command. Make `adopt`
     // hand the child back on refusal if that window ever matters.
     let early = || woken() && processes.list().iter().filter(|p| p.running()).count() < MAX_RUNNING;
-    run_inner(shell, request, cwd, events, None, &[], Some((&adopt, &early)))
+    run_inner(shell, request, cwd, events, None, &[], Some((&adopt, &early)), stop)
 }
 
 /// Takes a child at its deadline, with what it wrote so far; `None` when it
@@ -109,7 +115,7 @@ pub fn run_with(
     input: Option<&str>,
     env: &[(&str, &str)],
 ) -> Result<CommandOutput, CommandError> {
-    match run_inner(shell, request, cwd, events, input, env, None)? {
+    match run_inner(shell, request, cwd, events, input, env, None, &|| false)? {
         Ran::Finished(output) => Ok(output),
         Ran::Moved { .. } => unreachable!("nothing to move to without `adopt`"),
     }
@@ -123,6 +129,7 @@ fn run_inner(
     input: Option<&str>,
     env: &[(&str, &str)],
     moves: Option<Move>,
+    stop: &dyn Fn() -> bool,
 ) -> Result<Ran, CommandError> {
     if !cwd.is_dir() {
         return Err(CommandError::Cwd(format!(
@@ -165,6 +172,7 @@ fn run_inner(
     let started = Instant::now();
     let deadline = started + request.timeout();
     let mut timed_out = false;
+    let mut stopped = false;
     let mut child = Some(child);
     let status = loop {
         let Some(running) = child.as_mut() else { break None };
@@ -182,6 +190,12 @@ fn run_inner(
             }
             Ok(None) => {}
             Err(e) => return Err(CommandError::Io(e.to_string())),
+        }
+        if stop() {
+            stopped = true;
+            kill_tree(running);
+            let _ = running.wait();
+            break None;
         }
         if Instant::now() >= deadline || moves.is_some_and(|(_, early)| early()) {
             timed_out = true;
@@ -230,6 +244,7 @@ fn run_inner(
         stderr: shown_err,
         exit_code: status.and_then(|s| s.code()),
         timed_out,
+        stopped,
         truncated,
         duration_ms: started.elapsed().as_millis() as u64,
         full_output,
@@ -394,7 +409,7 @@ mod tests {
             Some((info, [feed(), feed()]))
         };
 
-        let ran = run_inner(&Shell::default(), &ask("echo before; sleep 1.3; echo after", Some(1)), &temp_dir("run-move"), None, None, &[], Some((&adopt, &|| false)))
+        let ran = run_inner(&Shell::default(), &ask("echo before; sleep 1.3; echo after", Some(1)), &temp_dir("run-move"), None, None, &[], Some((&adopt, &|| false)), &|| false)
             .unwrap();
         assert!(matches!(ran, Ran::Moved { .. }), "{ran:?}");
         let (mut child, backlog) = adopted.lock().unwrap().take().unwrap();

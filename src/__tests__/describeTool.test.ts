@@ -484,6 +484,18 @@ describe("what each call shows", () => {
     expect(shown.meta).toBe("timed out");
   });
 
+  test("a command killed by Stop says that", () => {
+    const shown = describeTool(
+      tool({
+        name: "runCommand",
+        arguments: '{"command":"gradle build"}',
+        result: { stdout: "", stderr: "", exitCode: null, timedOut: false, stopped: true },
+      }),
+    );
+
+    expect(shown.meta).toBe("stopped");
+  });
+
   test("a running command shows what has streamed so far", () => {
     const shown = describeTool(
       tool({

@@ -38,11 +38,12 @@ pub fn run_command(
     // or every call after a note would be moved, each running beside the last.
     let typed = deps.notes_typed.map(|count| (count, count()));
     let woken = || typed.is_some_and(|(count, at)| count() != at);
+    let stop = || deps.cancelled.is_some_and(|cancelled| cancelled());
     // With nowhere to move to — a hook, a test — the timeout kills as it always did.
     let ran = match deps.processes.as_deref() {
         Some(processes) => {
             let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
-            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes, &woken)
+            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes, &woken, &stop)
         }
         None => process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished),
     };

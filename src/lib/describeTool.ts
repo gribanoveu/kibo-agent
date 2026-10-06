@@ -417,7 +417,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         // Two different facts, and a reader needs to tell them apart: a killed
         // command has no exit code at all, and calling that "exit 0" would read
         // as success.
-        meta: [result.timedOut ? "timed out" : code === undefined ? undefined : `exit ${code}`, took(num(result.durationMs))]
+        meta: [result.stopped ? "stopped" : result.timedOut ? "timed out" : code === undefined ? undefined : `exit ${code}`, took(num(result.durationMs))]
           .filter(Boolean)
           .join(" · ") || undefined,
         // While it runs there is only what has streamed in; once it settles the

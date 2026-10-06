@@ -4038,6 +4038,7 @@ mod tests {
                     stderr: stderr.into(),
                     exit_code: Some(code),
                     timed_out: false,
+                    stopped: false,
                     truncated: false,
                     duration_ms: 0,
                     full_output: None,

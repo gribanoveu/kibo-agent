@@ -375,7 +375,7 @@ mod tests {
     }
 
     fn ran(code: Option<i32>, stderr: &str, timed_out: bool) -> Result<CommandOutput, CommandError> {
-        Ok(CommandOutput { stdout: "ignored".into(), stderr: stderr.into(), exit_code: code, timed_out, truncated: false, duration_ms: 0, full_output: None })
+        Ok(CommandOutput { stdout: "ignored".into(), stderr: stderr.into(), exit_code: code, timed_out, stopped: false, truncated: false, duration_ms: 0, full_output: None })
     }
 
     #[test]
