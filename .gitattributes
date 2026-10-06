@@ -1,3 +1,10 @@
+# Text in the repository's own line ending, LF, on every platform: a Windows
+# checkout with CRLF made what the app reads with `?raw` (the /init prompt)
+# differ from the tests' expectations. Binary files are told apart by Git.
+# The rules below are more specific and win: the bench's CRLF and mixed files
+# are as they are on purpose.
+* text=auto eol=lf
+
 src-tauri/models/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
 src-tauri/models/**/tokenizer.json filter=lfs diff=lfs merge=lfs -text
 src-tauri/bench/agent-tasks/** -text
