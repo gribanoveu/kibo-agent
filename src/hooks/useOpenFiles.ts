@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useReducer } from "react";
-import type { FileTarget } from "../lib/chat";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { fileWrite, type FileTarget } from "../lib/chat";
+import { onWindowClose } from "../lib/window";
 
 /**
  * The viewer's tabs, in the order they were opened, and the one showing.
@@ -144,6 +145,48 @@ export function useOpenFiles(workspace: string | null) {
     }),
     [],
   );
+  // Closing the window saves the folder's edits first; one that cannot be
+  // saved keeps it open, once, on its tab — `leaving` is that once. While the
+  // viewer is on screen it does this itself: it has the editor's newest text
+  // and the save under way. Without it the drafts are written from here, as
+  // they outlive it — a layout or mode switched to, a window too narrow.
+  const [leaving, setLeaving] = useState(false);
+  const viewerClose = useRef<(() => Promise<boolean>) | null>(null);
+  const latest = useRef({ drafts: state.drafts, workspace, leaving });
+  latest.current = { drafts: state.drafts, workspace, leaving };
+  useEffect(
+    () =>
+      onWindowClose(async () => {
+        if (viewerClose.current) return viewerClose.current();
+        const { drafts, workspace, leaving } = latest.current;
+        if (leaving) return false;
+        const prefix = draftKey(workspace, "");
+        let kept: string | null = null;
+        for (const [key, { base, text }] of Object.entries(drafts)) {
+          if (!key.startsWith(prefix)) continue;
+          const path = key.slice(prefix.length);
+          const saved = await fileWrite(path, base, text).then((done) => done.kind === "saved", () => false);
+          if (saved) dispatch({ kind: "drop", key });
+          else kept ??= path;
+        }
+        if (kept === null) return false;
+        setLeaving(true);
+        dispatch({ kind: "open", target: { path: kept, side: "worktree" }, pin: true });
+        return true;
+      }),
+    [],
+  );
+  const closing = useMemo(
+    () => ({
+      setLeaving,
+      /** The viewer's own save on closing, while it is on screen; returns the unsubscribe. */
+      whileShown: (handler: () => Promise<boolean>) => {
+        viewerClose.current = handler;
+        return () => void (viewerClose.current === handler && (viewerClose.current = null));
+      },
+    }),
+    [],
+  );
   // This folder's drafts by path, and what changes them.
   const edits = useMemo(() => {
     const prefix = draftKey(workspace, "");
@@ -159,8 +202,11 @@ export function useOpenFiles(workspace: string | null) {
       /** Keeps the edit over what is on disk now: the next save writes over it. */
       rebase: (path: string, base: string | null) => dispatch({ kind: "rebase", key: draftKey(workspace, path), base }),
       drop: (path: string) => dispatch({ kind: "drop", key: draftKey(workspace, path) }),
+      /** The window was kept open over an edit not saved: the next close leaves it. */
+      leaving,
+      ...closing,
     };
-  }, [state.drafts, workspace]);
+  }, [state.drafts, workspace, leaving, closing]);
   return { ...state.shown, ...actions, edits };
 }
 

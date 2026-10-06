@@ -11,7 +11,6 @@ import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
 import { matches } from "../lib/shortcuts";
-import { onWindowClose } from "../lib/window";
 import { Tabs } from "./Tabs";
 import "./FileViewer.css";
 
@@ -267,7 +266,8 @@ export function FileViewer({
   // typed included. One that cannot be saved keeps the window open, once: its
   // tab comes up with the banner saying why, and closing again leaves it —
   // unless the user did something about it in between: typed, or kept theirs.
-  const [leaving, setLeaving] = useState(false);
+  const leaving = !!edits?.leaving;
+  const setLeaving = (on: boolean) => edits?.setLeaving(on);
   const beforeClose = useRef(async () => false);
   beforeClose.current = async () => {
     if (!edits || leaving) return false;
@@ -288,7 +288,7 @@ export function FileViewer({
     onActivate({ path: kept, side: "worktree" });
     return true;
   };
-  useEffect(() => onWindowClose(() => beforeClose.current()), []);
+  useEffect(() => edits?.whileShown(() => beforeClose.current()), []);
 
   // On the texts, not the view: a re-read of an unchanged file makes a new
   // object with the same strings, and redrawing it all would be wasted.

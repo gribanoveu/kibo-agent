@@ -111,19 +111,23 @@ function Ide({ open }: { open: FileTarget[] }) {
       </button>
     );
   return (
-    <FileViewer
-      files={viewer.files}
-      active={viewer.active}
-      preview={viewer.preview}
-      workspace="/repo"
-      onActivate={viewer.open}
-      onPin={viewer.pin}
-      onClose={viewer.close}
-      onCloseAll={viewer.closeAll}
-      wrap
-      compact
-      edits={viewer.edits}
-    />
+    <>
+      {/* As the window does it when narrowed, or another layout is switched to. */}
+      <button type="button" data-testid="close-all" onClick={viewer.closeAll} />
+      <FileViewer
+        files={viewer.files}
+        active={viewer.active}
+        preview={viewer.preview}
+        workspace="/repo"
+        onActivate={viewer.open}
+        onPin={viewer.pin}
+        onClose={viewer.close}
+        onCloseAll={viewer.closeAll}
+        wrap
+        compact
+        edits={viewer.edits}
+      />
+    </>
   );
 }
 
@@ -402,6 +406,30 @@ describe("editing in the IDE layout", () => {
     await settle(10);
     expect(disk["docs/a.adoc"]).toBe("= Title\nThe agent's again.\n");
     expect(await closeWindow()).toBe(true);
+  });
+
+  test("closing the window with no file on screen still saves the edits, and keeps it open, once, for one that cannot be", async () => {
+    await ide([doc, other]);
+    fireEvent.click(tab("a.adoc"));
+    await showing("= Title\n");
+    await type("Draft.\n");
+    disk["docs/a.adoc"] = "= Title\nThe agent's.\n";
+    fireEvent.click(tab("b.adoc"));
+    await showing("= B\n");
+    await type("Mine.\n");
+    disk["docs/b.adoc"] = "= B\nThe agent's.\n";
+    fireEvent.click(screen.getByTestId("close-all"));
+    await settle(10);
+    expect(screen.getByTestId("closed")).toBeTruthy();
+    // b as the edit began from: saved now. a still the agent's: its tab comes up.
+    disk["docs/b.adoc"] = "= B\n";
+    expect(await closeWindow()).toBe(true);
+    expect(disk["docs/b.adoc"]).toBe("= B\nMine.\n");
+    expect(disk["docs/a.adoc"]).toBe("= Title\nThe agent's.\n");
+    await toEdit();
+    await showing("= Title\nDraft.\n");
+    expect(screen.getByRole("alert").textContent).toContain("Close the window again");
+    expect(await closeWindow()).toBe(false);
   });
 
   test("closing the window with nothing typed writes nothing", async () => {
