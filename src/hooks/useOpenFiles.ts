@@ -95,7 +95,10 @@ export const sameText = (base: string | null, text: string) => base !== null && 
 type Viewer = { shown: OpenFiles; other: OpenFiles; drafts: Record<string, Draft> };
 
 export function viewerReducer(state: Viewer, action: Action | DraftAction | { kind: "swap" } | { kind: "reset" }): Viewer {
+  // What changes nothing returns the state it was given: the drafts live in
+  // `App`, and every blur of the editor passes its text up.
   const without = (key: string) => {
+    if (!(key in state.drafts)) return state;
     const { [key]: _, ...drafts } = state.drafts;
     return { ...state, drafts };
   };
@@ -109,6 +112,7 @@ export function viewerReducer(state: Viewer, action: Action | DraftAction | { ki
       // Not `??`: a draft kept over a file deleted since has `null` for its base.
       const base = action.key in state.drafts ? state.drafts[action.key].base : action.base;
       if (sameText(base, action.text)) return without(action.key);
+      if (state.drafts[action.key]?.text === action.text) return state;
       return { ...state, drafts: { ...state.drafts, [action.key]: { base, text: action.text } } };
     }
     case "rebase": {
@@ -118,7 +122,7 @@ export function viewerReducer(state: Viewer, action: Action | DraftAction | { ki
       return { ...state, drafts: { ...state.drafts, [action.key]: { ...draft, base: action.base } } };
     }
     case "drop":
-      return action.key in state.drafts ? without(action.key) : state;
+      return without(action.key);
     default: {
       const shown = openFilesReducer(state.shown, action);
       return shown === state.shown ? state : { ...state, shown };

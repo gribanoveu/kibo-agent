@@ -107,6 +107,14 @@ describe("drafts", () => {
     });
   });
 
+  test("changing nothing leaves the state as it was", () => {
+    const start = { shown: empty, other: empty, drafts: {} };
+    expect(viewerReducer(start, edit("= A\n"))).toBe(start);
+    expect(viewerReducer(start, { kind: "drop", key })).toBe(start);
+    const begun = viewerReducer(start, edit("mine\n"));
+    expect(viewerReducer(begun, edit("mine\n", "= A\r\nthe agent's\r\n"))).toBe(begun);
+  });
+
   test("outlive the tabs: closing them all, switching layouts or folders keeps them", () => {
     const steps: ViewerStep[] = [edit("mine\n"), { kind: "closeAll" }, { kind: "swap" }, { kind: "reset" }];
     expect(drafts(steps)).toEqual({ [key]: { base: "= A\r\n", text: "mine\n" } });
