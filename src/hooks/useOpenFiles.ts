@@ -166,7 +166,7 @@ export function useOpenFiles(workspace: string | null) {
         for (const [key, { base, text }] of Object.entries(drafts)) {
           if (!key.startsWith(prefix)) continue;
           const path = key.slice(prefix.length);
-          const saved = await fileWrite(path, base, text).then((done) => done.kind === "saved", () => false);
+          const saved = await fileWrite(workspace ?? "", path, base, text).then((done) => done.kind === "saved", () => false);
           if (saved) dispatch({ kind: "drop", key });
           else kept ??= path;
         }

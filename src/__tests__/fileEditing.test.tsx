@@ -24,7 +24,9 @@ mock.module("@tauri-apps/api/core", () => ({
       return Promise.resolve({ old: text, new: text, unviewable: null });
     }
     if (command === "file_write") {
-      const { path, expected, content } = args as { path: string; expected: string | null; content: string };
+      const { root, path, expected, content } = args as { root: string; path: string; expected: string | null; content: string };
+      // Written only into the folder the edit was made in.
+      if (root !== "/repo") return Promise.reject(`${root} is no longer the open folder`);
       writes.push({ path, expected, content });
       const write = () => {
         // What is there already is saved, whatever it was made on.

@@ -212,7 +212,7 @@ export function FileViewer({
     setSaveError(null);
     const run = (async () => {
       try {
-        const saved = (await fileWrite(path, from, text)).kind === "saved";
+        const saved = (await fileWrite(workspace ?? "", path, from, text)).kind === "saved";
         const now = await reload(file);
         if (saved) {
           unsaved.current.delete(path);
