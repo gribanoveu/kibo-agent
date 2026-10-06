@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,8 @@ use crate::sync::lock;
 /// Lines of the server's stderr kept to explain an exit.
 const STDERR_LINES: usize = 20;
 const STDERR_LINE_CHARS: usize = 500;
+/// How long an exit waits for the rest of stderr when the pipe stays open.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
 
 /// The server's process. Dropping it kills the process and everything it
 /// started — `npx` runs the real server as a child, and killing only `npx`
@@ -79,8 +82,15 @@ pub fn start(config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool)
     RmcpClient::connect(pipes, timeout, cancelled, Box::new(describe), Box::new(ended))
 }
 
-fn gone(process: &Process, tail: &Mutex<VecDeque<String>>) -> McpError {
-    McpError::Exited { code: exit_code(&process.0), stderr: lock(tail).iter().cloned().collect::<Vec<_>>().join("\n") }
+fn gone(process: &Process, tail: &Tail) -> McpError {
+    let code = exit_code(&process.0);
+    // What it wrote on its way out may still be in the pipe: read to the
+    // pipe's end, or for a second — a child of its own can hold it open.
+    let deadline = Instant::now() + STDERR_GRACE;
+    while !tail.read.load(Ordering::Acquire) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    McpError::Exited { code, stderr: lock(&tail.lines).iter().cloned().collect::<Vec<_>>().join("\n") }
 }
 
 fn stop(child: &mut Child) {
@@ -107,20 +117,28 @@ fn exit_code(child: &Mutex<Child>) -> Option<i32> {
     }
 }
 
+/// The last lines of stderr, and whether the pipe has been read to its end.
+#[derive(Default)]
+struct Tail {
+    lines: Mutex<VecDeque<String>>,
+    read: AtomicBool,
+}
+
 /// The last lines of stderr, read as they come so the pipe never fills and
 /// stalls the server.
-fn keep_tail(stderr: impl std::io::Read + Send + 'static) -> Arc<Mutex<VecDeque<String>>> {
-    let tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
+fn keep_tail(stderr: impl std::io::Read + Send + 'static) -> Arc<Tail> {
+    let tail: Arc<Tail> = Arc::default();
     let kept = Arc::clone(&tail);
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
-            let mut kept = lock(&kept);
-            if kept.len() == STDERR_LINES {
-                kept.pop_front();
+            let mut lines = lock(&kept.lines);
+            if lines.len() == STDERR_LINES {
+                lines.pop_front();
             }
-            kept.push_back(line.chars().take(STDERR_LINE_CHARS).collect());
+            lines.push_back(line.chars().take(STDERR_LINE_CHARS).collect());
         }
+        kept.read.store(true, Ordering::Release);
     });
     tail
 }
@@ -207,6 +225,33 @@ mod tests {
         let result = start(&sh("echo 'Error: GITHUB_TOKEN is not set' >&2; exit 7", 5), &dir, &|| false);
         let Err(err) = result else { panic!("started") };
         assert_eq!(err, McpError::Exited { code: Some(7), stderr: "Error: GITHUB_TOKEN is not set".into() });
+    }
+
+    /// The exit can be seen before the last of stderr is read: what the
+    /// server wrote on its way out is waited for, as far as the pipe's end.
+    #[cfg(unix)]
+    #[test]
+    fn stderr_still_on_its_way_when_the_process_exits_is_reported() {
+        let dir = crate::testing::temp_dir("mcp-stdio-late-stderr");
+        let result = start(&sh("(sleep 0.2; echo 'Error: late' >&2) >/dev/null & exit 7", 5), &dir, &|| false);
+        let Err(err) = result else { panic!("started") };
+        assert_eq!(err, McpError::Exited { code: Some(7), stderr: "Error: late".into() });
+    }
+
+    /// Read to its end, stderr is not waited on any longer; held open by a
+    /// child of the server's, only for its grace, not for as long as the child.
+    #[cfg(unix)]
+    #[test]
+    fn an_exit_waits_for_stderr_only_while_it_may_still_come() {
+        let dir = crate::testing::temp_dir("mcp-stdio-stderr-wait");
+        let began = Instant::now();
+        let _ = start(&sh("echo gone >&2; exit 3", 30), &dir, &|| false);
+        assert!(began.elapsed() < STDERR_GRACE * 3 / 4, "an ended pipe was waited on: {:?}", began.elapsed());
+
+        let began = Instant::now();
+        let result = start(&sh("sleep 30 >/dev/null & exit 3", 30), &dir, &|| false);
+        assert!(matches!(result, Err(McpError::Exited { code: Some(3), .. })));
+        assert!(began.elapsed() < STDERR_GRACE * 5, "waited on the child: {:?}", began.elapsed());
     }
 
     /// Only the end of a long stderr is kept — enough to explain an exit,
