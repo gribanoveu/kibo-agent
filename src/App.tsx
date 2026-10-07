@@ -34,7 +34,7 @@ import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
 import { useToast } from "./hooks/useToast";
-import { nativeFrame, startWindowDrag, toggleMaximizeWindow } from "./lib/window";
+import { nativeFrame, startWindowDrag, toggleMaximizeWindow, windowsFrame } from "./lib/window";
 import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
@@ -176,7 +176,7 @@ export default function App() {
   // A window too narrow for every open panel at its minimum: the sidebar
   // falls back to its rail first, then the column right of the viewer hides.
   // Neither is stored — wider again, both come back as they were left.
-  const frame = nativeFrame ? 0 : 2;
+  const frame = nativeFrame || windowsFrame ? 0 : 2;
   // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
   const viewerOpen = agentMode && viewer.active !== null;
   const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
@@ -662,7 +662,7 @@ export default function App() {
   );
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
