@@ -574,7 +574,7 @@ pub(super) fn status_definition() -> LlmToolDefinition {
 pub(super) fn diff_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "gitDiff".to_string(),
-        description: "The diff for a file, or for every changed file under a directory (\\\".\\\" for the whole change). Read-only. Use it to see your own uncommitted work, or what a particular commit did — a commit with path \\\".\\\" is everything it changed."
+        description: "The diff for a file, or for every changed file under a directory (\".\" for the whole change). Read-only. Use it to see your own uncommitted work, or what a particular commit did — a commit with path \".\" is everything it changed. New untracked files are part of the unstaged diff. Between two branches or arbitrary commits, use git diff in runCommand."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -593,7 +593,7 @@ pub(super) fn diff_definition() -> LlmToolDefinition {
                         "staged",
                         null
                     ],
-                    "description": "\\\"unstaged\\\" (default) is the working tree against the index; \\\"staged\\\" is the index against HEAD. Ignored when `commit` is given."
+                    "description": "\"unstaged\" (default) is the working tree against the index; \"staged\" is the index against HEAD. Ignored when `commit` is given."
                 },
                 "commit": {
                     "type": [

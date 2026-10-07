@@ -55,6 +55,7 @@ pub fn grep(scope: &ToolScope, args: &GrepArgs) -> Result<ToolResult, ToolError>
         paths,
         max_results,
         context_lines,
+        files_only: args.files_only.unwrap_or(false),
         matches: Vec::new(),
         total: 0,
         files: std::collections::HashSet::new(),
@@ -79,8 +80,9 @@ pub fn grep(scope: &ToolScope, args: &GrepArgs) -> Result<ToolResult, ToolError>
         }
     }
 
+    let shown = if search.files_only { search.files.len() } else { search.total };
     Ok(ToolResult::GrepResults {
-        truncated: search.total > search.matches.len(),
+        truncated: shown > search.matches.len(),
         total: search.total,
         total_files: search.files.len(),
         total_is_floor: search.total >= MAX_COUNTED,
@@ -111,6 +113,7 @@ struct Search {
     paths: PathFilter,
     max_results: usize,
     context_lines: usize,
+    files_only: bool,
     matches: Vec<GrepMatch>,
     /// Every hit, kept or only counted.
     total: usize,
@@ -158,7 +161,9 @@ impl Search {
             }
             // The cap counts *hits*, not lines: context belongs to a hit, so
             // asking for context never silently returns fewer results.
-            if self.matches.len() >= self.max_results {
+            if self.matches.len() >= self.max_results
+                || (self.files_only && self.matches.last().is_some_and(|m| m.path == relative))
+            {
                 continue;
             }
             let (before, after) = if self.context_lines == 0 {
@@ -201,7 +206,7 @@ fn truncate(line: &str) -> String {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "grep".to_string(),
-        description: "Search file contents by regular expression. Use it when you know what the code says; use listFiles when you know where it lives. Results carry the path and line number in the spelling readFile takes, so a hit can be read without editing the path. Past maxResults the rest are still counted, so the result says how many there are in all; files over 1 MB or not UTF-8 text are not searched and are named."
+        description: "Search file contents by regular expression, line by line: a pattern cannot span lines. Git-ignored files (build output, dependencies) are not searched. Use it when you know what the code says; use listFiles when you know where it lives. Results carry the path and line number in the spelling readFile takes, so a hit can be read without editing the path. Past maxResults the rest are still counted, so the result says how many there are in all; files over 1 MB or not UTF-8 text are not searched and are named."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -215,21 +220,21 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "string",
                         "null"
                     ],
-                    "description": "A file or subdirectory to search under, relative to the workspace root. Omit, \\\".\\\" or \\\"\\\" searches everything."
+                    "description": "A file or subdirectory to search under, relative to the workspace root. Omit, \".\" or \"\" searches everything."
                 },
                 "glob": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Which files to search. Without a `/` it matches the file *name* at any depth — \\\"*.rs\\\"; with one it matches the path from the workspace root — \\\"src/main/**/*.java\\\"."
+                    "description": "Which files to search. Without a `/` it matches the file *name* at any depth — \"*.rs\"; with one it matches the path from the workspace root — \"src/main/**/*.java\"."
                 },
                 "exclude": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Files to leave out, as a glob over the path from the workspace root — \\\"src/docs/**\\\" drops documentation from a code search."
+                    "description": "Files to leave out, as a glob over the path from the workspace root — \"src/docs/**\" drops documentation from a code search."
                 },
                 "caseInsensitive": {
                     "type": [
@@ -244,7 +249,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "null"
                     ],
                     "minimum": 1,
-                    "description": "Cap on the number of matches. The result says whether it was reached, so a capped search is never mistaken for an exhaustive one."
+                    "description": "Cap on the number of matches: 50 when absent, at most 200. The result says whether it was reached, so a capped search is never mistaken for an exhaustive one."
                 },
                 "contextLines": {
                     "type": [
@@ -252,7 +257,14 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "null"
                     ],
                     "minimum": 0,
-                    "description": "Lines of context around each hit. Omit or 0 returns the matching line alone; 2-3 usually answers \\\"what does this line do\\\" without a follow-up readFile."
+                    "description": "Lines of context around each hit, at most 5. Omit or 0 returns the matching line alone; 2-3 usually answers \"what does this line do\" without a follow-up readFile."
+                },
+                "filesOnly": {
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "description": "Only the first hit of each file — which files use a name, not every use. maxResults then counts files."
                 }
             },
             "required": [
@@ -448,6 +460,28 @@ mod tests {
         assert_eq!((matches.len(), truncated, total, total_files, total_is_floor), (5, true, 21, 2, false));
         skipped.sort();
         assert_eq!(skipped, ["big.txt", "cp1251.txt"]);
+    }
+
+    /// filesOnly: a file once, by its first hit, while every hit is still
+    /// counted; the cap counts files, and a cut is a cut of files.
+    #[test]
+    fn files_only_shows_each_file_once_and_caps_files() {
+        let (scope, root) = fixture("grep-files-only");
+        write(&root, "a.txt", "x\nNEEDLE 1\nNEEDLE 2\n");
+        write(&root, "b.txt", "NEEDLE 3\n");
+        write(&root, "c.txt", "NEEDLE 4\nNEEDLE 5\n");
+
+        let all = GrepArgs { files_only: Some(true), ..args("NEEDLE") };
+        let ToolResult::GrepResults { matches, truncated, total, total_files, .. } = grep(&scope, &all).unwrap() else { panic!() };
+        let mut seen: Vec<_> = matches.iter().map(|m| (m.path.as_str(), m.line)).collect();
+        seen.sort();
+        assert_eq!(seen, [("a.txt", 2), ("b.txt", 1), ("c.txt", 1)]);
+        assert_eq!((truncated, total, total_files), (false, 5, 3), "every file shown, every hit counted");
+
+        let capped = GrepArgs { max_results: Some(2), ..all };
+        let (matches, truncated) = run(&scope, &capped);
+        assert_eq!(matches.len(), 2);
+        assert!(truncated, "a third file was left out");
     }
 
     /// Counting stops somewhere, and says so.

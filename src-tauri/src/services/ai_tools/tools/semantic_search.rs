@@ -57,13 +57,11 @@ pub(super) fn definition() -> LlmToolDefinition {
 Declarations named in the query come first; the rest is ranked by meaning and by shared words together. \
 Each match gives the path, the line range readFile takes, the enclosing declaration's name, and the start of its text. \
 Write the query as a sentence about the behaviour, and include any function, type or file names you know or can justify from the user's words. \
-Write it in the language the code is written in — usually English — even when the user asked in another: \
-a Russian question about English code matches far worse than the same question in English. \
-When a question is not in the code's language, or you are unsure how the code puts it, add other wordings in queries: \
-they are searched in the same call, which finds more than any one of them and costs less than a search each. \
-Searching documentation written in another language, write the query in that language. \
+Write it in the language of what you search — for code usually English, even when the user asked in another: \
+a Russian question about English code matches far worse. \
+Unsure how the code puts it, add other wordings in queries: one call searches them all. \
 Put the identifiers you expect the code to use in fts (sendNotification, RetryPolicy), not the words of the question. \
-Documentation is left out unless you set includeDocs — but for one passage that outranks all the code, listed fifth; glob and exclude narrow the search to paths, as in grep. \
+Documentation is left out unless you set includeDocs; glob and exclude narrow the search to paths, as in grep. \
 If meta.hint is present, follow it. Use grep instead when you need every occurrence of an exact string. \
 Returns at most {MAX_TOP_K} matches."
         ),
@@ -72,7 +70,7 @@ Returns at most {MAX_TOP_K} matches."
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "What you are looking for, as a sentence in the language of the code (usually English), with any identifiers you know (parseConfig, RepoIndexer, read_source)."
+                    "description": "What you are looking for, as a sentence, with any identifiers you know (parseConfig, RepoIndexer, read_source)."
                 },
                 "fts": {
                     "type": ["array", "null"],
@@ -168,7 +166,7 @@ mod tests {
     #[test]
     fn the_model_is_told_to_search_in_the_language_of_the_code() {
         let description = definition().description;
-        assert!(description.contains("in the language the code is written in"), "{description}");
+        assert!(description.contains("for code usually English, even when the user asked in another"), "{description}");
         assert!(description.contains("identifiers you expect the code to use in fts"), "{description}");
     }
 

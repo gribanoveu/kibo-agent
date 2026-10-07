@@ -216,7 +216,9 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         // "5 of 347" when the backend counted past the cap; "5+" for results
         // saved before it did.
         meta: matches.length
-          ? result.truncated && num(result.total)
+          ? args.filesOnly
+            ? `${matches.length}${result.truncated ? ` of ${num(result.totalFiles)}` : ""} files`
+            : result.truncated && num(result.total)
             ? `${matches.length} of ${num(result.total)}${result.totalIsFloor ? "+" : ""} matches · ${num(result.totalFiles)} files`
             : `${matches.length}${result.truncated ? "+" : ""} matches · ${files.size} files`
           : undefined,

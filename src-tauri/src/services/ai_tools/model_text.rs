@@ -253,7 +253,10 @@ fn grep(matches: &[GrepMatch], truncated: bool, total: usize, total_files: usize
     }
     let hits = matches.len();
     let files_count = blocks.len();
-    let head = if !truncated {
+    let head = if !truncated && total > hits {
+        // filesOnly: every file shown, by its first hit.
+        format!("{total} matches in {files_count} {}, the first of each shown:", if files_count == 1 { "file" } else { "files" })
+    } else if !truncated {
         format!(
             "{hits} {} in {files_count} {}:",
             if hits == 1 { "match" } else { "matches" },
@@ -644,6 +647,16 @@ mod tests {
             skipped: vec![],
         });
         assert!(legacy.starts_with("At least 1 matches in 1 files:"), "{legacy}");
+        // filesOnly: every file shown, more hits than lines.
+        let first_of_each = for_model(&ToolResult::GrepResults {
+            matches: vec![hit("a.rs", 1, "x", &[], &[]), hit("b.rs", 4, "x", &[], &[])],
+            truncated: false,
+            total: 7,
+            total_files: 2,
+            total_is_floor: false,
+            skipped: vec![],
+        });
+        assert!(first_of_each.starts_with("7 matches in 2 files, the first of each shown:"), "{first_of_each}");
     }
 
     /// Hits on 118 and 120 with two lines of context: 120 is both the first
