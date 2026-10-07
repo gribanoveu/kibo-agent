@@ -22,6 +22,8 @@ export type LlmMessage = {
   toolCalls?: LlmToolCall[];
   /** The provider's own blocks for this message (Anthropic's signed thinking). Opaque here: carried, never read. */
   nativeContent?: unknown;
+  /** Pictures the user attached, sanitized by `prepareImage`. Only on a user message. */
+  images?: ImagePart[];
 };
 
 export type TodoStatus = "pending" | "inProgress" | "completed" | "cancelled";
@@ -1258,6 +1260,9 @@ export async function prepareImage(bytes: Uint8Array): Promise<ImagePart> {
   requireBackend();
   return invoke<ImagePart>("image_prepare", bytes);
 }
+
+/** The picture as an `<img src>`: a `data:` URL, which the window's CSP allows. */
+export const imageUrl = (image: ImagePart) => `data:${image.mediaType};base64,${image.data}`;
 
 // ---------------------------------------------------------------- file tree
 

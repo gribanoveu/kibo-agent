@@ -265,6 +265,14 @@ describe("pausing", () => {
     expect(appendUserMessage(state, "more", 2_000).spent).toBe(0);
   });
 
+  test("a user message keeps its pictures, and one without has no field for them", () => {
+    const picture = { mediaType: "image/jpeg" as const, data: "J", width: 3, height: 4 };
+    const [withPictures] = appendUserMessage(emptyTurn(), "look", 1, undefined, [picture]).blocks;
+    expect(withPictures).toMatchObject({ kind: "user", text: "look", images: [picture] });
+    const [without] = appendUserMessage(emptyTurn(), "look", 1).blocks;
+    expect("images" in without).toBe(false);
+  });
+
   test("the estimate a round sends is kept until the next turn starts", () => {
     const estimate = { instructions: 1, skills: 0, tools: 2, mcp: 0, conversation: 7, total: 10, limit: 100, compactsAt: 80 };
     let state = appendUserMessage(emptyTurn(), "go", 1_000);

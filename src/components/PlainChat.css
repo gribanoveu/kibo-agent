@@ -273,3 +273,10 @@
   background: var(--bg-active);
   color: var(--text);
 }
+
+/* Why a pasted or dropped picture was not taken. */
+.plain-attach-error {
+  margin: 0 0 8px;
+  color: var(--red);
+  font-size: var(--fs-sm);
+}

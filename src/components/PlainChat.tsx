@@ -7,6 +7,8 @@ import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
 import { pickSuggestions } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/chat";
+import { useAttachments } from "../hooks/useAttachments";
+import { ImageThumbs } from "./ImageThumbs";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
@@ -53,6 +55,8 @@ type Props = {
   focus: number;
   /** The same models as the agent's box: the provider is the app's, not the mode's. */
   models: { choices: ModelChoice[]; current: ModelChoice | null; effort?: string | null };
+  /** Whether that model is set to see pictures — the composer's own rule. */
+  imagesEnabled?: boolean;
   onModel: (choice: ModelChoice) => void;
   onEffort: (effort: string | null) => void;
   onLoadModels: () => void;
@@ -72,8 +76,20 @@ const MANAGE_KUBECONFIGS = "\u0000manage";
  * No folder — the role says who the model is and what it may call; its calls
  * and their approval cards are drawn by the agent's own transcript.
  */
-export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels, kube, onSetUpKube, onCompact }: Props) {
+export function PlainChat({
+  chat,
+  focus,
+  models,
+  imagesEnabled = false,
+  onModel,
+  onEffort,
+  onLoadModels,
+  kube,
+  onSetUpKube,
+  onCompact,
+}: Props) {
   const [draft, setDraft] = useState("");
+  const attachments = useAttachments(imagesEnabled);
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
@@ -94,8 +110,8 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
   }, [chat.chatId, sent, scrollToBottom]);
 
   const send = () => {
-    if (chat.busy || !draft.trim()) return;
-    void chat.send(draft);
+    if (chat.busy || (!draft.trim() && attachments.images.length === 0)) return;
+    void chat.send(draft, attachments.take());
     setDraft("");
   };
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
@@ -260,13 +276,24 @@ export function PlainChat({ chat, focus, models, onModel, onEffort, onLoadModels
             />
           )}
         </div>
-        <section className="plain-composer">
+        <section
+          className="plain-composer"
+          onDragOver={attachments.dragOver}
+          onDrop={(e) => attachments.attach(Array.from(e.dataTransfer.files), e)}
+        >
+          <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
+          {attachments.error && (
+            <p className="plain-attach-error" role="alert">
+              {attachments.error}
+            </p>
+          )}
           <textarea
             ref={input}
             className="chat-text"
             rows={2}
             placeholder="Message the model…"
             value={draft}
+            onPaste={(e) => attachments.attach(Array.from(e.clipboardData.files), e)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (matches(e, "send") && !e.nativeEvent.isComposing) {

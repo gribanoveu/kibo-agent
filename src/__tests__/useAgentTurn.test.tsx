@@ -80,6 +80,31 @@ describe("making room before a turn", () => {
     ]);
   });
 
+  /// The pictures go to the model in the message and to the transcript in its
+  /// block — and a picture alone is a message.
+  test("pictures go with the message, and alone are one", async () => {
+    results.chat_start = done("a red square");
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    const { result } = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await result.current.send("", undefined, [picture]);
+    });
+
+    const started = calls.find((call) => call.command === "chat_start");
+    expect(started?.args.messages).toEqual([{ role: "user", content: "", images: [picture] }]);
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect((saved()[0].args.blocks as Block[])[0]).toMatchObject({ kind: "user", text: "", images: [picture] });
+  });
+
+  test("nothing said and nothing attached sends nothing", async () => {
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("  ", undefined, []);
+    });
+    expect(calls.filter((call) => call.command === "chat_start")).toEqual([]);
+  });
+
   /// A `/` command: the transcript and the chat's name have what was typed,
   /// the model has the prompt it stands for.
   test("a command's prompt goes to the model, and the command to the transcript", async () => {

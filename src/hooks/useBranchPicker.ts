@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { gitBranches, gitCheckout, gitWorktreeAdd, type BranchRef } from "../lib/chat";
+import { gitBranches, gitCheckout, gitWorktreeAdd, type BranchRef, type ImagePart } from "../lib/chat";
 
 /** A switch refused because it would overwrite these files; held until the user decides. */
 export type BranchConflict = { branch: string; paths: string[] };
@@ -12,7 +12,7 @@ type Deps = {
   open: (path: string) => Promise<boolean>;
   notify: (message: string) => void;
   /** Sends a message in the folder open now — the agent's; `sent` as `useAgentTurn`'s. */
-  send: (text: string, sent?: string) => void;
+  send: (text: string, sent?: string, images?: ImagePart[]) => void;
 };
 
 /**
@@ -35,12 +35,12 @@ export function useBranchPicker({ current, guard, open, notify, send }: Deps) {
   const [base, setBase] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BranchConflict | null>(null);
   // A first message waiting for its worktree to be the open folder.
-  const [waiting, setWaiting] = useState<{ text: string; sent?: string } | null>(null);
+  const [waiting, setWaiting] = useState<{ text: string; sent?: string; images?: ImagePart[] } | null>(null);
 
   useEffect(() => {
     if (waiting === null) return;
     setWaiting(null);
-    send(waiting.text, waiting.sent);
+    send(waiting.text, waiting.sent, waiting.images);
     // Once per message: `send` is a new function every render.
   }, [waiting]);
 
@@ -57,7 +57,7 @@ export function useBranchPicker({ current, guard, open, notify, send }: Deps) {
    * opens would be left on disk for nothing.
    */
   const startWorktree = useCallback(
-    (from: string, message?: string, sent?: string) =>
+    (from: string, message?: string, sent?: string, images?: ImagePart[]) =>
       new Promise<boolean>((resolve) => {
         setConflict(null);
         guard(
@@ -68,7 +68,7 @@ export function useBranchPicker({ current, guard, open, notify, send }: Deps) {
                 if (opened) {
                   setWorktree(false);
                   setBase(null);
-                  if (message !== undefined) setWaiting({ text: message, sent });
+                  if (message !== undefined) setWaiting({ text: message, sent, images });
                 }
                 resolve(opened);
               } catch (e) {
