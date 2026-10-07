@@ -21,7 +21,7 @@ use crate::domain::background::{
 use crate::domain::command_exec::{truncate_output, Shell, MAX_OUTPUT_CHARS};
 use crate::sync::lock;
 
-use super::process_runner::{kill_tree, set_process_group};
+use super::process_runner::{kill_tree, set_process_group, Utf8Decoder};
 
 /// How often an exit is looked for — and new output, which is signalled at
 /// most this often: a server writing a line per millisecond is one signal a
@@ -270,18 +270,25 @@ fn feed(registry: &Arc<Mutex<Registry>>, id: u32) -> Feed {
     })
 }
 
-/// Lossy on a chunk boundary, like `process_runner`'s reader: one broken
-/// character is better than a lost stream. No pipe is a stream already closed —
-/// on its thread even then: `start` calls this holding the registry.
+/// Decoded like `process_runner`'s reader: a character split between two
+/// reads arrives whole. No pipe is a stream already closed — on its thread
+/// even then: `start` calls this holding the registry.
 fn read_into(mut pipe: Option<impl Read + Send + 'static>, mut feed: Feed) {
     thread::spawn(move || {
         let mut chunk = [0u8; 8192];
+        let mut decoder = Utf8Decoder::default();
+        let mut deliver = |text: String| {
+            if !text.is_empty() {
+                feed(Some(&text));
+            }
+        };
         while let Some(pipe) = pipe.as_mut() {
             match pipe.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => feed(Some(&String::from_utf8_lossy(&chunk[..n]))),
+                Ok(n) => deliver(decoder.decode(&chunk[..n])),
             }
         }
+        deliver(decoder.finish());
         feed(None);
     });
 }
@@ -363,6 +370,21 @@ mod tests {
         });
         assert_eq!(processes.read(info.id).unwrap().output, "", "nothing new");
         assert!(processes.list()[0].running());
+    }
+
+    /// See `process_runner`'s test of the same name.
+    #[test]
+    fn cyrillic_output_longer_than_a_read_arrives_whole() {
+        let processes = Processes::default();
+        let letters = "д".repeat(10_000);
+        let info = start(&processes, &format!("printf 'x{letters}\\320'"));
+        let mut seen = String::new();
+        until("the exit", || {
+            seen.push_str(&processes.read(info.id).unwrap().output);
+            !processes.list()[0].running()
+        });
+        seen.push_str(&processes.read(info.id).unwrap().output);
+        assert_eq!(seen, format!("x{letters}\u{FFFD}"));
     }
 
     #[test]

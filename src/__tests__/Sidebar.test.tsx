@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+
+const opened: string[] = [];
+mock.module("@tauri-apps/plugin-opener", () => ({ openUrl: async (url: string) => void opened.push(url) }));
+mock.module("@tauri-apps/api/app", () => ({ getVersion: async () => "9.9.9-1" }));
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Sidebar } from "../components/Sidebar";
 import type { ChatSummary } from "../lib/chat";
@@ -96,5 +100,16 @@ describe("the account menu", () => {
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
     press();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("about", () => {
+  test("shows the running version and where to download a new one", async () => {
+    sidebar();
+    fireEvent.click(screen.getByRole("button", { name: /Account/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /About Kibo Agent/ }));
+    expect(await screen.findByText("Version 9.9.9-1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Download page" }));
+    expect(opened).toEqual(["https://github.com/gribanoveu/kibo-agent/releases"]);
   });
 });

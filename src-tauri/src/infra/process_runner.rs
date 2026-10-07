@@ -274,6 +274,41 @@ impl Target {
     }
 }
 
+/// Turns a pipe's reads into text without breaking a character a read cut in
+/// two: Cyrillic is two bytes, and decoding each read on its own turns every
+/// such boundary into `��` — which the agent then copies back into a file.
+/// The unfinished bytes wait for the next read. Bytes that can never be text
+/// are still replaced, so output that is not UTF-8 does not lose the run.
+#[derive(Default)]
+pub(crate) struct Utf8Decoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8Decoder {
+    pub(crate) fn decode(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let len = self.pending.len();
+        // A character still arriving is a valid start of at most three bytes
+        // that the end of the read cut short.
+        let cut = (len.saturating_sub(3)..len)
+            .find(|&at| {
+                std::str::from_utf8(&self.pending[at..])
+                    .err()
+                    .is_some_and(|e| e.valid_up_to() == 0 && e.error_len().is_none())
+            })
+            .unwrap_or(len);
+        let rest = self.pending.split_off(cut);
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending = rest;
+        text
+    }
+
+    /// The stream ended: what is left was never going to be a character.
+    pub(crate) fn finish(&mut self) -> String {
+        String::from_utf8_lossy(&std::mem::take(&mut self.pending)).into_owned()
+    }
+}
+
 /// Reads one stream to EOF on its own thread, reporting as it goes — into
 /// the target it returns, which a move to the background redirects.
 fn collect(
@@ -285,26 +320,28 @@ fn collect(
     let to = Arc::clone(&target);
     let reader = thread::spawn(move || {
         let mut buffer = [0u8; 8192];
+        let mut decoder = Utf8Decoder::default();
+        let deliver = |chunk: String| {
+            if chunk.is_empty() {
+                return;
+            }
+            match &mut *lock(&to) {
+                Target::Keep(text) => {
+                    text.push_str(&chunk);
+                    if let Some(events) = &events {
+                        events(CommandEvent { stream, chunk });
+                    }
+                }
+                Target::Feed(feed) => feed(Some(&chunk)),
+            }
+        };
         while let Some(pipe) = pipe.as_mut() {
             match pipe.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    // Lossy on purpose: a chunk boundary can fall inside a
-                    // multi-byte character, and losing one character is better
-                    // than losing the run.
-                    let chunk = String::from_utf8_lossy(&buffer[..n]).into_owned();
-                    match &mut *lock(&to) {
-                        Target::Keep(text) => {
-                            text.push_str(&chunk);
-                            if let Some(events) = &events {
-                                events(CommandEvent { stream, chunk });
-                            }
-                        }
-                        Target::Feed(feed) => feed(Some(&chunk)),
-                    }
-                }
+                Ok(n) => deliver(decoder.decode(&buffer[..n])),
             }
         }
+        deliver(decoder.finish());
         if let Target::Feed(feed) = &mut *lock(&to) {
             feed(None);
         }
@@ -593,6 +630,63 @@ mod tests {
         assert!(out.stdout.contains("omitted"), "the cut is marked");
         assert!(out.stdout.contains("line 1 of noise"), "the beginning survives");
         assert!(out.stdout.contains("line 20000 of noise"), "and so does the end");
+    }
+
+    #[test]
+    fn a_character_split_between_reads_arrives_whole() {
+        let bytes = "дом".as_bytes();
+        for at in 0..=bytes.len() {
+            let mut decoder = Utf8Decoder::default();
+            let text = decoder.decode(&bytes[..at]) + &decoder.decode(&bytes[at..]) + &decoder.finish();
+            assert_eq!(text, "дом", "split at {at}");
+        }
+        // A four-byte character, one byte per read.
+        let mut decoder = Utf8Decoder::default();
+        let text: String = "a😀b".as_bytes().iter().map(|b| decoder.decode(&[*b])).collect();
+        assert_eq!(text, "a😀b");
+    }
+
+    #[test]
+    fn a_complete_read_is_not_held_back() {
+        let mut decoder = Utf8Decoder::default();
+        assert_eq!(decoder.decode("при".as_bytes()), "при");
+        assert_eq!(decoder.decode(&"д".as_bytes()[..1]), "");
+        assert_eq!(decoder.decode(&"д".as_bytes()[1..]), "д");
+    }
+
+    #[test]
+    fn bytes_that_are_not_text_are_replaced_not_held() {
+        let mut decoder = Utf8Decoder::default();
+        // cp1251 «При»: the last byte could still start a character, so it
+        // waits — and the next read shows it was not one.
+        assert_eq!(decoder.decode(&[0xCF, 0xF0, 0xE8]), "\u{FFFD}\u{FFFD}");
+        assert_eq!(decoder.decode(&[b'!']), "\u{FFFD}!");
+        assert_eq!(decoder.decode(&[0xFF]), "\u{FFFD}");
+        // A start the stream ended before finishing still shows up.
+        assert_eq!(decoder.decode(&[b'x', 0xD0]), "x");
+        assert_eq!(decoder.finish(), "\u{FFFD}");
+        assert_eq!(decoder.finish(), "");
+    }
+
+    /// `x` first, so every read boundary — a multiple of a power of two —
+    /// falls inside a two-byte letter; the trailing `\320` is a letter the
+    /// command never finished.
+    #[cfg(unix)]
+    #[test]
+    fn cyrillic_output_longer_than_a_read_arrives_whole() {
+        let letters = "д".repeat(10_000);
+        let seen: Arc<Mutex<Vec<CommandEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = seen.clone();
+        let sink: CommandSink = Arc::new(move |event| sink_events.lock().unwrap().push(event));
+        let out = run(
+            &Shell::default(),
+            &ask(&format!("printf 'x{letters}\\320'"), Some(10)),
+            &temp_dir("run-cyrillic"),
+            Some(&sink),
+        )
+        .expect("runs");
+        assert_eq!(out.stdout, format!("x{letters}\u{FFFD}"));
+        assert!(seen.lock().unwrap().iter().all(|e| !e.chunk.is_empty()), "no empty chunks are reported");
     }
 
     /// Output that is not valid UTF-8 must cost one character, not the run.

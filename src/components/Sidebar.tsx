@@ -3,9 +3,9 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
-  Clock,
   CodeXml,
   GitBranch,
+  Info,
   Keyboard,
   MessageSquare,
   MessagesSquare,
@@ -16,6 +16,8 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
 import { GettingStarted } from "./GettingStarted";
@@ -27,6 +29,9 @@ import type { AppMode, AsideTab } from "../types";
 import "./Sidebar.css";
 
 type Filter = "active" | "archived" | "all";
+
+/** Releases, and the `nightly` pre-release built from every push to main. */
+const RELEASES = "https://github.com/gribanoveu/kibo-agent/releases";
 
 /** The list's one filter, as Claude Code's sidebar has it: archived chats are
     out of sight until asked for, not in a section of their own. */
@@ -86,6 +91,11 @@ export function Sidebar({
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (aboutOpen && version === null) void getVersion().then(setVersion, () => setVersion("unknown"));
+  }, [aboutOpen, version]);
   const listed = chats.filter((chat) => filter === "all" || chat.archived === (filter === "archived"));
   const userWrap = useRef<HTMLDivElement>(null);
 
@@ -227,6 +237,21 @@ export function Sidebar({
         </p>
       </Modal>
 
+      <Modal
+        title="About Kibo Agent"
+        open={aboutOpen}
+        onClose={() => setAboutOpen(false)}
+        footer={
+          <button type="button" className="btn btn-primary" title={RELEASES} onClick={() => void openUrl(RELEASES)}>
+            Download page
+          </button>
+        }
+      >
+        <p className="sidebar-about-version">Version {version ?? "…"}</p>
+        <p className="sidebar-about-note">
+          New versions are on GitHub: releases, and a nightly build of main marked as a pre-release.
+        </p>
+      </Modal>
       <Modal title="Keyboard shortcuts" wide open={shortcutsOpen} onClose={() => setShortcutsOpen(false)}>
         <div className="sidebar-shortcut-groups">
           {Object.entries(SHORTCUT_GROUPS).map(([group, entries]) => (
@@ -301,10 +326,13 @@ export function Sidebar({
                 className="user-menu-item"
                 role="menuitem"
                 type="button"
-                onClick={() => setMenuOpen(false)}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAboutOpen(true);
+                }}
               >
                 <span className="ico">
-                  <Clock size={14} />
+                  <Info size={14} />
                 </span>
                 About Kibo Agent
               </button>
