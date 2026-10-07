@@ -9,8 +9,10 @@
   flex-direction: column;
   overflow: hidden;
 }
-/* The native frame draws its own corners and edge. */
-.window.native-frame {
+/* The native frame draws its own corners and edge — on Windows the system
+   shadow of the undecorated window does. */
+.window.native-frame,
+.window.windows-frame {
   border: 0;
   border-radius: 0;
 }

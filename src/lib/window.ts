@@ -11,10 +11,29 @@ import { inTauri } from "./chat";
 // edges a resize grabs — an undecorated window there leaves a pixel-thin edge.
 export const nativeFrame = inTauri() && navigator.userAgent.includes("Mac");
 
+// On Windows the window is undecorated but opaque (tauri.windows.conf.json): a
+// transparent WebView2 paints its clear pixels black, which showed as a dark
+// frame round the rounded corners. The system's shadow rounds the corners and
+// draws the edge there, and the caption buttons are Windows' own shape, on the right.
+export const windowsFrame = inTauri() && navigator.userAgent.includes("Windows");
+
 export const minimizeWindow = () => inTauri() && getCurrentWindow().minimize();
 export const toggleMaximizeWindow = () => inTauri() && getCurrentWindow().toggleMaximize();
 export const closeWindow = () => inTauri() && getCurrentWindow().close();
 export const startWindowDrag = () => inTauri() && getCurrentWindow().startDragging();
+
+/**
+ * Whether the window is maximized: `onChange` gets it once now and again after
+ * every resize, which is when it can change. Returns the unsubscribe.
+ */
+export function onMaximizedChange(onChange: (maximized: boolean) => void): () => void {
+  if (!inTauri()) return () => {};
+  const window = getCurrentWindow();
+  const read = () => void window.isMaximized().then(onChange, () => {});
+  read();
+  const unlisten = window.onResized(read);
+  return () => void unlisten.then((stop) => stop());
+}
 
 /**
  * Before the window closes — its button, ⌘W, ⌘Q: `keep` resolves to whether

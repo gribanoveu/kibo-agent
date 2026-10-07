@@ -43,3 +43,39 @@
 .window-controls.native {
   visibility: hidden;
 }
+
+/* Windows: the bar's full height, flush with the window's right edge. */
+.window-controls.windows {
+  gap: 0;
+  height: 100%;
+  margin-left: auto;
+  margin-right: -14px;
+}
+.window-controls .caption {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: default;
+  display: grid;
+  place-items: center;
+}
+.window-controls .caption:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* Close turns the platform's red, not the theme's. */
+.window-controls .caption.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+.window-controls .caption svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  stroke-width: 1;
+  fill: none;
+  shape-rendering: crispEdges;
+}
