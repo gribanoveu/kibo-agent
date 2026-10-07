@@ -25,3 +25,4 @@ pub mod project_rules;
 pub mod mcp_questions;
 pub mod mcp_servers;
 pub mod rewind;
+pub mod image_sanitize;

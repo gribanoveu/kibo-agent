@@ -83,6 +83,8 @@ tokio = { version = "1", default-features = false, features = ["time", "io-util"
 futures-util = { version = "0.3", default-features = false }
 rmcp = { version = "3.5", default-features = false, features = ["client", "reqwest-tls-no-provider", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
 dunce = "1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -127,4 +129,5 @@ tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
+png = "0.18"
 tauri = { version = "2", features = ["test"] }

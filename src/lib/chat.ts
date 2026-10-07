@@ -1242,6 +1242,21 @@ export async function fileWrite(root: string, path: string, expected: string | n
   return invoke<FileSave>("file_write", { root, path, expected, content });
 }
 
+// ---------------------------------------------------------------- images
+
+/** Mirrors `domain::image::ImagePart`: a picture after sanitizing, `data` base64. */
+export type ImagePart = { mediaType: "image/png" | "image/jpeg"; data: string; width: number; height: number };
+
+/**
+ * Sanitizes a pasted or dropped picture: decoded and encoded again, with no
+ * metadata, PNG or JPEG only. The bytes go as the raw request body. Rejects
+ * with a sentence the composer can show as is.
+ */
+export async function prepareImage(bytes: Uint8Array): Promise<ImagePart> {
+  requireBackend();
+  return invoke<ImagePart>("image_prepare", bytes);
+}
+
 // ---------------------------------------------------------------- file tree
 
 /** Mirrors `domain::file_tree`. A deleted file is not listed: it is not on disk. */
