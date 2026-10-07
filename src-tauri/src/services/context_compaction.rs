@@ -736,6 +736,7 @@ mod tests {
                 arguments: "{}".to_string(),
             }],
             native_content: None,
+            images: Vec::new(),
         });
         for _ in 0..11 {
             history.push(LlmMessage {
@@ -744,6 +745,7 @@ mod tests {
                 tool_call_id: Some("c1".to_string()),
                 tool_calls: Vec::new(),
                 native_content: None,
+                images: Vec::new(),
             });
         }
 

@@ -20,6 +20,7 @@
 //!   no longer there. Upstream had no such rule to break, because its
 //!   messages carried their tool calls inside them.
 
+use super::image::ImagePart;
 use super::llm::{LlmMessage, LlmRole, LlmToolDefinition};
 use super::tools::{ToolName, TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -126,7 +127,10 @@ fn estimate_message_tokens(message: &LlmMessage) -> usize {
     for call in &message.tool_calls {
         chars += call.name.len() + call.arguments.len() + TOOL_CALL_OVERHEAD_CHARS;
     }
-    MESSAGE_OVERHEAD_TOKENS + chars.div_ceil(CHARS_PER_TOKEN)
+    // A picture by its size, never by its base64: that would count a
+    // screenshot as a quarter of a million tokens.
+    let images: usize = message.images.iter().map(ImagePart::estimate_tokens).sum();
+    MESSAGE_OVERHEAD_TOKENS + chars.div_ceil(CHARS_PER_TOKEN) + images
 }
 
 /// What the next request will cost, split the way the window shows it.
@@ -512,7 +516,12 @@ pub fn render_for_summary(messages: &[LlmMessage], budget_tokens: usize) -> Stri
     for message in messages {
         let line = match message.role {
             LlmRole::System => continue,
-            LlmRole::User => format!("User: {}", content_of(message)),
+            // The picture's size, not its pixels: the summary is text, and the
+            // model writing it may not see pictures at all.
+            LlmRole::User => {
+                let notes = message.images.iter().map(|image| format!("{} ", image.note()));
+                format!("User: {}{}", notes.collect::<String>(), content_of(message))
+            }
             LlmRole::Tool => format!("  [result] {}", content_of(message)),
             LlmRole::Assistant => {
                 let mut parts = Vec::new();
@@ -592,6 +601,29 @@ mod tests {
 
     /// No tools advertised is no cost — not a floor, and not the JSON of an
     /// empty array.
+    fn picture(width: u32, height: u32) -> ImagePart {
+        use crate::domain::image::ImageMediaType;
+        // Base64 the size of a real screenshot's, so counting it by its
+        // characters would be unmistakable.
+        ImagePart { media_type: ImageMediaType::Png, data: "A".repeat(400_000), width, height }
+    }
+
+    /// A picture costs what its size says, not what its base64 is long.
+    #[test]
+    fn a_picture_is_counted_by_its_size() {
+        let words = estimate_tokens(&[LlmMessage::user("look")]);
+        let with = estimate_tokens(&[LlmMessage::user_with_images("look", vec![picture(600, 400), picture(10, 10)])]);
+        assert_eq!(with - words, 320 + 200);
+    }
+
+    /// The summary request names the picture and its size; its pixels would
+    /// be noise to a model that may not see them, and its base64 a flood.
+    #[test]
+    fn a_picture_in_a_summary_is_its_size() {
+        let rendered = render_for_summary(&[LlmMessage::user_with_images("why red?", vec![picture(30, 20)])], 10_000);
+        assert_eq!(rendered, "User: [image 30×20] why red?\n");
+    }
+
     #[test]
     fn no_schemas_cost_nothing() {
         assert_eq!(estimate_tool_schema_tokens(&[]), 0);
@@ -667,6 +699,7 @@ mod tests {
                 arguments: r#"{"path":"a.rs"}"#.to_string(),
             }],
             native_content: None,
+            images: Vec::new(),
         }
     }
 
@@ -677,6 +710,7 @@ mod tests {
             tool_call_id: Some(id.to_string()),
             tool_calls: Vec::new(),
             native_content: None,
+            images: Vec::new(),
         }
     }
 

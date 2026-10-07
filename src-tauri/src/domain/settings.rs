@@ -75,6 +75,12 @@ pub struct ProviderConfig {
     /// be sendable without a rebuild.
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Whether the model is sent the pictures the user attaches. Off unless
+    /// the user turns it on: a model that cannot see refuses a request with
+    /// a picture in it, and every later request of that chat with it. Off,
+    /// each picture goes as a line saying it was left out.
+    #[serde(default)]
+    pub supports_images: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

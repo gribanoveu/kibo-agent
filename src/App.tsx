@@ -49,7 +49,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode } from "./lib/chat";
+import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode, type ImagePart } from "./lib/chat";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -417,6 +417,8 @@ export default function App() {
     send: agent.send,
   });
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
+  // The provider turns go to now: its own switch in Settings → Models.
+  const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
   const rewinding = useRewind({ preview: agent.previewRewind, rewind: agent.rewind, notify: toast.show });
   // The composer cleared the box when the message went; one that is not sent
@@ -428,16 +430,16 @@ export default function App() {
   // typed twice.
   // `command`, when given, is what the model gets in place of `text` — a `/`
   // command's prompt — with the reply language said at its end.
-  const send = async (text: string, command?: string) => {
+  const send = async (text: string, command?: string, images: ImagePart[] = []) => {
     const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
     if (!workspace.path && !(await workspace.pick())) return;
     // With Worktree ticked the first message is where the worktree is made:
     // sent here, it would be worked on in the folder the user meant to keep out of.
     if (unstarted && branchPicker.worktree && branchPicker.base) {
-      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent))) giveBack(text);
+      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text);
       return;
     }
-    agent.send(text, sent);
+    agent.send(text, sent, images);
   };
 
   const openChat = history.chats.find((one) => one.id === agent.chatId);
@@ -587,7 +589,8 @@ export default function App() {
                 }
               />
             }
-            onSend={send}
+            onSend={(text, images) => send(text, undefined, images)}
+            imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
             queued={agent.queued}
             onUnqueue={agent.unqueue}
@@ -622,6 +625,7 @@ export default function App() {
           chat={plain}
           focus={composerFocus}
           models={llm.models}
+          imagesEnabled={imagesEnabled}
           onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
           onEffort={llm.pickEffort}
           onLoadModels={llm.loadModels}

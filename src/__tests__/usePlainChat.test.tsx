@@ -164,6 +164,17 @@ describe("room in the window", () => {
     expect(called("plain_chat_send")[0]?.args.messages).toEqual([{ role: "user", content: "hi" }]);
   });
 
+  test("pictures go with the message, and alone are one", async () => {
+    results.plain_chat_send = done;
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("", [picture]);
+    });
+    expect(called("plain_chat_send")[0]?.args.messages).toEqual([{ role: "user", content: "", images: [picture] }]);
+    expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "", images: [picture] });
+  });
+
   test("Compact now asks outright, and says when nothing was folded", async () => {
     results.plain_chat_send = done;
     const { result } = renderHook(() => usePlainChat());

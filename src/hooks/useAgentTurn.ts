@@ -27,6 +27,7 @@ import {
   type LlmMessage,
   type Task,
   type ToolCallDecision,
+  type ImagePart,
 } from "../lib/chat";
 import {
   acceptEvent,
@@ -283,10 +284,11 @@ export function useAgentTurn({
    * with `text` (`/init`) what the transcript shows.
    */
   const send = useCallback(
-    async (text: string, sent?: string) => {
+    async (text: string, sent?: string, images: ImagePart[] = []) => {
       const trimmed = text.trim();
       const content = sent?.trim() || trimmed;
-      if (!trimmed) return;
+      // A picture alone is a message: "what is this?" can go unsaid.
+      if (!trimmed && images.length === 0) return;
 
       if (turn.status === "running") {
         const id = await steerCommand(content, content === trimmed ? undefined : trimmed);
@@ -300,10 +302,10 @@ export function useAgentTurn({
       void answered?.then((row) => (row ? nextPromptSent(row, trimmed) : undefined)).catch(() => {});
       unsaved.current = true;
       turnStart.current = turn.blocks.length;
-      setTurn((state) => appendUserMessage(state, trimmed, Date.now(), content));
+      setTurn((state) => appendUserMessage(state, trimmed, Date.now(), content, images));
       // Room in the window is the turn's to make, round by round; the
       // history it hands back, folded or not, is what the next message sends.
-      history.current = [...history.current, { role: "user", content }];
+      history.current = [...history.current, { role: "user", content, ...(images.length > 0 && { images }) }];
 
       const id = `turn-${++turnId.current}`;
       lastTurn.current = { id, user: trimmed };

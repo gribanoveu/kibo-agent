@@ -35,6 +35,7 @@ import { PANES } from "./panes";
 import { shortcutText } from "../lib/shortcuts";
 import type { AsideTab } from "../types";
 import { CopyAction } from "./CopyAction";
+import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
@@ -989,7 +990,9 @@ function UserBubble({
   // so a long conversation is not a column of buttons and nothing moves.
   return (
     <div className="user-msg">
-      <div className="bubble">{block.text}</div>
+      <ImageThumbs images={block.images ?? []} align="end" />
+      {/* A picture sent alone has no words to put in a bubble. */}
+      {block.text && <div className="bubble">{block.text}</div>}
       <div className="bubble-foot">
         <CopyAction text={block.text} />
         {offered && (

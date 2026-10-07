@@ -60,3 +60,21 @@ export function nativeMenu(e: MouseEvent, dev = import.meta.env.DEV): boolean {
   if (target?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return true;
   return !!window.getSelection()?.toString();
 }
+
+/** Files held over the window or let go on it — the drop's paths, as the OS gave them. */
+export type FileDrop = { type: "over" } | { type: "drop"; paths: string[] } | { type: "leave" };
+
+/**
+ * Files dragged onto the window from Finder or a browser. Tauri's own drag and
+ * drop rather than the page's: the webview's HTML5 drop does not reach the page
+ * on every platform, and this one does. Returns the unsubscribe.
+ */
+export function onFileDrop(handler: (drop: FileDrop) => void): () => void {
+  if (!inTauri()) return () => {};
+  const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
+    if (payload.type === "enter" || payload.type === "over") handler({ type: "over" });
+    else if (payload.type === "drop") handler({ type: "drop", paths: payload.paths });
+    else handler({ type: "leave" });
+  });
+  return () => void unlisten.then((stop) => stop());
+}

@@ -5,9 +5,11 @@ import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
 import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
+import type { ChatUsage, ContextUsage, ConversationMode, ImagePart } from "../lib/chat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
+import { useAttachments } from "../hooks/useAttachments";
+import { ImageThumbs } from "./ImageThumbs";
 import "./Composer.css";
 
 // Two permission states, not the prototype's three, because two is what
@@ -31,8 +33,13 @@ const CONVERSATIONS: { value: ConversationMode; label: string; hint: string }[] 
 type Props = {
   /** Drawn on the box's top edge — the folder the message will be worked on. */
   tab?: ReactNode;
-  /** Sends the box. While a turn is running the same box steers it instead. */
-  onSend: (text: string) => void;
+  /** Sends the box, with the pictures attached to it. While a turn is running
+      the same box steers it instead, with its text only — the pictures stay
+      for the next message. */
+  onSend: (text: string, images: ImagePart[]) => void;
+  /** Whether the model turns go to is set to see pictures; off, a pasted one
+      is refused with a word on where to change that. */
+  imagesEnabled?: boolean;
   /** Holds the box until the running turn ends, to be sent as the next message. */
   onQueue?: (text: string) => void;
   /** What is waiting for the turn to end; a row taken out goes back to the box. */
@@ -81,6 +88,7 @@ type Props = {
 export function Composer({
   tab,
   onSend,
+  imagesEnabled = false,
   onQueue,
   queued = [],
   onUnqueue,
@@ -107,6 +115,7 @@ export function Composer({
   focus = 0,
 }: Props) {
   const [text, setText] = useState("");
+  const attachments = useAttachments(imagesEnabled);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
   // The menu follows the text: shown while a name is being typed, until
@@ -171,12 +180,15 @@ export function Composer({
   };
 
   const send = () => {
-    if (!text.trim()) return;
+    // A note steering a running turn is text: the pictures wait for the next message.
+    const pictures = !running && attachments.images.length > 0;
+    if (!text.trim() && !pictures) return;
     const typed = commandFor(commands, text);
     if (typed) return run(typed.command, typed.args);
-    onSend(text);
+    onSend(text, pictures ? attachments.take() : []);
     clear();
   };
+
 
   // A `/` command is not queued: it runs now, as with Enter — the queue holds
   // text for the model, and a command's expansion belongs to the moment it runs.
@@ -225,8 +237,19 @@ export function Composer({
         </ul>
       )}
       {tab}
-      <section className="composer" ref={box}>
+      <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
+        {attachments.dragging && (
+          <div className="composer-drop" aria-hidden="true">
+            Drop to attach
+          </div>
+        )}
         {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} pending={pendingCommands} />}
+        <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
+        {attachments.error && (
+          <p className="composer-attach-error" role="alert">
+            {attachments.error}
+          </p>
+        )}
         <div className="composer-input">
           {/* The arguments still to type, in grey after the text: the text
               itself is drawn here too, invisibly, so the hint starts where it
@@ -248,6 +271,7 @@ export function Composer({
                 : "Describe your task…"
             }
             value={text}
+            onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => {
               setText(e.target.value);
               setDismissed(false);

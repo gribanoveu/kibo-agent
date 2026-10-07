@@ -34,6 +34,7 @@ use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 use super::openai_compatible::{header_value, ok_or_status_error};
+use crate::domain::image::ImagePart;
 use crate::domain::llm::{
     ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmMessage, LlmModelInfo,
     LlmProvider, LlmRole, LlmToolCall,
@@ -378,7 +379,8 @@ fn wire_messages(messages: &[LlmMessage]) -> Vec<Value> {
     for message in messages {
         let (role, blocks) = match message.role {
             LlmRole::System => continue,
-            LlmRole::User => ("user", text_block(message.content.as_deref()).into_iter().collect()),
+            // The pictures first, then the text: Anthropic's own advice.
+            LlmRole::User => ("user", message.images.iter().map(image_block).chain(text_block(message.content.as_deref())).collect()),
             // Verbatim: see `LlmMessage::native_content`.
             LlmRole::Assistant if message.native_content.as_ref().is_some_and(Value::is_array) => {
                 ("assistant", message.native_content.as_ref().and_then(Value::as_array).cloned().unwrap_or_default())
@@ -418,6 +420,10 @@ fn wire_messages(messages: &[LlmMessage]) -> Vec<Value> {
     out.into_iter()
         .map(|(role, content)| json!({ "role": role, "content": content }))
         .collect()
+}
+
+fn image_block(image: &ImagePart) -> Value {
+    json!({ "type": "image", "source": { "type": "base64", "media_type": image.media_type.as_str(), "data": image.data } })
 }
 
 fn text_block(text: Option<&str>) -> Option<Value> {
@@ -682,6 +688,38 @@ mod tests {
             ])
         );
         assert_eq!(wire.len(), 5);
+    }
+
+    fn image(data: &str) -> ImagePart {
+        use crate::domain::image::ImageMediaType;
+        ImagePart { media_type: ImageMediaType::Jpeg, data: data.into(), width: 1, height: 1 }
+    }
+
+    /// Pictures as base64 image blocks before the text, and the cache point
+    /// still on the message's last block.
+    #[test]
+    fn pictures_go_as_image_blocks_before_the_text() {
+        let messages = vec![LlmMessage::user_with_images("what is this?", vec![image("A"), image("B")])];
+        let body = body(&request(messages), 1, None, None);
+        assert_eq!(
+            body["messages"][0]["content"],
+            json!([
+                {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"A"}},
+                {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"B"}},
+                {"type":"text","text":"what is this?","cache_control":{"type":"ephemeral"}}
+            ])
+        );
+    }
+
+    /// A picture sent without a word is still a message, not one dropped for
+    /// having no text.
+    #[test]
+    fn a_picture_alone_is_still_sent() {
+        let wire = json!(wire_messages(&[LlmMessage::user_with_images(" ", vec![image("A")])]));
+        assert_eq!(
+            wire,
+            json!([{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"A"}}]}])
+        );
     }
 
     #[test]

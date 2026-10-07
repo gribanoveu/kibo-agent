@@ -22,6 +22,7 @@ import {
   type Outcome,
   type PendingToolCall,
   type ToolCallDecision,
+  type ImagePart,
 } from "../lib/chat";
 import {
   acceptEvent,
@@ -208,13 +209,13 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   // event otherwise ends with nothing on screen to say why.
   const failed = (e: unknown) => setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
 
-  const send = async (text: string) => {
+  const send = async (text: string, images: ImagePart[] = []) => {
     const trimmed = text.trim();
-    if (busy || !trimmed) return;
+    if (busy || (!trimmed && images.length === 0)) return;
     const id = chatId ?? crypto.randomUUID();
     const before = turn;
-    const asked = appendUserMessage(before, trimmed);
-    history.current = [...history.current, { role: "user", content: trimmed }];
+    const asked = appendUserMessage(before, trimmed, Date.now(), undefined, images);
+    history.current = [...history.current, { role: "user", content: trimmed, ...(images.length > 0 && { images }) }];
     unsaved.current = true;
     setChatId(id);
     setError(null);

@@ -3,6 +3,7 @@ import {
   type Checkpoint,
   type ContextUsage,
   type FileChange,
+  type ImagePart,
   type McpAnswer,
   type McpQuestion,
   type Outcome,
@@ -30,6 +31,9 @@ export type Block =
       /** What the model was sent instead, when that differs — a `/` command's
           prompt. The transcript shows `/init`, not the page it stands for. */
       sent?: string;
+      /** The pictures sent with it. A copy of the history's, saved with the
+          chat's blocks: the transcript draws from blocks alone. */
+      images?: ImagePart[];
       /** How long the agent worked on this message, in ms — its own time,
           not the time spent waiting on an approval. Saved with the chat. */
       workedMs?: number;
@@ -195,7 +199,13 @@ export function compactionEnded(state: TurnState, end: { folded: number } | null
 }
 
 /** `sent` is what the model gets when it is not `text` — see the user block. */
-export function appendUserMessage(state: TurnState, text: string, now = Date.now(), sent?: string): TurnState {
+export function appendUserMessage(
+  state: TurnState,
+  text: string,
+  now = Date.now(),
+  sent?: string,
+  images: ImagePart[] = [],
+): TurnState {
   return {
     ...state,
     status: "running",
@@ -211,7 +221,13 @@ export function appendUserMessage(state: TurnState, text: string, now = Date.now
     spent: 0,
     blocks: [
       ...state.blocks,
-      { kind: "user", id: `user:${state.blocks.length}`, text, ...(sent !== undefined && sent !== text && { sent }) },
+      {
+        kind: "user",
+        id: `user:${state.blocks.length}`,
+        text,
+        ...(sent !== undefined && sent !== text && { sent }),
+        ...(images.length > 0 && { images }),
+      },
     ],
   };
 }

@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::image::ImagePart;
+
 /// One tool call as the model produced it — a name and a JSON string it
 /// generated, neither of which is trusted to be well-formed.
 ///
@@ -66,6 +68,12 @@ pub struct LlmMessage {
     /// ignores it and uses the fields above, which always agree with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_content: Option<serde_json::Value>,
+    /// Pictures the user attached, sanitized (`services::image_sanitize`).
+    /// Only ever on a `User` message: DeepSeek refuses a picture in an
+    /// assistant's. Each wire sends them before `content`. Absent from every
+    /// message without one, so those serialize exactly as they did before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImagePart>,
 }
 
 impl LlmMessage {
@@ -75,6 +83,11 @@ impl LlmMessage {
 
     pub fn user(content: impl Into<String>) -> Self {
         Self::text(LlmRole::User, content)
+    }
+
+    /// What the user wrote, with the pictures they attached.
+    pub fn user_with_images(content: impl Into<String>, images: Vec<ImagePart>) -> Self {
+        Self { images, ..Self::user(content) }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -89,6 +102,7 @@ impl LlmMessage {
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
             native_content: None,
+            images: Vec::new(),
         }
     }
 
@@ -100,6 +114,7 @@ impl LlmMessage {
             tool_call_id: None,
             tool_calls: calls,
             native_content: None,
+            images: Vec::new(),
         }
     }
 
@@ -110,6 +125,7 @@ impl LlmMessage {
             tool_call_id: None,
             tool_calls: Vec::new(),
             native_content: None,
+            images: Vec::new(),
         }
     }
 }
@@ -353,6 +369,22 @@ mod tests {
     fn a_plain_message_carries_no_tool_call_fields() {
         let json = serde_json::to_string(&LlmMessage::user("hello")).expect("serializes");
         assert_eq!(json, r#"{"role":"user","content":"hello","toolCallId":null}"#);
+    }
+
+    /// Pictures survive a saved chat's round trip, and a chat saved before
+    /// pictures existed still loads.
+    #[test]
+    fn pictures_are_kept_and_old_messages_still_load() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+        let picture = ImagePart { media_type: ImageMediaType::Jpeg, data: "AA".into(), width: 2, height: 3 };
+        let message = LlmMessage::user_with_images("this", vec![picture.clone()]);
+        let json = serde_json::to_string(&message).expect("serializes");
+        assert!(json.contains(r#""images":[{"mediaType":"image/jpeg","data":"AA","width":2,"height":3}]"#), "{json}");
+        assert_eq!(serde_json::from_str::<LlmMessage>(&json).expect("loads"), message);
+        assert_eq!((message.role, message.content.as_deref()), (LlmRole::User, Some("this")));
+
+        let old: LlmMessage = serde_json::from_str(r#"{"role":"user","content":"hi"}"#).expect("loads");
+        assert!(old.images.is_empty());
     }
 
     #[test]
