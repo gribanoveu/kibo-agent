@@ -54,10 +54,14 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Saved from main only. A pull request reads main's cache, but one it
+      # saved could be read by nothing but itself: a gigabyte or two each,
+      # minutes to upload, and the repository's 10 GB pushing main's out.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup NASM (needed by git2 vendored OpenSSL build)
         if: runner.os == 'Windows'
@@ -73,10 +77,8 @@ jobs:
       - name: Frontend tests
         run: bun test
 
-      - name: Rust check
-        working-directory: src-tauri
-        run: cargo check --locked
-
+      # No `cargo check` before it: the binary's test target links the library
+      # built without `cfg(test)`, so this compiles everything a check would.
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --locked
