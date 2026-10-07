@@ -68,9 +68,15 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::GitStatus { branch, upstream, staged, unstaged, conflicted, truncated } => {
             git_status(branch.as_deref(), upstream.as_ref(), staged, unstaged, conflicted, *truncated)
         }
-        ToolResult::GitDiff { path, label, is_binary: true, .. } => format!("{path} is a binary file — no text diff ({label})"),
-        ToolResult::GitDiff { path, label, diff, .. } => render_for_model(&format!("Diff ({label}):"), path, diff, true),
-        ToolResult::GitDiffFiles { path, label, files, truncated } => diff_files(path, label, files, *truncated),
+        ToolResult::GitDiff { path, label, is_binary: true, message, .. } => {
+            format!("{}{path} is a binary file — no text diff ({label})", commit_message(message))
+        }
+        ToolResult::GitDiff { path, label, diff, message, .. } => {
+            format!("{}{}", commit_message(message), render_for_model(&format!("Diff ({label}):"), path, diff, true))
+        }
+        ToolResult::GitDiffFiles { path, label, files, truncated, message } => {
+            format!("{}{}", commit_message(message), diff_files(path, label, files, *truncated))
+        }
         ToolResult::GitBlame { path, hunks, truncated } => blame(path, hunks, *truncated),
         ToolResult::GitLog { path, commits, truncated } => log(path, commits, *truncated),
         ToolResult::CommandRan(output) => command(output),
@@ -206,6 +212,11 @@ fn outline(path: &str, entries: &[OutlineEntry], total: u32) -> String {
 /// Each line is printed once. Two hits whose context windows overlap share
 /// their lines, and a line that is itself a hit is shown as one even when it
 /// also falls in another hit's context.
+/// A diffed commit's message, ahead of its diff.
+fn commit_message(message: &Option<String>) -> String {
+    message.as_deref().map(|m| format!("Commit message:\n{m}\n\n")).unwrap_or_default()
+}
+
 fn grep(matches: &[GrepMatch], truncated: bool, total: usize, total_files: usize, floor: bool, skipped: &[String]) -> String {
     let not_searched = if skipped.is_empty() {
         String::new()
@@ -821,6 +832,7 @@ mod tests {
                 file("src/logo.png", FileDiffStats::default(), true),
             ],
             truncated: true,
+            message: None,
         });
         assert_eq!(
             shown,
@@ -830,7 +842,9 @@ mod tests {
              src/logo.png is a binary file — no text diff\n\n\
              [more changed files not shown — ask for a narrower path]"
         );
-        let none = for_model(&ToolResult::GitDiffFiles { path: "src".into(), label: "x".into(), files: vec![], truncated: false });
+        let none = for_model(&ToolResult::GitDiffFiles { path: "src".into(), label: "x".into(), files: vec![], truncated: false, message: None });
+        let with_why = for_model(&ToolResult::GitDiffFiles { path: ".".into(), label: "abc^ → abc".into(), files: vec![], truncated: false, message: Some("Fix it\n\nBecause.".into()) });
+        assert!(with_why.starts_with("Commit message:\nFix it\n\nBecause.\n\n"), "{with_why}");
         assert_eq!(none, "No changes under src (x).");
     }
 

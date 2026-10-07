@@ -139,8 +139,12 @@ pub fn git_diff(scope: &ToolScope, args: &GitDiffArgs) -> Result<ToolResult, Too
         label: label(&comparison, stat),
         diff,
         is_binary,
+        message: comparison.message(),
     })
 }
+
+/// Past this a commit message is a changelog pasted in, not a reason.
+const MAX_MESSAGE_CHARS: usize = 4_000;
 
 /// What a diff compares: one commit against its parent, the index against
 /// the working tree, or `HEAD` against the index.
@@ -164,6 +168,16 @@ impl<'r> Comparison<'r> {
                 reason: format!("scope must be \"unstaged\" or \"staged\" (got \"{other}\")"),
             }),
         }
+    }
+
+    /// The commit's message, cut where a long one stops being a message.
+    fn message(&self) -> Option<String> {
+        let Comparison::Commit(commit) = self else { return None };
+        let message = commit.message().ok()?.trim_end();
+        Some(match message.char_indices().nth(MAX_MESSAGE_CHARS) {
+            Some((cut, _)) => format!("{}…", &message[..cut]),
+            None => message.to_string(),
+        })
     }
 
     fn label(&self) -> String {
@@ -296,6 +310,7 @@ fn directory_diff(
         label: label(comparison, stat),
         files,
         truncated,
+        message: comparison.message(),
     })
 }
 
@@ -574,7 +589,7 @@ pub(super) fn status_definition() -> LlmToolDefinition {
 pub(super) fn diff_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "gitDiff".to_string(),
-        description: "The diff for a file, or for every changed file under a directory (\".\" for the whole change). Read-only. Use it to see your own uncommitted work, or what a particular commit did — a commit with path \".\" is everything it changed. New untracked files are part of the unstaged diff. Between two branches or arbitrary commits, use git diff in runCommand."
+        description: "The diff for a file, or for every changed file under a directory (\".\" for the whole change). Read-only. Use it to see your own uncommitted work, or what a particular commit did — a commit with path \".\" is everything it changed, headed by its whole message. New untracked files are part of the unstaged diff. Between two branches or arbitrary commits, use git diff in runCommand."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -967,6 +982,26 @@ mod tests {
         assert_eq!(entries(&staged), [("important.txt", "A")]);
         assert!(truncated);
         assert_eq!(staged.len() + unstaged.len(), MAX_STATUS_ENTRIES);
+    }
+
+    /// The why is in the body: a diffed commit brings its whole message, a
+    /// file or a directory alike; the working tree has none to bring.
+    #[test]
+    fn a_commit_diff_carries_the_whole_message() {
+        let (scope, root, repo) = repo_fixture("git-diff-message");
+        write(&root, "tracked.txt", "one\nTWO\n");
+        commit(&repo, "Make two loud\n\nBecause the parser reads it upper-case.\n");
+        let at = |path: &str, commit: Option<&str>| {
+            git_diff(&scope, &GitDiffArgs { path: path.into(), commit: commit.map(str::to_string), ..GitDiffArgs::default() }).unwrap()
+        };
+
+        let ToolResult::GitDiff { message, .. } = at("tracked.txt", Some("HEAD")) else { panic!() };
+        assert_eq!(message.as_deref(), Some("Make two loud\n\nBecause the parser reads it upper-case."));
+        let ToolResult::GitDiffFiles { message, .. } = at(".", Some("HEAD")) else { panic!() };
+        assert!(message.is_some_and(|m| m.contains("upper-case")));
+        write(&root, "tracked.txt", "one\nthree\n");
+        let ToolResult::GitDiff { message, .. } = at("tracked.txt", None) else { panic!() };
+        assert_eq!(message, None);
     }
 
     #[test]

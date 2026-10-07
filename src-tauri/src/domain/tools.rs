@@ -1392,6 +1392,10 @@ pub enum ToolResult {
         label: String,
         diff: FileDiffStats,
         is_binary: bool,
+        /// A commit's whole message, when a commit was diffed: `gitLog` gives
+        /// its first line, and `gitBlame` sends the model here for the why.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     /// `gitDiff` on a directory: every changed file under it, each as its own
     /// diff. `truncated` means files were left out; a file whose diff did not
@@ -1402,6 +1406,9 @@ pub enum ToolResult {
         label: String,
         files: Vec<GitFileDiff>,
         truncated: bool,
+        /// As on `GitDiff`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     GitBlame {
