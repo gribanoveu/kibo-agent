@@ -143,7 +143,7 @@ impl ChatRole {
 /// what the cluster said. The same words every turn while nothing changes, so a
 /// prompt cache keeps it.
 fn pinned_note(target: &KubeTarget) -> String {
-    let KubeTarget { config, context, cluster, namespace, reach, .. } = target;
+    let KubeTarget { config, context, cluster, namespace, reach, writes } = target;
     let place = format!(
         "The user's cluster: context \"{context}\" (cluster \"{cluster}\") of the kubeconfig \"{}\" at {}, namespace \
          \"{namespace}\". Commands you give name all three, so they reach this cluster and not whichever context is \
@@ -166,7 +166,15 @@ fn pinned_note(target: &KubeTarget) -> String {
              get through — the VPN, an expired login (`aws sso login`, `gcloud auth login`), the context's server."
         ),
     };
-    format!("{place} {found}")
+    // Told, not found out: unaware of the tab, deepseek-flash tried a change
+    // in five read-only chats to learn it from the refusal.
+    let tab = if *writes {
+        "The chat's tab is on \"Changes\": your changing tools work, each after the user approves it on a card."
+    } else {
+        "The chat's tab is on \"Read only\": your changing tools are refused — say what you would change, and that \
+         switching the tab to \"Changes\" lets you do it."
+    };
+    format!("{place} {found} {tab}")
 }
 
 const KUBERNETES_PROMPT: &str = "\
@@ -202,7 +210,8 @@ is the user's to run: give the exact command and say what it affects.
   reasoned: kubeProbe runs the check from inside the pod and says whether the name resolves, the port is \
   open, the server answers. It reads no body and runs nothing else in the pod.
 - A failing request usually runs ingress controller → Service → pods; the controller lives in its own \
-  namespace (ingress-nginx), which you may read, and a mesh sidecar is the container istio-proxy.
+  namespace (ingress-nginx), which this kubeconfig may or may not be allowed to read — a refusal there is final, \
+  and a mesh sidecar is the container istio-proxy.
 - Spend few calls and little text: kubeList with `fields` compares a field across many objects in one \
   call; kubeGet with `sections` reads part of an object; kubeLogs with `grep` or `since` finds the line.
 - Know what the cluster no longer shows: events last about an hour, `previous` is only the last restart, \
@@ -300,9 +309,18 @@ mod tests {
             "--kube-context eks-prod",
             "Kubernetes v1.30.2",
             "may only read",
+            "tab is on \"Read only\"",
         ] {
             assert!(note.contains(said), "{said:?} not in {note}");
         }
+    }
+
+    #[test]
+    fn the_note_says_which_way_the_tab_is() {
+        let KubeSetup::Pinned(mut target) = pinned(Reach::Answered { version: "v1.30.2".into(), access: Access::Changes }) else { unreachable!() };
+        target.writes = true;
+        let note = ChatRole::Kubernetes.setup_note(&KubeSetup::Pinned(target)).unwrap();
+        assert!(note.contains("tab is on \"Changes\"") && !note.contains("Read only"), "{note}");
     }
 
     #[test]

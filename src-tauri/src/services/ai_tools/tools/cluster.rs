@@ -1281,11 +1281,13 @@ pub fn change(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<ToolResult
 }
 
 /// What every changing tool says of itself.
-const CHANGE: &str = "Works only when the user has switched the chat's tab to \"Changes\"; otherwise it answers that the chat \
-    is read-only. The user approves it on a card; the object is backed up first. Returns what it was and is, and a change id.";
+const CHANGE: &str = "Needs \"Changes\" on the chat's tab and the user's approval on a card; the object is backed up first. \
+    Returns what it was and is, and a change id for each object changed.";
 
-/// How every Kubernetes tool is told where it reads.
-const WHERE: &str = "Reads the cluster, context and namespace this chat is pinned to — you cannot pick another cluster.";
+/// How every Kubernetes tool is told where it reads. The namespace is each
+/// tool's own to say: "this chat's namespace" here read as a ban on the
+/// `namespace` its schema offers.
+const WHERE: &str = "Only the cluster this chat is pinned to.";
 
 pub(super) fn list_definition() -> LlmToolDefinition {
     LlmToolDefinition {
@@ -1306,7 +1308,7 @@ pub(super) fn list_definition() -> LlmToolDefinition {
                 "fieldSelector": { "type": "string", "description": "e.g. status.phase!=Running, spec.nodeName=node-1" },
                 "fields": { "type": "array", "items": { "type": "string" }, "description": "Paths shown as extra columns: dots between keys, `\\\\.` for a dot inside a key (or ['key.with.dots']), [*] for every item, [0] for one." },
                 "limit": { "type": "integer", "description": "Objects per page, default 200, at most 500." },
-                "continue": { "type": "string", "description": "The token the previous page ended with." }
+                "continue": { "type": "string", "description": "The token a previous page of this list ended with, as it was given — never one of your own. Omit for the first page." }
             },
             "required": ["kind"]
         }),
@@ -1339,7 +1341,7 @@ pub(super) fn events_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "kubeEvents".to_string(),
         description: format!(
-            "Events oldest first, each distinct one once with its count summed. Of one object with kind and name — a \
+            "Events oldest first, each distinct one once with its count summed. Of one object with kind and name, or without them of the whole namespace — a \
              Deployment's pods have their own events, under each Pod. The cluster keeps events about an hour. {WHERE}"
         ),
         parameters: serde_json::json!({
