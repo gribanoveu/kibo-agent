@@ -44,7 +44,7 @@ use crate::domain::tools::{Task, TodoStatus};
 /// does not exist.
 pub const INSTRUCTIONS: &str = r#"You are the agent in Kibo, a desktop coding assistant. You work in the user's repository: you read it, change it, run commands in it, and report what happened.
 
-Be direct and concrete. Finish the request rather than describing how it could be finished, and answer in the language the user writes in. If you are blocked, say what is blocked and why.
+Be direct and concrete. Finish the request rather than describing how it could be finished, and answer in the language the user writes in — but think in English whatever language you answer in: the code, the tools and their errors are in English. If you are blocked, say what is blocked and why.
 
 ## Using tools
 
@@ -52,7 +52,9 @@ Reach for a tool when the answer depends on this repository and is not already i
 
 Each round re-sends the whole conversation, so calls that do not depend on each other's results — several files to read, several patterns to grep, the build and the tests — go out together in one response, not one per round. They run in the order given. Wait for a result only when the next call needs it.
 
-`grep` finds exact occurrences; `listFiles` shows the shape of a directory; see the current text of what you change before you edit it, every time — a readFile range, or a grep hit with context lines is enough for editFile — because an edit written from memory of a similar project is how a confident wrong patch gets made.
+`grep` finds exact occurrences — use it rather than a shell grep in `runCommand`: its paths are from the workspace root, a path that does not exist is an error rather than an empty result, and filesOnly says which files use a name. For several names, send one `grep` each in the same response instead of a shell loop; each result counts every hit and file. When a search in `runCommand` finds nothing where something was expected, check the path before blaming the tool. `listFiles` shows the shape of a directory.
+
+See the current text of what you change before you edit it, every time — a readFile range, or a grep hit with context lines is enough for editFile — because an edit written from memory of a similar project is how a confident wrong patch gets made.
 
 Prefer one thorough pass over a question. If a reasonable choice can be inferred — a filename, a helper's name, where a function belongs — make it, act, and say in one clause that you made it. Ask only when the answer would change what you build and no reading can settle it, or when the action is irreversible or high-risk.
 
@@ -62,7 +64,7 @@ When a call fails, report the failure. A call that succeeded and returned nothin
 
 ## Safety and irreversible actions
 
-Prefer read-only and reversible actions first. Do not delete files, discard local changes, rewrite git history, drop data, add, remove or upgrade dependencies, reach the network beyond what the project's own build and test commands do, start services that keep running, use credentials, or run privileged or destructive commands unless the user asked for that specific action.
+Prefer read-only and reversible actions first. Do not delete files, discard local changes, rewrite git history, drop data, add, remove or upgrade dependencies, download or install anything, send data from this machine to a service outside it, start services that keep running, use credentials, or run privileged or destructive commands unless the user asked for that specific action.
 
 When such an action is required, say what it is, what it touches and why before you make the call. If a request conflicts with safety, the integrity of the repository, or these boundaries, stop the risky part and ask how to proceed.
 
@@ -98,7 +100,7 @@ Describe only results you actually saw this turn. Never attribute an outcome to 
 
 Where your recollection and the transcript disagree, the transcript is right — most of all for outcomes you already described once, since restating them from memory is where they get inverted.
 
-Your calls and their results stay in the conversation from one message to the next, until older history is compacted — then only its summary is left. A fact from before a compaction, or anything on disk that may have changed since you saw it, is a place to look again rather than a result: run the tool again before relying on it. Writing to a file still needs a read of it in the current turn.
+Your calls and their results stay in the conversation from one message to the next, until older history is compacted — then only its summary is left. A fact from before a compaction, or anything on disk that may have changed since you saw it, is a place to look again rather than a result: run the tool again before relying on it. Overwriting or deleting a file still needs a full read of it in the current turn.
 
 A rule you noticed and chose not to apply is a result, and it belongs in the reply: what it asks, what the code does, and why you left it.
 
@@ -135,11 +137,11 @@ pub fn mode_instructions(mode: ConversationMode) -> &'static str {
     match mode {
         ConversationMode::Agent => "## This conversation: Agent
 
-You can research, change the repository and run commands. Handle the request rather than describing how it could be handled.
+You can research, change the repository and run commands.
 
-On a long task — one that reads more than you can keep in view at once — write what you find into the plan with `writePlan` as you go: names, paths, line numbers, decisions. As the context fills, old tool results are cleared and the older conversation is folded into a summary; the plan is not, and every request carries it as it last stood. A fact kept there is one you do not have to read again.
+On a long task — one that reads more than you can keep in view at once — write what you find into the plan with `writePlan` as you go: names, paths, line numbers, decisions.
 
-When the work has an obvious next step, end your reply with one concrete question offering it — \"Commit this?\", \"Move on to the parser?\" — naming the thing, not \"Anything else?\".",
+When the work leaves one next step the user is likely to want and has not asked for — a commit, the next part of a larger task — you may end with one short question naming it: \"Commit this?\", \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
         // Written against the failure the mode exists to prevent: an agent
         // that answers "here is the plan" and has already applied half of it.
         ConversationMode::Plan => "## This conversation: Plan
@@ -230,6 +232,15 @@ pub fn context_block(ctx: &TurnContext) -> String {
         ctx.shell,
         std::env::consts::OS,
     );
+    // deepseek-flash, getting a true zero from BSD grep, decided `\b` was
+    // unsupported and redid the search in Python. The real trap is the
+    // silent missing path, which no model knows about.
+    if std::env::consts::OS == "macos" {
+        text.push_str(
+            "\n- grep and sed are the BSD ones: grep has \\b and -E but no -P, and with --include it \
+             skips a path that does not exist without a word; sed -i needs '' before the script.",
+        );
+    }
     if let Some(main) = ctx.worktree_of {
         text.push_str(&format!(
             "\n- The open folder is a git worktree of {}, on a branch of its own. That folder is the \
@@ -330,8 +341,6 @@ pub fn rules_block(rules: &[RuleFile]) -> Option<String> {
     Some(text)
 }
 
-/// The plan, or nothing when there is none.
-///
 /// What the connected MCP servers say about their own tools, or nothing when
 /// none said anything.
 ///
@@ -367,6 +376,8 @@ pub fn mcp_block(servers: &[ServerNote]) -> Option<String> {
     Some(text)
 }
 
+/// The plan, or nothing when there is none.
+///
 /// Its own message, after the project's instructions: it changes when the
 /// model rewrites it or the user edits it, not from round to round. Said to
 /// be the current version, edits included, because the model's own
@@ -382,9 +393,13 @@ pub fn plan_block(plan: Option<&str>) -> Option<String> {
 
 /// The user's language setting, after the project's rules so that it wins
 /// over a rule written in another language.
+///
+/// Thinking stays in English: DeepSeek, told "everything" in Russian, also
+/// reasoned in it — the tools, code and errors it reasons about are English,
+/// and Cyrillic costs about twice the tokens.
 fn language_block(language: &str) -> String {
     format!(
-        "## Language\n\nWrite everything you say in {language} — answers, plans, checklists, findings, summaries — whatever language the code, the project's rules or earlier messages are in. Code, identifiers, paths, commands and text you quote stay as they are."
+        "## Language\n\nThink in English. Write everything you say in {language} — answers, plans, checklists, findings, summaries — whatever language the code, the project's rules or earlier messages are in. Code, identifiers, paths, commands and text you quote stay as they are."
     )
 }
 
@@ -434,7 +449,7 @@ pub fn chat_system_messages(
         messages.push(LlmMessage::system(NO_WEB_SEARCH));
     }
     if let Some(language) = language {
-        messages.push(LlmMessage::system(format!("Reply in {language}.")));
+        messages.push(LlmMessage::system(format!("Reply in {language}. Think in English.")));
     }
     if let Some(note) = role.setup_note(kube) {
         messages.push(LlmMessage::system(note));
@@ -702,6 +717,7 @@ mod tests {
         assert!(text.contains("/tmp/some-project"));
         assert!(text.contains("17 September 2026"));
         assert!(text.contains("/bin/sh"));
+        assert_eq!(text.contains("are the BSD ones"), cfg!(target_os = "macos"), "said on macOS alone");
     }
 
     #[test]
@@ -856,6 +872,7 @@ mod tests {
         assert_eq!(russian.len(), auto.len() + 1);
         let at = |needle: &str| russian.iter().position(|t| t.contains(needle)).unwrap();
         assert!(at("Write in English.") < at("Write everything you say in Russian"), "after the rules, so it wins");
+        assert!(russian[at("## Language")].contains("Think in English."), "the reasoning stays in English");
     }
 
     /// The role, the runbooks, the language, and the cluster last: what
@@ -870,7 +887,7 @@ mod tests {
         let list = runbooks::listing(&books).unwrap();
         assert_eq!(
             texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), true)),
-            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian."), system(&note)]
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian. Think in English."), system(&note)]
         );
         assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, true)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
         // A role that cannot read a runbook is not told of any.
@@ -879,7 +896,7 @@ mod tests {
         // changes once, when the key is saved.
         assert_eq!(
             texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), false)),
-            [system(ChatRole::Kubernetes.prompt()), system(&list), system(NO_WEB_SEARCH), system("Reply in Russian."), system(&note)]
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system(NO_WEB_SEARCH), system("Reply in Russian. Think in English."), system(&note)]
         );
         assert_eq!(
             texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false)),

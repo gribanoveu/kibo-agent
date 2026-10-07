@@ -276,7 +276,7 @@ mod tests {
         let messages = &asked[0].messages;
         assert_eq!(messages[0], LlmMessage::system(ChatRole::Assistant.prompt()));
         assert_eq!(messages[1], LlmMessage::system(crate::domain::prompt::NO_WEB_SEARCH));
-        assert_eq!(messages[2], LlmMessage::system("Reply in Russian."));
+        assert_eq!(messages[2], LlmMessage::system("Reply in Russian. Think in English."));
         assert_eq!(messages[3], LlmMessage::user("hi"));
         assert!(asked[0].tools.is_empty());
         assert_eq!(done.history.last(), Some(&LlmMessage::assistant("hello")), "the answer closes the history");
