@@ -164,7 +164,7 @@ fn file(content: &str, start: u32, end: u32, total: u32, clamped: bool, truncate
     let cut = if clamped { " (the range asked for was cut to fit the file)" } else { "" };
     // Said with the way on, or the model takes the first screen for the file.
     let limit = if truncated {
-        " (stopped at the read limit — read on with startLine, or grep for what you need)".to_string()
+        " (stopped at the read limit — read on with startLine, or search it with the grep tool)".to_string()
     } else {
         String::new()
     };
@@ -602,7 +602,7 @@ mod tests {
         let stopped = for_model(&ToolResult::File { content: "a\n".into(), start_line: 1, end_line: 1, total_lines: 9000, clamped: false, truncated: true });
         assert_eq!(
             stopped,
-            "Lines 1-1 of 9000 (stopped at the read limit — read on with startLine, or grep for what you need):\na\n"
+            "Lines 1-1 of 9000 (stopped at the read limit — read on with startLine, or search it with the grep tool):\na\n"
         );
     }
 
