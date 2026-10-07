@@ -22,4 +22,5 @@ pub mod agents;
 pub mod terminal;
 pub mod git;
 pub mod files;
+pub mod images;
 pub mod rewind;

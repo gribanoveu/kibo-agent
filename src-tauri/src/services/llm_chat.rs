@@ -682,6 +682,7 @@ fn run(
                     tool_call_id: None,
                     tool_calls: vec![],
                     native_content: result.native_content.clone(),
+                    images: Vec::new(),
                 });
                 if let Some(reason) = refused {
                     stop_blocks += 1;
@@ -703,6 +704,7 @@ fn run(
                 tool_call_id: None,
                 tool_calls: sanitize_tool_call_arguments(&result.tool_calls),
                 native_content: result.native_content.clone(),
+                images: Vec::new(),
             });
             state.budget_used += round_cost(&result.tool_calls, turn.mcp);
 
@@ -1722,6 +1724,7 @@ fn tool_message(call_id: &str, content: String) -> LlmMessage {
         tool_call_id: Some(call_id.to_string()),
         tool_calls: vec![],
         native_content: None,
+        images: Vec::new(),
     }
 }
 
@@ -3487,6 +3490,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: vec![wants("w1", "writeFile", "{}")],
                 native_content: None,
+                images: Vec::new(),
             }],
             round: 1,
             budget_used: 2,
@@ -3531,6 +3535,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: vec![wants("w1", "writeFile", "{}")],
             native_content: None,
+            images: Vec::new(),
         };
         let pending = PendingApproval {
             history: vec![round, LlmMessage::user("go")],

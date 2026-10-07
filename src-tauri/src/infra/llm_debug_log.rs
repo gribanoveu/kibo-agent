@@ -51,7 +51,20 @@ pub fn log_request(enabled: bool, provider_id: &str, round: u32, request: &ChatR
         return;
     }
     let Ok(path) = log_path() else { return };
-    append(&path, provider_id, round, "request", request);
+    append(&path, provider_id, round, "request", &without_pixels(request));
+}
+
+/// Each picture's base64 replaced by its length. Every round resends every
+/// picture of the conversation, so a turn of ten rounds over five screenshots
+/// would write tens of megabytes here — and a gateway's complaint is matched
+/// against a payload by its shape, its type and size, not by its pixels. The
+/// picture itself is in the chat, sanitized.
+fn without_pixels(request: &ChatRequest) -> ChatRequest {
+    let mut request = request.clone();
+    for image in request.messages.iter_mut().flat_map(|m| m.images.iter_mut()) {
+        image.data = format!("<{} bytes of base64>", image.data.len());
+    }
+    request
 }
 
 /// What that round produced — the result, or the error's message, which for
@@ -193,6 +206,26 @@ mod tests {
             );
 
             assert!(!log_path().unwrap().exists());
+        });
+    }
+
+    /// A picture is logged by its type and size, never by its pixels.
+    #[test]
+    fn a_picture_is_logged_without_its_pixels() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+        with_app_dir("debug-log-pixels", || {
+            let picture = ImagePart { media_type: ImageMediaType::Png, data: "PIXELS".repeat(1000), width: 40, height: 30 };
+            let mut sent = request();
+            sent.messages.push(crate::domain::llm::LlmMessage::user_with_images("look", vec![picture]));
+            log_request(true, "local", 1, &sent);
+
+            let line = std::fs::read_to_string(log_path().unwrap()).unwrap();
+            assert!(!line.contains("PIXELS"), "{line}");
+            let payload = lines(&log_path().unwrap()).remove(0)["payload"].clone();
+            let logged = &payload["messages"].as_array().unwrap().last().unwrap()["images"][0];
+            assert_eq!(logged["data"], "<6000 bytes of base64>");
+            assert_eq!((logged["mediaType"].as_str(), logged["width"].as_u64()), (Some("image/png"), Some(40)));
+            assert_eq!(sent.messages.last().unwrap().images[0].data.len(), 6000, "the request itself is untouched");
         });
     }
 

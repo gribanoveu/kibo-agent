@@ -545,3 +545,54 @@ describe("where the keys are kept", () => {
     expect(moved).toEqual(["file"]);
   });
 });
+
+describe("images", () => {
+  const save = async () => {
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+  };
+  const chosen = (label: string) => screen.getByRole("radio", { name: label }).getAttribute("aria-checked");
+
+  /// Off unless turned on: a model that cannot see refuses every request of a
+  /// chat with a picture in it.
+  test("a provider that never said is text only", async () => {
+    const { saved } = form();
+    expect(chosen("Text only")).toBe("true");
+    await save();
+    expect(saved[0]?.provider.supportsImages).toBe(false);
+  });
+
+  test("turning them on is saved", async () => {
+    const { saved } = form();
+    fireEvent.click(screen.getByRole("radio", { name: "Text and images" }));
+    await save();
+    expect(saved[0]?.provider.supportsImages).toBe(true);
+  });
+
+  /// Found by a mutation: a provider added from the blank form must start off
+  /// too, not only one loaded without the field.
+  test("a provider added from scratch is text only", async () => {
+    const { saved } = form();
+    fireEvent.click(screen.getByTitle("Add another provider"));
+    expect(chosen("Text only")).toBe("true");
+    fireEvent.change(field("Name"), { target: { value: "deepseek" } });
+    fireEvent.change(field("Base URL"), { target: { value: "https://api.deepseek.com" } });
+    await save();
+    expect(saved[0]?.provider).toMatchObject({ id: "deepseek", supportsImages: false });
+  });
+
+  test("each provider shows its own setting", async () => {
+    const { saved } = form({
+      providers: [
+        { id: "local", baseUrl: "http://127.0.0.1:1234/v1", supportsImages: true, hasApiKey: true },
+        { id: "openai", baseUrl: "https://api.openai.com/v1", hasApiKey: false },
+      ],
+    });
+    expect(chosen("Text and images")).toBe("true");
+    fireEvent.click(screen.getByText("openai"));
+    expect(chosen("Text only")).toBe("true");
+    await save();
+    expect(saved[0]?.provider).toMatchObject({ id: "openai", supportsImages: false });
+  });
+});

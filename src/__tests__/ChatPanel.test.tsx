@@ -908,3 +908,26 @@ describe("the transcript in Chat mode", () => {
     expect(document.body.textContent).toContain("replicas: 5");
   });
 });
+
+describe("a message with pictures", () => {
+  const picture = { mediaType: "image/jpeg" as const, data: "JPG", width: 30, height: 20 };
+
+  test("shows them above its words", () => {
+    panel(state([{ kind: "user", id: "u0", text: "why red?", images: [picture] }]));
+    const img = screen.getByAltText("Image 1, 30×20");
+    expect(img.getAttribute("src")).toBe("data:image/jpeg;base64,JPG");
+    expect(screen.getByText("why red?")).toBeTruthy();
+  });
+
+  /// Sent alone, a picture has no words: no empty bubble under it.
+  test("sent alone has no empty bubble", () => {
+    const { container } = panel(state([{ kind: "user", id: "u0", text: "", images: [picture] }]));
+    expect(screen.getByAltText("Image 1, 30×20")).toBeTruthy();
+    expect(container.querySelector(".user-msg .bubble")).toBeNull();
+  });
+
+  test("a message without pictures shows none", () => {
+    panel(state([{ kind: "user", id: "u0", text: "hi" }]));
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+});

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-07 Paste or drop a screenshot or photo into the message box, in the agent or in Chat, and a model that sees pictures looks at it — PNG and JPEG, cleaned of their metadata (location, camera, anything hidden in the file) before they leave the computer; turn pictures on per provider in Settings → Models
+
 - 2026-10-06 Stop ends a command the agent is waiting on at once, with everything it started, and its card says "stopped" — before, the turn went on until the command finished or reached its timeout
 
 - 2026-10-06 A message written while the agent waits on a long command — a build, a test run — is answered right away: the command goes on in the background and the agent comes back to it, instead of the message waiting until the command ends

@@ -8,7 +8,7 @@ use std::time::Duration;
 use secrecy::SecretString;
 use serde_json::Value;
 
-use crate::domain::llm::{LlmError, LlmProvider};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider};
 use crate::domain::settings::{ProviderConfig, ProviderKind};
 use crate::infra::http_agent;
 
@@ -28,7 +28,7 @@ pub fn provider_for(
     let models_url = config.models_url.clone().filter(|u| !u.trim().is_empty());
     let agent = http_agent::build_agent(config.trusted_cert_pem.as_deref())
         .map_err(|e| LlmError::Tls(e.0))?;
-    Ok(match config.kind {
+    let provider: Box<dyn LlmProvider> = match config.kind {
         ProviderKind::OpenAiCompatible => Box::new(openai_compatible::OpenAiCompatibleProvider::new(
             agent,
             config.base_url.clone(),
@@ -51,7 +51,44 @@ pub fn provider_for(
             config.reasoning_effort.clone(),
             models_url.clone(),
         )),
-    })
+    };
+    Ok(if config.supports_images { provider } else { Box::new(WithoutImages(provider)) })
+}
+
+/// A provider not set to accept pictures. Each one is replaced by a line
+/// saying it was left out, so a chat that has some — started on another
+/// model — still goes on here. In front of both wires, which then never need
+/// to know about the setting.
+struct WithoutImages(Box<dyn LlmProvider>);
+
+impl LlmProvider for WithoutImages {
+    fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+        self.0.chat(without_images(request))
+    }
+
+    fn chat_stream(
+        &self,
+        request: ChatRequest,
+        on_delta: &dyn Fn(&str),
+        on_reasoning: &dyn Fn(&str),
+        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<ChatStreamResult, LlmError> {
+        self.0.chat_stream(without_images(request), on_delta, on_reasoning, on_tool_call_delta, cancelled)
+    }
+
+    fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+        self.0.list_models()
+    }
+}
+
+fn without_images(mut request: ChatRequest) -> ChatRequest {
+    for message in request.messages.iter_mut().filter(|m| !m.images.is_empty()) {
+        let mut lines: Vec<String> = message.images.drain(..).map(|image| image.omitted_note()).collect();
+        lines.extend(message.content.take().filter(|t| !t.is_empty()));
+        message.content = Some(lines.join("\n\n"));
+    }
+    request
 }
 
 /// How soon a stop is seen while the provider says nothing.
@@ -185,6 +222,70 @@ mod tests {
         assert_eq!(asked(ProviderKind::OpenAiCompatible, Some("{url}/models")), "GET /models HTTP/1.1");
         assert_eq!(asked(ProviderKind::Anthropic, None), "GET /anthropic/models?limit=1000 HTTP/1.1");
         assert_eq!(asked(ProviderKind::Anthropic, Some("{url}/models")), "GET /models?limit=1000 HTTP/1.1");
+    }
+
+    fn picture(width: u32) -> crate::domain::image::ImagePart {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+        ImagePart { media_type: ImageMediaType::Png, data: "PIXELS".into(), width, height: 10 }
+    }
+
+    /// The setting decides what reaches the wire, for either protocol: the
+    /// picture itself, or a line saying it was left out.
+    #[test]
+    fn a_provider_sends_pictures_only_when_set_to() {
+        use crate::domain::llm::{ChatRequest, LlmMessage};
+        use crate::infra::llm_providers::openai_compatible::tests::serve_capturing;
+        let sent = |kind, supports_images, stream: bool| {
+            let (url, server) = serve_capturing("{}".to_string());
+            let config = ProviderConfig { id: "p".into(), kind, base_url: url, supports_images, ..Default::default() };
+            let request = ChatRequest {
+                messages: vec![LlmMessage::user_with_images("look", vec![picture(20)])],
+                tools: vec![],
+                model: "m".into(),
+            };
+            let provider = provider_for(&config, Some(SecretString::from("k"))).expect("builds");
+            if stream {
+                let _ = provider.chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false);
+            } else {
+                let _ = provider.chat(request);
+            }
+            server.join().expect("served")
+        };
+        for (kind, stream) in [
+            (ProviderKind::OpenAiCompatible, true),
+            (ProviderKind::OpenAiCompatible, false),
+            (ProviderKind::Anthropic, true),
+        ] {
+            let with = sent(kind, true, stream);
+            assert!(with.contains("PIXELS") && !with.contains("omitted"), "{kind:?} on: {with}");
+            let without = sent(kind, false, stream);
+            assert!(!without.contains("PIXELS"), "{kind:?} off: {without}");
+            assert!(without.contains("[image 20×10 omitted: this provider is not set to accept images]"), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_left_out_picture_becomes_a_line_before_the_words() {
+        use crate::domain::llm::{ChatRequest, LlmMessage};
+        let request = ChatRequest {
+            messages: vec![
+                LlmMessage::user("no picture"),
+                LlmMessage::user_with_images("and this?", vec![picture(1), picture(2)]),
+                LlmMessage::user_with_images("", vec![picture(3)]),
+            ],
+            tools: vec![],
+            model: "m".into(),
+        };
+        let messages = without_images(request).messages;
+        assert_eq!(messages[0], LlmMessage::user("no picture"), "untouched");
+        assert_eq!(
+            messages[1],
+            LlmMessage::user(
+                "[image 1×10 omitted: this provider is not set to accept images]\n\n\
+                 [image 2×10 omitted: this provider is not set to accept images]\n\nand this?"
+            )
+        );
+        assert_eq!(messages[2], LlmMessage::user("[image 3×10 omitted: this provider is not set to accept images]"));
     }
 
     #[test]

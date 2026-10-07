@@ -99,6 +99,9 @@ pub(super) fn session() -> LlmSession {
         reasoning_effort: var("AGENT_BENCH_REASONING_EFFORT"),
         trusted_cert_pem: var("AGENT_BENCH_TRUSTED_CERT")
             .map(|path| std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("AGENT_BENCH_TRUSTED_CERT {path}: {e}"))),
+        // The bench's tasks send none; `image_sanitize`'s live test does, and a
+        // model that cannot see refuses it the way it should.
+        supports_images: true,
         ..ProviderConfig::default()
     };
     let key = SecretString::from(required("AGENT_BENCH_API_KEY"));

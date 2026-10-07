@@ -39,6 +39,9 @@ fn section(message: &LlmMessage) -> String {
     if let Some(id) = &message.tool_call_id {
         out.push_str(&format!("\nIn answer to `{id}`.\n"));
     }
+    for image in &message.images {
+        out.push_str(&format!("\n{}\n", image.note()));
+    }
     match message.content.as_deref().map(str::trim) {
         // A tool result is data, not prose: fenced, so a diff or a stack
         // trace reads as what it is and cannot be mistaken for Markdown.
@@ -194,6 +197,17 @@ mod tests {
 
     /// An assistant turn that only asked for tools has no text, and must not
     /// be written as if it had said something empty.
+    /// A picture is named by its size, never written out as base64.
+    #[test]
+    fn a_picture_is_a_line_with_its_size() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+        let picture = ImagePart { media_type: ImageMediaType::Png, data: "BASE64".into(), width: 30, height: 20 };
+        let text = to_markdown(&record(vec![LlmMessage::user_with_images("this one", vec![picture])]));
+
+        assert!(text.contains("## User\n\n[image 30×20]\n\nthis one\n"), "{text}");
+        assert!(!text.contains("BASE64"), "{text}");
+    }
+
     #[test]
     fn a_message_with_nothing_said_is_just_its_heading() {
         let text = to_markdown(&record(vec![

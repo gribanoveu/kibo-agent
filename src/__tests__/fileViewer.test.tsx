@@ -32,7 +32,8 @@ mock.module("@tauri-apps/api/event", () => ({
 }));
 
 mock.module("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ onCloseRequested: () => Promise.resolve(() => {}) }),
+  // Global to the run: every method a later file's component calls must be here.
+  getCurrentWindow: () => ({ onCloseRequested: () => Promise.resolve(() => {}), onDragDropEvent: () => Promise.resolve(() => {}) }),
 }));
 
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};

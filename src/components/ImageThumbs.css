@@ -1,0 +1,60 @@
+.image-thumbs {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.image-thumbs.end {
+  justify-content: flex-end;
+}
+.image-thumbs li {
+  position: relative;
+}
+.image-thumb {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) / 2);
+  overflow: hidden;
+  background: var(--bg-panel-soft);
+  cursor: zoom-in;
+}
+.image-thumb:hover {
+  border-color: var(--text-faint);
+}
+.image-thumb img {
+  display: block;
+  height: 56px;
+  width: auto;
+  max-width: 140px;
+  object-fit: cover;
+}
+/* On the thumbnail's corner, half outside it, so it covers nothing of the picture. */
+.image-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.image-thumb-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.image-full {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+}

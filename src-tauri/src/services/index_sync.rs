@@ -138,10 +138,21 @@ impl RepoIndexer {
         let mut release = Release { run: &self.run, armed: true };
         self.set_status(|status| status.syncing = true);
         loop {
-            let result = self.run_once(sink);
-            if result.is_err() || !self.go_again(&mut release) {
-                self.set_status(|status| status.syncing = false);
-                return result.map(|()| Some(self.status()));
+            // The status settles before the event goes out: a listener re-reads
+            // it on `SyncFinished`, and must not find this sync still running.
+            match self.run_once(sink) {
+                Ok((embedded, embedding_error)) => {
+                    let again = self.go_again(&mut release);
+                    sink(IndexEvent::SyncFinished { embedded, embedding_error });
+                    if !again {
+                        return Ok(Some(self.status()));
+                    }
+                }
+                Err(error) => {
+                    self.set_status(|status| status.syncing = false);
+                    sink(IndexEvent::Failed { error: error.to_string() });
+                    return Err(error);
+                }
             }
         }
     }
@@ -203,11 +214,10 @@ impl RepoIndexer {
         near.into_iter().take(HISTORY_MATCHES).flat_map(|(_, files)| files.iter().cloned()).collect()
     }
 
-    fn run_once(&self, sink: &IndexEventSink) -> Result<(), RepoSyncError> {
+    /// One pass; what it embedded and why it could not, for `SyncFinished`.
+    fn run_once(&self, sink: &IndexEventSink) -> Result<(usize, Option<String>), RepoSyncError> {
         sink(IndexEvent::SyncStarted);
-        let report = repo_index::sync(&self.root, &self.store, &self.options).inspect_err(|error| {
-            sink(IndexEvent::Failed { error: error.to_string() });
-        })?;
+        let report = repo_index::sync(&self.root, &self.store, &self.options)?;
         let skipped: Vec<(String, String)> =
             report.skipped.iter().map(|s| (s.path.clone(), s.reason.to_string())).collect();
         sink(IndexEvent::KeywordsReady {
@@ -229,8 +239,7 @@ impl RepoIndexer {
             status.skipped = skipped;
             status.embedding_error = error.clone();
         });
-        sink(IndexEvent::SyncFinished { embedded: count, embedding_error: error });
-        Ok(())
+        Ok((count, error))
     }
 
     /// Takes the run, or — if a sync holds it — asks that sync to go round
@@ -246,16 +255,18 @@ impl RepoIndexer {
         }
     }
 
-    /// Whether another request arrived during this pass. Deciding "no" and
-    /// giving the run up happen under one lock: a request arriving between
-    /// the two would otherwise see a sync that is running and about to stop,
-    /// fold itself into it, and be lost.
+    /// Whether another request arrived during this pass. Deciding "no",
+    /// clearing `syncing` and giving the run up happen under one lock: a
+    /// request arriving between them would otherwise see a sync that is
+    /// running and about to stop, fold itself into it, and be lost — or claim
+    /// the run and then have its `syncing` cleared.
     fn go_again(&self, release: &mut Release<'_>) -> bool {
         let mut run = self.run.lock().unwrap_or_else(PoisonError::into_inner);
         if run.again {
             run.again = false;
             true
         } else {
+            self.set_status(|status| status.syncing = false);
             run.running = false;
             release.armed = false;
             false
@@ -452,6 +463,30 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("a.rs"), "fn alpha() {}\n").unwrap();
         assert!(indexer.sync(&sink).unwrap().is_some(), "the run was never given up");
+    }
+
+    /// A listener re-reads the status on `SyncFinished` or `Failed`; by then it
+    /// must no longer say "syncing", or a window that read it keeps saying so.
+    #[test]
+    fn the_status_has_settled_when_the_end_is_reported() {
+        let (indexer, root) = indexer("indexer-settled", Arc::new(FakeModel::default()));
+        fs::write(root.join("a.rs"), "fn alpha() {}\n").unwrap();
+        let indexer = Arc::new(indexer);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink: IndexEventSink = {
+            let (indexer, seen) = (Arc::clone(&indexer), Arc::clone(&seen));
+            Arc::new(move |event| {
+                if matches!(event, IndexEvent::SyncFinished { .. } | IndexEvent::Failed { .. }) {
+                    seen.lock().unwrap().push(indexer.status().syncing);
+                }
+            })
+        };
+
+        indexer.sync(&sink).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(indexer.sync(&sink).is_err());
+
+        assert_eq!(*seen.lock().unwrap(), [false, false]);
     }
 
     // ------------------------------------------------------ concurrency

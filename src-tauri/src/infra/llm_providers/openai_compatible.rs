@@ -370,7 +370,7 @@ struct StreamOptions {
 struct WireMessage<'a> {
     role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<&'a str>,
+    content: Option<WireContent<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -385,7 +385,7 @@ impl<'a> From<&'a LlmMessage> for WireMessage<'a> {
     fn from(message: &'a LlmMessage) -> Self {
         Self {
             role: role_str(message.role),
-            content: message.content.as_deref(),
+            content: wire_content(message),
             // An object with these keys is ours; Anthropic's blocks are an array.
             reasoning_content: kept_reasoning(message, REASONING_CONTENT),
             reasoning: kept_reasoning(message, REASONING),
@@ -404,6 +404,40 @@ impl<'a> From<&'a LlmMessage> for WireMessage<'a> {
                 .collect(),
         }
     }
+}
+
+/// A plain string, as every message was before pictures — or, only when the
+/// message has some, an array of parts: the pictures first, then the text.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireContent<'a> {
+    Text(&'a str),
+    Parts(Vec<WirePart<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WirePart<'a> {
+    ImageUrl { image_url: WireImageUrl },
+    Text { text: &'a str },
+}
+
+#[derive(Serialize)]
+struct WireImageUrl {
+    /// A `data:` URL — the picture itself, never a link the provider would
+    /// fetch from somewhere.
+    url: String,
+}
+
+fn wire_content(message: &LlmMessage) -> Option<WireContent<'_>> {
+    if message.images.is_empty() {
+        return message.content.as_deref().map(WireContent::Text);
+    }
+    let images = message.images.iter().map(|image| WirePart::ImageUrl {
+        image_url: WireImageUrl { url: format!("data:{};base64,{}", image.media_type.as_str(), image.data) },
+    });
+    let text = message.content.as_deref().filter(|t| !t.is_empty()).map(|text| WirePart::Text { text });
+    Some(WireContent::Parts(images.chain(text).collect()))
 }
 
 #[derive(Serialize)]
@@ -858,6 +892,48 @@ pub(super) mod tests {
         assert!(anthropic.get("reasoning_content").is_none() && anthropic.get("reasoning").is_none());
         let none = with(None);
         assert!(none.get("reasoning_content").is_none() && none.get("reasoning").is_none());
+    }
+
+    fn image(width: u32) -> crate::domain::image::ImagePart {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+        ImagePart { media_type: ImageMediaType::Png, data: format!("PNG{width}"), width, height: 1 }
+    }
+
+    fn wire_of(message: LlmMessage) -> serde_json::Value {
+        let request = ChatRequest { messages: vec![message], tools: vec![], model: "m".into() };
+        serde_json::to_value(provider("http://x".into()).body(&request, false)).unwrap()["messages"][0].clone()
+    }
+
+    /// The pictures as `data:` URLs, in order, then the text — DeepSeek's
+    /// shape, and OpenAI's.
+    #[test]
+    fn a_message_with_pictures_is_sent_as_parts() {
+        let mut photo = image(2);
+        photo.media_type = crate::domain::image::ImageMediaType::Jpeg;
+        let wire = wire_of(LlmMessage::user_with_images("what is this?", vec![image(1), photo]));
+        assert_eq!(
+            wire["content"],
+            serde_json::json!([
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,PNG1"}},
+                {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,PNG2"}},
+                {"type":"text","text":"what is this?"}
+            ])
+        );
+    }
+
+    /// A picture sent without a word: no empty text part after it.
+    #[test]
+    fn a_picture_alone_has_no_text_part() {
+        let wire = wire_of(LlmMessage::user_with_images("", vec![image(1)]));
+        assert_eq!(wire["content"], serde_json::json!([{"type":"image_url","image_url":{"url":"data:image/png;base64,PNG1"}}]));
+    }
+
+    /// Every message without a picture goes exactly as it did before them: a
+    /// string, which is all some local servers accept.
+    #[test]
+    fn a_message_without_pictures_is_still_a_string() {
+        assert_eq!(wire_of(LlmMessage::user("hi"))["content"], "hi");
+        assert!(wire_of(LlmMessage::tool_requests(vec![])).get("content").is_none());
     }
 
     /// Several servers send `null` rather than omitting the field.

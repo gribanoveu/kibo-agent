@@ -76,6 +76,15 @@ passes, the wrong one fails. Run that after adding or changing a task:
 cd src-tauri && cargo test kube_fixtures -- --ignored --nocapture
 ```
 
+Sending a picture has a live test too: a phone photo with GPS and a turn in its EXIF,
+sanitized and sent through the app's own wire to a real model, must be seen the right way
+up. The provider is the agent bench's (`AGENT_BENCH_*`). Run it after touching
+`services/image_sanitize.rs` or how a provider sends `images`:
+
+```bash
+cd src-tauri && AGENT_BENCH_KIND=openai AGENT_BENCH_BASE_URL=https://api.deepseek.com AGENT_BENCH_MODEL=deepseek-flash AGENT_BENCH_API_KEY=… cargo test vision_live -- --ignored --nocapture
+```
+
 The Kubernetes client has a live test against the local cluster (OrbStack's, context
 `orbstack` in `~/.kube/config`), ignored because it needs that cluster running. Run it
 after touching `infra/kube_client.rs`:
