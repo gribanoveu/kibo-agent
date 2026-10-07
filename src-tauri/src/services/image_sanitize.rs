@@ -9,6 +9,7 @@
 //! built with those two and no others.
 
 use std::io::Cursor;
+use std::path::Path;
 
 use base64::Engine as _;
 use image::codecs::jpeg::JpegEncoder;
@@ -48,6 +49,29 @@ const JPEG_QUALITY: u8 = 85;
 /// The picture, sanitized: the only way an `ImagePart` is made.
 pub fn sanitize(bytes: &[u8]) -> Result<ImagePart, ImageError> {
     sanitize_within(bytes, &BOUNDS)
+}
+
+/// A file dropped on the window, by its path — sanitized like pasted bytes.
+///
+/// The path is whatever the drop named, anywhere on disk: what comes back is
+/// only ever a PNG or JPEG encoded here from its pixels, so a file that is not
+/// a picture gives an error and nothing of its contents. Its size is checked
+/// before a byte is read.
+pub fn sanitize_file(path: &Path) -> Result<ImagePart, ImageError> {
+    sanitize_file_within(path, &BOUNDS)
+}
+
+fn sanitize_file_within(path: &Path, bounds: &Bounds) -> Result<ImagePart, ImageError> {
+    let meta = std::fs::metadata(path).map_err(|e| ImageError::Read(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(ImageError::Read("not a file".to_string()));
+    }
+    let size = usize::try_from(meta.len()).unwrap_or(usize::MAX);
+    if size > bounds.max_input_bytes {
+        return Err(ImageError::TooLarge { bytes: size, limit: bounds.max_input_bytes });
+    }
+    let bytes = std::fs::read(path).map_err(|e| ImageError::Read(e.to_string()))?;
+    sanitize_within(&bytes, bounds)
 }
 
 fn sanitize_within(bytes: &[u8], bounds: &Bounds) -> Result<ImagePart, ImageError> {
@@ -431,6 +455,89 @@ mod tests {
         let bounds = Bounds { max_output_bytes: 200, ..SMALL };
         let file = png_of(DynamicImage::ImageRgba8(noise(90, 90)));
         assert!(matches!(sanitize_within(&file, &bounds), Err(ImageError::TooLarge { limit: 200, .. })));
+    }
+
+    /// A dropped file goes through the same sanitizing as pasted bytes.
+    #[test]
+    fn a_dropped_file_is_sanitized_like_pasted_bytes() {
+        let dir = crate::testing::temp_dir("image-drop");
+        let path = dir.join("shot.png");
+        // Over `SMALL`'s target, so the bounds it was given are the ones it used.
+        let mut file = png_with_text(&halves(400, 300));
+        file.extend(b"SECRETZIP");
+        std::fs::write(&path, &file).unwrap();
+
+        let part = sanitize_file_within(&path, &SMALL).expect("sanitizes");
+        assert_eq!(part, sanitize_within(&file, &SMALL).expect("same bytes"));
+        assert_eq!((part.width, part.height), (100, 75));
+        assert!(!contains(&bytes_of(&part), b"SECRETTEXT"));
+    }
+
+    /// A file over the limit is refused by its size, before it is read; a
+    /// folder or a missing file says it could not be read.
+    #[test]
+    fn a_dropped_file_too_large_or_not_a_file_is_refused() {
+        let dir = crate::testing::temp_dir("image-drop-refused");
+        let big = dir.join("big.png");
+        std::fs::write(&big, vec![0u8; SMALL.max_input_bytes + 1]).unwrap();
+        assert_eq!(
+            sanitize_file_within(&big, &SMALL),
+            Err(ImageError::TooLarge { bytes: SMALL.max_input_bytes + 1, limit: SMALL.max_input_bytes })
+        );
+        assert_eq!(sanitize_file_within(&dir, &SMALL), Err(ImageError::Read("not a file".into())));
+
+        // A terabyte, sparse: refused by its size at once. Read first, it
+        // would not fit in memory — the check before reading is the point.
+        let huge = dir.join("huge.png");
+        let sparse = std::fs::File::create(&huge).and_then(|f| f.set_len(1 << 40));
+        if sparse.is_ok() {
+            assert_eq!(
+                sanitize_file_within(&huge, &SMALL),
+                Err(ImageError::TooLarge { bytes: 1 << 40, limit: SMALL.max_input_bytes })
+            );
+        }
+        let _ = std::fs::remove_file(&huge);
+        assert!(matches!(sanitize_file_within(&dir.join("gone.png"), &SMALL), Err(ImageError::Read(_))));
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, "secret notes").unwrap();
+        assert_eq!(sanitize_file_within(&notes, &SMALL), Err(ImageError::UnsupportedFormat { detected: None }));
+    }
+
+    /// End to end against a real model: a phone photo with GPS and a turn in
+    /// its EXIF, sanitized and sent through our own wire, is seen the right
+    /// way up. The provider is the agent bench's (`AGENT_BENCH_*`); DeepSeek:
+    ///
+    /// ```text
+    /// AGENT_BENCH_KIND=openai AGENT_BENCH_BASE_URL=https://api.deepseek.com \
+    /// AGENT_BENCH_MODEL=deepseek-flash AGENT_BENCH_API_KEY=… \
+    /// cargo test vision_live -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn vision_live_a_turned_photo_is_seen_upright() {
+        use crate::domain::llm::{ChatRequest, LlmMessage};
+        let session = crate::services::agent_bench::session();
+        // 400×200, red left and blue right, stored the way a phone stores a
+        // shot held upright: orientation 6. Upright, red is on top.
+        let photo = jpeg_with_metadata(&halves(400, 200), 6);
+        let part = sanitize(&photo).expect("sanitizes");
+        assert_eq!((part.width, part.height), (200, 400));
+        assert!(!contains(&bytes_of(&part), b"SECRETCAMERA"));
+
+        let question = "This picture is split in two halves. Answer in exactly this form and nothing else: \
+                        TOP=<colour> BOTTOM=<colour>";
+        let request = ChatRequest {
+            messages: vec![LlmMessage::user_with_images(question, vec![part])],
+            tools: vec![],
+            model: session.model.clone(),
+        };
+        let result = session
+            .provider
+            .chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .expect("the provider takes the picture");
+        let answer = result.text.to_lowercase().replace(' ', "");
+        println!("{}", result.text);
+        assert!(answer.contains("top=red") && answer.contains("bottom=blue"), "{}", result.text);
     }
 
     #[test]

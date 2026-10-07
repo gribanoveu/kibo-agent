@@ -16,6 +16,11 @@ mock.module("@tauri-apps/api/core", () => ({
   transformCallback: (callback: unknown) => callback,
 }));
 
+// The box listens for files dropped on the window; nothing is dropped here.
+mock.module("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }),
+}));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 
 const { Composer } = await import("../components/Composer");

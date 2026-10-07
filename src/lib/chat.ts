@@ -1261,6 +1261,16 @@ export async function prepareImage(bytes: Uint8Array): Promise<ImagePart> {
   return invoke<ImagePart>("image_prepare", bytes);
 }
 
+/**
+ * Sanitizes a file dropped on the window, by its path: the backend reads it,
+ * size first, and answers with a picture encoded from its pixels — or a
+ * sentence saying why not, for a file that is not a PNG or JPEG.
+ */
+export async function prepareImageFile(path: string): Promise<ImagePart> {
+  requireBackend();
+  return invoke<ImagePart>("image_prepare_file", { path });
+}
+
 /** The picture as an `<img src>`: a `data:` URL, which the window's CSP allows. */
 export const imageUrl = (image: ImagePart) => `data:${image.mediaType};base64,${image.data}`;
 

@@ -75,6 +75,8 @@ mock.module("@tauri-apps/api/window", () => ({
       closeRequested = handler;
       return Promise.resolve(() => void (closeRequested = null));
     },
+    // Global to the run: every method a later file's component calls must be here.
+    onDragDropEvent: () => Promise.resolve(() => {}),
   }),
 }));
 async function closeWindow() {

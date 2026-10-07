@@ -181,6 +181,7 @@ pub fn run() {
             commands::files::workspace_list,
             commands::files::file_write,
             commands::images::image_prepare,
+            commands::images::image_prepare_file,
             commands::chat::workspace_recent,
             commands::chat::workspace_index_status,
             commands::chat::chat_start,

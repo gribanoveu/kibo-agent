@@ -79,6 +79,9 @@ pub enum ImageError {
     Decode(String),
     #[error("the image could not be encoded: {0}")]
     Encode(String),
+    /// A dropped file that could not be read — gone, a folder, no permission.
+    #[error("the file could not be read: {0}")]
+    Read(String),
 }
 
 #[cfg(test)]

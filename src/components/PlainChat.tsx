@@ -276,11 +276,12 @@ export function PlainChat({
             />
           )}
         </div>
-        <section
-          className="plain-composer"
-          onDragOver={attachments.dragOver}
-          onDrop={(e) => attachments.attach(Array.from(e.dataTransfer.files), e)}
-        >
+        <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
+          {attachments.dragging && (
+            <div className="plain-drop" aria-hidden="true">
+              Drop to attach
+            </div>
+          )}
           <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
           {attachments.error && (
             <p className="plain-attach-error" role="alert">
@@ -293,7 +294,7 @@ export function PlainChat({
             rows={2}
             placeholder="Message the model…"
             value={draft}
-            onPaste={(e) => attachments.attach(Array.from(e.clipboardData.files), e)}
+            onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (matches(e, "send") && !e.nativeEvent.isComposing) {

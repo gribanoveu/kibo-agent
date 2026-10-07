@@ -159,3 +159,22 @@
   color: var(--red);
   font-size: var(--fs-sm);
 }
+
+/* Files held over the window: the box says it takes them, wherever they are
+   dropped. The dashed edge is the overlay's own border, so it follows the
+   box's rounded corners. */
+.composer-drop {
+  position: absolute;
+  /* Inside the box, clear of its edge; the corners follow it, less the gap. */
+  inset: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px dashed var(--text-faint);
+  border-radius: calc(var(--radius) - 6px);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  pointer-events: none;
+}

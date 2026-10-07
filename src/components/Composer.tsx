@@ -237,12 +237,12 @@ export function Composer({
         </ul>
       )}
       {tab}
-      <section
-        className="composer"
-        ref={box}
-        onDragOver={attachments.dragOver}
-        onDrop={(e) => attachments.attach(Array.from(e.dataTransfer.files), e)}
-      >
+      <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
+        {attachments.dragging && (
+          <div className="composer-drop" aria-hidden="true">
+            Drop to attach
+          </div>
+        )}
         {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} pending={pendingCommands} />}
         <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
         {attachments.error && (
@@ -271,7 +271,7 @@ export function Composer({
                 : "Describe your task…"
             }
             value={text}
-            onPaste={(e) => attachments.attach(Array.from(e.clipboardData.files), e)}
+            onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => {
               setText(e.target.value);
               setDismissed(false);

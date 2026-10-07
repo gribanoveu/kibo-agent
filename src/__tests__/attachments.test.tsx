@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ImagePart } from "../lib/chat";
 
 // Pictures pasted or dropped into the box: each goes to the backend to be
@@ -11,8 +11,16 @@ let refusal: string | null = null;
 
 const part = (n: number): ImagePart => ({ mediaType: "image/png", data: `PNG${n}`, width: 10 + n, height: 5 });
 
+const dropped: string[] = [];
+
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
+    if (command === "image_prepare_file") {
+      const path = (args as { path: string }).path;
+      dropped.push(path);
+      const n = Number(path.match(/(\d+)\.png$/)?.[1]);
+      return Number.isNaN(n) ? Promise.reject("this file is not supported: save the image as PNG or JPEG") : Promise.resolve(part(n));
+    }
     if (command !== "image_prepare") return Promise.resolve(null);
     const bytes = Array.from(args as Uint8Array);
     prepared.push(bytes);
@@ -21,6 +29,21 @@ mock.module("@tauri-apps/api/core", () => ({
   transformCallback: (callback: unknown) => callback,
 }));
 
+// The window's own drag and drop: what the test emits is what Tauri would.
+type Drop = { payload: { type: "enter" | "over" | "drop" | "leave"; paths?: string[] } };
+let onDrop: ((event: Drop) => void) | null = null;
+mock.module("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onDragDropEvent: (handler: (event: Drop) => void) => {
+      onDrop = handler;
+      return Promise.resolve(() => {
+        if (onDrop === handler) onDrop = null;
+      });
+    },
+  }),
+}));
+const emitDrop = (payload: Drop["payload"]) => act(() => onDrop!({ payload }));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 
 const { Composer } = await import("../components/Composer");
@@ -28,6 +51,7 @@ const { MAX_IMAGES } = await import("../hooks/useAttachments");
 
 afterEach(() => {
   prepared.length = 0;
+  dropped.length = 0;
   refusal = null;
 });
 
@@ -89,15 +113,55 @@ describe("attaching a picture", () => {
     expect(sent).toEqual([{ text: "", images: [part(2)] }]);
   });
 
-  test("a dropped one is taken the same way", async () => {
+  /// Dropped anywhere on the window, the file goes to the backend by its
+  /// path, and the box says it takes it while it is held over.
+  test("a dropped one is taken by its path", async () => {
     box();
-    const section = screen.getByRole("textbox").closest("section")!;
-    // Taken by the box, or the webview opens the file in the window.
-    expect(fireEvent.dragOver(section, { dataTransfer: { types: ["Files"] } })).toBe(false);
-    expect(fireEvent.dragOver(section, { dataTransfer: { types: ["text/plain"] } })).toBe(true);
-    fireEvent.drop(section, { dataTransfer: { files: [picture(3)], types: ["Files"] } });
+    await waitFor(() => expect(onDrop).not.toBeNull());
+    emitDrop({ type: "enter", paths: ["/Users/me/Desktop/shot3.png"] });
+    expect(screen.getByText("Drop to attach")).toBeTruthy();
+    emitDrop({ type: "drop", paths: ["/Users/me/Desktop/shot3.png"] });
+    expect(screen.queryByText("Drop to attach")).toBeNull();
     await waitFor(() => expect(thumbs()).toHaveLength(1));
-    expect(prepared).toEqual([[3]]);
+    expect(dropped).toEqual(["/Users/me/Desktop/shot3.png"]);
+    expect(prepared).toEqual([]);
+  });
+
+  test("the drop hint goes when the drag leaves", async () => {
+    box();
+    await waitFor(() => expect(onDrop).not.toBeNull());
+    emitDrop({ type: "over" });
+    expect(screen.getByText("Drop to attach")).toBeTruthy();
+    emitDrop({ type: "leave" });
+    expect(screen.queryByText("Drop to attach")).toBeNull();
+  });
+
+  /// A file that is not a picture is the backend's to judge, by its content:
+  /// its refusal is said by the file's name.
+  test("a dropped file that is not a picture is refused by name", async () => {
+    box();
+    await waitFor(() => expect(onDrop).not.toBeNull());
+    emitDrop({ type: "drop", paths: ["/Users/me/notes.txt"] });
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("notes.txt: this file is not supported: save the image as PNG or JPEG"),
+    );
+    expect(thumbs()).toHaveLength(0);
+  });
+
+  test("a model set to text only takes no drop either", async () => {
+    box({ imagesEnabled: false });
+    await waitFor(() => expect(onDrop).not.toBeNull());
+    emitDrop({ type: "drop", paths: ["/Users/me/shot1.png"] });
+    expect(dropped).toEqual([]);
+    expect(screen.getByRole("alert").textContent).toContain("Settings → Models");
+  });
+
+  /// The box listens only while it is on screen.
+  test("a box gone from the screen hears no drops", async () => {
+    box();
+    await waitFor(() => expect(onDrop).not.toBeNull());
+    cleanup();
+    await waitFor(() => expect(onDrop).toBeNull());
   });
 
   /// Pasted text is text: the box handles it as it always did.
