@@ -149,6 +149,7 @@ impl RepoIndexer {
                     }
                 }
                 Err(error) => {
+                    self.set_status(|status| status.syncing = false);
                     sink(IndexEvent::Failed { error: error.to_string() });
                     return Err(error);
                 }
