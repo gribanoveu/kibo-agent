@@ -68,9 +68,15 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::GitStatus { branch, upstream, staged, unstaged, conflicted, truncated } => {
             git_status(branch.as_deref(), upstream.as_ref(), staged, unstaged, conflicted, *truncated)
         }
-        ToolResult::GitDiff { path, label, is_binary: true, .. } => format!("{path} is a binary file — no text diff ({label})"),
-        ToolResult::GitDiff { path, label, diff, .. } => render_for_model(&format!("Diff ({label}):"), path, diff, true),
-        ToolResult::GitDiffFiles { path, label, files, truncated } => diff_files(path, label, files, *truncated),
+        ToolResult::GitDiff { path, label, is_binary: true, message, .. } => {
+            format!("{}{path} is a binary file — no text diff ({label})", commit_message(message))
+        }
+        ToolResult::GitDiff { path, label, diff, message, .. } => {
+            format!("{}{}", commit_message(message), render_for_model(&format!("Diff ({label}):"), path, diff, true))
+        }
+        ToolResult::GitDiffFiles { path, label, files, truncated, message } => {
+            format!("{}{}", commit_message(message), diff_files(path, label, files, *truncated))
+        }
         ToolResult::GitBlame { path, hunks, truncated } => blame(path, hunks, *truncated),
         ToolResult::GitLog { path, commits, truncated } => log(path, commits, *truncated),
         ToolResult::CommandRan(output) => command(output),
@@ -158,7 +164,7 @@ fn file(content: &str, start: u32, end: u32, total: u32, clamped: bool, truncate
     let cut = if clamped { " (the range asked for was cut to fit the file)" } else { "" };
     // Said with the way on, or the model takes the first screen for the file.
     let limit = if truncated {
-        " (stopped at the read limit — read on with startLine, or grep for what you need)".to_string()
+        " (stopped at the read limit — read on with startLine, or search it with the grep tool)".to_string()
     } else {
         String::new()
     };
@@ -206,6 +212,11 @@ fn outline(path: &str, entries: &[OutlineEntry], total: u32) -> String {
 /// Each line is printed once. Two hits whose context windows overlap share
 /// their lines, and a line that is itself a hit is shown as one even when it
 /// also falls in another hit's context.
+/// A diffed commit's message, ahead of its diff.
+fn commit_message(message: &Option<String>) -> String {
+    message.as_deref().map(|m| format!("Commit message:\n{m}\n\n")).unwrap_or_default()
+}
+
 fn grep(matches: &[GrepMatch], truncated: bool, total: usize, total_files: usize, floor: bool, skipped: &[String]) -> String {
     let not_searched = if skipped.is_empty() {
         String::new()
@@ -253,7 +264,10 @@ fn grep(matches: &[GrepMatch], truncated: bool, total: usize, total_files: usize
     }
     let hits = matches.len();
     let files_count = blocks.len();
-    let head = if !truncated {
+    let head = if !truncated && total > hits {
+        // filesOnly: every file shown, by its first hit.
+        format!("{total} matches in {files_count} {}, the first of each shown:", if files_count == 1 { "file" } else { "files" })
+    } else if !truncated {
         format!(
             "{hits} {} in {files_count} {}:",
             if hits == 1 { "match" } else { "matches" },
@@ -588,7 +602,7 @@ mod tests {
         let stopped = for_model(&ToolResult::File { content: "a\n".into(), start_line: 1, end_line: 1, total_lines: 9000, clamped: false, truncated: true });
         assert_eq!(
             stopped,
-            "Lines 1-1 of 9000 (stopped at the read limit — read on with startLine, or grep for what you need):\na\n"
+            "Lines 1-1 of 9000 (stopped at the read limit — read on with startLine, or search it with the grep tool):\na\n"
         );
     }
 
@@ -644,6 +658,16 @@ mod tests {
             skipped: vec![],
         });
         assert!(legacy.starts_with("At least 1 matches in 1 files:"), "{legacy}");
+        // filesOnly: every file shown, more hits than lines.
+        let first_of_each = for_model(&ToolResult::GrepResults {
+            matches: vec![hit("a.rs", 1, "x", &[], &[]), hit("b.rs", 4, "x", &[], &[])],
+            truncated: false,
+            total: 7,
+            total_files: 2,
+            total_is_floor: false,
+            skipped: vec![],
+        });
+        assert!(first_of_each.starts_with("7 matches in 2 files, the first of each shown:"), "{first_of_each}");
     }
 
     /// Hits on 118 and 120 with two lines of context: 120 is both the first
@@ -808,6 +832,7 @@ mod tests {
                 file("src/logo.png", FileDiffStats::default(), true),
             ],
             truncated: true,
+            message: None,
         });
         assert_eq!(
             shown,
@@ -817,7 +842,9 @@ mod tests {
              src/logo.png is a binary file — no text diff\n\n\
              [more changed files not shown — ask for a narrower path]"
         );
-        let none = for_model(&ToolResult::GitDiffFiles { path: "src".into(), label: "x".into(), files: vec![], truncated: false });
+        let none = for_model(&ToolResult::GitDiffFiles { path: "src".into(), label: "x".into(), files: vec![], truncated: false, message: None });
+        let with_why = for_model(&ToolResult::GitDiffFiles { path: ".".into(), label: "abc^ → abc".into(), files: vec![], truncated: false, message: Some("Fix it\n\nBecause.".into()) });
+        assert!(with_why.starts_with("Commit message:\nFix it\n\nBecause.\n\n"), "{with_why}");
         assert_eq!(none, "No changes under src (x).");
     }
 

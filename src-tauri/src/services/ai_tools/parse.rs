@@ -219,7 +219,7 @@ fn humanize_serde_error(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::tools::{ReadFileArgs, TodoArgs};
+    use crate::domain::tools::{ReadFileArgs, TodoArgs, TodoUpdateStatus};
     use crate::testing::temp_dir;
     use std::path::PathBuf;
 
@@ -362,6 +362,36 @@ mod tests {
                 tasks: vec!["a".into()]
             })
         );
+    }
+
+    /// What deepseek-flash sent in `agent_bench` instead of a well-formed
+    /// call: each says plainly what it is, and each was a lost round.
+    #[test]
+    fn a_todo_call_with_a_wrong_or_missing_op_is_read_from_its_fields() {
+        let todo = |arguments: &str| match parse_tool_call(&call("todo", arguments)) {
+            Ok(ToolCall::Todo(args)) => Ok(args),
+            Ok(other) => panic!("{other:?}"),
+            Err(e) => Err(e.to_string()),
+        };
+        let write = |titles: &[&str]| Ok(TodoArgs::Write { tasks: titles.iter().map(|t| t.to_string()).collect() });
+        // The list in `op`, as a JSON string, of objects or of strings.
+        assert_eq!(todo(r#"{"op": "[\n  {\"title\": \"Read logs\"}, {\"title\": \"Fix A\"}\n]"}"#), write(&["Read logs", "Fix A"]));
+        assert_eq!(todo(r#"{"op": "[\"a\", \"b\"]"}"#), write(&["a", "b"]));
+        // `op` left out, or a title in it, with the list where it belongs.
+        assert_eq!(todo(r#"{"tasks": ["a", "b"]}"#), write(&["a", "b"]));
+        assert_eq!(todo(r#"{"op": "Demux log / write plan", "tasks": ["Demux log / write plan"]}"#), write(&["Demux log / write plan"]));
+        assert_eq!(todo(r#"{"op": "write", "tasks": "[\"a\"]"}"#), write(&["a"]));
+        assert_eq!(todo(r#"{"op": "write", "tasks": [{"content": "a"}]}"#), write(&["a"]));
+        // No `op`, but an update's fields.
+        assert_eq!(
+            todo(r#"{"status": "completed", "note": "done"}"#),
+            Ok(TodoArgs::Update { id: None, ids: vec![], status: Some(TodoUpdateStatus::Completed), note: Some("done".into()) })
+        );
+        // Undecidable: said, not guessed.
+        let lone_title = todo(r#"{"op": "Demux log / write plan"}"#).unwrap_err();
+        assert!(lone_title.contains("op must be \"write\"") && lone_title.contains("Demux log"), "{lone_title}");
+        assert!(todo(r#"{"op": "write"}"#).unwrap_err().contains("needs tasks"));
+        assert!(todo("{}").is_err());
     }
 
     /// A confirmation card for a write that was always going to fail costs a

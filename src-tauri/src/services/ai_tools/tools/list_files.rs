@@ -178,7 +178,7 @@ fn human_size(bytes: u64) -> String {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "listFiles".to_string(),
-        description: "List the files and directories under a path, as a tree. Ignored files (.gitignore, and .git itself) are never listed. Use it to learn a project's shape before reading; use grep when you already know what to look for. A file larger than one readFile returns (100 KB) shows its size — grep it, or read a range."
+        description: "List the files and directories under a path, as a tree. Ignored files (.gitignore, and .git itself) are never listed. Use it to learn a project's shape before reading; use grep when you already know what to look for. A file larger than one readFile returns (100 KB) shows its size — grep it, or read a range. At most 1000 entries; the result says when it was cut."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -188,7 +188,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "string",
                         "null"
                     ],
-                    "description": "Subdirectory relative to the workspace root. Omit or \\\".\\\" lists the root."
+                    "description": "Subdirectory relative to the workspace root. Omit or \".\" lists the root."
                 },
                 "depth": {
                     "type": [
@@ -203,7 +203,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "string",
                         "null"
                     ],
-                    "description": "Glob over each entry's file *name*, never its full path, so \\\"*.rs\\\" matches at any depth. Only the directories on the way to a matching file are kept."
+                    "description": "Glob over each entry's file *name*, never its full path, so \"*.rs\" matches at any depth. Only the directories on the way to a matching file are kept."
                 }
             },
             "required": []

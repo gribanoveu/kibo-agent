@@ -994,12 +994,6 @@ pub enum ToolError {
     /// rather than guessing again.
     #[error("edit text not found: {text}{}", closest_line(.nearest))]
     EditTextNotFound { text: String, nearest: Option<(u32, String)> },
-    /// The anchor is in the file but with the other line endings. A `\r` is
-    /// invisible in an error message, so without saying this the model can
-    /// only guess why a text it copied does not match. Carries no text of
-    /// its own, so the tool-call log needs no redaction for it.
-    #[error("edit text not found: the file uses {file} line endings and your text has {edit} — resend it with {file}")]
-    EditLineEndings { file: &'static str, edit: &'static str },
     /// An `editFile` edit's `old` text appears more than once — which
     /// occurrence was meant is unknowable, so nothing is written. `.1` is the
     /// match count, so the model learns how much more context to include.
@@ -1398,6 +1392,10 @@ pub enum ToolResult {
         label: String,
         diff: FileDiffStats,
         is_binary: bool,
+        /// A commit's whole message, when a commit was diffed: `gitLog` gives
+        /// its first line, and `gitBlame` sends the model here for the why.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     /// `gitDiff` on a directory: every changed file under it, each as its own
     /// diff. `truncated` means files were left out; a file whose diff did not
@@ -1408,6 +1406,9 @@ pub enum ToolResult {
         label: String,
         files: Vec<GitFileDiff>,
         truncated: bool,
+        /// As on `GitDiff`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     GitBlame {
@@ -1903,6 +1904,11 @@ pub struct GrepArgs {
     /// actually do" costs a follow-up `readFile` round trip.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_usize")]
     pub context_lines: Option<usize>,
+    /// One hit per file, its first — `grep -l` with the line that proves it.
+    /// `maxResults` then caps files. Asking "who uses each of these names"
+    /// otherwise went to a shell loop over grep.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub files_only: Option<bool>,
 }
 
 /// One line hit.
@@ -2150,8 +2156,11 @@ pub struct MoveArgs {
 
 /// `todo` arguments. One wire tool, two operations — the same shape the model
 /// is given, so nothing has to fan it out.
+///
+/// Read through [`LooseTodo`]: `op` decides when it says `write` or `update`,
+/// and the fields sent decide when it does not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[serde(tag = "op", rename_all = "camelCase", try_from = "LooseTodo")]
 pub enum TodoArgs {
     /// Appends to the end of the list. Never replaces it.
     Write { tasks: Vec<String> },
@@ -2179,6 +2188,86 @@ pub enum TodoArgs {
         #[serde(default)]
         note: Option<String>,
     },
+}
+
+/// A `todo` call as models send it. In `agent_bench`, deepseek-flash put the
+/// task list in `op` as a JSON string (`"op": "[{…"`), put a task's title
+/// there, or left `op` out — a round lost each time, for a call whose fields
+/// said plainly what it was.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LooseTodo {
+    #[serde(default)]
+    op: Option<serde_json::Value>,
+    #[serde(default)]
+    tasks: Option<serde_json::Value>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    status: Option<TodoUpdateStatus>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+impl TryFrom<LooseTodo> for TodoArgs {
+    type Error = String;
+
+    fn try_from(call: LooseTodo) -> Result<Self, String> {
+        let op = call.op.as_ref().and_then(serde_json::Value::as_str).map(|op| op.trim().to_ascii_lowercase());
+        let update = || TodoArgs::Update { id: call.id.clone(), ids: call.ids.clone(), status: call.status, note: call.note.clone() };
+        match op.as_deref() {
+            Some("write") => {
+                let tasks = call.tasks.as_ref().ok_or("op \"write\" needs tasks: a list of task titles")?;
+                Ok(TodoArgs::Write { tasks: task_titles(tasks, true)? })
+            }
+            Some("update") => Ok(update()),
+            // `op` missing or not an operation: what was sent says which.
+            _ => {
+                if let Some(tasks) = &call.tasks {
+                    return Ok(TodoArgs::Write { tasks: task_titles(tasks, true)? });
+                }
+                if let Some(Ok(tasks)) = call.op.as_ref().map(|op| task_titles(op, false)) {
+                    return Ok(TodoArgs::Write { tasks });
+                }
+                if call.id.is_some() || !call.ids.is_empty() || call.status.is_some() || call.note.is_some() {
+                    return Ok(update());
+                }
+                Err(format!(
+                    "op must be \"write\" (with tasks, a list of task titles) or \"update\" (with status or note); got {}",
+                    call.op.map_or("nothing".to_string(), |op| op.to_string())
+                ))
+            }
+        }
+    }
+}
+
+/// Task titles from a list of strings, of `{"title": …}` objects, or of either
+/// written out as a JSON string. A lone string is one title only where
+/// `tasks` holds it — in `op` it is more likely a mistyped operation.
+fn task_titles(value: &serde_json::Value, lone_string_is_a_title: bool) -> Result<Vec<String>, String> {
+    use serde_json::Value;
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                Value::String(title) => Ok(title.clone()),
+                Value::Object(task) => ["title", "content", "task"]
+                    .iter()
+                    .find_map(|key| task.get(*key).and_then(Value::as_str))
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("a task needs a title, got {item}")),
+                other => Err(format!("a task title is a string, got {other}")),
+            })
+            .collect(),
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(list @ Value::Array(_)) => task_titles(&list, false),
+            _ if lone_string_is_a_title => Ok(vec![text.clone()]),
+            _ => Err(format!("expected a list of task titles, got {value}")),
+        },
+        other => Err(format!("tasks is a list of task titles, got {other}")),
+    }
 }
 
 /// One entry in the model's checklist for a multi-step turn.

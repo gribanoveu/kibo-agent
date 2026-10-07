@@ -76,6 +76,10 @@ pub fn basename(path: &str) -> &str {
 }
 
 fn resolve(scope: &ToolScope, path: &str) -> Result<PathBuf, ToolError> {
+    // The prompt names the open folder by its full path, and a model that
+    // writes a file's full path back means that file — not root/Users/…,
+    // which was "not found" for a file that is there.
+    let path = Path::new(path).strip_prefix(scope.root()).ok().and_then(Path::to_str).unwrap_or(path);
     let joined = join_relative(scope.root(), path)?;
     ensure_under(scope.root(), &joined)
 }
@@ -237,6 +241,18 @@ mod tests {
     /// Not an escape, and deliberately not an error: the segment before the
     /// first `/` is empty, so an over-qualified path folds back under the root
     /// instead of failing. A model that wrote `/src/main.rs` meant `src/main.rs`.
+    #[test]
+    fn the_roots_own_full_path_names_the_file_under_it() {
+        let (scope, root) = scope("resolve-absolute");
+        write(&root.join("src").join("main.rs"), "fn main() {}");
+        let full = root.join("src").join("main.rs");
+
+        let found = resolve_existing(&scope, full.to_str().unwrap()).expect("resolves");
+
+        assert_eq!(found, full);
+        assert_eq!(resolve_existing(&scope, root.to_str().unwrap()).unwrap(), root, "the root itself");
+    }
+
     #[test]
     fn a_leading_slash_folds_back_under_the_root() {
         let (scope, root) = scope("resolve-absolute");

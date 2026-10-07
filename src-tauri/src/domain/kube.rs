@@ -53,6 +53,19 @@ pub enum KubeError {
     Timeout(u64),
     #[error("{0}")]
     Cluster(String),
+    /// The server's 403. Said as final: deepseek-flash, refused pods in
+    /// istio-ingress, asked for that namespace's pods again with a selector,
+    /// then for its logs.
+    #[error("{0} — this kubeconfig has no right to it (RBAC), so asking again, or for the same thing another way, gets the same answer")]
+    Forbidden(String),
+    /// No connection at all — no answer to read, nothing about the request.
+    #[error("the cluster could not be reached ({0}) — the network, a VPN, or a login that expired")]
+    Unreachable(String),
+    /// The upgrade an exec needs was refused: the cluster, or a proxy in
+    /// front of it, does not pass WebSocket. Every probe fails the same way,
+    /// whatever its target — the model tried four before giving up.
+    #[error("the cluster would not open a connection into the pod ({0}) — usually a proxy in front of the API server that does not pass WebSocket; nothing that runs in a pod can work here, whatever the target, though kubectl exec may still")]
+    NoExec(String),
     /// The server's 404, apart from its other answers: an apply asks whether
     /// the object is there, and an undone delete needs it not to be.
     #[error("{0}")]
@@ -339,10 +352,34 @@ const SHORT_NAMES: &[(&str, &str)] = &[
     ("se", "serviceentries"),
 ];
 
+/// The API groups Kubernetes itself serves — every other group is a CRD's.
+/// `gateway.networking.k8s.io` is not here: the Gateway API is installed.
+const BUILT_IN_GROUPS: &[&str] = &[
+    "apps",
+    "batch",
+    "autoscaling",
+    "policy",
+    "networking.k8s.io",
+    "rbac.authorization.k8s.io",
+    "storage.k8s.io",
+    "events.k8s.io",
+    "discovery.k8s.io",
+    "coordination.k8s.io",
+    "scheduling.k8s.io",
+    "node.k8s.io",
+    "admissionregistration.k8s.io",
+    "apiextensions.k8s.io",
+    "certificates.k8s.io",
+    "flowcontrol.apiserver.k8s.io",
+    "resource.k8s.io",
+];
+
 /// The kind the model means by `asked`: `Deployment`, `deployments`, `deploy`,
 /// or with its group, `Gateway.networking.istio.io`. A name several groups
-/// serve is the core group's when it has one — `Event` is `v1` — and
-/// otherwise the model is asked to say which.
+/// serve is the core group's when it has one — `Event` is `v1` — then a
+/// built-in group's, as in `kubectl`: `NetworkPolicy` is networking.k8s.io's,
+/// not Calico's (the model, told to choose, chose Calico's and was refused).
+/// Two CRDs of one name are the model's to tell apart.
 pub fn resolve_kind<'k>(kinds: &'k [KubeKind], asked: &str) -> Result<&'k KubeKind, KubeError> {
     let asked = asked.trim();
     let (name, group) = match asked.split_once('.') {
@@ -358,7 +395,12 @@ pub fn resolve_kind<'k>(kinds: &'k [KubeKind], asked: &str) -> Result<&'k KubeKi
     match found.as_slice() {
         [] => Err(KubeError::UnknownKind(asked.to_string())),
         [one] => Ok(one),
-        many => many.iter().find(|k| k.group.is_empty()).copied().ok_or_else(|| KubeError::AmbiguousKind {
+        many => many
+            .iter()
+            .find(|k| k.group.is_empty())
+            .or_else(|| many.iter().find(|k| BUILT_IN_GROUPS.contains(&k.group.as_str())))
+            .copied()
+            .ok_or_else(|| KubeError::AmbiguousKind {
             asked: asked.to_string(),
             options: many.iter().map(|k| k.qualified()).collect::<Vec<_>>().join(", "),
         }),
@@ -567,6 +609,9 @@ mod tests {
         let Err(KubeError::AmbiguousKind { options, .. }) = resolve_kind(&kinds, "Gateway") else { panic!("not ambiguous") };
         assert_eq!(options, "Gateway.gateway.networking.k8s.io, Gateway.networking.istio.io");
         assert_eq!(resolve_kind(&kinds, "Gateway.networking.istio.io").unwrap().group, "networking.istio.io");
+        let policies = [kind("crd.projectcalico.org", "NetworkPolicy", "networkpolicies"), kind("networking.k8s.io", "NetworkPolicy", "networkpolicies")];
+        assert_eq!(resolve_kind(&policies, "NetworkPolicy").unwrap().group, "networking.k8s.io", "built-in over a CRD");
+        assert_eq!(resolve_kind(&policies, "NetworkPolicy.crd.projectcalico.org").unwrap().group, "crd.projectcalico.org");
     }
 
     #[test]

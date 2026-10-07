@@ -89,11 +89,16 @@ fn exact_match_ranges<'a>(
     let ending = line_ending(content);
     let mut ranges: Vec<(usize, usize, Cow<str>)> = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
-        let old = in_endings(&edit.old, ending);
-        let (start, end) = find_unique(content, &old).map_err(|reason| match edits.len() {
+        let found = match ending {
+            Some(_) => find_unique(content, &in_endings(&edit.old, ending)),
+            None => find_in_mixed(content, &edit.old),
+        };
+        let (start, end) = found.map_err(|reason| match edits.len() {
             1 => reason,
             of => ToolError::InEdit { index: index + 1, of, reason: Box::new(reason) },
         })?;
+        // A mixed file's replacement takes the endings of the place it goes.
+        let ending = ending.or_else(|| ending_at(content, start, end));
         ranges.push((start, end, in_endings(&edit.new, ending)));
     }
 
@@ -106,16 +111,33 @@ fn exact_match_ranges<'a>(
     Ok(ranges)
 }
 
-/// Whether `old` would have matched with the file's line endings — reached
-/// only in a file that mixes both, where which one was meant is a guess.
-fn line_endings_differ(content: &str, old: &str) -> Option<ToolError> {
-    if old.contains("\r\n") && content.contains(&old.replace("\r\n", "\n")) {
-        return Some(ToolError::EditLineEndings { file: "LF", edit: "CRLF" });
+/// The anchor in a file with both line endings, with either: a model reads
+/// the `\r`s invisibly and writes `\n`. Refusing that as a guess cost every
+/// `mixed-endings` run in `agent_bench` a round, yet where the anchor's
+/// lines occur once there is nothing to guess — only an anchor found both
+/// ways is.
+fn find_in_mixed(content: &str, old: &str) -> Result<(usize, usize), ToolError> {
+    let lf = old.replace("\r\n", "\n");
+    let crlf = lf.replace('\n', "\r\n");
+    if lf == crlf {
+        return find_unique(content, old);
     }
-    if old.contains('\n') && !old.contains('\r') && content.contains(&old.replace('\n', "\r\n")) {
-        return Some(ToolError::EditLineEndings { file: "CRLF", edit: "LF" });
+    match (content.matches(lf.as_str()).count(), content.matches(crlf.as_str()).count()) {
+        (_, 0) => find_unique(content, &lf),
+        (0, _) => find_unique(content, &crlf),
+        (with_lf, with_crlf) => Err(ToolError::EditTextAmbiguous(old.to_string(), with_lf + with_crlf)),
     }
-    None
+}
+
+/// The line ending where `start..end` sits: its own breaks' when they agree,
+/// else the break that ends its line. `None` for a range whose breaks differ.
+fn ending_at(content: &str, start: usize, end: usize) -> Option<&'static str> {
+    let range = &content[start..end];
+    if range.contains('\n') {
+        return line_ending(range);
+    }
+    let break_at = end + content[end..].find('\n')?;
+    Some(if content[..break_at].ends_with('\r') { "\r\n" } else { "\n" })
 }
 
 /// The anchor's single occurrence.
@@ -134,9 +156,6 @@ fn find_unique(content: &str, old: &str) -> Result<(usize, usize), ToolError> {
             (start, start + old.len())
         }
         None => {
-            if let Some(mismatch) = line_endings_differ(content, old) {
-                return Err(mismatch);
-            }
             find_loosely(content, old)?.ok_or_else(|| ToolError::EditTextNotFound {
                 text: old.to_string(),
                 nearest: closest_line(content, old),
@@ -257,7 +276,7 @@ fn split_word(content: &str, start: usize, end: usize) -> Option<String> {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "editFile".to_string(),
-        description: "Replace exact passages in an existing file. The preferred way to change code: it touches only what you name. Each edit's `old` must appear **exactly once** in the file as it is now — include the surrounding lines needed to make it unique — and must begin and end on whole words: an anchor that starts or ends inside a name is refused. If any anchor is missing, ambiguous or overlaps another edit, the whole call is refused and nothing is written, so a failed edit never leaves the file half-changed. All edits are matched against the file's original content, so one edit's replacement can never become another's anchor. The file must already exist. It needs no readFile first: an anchor seen in a grep result is enough, since it has to match exactly. A file that changed on disk since you read it is refused."
+        description: "Replace exact passages in an existing file. The preferred way to change code: it touches only what you name. Each edit's `old` must appear **exactly once** in the file as it is now — include the surrounding lines needed to make it unique — and must start and end at a word boundary: to change part of a name, anchor on the whole name. If any anchor is missing, ambiguous or overlaps another edit, the whole call is refused and nothing is written, so a failed edit never leaves the file half-changed. All edits are matched against the file's original content, so one edit's replacement can never become another's anchor. The file must already exist. It needs no readFile first: an anchor seen in a grep result is enough, since it has to match exactly. A file that changed on disk since you read it is refused; your own edits and writes do not count as a change, so a second editFile needs no new read. Returns the line diff of what changed — no need to read the file back to check."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -454,19 +473,27 @@ mod tests {
         assert_eq!(on_disk(&root), "a: 1\r\nz: 0\r\nb: 2\r\n");
     }
 
-    /// A file with both endings leaves which one was meant unknowable: the
-    /// mismatch is named rather than guessed, and a `\r` does not show in an
-    /// error, so it has to be.
+    /// In a file with both endings, an anchor matches with either where its
+    /// lines occur once, and the replacement takes the endings found there.
+    /// Only lines found both ways are a guess, and refused as one.
     #[test]
-    fn a_line_ending_mismatch_in_a_mixed_file_is_named_not_guessed() {
+    fn an_anchor_in_a_mixed_file_matches_with_either_ending_and_keeps_the_places() {
         let (scope, root, mut reads) = fixture("edit-mixed", "a: 1\r\nb: 2\r\nc: 3\n");
-        let err = edit_file(&scope, &edits(&[("a: 1\nb: 2", "x")]), &mut reads).expect_err("LF anchor");
-        assert!(matches!(err, ToolError::EditLineEndings { file: "CRLF", edit: "LF" }), "{err}");
-        assert_eq!(on_disk(&root), "a: 1\r\nb: 2\r\nc: 3\n", "left untouched");
+        edit_file(&scope, &edits(&[("a: 1\nb: 2", "x\ny")]), &mut reads).expect("LF anchor in the CRLF part");
+        assert_eq!(on_disk(&root), "x\r\ny\r\nc: 3\n", "CRLF where it went, LF left as it was");
 
-        let (scope, _, mut reads) = fixture("edit-mixed-lf", "a: 1\nb: 2\nc: 3\r\n");
-        let err = edit_file(&scope, &edits(&[("a: 1\r\nb: 2", "x")]), &mut reads).expect_err("CRLF anchor");
-        assert!(matches!(err, ToolError::EditLineEndings { file: "LF", edit: "CRLF" }), "{err}");
+        let (scope, root, mut reads) = fixture("edit-mixed-lf", "a: 1\nb: 2\nc: 3\r\n");
+        edit_file(&scope, &edits(&[("a: 1\r\nb: 2", "x\r\ny")]), &mut reads).expect("CRLF anchor in the LF part");
+        assert_eq!(on_disk(&root), "x\ny\nc: 3\r\n");
+
+        // One line: the replacement's breaks are those of the line it is on.
+        let (scope, root, mut reads) = fixture("edit-mixed-line", "a: 1\r\nb: 2\nc: 3\n");
+        edit_file(&scope, &edits(&[("a: 1", "a: 1\nz: 0")]), &mut reads).expect("one line");
+        assert_eq!(on_disk(&root), "a: 1\r\nz: 0\r\nb: 2\nc: 3\n");
+
+        let (scope, _, mut reads) = fixture("edit-mixed-twice", "a\r\nb\r\na\nb\n");
+        let err = edit_file(&scope, &edits(&[("a\nb", "x")]), &mut reads).expect_err("found both ways");
+        assert!(matches!(err, ToolError::EditTextAmbiguous(_, 2)), "{err}");
 
         let (scope, _, mut reads) = fixture("edit-absent", "a: 1\nb: 2\n");
         let err = edit_file(&scope, &edits(&[("a: 9\r\nb: 2", "x")]), &mut reads).expect_err("absent");

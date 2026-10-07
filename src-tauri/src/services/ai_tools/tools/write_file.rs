@@ -65,7 +65,7 @@ pub fn write_file(
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "writeFile".to_string(),
-        description: "Create a file, or replace an existing one whole. To change part of a file, use editFile: rewriting a whole file to alter a few lines costs context and risks losing everything you did not repeat. Refused if the file exists and this turn has not read it whole, or if it changed on disk since that read — read it again and reconcile rather than overwriting someone's work. Returns the line diff of what actually landed."
+        description: "Create a file, or replace an existing one whole. To change part of a file, use editFile: rewriting a whole file to alter a few lines costs context and risks losing everything you did not repeat. Refused if the file exists and this turn has not read it whole, or if it changed on disk since that read — read it again and reconcile rather than overwriting someone's work. A file you wrote or edited this turn counts as read. Returns the line diff of what actually landed."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",

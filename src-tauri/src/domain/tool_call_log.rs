@@ -264,7 +264,7 @@ mod tests {
             ),
             ToolName::GitDiff => (
                 None,
-                ToolResult::GitDiff { path: path(), label: "index → working tree".into(), diff: diff(), is_binary: false },
+                ToolResult::GitDiff { path: path(), label: "index → working tree".into(), diff: diff(), is_binary: false, message: None },
             ),
             ToolName::GitBlame => (None, ToolResult::GitBlame { path: path(), hunks: vec![], truncated: false }),
             ToolName::GitLog => (None, ToolResult::GitLog { path: path(), commits: vec![], truncated: false }),

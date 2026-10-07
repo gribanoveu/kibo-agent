@@ -395,13 +395,18 @@ fn modified(path: &Path) -> Option<SystemTime> {
 /// What the cluster said, cut to what fits in a chip's hint and a prompt —
 /// for a refusal, the server's own sentence (`pods is forbidden: User …`).
 fn cluster_error(error: kube::Error) -> KubeError {
-    let missing = matches!(&error, kube::Error::Api(status) if status.code == 404);
+    let wrap: fn(String) -> KubeError = match &error {
+        kube::Error::Api(status) if status.code == 404 => KubeError::NotFound,
+        kube::Error::Api(status) if status.code == 403 => KubeError::Forbidden,
+        kube::Error::Service(_) | kube::Error::HyperError(_) => KubeError::Unreachable,
+        kube::Error::UpgradeConnection(_) => KubeError::NoExec,
+        _ => KubeError::Cluster,
+    };
     let text = match error {
         kube::Error::Api(status) if !status.message.is_empty() => status.message,
         other => other.to_string(),
     };
-    let line: String = text.lines().next().unwrap_or_default().chars().take(400).collect();
-    if missing { KubeError::NotFound(line) } else { KubeError::Cluster(line) }
+    wrap(text.lines().next().unwrap_or_default().chars().take(400).collect())
 }
 
 /// Gives each login plugin (`exec`) the login shell's `PATH`.
@@ -427,6 +432,21 @@ fn with_login_path(file: &mut Kubeconfig, path: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    /// Each refusal the model has to treat differently arrives as its own
+    /// kind, with the server's sentence kept.
+    #[test]
+    fn a_refusal_no_connection_and_no_exec_are_told_apart() {
+        use crate::domain::kube::KubeError;
+        let status = |code| kube::Error::Api(kube::core::Status::failure("pods is forbidden: User u", "Forbidden").with_code(code).boxed());
+        assert!(matches!(super::cluster_error(status(403)), KubeError::Forbidden(m) if m == "pods is forbidden: User u"));
+        assert!(matches!(super::cluster_error(status(404)), KubeError::NotFound(_)));
+        assert!(matches!(super::cluster_error(status(409)), KubeError::Cluster(_)));
+        let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "client error (Connect)");
+        assert!(matches!(super::cluster_error(kube::Error::Service(Box::new(refused))), KubeError::Unreachable(_)));
+        let upgrade = kube::client::UpgradeConnectionError::ProtocolSwitch(http::StatusCode::BAD_REQUEST);
+        assert!(matches!(super::cluster_error(kube::Error::UpgradeConnection(upgrade)), KubeError::NoExec(m) if m.contains("400")));
+    }
+
     use super::*;
     use crate::testing::temp_dir;
 

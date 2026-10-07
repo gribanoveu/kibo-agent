@@ -128,7 +128,7 @@ fn advance(mut tasks: Vec<Task>) -> Vec<Task> {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "todo".to_string(),
-        description: "Keep the checklist for work the user asked for that takes several steps (three or more) — not for steps you are only suggesting. One tool, two operations chosen with `op`. `write` appends new task titles to the end of the list; once every task on it is completed or cancelled, the next `write` starts a new list instead. The runtime assigns ids and activates the first task when nothing is active. `update` changes one task — or several at once with `ids`, such as duplicates to cancel — to `completed` or `cancelled`; those are the only statuses you may set, and the runtime activates the next task by itself. An `update` with only a `note` records progress on the task and leaves its status as it is. Omit `id` to mean the task you are on, which is what almost every update means and cannot name the wrong one. Mark a task completed alongside the last call of the step that finishes it, not in a round of updates at the end. There is no read operation because none is needed: every call returns the current list, ids and notes included, and if the conversation stops showing it, it is added again at the end. Do not use it for a one- or two-step request."
+        description: "Keep the checklist for work the user asked for that takes three or more steps — not for a one- or two-step request, and not for steps you are only suggesting. One tool, two operations chosen with `op`. `write` appends new task titles to the end of the list; once every task on it is completed or cancelled, the next `write` starts a new list instead. The runtime assigns ids and activates the first task when nothing is active. `update` changes one task — or several at once with `ids`, such as duplicates to cancel — to `completed` or `cancelled`; those are the only statuses you may set, and the runtime activates the next task by itself. An `update` with only a `note` records progress on the task and leaves its status as it is. Omit `id` to mean the task you are on, which is what almost every update means and cannot name the wrong one. Mark a task completed alongside the last call of the step that finishes it, not in a round of updates at the end. Every call returns the current list, ids and notes included; if the conversation stops showing it, it is added again at the end."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -139,7 +139,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "write",
                         "update"
                     ],
-                    "description": "\\\"write\\\" to append tasks, \\\"update\\\" to change one."
+                    "description": "\"write\" to append tasks, \"update\" to change one."
                 },
                 "tasks": {
                     "type": [
@@ -149,14 +149,14 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "items": {
                         "type": "string"
                     },
-                    "description": "Only for op \\\"write\\\": task titles to append, each a short imperative phrase."
+                    "description": "Only for op \"write\": task titles to append, each a short imperative phrase."
                 },
                 "id": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Only for op \\\"update\\\": which task to change, exactly as the list spells it. Omit it to change the active task."
+                    "description": "Only for op \"update\": which task to change, exactly as the list spells it. Omit it to change the active task."
                 },
                 "ids": {
                     "type": [
@@ -166,7 +166,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "items": {
                         "type": "string"
                     },
-                    "description": "Only for op \\\"update\\\": several tasks to change the same way in one call, each id exactly as the list spells it — not a range."
+                    "description": "Only for op \"update\": several tasks to change the same way in one call, each id exactly as the list spells it — not a range."
                 },
                 "status": {
                     "type": [
@@ -178,14 +178,14 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "cancelled",
                         null
                     ],
-                    "description": "Only for op \\\"update\\\". Use \\\"cancelled\\\" when a task turned out unnecessary, with a note saying why."
+                    "description": "Only for op \"update\". Use \"cancelled\" when a task turned out unnecessary, with a note saying why."
                 },
                 "note": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Only for op \\\"update\\\": a short result for a completed task, the reason for a cancelled one, or — with no status — progress on the task."
+                    "description": "Only for op \"update\": a short result for a completed task, the reason for a cancelled one, or — with no status — progress on the task."
                 }
             },
             "required": [

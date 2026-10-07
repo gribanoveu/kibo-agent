@@ -259,6 +259,7 @@ mod definition_tests {
                     case_insensitive: Some(true),
                     max_results: Some(20),
                     context_lines: Some(2),
+                    files_only: Some(true),
                 })],
             ),
             ToolName::ListFiles => (
