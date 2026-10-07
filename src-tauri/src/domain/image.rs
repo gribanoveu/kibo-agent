@@ -39,6 +39,33 @@ pub struct ImagePart {
     pub height: u32,
 }
 
+/// What a picture is estimated to cost, at least and at most. Measured on
+/// DeepSeek (`docs/30-vision.md`, V-0): ~200 tokens for 64×32, ~940 for
+/// 1568×1000. Anthropic charges about `w·h/750` and scales to 1.15 MP, about
+/// 1600. The formula is Anthropic's and the floor DeepSeek's: an estimate
+/// that errs high only compacts a little early.
+const MIN_TOKENS: usize = 200;
+const MAX_TOKENS: usize = 1600;
+const PIXELS_PER_TOKEN: usize = 750;
+
+impl ImagePart {
+    pub fn estimate_tokens(&self) -> usize {
+        (self.width as usize * self.height as usize).div_ceil(PIXELS_PER_TOKEN).clamp(MIN_TOKENS, MAX_TOKENS)
+    }
+
+    /// The picture as a line of text, where only text goes: a summary
+    /// request, an exported chat.
+    pub fn note(&self) -> String {
+        format!("[image {}×{}]", self.width, self.height)
+    }
+
+    /// Sent in its place to a provider not set to accept pictures — saying
+    /// so, so the model can tell the user why it did not see it.
+    pub fn omitted_note(&self) -> String {
+        format!("[image {}×{} omitted: this provider is not set to accept images]", self.width, self.height)
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ImageError {
     #[error("the image is {bytes} bytes, over the {limit} allowed")]
@@ -75,6 +102,27 @@ mod tests {
             let json = format!(r#"{{"mediaType":"{other}","data":"","width":1,"height":1}}"#);
             assert!(serde_json::from_str::<ImagePart>(&json).is_err(), "{other} loaded");
         }
+    }
+
+    fn part(width: u32, height: u32) -> ImagePart {
+        ImagePart { media_type: ImageMediaType::Png, data: String::new(), width, height }
+    }
+
+    #[test]
+    fn a_picture_costs_its_pixels_between_a_floor_and_a_ceiling() {
+        assert_eq!(part(64, 32).estimate_tokens(), 200, "DeepSeek's floor");
+        assert_eq!(part(600, 400).estimate_tokens(), 320, "w·h/750");
+        assert_eq!(part(601, 400).estimate_tokens(), 321, "rounded up");
+        assert_eq!(part(1568, 1176).estimate_tokens(), 1600, "Anthropic's ceiling");
+    }
+
+    #[test]
+    fn a_picture_reads_as_a_line_of_text() {
+        assert_eq!(part(1568, 1176).note(), "[image 1568×1176]");
+        assert_eq!(
+            part(20, 40).omitted_note(),
+            "[image 20×40 omitted: this provider is not set to accept images]"
+        );
     }
 
     #[test]

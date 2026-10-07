@@ -1084,11 +1084,17 @@ mod tests {
                 }),
             )
             .unwrap();
-        finished.recv_timeout(Duration::from_secs(10)).expect("the first sync never finished");
-
-        let shot = snapshot(&index).unwrap();
+        // Not "the first finish": FSEvents may still report the files written
+        // above, and the sync that wakes is running when the first one ends.
+        let shot = loop {
+            finished.recv_timeout(Duration::from_secs(10)).expect("the sync never finished");
+            let shot = snapshot(&index).unwrap();
+            if !shot.syncing {
+                break shot;
+            }
+        };
         assert_eq!(shot.root, root.display().to_string());
-        assert_eq!((shot.syncing, shot.embedded, shot.skipped), (false, 0, 1));
+        assert_eq!((shot.embedded, shot.skipped), (0, 1));
         assert!(shot.embedding_error.as_deref().is_some_and(|e| e.contains("no model")), "{shot:?}");
     }
 }

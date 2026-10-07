@@ -368,6 +368,8 @@ export type ProviderConfig = {
   /** The model's context window in tokens. Unset means the app does not know. */
   contextLimit?: number | null;
   reasoningEffort?: string | null;
+  /** Whether attached pictures are sent. Unset is off: each goes as a note that it was left out. */
+  supportsImages?: boolean;
 };
 
 /** A provider as the window sees it: the configuration, plus whether a key is stored. */

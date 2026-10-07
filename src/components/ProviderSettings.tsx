@@ -26,6 +26,7 @@ const BLANK = {
   temperature: "",
   topP: "",
   cert: "",
+  supportsImages: false,
 };
 
 type Draft = typeof BLANK;
@@ -66,6 +67,7 @@ const fromConfig = (config: ProviderConfig): Draft => ({
   temperature: sampling(config.temperature),
   topP: sampling(config.topP),
   cert: config.trustedCertPem ?? "",
+  supportsImages: config.supportsImages ?? false,
 });
 
 export function ProviderSettings({
@@ -130,6 +132,7 @@ export function ProviderSettings({
     temperature: draft.temperature === "" ? null : Number(draft.temperature),
     topP: draft.topP === "" ? null : Number(draft.topP),
     trustedCertPem: draft.cert.trim() || null,
+    supportsImages: draft.supportsImages,
   });
 
   const save = async (e?: React.FormEvent) => {
@@ -309,6 +312,30 @@ export function ProviderSettings({
               />
             </div>
           )}
+          <div className="modal-field">
+            <label>Images</label>
+            <div className="segmented" role="radiogroup" aria-label="Images">
+              {([
+                [false, "Text only"],
+                [true, "Text and images"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.supportsImages === value}
+                  className={`segment${draft.supportsImages === value ? " active" : ""}`}
+                  onClick={() => edit({ supportsImages: value })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="modal-note settings-hint">
+            Pictures pasted into a chat go to this model. Only for a model that sees them — one that does not
+            refuses the request. Text only, each picture is left out with a note saying so.
+          </p>
         </section>
 
         <section className="provider-card">

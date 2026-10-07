@@ -1306,6 +1306,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: calls.iter().map(|(id, name)| LlmToolCall { id: id.to_string(), name: name.to_string(), arguments: String::new() }).collect(),
             native_content: None,
+            images: Vec::new(),
         };
         let history = [
             calls(&[("s1", TOOL_SEARCH), ("r1", "readFile")]),
