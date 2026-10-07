@@ -2,7 +2,7 @@
   "name": "kibo-agent",
   "private": true,
   "license": "GPL-3.0-only",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
