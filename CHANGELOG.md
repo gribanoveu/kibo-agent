@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-07 About Kibo Agent shows the running version and opens the download page; every push to main is published as the `nightly` pre-release
 - 2026-10-07 The agent thinks in English whatever language it answers in, finds which files use a name in one search, edits files that mix line endings and takes a full path inside the project; a Kubernetes chat knows whether its tab is on Read only or Changes, and says plainly when the cluster refused a read, could not be reached, or will not run a probe in a pod
 
 ## v0.7.0 — 2026-10-07

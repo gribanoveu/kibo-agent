@@ -396,3 +396,15 @@
   color: var(--text-dim);
 }
 
+
+.sidebar-about-version {
+  margin: 0 0 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.sidebar-about-note {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+}
