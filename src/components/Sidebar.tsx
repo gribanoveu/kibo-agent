@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
 import { GettingStarted } from "./GettingStarted";
@@ -178,7 +179,7 @@ export function Sidebar({
                 ) : (
                   <MessageSquare size={14} />
                 )}
-                <span>{chat.title}</span>
+                <ChangingText text={chat.title} />
               </button>
               <ChatMenu
                 items={[
