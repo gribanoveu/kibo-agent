@@ -39,7 +39,7 @@ use crate::domain::background::{self, BackgroundProcesses};
 use crate::domain::command_exec::{CommandEvent, CommandSink, Shell};
 use crate::domain::tools::{
     ApprovalPolicy, CodeSearchFn, ReadFiles, Task, ToolDeps, ToolName, ToolResult, ToolScope,
-    TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX,
+    AFTER_DENIAL, TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX,
 };
 use crate::domain::turn::{
     ChatDone, ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, DecisionError,
@@ -869,6 +869,9 @@ fn run(
             // `model_text`.
             let content = match &outcome {
                 Ok(result) => for_model(result),
+                // The prompt says nothing about approval: what to do with a
+                // refusal arrives with the refusal.
+                Err(message) if denied => format!("{message}\n{AFTER_DENIAL}"),
                 Err(message) => message.clone(),
             };
             // What came back, before any note is added to it. A denial is the
@@ -1446,7 +1449,6 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         workspace: scope.root(),
         shell: turn.shell_described,
         today,
-        unattended: turn.approval.skip_all,
         skills: turn.skills,
         rules: turn.rules,
         plan: turn.plan,
@@ -2699,10 +2701,10 @@ mod tests {
         assert!(text.contains("read it") && text.contains("rewrite it"));
     }
 
-    /// A turn nobody is watching must not be told to expect an approval
-    /// prompt, and a watched one must not be told the opposite.
+    /// Approval is the harness's business: the prompt says nothing about it,
+    /// whether the turn asks the user or not.
     #[test]
-    fn whether_anybody_is_watching_reaches_the_prompt() {
+    fn the_prompt_says_nothing_about_approval() {
         let unattended = harness("prompt-unattended", vec![text("done")]);
         unattended
             .run(|turn| stream(turn, vec![LlmMessage::user("hi")], vec![]))
@@ -2714,10 +2716,13 @@ mod tests {
             .run(|turn| stream(turn, vec![LlmMessage::user("hi")], vec![]))
             .expect("finishes");
 
-        let watched =
-            |h: &Harness| facts_of(&h.provider.requests()[0]).contains("approved this turn in advance");
-        assert!(watched(&unattended));
-        assert!(!watched(&attended));
+        let speaks_of_approval = |h: &Harness| {
+            h.provider.requests()[0].messages.iter().filter(|m| m.role == LlmRole::System).any(|m| {
+                m.content.as_deref().is_some_and(|c| c.to_lowercase().contains("approv"))
+            })
+        };
+        assert!(!speaks_of_approval(&unattended));
+        assert!(!speaks_of_approval(&attended));
     }
 
     /// What the shell really is, as the command layer found it, is what the
@@ -3364,6 +3369,7 @@ mod tests {
         assert!(!h.root.join("a.rs").exists(), "a denied call must not run");
         let told = tool_contents(h.provider.requests().last().unwrap());
         assert!(told[0].contains("use the existing helper"), "{}", told[0]);
+        assert!(told[0].ends_with(AFTER_DENIAL), "what to do next arrives with the refusal: {}", told[0]);
     }
 
     /// Every settled call reaches the log, each with how it ended — and none

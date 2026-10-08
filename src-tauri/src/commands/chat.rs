@@ -465,7 +465,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             workspace: root.unwrap_or(std::path::Path::new("")),
             shell: &shell.program,
             today: &today,
-            unattended: state.approval().is_ok_and(|approval| approval.skip_all),
             skills: &skills,
             rules: &rules,
             plan,
