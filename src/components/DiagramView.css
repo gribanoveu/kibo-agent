@@ -10,6 +10,9 @@
   background: white;
   cursor: grab;
 }
+.diagram-view.themed {
+  background: var(--bg-panel);
+}
 .diagram-view:active {
   cursor: grabbing;
 }

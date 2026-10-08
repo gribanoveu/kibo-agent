@@ -1,8 +1,11 @@
 import { cloneElement, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Check, Copy, SquareTerminal } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, Code2, Copy, SquareTerminal, Workflow } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { defaultRemarkPlugins, Streamdown, useIsCodeFenceIncomplete, type Components } from "streamdown";
 import { highlight, splitLines, type Token } from "../lib/highlight";
+import { renderMermaid } from "../lib/mermaid";
+import { DiagramView } from "./DiagramView";
 import { wrapAsciiTrees } from "../lib/wrapAsciiTrees";
 import "streamdown/styles.css";
 import "./Markdown.css";
@@ -41,6 +44,36 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Light or dark, as `useTheme` last wrote it to <html>: a diagram is drawn again when it changes. */
+function useScheme(): string | undefined {
+  const [scheme, setScheme] = useState(() => document.documentElement.dataset.scheme);
+  useEffect(() => {
+    const root = document.documentElement;
+    const watch = new MutationObserver(() => setScheme(root.dataset.scheme));
+    watch.observe(root, { attributes: true, attributeFilter: ["data-scheme"] });
+    return () => watch.disconnect();
+  }, []);
+  return scheme;
+}
+
+/** `source` drawn as a diagram once it is whole; a `null` source draws nothing. */
+function useDiagram(source: string | null): { svg: string | null; error: string | null } {
+  const scheme = useScheme();
+  const [drawn, setDrawn] = useState<{ svg: string | null; error: string | null }>({ svg: null, error: null });
+  useEffect(() => {
+    if (source === null) return;
+    let live = true;
+    renderMermaid(source, scheme === "dark").then(
+      (svg) => live && setDrawn({ svg, error: null }),
+      (e: unknown) => live && setDrawn({ svg: null, error: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [source, scheme]);
+  return source === null ? { svg: null, error: null } : drawn;
+}
+
 /** Fences whose text a shell runs as it stands — not `console`, which carries prompts and output. */
 const SHELLS = new Set(["bash", "sh", "zsh", "shell"]);
 
@@ -64,6 +97,12 @@ function Code({
   const source = lang === null ? "" : textOf(children);
   const incomplete = useIsCodeFenceIncomplete();
   const [tokens, setTokens] = useState<Token[][] | null>(null);
+  // A diagram is drawn once its fence is closed: half of one does not parse.
+  const diagram = useDiagram(lang === "mermaid" && !incomplete ? source : null);
+  const [showCode, setShowCode] = useState(false);
+  const [large, setLarge] = useState(false);
+  const drawing = diagram.svg !== null && !showCode;
+  const image = diagram.svg === null ? "" : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(diagram.svg)}`;
 
   useEffect(() => {
     setTokens(null);
@@ -80,6 +119,17 @@ function Code({
   return (
     <div className="md-code" data-lang={lang}>
       <div className="md-code-actions">
+        {diagram.svg !== null && (
+          <button
+            type="button"
+            className="md-code-action"
+            title={showCode ? "Show diagram" : "Show code"}
+            aria-label={showCode ? "Show diagram" : "Show code"}
+            onClick={() => setShowCode((v) => !v)}
+          >
+            {showCode ? <Workflow size={13} aria-hidden /> : <Code2 size={13} aria-hidden />}
+          </button>
+        )}
         {onPaste && SHELLS.has(lang) && !incomplete && (
           <button type="button" className="md-code-action" title="Paste into terminal" aria-label="Paste into terminal" onClick={() => onPaste(source.replace(/\n$/, ""))}>
             <SquareTerminal size={13} aria-hidden />
@@ -87,6 +137,12 @@ function Code({
         )}
         <CopyButton text={source} />
       </div>
+      {drawing ? (
+        // Shrunk to the thread's width; a click opens it the whole window over.
+        <button type="button" className="md-diagram" title="Open larger" onClick={() => setLarge(true)}>
+          <img src={image} alt="Diagram" />
+        </button>
+      ) : (
       <div className="md-code-scroll">
         <div className="md-code-body">
         {splitLines(source).map((line, index) => (
@@ -107,6 +163,10 @@ function Code({
         ))}
         </div>
       </div>
+      )}
+      {/* Out of the message, whose styles would reach into it. */}
+      {large && image && createPortal(<DiagramView src={image} themed onClose={() => setLarge(false)} />, document.body)}
+      {diagram.error !== null && <div className="md-diagram-error">Not drawn as a diagram: {diagram.error}</div>}
     </div>
   );
 }

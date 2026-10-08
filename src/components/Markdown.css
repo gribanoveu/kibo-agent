@@ -226,3 +226,26 @@
     animation: none;
   }
 }
+
+/* A ```mermaid block drawn: centred, shrunk to the thread's width; a click opens it larger. */
+.md-diagram {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 14px 12px;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+.md-diagram img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+/* Why a diagram stayed code: Mermaid's own words, under the code it could not read. */
+.md-diagram-error {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}

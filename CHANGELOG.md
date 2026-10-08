@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-08 A Mermaid diagram the model writes — flowchart, sequence, ER, state — is drawn as a diagram in the chat once its block is complete, in the light or dark theme, with a button to see its code; a click opens it the whole window over, zoomed and dragged like a PlantUML one; one Mermaid cannot read stays code and says why
 - 2026-10-08 A new assistant chat suggests from 60 questions instead of 30 — architecture, more Spring, and systems analysis (user stories, NFRs, BPMN, sequence and ER diagrams) join the banking and API design ones
 - 2026-10-08 The Account menu switches between the light and dark theme in one click; each side keeps the palette picked in Settings
 - 2026-10-08 A new chat greets you differently each time, and by the time of day — "Good morning", "Up late?" — instead of always "How can I help?"

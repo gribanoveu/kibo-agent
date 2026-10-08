@@ -9,9 +9,10 @@ const MAX = 8;
 /**
  * A diagram the whole window over: fitted at first, then zoomed with the
  * buttons, and scrolled or dragged about. Not zoomed by the wheel or a pinch:
- * on a trackpad that leapt.
+ * on a trackpad that leapt. `themed` draws it on the window's background
+ * rather than PlantUML's white — a Mermaid diagram comes in the theme's colours.
  */
-export function DiagramView({ src, onClose }: { src: string; onClose: () => void }) {
+export function DiagramView({ src, onClose, themed = false }: { src: string; onClose: () => void; themed?: boolean }) {
   const image = useRef<HTMLImageElement>(null);
   // `null` is fitted; otherwise image pixels per diagram pixel.
   const [zoom, setZoom] = useState<number | null>(null);
@@ -49,7 +50,7 @@ export function DiagramView({ src, onClose }: { src: string; onClose: () => void
       }
     >
       <div
-        className={`diagram-view${zoom === null ? " fitted" : ""}`}
+        className={`diagram-view${zoom === null ? " fitted" : ""}${themed ? " themed" : ""}`}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           e.preventDefault();
