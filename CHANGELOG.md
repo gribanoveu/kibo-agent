@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-08 The agent is no longer told how approval works: Kibo decides when a call needs you, and only a refusal tells the agent what to do next. The plan is the plan of work, the checklist a short outline the agent checks its own work against
+- 2026-10-08 The agent answers and thinks more briefly — about a sixth fewer output tokens on the agent bench, with the same tasks solved
 - 2026-10-08 A model answer that goes silent for 5 minutes no longer hangs the turn — sent again if nothing had arrived yet, otherwise the turn ends with an error
 - 2026-10-08 A new chat is named by the active model from its first message — a few hundred tokens, once per chat; when the request fails the chat keeps its first message as its name
 - 2026-10-08 A plan the agent writes no longer opens the Plan tab on its own — it is there when you open the tab, and the chat stays in front

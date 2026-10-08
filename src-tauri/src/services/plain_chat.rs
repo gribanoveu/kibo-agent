@@ -446,7 +446,10 @@ mod tests {
         };
         let deny = vec![ToolCallDecision { id: "c1".into(), approved: false, reason: Some("keep it".into()) }];
         let done = done(chat.run(ChatRole::Tester, false, |turn| resume(turn, paused, deny)).unwrap());
-        assert_eq!(tool_result(&done.history), "Denied by the user: keep it");
+        assert_eq!(
+            tool_result(&done.history),
+            format!("Denied by the user: keep it\n{}", crate::domain::tools::AFTER_DENIAL)
+        );
     }
 
     /// A cluster of one pod, in whatever namespace it is asked about.

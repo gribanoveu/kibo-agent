@@ -197,7 +197,6 @@ mod tests {
                 workspace: Path::new("/tmp/p"),
                 shell: "/bin/sh",
                 today: "26 September 2026",
-                unattended: false,
                 skills,
                 rules,
                 plan: None,

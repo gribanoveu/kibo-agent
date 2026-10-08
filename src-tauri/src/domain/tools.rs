@@ -944,6 +944,9 @@ pub struct ToolDeps<'a> {
 /// that never happened.
 pub const TOOL_ERROR_PREFIX: &str = "Error: ";
 pub const TOOL_DENIED_PREFIX: &str = "Denied by the user";
+/// Said to the model after a denial, the one time it needs to know: the
+/// prompt carries nothing about approval.
+pub const AFTER_DENIAL: &str = "Do not retry this call or reach the same result another way: ask the user how to proceed, and cancel the checklist item it belonged to with this reason.";
 pub const TOOL_NOT_RUN_PREFIX: &str = "Not run: ";
 
 /// Why a tool call could not be carried out.
