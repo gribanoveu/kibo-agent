@@ -220,7 +220,7 @@ struct Run {
     tokens_cached: u64,
     tokens_out: u64,
     /// Each round: tokens in, cached and out, whether the length limit cut it,
-    /// and the start of what it said and thought. A clearing or a changed
+    /// and what it said and thought, whole. A clearing or a changed
     /// checklist shows as the round where the cached share drops; a blank
     /// reply shows why it was blank.
     per_round: Vec<serde_json::Value>,
@@ -234,7 +234,6 @@ impl Run {
     }
 
     fn json(&self) -> serde_json::Value {
-        let clip = |s: &str| s.chars().take(400).collect::<String>();
         json!({
             "task": self.task,
             "passed": self.passed,
@@ -244,7 +243,7 @@ impl Run {
             "toolErrors": self.errors().map(|c| json!({
                 "tool": c.tool,
                 "args": c.args,
-                "error": clip(c.error.as_deref().unwrap_or("")),
+                "error": c.error.as_deref().unwrap_or(""),
             })).collect::<Vec<_>>(),
             // Every call in order, as the call log redacts it (edit texts are
             // hidden, commands are not) — what a pass that took twice the
@@ -263,8 +262,8 @@ impl Run {
             "tokensOut": self.tokens_out,
             "perRound": self.per_round,
             "seconds": self.seconds,
-            "check": clip(&self.check_output),
-            "answer": clip(&self.answer),
+            "check": self.check_output,
+            "answer": self.answer,
             "workspace": self.workspace,
         })
     }
@@ -350,7 +349,6 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let rounds = events.iter().filter(|e| matches!(e.event, ChatEventPayload::RoundCompleted { .. })).count();
     let (tokens_in, tokens_cached, tokens_out) = tokens_spent(&events, &agents.list());
     let mut by_round: BTreeMap<u32, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
-    let clip = |s: &str| s.chars().take(300).collect::<String>();
     for e in events.iter() {
         let entry = by_round.entry(e.round).or_default();
         match &e.event {
@@ -363,8 +361,8 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
                 entry.insert("loopReminded".into(), json!({ "tool": tool, "failing": failing }));
             }
             ChatEventPayload::RoundCompleted { text, reasoning, truncated } => {
-                entry.insert("text".into(), json!(clip(text)));
-                entry.insert("reasoning".into(), json!(clip(reasoning)));
+                entry.insert("text".into(), json!(text));
+                entry.insert("reasoning".into(), json!(reasoning));
                 entry.insert("reasoningChars".into(), json!(reasoning.chars().count()));
                 entry.insert("truncated".into(), json!(truncated));
             }
