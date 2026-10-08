@@ -303,12 +303,6 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  // A plan the agent has just written is shown, once, as soon as it lands —
-  // the turn may go on carrying it out for a long while.
-  useEffect(() => {
-    if (agent.planWritten > 0) openTab("plan");
-  }, [agent.planWritten]);
-
   const selectChat = (id: string) =>
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
 
