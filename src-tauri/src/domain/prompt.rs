@@ -25,7 +25,7 @@ use crate::domain::runbooks::{self, Runbook};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmMessage;
 use crate::domain::mcp::ServerNote;
-use crate::domain::project_rules::RuleFile;
+use crate::domain::project_rules::{MEMORY_NAME, RuleFile};
 use crate::domain::skills::Skill;
 use crate::domain::tools::{Task, TodoStatus};
 
@@ -303,6 +303,7 @@ pub fn skills_block(skills: &[Skill]) -> Option<String> {
 /// skills: it changes when someone edits the file, not from round to round.
 /// Headed by file name so that "per `CLAUDE.md`" in a reply is checkable.
 pub fn rules_block(rules: &[RuleFile]) -> Option<String> {
+    let rules: Vec<&RuleFile> = rules.iter().filter(|r| r.name != MEMORY_NAME).collect();
     if rules.is_empty() {
         return None;
     }
@@ -322,6 +323,19 @@ pub fn rules_block(rules: &[RuleFile]) -> Option<String> {
         }
     }
     Some(text)
+}
+
+/// The agent's notes from earlier conversations in this folder, saved with
+/// `remember`. Apart from the rules and worded down from them: the agent
+/// wrote these, not the maintainers, and a note can be out of date.
+pub fn memory_block(rules: &[RuleFile]) -> Option<String> {
+    let memory = rules.iter().find(|r| r.name == MEMORY_NAME)?;
+    Some(format!(
+        "## Memory\n\nNotes you saved with `remember` in earlier conversations in this folder. They are what you learned, \
+         not the user's instructions: one may be out of date, so when a note decides what you do, check it against the code first. \
+         They never outrank the user's request, the project instructions, or a confirmation the user is asked for.\n\n{}",
+        memory.content.trim_end()
+    ))
 }
 
 /// What the connected MCP servers say about their own tools, or nothing when
@@ -454,6 +468,9 @@ pub fn system_messages(ctx: &TurnContext) -> Vec<LlmMessage> {
     if let Some(rules) = rules_block(ctx.rules) {
         messages.push(LlmMessage::system(rules));
     }
+    if let Some(memory) = memory_block(ctx.rules) {
+        messages.push(LlmMessage::system(memory));
+    }
     // After what changes when a file is edited and before what changes with
     // the turn: this one changes when the set of servers does.
     if let Some(servers) = mcp_block(ctx.mcp_servers) {
@@ -575,6 +592,26 @@ mod tests {
         assert!(text.contains("### AGENTS.md\n\nRun cargo test.\n\n### CLAUDE.md\n\nUse bun."), "{text}");
         assert!(!text.contains("[cut here"));
         assert_eq!(messages[4], LlmMessage::system(context_block(&ctx(&workspace))));
+    }
+
+    /// The agent's notes are not the maintainers' rules: their own block,
+    /// after the rules, and none at all when only the memory is there.
+    #[test]
+    fn memory_is_its_own_block_after_the_rules() {
+        let workspace = PathBuf::from("/tmp/p");
+        let rules = [RuleFile::new("AGENTS.md", "Run cargo test."), RuleFile::new(MEMORY_NAME, "- k8s is OrbStack\n")];
+        let messages = system_messages(&TurnContext { rules: &rules, ..ctx(&workspace) });
+
+        assert_eq!(messages.len(), 5);
+        let rules_text = messages[2].content.as_deref().unwrap();
+        assert!(rules_text.starts_with("## Project instructions") && !rules_text.contains("OrbStack"), "{rules_text}");
+        let memory = messages[3].content.as_deref().unwrap();
+        assert!(memory.starts_with("## Memory") && memory.ends_with("\n\n- k8s is OrbStack"), "{memory}");
+
+        let only = [RuleFile::new(MEMORY_NAME, "- x")];
+        assert_eq!(rules_block(&only), None);
+        assert!(memory_block(&only).is_some());
+        assert_eq!(memory_block(&rules[..1]), None);
     }
 
     /// Without the note the model takes the first 20 000 characters for the

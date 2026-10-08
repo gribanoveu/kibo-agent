@@ -111,17 +111,20 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 // Where the MCP tools are, so is the way to the deferred ones.
                 ToolName::ToolSearch,
                 ToolName::Explore,
+                ToolName::Remember,
             ]);
         }
         // `writePlan` is chat state, not the working tree: writing the plan
         // is the one thing Plan mode is for. Agent has it too, so a plan
         // that meets reality can be corrected where the user reads it.
         ConversationMode::Plan => {
-            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore]);
+            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember]);
         }
         // Research handed off reads the same files, only somewhere else.
+        // `remember` writes the agent's memory, not the tree: "remember
+        // that" is something the user says in any mode they talk in.
         ConversationMode::Ask => {
-            tools.insert(ToolName::Explore);
+            tools.extend([ToolName::Explore, ToolName::Remember]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
@@ -269,6 +272,17 @@ mod tests {
         assert!(offers(ConversationMode::Plan, ToolName::WritePlan));
         assert!(!offers(ConversationMode::Ask, ToolName::WritePlan));
         assert!(!offers(ConversationMode::Ask, ToolName::Todo));
+    }
+
+    /// "Remember that" is said in whatever mode the user talks in; a helper
+    /// and a reviewer have no one to remember it for.
+    #[test]
+    fn memory_is_kept_where_the_user_talks_to_the_agent() {
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Ask] {
+            assert!(offers(mode, ToolName::Remember), "{mode:?}");
+        }
+        assert!(!offers(ConversationMode::Explore, ToolName::Remember));
+        assert!(!offers(ConversationMode::Review, ToolName::Remember));
     }
 
     /// The narrower modes are narrower. Without this, a set that quietly grew

@@ -55,6 +55,9 @@ pub enum ToolName {
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
+    /// A note for later conversations in this folder, checked by the model
+    /// before it is kept.
+    Remember,
     /// The Kubernetes role's reads of the cluster its chat is pinned to
     /// (`docs/21-kubernetes-mode.md`, K-3).
     KubeList,
@@ -124,6 +127,7 @@ impl ToolName {
         ToolName::RunInTerminal,
         ToolName::ReportFinding,
         ToolName::Explore,
+        ToolName::Remember,
         ToolName::KubeList,
         ToolName::KubeGet,
         ToolName::KubeEvents,
@@ -174,6 +178,7 @@ impl ToolName {
             ToolName::RunInTerminal => "runInTerminal",
             ToolName::ReportFinding => "reportFinding",
             ToolName::Explore => "explore",
+            ToolName::Remember => "remember",
             ToolName::KubeList => "kubeList",
             ToolName::KubeGet => "kubeGet",
             ToolName::KubeEvents => "kubeEvents",
@@ -298,6 +303,8 @@ impl ToolName {
             // A whole turn of its own. That turn has its own ceiling, so this
             // only keeps a turn from delegating without end.
             ToolName::Explore => 5,
+            // A short request to the model, and a line appended.
+            ToolName::Remember => 2,
             // A request or two to the cluster; logs may be ten pods' worth.
             ToolName::KubeList
             | ToolName::KubeGet
@@ -487,7 +494,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            44,
+            45,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -928,6 +935,9 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
+    /// Asks the model whether a `remember` note may be kept; `Err` says why
+    /// not, or why it could not be asked. `None` where there is no model.
+    pub check_memory: Option<&'a dyn Fn(&str) -> Result<(), String>>,
     /// The cluster a Kubernetes chat is pinned to; `None` where there is
     /// none, or its kubeconfig could not be read.
     pub kube: Option<crate::domain::kube::PinnedCluster<'a>>,
@@ -1108,6 +1118,9 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// A `remember` note that was not kept, and why.
+    #[error("remember: {0}")]
+    Memory(String),
     /// A change asked for while the chat's tab says "Read only". The switch
     /// is the user's; the model says what it would do and where to turn it on.
     #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
@@ -1177,6 +1190,7 @@ pub enum ToolCall {
     RunInTerminal(RunInTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
     Explore(ExploreArgs),
+    Remember(RememberArgs),
     KubeList(KubeListArgs),
     KubeGet(KubeGetArgs),
     KubeEvents(KubeEventsArgs),
@@ -1226,6 +1240,7 @@ impl ToolCall {
             ToolCall::RunInTerminal(_) => ToolName::RunInTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Explore(_) => ToolName::Explore,
+            ToolCall::Remember(_) => ToolName::Remember,
             ToolCall::KubeList(_) => ToolName::KubeList,
             ToolCall::KubeGet(_) => ToolName::KubeGet,
             ToolCall::KubeEvents(_) => ToolName::KubeEvents,
@@ -1481,6 +1496,9 @@ pub enum ToolResult {
     /// The plan was replaced. The text is in the call's own arguments.
     #[serde(rename_all = "camelCase")]
     PlanWritten { lines: u32 },
+    /// A note was kept — or was there already, word for word. The text is in
+    /// the call's own arguments.
+    Remembered { already: bool },
     /// An MCP tool's answer, already text.
     Mcp { text: String },
     /// The helper turn's closing answer, which run it was — its number in
@@ -1791,6 +1809,13 @@ pub struct KubeUndoArgs {
 #[serde(rename_all = "camelCase")]
 pub struct ExploreArgs {
     pub task: String,
+}
+
+/// `remember`: one fact for later conversations in this folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RememberArgs {
+    pub fact: String,
 }
 
 /// `writePlan` arguments: the whole plan.

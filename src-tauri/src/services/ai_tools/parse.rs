@@ -48,6 +48,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "writePlan" => ToolCall::WritePlan(args(call)?),
         "reportFinding" => ToolCall::ReportFinding(args(call)?),
         "explore" => ToolCall::Explore(args(call)?),
+        "remember" => ToolCall::Remember(args(call)?),
         "readOutput" => ToolCall::ReadOutput(args(call)?),
         "stopProcess" => ToolCall::StopProcess(args(call)?),
         "readTerminal" => ToolCall::ReadTerminal(args(call)?),

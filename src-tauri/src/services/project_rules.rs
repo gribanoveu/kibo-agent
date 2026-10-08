@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::project_rules::{RULE_FILES, RuleFile, RuleListItem};
+use crate::domain::project_rules::{MEMORY_NAME, RULE_FILES, RuleFile, RuleListItem};
 use crate::domain::settings::SettingsError;
-use crate::infra::settings_store;
+use crate::infra::{app_dir, settings_store};
 
 /// A rule file found at the root: where it really is, and its text or why
 /// there is none.
@@ -31,17 +31,36 @@ fn find(root: &Path) -> Vec<Found> {
         // somewhere else on the disk would send that too.
         let text = if !path.starts_with(&root) {
             Err("links outside the open folder".to_string())
-        } else if !path.is_file() {
-            Err("not a file".to_string())
         } else {
-            fs::read_to_string(&path).map_err(|e| match e.kind() {
-                std::io::ErrorKind::InvalidData => "not UTF-8 text".to_string(),
-                _ => e.to_string(),
-            })
+            read(&path)
         };
         found.push(Found { name, path, text });
     }
+    // Last, and only once something was saved: an empty memory is not a row.
+    if let Some(path) = memory_path(&root).filter(|path| path.exists()) {
+        let text = read(&path);
+        found.push(Found { name: MEMORY_NAME, path, text });
+    }
     found
+}
+
+fn read(path: &Path) -> Result<String, String> {
+    if !path.is_file() {
+        return Err("not a file".to_string());
+    }
+    fs::read_to_string(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidData => "not UTF-8 text".to_string(),
+        _ => e.to_string(),
+    })
+}
+
+/// Where the agent's notes about `root` are kept: a file per folder under the
+/// app directory, named by a hash of the folder's real path. `None` when the
+/// folder or the app directory cannot be resolved.
+pub fn memory_path(root: &Path) -> Option<PathBuf> {
+    let root = root.canonicalize().ok()?;
+    let hash = blake3::hash(root.as_os_str().as_encoded_bytes()).to_hex();
+    Some(app_dir::dir().ok()?.join("memory").join(format!("{}.md", &hash[..16])))
 }
 
 /// What the turn's prompt carries: every readable file that is switched on.

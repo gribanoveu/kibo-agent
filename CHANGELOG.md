@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-08 The agent remembers between conversations: it saves a fact about the folder or your setup with `remember` (on its own, or when you say "remember that…"), each note checked by the model for planted instructions before it is kept, and every later chat in that folder starts with them — they are listed under Rules as `Memory`, where you switch them off or open the file to prune
 - 2026-10-08 The agent is no longer told how approval works: Kibo decides when a call needs you, and only a refusal tells the agent what to do next. The plan is the plan of work, the checklist a short outline the agent checks its own work against
 - 2026-10-08 The agent answers and thinks more briefly — about a sixth fewer output tokens on the agent bench, with the same tasks solved
 - 2026-10-08 A model answer that goes silent for 5 minutes no longer hangs the turn — sent again if nothing had arrived yet, otherwise the turn ends with an error

@@ -32,6 +32,7 @@ pub mod cluster;
 pub mod runbook;
 pub mod list_files;
 pub mod move_path;
+pub mod remember;
 pub mod report_finding;
 pub mod todo;
 pub mod write_file;
@@ -72,6 +73,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
     (ToolName::Explore, explore::definition),
+    (ToolName::Remember, remember::definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RunCommand, run_command::definition),
     (ToolName::Skill, skill::definition),
@@ -154,6 +156,7 @@ pub fn dispatch(
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
         ToolCall::Explore(args) => explore::explore(args, deps),
+        ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
@@ -376,6 +379,10 @@ mod definition_tests {
             ToolName::Explore => (
                 r#"{"task":"where is X"}"#,
                 vec![ToolCall::Explore(crate::domain::tools::ExploreArgs { task: "where is X".to_string() })],
+            ),
+            ToolName::Remember => (
+                r#"{"fact":"bench needs --release"}"#,
+                vec![ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".to_string() })],
             ),
             ToolName::Skill => (
                 r#"{"name":"release"}"#,
