@@ -608,7 +608,6 @@ function ToolRun({
   return (
     <details className={`tool-run${live ? " live" : ""}`}>
       <summary>
-        {live && <Loader2 className="tool-run-spin" size={12} aria-hidden="true" />}
         {live && step ? (
           <span key={step} className="tool-run-text tool-run-step">
             {step}…

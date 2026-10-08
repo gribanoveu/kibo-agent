@@ -115,6 +115,8 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Skill { name, instructions, files, from } => skill(name, instructions, files, from),
         ToolResult::SkillFile { name, path, content } => format!("{name}/{path}:\n{content}"),
         ToolResult::PlanWritten { lines } => format!("Plan saved ({lines} lines). The user sees it in the Plan tab."),
+        ToolResult::Remembered { already: false } => "Saved. It is under \"Memory\" in every later conversation in this folder.".to_string(),
+        ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),

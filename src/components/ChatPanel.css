@@ -101,7 +101,6 @@
 .notice {
   font-size: var(--fs-xs);
   color: var(--text-faint);
-  text-align: center;
   margin: 2px 0;
 }
 
@@ -379,7 +378,7 @@ button.turn-processes:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The run under way: a spinner, the step it is on, how many calls so far. */
+/* Compacting under way. The run under way shows only its shimmering step and how many calls so far. */
 .tool-run-spin {
   flex: none;
   color: var(--accent);

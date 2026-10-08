@@ -58,6 +58,7 @@ export const LABELS: Record<string, string> = {
   runInTerminal: "Terminal",
   reportFinding: "Finding",
   explore: "Explore",
+  remember: "Memory",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -488,6 +489,10 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // The note is the whole call; a refused one says why in the error.
+    case "remember":
+      return { name, arg: str(args.fact) ?? "", meta: result.already ? "already saved" : undefined, detail: "" };
+
     // A review's finding: the one refused is what shows here, a kept one
     // stands on its own card (`lib/finding.ts`).
     case "reportFinding":
@@ -614,6 +619,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Output: "Reading the output of",
   Stop: "Stopping",
   Explore: "Exploring",
+  Memory: "Saving to memory",
 };
 
 export function describeActive(block: Extract<Block, { kind: "tool" }>): string {

@@ -294,6 +294,12 @@ mod tests {
                 Some(ToolCall::WritePlan(WritePlanArgs { content: LEAK.into() })),
                 ToolResult::PlanWritten { lines: 3 },
             ),
+            // The note is the model's own words, and the log is where the
+            // user finds what it chose to keep.
+            ToolName::Remember => (
+                Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
+                ToolResult::Remembered { already: false },
+            ),
             ToolName::ReportFinding => (
                 None,
                 ToolResult::FindingNoted { path: path(), start_line: 3, end_line: 4 },

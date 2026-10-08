@@ -97,5 +97,9 @@ export function useTheme() {
     [],
   );
 
-  return { choice, setMode, setPalette };
+  // The other side, fixed: from "system" too, since the point is to leave
+  // what is on screen. The palettes stay as Settings has them.
+  const toggle = useCallback(() => setChoice((c) => ({ ...c, mode: sideOf(c) === "light" ? "dark" : "light" })), []);
+
+  return { choice, setMode, setPalette, toggle };
 }

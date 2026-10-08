@@ -101,6 +101,17 @@ describe("what each call shows", () => {
     expect(failed).toMatchObject({ arg: "Where is the token refreshed?", meta: "failed" });
   });
 
+  test("a note to memory shows the note, and says when it was there already", () => {
+    const args = '{"fact":"bench needs --release"}';
+    expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: false } }))).toMatchObject({
+      name: "Memory",
+      arg: "bench needs --release",
+      meta: undefined,
+      detail: "",
+    });
+    expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: true } })).meta).toBe("already saved");
+  });
+
   test("the user's terminal: which one and what it showed; a typed line and where it went", () => {
     const read = describeTool(
       tool({

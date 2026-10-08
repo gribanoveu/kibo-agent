@@ -1,7 +1,18 @@
 import { describe, expect, mock, test } from "bun:test";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 
 mock.module("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
+// Mermaid needs a browser's text layout to draw; here it is the call and its answer that matter.
+const drawn: Array<[source: string, dark: boolean]> = [];
+let drawing: (source: string) => Promise<string> = async () => '<svg data-drawn="yes"></svg>';
+const { sized } = await import("../lib/mermaid");
+mock.module("../lib/mermaid", () => ({
+  sized,
+  renderMermaid: (source: string, dark: boolean) => {
+    drawn.push([source, dark]);
+    return drawing(source);
+  },
+}));
 
 const { Markdown } = await import("../components/Markdown");
 const { highlight, resolveLanguage } = await import("../lib/highlight");
@@ -134,5 +145,86 @@ describe("highlight", () => {
     expect(resolveLanguage("bash")).toBe("shell");
     expect(resolveLanguage(" RS ")).toBe("rust");
     expect(resolveLanguage("tsx")).toBe("tsx");
+  });
+});
+
+describe("a mermaid block", () => {
+  const fence = "```mermaid\ngraph TD\n  A --> B\n```";
+
+  const shown = (container: HTMLElement) => decodeURIComponent(container.querySelector<HTMLImageElement>(".md-diagram img")?.src ?? "");
+
+  test("is drawn once closed, as an image, and shows its code on request", async () => {
+    drawing = async () => '<svg data-drawn="yes"></svg>';
+    const { container, getByTitle } = render(<Markdown text={fence} streaming={false} />);
+    await waitFor(() => expect(shown(container)).toContain('data-drawn="yes"'));
+    expect(container.querySelector(".md-diagram svg")).toBeNull();
+    expect(container.querySelector(".md-code-line")).toBeNull();
+
+    fireEvent.click(getByTitle("Show code"));
+    expect(container.querySelector(".md-diagram")).toBeNull();
+    expect(container.textContent).toContain("A --> B");
+    fireEvent.click(getByTitle("Show diagram"));
+    expect(shown(container)).toContain('data-drawn="yes"');
+  });
+
+  test("opens larger the whole window over, on the theme's background", async () => {
+    drawing = async () => '<svg data-drawn="big"></svg>';
+    const { container, getByTitle, getByRole, queryByRole } = render(<Markdown text={fence} streaming={false} />);
+    await waitFor(() => expect(shown(container)).toContain("big"));
+    fireEvent.click(getByTitle("Open larger"));
+    const dialog = getByRole("dialog", { name: "Diagram" });
+    expect(decodeURIComponent(dialog.querySelector("img")?.getAttribute("src") ?? "")).toContain("big");
+    expect(dialog.querySelector(".diagram-view.themed")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(queryByRole("dialog")).toBeNull();
+  });
+
+  test("half written, it stays code and Mermaid is not asked", () => {
+    drawn.length = 0;
+    const { container } = render(<Markdown text={"```mermaid\ngraph TD\n  A -->"} streaming={true} />);
+    expect(container.querySelector(".md-diagram")).toBeNull();
+    expect(drawn).toEqual([]);
+  });
+
+  test("one Mermaid cannot read stays code, and says why", async () => {
+    drawing = async () => {
+      throw new Error("Parse error on line 2");
+    };
+    const { container, queryByTitle } = render(<Markdown text={fence} streaming={false} />);
+    await waitFor(() => expect(container.querySelector(".md-diagram-error")?.textContent).toContain("Parse error on line 2"));
+    expect(container.textContent).toContain("A --> B");
+    expect(queryByTitle("Show code")).toBeNull();
+  });
+
+  test("is drawn in the side the window shows, and again when it changes", async () => {
+    drawing = async () => "<svg></svg>";
+    document.documentElement.dataset.scheme = "dark";
+    drawn.length = 0;
+    render(<Markdown text={fence} streaming={false} />);
+    await waitFor(() => expect(drawn.at(-1)?.[1]).toBe(true));
+    document.documentElement.dataset.scheme = "light";
+    await waitFor(() => expect(drawn.at(-1)?.[1]).toBe(false));
+  });
+
+  test("other languages are never drawn", async () => {
+    drawn.length = 0;
+    const { container } = render(<Markdown text={"```rust\nfn main() {}\n```"} streaming={false} />);
+    await waitFor(() => expect(container.querySelector(".md-code-line")).toBeTruthy());
+    expect(drawn).toEqual([]);
+  });
+});
+
+describe("a drawn diagram's size", () => {
+  test("is the size it was laid out at, so an image of it can be zoomed from there", () => {
+    const out = sized('<svg xmlns="http://www.w3.org/2000/svg" width="100%" style="max-width: 412.5px; background: none" viewBox="-8 -8 412.5 120.2"><g/></svg>');
+    expect(out).toContain('width="413"');
+    expect(out).toContain('height="121"');
+    expect(out).not.toContain("max-width");
+    expect(out).toContain("background: none");
+  });
+
+  test("an SVG without a usable viewBox is left as it came", () => {
+    const bare = '<svg xmlns="http://www.w3.org/2000/svg" width="100%"><g/></svg>';
+    expect(sized(bare)).toBe(bare);
   });
 });

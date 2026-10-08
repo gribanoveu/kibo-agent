@@ -134,7 +134,11 @@ pub struct TurnLimits {
 
 impl Default for TurnLimits {
     fn default() -> Self {
-        Self { rounds: 60, budget: 250 }
+        // Two weeks of real chats (2026-10-08): half the turns took 5 rounds,
+        // the heaviest — documenting a repository — 71 rounds and ~410 budget.
+        // 60/250 stopped those mid-work; this keeps a margin over them and
+        // still ends a model going round in circles.
+        Self { rounds: 100, budget: 500 }
     }
 }
 

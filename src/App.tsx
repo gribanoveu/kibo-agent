@@ -29,7 +29,7 @@ import { useHooks } from "./hooks/useHooks";
 import { useSkills } from "./hooks/useSkills";
 import { useToolLog } from "./hooks/useToolLog";
 import { roomFor, usePanelSizes } from "./hooks/usePanelSizes";
-import { useTheme } from "./hooks/useTheme";
+import { sideOf, useTheme } from "./hooks/useTheme";
 import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
@@ -694,6 +694,8 @@ export default function App() {
           onToggleCollapse={toggleSidebar}
           onOpenSettings={() => openSettings()}
           onOnboardingAction={openTab}
+          themeSide={sideOf(theme.choice)}
+          onToggleTheme={theme.toggle}
         />
 
         <PanelResizeHandle
