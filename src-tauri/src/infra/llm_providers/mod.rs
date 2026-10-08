@@ -3,7 +3,7 @@ pub mod openai_compatible;
 
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use secrecy::SecretString;
 use serde_json::Value;
@@ -94,16 +94,37 @@ fn without_images(mut request: ChatRequest) -> ChatRequest {
 /// How soon a stop is seen while the provider says nothing.
 const CANCEL_POLL: Duration = Duration::from_millis(100);
 
+/// How long a stream may go without a line before it is taken for dead — a
+/// proxy or NAT that dropped the connection without a word sends no FIN, so
+/// nothing else would ever end the wait. Anthropic's `ping` events and any
+/// other line reset it, so a model thinking for long still gets through.
+const STALL: Duration = Duration::from_secs(300);
+
+/// Ends the reader thread a stall left blocked in `read`: headers past this,
+/// or a body that took longer than any real answer. A deadline of ureq's,
+/// not a silence timer — its body timeout counts from the start.
+const READER_HEADERS_LIMIT: Duration = Duration::from_secs(360);
+const READER_BODY_LIMIT: Duration = Duration::from_secs(3600);
+
 /// A streamed answer's lines, sent and read on a thread of its own. A model
 /// that thinks before its first byte, or a proxy that holds the headers, keeps
 /// that thread blocked for as long as it likes — the caller waits on the
 /// channel instead, and a stop lands within `CANCEL_POLL`. The thread left
-/// behind hangs up at its next line, once nobody takes it.
-pub(super) struct StreamLines(Receiver<Result<String, LlmError>>);
+/// behind hangs up at its next line, once nobody takes it, or at ureq's
+/// deadlines.
+pub(super) struct StreamLines {
+    lines: Receiver<Result<String, LlmError>>,
+    stall: Duration,
+}
 
 impl StreamLines {
     pub(super) fn send(post: ureq::RequestBuilder<ureq::typestate::WithBody>, body: Value) -> Self {
         let (lines, taken) = mpsc::channel();
+        let post = post
+            .config()
+            .timeout_recv_response(Some(READER_HEADERS_LIMIT))
+            .timeout_recv_body(Some(READER_BODY_LIMIT))
+            .build();
         std::thread::spawn(move || {
             let response = post
                 .send_json(&body)
@@ -124,16 +145,25 @@ impl StreamLines {
                 }
             }
         });
-        Self(taken)
+        Self { lines: taken, stall: STALL }
     }
 
     /// The next line; `None` at the end of the stream or once `cancelled`.
+    /// `Unavailable` after `stall` without one — retried by the turn while
+    /// nothing has reached the user yet, reported once something has.
     pub(super) fn next(&self, cancelled: &dyn Fn() -> bool) -> Result<Option<String>, LlmError> {
+        let deadline = Instant::now() + self.stall;
         loop {
             if cancelled() {
                 return Ok(None);
             }
-            match self.0.recv_timeout(CANCEL_POLL) {
+            if Instant::now() >= deadline {
+                return Err(LlmError::Unavailable {
+                    retry_after_seconds: None,
+                    message: format!("the provider sent nothing for {} s", self.stall.as_secs()),
+                });
+            }
+            match self.lines.recv_timeout(CANCEL_POLL) {
                 Ok(line) => return line.map(Some),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Ok(None),
@@ -167,6 +197,38 @@ mod tests {
         let next = lines.next(&|| std::time::Instant::now() > stop_after);
         assert!(started.elapsed() < Duration::from_secs(2), "waited for the provider instead");
         assert_eq!(next.expect("a stop is not an error"), None);
+    }
+
+    /// A connection that went quiet without closing — a proxy that dropped
+    /// it says nothing — ends the wait. Lines spaced closer than the stall
+    /// keep it alive, so it is silence that counts, not the stream's length.
+    #[test]
+    fn a_stream_that_goes_silent_is_given_up_on() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let url = format!("http://127.0.0.1:{}", listener.local_addr().expect("addr").port());
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accepts");
+            let _ = socket.read(&mut [0; 4096]);
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+            for i in 0..4 {
+                let _ = socket.write_all(format!("data: {i}\n").as_bytes());
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            // Open and silent, past the test's own timing check.
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        let post = http_agent::build_agent(None).expect("agent").post(url);
+        let mut lines = StreamLines::send(post, serde_json::json!({}));
+        lines.stall = Duration::from_millis(400);
+
+        let started = Instant::now();
+        for i in 0..4 {
+            assert_eq!(lines.next(&|| false).expect("a line"), Some(format!("data: {i}")));
+        }
+        let err = lines.next(&|| false).expect_err("silence is an error");
+        assert!(matches!(err, LlmError::Unavailable { retry_after_seconds: None, .. }), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(3), "waited for the provider instead");
     }
 
     fn config(trusted_cert_pem: Option<&str>) -> ProviderConfig {
