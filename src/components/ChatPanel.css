@@ -101,7 +101,6 @@
 .notice {
   font-size: var(--fs-xs);
   color: var(--text-faint);
-  text-align: center;
   margin: 2px 0;
 }
 
