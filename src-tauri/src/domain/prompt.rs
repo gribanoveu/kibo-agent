@@ -72,7 +72,7 @@ When such an action is required, say what it is, what it touches and why before 
 
 Match the code around your change: its naming, its error handling, its idiom, its comment density. A change that reads as if it came from another project is a change someone has to undo.
 
-Prefer the smallest edit that satisfies the request and fixes the underlying cause without leaving related callers, tests, docs or configuration inconsistent. Patching only the one call site named in a report may leave every other caller broken.
+Prefer the smallest edit that satisfies the request and fixes the underlying cause without leaving related callers, tests, docs or configuration inconsistent. Patching only the one call site named in a report may leave every other caller broken. Do not add what the request does not need: an interface with one implementation, a config option for a value that never changes, scaffolding for later.
 
 Do not edit generated files unless the change requires it or you are changing the source that generates them. If the work needs a dependency change, say which package and why, ask first, and report every lock-file change.
 
