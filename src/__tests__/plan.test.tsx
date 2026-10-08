@@ -181,36 +181,6 @@ describe("the plan through a conversation", () => {
     expect(result.current.checklist).toEqual([]);
   });
 
-  /// The window opens the Plan tab on each count — once per plan, as it is
-  /// written, never for a chat that is only being opened.
-  test("each plan written is counted; opening and plain turns are not", async () => {
-    record = { id: "c1", messages: [], blocks: [tool("old", "writePlan", { content: "# Old" })], todos: [], plan: "# Old" };
-    const { result } = renderHook(() => useAgentTurn());
-    await act(async () => result.current.open("c1"));
-    expect(result.current.planWritten).toBe(0);
-
-    during = writes("# One");
-    await act(async () => result.current.send("plan it"));
-    expect(result.current.planWritten).toBe(1);
-
-    during = [];
-    await act(async () => result.current.send("thanks"));
-    expect(result.current.planWritten).toBe(1);
-
-    // Shown as it was written, so stopping the turn afterwards takes nothing back.
-    during = writes("# Half", "p-half");
-    stopped = true;
-    await act(async () => result.current.send("stop midway"));
-    expect(result.current.turn.status).toBe("cancelled");
-    expect(result.current.planWritten).toBe(2);
-    stopped = false;
-
-    // A call id is unique across the conversation; a repeated one would be the first call again.
-    during = writes("# Two", "p2");
-    await act(async () => result.current.send("again"));
-    expect(result.current.planWritten).toBe(3);
-  });
-
   /// A long turn can spend most of its time carrying the plan out; the user
   /// reads it while it does, not after.
   test("a plan is on the tab while its turn is still running", async () => {
@@ -225,13 +195,11 @@ describe("the plan through a conversation", () => {
     });
     expect(result.current.turn.status).toBe("running");
     expect(result.current.plan).toBe("# Now");
-    expect(result.current.planWritten).toBe(1);
 
     await act(async () => {
       release();
       await sent;
     });
-    expect(result.current.planWritten).toBe(1);
   });
 
   test("a chat saved before plans existed opens without one", async () => {

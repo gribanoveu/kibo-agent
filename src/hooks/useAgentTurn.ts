@@ -87,10 +87,6 @@ export function useAgentTurn({
   const [checklist, setChecklist] = useState<Task[]>([]);
   const [plan, setPlanState] = useState<string | null>(null);
   const planRef = useRef<string | null>(null);
-  // Counts the plans written — the window opens the Plan tab on each, as the
-  // call lands rather than when its turn ends. A count, not a flag: two plans
-  // in a row are two openings, and opening a saved chat is none.
-  const [planWritten, setPlanWritten] = useState(0);
   // Where the running turn's blocks begin — what `writtenPlan` looks at.
   const turnStart = useRef(0);
   const keepPlan = useCallback((next: string | null) => {
@@ -170,10 +166,7 @@ export function useAgentTurn({
     const live = writtenChecklist(blocks);
     if (live) setChecklist(live);
     const written = writtenPlan(blocks);
-    if (written !== null && written !== planRef.current) {
-      keepPlan(written);
-      setPlanWritten((n) => n + 1);
-    }
+    if (written !== null && written !== planRef.current) keepPlan(written);
   }, [turn.status, turn.blocks, keepPlan]);
 
   // A new chat is in the sidebar from its first message, not from the end of
@@ -197,8 +190,6 @@ export function useAgentTurn({
     unsaved.current = false;
 
     const written = writtenPlan(turn.blocks.slice(turnStart.current));
-    // Already counted while the turn ran, unless it ended within one render.
-    if (written !== null && written !== planRef.current) setPlanWritten((n) => n + 1);
     if (written !== null) keepPlan(written);
     const id = chatId ?? crypto.randomUUID();
     setChatId(id);
@@ -658,7 +649,6 @@ export function useAgentTurn({
     reset,
     compact: makeRoom,
     plan,
-    planWritten,
     editPlan,
     checklist,
     branch,

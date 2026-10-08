@@ -462,7 +462,6 @@ describe("branching", () => {
   test("a fork copies the whole conversation into a new chat, saved at once", async () => {
     const { result } = await twoTurns();
     const original = result.current.chatId;
-    const opened = result.current.planWritten;
 
     act(() => result.current.branch());
 
@@ -475,7 +474,6 @@ describe("branching", () => {
     expect(fork.id).toBe(result.current.chatId as string);
     expect(fork.branchedFrom).toBe(original as string);
     expect(fork.messages).toEqual(saved()[1].args.messages);
-    expect(result.current.planWritten).toBe(opened);
 
     results.chat_start = done("third answer");
     await act(async () => {
@@ -486,9 +484,8 @@ describe("branching", () => {
     expect(saved()[3].args.messages).toHaveLength(6);
   });
 
-  /// The plan the original wrote in its last turn is copied, not announced
-  /// again: the Plan tab opens for a plan just written, not for a fork.
-  test("a fork of a chat whose last turn wrote a plan keeps it without reopening it", async () => {
+  /// The plan the original wrote in its last turn is copied with the fork.
+  test("a fork of a chat whose last turn wrote a plan keeps it", async () => {
     results.chat_load = branchRecord;
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
@@ -498,7 +495,6 @@ describe("branching", () => {
     act(() => result.current.branch());
     await waitFor(() => expect(saved()).toHaveLength(1));
     expect(saved()[0].args.plan).toBe("# Plan");
-    expect(result.current.planWritten).toBe(0);
   });
 
   test("a fork keeps the checklist", async () => {
