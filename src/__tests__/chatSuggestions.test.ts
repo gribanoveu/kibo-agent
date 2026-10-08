@@ -4,9 +4,11 @@ import { CHAT_SUGGESTIONS, KUBE_SUGGESTIONS, ROLE_SUGGESTIONS, greetingsAt, pick
 // Chat mode's empty chat shows two of its role's set, different each time it opens.
 
 describe("pickSuggestions", () => {
-  test("the assistant's set has thirty, none twice", () => {
-    expect(CHAT_SUGGESTIONS.length).toBe(30);
-    expect(new Set(CHAT_SUGGESTIONS).size).toBe(30);
+  test("the assistant's set has sixty, none twice, each one line", () => {
+    expect(CHAT_SUGGESTIONS.length).toBe(60);
+    expect(new Set(CHAT_SUGGESTIONS).size).toBe(60);
+    // As long as the longest that fits a row under Kibo.
+    expect(Math.max(...CHAT_SUGGESTIONS.map((s) => s.length))).toBeLessThanOrEqual(60);
   });
 
   test("each role offers its own: Kubernetes asks about the cluster, not about Spring", () => {
@@ -27,7 +29,7 @@ describe("pickSuggestions", () => {
 
   test("any of the set can come up, the last included", () => {
     expect(pickSuggestions(CHAT_SUGGESTIONS, 2, () => 0)).toEqual([CHAT_SUGGESTIONS[0], CHAT_SUGGESTIONS[1]]);
-    expect(pickSuggestions(CHAT_SUGGESTIONS, 1, () => 0.999)).toEqual([CHAT_SUGGESTIONS[29]]);
+    expect(pickSuggestions(CHAT_SUGGESTIONS, 1, () => 0.999)).toEqual([CHAT_SUGGESTIONS[CHAT_SUGGESTIONS.length - 1]]);
   });
 
   test("a greeting fits the hour: no good morning at night, the general ones always", () => {

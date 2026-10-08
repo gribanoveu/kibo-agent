@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-08 A new assistant chat suggests from 60 questions instead of 30 — architecture, more Spring, and systems analysis (user stories, NFRs, BPMN, sequence and ER diagrams) join the banking and API design ones
 - 2026-10-08 The Account menu switches between the light and dark theme in one click; each side keeps the palette picked in Settings
 - 2026-10-08 A new chat greets you differently each time, and by the time of day — "Good morning", "Up late?" — instead of always "How can I help?"
 - 2026-10-08 A new Kubernetes chat says what it can do — read the cluster, and with Changes on, change it — and suggests questions about the cluster (a restarting pod, an OOMKilled one, the last rollout) instead of the assistant's Spring ones

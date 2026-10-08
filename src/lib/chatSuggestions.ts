@@ -2,7 +2,8 @@ import type { ChatRoleId } from "./chat";
 
 /**
  * What Chat mode's empty chat offers to ask — the questions of a Spring
- * developer at a bank, and of system and API design. Short enough for one
+ * developer at a bank, of system and API design, of architecture and of a
+ * systems analyst. Short enough for one
  * line each: two rows is what keeps Kibo where the agent's empty chat has it.
  */
 export const CHAT_SUGGESTIONS = [
@@ -37,6 +38,39 @@ export const CHAT_SUGGESTIONS = [
   "Where should a cache sit in a card payment flow?",
   "Design webhooks that clients can trust and retry",
   "Idempotency keys: how long to keep them, and where?",
+  // Architecture.
+  "Modular monolith or microservices for a new product?",
+  "When does CQRS pay off, and when is it overkill?",
+  "Event sourcing for account balances: worth it?",
+  "Hexagonal architecture in Spring: how to lay out packages?",
+  "How do I split a monolith into services safely?",
+  "Write an ADR for choosing Kafka over RabbitMQ",
+  "Multi-tenant SaaS: one database or one per tenant?",
+  "Strangler fig: how do I start replacing a legacy system?",
+  "Where does an API gateway end and a BFF begin?",
+  "Draw a C4 container diagram for a payment system",
+  "Bounded contexts for a banking app: where to draw lines?",
+  "Choreography or orchestration for a multi-step flow?",
+  "What does 99.99% uptime really take?",
+  "Database per service: how do I report across them?",
+  "Shared library or duplicated code between services?",
+  "Read replicas or a cache for a read-heavy service?",
+  "How do I make a service stateless to scale out?",
+  // More Spring.
+  "@Async in Spring: thread pools and pitfalls",
+  "Spring WebFlux or MVC with virtual threads?",
+  "How do Spring Boot auto-configurations work?",
+  "Structure settings with @ConfigurationProperties",
+  "Add tracing with Micrometer and OpenTelemetry",
+  "Spring Cache with Redis: TTL and eviction done right",
+  // Systems analysis.
+  "Write user stories with acceptance criteria for a transfer",
+  "Which non-functional requirements does a payment API need?",
+  "Draw a sequence diagram for a card payment",
+  "Model a loan application process in BPMN",
+  "Use case or user story: when to use which?",
+  "Design an ER model for customers, accounts and cards",
+  "What goes into an OpenAPI spec before coding starts?",
 ];
 
 /**
