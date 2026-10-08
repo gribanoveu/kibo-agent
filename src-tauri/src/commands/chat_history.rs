@@ -12,6 +12,7 @@ use crate::domain::chat_record::{ChatRecord, ChatSummary};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::chat_store;
+use crate::services::{chat_title, llm_session};
 
 use super::chat::AgentState;
 
@@ -59,6 +60,21 @@ pub fn chat_save(
         super::chat::remember_new_chat(&state, &id);
     }
     Ok(summary)
+}
+
+/// Names a new chat with the active provider's model, from its first message.
+/// Called once that message is saved, beside the turn; the window re-reads the
+/// list when it returns. A failure is only reported: the chat keeps the name it
+/// was saved with.
+#[tauri::command]
+pub async fn chat_generate_title(id: String) -> Result<(), String> {
+    // A request to the provider, which would freeze the IPC loop for its duration.
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        chat_title::name(&session, &id).map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Writes one saved chat to a file the user picked, as Markdown. The path is

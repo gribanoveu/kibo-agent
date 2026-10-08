@@ -604,6 +604,15 @@ export async function saveChat(
 }
 
 /**
+ * Names chat `id` with the active model, from its first message saved. Resolves once the name is
+ * stored — re-read the list then; rejects when the model could not name it, and the chat keeps its name.
+ */
+export async function generateChatTitle(id: string): Promise<void> {
+  requireBackend();
+  await invoke("chat_generate_title", { id });
+}
+
+/**
  * Journals the turn `turnId` of chat `chatId` for the next-prompt model
  * (docs/20-next-prompt-suggestions.md). `user` is the message that started it
  * as the transcript shows it. Returns the row's id, or `null` when there was

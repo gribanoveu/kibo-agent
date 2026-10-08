@@ -7,6 +7,7 @@ pub mod kubeconfigs;
 pub mod kube_changes;
 pub mod context_compaction;
 pub mod commit_message;
+pub mod chat_title;
 pub mod chunk_text;
 pub mod repo_index;
 pub mod embedding_index;

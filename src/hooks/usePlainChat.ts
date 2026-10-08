@@ -12,6 +12,7 @@ import {
   plainChatResume,
   plainChatRoles,
   plainChatSave,
+  generateChatTitle,
   plainChatSend,
   setChatArchived,
   type ChatRoleId,
@@ -234,6 +235,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       // retry, not retype — and the chat is in the sidebar from its first message.
       await plainChatSave(id, role, kube, history.current, asked.blocks);
       void refresh();
+      // Beside the turn; a chat the model could not name keeps its first message as its name.
+      if (chatId === null) generateChatTitle(id).then(refresh, () => {});
       finish(await plainChatSend(turnId.current, role, kube, history.current));
     } catch (e) {
       failed(e);

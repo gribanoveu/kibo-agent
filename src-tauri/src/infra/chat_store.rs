@@ -5,8 +5,10 @@
 //! transcript. The record itself is stored whole as JSON in `body`, in the
 //! `domain::chat_record` format — that file stays the contract.
 //!
-//! `archived` is the one column not taken from the body: it is where the chat
-//! is filed, not what was said, so saving a turn leaves it as it was.
+//! `archived` and `generated_title` are the columns not taken from the body:
+//! where the chat is filed and what the model named it are not what was said,
+//! so saving a turn leaves them as they were. A generated title is listed in
+//! place of the one derived from the first message.
 //!
 //! No database-wide version and no migrations. Upstream once refused to open
 //! a database written by a newer build and thereby hid a user's entire
@@ -80,26 +82,23 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     // A database from before archiving has the table without the column.
     // Adding one with a default is all it takes; an older build reading the
     // file afterwards does not see it and is not harmed by it.
-    let has_archived: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM pragma_table_info('chats') WHERE name = 'archived'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(store)?;
-    if !has_archived {
-        conn.execute_batch("ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
-            .map_err(store)?;
-    }
+    add_column(&conn, "archived", "INTEGER NOT NULL DEFAULT 0")?;
     // The same for a chat's role, which the list draws a sign from: null for
     // the agent's chats and for those saved before the column.
-    let has_role: bool = conn
-        .query_row("SELECT COUNT(*) > 0 FROM pragma_table_info('chats') WHERE name = 'role'", [], |row| row.get(0))
-        .map_err(store)?;
-    if !has_role {
-        conn.execute_batch("ALTER TABLE chats ADD COLUMN role TEXT").map_err(store)?;
-    }
+    add_column(&conn, "role", "TEXT")?;
+    // Null until the model has named the chat, and for good when it could not.
+    add_column(&conn, "generated_title", "TEXT")?;
     Ok(conn)
+}
+
+fn add_column(conn: &Connection, name: &str, definition: &str) -> Result<(), ChatError> {
+    let has: bool = conn
+        .query_row("SELECT COUNT(*) > 0 FROM pragma_table_info('chats') WHERE name = ?1", [name], |row| row.get(0))
+        .map_err(store)?;
+    if !has {
+        conn.execute_batch(&format!("ALTER TABLE chats ADD COLUMN {name} {definition}")).map_err(store)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn now() -> i64 {
@@ -119,7 +118,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
     rename_summary_titles(&conn, workspace)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, updated_at, branched_from, archived, role FROM chats
+            "SELECT id, COALESCE(generated_title, title), updated_at, branched_from, archived, role FROM chats
              WHERE workspace = ?1 AND schema_version <= ?2
              ORDER BY updated_at DESC, id",
         )
@@ -246,22 +245,24 @@ pub fn save_plain(
 fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     chat_record::check_id(&record.id)?;
     let conn = open()?;
-    let stored: Option<(i64, bool)> = conn
-        .query_row("SELECT created_at, archived FROM chats WHERE id = ?1", params![record.id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
+    let stored: Option<(i64, bool, Option<String>)> = conn
+        .query_row("SELECT created_at, archived, generated_title FROM chats WHERE id = ?1", params![record.id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })
         .optional()
         .map_err(store)?;
-    let archived = stored.is_some_and(|s| s.1);
     record.updated_at = now();
-    record.created_at = stored.map_or(record.updated_at, |s| s.0);
+    record.created_at = stored.as_ref().map_or(record.updated_at, |s| s.0);
+    let (archived, generated) = stored.map_or((false, None), |s| (s.1, s.2));
 
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
-    // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`.
+    // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`
+    // and `generated_title`. A new branch starts with its original's name, as
+    // it starts with its first message.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, generated_title)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, (SELECT generated_title FROM chats WHERE id = ?7))
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -284,7 +285,11 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
         ],
     )
     .map_err(store)?;
-    Ok(ChatSummary { archived, ..ChatSummary::from(&record) })
+    let mut summary = ChatSummary { archived, ..ChatSummary::from(&record) };
+    if let Some(title) = generated {
+        summary.title = title;
+    }
+    Ok(summary)
 }
 
 /// Writes one chat as a Markdown transcript, wherever the user chose to put
@@ -306,6 +311,19 @@ pub fn set_archived(id: &str, archived: bool) -> Result<(), ChatError> {
         0 => Err(ChatError::NotFound(id.to_string())),
         _ => Ok(()),
     }
+}
+
+/// Names a chat for good. A chat named already keeps its name: `false`, as
+/// for one deleted while the model was asked.
+pub fn set_generated_title(id: &str, title: &str) -> Result<bool, ChatError> {
+    chat_record::check_id(id)?;
+    open()?
+        .execute(
+            "UPDATE chats SET generated_title = ?2 WHERE id = ?1 AND generated_title IS NULL",
+            params![id, title],
+        )
+        .map(|changed| changed > 0)
+        .map_err(store)
 }
 
 pub fn delete(id: &str) -> Result<(), ChatError> {
@@ -554,6 +572,27 @@ mod tests {
             assert_eq!(from("one"), None);
             assert_eq!(from("two").as_deref(), Some("one"));
             assert_eq!(load("two").unwrap().branched_from.as_deref(), Some("one"));
+        });
+    }
+
+    /// Saving a turn derives the title again; the model's name has to outlast it.
+    #[test]
+    fn a_generated_title_outlasts_the_next_save_and_comes_first() {
+        with_app_dir("chat-store-generated-title", || {
+            save_one("one", "/repo", "why is a token dropped?");
+            assert!(set_generated_title("one", "Lost token").unwrap());
+            assert!(!set_generated_title("one", "Another name").unwrap(), "named twice");
+            assert!(!set_generated_title("gone", "Name").unwrap());
+
+            let saved = save_one("one", "/repo", "why is a token dropped?");
+            assert_eq!(saved.title, "Lost token");
+            assert_eq!(list("/repo").unwrap()[0].title, "Lost token");
+
+            save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one")).unwrap();
+            save_one("three", "/repo", "untouched");
+            let title = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().title;
+            assert_eq!(title("two"), "Lost token", "a branch starts with its original's name");
+            assert_eq!(title("three"), "untouched");
         });
     }
 
