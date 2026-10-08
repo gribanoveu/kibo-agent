@@ -19,7 +19,7 @@ use thiserror::Error;
 use super::chat_role::ChatRole;
 use super::kube::KubePin;
 use super::compaction::SUMMARY_PREFIX;
-use super::llm::{LlmMessage, LlmRole};
+use super::llm::{LlmError, LlmMessage, LlmRole};
 use super::tools::Task;
 
 /// Bumped when a field this build reads stops meaning what it meant. Adding a
@@ -50,6 +50,8 @@ pub enum ChatError {
     BadId(String),
     #[error("no such chat: {0}")]
     NotFound(String),
+    #[error("could not name the chat: {0}")]
+    Naming(#[from] LlmError),
 }
 
 /// One conversation, whole.
@@ -146,29 +148,10 @@ pub fn parse(text: &str) -> Result<ChatRecord, ChatError> {
 
 /// A name for a conversation, taken from the first thing the user said.
 ///
-/// Asking the model for one costs a request per chat and can fail; the first
-/// line of the first question is what the user would have typed anyway.
-///
-/// Read from the transcript, which keeps every message. The model's copy is
-/// only the fallback, past its summary: once a chat is compacted its first user
-/// message is the summary, and every compacted chat had the summary's name.
+/// The name the window starts with, and the one kept when asking the model
+/// for a better one fails — see `services::chat_title`.
 pub fn derive_title(messages: &[LlmMessage], blocks: &Value) -> String {
-    let bubble = blocks
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|block| block.get("kind").and_then(Value::as_str) == Some("user"))
-        .and_then(|block| block.get("text"))
-        .and_then(Value::as_str);
-    let first = bubble
-        .or_else(|| {
-            messages
-                .iter()
-                .filter(|message| message.role == LlmRole::User)
-                .filter_map(|message| message.content.as_deref())
-                .find(|text| !text.starts_with(SUMMARY_PREFIX))
-        })
-        .unwrap_or("");
+    let first = first_question(messages, blocks).unwrap_or("");
     let line = first.lines().map(str::trim).find(|line| !line.is_empty());
 
     match line {
@@ -185,6 +168,49 @@ pub fn derive_title(messages: &[LlmMessage], blocks: &Value) -> String {
             format!("{}…", cut.trim_end())
         }
     }
+}
+
+/// The first thing the user said, whole.
+///
+/// Read from the transcript, which keeps every message. The model's copy is
+/// only the fallback, past its summary: once a chat is compacted its first user
+/// message is the summary, and every compacted chat had the summary's name.
+pub fn first_question<'a>(messages: &'a [LlmMessage], blocks: &'a Value) -> Option<&'a str> {
+    let bubble = blocks
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|block| block.get("kind").and_then(Value::as_str) == Some("user"))
+        .and_then(|block| block.get("text"))
+        .and_then(Value::as_str);
+    bubble.or_else(|| {
+        messages
+            .iter()
+            .filter(|message| message.role == LlmRole::User)
+            .filter_map(|message| message.content.as_deref())
+            .find(|text| !text.starts_with(SUMMARY_PREFIX))
+    })
+}
+
+/// What the model is told when it is asked to name a chat.
+pub const TITLE_PROMPT: &str = "Name the conversation that starts with the user's message below. \
+Reply with the name only: 3 to 6 words, in the language of the message, no quotes, no trailing period. \
+Do not answer the message.";
+
+/// How much of the first message the model is shown to name the chat: the
+/// gist is in its opening, and a pasted log is not worth paying for.
+pub const TITLE_QUESTION_CHARS: usize = 1000;
+
+/// The model's reply as a chat's name, or `None` when it is not one: empty,
+/// or longer than a name the sidebar would show — an answer to the question
+/// rather than a name for it.
+pub fn clean_title(reply: &str) -> Option<String> {
+    let line = reply.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let line = line.trim_start_matches(|c: char| matches!(c, '#' | '*')).trim();
+    let line = line.strip_prefix("Title:").unwrap_or(line).trim();
+    let line = line.trim_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '«' | '»' | '`' | '*'));
+    let line = line.strip_suffix('.').unwrap_or(line).trim_end();
+    (!line.is_empty() && line.chars().count() <= TITLE_CHARS).then(|| line.to_string())
 }
 
 /// Ids come back from the window and become the store's key. Anything
@@ -366,6 +392,22 @@ mod tests {
     }
 
     /// The id is the store's key, and it arrives from the window.
+    #[test]
+    fn a_reply_becomes_a_name_without_its_dressing() {
+        assert_eq!(clean_title("Парсер теряет токен").as_deref(), Some("Парсер теряет токен"));
+        assert_eq!(clean_title("\n  \"Fix the parser.\"  \nmore").as_deref(), Some("Fix the parser"));
+        assert_eq!(clean_title("**Title:** «Lexer bug»").as_deref(), Some("Lexer bug"));
+        assert_eq!(clean_title("# Token loss").as_deref(), Some("Token loss"));
+    }
+
+    #[test]
+    fn a_reply_that_is_no_name_is_refused() {
+        assert_eq!(clean_title(""), None);
+        assert_eq!(clean_title("  \n \"\" "), None);
+        assert_eq!(clean_title(&"word ".repeat(13)), None);
+        assert!(clean_title(&"ы".repeat(TITLE_CHARS)).is_some());
+    }
+
     #[test]
     fn an_id_that_is_not_an_id_is_refused() {
         check_id("0f8c-4a11").unwrap();

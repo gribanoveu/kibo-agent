@@ -1,0 +1,15 @@
+.changing-text {
+  animation: changing-text-in 420ms ease-out;
+}
+@keyframes changing-text-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .changing-text {
+    animation: none;
+  }
+}

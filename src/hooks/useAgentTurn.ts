@@ -15,6 +15,7 @@ import {
   onTurnEvent,
   resumeChat,
   saveChat,
+  generateChatTitle,
   startChat,
   steer as steerCommand,
   alwaysAllow,
@@ -177,7 +178,11 @@ export function useAgentTurn({
     const id = crypto.randomUUID();
     setChatId(id);
     saveChat(id, history.current, turn.blocks.slice(0, turnStart.current + 1), todos.current, planRef.current, branchedFrom.current)
-      .then(() => onSaved?.())
+      .then(() => {
+        onSaved?.();
+        // Beside the turn; a chat the model could not name keeps its first message as its name.
+        generateChatTitle(id).then(() => onSaved?.(), () => {});
+      })
       .catch((e) => setError(String(e)));
   }, [turn.status, turn.blocks, chatId, onSaved]);
 
