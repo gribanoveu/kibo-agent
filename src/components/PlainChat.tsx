@@ -6,7 +6,7 @@ import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
-import { pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
+import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/chat";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
@@ -107,6 +107,8 @@ export function PlainChat({
   const empty = chat.turn.blocks.length === 0;
   // Two of the role's set, picked again each time an empty chat opens or the role changes.
   const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
+  // A greeting per empty chat, not per render: it must not change while the user types.
+  const greeting = useMemo(() => pickSuggestions(greetingsAt(new Date().getHours()), 1)[0], [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
   // Kept at the newest line while it is written, until the user scrolls up to
@@ -146,7 +148,7 @@ export function PlainChat({
                   <RoleIcon size={22} />
                 </span>
               </div>
-              <h2>How can I help?</h2>
+              <h2>{greeting}</h2>
               <p>{ROLE_WELCOME[chat.role]}</p>
               <div className="plain-suggest">
                 {suggestions.map((text) => (
