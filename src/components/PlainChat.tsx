@@ -6,7 +6,7 @@ import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
 import { matches } from "../lib/shortcuts";
-import { pickSuggestions } from "../lib/chatSuggestions";
+import { pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/chat";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
@@ -26,6 +26,13 @@ const WRITES_ON = "changes";
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
+};
+
+/** What the empty chat says the role can do — longer than its menu hint, and plain about the limits. */
+const ROLE_WELCOME: Record<ChatRoleId, string> = {
+  assistant: "The model answers in text here: it does not read your files, run commands or change anything.",
+  kubernetes:
+    "The model reads the cluster picked below: pods, events, logs. With Changes on it can change it too, asking you first.",
 };
 
 // A thought cloud: overlapping circles, then the bubbles trailing to the head.
@@ -98,8 +105,8 @@ export function PlainChat({
   const config = kube.configs.find((c) => c.name === chat.kube?.kubeconfig) ?? null;
   const target = useKubeTarget(config ? chat.kube : null);
   const empty = chat.turn.blocks.length === 0;
-  // Two of the set, picked again each time an empty chat opens.
-  const suggestions = useMemo(() => pickSuggestions(2), [chat.chatId, empty]);
+  // Two of the role's set, picked again each time an empty chat opens or the role changes.
+  const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
   // Kept at the newest line while it is written, until the user scrolls up to
@@ -140,7 +147,7 @@ export function PlainChat({
                 </span>
               </div>
               <h2>How can I help?</h2>
-              <p>The model answers in text here: it does not read your files, run commands or change anything.</p>
+              <p>{ROLE_WELCOME[chat.role]}</p>
               <div className="plain-suggest">
                 {suggestions.map((text) => (
                   <button

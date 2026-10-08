@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-08 A new Kubernetes chat says what it can do — read the cluster, and with Changes on, change it — and suggests questions about the cluster (a restarting pod, an OOMKilled one, the last rollout) instead of the assistant's Spring ones
 - 2026-10-08 The app's own notes in a chat — a cache miss, history compacted, a turn stopped at its limit — are aligned to the left with the rest of the conversation instead of centred
 - 2026-10-08 An agent turn runs up to 100 rounds and a budget of 500 by default (was 60 and 250), so long work such as documenting a repository finishes instead of stopping halfway; a limit you set in Settings → Agent is kept
 - 2026-10-08 While the agent thinks or works, its line in the chat shows only the shimmering step it is on, without a spinning circle beside it

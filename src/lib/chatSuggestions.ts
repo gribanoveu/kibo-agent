@@ -1,3 +1,5 @@
+import type { ChatRoleId } from "./chat";
+
 /**
  * What Chat mode's empty chat offers to ask — the questions of a Spring
  * developer at a bank, and of system and API design. Short enough for one
@@ -37,9 +39,40 @@ export const CHAT_SUGGESTIONS = [
   "Idempotency keys: how long to keep them, and where?",
 ];
 
-/** `count` different suggestions, in random order. `random` is `Math.random` outside a test. */
-export function pickSuggestions(count: number, random: () => number = Math.random): string[] {
-  const pool = [...CHAT_SUGGESTIONS];
+/**
+ * The Kubernetes role's: questions about the cluster the chat is pinned to.
+ * Reads only — a chat starts on Read only, and a suggestion should work there.
+ */
+export const KUBE_SUGGESTIONS = [
+  "Why is a pod in this namespace restarting?",
+  "Which pods are not Ready, and why?",
+  "Find the pod that was OOMKilled and say why",
+  "Why is a pod stuck in Pending?",
+  "What is behind a CrashLoopBackOff here?",
+  "Why can't a pod pull its image?",
+  "Is the last rollout healthy?",
+  "What changed in this namespace in the last hour?",
+  "Show the warning events in this namespace",
+  "Which pods use the most memory right now?",
+  "Are the requests and limits sensible here?",
+  "Check the liveness and readiness probes",
+  "Why does a service have no endpoints?",
+  "Which CronJobs failed recently?",
+  "Why is a Job not finishing?",
+  "Is the autoscaler scaling as it should?",
+  "Find the errors in the logs since the last deploy",
+  "Explain what runs in this namespace",
+];
+
+/** Each role's set. */
+export const ROLE_SUGGESTIONS: Record<ChatRoleId, readonly string[]> = {
+  assistant: CHAT_SUGGESTIONS,
+  kubernetes: KUBE_SUGGESTIONS,
+};
+
+/** `count` different suggestions from `set`, in random order. `random` is `Math.random` outside a test. */
+export function pickSuggestions(set: readonly string[], count: number, random: () => number = Math.random): string[] {
+  const pool = [...set];
   // The first `count` steps of a Fisher–Yates shuffle: each pick is uniform over what is left.
   for (let i = 0; i < Math.min(count, pool.length); i++) {
     const j = i + Math.floor(random() * (pool.length - i));
