@@ -13,7 +13,10 @@ const chats: ChatSummary[] = [
   { id: "b", title: "filed away", updatedAt: 1, archived: true },
 ];
 
-const sidebar = (on: { archive?: (id: string, archived: boolean) => void; remove?: (id: string) => void } = {}) =>
+const sidebar = (
+  on: { archive?: (id: string, archived: boolean) => void; remove?: (id: string) => void; toggleTheme?: () => void } = {},
+  themeSide: "light" | "dark" = "dark",
+) =>
   render(
     <Sidebar
       chats={chats}
@@ -25,6 +28,8 @@ const sidebar = (on: { archive?: (id: string, archived: boolean) => void; remove
       onToggleCollapse={() => {}}
       onOpenSettings={() => {}}
       onOnboardingAction={() => {}}
+      themeSide={themeSide}
+      onToggleTheme={on.toggleTheme ?? (() => {})}
     />,
   );
 
@@ -82,6 +87,21 @@ describe("the chat list", () => {
 });
 
 describe("the account menu", () => {
+  test("switches to the other theme, named by where it goes", () => {
+    let toggled = 0;
+    sidebar({ toggleTheme: () => toggled++ }, "dark");
+    fireEvent.click(screen.getByRole("button", { name: "Account" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Light theme" }));
+    expect(toggled).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("on the light side it offers the dark one", () => {
+    sidebar({}, "light");
+    fireEvent.click(screen.getByRole("button", { name: "Account" }));
+    expect(screen.getByRole("menuitem", { name: "Dark theme" })).toBeTruthy();
+  });
+
   test("opens the keyboard shortcuts, and Escape closes them", () => {
     sidebar();
     fireEvent.click(screen.getByRole("button", { name: "Account" }));

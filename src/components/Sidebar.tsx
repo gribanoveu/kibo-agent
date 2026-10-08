@@ -9,10 +9,12 @@ import {
   Keyboard,
   MessageSquare,
   MessagesSquare,
+  Moon,
   PanelLeft,
   Plus,
   Settings,
   ShipWheel,
+  Sun,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -27,6 +29,7 @@ import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/chat";
 import type { AppMode, AsideTab } from "../types";
+import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
 
 type Filter = "active" | "archived" | "all";
@@ -72,6 +75,9 @@ type Props = {
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
+  /** The side the window shows now, and a switch to the other one. */
+  themeSide: Scheme;
+  onToggleTheme: () => void;
 };
 
 export function Sidebar({
@@ -86,6 +92,8 @@ export function Sidebar({
   onToggleCollapse,
   onOpenSettings,
   onOnboardingAction,
+  themeSide,
+  onToggleTheme,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("active");
@@ -295,6 +303,18 @@ export function Sidebar({
           </button>
           {menuOpen && (
             <div className="user-menu" role="menu">
+              <button
+                className="user-menu-item"
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onToggleTheme();
+                }}
+              >
+                <span className="ico">{themeSide === "light" ? <Moon size={14} /> : <Sun size={14} />}</span>
+                {themeSide === "light" ? "Dark theme" : "Light theme"}
+              </button>
               <button
                 className="user-menu-item"
                 role="menuitem"

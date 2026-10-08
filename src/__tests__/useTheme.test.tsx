@@ -32,6 +32,23 @@ describe("the theme", () => {
     expect(result.current.choice).toEqual({ mode: "system", light: "latte", dark: "one-dark" });
   });
 
+  test("the quick switch shows the other side and keeps each side's palette", () => {
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setPalette("one-dark"));
+    act(() => result.current.setMode("light"));
+    act(() => result.current.toggle());
+    expect(result.current.choice).toEqual({ mode: "dark", light: "light", dark: "one-dark" });
+    expect([root.dataset.theme, root.dataset.scheme]).toEqual(["one-dark", "dark"]);
+    act(() => result.current.toggle());
+    expect(result.current.choice.mode).toBe("light");
+
+    // From "system", away from whatever the system shows now.
+    act(() => result.current.setMode("system"));
+    const shown = root.dataset.scheme;
+    act(() => result.current.toggle());
+    expect(result.current.choice.mode).toBe(shown === "light" ? "dark" : "light");
+  });
+
   test("what does not fit — a theme since removed, a palette on the wrong side — is the default", () => {
     localStorage.setItem("kibo-theme", JSON.stringify({ mode: "light", light: "github-light", dark: "dark" }));
     expect(renderHook(() => useTheme()).result.current.choice.light).toBe("light");
