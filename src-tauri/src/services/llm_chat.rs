@@ -5193,12 +5193,16 @@ mod tests {
         harness(label, steps)
     }
 
-    /// Rounds whose calls weigh 102 each: two use four fifths of the budget.
+    /// Rounds whose calls weigh 102 each: two use four fifths of a budget of
+    /// 250, pinned here rather than read from the default so the arithmetic
+    /// holds when the default moves.
     fn weighing(label: &str, rounds: u32) -> Harness {
         let heavy = |n: u32| asks((0..34).map(|i| wants(&format!("g{n}-{i}"), "grep", &format!(r#"{{"pattern":"p{n}x{i}"}}"#))).collect());
         let mut steps: Vec<Step> = (0..rounds).map(heavy).collect();
         steps.push(text("done"));
-        harness(label, steps)
+        let mut h = harness(label, steps);
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 250 };
+        h
     }
 
     fn wrap_ups(h: &Harness) -> Vec<String> {
@@ -5206,15 +5210,15 @@ mod tests {
     }
 
     /// A review has an ordinary turn's ceilings, and is asked once to wrap up
-    /// with a fifth of the rounds left — after its 48th of 60 — and an
-    /// agent's turn never is.
+    /// with a fifth of the rounds left — after its 80th of 100 by default —
+    /// and an agent's turn never is.
     #[test]
     fn a_long_review_is_asked_once_to_wrap_up_and_an_agent_turn_never() {
         let limit = crate::domain::settings::TurnLimits::default().rounds * crate::domain::review::WRAP_UP_AT_PERCENT / 100;
         let mut review = reading("chat-wrap-up-review", limit + 2);
         review.mode = ConversationMode::Review;
         review.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
-        assert_eq!(wrap_ups(&review), [format!("wrap-up:{limit}")], "once, after the 48th round");
+        assert_eq!(wrap_ups(&review), [format!("wrap-up:{limit}")], "once, after the {limit}th round");
         let notes = review.provider.requests().last().unwrap().messages.iter().filter(|m| m.content.as_deref().is_some_and(|c| c.starts_with("[Review budget]"))).count();
         assert_eq!(notes, 1, "in the history the model reads");
 
@@ -5245,8 +5249,6 @@ mod tests {
         request.tools.iter().map(|t| t.name.clone()).collect()
     }
 
-    /// The helper works in a conversation of its own, and the calling turn
-    /// gets its answer — not the file it read to find it.
     #[test]
     fn remember_asks_the_model_before_it_keeps_a_note() {
         crate::testing::with_app_dir("remember-loop", || {
@@ -5278,6 +5280,8 @@ mod tests {
         });
     }
 
+    /// The helper works in a conversation of its own, and the calling turn
+    /// gets its answer — not the file it read to find it.
     #[test]
     fn explore_runs_a_helper_turn_and_hands_back_only_its_answer() {
         let h = harness(

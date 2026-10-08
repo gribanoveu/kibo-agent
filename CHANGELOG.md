@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-08 An agent turn runs up to 100 rounds and a budget of 500 by default (was 60 and 250), so long work such as documenting a repository finishes instead of stopping halfway; a limit you set in Settings → Agent is kept
 - 2026-10-08 While the agent thinks or works, its line in the chat shows only the shimmering step it is on, without a spinning circle beside it
 - 2026-10-08 The agent remembers between conversations: it saves a fact about the folder or your setup with `remember` (on its own, or when you say "remember that…"), each note checked by the model for planted instructions before it is kept, and every later chat in that folder starts with them — they are listed under Rules as `Memory`, where you switch them off or open the file to prune
 - 2026-10-08 The agent is no longer told how approval works: Kibo decides when a call needs you, and only a refusal tells the agent what to do next. The plan is the plan of work, the checklist a short outline the agent checks its own work against

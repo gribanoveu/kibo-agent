@@ -395,7 +395,7 @@ export function withLanguageReminder(prompt: string, language: ReplyLanguage): s
 /** Mirrors `domain::settings::TurnLimits`: how far one agent turn may run. */
 export type TurnLimits = { rounds: number; budget: number };
 
-export const DEFAULT_TURN_LIMITS: TurnLimits = { rounds: 60, budget: 250 };
+export const DEFAULT_TURN_LIMITS: TurnLimits = { rounds: 100, budget: 500 };
 
 /** Mirrors `infra::master_key::KeyStore`: where the key the API keys are sealed under is kept. */
 export type KeyStore = "file" | "keychain";
