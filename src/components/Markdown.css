@@ -66,6 +66,10 @@
 .md-li > .md-p {
   margin: 0;
 }
+/* A loose item's paragraphs — a blank line between them — stay apart. */
+.md-li > .md-p + .md-p {
+  margin-top: 0.5em;
+}
 .md-li > .md-ul,
 .md-li > .md-ol {
   margin-top: 0.25em;
@@ -105,6 +109,16 @@
 .md-img {
   max-width: 100%;
   border-radius: 4px;
+}
+.md-img-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.15em 0.5em;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 0.85em;
 }
 
 .md-code-inline {
@@ -216,6 +230,11 @@
 .md-th {
   background: var(--bg-panel-soft);
   font-weight: 600;
+}
+/* A header of empty cells — how Confluence exports a table whose headings
+   are its first row — is not drawn as an empty band. */
+.md-table thead:not(:has(.md-th:not(:empty))) {
+  display: none;
 }
 
 /* Streamdown fades each new word in while an answer streams; under reduced
