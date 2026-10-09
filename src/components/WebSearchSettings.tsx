@@ -1,55 +1,91 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWebSearchKey } from "../hooks/useWebSearchKey";
-import { describeUsage, type WebSearchBackend } from "../lib/chat";
+import { describeUsage, type WebSearchBackend, type WebSearchPlace } from "../lib/chat";
 import "./WebSearchSettings.css";
 
 const KEYS_PAGE = "https://app.tavily.com";
 
-const BACKENDS: { value: WebSearchBackend; label: string; hint: string }[] = [
-  { value: "off", label: "Off", hint: "The model cannot search or open pages; it answers from what it knows." },
-  {
-    value: "builtin",
-    label: "Built-in",
-    hint: "No key. Queries go to DuckDuckGo; the pages it finds are read here, and the parts about the question are sent to the model.",
-  },
-  { value: "tavily", label: "Tavily", hint: "Your Tavily key and its credits. Pages the model opens are read here, as with Built-in." },
+const BACKENDS: { value: WebSearchBackend; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "searxng", label: "SearXNG" },
+  { value: "tavily", label: "Tavily" },
 ];
 
-/** Settings → Web search: which search a chat's `webSearch` asks, and the Tavily key when it is Tavily's. The key goes in and never comes back. */
+const PLACES: { value: WebSearchPlace; label: string }[] = [
+  { value: "chat", label: "Chat" },
+  { value: "agent", label: "Agent" },
+];
+
+/**
+ * Settings → Web search: which search `webSearch` asks in a chat and in a folder, SearXNG's address
+ * when either uses it, and the Tavily key when either is Tavily's. The key goes in and never comes back.
+ */
 export function WebSearchSettings() {
-  const { backend, choose, hasKey, usage, error, save } = useWebSearchKey();
+  const { backends, choose, searxng, saveSearxng, hasKey, usage, error, save } = useWebSearchKey();
+  const uses = (backend: WebSearchBackend) => backends !== null && (backends.chat === backend || backends.agent === backend);
   const [key, setKey] = useState("");
+  const [address, setAddress] = useState(searxng);
+  // The saved address arrives after the first render, and comes back cleaned up after a save.
+  useEffect(() => setAddress(searxng), [searxng]);
 
   return (
     <>
       <h3 className="settings-title">Web search</h3>
       <p className="modal-note web-search-intro">
-        In Chat mode, the model can search the web and read the pages it finds. Each query and page shows in the chat. In a
-        folder, add a search server in MCP instead.
+        The model can search the web and read the pages it finds — in Chat mode, and in a folder (Agent, Plan, Ask). Each
+        has its own search, or none. Each query and page shows in the conversation.
       </p>
 
-      <div className="modal-field">
-        <label>Search with</label>
-        <div className="segmented" role="radiogroup" aria-label="Search with">
-          {BACKENDS.map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={backend === value}
-              className={`segment${backend === value ? " active" : ""}`}
-              onClick={() => void choose(value)}
-            >
-              {label}
-            </button>
-          ))}
+      {PLACES.map((place) => (
+        <div className="modal-field" key={place.value}>
+          <label>{place.label}</label>
+          <div className="segmented" role="radiogroup" aria-label={`${place.label} searches with`}>
+            {BACKENDS.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={backends?.[place.value] === value}
+                className={`segment${backends?.[place.value] === value ? " active" : ""}`}
+                onClick={() => void choose(place.value, value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
-      <p className="modal-note settings-hint">{BACKENDS.find((b) => b.value === backend)?.hint}</p>
+      ))}
+      <p className="modal-note settings-hint">
+        SearXNG: no key — queries go to your SearXNG, which asks the engines it is set up with. Tavily: your key and its
+        credits; an agent may search several times a turn. Pages are read here either way, and the parts about the question
+        are sent to the model.
+      </p>
 
-      {backend === "tavily" && (
+      {uses("searxng") && (
+        <form
+          className="web-search-key"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveSearxng(address);
+          }}
+        >
+          <div className="modal-field">
+            <label htmlFor="searxng-url">SearXNG address</label>
+            <input id="searxng-url" value={address} placeholder="http://localhost:8080/" onChange={(e) => setAddress(e.target.value)} />
+          </div>
+          <p className="modal-note settings-hint">Its settings.yml must list json under search.formats.</p>
+          <div className="web-search-actions">
+            <button type="submit" className="btn btn-primary" disabled={!address.trim() || address === searxng}>
+              Save address
+            </button>
+          </div>
+        </form>
+      )}
+
+      {uses("tavily") && (
         <form
           className="web-search-key"
           noValidate

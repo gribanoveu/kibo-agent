@@ -76,7 +76,9 @@ mod tests {
                 active: Some("prod".to_string()),
                 typed_namespaces: [("prod".to_string(), vec!["payments".to_string()])].into(),
             },
-            web_search: Some(crate::domain::settings::WebSearchBackend::Builtin),
+            web_search: Some(crate::domain::settings::WebSearchBackend::Searxng),
+            searxng_url: Some("http://searx.lan:8888/".to_string()),
+            web_search_agent: Some(crate::domain::settings::WebSearchBackend::Tavily),
         }
     }
 

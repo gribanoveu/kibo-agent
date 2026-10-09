@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// The provider's client and the agent it is built on, the MCP servers the
 /// user gave a URL (the SDK's client and the module that points it at that
 /// URL), the cluster of a kubeconfig the user added, and the web search the
-/// user turned on — Tavily, or DuckDuckGo and the pages it finds. Anything
+/// user turned on — Tavily, or their SearXNG and the pages it finds. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[

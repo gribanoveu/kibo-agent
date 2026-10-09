@@ -25,7 +25,7 @@ use crate::domain::command_exec::Shell;
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::prompt::TurnContext;
 use crate::domain::conversation_mode::ConversationMode;
-use crate::domain::settings::RememberScope;
+use crate::domain::settings::{RememberScope, WebSearchPlace};
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::tools::{ApprovalPolicy, CodeSearchFn, Task, ToolPreview, ToolScope};
 use crate::domain::next_prompt::{self, FinishedTurn, TurnFeatures};
@@ -474,6 +474,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             mcp_servers: mcp.notes(),
         },
         &mcp,
+        super::settings::web_search_on(WebSearchPlace::Agent),
     )
 }
 
@@ -724,6 +725,7 @@ where
     let approval = with_git_aliases(state.approval()?, &workspace);
     let (mode, review) = state.turn_mode();
     let search = searcher_of(&app);
+    let embeddings = app.try_state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().map(|index| index.embeddings());
     let mcp_servers = app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers));
     let processes = app
         .try_state::<Arc<Processes>>()
@@ -769,11 +771,14 @@ where
             .map_err(|e| format!("{e} — fix or remove {}", crate::infra::hooks::path().map(|p| p.display().to_string()).unwrap_or_default()))?;
         let mcp = mcp_for_turn(mcp_servers.as_deref(), mode, &workspace, &cancelled);
         let worktree_of = crate::infra::git_head::worktree_of(&workspace);
+        // Read each turn, as the chat's is: a search turned on in Settings is
+        // there for the next answer.
+        let web = embeddings.as_ref().and_then(|model| super::settings::web_for(WebSearchPlace::Agent, model));
 
         let turn = Turn {
             events: &events,
             session: &session,
-            place: Place::Folder { scope: &scope, mode },
+            place: Place::Folder { scope: &scope, mode, web: web.as_ref() },
             approval: &approval,
             cancelled: &cancelled,
             sleep: &sleep,

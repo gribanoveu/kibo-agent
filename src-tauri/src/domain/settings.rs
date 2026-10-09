@@ -206,7 +206,45 @@ pub struct AppSettings {
     /// Which search a chat's `webSearch` asks. `None` in every file written
     /// before there was a choice — see [`WebSearchBackend::resolve`].
     pub web_search: Option<WebSearchBackend>,
+    /// Which search the agent's `webSearch` asks, in a folder; `None` is off —
+    /// the agent never searched before the user chose it could.
+    pub web_search_agent: Option<WebSearchBackend>,
+    /// Where the user's SearXNG answers; `None` is [`DEFAULT_SEARXNG_URL`].
+    pub searxng_url: Option<String>,
 }
+
+/// Where the web tools are offered: each has its own search, or none — Tavily
+/// in a chat and not to an agent that would search five times a turn on
+/// the user's credits, say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WebSearchPlace {
+    /// Chat mode, with no folder.
+    Chat,
+    /// A folder, in any mode: the tools only read, so Plan and Ask have them too.
+    Agent,
+}
+
+impl AppSettings {
+    /// The search `place` asks, as chosen — or, never chosen, what an app
+    /// that never asked does there.
+    pub fn web_search_in(&self, place: WebSearchPlace, has_tavily_key: bool) -> WebSearchBackend {
+        match place {
+            WebSearchPlace::Chat => WebSearchBackend::resolve(self.web_search, has_tavily_key),
+            WebSearchPlace::Agent => self.web_search_agent.unwrap_or(WebSearchBackend::Off),
+        }
+    }
+
+    pub fn set_web_search(&mut self, place: WebSearchPlace, backend: WebSearchBackend) {
+        match place {
+            WebSearchPlace::Chat => self.web_search = Some(backend),
+            WebSearchPlace::Agent => self.web_search_agent = Some(backend),
+        }
+    }
+}
+
+/// Where SearXNG's own Docker image listens.
+pub const DEFAULT_SEARXNG_URL: &str = "http://localhost:8080/";
 
 /// Where a chat's web search goes (`docs/24-web-search.md`). Off, the model is
 /// given neither `webSearch` nor `webFetch`.
@@ -214,17 +252,18 @@ pub struct AppSettings {
 #[serde(rename_all = "camelCase")]
 pub enum WebSearchBackend {
     Off,
-    /// DuckDuckGo and the pages it finds, read here — no key, no account.
-    Builtin,
+    /// The user's own SearXNG, and the pages it finds read here — no key, no
+    /// account. `builtin` in files from the days it was DuckDuckGo directly.
+    #[serde(alias = "builtin")]
+    Searxng,
     /// Tavily, with the user's key.
     Tavily,
 }
 
 impl WebSearchBackend {
     /// What an app that never asked does: Tavily for whoever saved a key —
-    /// it was the only search there was — and nothing for anyone else, since
-    /// the built-in one sends queries to DuckDuckGo and the user has not said
-    /// it may.
+    /// it was the only search there was — and nothing for anyone else: a
+    /// SearXNG is one the user has to have, and say where.
     pub fn resolve(saved: Option<Self>, has_tavily_key: bool) -> Self {
         saved.unwrap_or(if has_tavily_key { WebSearchBackend::Tavily } else { WebSearchBackend::Off })
     }
@@ -233,7 +272,7 @@ impl WebSearchBackend {
     pub fn is_on(self, has_tavily_key: bool) -> bool {
         match self {
             WebSearchBackend::Off => false,
-            WebSearchBackend::Builtin => true,
+            WebSearchBackend::Searxng => true,
             WebSearchBackend::Tavily => has_tavily_key,
         }
     }
@@ -645,17 +684,35 @@ mod tests {
     }
 
     #[test]
+    fn each_place_keeps_its_own_search() {
+        use WebSearchBackend::*;
+        let mut settings = AppSettings::default();
+        settings.set_web_search(WebSearchPlace::Chat, Tavily);
+        settings.set_web_search(WebSearchPlace::Agent, Searxng);
+        assert_eq!(settings.web_search_in(WebSearchPlace::Chat, true), Tavily);
+        assert_eq!(settings.web_search_in(WebSearchPlace::Agent, true), Searxng);
+        settings.set_web_search(WebSearchPlace::Agent, Off);
+        assert_eq!(settings.web_search_in(WebSearchPlace::Agent, true), Off);
+        assert_eq!(settings.web_search_in(WebSearchPlace::Chat, true), Tavily, "turning the agent's off leaves the chat's");
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!((json["webSearch"].as_str(), json["webSearchAgent"].as_str()), (Some("tavily"), Some("off")));
+    }
+
+    #[test]
     fn a_web_search_never_chosen_is_tavilys_with_a_key_and_off_without() {
         use WebSearchBackend::*;
         assert_eq!(WebSearchBackend::resolve(None, true), Tavily);
         assert_eq!(WebSearchBackend::resolve(None, false), Off);
-        for chosen in [Off, Builtin, Tavily] {
+        for chosen in [Off, Searxng, Tavily] {
             assert_eq!(WebSearchBackend::resolve(Some(chosen), true), chosen);
             assert_eq!(WebSearchBackend::resolve(Some(chosen), false), chosen);
         }
-        assert!(!Off.is_on(true) && Builtin.is_on(false) && Tavily.is_on(true) && !Tavily.is_on(false));
+        assert!(!Off.is_on(true) && Searxng.is_on(false) && Tavily.is_on(true) && !Tavily.is_on(false));
         let old: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.web_search, None);
-        assert_eq!(serde_json::to_value(Builtin).unwrap(), "builtin");
+        assert_eq!(old.web_search_in(WebSearchPlace::Agent, true), Off, "the agent never searched before it was chosen");
+        assert_eq!(serde_json::to_value(Searxng).unwrap(), "searxng");
+        // Saved while it was DuckDuckGo: the keyless search it meant is SearXNG now.
+        assert_eq!(serde_json::from_str::<WebSearchBackend>("\"builtin\"").unwrap(), Searxng);
     }
 }

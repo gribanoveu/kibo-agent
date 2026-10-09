@@ -37,14 +37,14 @@ pub struct Compacted {
 /// list in it — and the tool schemas, MCP servers' included. One large server
 /// can outweigh everything else here, and a window that looks 60% free can be
 /// nearly full.
-pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools) -> RequestFrame {
+pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool) -> RequestFrame {
     let skills = prompt::skills_block(ctx.skills).map_or(0, |list| compaction::estimate_tokens(&[LlmMessage::system(list)]));
     let system = compaction::estimate_tokens(&prompt::system_messages(ctx));
     // A server's instructions are in the prompt and are the server's cost.
     let said = prompt::mcp_block(ctx.mcp_servers).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
     // Before the conversation: a deferred tool its `toolSearch` found is not
     // counted. `toolSearch` is there for the servers, and is theirs.
-    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[])
+    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[], web)
         .into_iter()
         .partition(|definition| matches!(ToolName::from_wire_name(&definition.name), Some(ToolName::Mcp | ToolName::ToolSearch)));
     RequestFrame {
@@ -205,6 +205,7 @@ mod tests {
                 mcp_servers: mcp.notes(),
             },
             mcp,
+            false,
         )
     }
 

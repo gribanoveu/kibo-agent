@@ -1,4 +1,4 @@
-//! `webSearch` — a chat's way to what the model could not know: a version out
+//! `webSearch` — a chat's or an agent's way to what the model could not know: a version out
 //! since its training, an error message, a known issue (`docs/24-web-search.md`).
 //! The search is `deps.web`; this is the checking, the size, and the schema.
 
@@ -51,7 +51,8 @@ release notes, error messages, known issues, documentation. Returns pages with t
 Search when the answer depends on facts that change — a release, a chart's or an operator's notes, the known issue \
 behind an error message, what a version deprecates; answer from what you know when it does not. \
 The query goes to a search service outside the user's machine: search with the error text, the product and its version — \
-never with secrets, credentials, or names from the user's own systems (hosts, clusters, namespaces, services). \
+never with secrets, credentials, the user's code, or names from the user's own systems (hosts, clusters, namespaces, \
+services, private packages). \
 Write the query in the language the pages you want are written in — usually English for technical subjects. \
 Say which address each fact you use comes from. Returns at most {MAX_RESULTS} pages. \
 When the passages are not enough — a changelog, a guide, an issue's thread — read the page with webFetch."

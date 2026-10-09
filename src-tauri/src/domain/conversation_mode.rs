@@ -71,6 +71,10 @@ fn base_tools() -> HashSet<ToolName> {
         ToolName::ReadOutput,
         // The user's own screen, looked at.
         ToolName::ReadTerminal,
+        // The web, read: offered only while Settings → Web search gives the
+        // agent a search (`llm_chat::tool_definitions_for`).
+        ToolName::WebSearch,
+        ToolName::WebFetch,
     ]
     .into_iter()
     .collect()
@@ -231,21 +235,23 @@ mod tests {
         }
     }
 
-    /// The web is a chat's: in a folder it is an MCP server's, on the user's
-    /// own account (`docs/24-web-search.md`).
+    /// The web tools only read, so every folder mode may have them; whether
+    /// it does is Settings' — the agent's search, on or off.
     #[test]
-    fn no_folder_mode_searches_the_web() {
+    fn every_folder_mode_may_search_the_web() {
         for &mode in ConversationMode::ALL {
-            assert!(!offers(mode, ToolName::WebSearch) && !offers(mode, ToolName::WebFetch), "{mode:?}");
+            assert!(offers(mode, ToolName::WebSearch) && offers(mode, ToolName::WebFetch), "{mode:?}");
         }
     }
 
     /// Every tool but a review's own — a finding needs a review to be about —
-    /// and the Kubernetes role's: the agent has no cluster pinned to it.
+    /// and the Kubernetes role's cluster tools: the agent has no cluster
+    /// pinned to it. The role's web tools it shares.
     #[test]
     fn agent_mode_offers_every_tool_there_is() {
         let agent = tools(ConversationMode::Agent);
-        let cluster = crate::domain::chat_role::ChatRole::Kubernetes.tools();
+        let cluster: Vec<ToolName> =
+            crate::domain::chat_role::ChatRole::Kubernetes.tools().iter().copied().filter(|tool| !tool.is_web()).collect();
         assert_eq!(agent.len(), ToolName::ALL.len() - 1 - cluster.len());
         assert!(!agent.contains(&ToolName::ReportFinding));
         assert!(cluster.iter().all(|tool| !agent.contains(tool)));

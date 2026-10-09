@@ -1,21 +1,25 @@
 import { useEffect, useState } from "react";
 import {
+  saveSearxngUrl,
   saveWebSearchKey,
+  searxngUrl,
   setWebSearchBackend,
   webSearchBackend,
   webSearchKeyStatus,
   webSearchUsage,
   type WebSearchBackend,
+  type WebSearchPlace,
   type WebUsage,
 } from "../lib/chat";
 
 /**
- * Settings → Web search: which search a chat uses, whether a Tavily key is
- * saved and what it has spent — read when the pane opens and again after a
- * save, which is also how a mistyped key is found out.
+ * Settings → Web search: which search a chat and an agent use, where SearXNG is,
+ * whether a Tavily key is saved and what it has spent — read when the pane
+ * opens and again after a save, which is also how a mistyped key is found out.
  */
 export function useWebSearchKey() {
-  const [backend, setBackend] = useState<WebSearchBackend | null>(null);
+  const [backends, setBackends] = useState<Record<WebSearchPlace, WebSearchBackend> | null>(null);
+  const [searxng, setSearxng] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [usage, setUsage] = useState<WebUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +37,11 @@ export function useWebSearchKey() {
     );
 
   useEffect(() => {
-    webSearchBackend().then(setBackend, (e) => setError(String(e)));
+    Promise.all([webSearchBackend("chat"), webSearchBackend("agent")]).then(
+      ([chat, agent]) => setBackends({ chat, agent }),
+      (e) => setError(String(e)),
+    );
+    searxngUrl().then(setSearxng, () => {});
     webSearchKeyStatus().then(setHasKey, () => {});
     void readUsage();
   }, []);
@@ -53,15 +61,27 @@ export function useWebSearchKey() {
   };
 
   /** From the next turn on: the tools are given, or not, per request. */
-  const choose = async (next: WebSearchBackend) => {
+  const choose = async (place: WebSearchPlace, next: WebSearchBackend) => {
     try {
-      await setWebSearchBackend(next);
-      setBackend(next);
+      await setWebSearchBackend(place, next);
+      setBackends((current) => (current ? { ...current, [place]: next } : current));
       setError(null);
     } catch (e) {
       setError(String(e));
     }
   };
 
-  return { backend, choose, hasKey, usage, error, save };
+  /** Saves the SearXNG address; `false` with the reason in `error` when it is not one. */
+  const saveSearxng = async (url: string): Promise<boolean> => {
+    try {
+      setSearxng(await saveSearxngUrl(url));
+      setError(null);
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    }
+  };
+
+  return { backends, choose, searxng, saveSearxng, hasKey, usage, error, save };
 }
