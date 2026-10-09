@@ -337,8 +337,8 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete => 3,
-            // One request to the search service, a second or two — and the
-            // built-in one reads the pages found, side by side.
+            // One request to the search service, a second or two — and with
+            // SearXNG, the pages it found read side by side.
             ToolName::WebSearch => 2,
             // A page, and its redirects.
             ToolName::WebFetch => 2,

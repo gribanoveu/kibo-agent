@@ -78,6 +78,7 @@ mod tests {
             },
             web_search: Some(crate::domain::settings::WebSearchBackend::Searxng),
             searxng_url: Some("http://searx.lan:8888/".to_string()),
+            web_search_agent: Some(crate::domain::settings::WebSearchBackend::Tavily),
         }
     }
 

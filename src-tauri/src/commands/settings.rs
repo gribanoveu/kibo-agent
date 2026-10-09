@@ -14,7 +14,7 @@ use tauri::State;
 use std::path::{Path, PathBuf};
 
 use crate::domain::kube::{KubeContexts, KubePin};
-use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend};
+use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
@@ -99,19 +99,20 @@ pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
     llm_credentials_store::save_api_key(&id, key.trim())
 }
 
-/// Which search a chat's `webSearch` asks: the one chosen in Settings → Web
-/// search, or, never chosen, what [`WebSearchBackend::resolve`] says.
+/// Which search `webSearch` asks in `place`: the one chosen in Settings → Web
+/// search, or, never chosen, what [`AppSettings::web_search_in`] says.
+///
+/// [`AppSettings::web_search_in`]: crate::domain::settings::AppSettings::web_search_in
 #[tauri::command]
-pub fn web_search_backend_get() -> WebSearchBackend {
+pub fn web_search_backend_get(place: WebSearchPlace) -> WebSearchBackend {
     // An unreadable file is the default's to answer, as for every setting read here.
-    let saved = settings_store::load().ok().and_then(|settings| settings.web_search);
-    WebSearchBackend::resolve(saved, crate::infra::tavily::has_saved_key())
+    settings_store::load().unwrap_or_default().web_search_in(place, crate::infra::tavily::has_saved_key())
 }
 
 #[tauri::command]
-pub fn web_search_backend_set(backend: WebSearchBackend) -> Result<(), String> {
+pub fn web_search_backend_set(place: WebSearchPlace, backend: WebSearchBackend) -> Result<(), String> {
     let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.web_search = Some(backend);
+    settings.set_web_search(place, backend);
     settings_store::save(&settings).map_err(|e| e.to_string())
 }
 
@@ -150,8 +151,28 @@ pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
     Ok(base)
 }
 
-pub(crate) fn web_search_on() -> bool {
-    web_search_backend_get().is_on(crate::infra::tavily::has_saved_key())
+/// Whether `place` is given the web tools: a search chosen there, and
+/// Tavily's with a key.
+pub(crate) fn web_search_on(place: WebSearchPlace) -> bool {
+    web_search_backend_get(place).is_on(crate::infra::tavily::has_saved_key())
+}
+
+/// What `place` reaches the web with, as Settings → Web search says; `None`
+/// while it is off there, or Tavily's has no key.
+pub(crate) fn web_for(
+    place: WebSearchPlace,
+    embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>,
+) -> Option<crate::domain::web_search::Web> {
+    use crate::infra::{open_web, tavily};
+    let search = match web_search_backend_get(place) {
+        WebSearchBackend::Off => return None,
+        WebSearchBackend::Searxng => {
+            let base = searxng_base(&web_search_searxng_url_get()).ok()?;
+            open_web::searxng(base, Arc::clone(embeddings)).ok()?
+        }
+        WebSearchBackend::Tavily => tavily::saved()?,
+    };
+    open_web::web(search, Arc::clone(embeddings)).ok()
 }
 
 /// Whether a key for the chat's web search is saved — all the window learns

@@ -130,7 +130,7 @@ where
         let log_call = |entry: ToolCallLogEntry| record(&entry);
         // Read each turn: a runbook the user just wrote is there for this answer.
         let runbooks = runbooks::merged(runbooks_store::own());
-        let web = chat_web(&embeddings);
+        let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings);
         let chat = plain_chat::ChatTurn {
             session: &session,
             role,
@@ -193,32 +193,13 @@ pub async fn plain_chat_compact<R: Runtime>(
     .map_err(|e| format!("the compaction thread failed: {e}"))?
 }
 
-/// What a chat reaches the web with, as Settings → Web search says; `None`
-/// while it is off, or Tavily's has no key.
-fn chat_web(embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>) -> Option<crate::domain::web_search::Web> {
-    use crate::domain::settings::WebSearchBackend;
-    use crate::infra::{open_web, tavily};
-    if !super::settings::web_search_on() {
-        return None;
-    }
-    let search = match super::settings::web_search_backend_get() {
-        WebSearchBackend::Off => return None,
-        WebSearchBackend::Searxng => {
-            let base = super::settings::searxng_base(&super::settings::web_search_searxng_url_get()).ok()?;
-            open_web::searxng(base, Arc::clone(embeddings)).ok()?
-        }
-        WebSearchBackend::Tavily => tavily::saved()?,
-    };
-    open_web::web(search, Arc::clone(embeddings)).ok()
-}
-
 /// The provider, and what a chat's request sends in front of the conversation.
 fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Result<(LlmSession, RequestFrame), String> {
     let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
-        super::settings::web_search_on(),
+        super::settings::web_search_on(crate::domain::settings::WebSearchPlace::Chat),
     );
     Ok((session, frame))
 }

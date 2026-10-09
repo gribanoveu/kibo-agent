@@ -239,7 +239,14 @@ pub enum Place<'a> {
     /// The agent in the open folder. The mode is read once per turn: a mode
     /// changed while an approval card was showing does not rewrite decisions
     /// already made.
-    Folder { scope: &'a ToolScope, mode: ConversationMode },
+    Folder {
+        scope: &'a ToolScope,
+        mode: ConversationMode,
+        /// What `webSearch` and `webFetch` reach — the agent's own choice in
+        /// Settings → Web search; `None` while it is off, and then neither
+        /// is offered.
+        web: Option<&'a Web>,
+    },
     /// Chat mode (`docs/21-kubernetes-mode.md`, K-1): no folder. The role is
     /// who the model is and all it may call; `kube` is what it is told of the
     /// user's cluster, and `cluster` what its tools read it through — `None`
@@ -942,8 +949,7 @@ fn execute_call(
             Place::Folder { .. } => Vec::new(),
         },
         web: match turn.place {
-            Place::Chat { web, .. } => web.cloned(),
-            Place::Folder { .. } => None,
+            Place::Chat { web, .. } | Place::Folder { web, .. } => web.cloned(),
         },
         history,
     };
@@ -954,7 +960,7 @@ fn execute_call(
 /// containment; in a chat, the role's own tools and nothing else.
 fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), crate::domain::tools::ToolError> {
     match turn.place {
-        Place::Folder { scope, mode } => preflight_tool_call(scope, mode, reads, call),
+        Place::Folder { scope, mode, .. } => preflight_tool_call(scope, mode, reads, call),
         Place::Chat { role, .. } => {
             let parsed = preflight_chat_call(role, call)?;
             // A change the cluster would refuse — read-only, RBAC, a
@@ -1127,7 +1133,9 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
     let helper = Turn {
         events: &events,
         session: turn.session,
-        place: Place::Folder { scope, mode: ConversationMode::Explore },
+        // A helper reads the folder. Several run side by side, and each
+        // searching the web would multiply the queries — and Tavily's credits.
+        place: Place::Folder { scope, mode: ConversationMode::Explore, web: None },
         approval: &ApprovalPolicy::default(),
         cancelled: &stopped,
         sleep: turn.sleep,
@@ -1398,13 +1406,17 @@ fn keep_plan_through_fold(history: &mut [LlmMessage], written_plan: Option<&str>
 /// in it found are declared with the rest. `toolSearch` itself only while
 /// some tool waits for it — offered with nothing to find, it costs every
 /// request its schema for nothing.
-pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
+/// `web`: whether the agent's web search is on — off, `webSearch` and
+/// `webFetch` are left out, as in a chat.
+pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, history: &[LlmMessage], web: bool) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
         .chain(mcp.definitions(&crate::domain::mcp::loaded_tools(history)))
         .filter(|definition| {
             ToolName::from_wire_name(&definition.name).is_some_and(|tool| {
-                conversation_mode::offers(mode, tool) && (tool != ToolName::ToolSearch || mcp.has_deferred())
+                conversation_mode::offers(mode, tool)
+                    && (tool != ToolName::ToolSearch || mcp.has_deferred())
+                    && (web || !tool.is_web())
             })
         })
         .collect()
@@ -1413,7 +1425,7 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, histo
 /// What the turn advertises: the mode's tools in a folder, the role's in a chat.
 fn offered(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
     match turn.place {
-        Place::Folder { mode, .. } => tool_definitions_for(mode, turn.mcp, history),
+        Place::Folder { mode, web, .. } => tool_definitions_for(mode, turn.mcp, history, web.is_some()),
         Place::Chat { role, web, .. } => tool_definitions_for_role(role, web.is_some()),
     }
 }
@@ -1449,7 +1461,7 @@ pub fn estimate_request(turn: &Turn, history: &[LlmMessage]) -> usize {
 /// of a turn, so a prompt cache keeps it.
 fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
-        Place::Folder { scope, mode } => (scope, mode),
+        Place::Folder { scope, mode, .. } => (scope, mode),
         Place::Chat { role, kube, runbooks, web, .. } => {
             let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some());
             messages.extend_from_slice(history);
@@ -1483,9 +1495,9 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
 /// history.
 fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
     let frame = match turn.place {
-        Place::Folder { scope, mode } => {
+        Place::Folder { scope, mode, web } => {
             let today = Local::now().format("%e %B %Y").to_string();
-            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp)
+            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some())
         }
         Place::Chat { role, kube, runbooks, web, .. } => {
             context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some())
@@ -2032,6 +2044,8 @@ mod tests {
         shell_described: String,
         agents: Option<Arc<crate::domain::agents::Agents>>,
         questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
+        /// The agent's web, as Settings would give it; `None` is off.
+        web: Option<Web>,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -2082,6 +2096,7 @@ mod tests {
             shell_described: "/bin/sh".to_string(),
             agents: None,
             questions: None,
+            web: None,
         }
     }
 
@@ -2118,7 +2133,7 @@ mod tests {
                 session: &self.session,
                 place: match self.chat {
                     Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None },
-                    None => Place::Folder { scope: &self.scope, mode: self.mode },
+                    None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref() },
                 },
                 approval: &self.approval,
                 cancelled: &cancelled,
@@ -4382,6 +4397,31 @@ mod tests {
         assert!(plain.provider.requests()[0].tools.iter().all(|t| t.name != "toolSearch"));
     }
 
+    /// The agent searches only when Settings gave it a search: off, neither
+    /// web tool is offered; on, both are — in Plan and Ask too, since they only
+    /// read — and a call reaches the search.
+    #[test]
+    fn the_web_tools_are_offered_to_the_agent_only_when_its_search_is_on() {
+        let off = harness("web-off", vec![text("hi")]);
+        off.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        assert!(off.provider.requests()[0].tools.iter().all(|t| t.name != "webSearch" && t.name != "webFetch"));
+
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Ask] {
+            let mut on = harness("web-on", vec![asks(vec![wants("w1", "webSearch", r#"{"query":"tokio 2"}"#)]), text("ok")]);
+            on.mode = mode;
+            let searched = Arc::new(Mutex::new(Vec::new()));
+            let seen = searched.clone();
+            on.web = Some(Web::search_only(Arc::new(move |q: &crate::domain::web_search::WebQuery| {
+                seen.lock().unwrap().push(q.query.to_string());
+                Ok(Vec::new())
+            })));
+            on.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            let names: Vec<String> = on.provider.requests()[0].tools.iter().map(|t| t.name.clone()).collect();
+            assert!(names.iter().any(|n| n == "webSearch") && names.iter().any(|n| n == "webFetch"), "{mode:?}: {names:?}");
+            assert_eq!(*searched.lock().unwrap(), ["tokio 2"], "{mode:?}");
+        }
+    }
+
     /// Offered in Agent beside the built-in tools; not in Plan, which
     /// promises nothing changes, and a foreign tool promises nothing.
     #[test]
@@ -5332,6 +5372,22 @@ mod tests {
         assert!(shown.contains(&"toolCall:e1".to_string()));
         assert!(!shown.contains(&"toolCall:r1".to_string()), "{shown:?}");
         assert!(events.iter().all(|e| !matches!(&e.event, ChatEventPayload::Delta { delta } if delta.contains("X is in"))));
+    }
+
+    /// The agent may search the web; its helpers may not — several run side
+    /// by side, and each searching would multiply the queries and the credits.
+    #[test]
+    fn a_helper_is_not_given_the_agents_web() {
+        let mut h = harness(
+            "explore-no-web",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is nowhere"), text("done")],
+        );
+        h.web = Some(Web::search_only(Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new()))));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert!(tool_names(&requests[0]).contains(&"webSearch".to_string()), "the agent has it");
+        let helper = tool_names(&requests[1]);
+        assert!(!helper.contains(&"webSearch".to_string()) && !helper.contains(&"webFetch".to_string()), "{helper:?}");
     }
 
     /// A helper cannot send a helper: asked from memory, it is refused.
