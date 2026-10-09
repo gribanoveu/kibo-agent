@@ -206,7 +206,12 @@ pub struct AppSettings {
     /// Which search a chat's `webSearch` asks. `None` in every file written
     /// before there was a choice — see [`WebSearchBackend::resolve`].
     pub web_search: Option<WebSearchBackend>,
+    /// Where the user's SearXNG answers; `None` is [`DEFAULT_SEARXNG_URL`].
+    pub searxng_url: Option<String>,
 }
+
+/// Where SearXNG's own Docker image listens.
+pub const DEFAULT_SEARXNG_URL: &str = "http://localhost:8080/";
 
 /// Where a chat's web search goes (`docs/24-web-search.md`). Off, the model is
 /// given neither `webSearch` nor `webFetch`.
@@ -214,17 +219,18 @@ pub struct AppSettings {
 #[serde(rename_all = "camelCase")]
 pub enum WebSearchBackend {
     Off,
-    /// DuckDuckGo and the pages it finds, read here — no key, no account.
-    Builtin,
+    /// The user's own SearXNG, and the pages it finds read here — no key, no
+    /// account. `builtin` in files from the days it was DuckDuckGo directly.
+    #[serde(alias = "builtin")]
+    Searxng,
     /// Tavily, with the user's key.
     Tavily,
 }
 
 impl WebSearchBackend {
     /// What an app that never asked does: Tavily for whoever saved a key —
-    /// it was the only search there was — and nothing for anyone else, since
-    /// the built-in one sends queries to DuckDuckGo and the user has not said
-    /// it may.
+    /// it was the only search there was — and nothing for anyone else: a
+    /// SearXNG is one the user has to have, and say where.
     pub fn resolve(saved: Option<Self>, has_tavily_key: bool) -> Self {
         saved.unwrap_or(if has_tavily_key { WebSearchBackend::Tavily } else { WebSearchBackend::Off })
     }
@@ -233,7 +239,7 @@ impl WebSearchBackend {
     pub fn is_on(self, has_tavily_key: bool) -> bool {
         match self {
             WebSearchBackend::Off => false,
-            WebSearchBackend::Builtin => true,
+            WebSearchBackend::Searxng => true,
             WebSearchBackend::Tavily => has_tavily_key,
         }
     }
@@ -649,13 +655,15 @@ mod tests {
         use WebSearchBackend::*;
         assert_eq!(WebSearchBackend::resolve(None, true), Tavily);
         assert_eq!(WebSearchBackend::resolve(None, false), Off);
-        for chosen in [Off, Builtin, Tavily] {
+        for chosen in [Off, Searxng, Tavily] {
             assert_eq!(WebSearchBackend::resolve(Some(chosen), true), chosen);
             assert_eq!(WebSearchBackend::resolve(Some(chosen), false), chosen);
         }
-        assert!(!Off.is_on(true) && Builtin.is_on(false) && Tavily.is_on(true) && !Tavily.is_on(false));
+        assert!(!Off.is_on(true) && Searxng.is_on(false) && Tavily.is_on(true) && !Tavily.is_on(false));
         let old: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.web_search, None);
-        assert_eq!(serde_json::to_value(Builtin).unwrap(), "builtin");
+        assert_eq!(serde_json::to_value(Searxng).unwrap(), "searxng");
+        // Saved while it was DuckDuckGo: the keyless search it meant is SearXNG now.
+        assert_eq!(serde_json::from_str::<WebSearchBackend>("\"builtin\"").unwrap(), Searxng);
     }
 }

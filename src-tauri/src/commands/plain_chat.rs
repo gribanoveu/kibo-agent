@@ -203,7 +203,10 @@ fn chat_web(embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>) 
     }
     let search = match super::settings::web_search_backend_get() {
         WebSearchBackend::Off => return None,
-        WebSearchBackend::Builtin => open_web::searcher(Arc::clone(embeddings)).ok()?,
+        WebSearchBackend::Searxng => {
+            let base = super::settings::searxng_base(&super::settings::web_search_searxng_url_get()).ok()?;
+            open_web::searxng(base, Arc::clone(embeddings)).ok()?
+        }
         WebSearchBackend::Tavily => tavily::saved()?,
     };
     open_web::web(search, Arc::clone(embeddings)).ok()

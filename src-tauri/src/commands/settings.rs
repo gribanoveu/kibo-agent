@@ -115,6 +115,41 @@ pub fn web_search_backend_set(backend: WebSearchBackend) -> Result<(), String> {
     settings_store::save(&settings).map_err(|e| e.to_string())
 }
 
+/// Where the user's SearXNG answers, as saved or the default.
+#[tauri::command]
+pub fn web_search_searxng_url_get() -> String {
+    settings_store::load()
+        .ok()
+        .and_then(|settings| settings.searxng_url)
+        .unwrap_or_else(|| crate::domain::settings::DEFAULT_SEARXNG_URL.to_string())
+}
+
+/// Saves the SearXNG address, as a base its `/search` is joined to: an
+/// http(s) address, and a path that ends with `/` — `http://host/searx` would
+/// otherwise lose its last segment to the join.
+#[tauri::command]
+pub fn web_search_searxng_url_set(url: String) -> Result<String, String> {
+    let base = searxng_base(&url)?;
+    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
+    settings.searxng_url = Some(base.to_string());
+    settings_store::save(&settings).map_err(|e| e.to_string())?;
+    Ok(base.to_string())
+}
+
+pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
+    let mut base = url::Url::parse(text.trim()).map_err(|e| format!("not an address: {e}"))?;
+    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+        return Err("SearXNG's address starts with http:// or https://".to_string());
+    }
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
+    }
+    base.set_query(None);
+    base.set_fragment(None);
+    Ok(base)
+}
+
 pub(crate) fn web_search_on() -> bool {
     web_search_backend_get().is_on(crate::infra::tavily::has_saved_key())
 }
@@ -318,6 +353,20 @@ pub async fn llm_models_probe(provider: ProviderConfig, api_key: Option<String>)
 mod tests {
     use super::*;
     use crate::testing::with_app_dir;
+
+    #[test]
+    fn a_searxng_address_is_saved_as_a_base_and_read_back() {
+        with_app_dir("searxng-url", || {
+            assert_eq!(web_search_searxng_url_get(), "http://localhost:8080/");
+            assert_eq!(web_search_searxng_url_set(" http://searx.lan:8888/searx?q=x#top ".into()).unwrap(), "http://searx.lan:8888/searx/");
+            assert_eq!(web_search_searxng_url_get(), "http://searx.lan:8888/searx/");
+            assert_eq!(searxng_base("http://localhost:8080").unwrap().join("search").unwrap().as_str(), "http://localhost:8080/search");
+            for bad in ["localhost:8080", "ftp://searx.lan/", "not a url", "file:///etc/"] {
+                assert!(web_search_searxng_url_set(bad.into()).is_err(), "{bad}");
+            }
+            assert_eq!(web_search_searxng_url_get(), "http://searx.lan:8888/searx/", "a refused address leaves the saved one");
+        });
+    }
 
     /// The key saved from Settings is the one a chat's turn searches with,
     /// and a provider's key beside it is neither read nor touched.

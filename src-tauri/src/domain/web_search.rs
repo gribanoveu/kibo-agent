@@ -132,7 +132,7 @@ pub const PASSAGE_CHARS: usize = 600;
 /// release, error messages, a Kubernetes state: it found the asked-for token in
 /// no more passages anywhere, and in fewer once. The model already matches a
 /// rare token like `ERR_OSSL_EVP_UNSUPPORTED`; what it cannot see is that
-/// "latest version" means a number, and DuckDuckGo's snippet, kept first by
+/// "latest version" means a number, and the engine's snippet, kept first by
 /// the search, is what supplies that.
 pub fn passages(text: &str, query: &str, model: &dyn EmbeddingProvider, budget: usize) -> Option<String> {
     let text = text.trim();

@@ -1,13 +1,14 @@
 //! The web without a key (`docs/24-web-search.md`, `docs/08-data-policy.md`):
-//! DuckDuckGo's HTML results for a search, and any public page read as
-//! Markdown. What leaves is the query, to DuckDuckGo, and a plain `GET` to each
-//! page's own host. Nothing here is DuckDuckGo's API — it has none for web
-//! results — so a change of its markup is a search that finds nothing.
+//! a search through the user's own SearXNG, and any public page read as
+//! Markdown. What leaves is the query, to the SearXNG at the address the user
+//! gave — and from there to whichever engines it is set up to ask — and a
+//! plain `GET` to each page's own host.
 
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
 use url::Url;
 
 use crate::domain::embeddings::EmbeddingProvider;
@@ -16,11 +17,12 @@ use crate::domain::web_search::{
 };
 use crate::infra::http_agent::{self, TlsError};
 
-const SEARCH: &str = "https://html.duckduckgo.com/html/";
-/// Sites answer a browser; some answer nothing else, DuckDuckGo among them.
+/// Sites answer a browser; some answer nothing else.
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// SearXNG asks its engines side by side and gives up on a slow one itself;
+/// this is for a SearXNG that is not answering at all.
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// A page asked for by `webFetch`: the model wants this one, so it waits.
 const PAGE_TIMEOUT: Duration = Duration::from_secs(10);
 /// A page a search found: one slower than this keeps its snippet, and the
@@ -36,11 +38,12 @@ pub fn web(search: WebSearchFn, model: Arc<dyn EmbeddingProvider>) -> Result<Web
     Ok(Web { search, fetch: fetcher(model)? })
 }
 
-/// The search without a key: DuckDuckGo's results, each page read and cut to
-/// its passages about the query.
-pub fn searcher(model: Arc<dyn EmbeddingProvider>) -> Result<WebSearchFn, TlsError> {
+/// The search through the SearXNG at `base`: its results, each page read and
+/// cut to its passages about the query. `base` is the user's own — localhost
+/// is allowed here, as it is not for a page.
+pub fn searxng(base: Url, model: Arc<dyn EmbeddingProvider>) -> Result<WebSearchFn, TlsError> {
     let agent = http_agent::build_agent(None)?;
-    Ok(Arc::new(move |query: &WebQuery| search(&agent, model.as_ref(), query)))
+    Ok(Arc::new(move |query: &WebQuery| search(&agent, &base, model.as_ref(), query, &public)))
 }
 
 fn fetcher(model: Arc<dyn EmbeddingProvider>) -> Result<WebFetchFn, TlsError> {
@@ -48,42 +51,41 @@ fn fetcher(model: Arc<dyn EmbeddingProvider>) -> Result<WebFetchFn, TlsError> {
     Ok(Arc::new(move |query: &PageQuery| fetch(&agent, model.as_ref(), query)))
 }
 
-fn search(agent: &ureq::Agent, model: &dyn EmbeddingProvider, query: &WebQuery) -> Result<Vec<WebHit>, WebSearchError> {
-    let mut form = vec![("q", query.query)];
+/// `allowed` checks each found page before it is read — [`public`], but for a test.
+fn search(
+    agent: &ureq::Agent,
+    base: &Url,
+    model: &dyn EmbeddingProvider,
+    query: &WebQuery,
+    allowed: &(dyn Fn(&Url) -> Result<(), WebSearchError> + Sync),
+) -> Result<Vec<WebHit>, WebSearchError> {
+    let endpoint = base.join("search").map_err(|e| WebSearchError::Unavailable(format!("{base}: {e}")))?;
+    let mut request = agent.get(endpoint.as_str()).query("q", query.query).query("format", "json");
     if let Some(range) = query.time_range {
-        form.push((
-            "df",
+        request = request.query(
+            "time_range",
             match range {
-                TimeRange::Day => "d",
-                TimeRange::Week => "w",
-                TimeRange::Month => "m",
-                TimeRange::Year => "y",
+                TimeRange::Day => "day",
+                TimeRange::Week => "week",
+                TimeRange::Month => "month",
+                TimeRange::Year => "year",
             },
-        ));
+        );
     }
-    let mut response = agent
-        .post(SEARCH)
-        .header("User-Agent", USER_AGENT)
+    let mut response = request
         .config()
         .timeout_global(Some(SEARCH_TIMEOUT))
         .build()
-        .send_form(form)
-        .map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
+        .call()
+        .map_err(|e| WebSearchError::Unavailable(format!("SearXNG at {base} is not answering ({e}) — is it running?")))?;
     let status = response.status().as_u16();
-    let html = response.body_mut().read_to_string().map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
-    // A puzzle instead of results is DuckDuckGo's "too many from here".
-    if status == 202 || html.contains("anomaly-modal") {
-        return Err(WebSearchError::RateLimited);
-    }
-    if !(200..300).contains(&status) {
-        return Err(WebSearchError::Unavailable(format!("DuckDuckGo answered {status}")));
-    }
-    let mut hits = parse_results(&html);
+    let body = response.body_mut().read_to_string().map_err(|e| WebSearchError::Unavailable(e.to_string()))?;
+    let mut hits = parse_results(status, &body)?;
     hits.truncate(query.max_results as usize);
     // Side by side: the turn waits for the slowest page, not for all of them.
     let read: Vec<Option<String>> = std::thread::scope(|scope| {
         let running: Vec<_> =
-            hits.iter().map(|hit| scope.spawn(move || read(agent, &hit.url, SEARCH_PAGE_TIMEOUT).ok().map(|page| page.content))).collect();
+            hits.iter().map(|hit| scope.spawn(move || read_checked(agent, &hit.url, SEARCH_PAGE_TIMEOUT, allowed).ok().map(|page| page.content))).collect();
         running.into_iter().map(|handle| handle.join().ok().flatten()).collect()
     });
     with_passages(&mut hits, read, query.query, model);
@@ -91,7 +93,7 @@ fn search(agent: &ureq::Agent, model: &dyn EmbeddingProvider, query: &WebQuery) 
 }
 
 /// Each page's passages about `query` after its snippet. The snippet stays
-/// first: DuckDuckGo chose it for the query, and it often holds the very
+/// first: the engine chose it for the query, and it often holds the very
 /// words asked about. A page that would not be read keeps the snippet alone.
 fn with_passages(hits: &mut [WebHit], pages: Vec<Option<String>>, query: &str, model: &dyn EmbeddingProvider) {
     for (hit, text) in hits.iter_mut().zip(pages) {
@@ -104,31 +106,53 @@ fn with_passages(hits: &mut [WebHit], pages: Vec<Option<String>>, query: &str, m
     }
 }
 
-/// The results, ads left out, in DuckDuckGo's order. The snippet is the
-/// content until the page itself is read.
-fn parse_results(html: &str) -> Vec<WebHit> {
-    let document = dom_query::Document::from(html);
-    document
-        .select("div.result")
-        .iter()
-        .filter(|result| !result.has_class("result--ad"))
-        .filter_map(|result| {
-            let link = result.select("a.result__a");
-            let url = target(&link.attr("href")?)?;
-            Some(WebHit { title: squash(&link.text()), url, content: squash(&result.select(".result__snippet").text()) })
-        })
-        .collect()
+#[derive(Deserialize)]
+struct Answer {
+    results: Vec<Found>,
+    /// `[engine, why]` for each engine that gave nothing: `["duckduckgo", "CAPTCHA"]`.
+    #[serde(default)]
+    unresponsive_engines: Vec<(String, String)>,
 }
 
-/// Where a result leads. Some arrive through DuckDuckGo's redirect, with the
-/// address in `uddg`; an ad's goes through `y.js`, and is not a result.
-fn target(href: &str) -> Option<String> {
-    let absolute = if href.starts_with("//") { format!("https:{href}") } else { href.to_string() };
-    let url = Url::parse(&absolute).ok()?;
-    if url.host_str().is_some_and(|host| host.ends_with("duckduckgo.com")) {
-        return url.query_pairs().find(|(key, _)| key == "uddg").map(|(_, value)| value.into_owned());
+#[derive(Deserialize)]
+struct Found {
+    #[serde(default)]
+    title: String,
+    url: String,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+/// SearXNG's results in its order, web addresses only. No results because
+/// every engine failed is said as such — with which, and why — rather than as
+/// "nothing found", which would send the model looking with other words.
+fn parse_results(status: u16, body: &str) -> Result<Vec<WebHit>, WebSearchError> {
+    match status {
+        200..=299 => {}
+        // `json` is not in `search.formats` of its settings.yml.
+        403 => {
+            return Err(WebSearchError::Refused(
+                "SearXNG does not answer in JSON — tell the user to add `json` to `search.formats` in its settings.yml".into(),
+            ))
+        }
+        429 => return Err(WebSearchError::RateLimited),
+        _ => return Err(WebSearchError::Unavailable(format!("SearXNG answered {status}"))),
     }
-    matches!(url.scheme(), "http" | "https").then(|| url.into())
+    let answer: Answer = serde_json::from_str(body).map_err(|e| WebSearchError::BadAnswer(e.to_string()))?;
+    let hits: Vec<WebHit> = answer
+        .results
+        .into_iter()
+        .filter(|found| Url::parse(&found.url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")))
+        .map(|found| WebHit { title: squash(&found.title), url: found.url, content: squash(&found.content.unwrap_or_default()) })
+        .collect();
+    if hits.is_empty() && !answer.unresponsive_engines.is_empty() {
+        let failed: Vec<String> = answer.unresponsive_engines.iter().map(|(engine, why)| format!("{engine} ({why})")).collect();
+        return Err(WebSearchError::Unavailable(format!(
+            "every engine of SearXNG failed: {} — do not search again in this turn",
+            failed.join(", ")
+        )));
+    }
+    Ok(hits)
 }
 
 fn squash(text: &str) -> String {
@@ -317,52 +341,47 @@ fn is_public(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
 
-    const RESULTS: &str = r##"<html><body><div id="links" class="results">
-        <div class="result results_links results_links_deep result--ad">
-          <h2 class="result__title"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fshop.example%2F&amp;rut=ad">Buy now</a></h2>
-          <a class="result__snippet" href="#">An ad</a>
-        </div>
-        <div class="result results_links results_links_deep web-result ">
-          <h2 class="result__title"><a rel="nofollow" class="result__a" href="https://v2.tauri.app/release/">Tauri  Ecosystem
-            Releases</a></h2>
-          <a class="result__snippet" href="https://v2.tauri.app/release/"><b>Tauri</b> Ecosystem <b>Releases</b> notes</a>
-        </div>
-        <div class="result results_links results_links_deep web-result ">
-          <h2 class="result__title"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ftauri-apps%2Ftauri%2Freleases&amp;rut=abc">Releases</a></h2>
-          <a class="result__snippet">On GitHub</a>
-        </div>
-        <div class="result"><a class="result__a">no address</a></div>
-    </div></body></html>"##;
+    const RESULTS: &str = r#"{"query":"tauri","number_of_results":0,"results":[
+        {"url":"https://v2.tauri.app/release/","title":"Tauri  Ecosystem\nReleases","content":"Release notes   for every package","engine":"google cse","score":1.0},
+        {"url":"https://v2.tauri.app/blog/tauri-20/","title":"Tauri 2.0","content":null},
+        {"url":"javascript:alert(1)","title":"not a page"},
+        {"url":"https://github.com/tauri-apps/tauri/releases","title":"Releases"}
+    ],"answers":[],"infoboxes":[],"suggestions":[],"unresponsive_engines":[["duckduckgo","CAPTCHA"]]}"#;
+
+    fn hit(title: &str, url: &str, content: &str) -> WebHit {
+        WebHit { title: title.into(), url: url.into(), content: content.into() }
+    }
 
     #[test]
-    fn results_are_read_in_order_without_ads_and_through_the_redirect() {
+    fn results_are_read_in_order_web_addresses_only() {
         assert_eq!(
-            parse_results(RESULTS),
+            parse_results(200, RESULTS).unwrap(),
             vec![
-                WebHit {
-                    title: "Tauri Ecosystem Releases".into(),
-                    url: "https://v2.tauri.app/release/".into(),
-                    content: "Tauri Ecosystem Releases notes".into(),
-                },
-                WebHit {
-                    title: "Releases".into(),
-                    url: "https://github.com/tauri-apps/tauri/releases".into(),
-                    content: "On GitHub".into(),
-                },
+                hit("Tauri Ecosystem Releases", "https://v2.tauri.app/release/", "Release notes for every package"),
+                hit("Tauri 2.0", "https://v2.tauri.app/blog/tauri-20/", ""),
+                hit("Releases", "https://github.com/tauri-apps/tauri/releases", ""),
             ]
         );
     }
 
     #[test]
-    fn a_page_without_results_finds_nothing() {
-        assert!(parse_results("<html><body>No results.</body></html>").is_empty());
+    fn no_results_is_nothing_found_unless_every_engine_failed() {
+        let none = r#"{"results":[],"unresponsive_engines":[]}"#;
+        assert_eq!(parse_results(200, none).unwrap(), vec![]);
+        let failed = r#"{"results":[],"unresponsive_engines":[["duckduckgo","CAPTCHA"],["brave","too many requests"]]}"#;
+        let error = parse_results(200, failed).unwrap_err();
+        assert!(
+            matches!(&error, WebSearchError::Unavailable(why) if why.contains("duckduckgo (CAPTCHA), brave (too many requests)")),
+            "{error:?}"
+        );
     }
 
     #[test]
-    fn only_web_addresses_lead_anywhere() {
-        assert_eq!(target("javascript:alert(1)"), None);
-        assert_eq!(target("/relative"), None);
-        assert_eq!(target("https://duckduckgo.com/y.js?ad=1"), None);
+    fn statuses_say_what_to_fix() {
+        assert!(matches!(parse_results(403, "Forbidden"), Err(WebSearchError::Refused(why)) if why.contains("search.formats")));
+        assert!(matches!(parse_results(429, ""), Err(WebSearchError::RateLimited)));
+        assert!(matches!(parse_results(502, ""), Err(WebSearchError::Unavailable(_))));
+        assert!(matches!(parse_results(200, "<html>"), Err(WebSearchError::BadAnswer(_))));
     }
 
     /// Serves each request with the next of `answers`, as raw HTTP, on a port
@@ -396,6 +415,69 @@ mod tests {
 
     fn agent() -> ureq::Agent {
         http_agent::build_agent(None).unwrap()
+    }
+
+    /// SearXNG itself may be on this machine — the user said so. A page it
+    /// found there is not read: the search answers with its snippet.
+    #[test]
+    fn searxng_on_localhost_is_asked_but_a_page_on_this_machine_is_not_read() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let results = format!(r#"{{"results":[{{"url":"{address}/admin","title":"Router","content":"snippet"}}],"unresponsive_engines":[]}}"#);
+        let answers = vec![
+            answer("200 OK\r\nContent-Type: application/json", &results),
+            answer("200 OK\r\nContent-Type: text/plain", "the router's admin page"),
+        ];
+        std::thread::spawn(move || {
+            for answer in answers {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let _ = stream.read(&mut [0u8; 4096]);
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        let search = searxng(Url::parse(&format!("{address}/")).unwrap(), Arc::new(NoModel)).unwrap();
+        let hits = search(&WebQuery { query: "router", max_results: 5, time_range: None }).unwrap();
+        assert_eq!(hits, vec![hit("Router", &format!("{address}/admin"), "snippet")]);
+    }
+
+    #[test]
+    fn the_query_and_its_period_reach_searxng_and_its_pages_are_read() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let base = Url::parse(&format!("{address}/")).unwrap();
+        let results = format!(
+            r#"{{"results":[{{"url":"{address}/page","title":"Read","content":"snippet"}},{{"url":"{address}/private","title":"Not read","content":"its snippet"}}],"unresponsive_engines":[]}}"#
+        );
+        let answers = vec![
+            answer("200 OK\r\nContent-Type: application/json", &results),
+            answer("200 OK\r\nContent-Type: text/plain", "the page's own words"),
+        ];
+        let asked = std::thread::spawn(move || {
+            let mut first = String::new();
+            for answer in answers {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                if first.is_empty() {
+                    first = String::from_utf8_lossy(&request[..n]).lines().next().unwrap_or_default().to_string();
+                }
+                let _ = stream.write_all(answer.as_bytes());
+            }
+            first
+        });
+        let query = WebQuery { query: "tauri 2", max_results: 5, time_range: Some(TimeRange::Month) };
+        let hits = search(&agent(), &base, &NoModel, &query, &not_private).unwrap();
+        assert_eq!(asked.join().unwrap(), "GET /search?q=tauri%202&format=json&time_range=month HTTP/1.1");
+        assert_eq!(
+            hits,
+            vec![
+                hit("Read", &format!("{address}/page"), "snippet\n…\nthe page's own words"),
+                // Refused before it is asked: it keeps its snippet.
+                hit("Not read", &format!("{address}/private"), "its snippet"),
+            ]
+        );
     }
 
     #[test]
@@ -517,16 +599,18 @@ mod tests {
         }
     }
 
-    /// The real thing, against the network: DuckDuckGo answers, pages are
-    /// read, and the bundled model picks their passages. Ignored — it needs
-    /// the network and DuckDuckGo's markup as it is today. Run after touching
-    /// this file: `cargo test open_web_live -- --ignored --nocapture`.
+    /// The real thing, against the network: SearXNG answers, pages are read,
+    /// and the bundled model picks their passages. Ignored — it needs the
+    /// network and a SearXNG (`KIBO_SEARXNG`, `http://localhost:8080/` when
+    /// unset). Run after touching this file:
+    /// `cargo test open_web_live -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn open_web_live() {
         use crate::infra::local_embeddings::{bundled_model_dir, LocalEmbeddings, DEFAULT_IDLE_UNLOAD};
         let model: Arc<dyn EmbeddingProvider> = Arc::new(LocalEmbeddings::new(bundled_model_dir(None), DEFAULT_IDLE_UNLOAD));
-        let web = web(searcher(Arc::clone(&model)).unwrap(), model).unwrap();
+        let base = std::env::var("KIBO_SEARXNG").unwrap_or_else(|_| "http://localhost:8080/".into());
+        let web = web(searxng(Url::parse(&base).unwrap(), Arc::clone(&model)).unwrap(), model).unwrap();
         let started = std::time::Instant::now();
         let hits = (web.search)(&WebQuery { query: "Spring AI latest release version", max_results: 5, time_range: None }).unwrap();
         println!("search: {} pages in {:?}", hits.len(), started.elapsed());
