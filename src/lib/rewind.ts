@@ -21,6 +21,7 @@ const ACCOUNTED = new Set([
   "gitLog",
   "semanticSearch",
   "webSearch",
+  "webFetch",
   "toolSearch",
   "skill",
   "writePlan",

@@ -297,6 +297,23 @@ describe("what each call shows", () => {
     );
   });
 
+  test("a page read shows its address, whether it was cut, and the text the model got", () => {
+    const running = tool({ name: "webFetch", arguments: '{"url":"https://tokio.rs/blog"}', result: undefined });
+    expect(describeTool(running)).toMatchObject({ name: "Page", arg: "https://tokio.rs/blog", meta: undefined, detail: "" });
+    expect(describeActive(running)).toBe("Reading https://tokio.rs/blog");
+
+    const page = (truncated: boolean) =>
+      describeTool(
+        tool({
+          name: "webFetch",
+          arguments: '{"url":"https://tokio.rs/blog"}',
+          result: { result: "webPage", page: { title: "Blog", url: "https://tokio.rs/blog/", content: "Out in March.", truncated } },
+        }),
+      );
+    expect(page(true)).toMatchObject({ meta: "part of the page", detail: "Blog\nhttps://tokio.rs/blog/\n\nOut in March." });
+    expect(page(false).meta).toBeUndefined();
+  });
+
   test("a tool search shows its query and the tools it declared, by server", () => {
     const running = tool({ name: "toolSearch", arguments: '{"query":"create issue"}', result: undefined });
     expect(describeTool(running)).toMatchObject({ name: "Find tools", arg: "create issue", meta: undefined });
