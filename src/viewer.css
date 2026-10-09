@@ -25,12 +25,35 @@
   user-select: text;
 }
 
+/* As wide as the window: the text reflows when it is resized. */
 .viewer-page {
-  max-width: 46em;
-  margin: 0 auto;
   padding: 0.6em 2.2em 3em;
 }
 
 .viewer-error {
   color: var(--text-dim);
+}
+
+/* The text size, in the title bar. */
+.viewer-size {
+  height: 24px;
+  min-width: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.viewer-size:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.viewer-size.percent {
+  min-width: 40px;
 }
