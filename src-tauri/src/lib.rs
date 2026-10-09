@@ -225,6 +225,8 @@ pub fn run() {
             commands::settings::llm_provider_save,
             commands::settings::llm_provider_remove,
             commands::settings::llm_api_key_save,
+            commands::settings::web_search_backend_get,
+            commands::settings::web_search_backend_set,
             commands::settings::web_search_key_status,
             commands::settings::web_search_key_save,
             commands::settings::web_search_usage,

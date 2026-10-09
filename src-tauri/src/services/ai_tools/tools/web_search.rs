@@ -18,7 +18,7 @@ const CONTENT_CHARS: usize = 2_000;
 pub const MAX_QUERY_CHARS: usize = 400;
 
 pub fn web_search(args: &WebSearchArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
-    let search = deps.web.as_ref().ok_or(ToolError::NoWebSearch)?;
+    let search = &deps.web.as_ref().ok_or(ToolError::NoWebSearch)?.search;
     let query = args.query.trim();
     let invalid = |reason: String| ToolError::InvalidArguments { tool: "webSearch".into(), reason };
     if query.is_empty() {
@@ -53,7 +53,8 @@ behind an error message, what a version deprecates; answer from what you know wh
 The query goes to a search service outside the user's machine: search with the error text, the product and its version — \
 never with secrets, credentials, or names from the user's own systems (hosts, clusters, namespaces, services). \
 Write the query in the language the pages you want are written in — usually English for technical subjects. \
-Say which address each fact you use comes from. Returns at most {MAX_RESULTS} pages."
+Say which address each fact you use comes from. Returns at most {MAX_RESULTS} pages. \
+When the passages are not enough — a changelog, a guide, an issue's thread — read the page with webFetch."
         ),
         parameters: serde_json::json!({
             "type": "object",
@@ -98,7 +99,7 @@ mod tests {
     }
 
     fn deps(web: Option<WebSearchFn>) -> ToolDeps<'static> {
-        ToolDeps { web, ..ToolDeps::default() }
+        ToolDeps { web: web.map(crate::domain::web_search::Web::search_only), ..ToolDeps::default() }
     }
 
     fn args(query: &str, max_results: Option<u32>) -> WebSearchArgs {
@@ -110,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_key_it_says_where_to_add_one() {
+    fn while_off_it_says_where_to_turn_it_on() {
         let error = web_search(&args("q", None), &deps(None)).unwrap_err();
         assert!(matches!(error, ToolError::NoWebSearch));
         assert!(error.to_string().contains("Settings → Web search"));

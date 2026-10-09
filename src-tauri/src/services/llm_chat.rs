@@ -22,7 +22,7 @@ use crate::domain::llm::{
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, KEEP_TAIL_PERCENT, RETRY_KEEP_TAIL_PERCENT};
 use crate::domain::result_clearing;
-use crate::domain::web_search::WebSearchFn;
+use crate::domain::web_search::Web;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
@@ -252,9 +252,9 @@ pub enum Place<'a> {
         changes: Option<&'a dyn KubeChanges>,
         /// The runbooks the prompt lists and `kubeRunbook` reads.
         runbooks: &'a [Runbook],
-        /// What `webSearch` asks; `None` without a key, and then the tool is
-        /// not offered.
-        web: Option<&'a WebSearchFn>,
+        /// What `webSearch` and `webFetch` reach; `None` while web search is
+        /// off, and then neither is offered.
+        web: Option<&'a Web>,
     },
 }
 
@@ -821,7 +821,7 @@ fn run(
                         // Around the call, not inside the tool: one place sees
                         // every write, and no tool has to remember to report.
                         let watched = turn.place.scope().and_then(|scope| file_changes::before(scope, &parsed));
-                        let result = execute_call(turn, round, call, &parsed, &mut state.reads, &mut state.todos);
+                        let result = execute_call(turn, round, call, &parsed, &state.history, &mut state.reads, &mut state.todos);
                         if let (Ok(_), crate::domain::tools::ToolCall::WritePlan(written)) = (&result, &parsed) {
                             state.written_plan = Some(written.content.trim().to_string());
                         }
@@ -912,6 +912,7 @@ fn execute_call(
     round: u32,
     call: &LlmToolCall,
     parsed: &crate::domain::tools::ToolCall,
+    history: &[LlmMessage],
     reads: &mut ReadFiles,
     todos: &mut Vec<Task>,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
@@ -944,6 +945,7 @@ fn execute_call(
             Place::Chat { web, .. } => web.cloned(),
             Place::Folder { .. } => None,
         },
+        history,
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1041,7 +1043,7 @@ fn explore_side_by_side(
                     scope.spawn(move || {
                         // Neither is touched by `explore`; the round's own
                         // stay with the loop.
-                        let result = execute_call(turn, round, call, parsed, &mut ReadFiles::default(), &mut Vec::new());
+                        let result = execute_call(turn, round, call, parsed, &[], &mut ReadFiles::default(), &mut Vec::new());
                         (call.id.clone(), Early { result, started: *started })
                     })
                 })
@@ -1417,14 +1419,14 @@ fn offered(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
 }
 
 /// The tools a chat in `role` is offered.
-/// `web`: whether a search key is saved. Without one `webSearch` is left
-/// out — offered, it could only fail, and its schema costs every request.
+/// `web`: whether web search is on. Off, `webSearch` and `webFetch` are left
+/// out — offered, they could only fail, and their schemas cost every request.
 pub(crate) fn tool_definitions_for_role(role: ChatRole, web: bool) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
         .filter(|definition| {
             ToolName::from_wire_name(&definition.name)
-                .is_some_and(|tool| role.tools().contains(&tool) && (web || tool != ToolName::WebSearch))
+                .is_some_and(|tool| role.tools().contains(&tool) && (web || !tool.is_web()))
         })
         .collect()
 }

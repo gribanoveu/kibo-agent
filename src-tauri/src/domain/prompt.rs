@@ -415,12 +415,12 @@ pub fn with_language_reminder(text: String, language: Option<&str>) -> String {
     }
 }
 
-/// Told to a chat while no search key is saved.
+/// Told to a chat while web search is off.
 /// The tool is not named: a model told of a tool it was not given writes the
 /// call out as text in its own markup (DeepSeek's `<｜DSML｜ calls>`).
-pub const NO_WEB_SEARCH: &str = "Web search is not set up, so you cannot look anything up. When an answer depends on \
+pub const NO_WEB_SEARCH: &str = "Web search is off, so you cannot look anything up. When an answer depends on \
 current information — versions, releases, news — answer from what you know, say that it may be out of date, and \
-that the user can add a Tavily API key in Settings → Web search to let you search the web.";
+that the user can turn on web search in Settings → Web search.";
 
 /// What goes in front of a Chat mode conversation, steadiest first: the
 /// role, the runbooks it may read, the language, and last what it is told of

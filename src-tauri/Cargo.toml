@@ -85,6 +85,9 @@ rmcp = { version = "3.5", default-features = false, features = ["client", "reqwe
 dunce = "1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
+dom_smoothie = "0.18.2"
+url = "2.5.8"
+dom_query = "0.28"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

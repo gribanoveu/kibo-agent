@@ -44,6 +44,7 @@ pub mod write_plan;
 pub mod mcp;
 pub mod process;
 pub mod terminal;
+pub mod web_fetch;
 pub mod web_search;
 pub mod tool_search;
 
@@ -99,6 +100,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeApply, cluster::apply_definition),
     (ToolName::KubeDelete, cluster::delete_definition),
     (ToolName::WebSearch, web_search::definition),
+    (ToolName::WebFetch, web_fetch::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
@@ -163,6 +165,7 @@ pub fn dispatch(
         ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
+        ToolCall::WebFetch(args) => web_fetch::web_fetch(args, deps),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
@@ -526,6 +529,13 @@ mod definition_tests {
                     query: "tokio release".into(),
                     max_results: Some(3),
                     time_range: Some(crate::domain::web_search::TimeRange::Month),
+                })],
+            ),
+            ToolName::WebFetch => (
+                r#"{"url":"https://tokio.rs"}"#,
+                vec![ToolCall::WebFetch(crate::domain::tools::WebFetchArgs {
+                    url: "https://tokio.rs".into(),
+                    query: Some("release".into()),
                 })],
             ),
             ToolName::ToolSearch => (

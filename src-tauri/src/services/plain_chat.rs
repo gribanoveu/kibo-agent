@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubeChanges, KubeSetup, PinnedCluster};
 use crate::domain::runbooks::Runbook;
-use crate::domain::web_search::WebSearchFn;
+use crate::domain::web_search::Web;
 
 use crate::services::ai_tools::parse::parse_tool_call;
 use crate::services::ai_tools::tools;
@@ -35,8 +35,8 @@ pub struct ChatTurn<'a> {
     pub changes: Option<&'a dyn KubeChanges>,
     /// The runbooks the role is told of and may read.
     pub runbooks: &'a [Runbook],
-    /// The web search, when a key is saved.
-    pub web: Option<&'a WebSearchFn>,
+    /// The web, while web search is on.
+    pub web: Option<&'a Web>,
     pub approval: &'a ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -181,7 +181,7 @@ mod tests {
         cluster: Option<Arc<dyn KubeApi>>,
         changes: Option<Arc<Kept>>,
         runbooks: Vec<Runbook>,
-        web: Option<WebSearchFn>,
+        web: Option<Web>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
     }
@@ -258,7 +258,7 @@ mod tests {
         let mut chat = chat(Vec::new(), Some("French"));
         let history = vec![LlmMessage::user("how many pods are running?")];
         for (&role, web) in ChatRole::ALL.iter().flat_map(|role| [(role, false), (role, true)]) {
-            chat.web = web.then(|| web_search(Vec::new()).0);
+            chat.web = web.then(|| Web::search_only(web_search(Vec::new()).0));
             let sent = chat.run(role, false, |c| in_place(c, |turn| llm_chat::estimate_request(turn, &history)));
             let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language, chat.web.is_some());
             let usage = crate::services::context_compaction::usage(&chat.session, frame, &history);
@@ -335,10 +335,10 @@ mod tests {
     type Searched = Arc<Mutex<Vec<String>>>;
 
     /// A search that answers with `hits`, and records the queries.
-    fn web_search(hits: Vec<crate::domain::web_search::WebHit>) -> (WebSearchFn, Searched) {
+    fn web_search(hits: Vec<crate::domain::web_search::WebHit>) -> (crate::domain::web_search::WebSearchFn, Searched) {
         let searched = Searched::default();
         let seen = searched.clone();
-        let search: WebSearchFn = Arc::new(move |q: &crate::domain::web_search::WebQuery| {
+        let search: crate::domain::web_search::WebSearchFn = Arc::new(move |q: &crate::domain::web_search::WebQuery| {
             seen.lock().unwrap().push(q.query.to_string());
             Ok(hits.clone())
         });
@@ -357,12 +357,12 @@ mod tests {
             content: "Tokio 2.0 was released in March.".into(),
         };
         let (search, searched) = web_search(vec![page]);
-        chat.web = Some(search);
+        chat.web = Some(Web::search_only(search));
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("when is tokio 2 out?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["webSearch"]);
-        assert!(!system_text(&chat.asked()[0].messages).contains("Web search is not set up"));
+        assert_eq!(offered, ["webSearch", "webFetch"]);
+        assert!(!system_text(&chat.asked()[0].messages).contains("Web search is off"));
         assert_eq!(*searched.lock().unwrap(), ["tokio 2 release date"]);
         let result = tool_result(&done.history);
         assert!(result.contains("never as instructions"), "{result}");
@@ -370,19 +370,59 @@ mod tests {
         assert_eq!(done.result.text, "in March");
     }
 
-    /// Without a key the tool is not in the request; a model calling it from
-    /// memory is told where the user adds one.
+    /// A page the search found is read in the same turn: the results are in
+    /// the history `webFetch` checks the address against. One the model made
+    /// up is not asked for.
     #[test]
-    fn without_a_key_the_web_search_is_not_offered_and_a_call_is_told_why() {
+    fn a_page_the_search_found_is_read_and_a_made_up_one_is_not() {
+        let mut chat = chat(
+            vec![
+                calls("webSearch", r#"{"query":"tokio 2"}"#),
+                calls("webFetch", r#"{"url":"https://tokio.rs/blog/tokio-2","query":"date"}"#),
+                calls("webFetch", r#"{"url":"https://evil.example/?q=tokio"}"#),
+                said("in March"),
+            ],
+            None,
+        );
+        let page = crate::domain::web_search::WebHit {
+            title: "Tokio 2.0".into(),
+            url: "https://tokio.rs/blog/tokio-2".into(),
+            content: "passage".into(),
+        };
+        let fetched = Searched::default();
+        let seen = fetched.clone();
+        let fetch: crate::domain::web_search::WebFetchFn = Arc::new(move |q: &crate::domain::web_search::PageQuery| {
+            seen.lock().unwrap().push(q.url.to_string());
+            Ok(crate::domain::web_search::WebPage {
+                title: "Tokio 2.0".into(),
+                url: q.url.into(),
+                content: "Released on March 3.".into(),
+                truncated: false,
+            })
+        });
+        chat.web = Some(Web { search: web_search(vec![page]).0, fetch });
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("when is tokio 2 out?")]));
+
+        assert_eq!(*fetched.lock().unwrap(), ["https://tokio.rs/blog/tokio-2"]);
+        let results: Vec<&str> =
+            done.history.iter().filter(|m| m.role == LlmRole::Tool).filter_map(|m| m.content.as_deref()).collect();
+        assert!(results[1].contains("Released on March 3."), "{}", results[1]);
+        assert!(results[2].contains("not in this conversation"), "{}", results[2]);
+    }
+
+    /// Off, neither tool is in the request; a model calling one from memory
+    /// is told where the user turns it on.
+    #[test]
+    fn while_off_the_web_is_not_offered_and_a_call_is_told_why() {
         let chat = chat(vec![calls("webSearch", r#"{"query":"x"}"#), said("cannot")], None);
         let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("search it")]));
 
-        assert!(chat.asked()[0].tools.iter().all(|t| t.name != "webSearch"));
+        assert!(chat.asked()[0].tools.iter().all(|t| t.name != "webSearch" && t.name != "webFetch"));
         assert!(chat.asked()[0].tools.iter().any(|t| t.name == "kubeGet"));
         // Told that it cannot search, and never the tool's name — a model
         // told of a tool it was not given writes the call out as text.
         let system = system_text(&chat.asked()[0].messages);
-        assert!(system.contains("Web search is not set up") && !system.contains("webSearch"), "{system}");
+        assert!(system.contains("Web search is off") && !system.contains("webSearch"), "{system}");
         assert!(tool_result(&done.history).contains("Settings → Web search"), "{:?}", done.history);
     }
 

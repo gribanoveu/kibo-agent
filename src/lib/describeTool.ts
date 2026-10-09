@@ -77,6 +77,7 @@ export const LABELS: Record<string, string> = {
   kubeApply: "Apply",
   kubeDelete: "Delete object",
   webSearch: "Web",
+  webFetch: "Page",
   toolSearch: "Find tools",
 };
 
@@ -255,6 +256,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.query) ?? "",
         meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "page" : "pages"}`,
         detail: hits.map((h, i) => `[${i + 1}] ${str(h.title) ?? ""}\n${str(h.url) ?? ""}\n${str(h.content) ?? ""}`).join("\n\n"),
+      };
+    }
+
+    // The page as the model got it: where it ended up, and its text.
+    case "webFetch": {
+      const page = asObject(result.page);
+      const cut = page.truncated === true;
+      return {
+        name,
+        arg: str(args.url) ?? "",
+        meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
+        detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
       };
     }
 
@@ -602,6 +615,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Grep: "Searching",
   Search: "Searching the code for",
   Web: "Searching the web for",
+  Page: "Reading",
   "Find tools": "Finding tools for",
   List: "Listing",
   Write: "Writing",
@@ -635,6 +649,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Grep: (n) => `searched ${n === 1 ? "a pattern" : `${n} patterns`}`,
   Search: (n) => `searched the code${n > 1 ? ` ${n} times` : ""}`,
   Web: (n) => `searched the web${n > 1 ? ` ${n} times` : ""}`,
+  Page: (n) => `read ${n === 1 ? "a page" : `${n} pages`}`,
   List: (n) => `listed ${n === 1 ? "a folder" : `${n} folders`}`,
   Write: (n) => `wrote ${n === 1 ? "a file" : `${n} files`}`,
   Edit: (n) => `edited ${n === 1 ? "a file" : `${n} files`}`,
