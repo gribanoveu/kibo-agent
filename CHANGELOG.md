@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.8.0 — 2026-10-09
+
 - 2026-10-09 Markdown tables keep their columns' alignment and skip an empty header row (as Confluence exports them); an image that cannot load shows its name instead of a gap; paragraphs inside a list item stay apart
 - 2026-10-09 Markdown files open with the app in a light window of their own, one per file, framed like the app: pick Kibo Agent in Finder or Explorer's "Open With" (or make it the default for .md); the file shows in the app's theme, as wide as the window, with its own text size, kept for the next file (the buttons in its title bar, or ⌘+ ⌘− ⌘0), without opening a folder, and the main window stays closed until you ask for it (the Dock icon on macOS); on macOS, with Kibo Agent as their app, Markdown files show its icon in Finder
 - 2026-10-09 Web search works without a key, in a chat and for the agent in a folder: Settings → Web search picks Off, SearXNG (your own instance, at the address you give — `http://localhost:8080/` by default) or Tavily for each of Chat and Agent — Tavily in both, say, or only in chats; the agent's is off until you choose, and turning a search off keeps a saved Tavily key; each result starts with the engine's snippet and goes on with the parts of the page about the question, read in the app; the model can also open a page from the results, a link on a page it read, or an address you gave, whole or the parts about a question
