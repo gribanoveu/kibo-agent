@@ -103,11 +103,11 @@ impl ChatRole {
     /// The tools this role may call. Offered whether or not a cluster is
     /// pinned: the list heads every request, and one that changed with the
     /// tab would cost the provider's cache — a call without a cluster says so.
-    /// `webSearch` is the exception, left out while no key is saved
-    /// (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
+    /// `webSearch` and `webFetch` are the exception, left out while web search
+    /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[ToolName::WebSearch],
+            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
                 ToolName::KubeList,
@@ -130,6 +130,7 @@ impl ChatRole {
                 ToolName::KubeDelete,
                 // Known issues, release notes, an operator's error message.
                 ToolName::WebSearch,
+                ToolName::WebFetch,
             ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
@@ -226,14 +227,14 @@ mod tests {
     /// side effect.
     #[test]
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
-        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch]);
+        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch]);
         let tools = ChatRole::Kubernetes.tools();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 19);
         assert!(
-            tools.iter().all(|tool| tool.wire_name().starts_with("kube") || *tool == ToolName::WebSearch),
+            tools.iter().all(|tool| tool.wire_name().starts_with("kube") || tool.is_web()),
             "{tools:?}"
         );
-        assert!(tools.contains(&ToolName::WebSearch));
+        assert!(tools.contains(&ToolName::WebSearch) && tools.contains(&ToolName::WebFetch));
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
         assert_eq!(
             changing,

@@ -336,6 +336,18 @@ mod tests {
                     }],
                 },
             ),
+            // The address stays, as a search's do; the page's words go.
+            ToolName::WebFetch => (
+                Some(ToolCall::WebFetch(crate::domain::tools::WebFetchArgs { url: "https://tokio.rs".into(), query: None })),
+                ToolResult::WebPage {
+                    page: crate::domain::web_search::WebPage {
+                        title: "Tokio".into(),
+                        url: "https://tokio.rs".into(),
+                        content: LEAK.into(),
+                        truncated: false,
+                    },
+                },
+            ),
             // A manifest may carry a Secret's values: it goes as `manifest`.
             ToolName::KubeApply => (
                 Some(ToolCall::KubeApply(crate::domain::tools::KubeApplyArgs { manifest: LEAK.into() })),

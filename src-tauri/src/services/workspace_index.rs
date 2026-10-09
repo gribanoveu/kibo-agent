@@ -50,6 +50,12 @@ impl WorkspaceIndex {
         Self { index_dir, provider, open: Mutex::new(None) }
     }
 
+    /// The bundled model, shared: a chat's web search picks a page's passages
+    /// with the same weights the index loaded, not a second copy of them.
+    pub fn embeddings(&self) -> Arc<dyn EmbeddingProvider> {
+        Arc::clone(&self.provider)
+    }
+
     /// Makes `root` the indexed folder: opens its store, starts watching it,
     /// and starts the first sync on a thread of its own. Returns once the
     /// store is open — which reads what was embedded before, so it blocks for

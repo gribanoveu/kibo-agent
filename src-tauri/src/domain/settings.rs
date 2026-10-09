@@ -203,6 +203,40 @@ pub struct AppSettings {
     pub approval: ApprovalMemory,
     /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
     pub kube: KubeSettings,
+    /// Which search a chat's `webSearch` asks. `None` in every file written
+    /// before there was a choice — see [`WebSearchBackend::resolve`].
+    pub web_search: Option<WebSearchBackend>,
+}
+
+/// Where a chat's web search goes (`docs/24-web-search.md`). Off, the model is
+/// given neither `webSearch` nor `webFetch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WebSearchBackend {
+    Off,
+    /// DuckDuckGo and the pages it finds, read here — no key, no account.
+    Builtin,
+    /// Tavily, with the user's key.
+    Tavily,
+}
+
+impl WebSearchBackend {
+    /// What an app that never asked does: Tavily for whoever saved a key —
+    /// it was the only search there was — and nothing for anyone else, since
+    /// the built-in one sends queries to DuckDuckGo and the user has not said
+    /// it may.
+    pub fn resolve(saved: Option<Self>, has_tavily_key: bool) -> Self {
+        saved.unwrap_or(if has_tavily_key { WebSearchBackend::Tavily } else { WebSearchBackend::Off })
+    }
+
+    /// Whether a chat is given the web: a search chosen, and Tavily's with a key.
+    pub fn is_on(self, has_tavily_key: bool) -> bool {
+        match self {
+            WebSearchBackend::Off => false,
+            WebSearchBackend::Builtin => true,
+            WebSearchBackend::Tavily => has_tavily_key,
+        }
+    }
 }
 
 /// The user's answer per folder, by canonical path. A repository's skills and
@@ -608,5 +642,20 @@ mod tests {
         assert_eq!(json["folderTrust"], serde_json::json!({ "/work": false }));
         let back: AppSettings = serde_json::from_value(json).unwrap();
         assert_eq!(back, settings);
+    }
+
+    #[test]
+    fn a_web_search_never_chosen_is_tavilys_with_a_key_and_off_without() {
+        use WebSearchBackend::*;
+        assert_eq!(WebSearchBackend::resolve(None, true), Tavily);
+        assert_eq!(WebSearchBackend::resolve(None, false), Off);
+        for chosen in [Off, Builtin, Tavily] {
+            assert_eq!(WebSearchBackend::resolve(Some(chosen), true), chosen);
+            assert_eq!(WebSearchBackend::resolve(Some(chosen), false), chosen);
+        }
+        assert!(!Off.is_on(true) && Builtin.is_on(false) && Tavily.is_on(true) && !Tavily.is_on(false));
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.web_search, None);
+        assert_eq!(serde_json::to_value(Builtin).unwrap(), "builtin");
     }
 }

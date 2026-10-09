@@ -76,6 +76,7 @@ mod tests {
                 active: Some("prod".to_string()),
                 typed_namespaces: [("prod".to_string(), vec!["payments".to_string()])].into(),
             },
+            web_search: Some(crate::domain::settings::WebSearchBackend::Builtin),
         }
     }
 

@@ -110,6 +110,7 @@ where
 {
     let events = chat_event_sink(&app, turn_id);
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
@@ -129,7 +130,7 @@ where
         let log_call = |entry: ToolCallLogEntry| record(&entry);
         // Read each turn: a runbook the user just wrote is there for this answer.
         let runbooks = runbooks::merged(runbooks_store::own());
-        let web = crate::infra::tavily::saved();
+        let web = chat_web(&embeddings);
         let chat = plain_chat::ChatTurn {
             session: &session,
             role,
@@ -192,13 +193,29 @@ pub async fn plain_chat_compact<R: Runtime>(
     .map_err(|e| format!("the compaction thread failed: {e}"))?
 }
 
+/// What a chat reaches the web with, as Settings → Web search says; `None`
+/// while it is off, or Tavily's has no key.
+fn chat_web(embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>) -> Option<crate::domain::web_search::Web> {
+    use crate::domain::settings::WebSearchBackend;
+    use crate::infra::{open_web, tavily};
+    if !super::settings::web_search_on() {
+        return None;
+    }
+    let search = match super::settings::web_search_backend_get() {
+        WebSearchBackend::Off => return None,
+        WebSearchBackend::Builtin => open_web::searcher(Arc::clone(embeddings)).ok()?,
+        WebSearchBackend::Tavily => tavily::saved()?,
+    };
+    open_web::web(search, Arc::clone(embeddings)).ok()
+}
+
 /// The provider, and what a chat's request sends in front of the conversation.
 fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Result<(LlmSession, RequestFrame), String> {
     let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
-        crate::infra::tavily::has_saved_key(),
+        super::settings::web_search_on(),
     );
     Ok((session, frame))
 }

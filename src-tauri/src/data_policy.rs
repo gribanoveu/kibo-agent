@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 /// The provider's client and the agent it is built on, the MCP servers the
 /// user gave a URL (the SDK's client and the module that points it at that
-/// URL), and the cluster of a kubeconfig the user added. Anything
+/// URL), the cluster of a kubeconfig the user added, and the web search the
+/// user turned on — Tavily, or DuckDuckGo and the pages it finds. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[
@@ -21,6 +22,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/mcp_rmcp.rs",
     "src/infra/kube_client.rs",
     "src/infra/tavily.rs",
+    "src/infra/open_web.rs",
 ];
 
 /// What opening a connection looks like in Rust here.

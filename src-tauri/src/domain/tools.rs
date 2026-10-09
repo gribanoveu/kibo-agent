@@ -85,6 +85,8 @@ pub enum ToolName {
     KubeDelete,
     /// A chat's search of the web (`docs/24-web-search.md`).
     WebSearch,
+    /// A chat's read of one page the search found or the user named.
+    WebFetch,
     /// Finds the MCP tools left out of the request (`Exposure::Deferred`)
     /// and declares them from the next round on.
     ToolSearch,
@@ -146,6 +148,7 @@ impl ToolName {
         ToolName::KubeApply,
         ToolName::KubeDelete,
         ToolName::WebSearch,
+        ToolName::WebFetch,
         ToolName::ToolSearch,
         ToolName::Mcp,
     ];
@@ -197,6 +200,7 @@ impl ToolName {
             ToolName::KubeApply => "kubeApply",
             ToolName::KubeDelete => "kubeDelete",
             ToolName::WebSearch => "webSearch",
+            ToolName::WebFetch => "webFetch",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
@@ -219,6 +223,11 @@ impl ToolName {
     /// write whatever its arguments. It stops holding at `runCommand`, where
     /// `ls` and `rm -rf /` are the same tool — which is why the gate takes the
     /// verdict as an argument instead of calling this itself.
+    /// The tools that reach the web — offered together, or not at all.
+    pub fn is_web(self) -> bool {
+        matches!(self, ToolName::WebSearch | ToolName::WebFetch)
+    }
+
     pub fn is_mutating(self) -> bool {
         matches!(
             self,
@@ -328,8 +337,11 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete => 3,
-            // One request to the search service, a second or two.
+            // One request to the search service, a second or two — and the
+            // built-in one reads the pages found, side by side.
             ToolName::WebSearch => 2,
+            // A page, and its redirects.
+            ToolName::WebFetch => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -494,7 +506,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            45,
+            46,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -944,8 +956,11 @@ pub struct ToolDeps<'a> {
     /// The runbooks this turn's prompt listed — the only ones `kubeRunbook`
     /// reads.
     pub runbooks: Vec<crate::domain::runbooks::Runbook>,
-    /// The web search a chat's `webSearch` asks; `None` without a key.
-    pub web: Option<crate::domain::web_search::WebSearchFn>,
+    /// The web a chat's `webSearch` and `webFetch` reach; `None` while web
+    /// search is off.
+    pub web: Option<crate::domain::web_search::Web>,
+    /// The conversation so far: `webFetch` opens only an address that is in it.
+    pub history: &'a [crate::domain::llm::LlmMessage],
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -1136,8 +1151,9 @@ pub enum ToolError {
     /// about the user's setup says why; the model tells the user what to fix.
     #[error("no cluster is pinned to this chat — tell the user what to set up, as the note about their cluster says")]
     NoCluster,
-    /// `webSearch` with no key saved: called from memory of an earlier turn.
-    #[error("web search is not set up — tell the user they can add a Tavily API key in Settings → Web search, and answer without searching")]
+    /// `webSearch` or `webFetch` while web search is off: called from memory
+    /// of an earlier turn.
+    #[error("web search is off — tell the user they can turn it on in Settings → Web search, and answer without searching")]
     NoWebSearch,
     #[error(transparent)]
     WebSearch(#[from] crate::domain::web_search::WebSearchError),
@@ -1209,6 +1225,7 @@ pub enum ToolCall {
     KubeApply(KubeApplyArgs),
     KubeDelete(KubeDeleteArgs),
     WebSearch(WebSearchArgs),
+    WebFetch(WebFetchArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
 }
@@ -1259,6 +1276,7 @@ impl ToolCall {
             ToolCall::KubeApply(_) => ToolName::KubeApply,
             ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::WebSearch(_) => ToolName::WebSearch,
+            ToolCall::WebFetch(_) => ToolName::WebFetch,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
@@ -1513,6 +1531,8 @@ pub enum ToolResult {
     Kube { text: String, summary: String },
     /// `webSearch`: the pages found, in the service's order.
     WebResults { hits: Vec<crate::domain::web_search::WebHit> },
+    /// `webFetch`: the page, whole or the part asked for.
+    WebPage { page: crate::domain::web_search::WebPage },
     /// `toolSearch`: the MCP tools found, best first — declared from the
     /// next round on.
     ToolsFound { tools: Vec<FoundTool> },
@@ -1546,6 +1566,15 @@ pub struct WebSearchArgs {
     pub max_results: Option<u32>,
     #[serde(default)]
     pub time_range: Option<crate::domain::web_search::TimeRange>,
+}
+
+/// `webFetch`. `query` picks the passages of a long page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebFetchArgs {
+    pub url: String,
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 /// A call to an MCP tool: the full name the model used, and whatever it

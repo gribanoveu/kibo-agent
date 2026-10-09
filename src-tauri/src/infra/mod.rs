@@ -7,6 +7,7 @@ pub mod workspace_scanner;
 pub mod app_dir;
 pub mod settings_store;
 pub mod kube_client;
+pub mod open_web;
 pub mod tavily;
 pub mod llm_credentials_store;
 pub mod llm_debug_log;

@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn no_folder_mode_searches_the_web() {
         for &mode in ConversationMode::ALL {
-            assert!(!offers(mode, ToolName::WebSearch), "{mode:?}");
+            assert!(!offers(mode, ToolName::WebSearch) && !offers(mode, ToolName::WebFetch), "{mode:?}");
         }
     }
 

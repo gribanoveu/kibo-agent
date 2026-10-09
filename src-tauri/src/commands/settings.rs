@@ -14,7 +14,7 @@ use tauri::State;
 use std::path::{Path, PathBuf};
 
 use crate::domain::kube::{KubeContexts, KubePin};
-use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits};
+use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
@@ -97,6 +97,26 @@ pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
         return llm_credentials_store::delete_api_key(&id);
     }
     llm_credentials_store::save_api_key(&id, key.trim())
+}
+
+/// Which search a chat's `webSearch` asks: the one chosen in Settings → Web
+/// search, or, never chosen, what [`WebSearchBackend::resolve`] says.
+#[tauri::command]
+pub fn web_search_backend_get() -> WebSearchBackend {
+    // An unreadable file is the default's to answer, as for every setting read here.
+    let saved = settings_store::load().ok().and_then(|settings| settings.web_search);
+    WebSearchBackend::resolve(saved, crate::infra::tavily::has_saved_key())
+}
+
+#[tauri::command]
+pub fn web_search_backend_set(backend: WebSearchBackend) -> Result<(), String> {
+    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
+    settings.web_search = Some(backend);
+    settings_store::save(&settings).map_err(|e| e.to_string())
+}
+
+pub(crate) fn web_search_on() -> bool {
+    web_search_backend_get().is_on(crate::infra::tavily::has_saved_key())
 }
 
 /// Whether a key for the chat's web search is saved — all the window learns
