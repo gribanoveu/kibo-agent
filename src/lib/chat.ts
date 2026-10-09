@@ -433,8 +433,8 @@ export async function saveApiKey(id: string, key: string): Promise<void> {
   return invoke<void>("llm_api_key_save", { id, key });
 }
 
-/** Where a chat's web search goes: nowhere, DuckDuckGo read by the app, or Tavily with the user's key. */
-export type WebSearchBackend = "off" | "builtin" | "tavily";
+/** Where a chat's web search goes: nowhere, the user's SearXNG, or Tavily with the user's key. */
+export type WebSearchBackend = "off" | "searxng" | "tavily";
 
 /** The search chosen in Settings → Web search — or, never chosen, Tavily with a key and off without. */
 export async function webSearchBackend(): Promise<WebSearchBackend> {
@@ -445,6 +445,18 @@ export async function webSearchBackend(): Promise<WebSearchBackend> {
 export async function setWebSearchBackend(backend: WebSearchBackend): Promise<void> {
   requireBackend();
   return invoke<void>("web_search_backend_set", { backend });
+}
+
+/** Where the user's SearXNG answers — `http://localhost:8080/` until one is saved. */
+export async function searxngUrl(): Promise<string> {
+  requireBackend();
+  return invoke<string>("web_search_searxng_url_get");
+}
+
+/** Saves the SearXNG address and returns it as kept: with a trailing `/`, without a query. Rejects a non-http(s) one. */
+export async function saveSearxngUrl(url: string): Promise<string> {
+  requireBackend();
+  return invoke<string>("web_search_searxng_url_set", { url });
 }
 
 /** Whether a Tavily key is saved for the chat's web search. The key itself never comes back. */
