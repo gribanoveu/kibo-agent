@@ -17,34 +17,6 @@
   border-radius: 0;
 }
 
-/* The window is undecorated — this bar is the only drag handle. */
-.titlebar {
-  height: 38px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  position: relative;
-}
-/* Centred on the window, not on the room the controls leave. */
-.titlebar-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  pointer-events: none;
-  font-size: var(--fs-sm);
-  color: var(--text-faint);
-}
-/* Level with the native traffic lights, which sit above the bar's middle. */
-.window.native-frame .titlebar-title {
-  transform: translate(-50%, -5px);
-}
-.titlebar-title span {
-  color: var(--text-dim);
-}
-
 /* A window narrower than every open panel's minimum cuts them at its edge,
    rather than drawing past it — only in a browser: the desktop window stops
    at the width the rail, the chat and the file viewer need (tauri.conf.json),

@@ -1,0 +1,29 @@
+/* The bar the app draws for a title bar (`Titlebar.tsx`): the main window's and a Markdown viewer's. */
+
+/* The window is undecorated — this bar is the only drag handle. */
+.titlebar {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  position: relative;
+}
+/* Centred on the window, not on the room the controls leave. */
+.titlebar-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+/* Level with the native traffic lights, which sit above the bar's middle. */
+.titlebar.native .titlebar-title {
+  transform: translate(-50%, -5px);
+}
+.titlebar-title span {
+  color: var(--text-dim);
+}
