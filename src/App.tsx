@@ -15,7 +15,7 @@ import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
-import { WindowControls } from "./components/WindowControls";
+import { Titlebar } from "./components/Titlebar";
 import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
 import { useChatHistory } from "./hooks/useChatHistory";
@@ -34,7 +34,7 @@ import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
 import { useToast } from "./hooks/useToast";
-import { nativeFrame, startWindowDrag, toggleMaximizeWindow, windowsFrame } from "./lib/window";
+import { nativeFrame, windowsFrame } from "./lib/window";
 import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
@@ -68,17 +68,6 @@ import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
-
-// Titlebar drag: single press drags the window, double press zooms it — the macOS
-// titlebar contract, driven explicitly so clicks on the controls stay clicks.
-const dragOrMaximize = (e: React.MouseEvent) => {
-  if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
-  // Without this the webview keeps extending a text selection while the window
-  // moves under the cursor, which flickers through whatever it passes over.
-  e.preventDefault();
-  if (e.detail === 2) toggleMaximizeWindow();
-  else startWindowDrag();
-};
 
 /** A stored pane id, if it still opens in `dock` — a pane may have moved docks since it was stored. */
 const isPaneIn =
@@ -667,12 +656,9 @@ export default function App() {
         } as React.CSSProperties
       }
     >
-      <div className="titlebar" onMouseDown={dragOrMaximize}>
-        <WindowControls />
-        <span className="titlebar-title">
-          Kibo{workspace.path && <span> · {workspace.path.split("/").pop()}</span>}
-        </span>
-      </div>
+      <Titlebar>
+        Kibo{workspace.path && <span> · {workspace.path.split("/").pop()}</span>}
+      </Titlebar>
 
       <div className="body">
         <Sidebar

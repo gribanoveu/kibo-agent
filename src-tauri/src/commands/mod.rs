@@ -24,3 +24,4 @@ pub mod git;
 pub mod files;
 pub mod images;
 pub mod rewind;
+pub mod viewer;

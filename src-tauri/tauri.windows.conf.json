@@ -3,6 +3,7 @@
     "windows": [
       {
         "title": "Kibo Agent",
+        "create": false,
         "decorations": false,
         "transparent": false,
         "shadow": true,

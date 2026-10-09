@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { inTauri } from "./chat";
 
@@ -21,6 +22,9 @@ export const minimizeWindow = () => inTauri() && getCurrentWindow().minimize();
 export const toggleMaximizeWindow = () => inTauri() && getCurrentWindow().toggleMaximize();
 export const closeWindow = () => inTauri() && getCurrentWindow().close();
 export const startWindowDrag = () => inTauri() && getCurrentWindow().startDragging();
+
+/** In a Markdown viewer (`viewer.html`), the file it was opened on: its name and its text. */
+export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_file");
 
 /**
  * Whether the window is maximized: `onChange` gets it once now and again after
