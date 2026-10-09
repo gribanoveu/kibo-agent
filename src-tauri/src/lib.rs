@@ -47,6 +47,39 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     Ok(menu)
 }
 
+/// Brings the main window up — making it, from the config's entry
+/// (`"create": false` there), when Markdown files opened without it.
+fn open_main(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let Some(config) = app.config().app.windows.iter().find(|w| w.label == "main") else {
+        eprintln!("the config has no main window");
+        return;
+    };
+    match tauri::WebviewWindowBuilder::from_config(app, config).and_then(|b| b.build()) {
+        #[cfg(target_os = "macos")]
+        Ok(window) => window_frame::restore(&window),
+        #[cfg(not(target_os = "macos"))]
+        Ok(_) => {}
+        Err(e) => eprintln!("the main window did not open: {e}"),
+    }
+}
+
+/// A launch's Markdown files open each in a viewer; a launch without any
+/// brings the main window up.
+fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
+    if files.is_empty() {
+        open_main(app);
+    } else {
+        commands::viewer::open(app, files);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -54,18 +87,20 @@ pub fn run() {
     // added, and a second launch must be turned away before anything else
     // comes up — the index, the MCP servers.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        use tauri::Manager;
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        let files = commands::viewer::markdown_args(argv.into_iter().map(Into::into), std::path::Path::new(&cwd));
+        open_launch(app, files);
     }));
     // Applied when the window is created — so the window opens where it was,
-    // not at the config's size and then jumping.
+    // not at the config's size and then jumping. The main window only: a
+    // Markdown viewer's label is new each time.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().with_state_flags(window_state()).build());
+    let builder = builder.plugin(
+        tauri_plugin_window_state::Builder::default()
+            .with_state_flags(window_state())
+            .with_filter(|label| label == "main")
+            .build(),
+    );
     // The plugin writes the file only on a clean exit. `tauri dev` restarting
     // after a rebuild, a Ctrl+C, a crash: none is one, and the window came back
     // at whatever size the last clean exit saw. Leaving the window — for the
@@ -75,6 +110,9 @@ pub fn run() {
     let builder = builder.on_window_event(|window, event| {
         use tauri::Manager;
         use tauri_plugin_window_state::AppHandleExt;
+        if window.label() != "main" {
+            return;
+        }
         if matches!(event, tauri::WindowEvent::Focused(false) | tauri::WindowEvent::CloseRequested { .. }) {
             if let Err(e) = window.app_handle().save_window_state(window_state()) {
                 eprintln!("window size and position not saved: {e}");
@@ -89,6 +127,13 @@ pub fn run() {
     let builder = builder.menu(app_menu).on_menu_event(|app, event| {
         use tauri::Manager;
         if event.id() == QUIT {
+            // Viewers first: left open, they would keep the app running
+            // after the main window closed.
+            for (label, window) in app.webview_windows() {
+                if label.starts_with(commands::viewer::LABEL) {
+                    let _ = window.destroy();
+                }
+            }
             match app.get_webview_window("main") {
                 Some(window) => {
                     if let Err(e) = window.close() {
@@ -116,6 +161,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
+        .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
         // The MCP servers, kept running between turns.
         .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
             |config, cwd, cancelled| {
@@ -131,10 +177,6 @@ pub fn run() {
         // Tauri's to know: the resource directory of the installed app.
         .setup(|app| {
             use tauri::Manager;
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                window_frame::restore(&window);
-            }
             // Background processes the agent started; they outlive turns.
             // Here because what they report goes out through the app.
             app.manage(std::sync::Arc::new(infra::background::Processes::new(
@@ -158,9 +200,16 @@ pub fn run() {
                 index_dir,
                 std::sync::Arc::new(model),
             )));
+            // The main window, or a viewer per Markdown file the launch was
+            // for: on the command line, or — macOS — sent before `Ready`.
+            let mut files = app.state::<std::sync::Arc<commands::viewer::Viewers>>().take_early();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            files.extend(commands::viewer::markdown_args(std::env::args_os(), &cwd));
+            open_launch(app.handle(), files);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::viewer::viewer_file,
             commands::chat::workspace_open,
             commands::chat::workspace_current,
             commands::chat::workspace_branch,
@@ -288,6 +337,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            // A file opened with the app, at launch or while it runs.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                commands::viewer::open(app, commands::viewer::markdown_urls(urls));
+            }
+            // The Dock icon, clicked with only viewers open.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = &event {
+                use tauri::Manager;
+                if app.get_webview_window("main").is_none() {
+                    open_main(app);
+                }
+            }
             // Servers are in process groups of their own, so the app's exit
             // does not take them along; most would notice their stdin closing
             // and exit, and this does not leave that to them.

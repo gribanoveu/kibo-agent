@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Kibo Agent",
+        "create": false,
         "decorations": false,
         "transparent": true,
         "width": 1340,
@@ -53,6 +54,17 @@
     ],
     "macOS": {
       "signingIdentity": "-"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "contentTypes": ["net.daringfireball.markdown"],
+        "name": "Markdown",
+        "description": "Markdown document",
+        "mimeType": "text/markdown",
+        "role": "Viewer",
+        "rank": "Alternate"
+      }
+    ]
   }
 }

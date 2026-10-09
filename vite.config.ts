@@ -10,6 +10,8 @@ export default defineConfig(() => ({
   // ES workers: the highlight worker loads each grammar as its own chunk,
   // which the default IIFE format cannot split into.
   worker: { format: "es" as const },
+  // Two pages: the app, and the window a Markdown file opened with it gets.
+  build: { rollupOptions: { input: { main: "index.html", viewer: "viewer.html" } } },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

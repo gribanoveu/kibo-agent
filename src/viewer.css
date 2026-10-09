@@ -1,0 +1,36 @@
+/* The Markdown viewer's window (viewer.tsx), framed as the main one is
+   (App.css, `.window`): where the OS window is transparent, this paints it
+   and rounds its corners; a native frame draws its own. */
+
+.viewer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-window);
+  border: 1px solid var(--window-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.viewer.framed {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Below the bar the page scrolls, and its text selects. */
+.viewer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.viewer-page {
+  max-width: 46em;
+  margin: 0 auto;
+  padding: 0.6em 2.2em 3em;
+}
+
+.viewer-error {
+  color: var(--text-dim);
+}
