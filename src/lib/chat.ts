@@ -436,15 +436,21 @@ export async function saveApiKey(id: string, key: string): Promise<void> {
 /** Where a chat's web search goes: nowhere, the user's SearXNG, or Tavily with the user's key. */
 export type WebSearchBackend = "off" | "searxng" | "tavily";
 
-/** The search chosen in Settings → Web search — or, never chosen, Tavily with a key and off without. */
-export async function webSearchBackend(): Promise<WebSearchBackend> {
+/** Where the web tools are offered, each with its own search: a chat, and an agent in a folder. */
+export type WebSearchPlace = "chat" | "agent";
+
+/**
+ * The search chosen for `place` in Settings → Web search — or, never chosen: a chat's is
+ * Tavily with a key and off without, an agent's is off.
+ */
+export async function webSearchBackend(place: WebSearchPlace): Promise<WebSearchBackend> {
   requireBackend();
-  return invoke<WebSearchBackend>("web_search_backend_get");
+  return invoke<WebSearchBackend>("web_search_backend_get", { place });
 }
 
-export async function setWebSearchBackend(backend: WebSearchBackend): Promise<void> {
+export async function setWebSearchBackend(place: WebSearchPlace, backend: WebSearchBackend): Promise<void> {
   requireBackend();
-  return invoke<void>("web_search_backend_set", { backend });
+  return invoke<void>("web_search_backend_set", { place, backend });
 }
 
 /** Where the user's SearXNG answers — `http://localhost:8080/` until one is saved. */

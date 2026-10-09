@@ -8,16 +8,17 @@ import {
   webSearchKeyStatus,
   webSearchUsage,
   type WebSearchBackend,
+  type WebSearchPlace,
   type WebUsage,
 } from "../lib/chat";
 
 /**
- * Settings → Web search: which search a chat uses, where its SearXNG is,
+ * Settings → Web search: which search a chat and an agent use, where SearXNG is,
  * whether a Tavily key is saved and what it has spent — read when the pane
  * opens and again after a save, which is also how a mistyped key is found out.
  */
 export function useWebSearchKey() {
-  const [backend, setBackend] = useState<WebSearchBackend | null>(null);
+  const [backends, setBackends] = useState<Record<WebSearchPlace, WebSearchBackend> | null>(null);
   const [searxng, setSearxng] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [usage, setUsage] = useState<WebUsage | null>(null);
@@ -36,7 +37,10 @@ export function useWebSearchKey() {
     );
 
   useEffect(() => {
-    webSearchBackend().then(setBackend, (e) => setError(String(e)));
+    Promise.all([webSearchBackend("chat"), webSearchBackend("agent")]).then(
+      ([chat, agent]) => setBackends({ chat, agent }),
+      (e) => setError(String(e)),
+    );
     searxngUrl().then(setSearxng, () => {});
     webSearchKeyStatus().then(setHasKey, () => {});
     void readUsage();
@@ -57,10 +61,10 @@ export function useWebSearchKey() {
   };
 
   /** From the next turn on: the tools are given, or not, per request. */
-  const choose = async (next: WebSearchBackend) => {
+  const choose = async (place: WebSearchPlace, next: WebSearchBackend) => {
     try {
-      await setWebSearchBackend(next);
-      setBackend(next);
+      await setWebSearchBackend(place, next);
+      setBackends((current) => (current ? { ...current, [place]: next } : current));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -79,5 +83,5 @@ export function useWebSearchKey() {
     }
   };
 
-  return { backend, choose, searxng, saveSearxng, hasKey, usage, error, save };
+  return { backends, choose, searxng, saveSearxng, hasKey, usage, error, save };
 }
