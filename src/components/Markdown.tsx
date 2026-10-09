@@ -1,6 +1,6 @@
 import { cloneElement, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, Code2, Copy, SquareTerminal, Workflow } from "lucide-react";
+import { Check, Code2, Copy, ImageOff, SquareTerminal, Workflow } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { defaultRemarkPlugins, Streamdown, useIsCodeFenceIncomplete, type Components } from "streamdown";
 import { highlight, splitLines, type Token } from "../lib/highlight";
@@ -204,16 +204,34 @@ const components: Components = {
   thead: ({ children }) => <thead>{children}</thead>,
   tbody: ({ children }) => <tbody>{children}</tbody>,
   tr: ({ children }) => <tr>{children}</tr>,
-  th: ({ children }) => <th className="md-th">{children}</th>,
-  td: ({ children }) => <td className="md-td">{children}</td>,
+  // `style` carries a column's alignment (`---:`).
+  th: ({ children, style }) => <th className="md-th" style={style}>{children}</th>,
+  td: ({ children, style }) => <td className="md-td" style={style}>{children}</td>,
   hr: () => <hr className="md-hr" />,
   sup: ({ children }) => <sup>{children}</sup>,
   sub: ({ children }) => <sub>{children}</sub>,
-  // The CSP lets no outside image load; alt text is what is left of one.
-  img: ({ src, alt }) => <img className="md-img" src={typeof src === "string" ? src : undefined} alt={alt} />,
+  img: ({ src, alt }) => <Image src={typeof src === "string" ? src : undefined} alt={alt} />,
   // A `<code>` under `<pre>` is a fenced block; Streamdown marks it the same way.
   pre: ({ children }) => (isValidElement(children) ? cloneElement(children, { "data-block": "true" } as object) : children),
 };
+
+/**
+ * The CSP lets no outside image load, and a path from another site (an export
+ * from Confluence: `/download/attachments/…`) points nowhere here. One that
+ * does not load says so, by its alt text or else its file's name, rather than
+ * leaving a gap.
+ */
+function Image({ src, alt }: { src?: string; alt?: string }) {
+  const [failed, setFailed] = useState(!src);
+  if (!failed) return <img className="md-img" src={src} alt={alt} onError={() => setFailed(true)} />;
+  const name = alt || src?.split(/[?#]/)[0].split("/").pop() || "image";
+  return (
+    <span className="md-img-missing" title={src}>
+      <ImageOff size={13} aria-hidden />
+      {name}
+    </span>
+  );
+}
 
 /** A link to a file in the open folder, carried as a fragment: Streamdown's
  * link hardening drops an href it cannot read as a URL — a bare `docs/x.md`

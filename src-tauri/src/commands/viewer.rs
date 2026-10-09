@@ -8,7 +8,7 @@
 //! path the page names.
 
 use crate::sync::lock;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -146,6 +146,45 @@ pub async fn viewer_file(window: WebviewWindow, viewers: State<'_, Arc<Viewers>>
     .map_err(|e| e.to_string())?
 }
 
+/// The viewers' text size lives in the app directory, not in the webview's
+/// storage: WebKit writes that to disk a moment later, and closing a viewer —
+/// often the last window — ends the app before it does.
+const SETTINGS: &str = "viewer.json";
+
+/// The sizes a viewer may keep; the page offers 0.7 to 2.
+const TEXT_SCALES: std::ops::RangeInclusive<f64> = 0.5..=3.0;
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewerSettings {
+    text_scale: Option<f64>,
+}
+
+fn settings_path() -> Result<PathBuf, String> {
+    Ok(crate::infra::app_dir::ensure()?.join(SETTINGS))
+}
+
+/// The text size the viewers last had; `None` before any was set, or from a
+/// file that does not read.
+#[tauri::command]
+pub fn viewer_text_scale_get() -> Result<Option<f64>, String> {
+    let settings = std::fs::read(settings_path()?)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ViewerSettings>(&bytes).ok())
+        .unwrap_or_default();
+    Ok(settings.text_scale.filter(|s| TEXT_SCALES.contains(s)))
+}
+
+#[tauri::command]
+pub fn viewer_text_scale_set(scale: f64) -> Result<(), String> {
+    if !TEXT_SCALES.contains(&scale) {
+        return Err(format!("text size {scale} is out of range"));
+    }
+    let json = serde_json::to_vec(&ViewerSettings { text_scale: Some(scale) }).map_err(|e| e.to_string())?;
+    let path = settings_path()?;
+    std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +194,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_text_size_comes_back_as_it_was_set() {
+        crate::testing::with_app_dir("viewer-scale", || {
+            assert_eq!(viewer_text_scale_get().unwrap(), None);
+            viewer_text_scale_set(1.3).unwrap();
+            assert_eq!(viewer_text_scale_get().unwrap(), Some(1.3));
+        });
+    }
+
+    #[test]
+    fn a_text_size_out_of_range_is_refused_and_one_stored_is_ignored() {
+        crate::testing::with_app_dir("viewer-scale-range", || {
+            assert!(viewer_text_scale_set(0.0).is_err());
+            assert!(viewer_text_scale_set(f64::NAN).is_err());
+            assert_eq!(viewer_text_scale_get().unwrap(), None);
+            std::fs::write(settings_path().unwrap(), br#"{"textScale":40}"#).unwrap();
+            assert_eq!(viewer_text_scale_get().unwrap(), None);
+            std::fs::write(settings_path().unwrap(), b"not json").unwrap();
+            assert_eq!(viewer_text_scale_get().unwrap(), None);
+        });
     }
 
     #[test]

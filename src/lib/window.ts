@@ -26,6 +26,10 @@ export const startWindowDrag = () => inTauri() && getCurrentWindow().startDraggi
 /** In a Markdown viewer (`viewer.html`), the file it was opened on: its name and its text. */
 export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_file");
 
+/** The viewers' text size as last set — `null` before any was — and setting it. */
+export const viewerTextScale = () => invoke<number | null>("viewer_text_scale_get");
+export const setViewerTextScale = (scale: number) => invoke<void>("viewer_text_scale_set", { scale });
+
 /**
  * Whether the window is maximized: `onChange` gets it once now and again after
  * every resize, which is when it can change. Returns the unsubscribe.

@@ -8,7 +8,7 @@ import type { AsideTab } from "../types";
  */
 export type Combo = { code: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean };
 
-export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files";
+export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer";
 type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
@@ -51,6 +51,9 @@ export const SHORTCUTS = {
   find: { label: "Find and replace in the file", group: "Files", combos: [{ code: "KeyF", mod: true }] },
   findNext: { label: "Next match", group: "Files", combos: [{ code: "KeyG", mod: true }, { code: "F3" }] },
   findPrevious: { label: "Previous match", group: "Files", combos: [{ code: "KeyG", mod: true, shift: true }, { code: "F3", shift: true }] },
+  textLarger: { label: "Larger text", group: "Markdown viewer", combos: [{ code: "Equal", mod: true }] },
+  textSmaller: { label: "Smaller text", group: "Markdown viewer", combos: [{ code: "Minus", mod: true }] },
+  textReset: { label: "Text at its usual size", group: "Markdown viewer", combos: [{ code: "Digit0", mod: true }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;
@@ -74,6 +77,8 @@ export const matches = (e: KeyState, id: ShortcutId, mac = IS_MAC) =>
 const KEY_LABELS: Record<string, string> = {
   Backquote: "`",
   Comma: ",",
+  Equal: "+",
+  Minus: "−",
   Slash: "/",
   Escape: "Esc",
   ArrowDown: "↓",

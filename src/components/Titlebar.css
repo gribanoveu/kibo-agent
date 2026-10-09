@@ -27,3 +27,17 @@
 .titlebar-title span {
   color: var(--text-dim);
 }
+
+.titlebar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* Beside the actions, Windows' caption buttons need no push of their own. */
+.titlebar-actions + .window-controls.windows {
+  margin-left: 0;
+}
+.titlebar.native .titlebar-actions {
+  margin-top: -5px;
+}
