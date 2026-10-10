@@ -253,6 +253,10 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
         .map_err(store)?;
     record.updated_at = now();
     record.created_at = stored.as_ref().map_or(record.updated_at, |s| s.0);
+    if stored.is_none() {
+        // A chat's first save is its start: one session, for the Usage pane.
+        crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Sessions, &record.workspace, 1)]);
+    }
     let (archived, generated) = stored.map_or((false, None), |s| (s.1, s.2));
 
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
@@ -374,6 +378,19 @@ mod tests {
 
     /// Compacted, the model's history opens with the summary. The chat is
     /// still named after what the user first asked, as the transcript has it.
+    #[test]
+    fn a_chat_counts_as_one_session_of_its_folder_however_often_it_is_saved() {
+        with_app_dir("chat-sessions", || {
+            save_one("a", "/repo", "hi");
+            save_one("a", "/repo", "hi again");
+            save_one("b", "/other", "hello");
+
+            let sessions = crate::infra::daily_metrics::read(&[crate::domain::metrics::Metric::Sessions]).unwrap();
+            let counted: Vec<_> = sessions.iter().map(|r| (r.key.as_str(), r.value)).collect();
+            assert_eq!(counted, [("/other", 1), ("/repo", 1)]);
+        });
+    }
+
     #[test]
     fn a_compacted_chat_keeps_its_name() {
         with_app_dir("chat-store-compacted-title", || {

@@ -32,6 +32,7 @@ pub mod skills;
 pub mod slash_commands;
 pub mod project_rules;
 pub mod tool_call_log;
+pub mod metrics;
 pub mod mcp;
 pub mod hooks;
 pub mod agents;

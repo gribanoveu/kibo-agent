@@ -69,3 +69,9 @@
   margin: 0 3px;
   opacity: 0.6;
 }
+
+/* Twelve weeks and the figures under them, as in `/stats`. */
+.chat-empty-usage {
+  width: min(100%, 420px);
+  margin-top: 10px;
+}

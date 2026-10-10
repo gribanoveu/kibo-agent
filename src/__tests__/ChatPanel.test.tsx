@@ -356,7 +356,7 @@ describe("how long the agent worked", () => {
   });
 
   test("tokens read as the clock says them", () => {
-    expect([553, 1_000, 1_234, 12_345, 99_990, 123_456, 1_234_567].map(formatTokens)).toEqual([
+    expect([553, 1_000, 1_234, 12_345, 99_990, 123_456, 1_234_567, 2_066_000_000].map(formatTokens)).toEqual([
       "553",
       "1k",
       "1.2k",
@@ -364,6 +364,7 @@ describe("how long the agent worked", () => {
       "100k",
       "123k",
       "1.2M",
+      "2.1B",
     ]);
   });
 

@@ -1,0 +1,299 @@
+/* ------------------------------------------------------------ the pane */
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.usage-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--red);
+}
+
+.usage-ranges {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
+}
+.usage-range {
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.usage-range:hover {
+  color: var(--text);
+}
+.usage-range.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+/* Four headline figures. */
+.usage-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.usage-tile {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-panel-soft);
+}
+.usage-tile dt {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.usage-tile dd {
+  margin: 2px 0 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.usage-tile .usage-tile-note {
+  overflow: hidden;
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-card {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-panel-soft);
+}
+.usage-card-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.usage-card-title span {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.usage-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usage-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.usage-none {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------- heatmap */
+
+.usage-map {
+  display: grid;
+  gap: 3px;
+  align-items: center;
+}
+/* Weeks are rows to a screen reader and nothing to the layout: their cells
+   take their places in the map's grid themselves. */
+.usage-week {
+  display: contents;
+}
+.usage-map .usage-cell {
+  width: auto;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 3px;
+}
+.usage-month,
+.usage-weekday {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.usage-weekday {
+  padding-right: 4px;
+}
+
+.usage-cell {
+  display: inline-block;
+  width: var(--cell, 10px);
+  height: var(--cell, 10px);
+  border-radius: 4px;
+}
+.usage-cell.level-0 {
+  background: var(--bg-hover);
+}
+.usage-cell.level-1 {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-hover));
+}
+.usage-cell.level-2 {
+  background: color-mix(in srgb, var(--accent) 55%, var(--bg-hover));
+}
+.usage-cell.level-3 {
+  background: color-mix(in srgb, var(--accent) 78%, var(--bg-hover));
+}
+.usage-cell.level-4 {
+  background: var(--accent);
+}
+
+.usage-legend {
+  --cell: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  margin-top: 6px;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+}
+
+/* Streaks and the busiest day, in a row under the heatmap. */
+.usage-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.usage-facts dt {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+}
+.usage-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------ hours, rankings */
+
+.usage-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 56px;
+}
+.usage-bars span {
+  flex: 1;
+  min-height: 1px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent) 40%, var(--bg-hover));
+}
+.usage-bars span.peak {
+  background: var(--accent);
+}
+.usage-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+}
+
+.usage-ranking {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+}
+.usage-ranking div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+}
+.usage-ranking span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-ranking b {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* Share of the leader, as a hairline under the name. */
+.usage-ranking i {
+  display: block;
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------- the new chat's strip */
+
+.usage-glance {
+  --cell: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.usage-strip > div {
+  display: flex;
+  gap: 4px;
+}
+.usage-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 0;
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.usage-line span + span::before {
+  content: "·";
+  margin: 0 6px;
+}
+.usage-line span:first-child {
+  color: var(--text-dim);
+}

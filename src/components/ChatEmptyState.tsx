@@ -1,5 +1,6 @@
 import { FolderGit2 } from "lucide-react";
 import logo from "../assets/kibo-logo.png";
+import { UsageStrip } from "./UsageHeatmap";
 import "./ChatEmptyState.css";
 
 type Props = {
@@ -30,6 +31,11 @@ export function ChatEmptyState({ workspace, onOpenRepo }: Props) {
             <FolderGit2 size={13} />
             Open folder…
           </button>
+        </div>
+      )}
+      {workspace && (
+        <div className="chat-empty-usage">
+          <UsageStrip />
         </div>
       )}
       <p className="chat-empty-hint">

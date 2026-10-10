@@ -307,6 +307,7 @@ pub async fn chat_start<R: Runtime>(
     // before it starts.
     state.cancel.store(false, Ordering::SeqCst);
     state.begin_turn(None);
+    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
     run_off_the_event_loop(app, state, turn_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })

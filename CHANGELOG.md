@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-10 See your usage in Settings → Usage: the last half year as a GitHub-style heatmap, and for all time, 30 or 7 days your tokens, sessions, prompts and tool calls, streaks and the busiest day, your models, peak hours, top projects and top tools; a new agent chat shows the last 14 days as a strip once anything is counted. Every request to the model counts, chat titles, commit messages and summaries included
+
 ## v0.8.0 — 2026-10-09
 
 - 2026-10-09 Markdown tables keep their columns' alignment and skip an empty header row (as Confluence exports them); an image that cannot load shows its name instead of a gap; paragraphs inside a list item stay apart

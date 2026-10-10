@@ -15,6 +15,7 @@ pub mod skills;
 pub mod folder_trust;
 pub mod slash_commands;
 pub mod tool_log;
+pub mod metrics;
 pub mod mcp;
 pub mod hooks;
 pub mod processes;

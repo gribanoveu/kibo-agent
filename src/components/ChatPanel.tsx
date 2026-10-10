@@ -404,10 +404,10 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** A token count as the clock says it: 553, 1.2k, 12.3k, 123k, 1.2M. */
+/** A token count as the clock says it: 553, 1.2k, 12.3k, 123k, 1.2M, 2.1B. */
 export function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
-  const [value, unit] = n < 1_000_000 ? [n / 1000, "k"] : [n / 1_000_000, "M"];
+  const [value, unit] = n < 1_000_000 ? [n / 1000, "k"] : n < 1_000_000_000 ? [n / 1_000_000, "M"] : [n / 1_000_000_000, "B"];
   // One decimal while it says something; past 100 it is noise.
   return `${value < 100 ? Number(value.toFixed(1)) : Math.round(value)}${unit}`;
 }
