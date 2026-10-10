@@ -36,6 +36,9 @@ pub const MAX_READ_LINES: u32 = 2000;
 /// on long lines — data, generated code, a minified bundle.
 pub const MAX_READ_BYTES: usize = 100_000;
 
+/// Up to this many lines an outline request reads the file whole instead.
+pub const OUTLINE_MIN_LINES: usize = 150;
+
 /// Where a read of a large log or data file without a range stops.
 pub const DATA_HEAD_LINES: u32 = 50;
 
@@ -67,9 +70,13 @@ pub fn read_file(
         return Err(ToolError::NotAFile(args.path.clone()));
     }
     let content = fs::read_to_string(&path).map_err(ToolError::Io)?;
-    if args.outline == Some(true) {
+    // A small file's outline costs the round it was meant to save — and with
+    // no parser for its language it is empty — so the file itself comes back.
+    let small_outline = args.outline == Some(true) && content.lines().count() <= OUTLINE_MIN_LINES;
+    if args.outline == Some(true) && !small_outline {
         return Ok(outline(&args.path, &content));
     }
+    let (start_line, end_line) = if small_outline { (None, None) } else { (args.start_line, args.end_line) };
 
     // Recorded against the whole file even when a slice is returned, and under
     // the canonical spelling rather than whatever the model typed — otherwise
@@ -78,12 +85,12 @@ pub fn read_file(
     // being conservative costs one re-read, being wrong costs the file. So does
     // a whole-file read the limit cut short: the model has not seen the rest.
     let relative = relative_to_root(scope, &path)?;
-    let asked_whole = args.start_line.is_none() && args.end_line.is_none();
+    let asked_whole = start_line.is_none() && end_line.is_none();
     let data = asked_whole
         && content.len() > DATA_WHOLE_BYTES
         && DATA_EXTENSIONS.contains(&extension_of(&args.path).as_str());
     let max_lines = if data { DATA_HEAD_LINES } else { MAX_READ_LINES };
-    let result = slice_lines(&content, args.start_line, args.end_line, max_lines, MAX_READ_BYTES);
+    let result = slice_lines(&content, start_line, end_line, max_lines, MAX_READ_BYTES);
     let whole = asked_whole && !matches!(result, ToolResult::File { truncated: true, .. });
     reads.record(&relative, &content, whole);
     Ok(result)
@@ -301,7 +308,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "boolean",
                         "null"
                     ],
-                    "description": "When true, return the file's declarations and headings with the lines each spans, plus its total line count, instead of its text. Use it on a large file you need only part of: read the outline, then read the one range that matters. Ignores startLine/endLine, and does not unlock a write."
+                    "description": "When true, return the file's declarations and headings with the lines each spans, plus its total line count, instead of its text. Use it on a large file you need only part of: read the outline, then read the one range that matters. Ignores startLine/endLine, and does not unlock a write. A file of at most 150 lines comes back whole instead, as a plain read."
                 }
             },
             "required": []
@@ -632,14 +639,14 @@ mod tests {
         let dir = temp_dir("read-outline");
         std::fs::write(
             dir.join("lib.rs"),
-            "use std::fs;\n\npub struct Store;\n\nimpl Store {\n    fn open() {}\n\n    fn close() {}\n}\n",
+            format!("use std::fs;\n\npub struct Store;\n\nimpl Store {{\n    fn open() {{}}\n\n    fn close() {{}}\n}}\n{}", padding()),
         )
         .unwrap();
         let scope = ToolScope::new(&dir).unwrap();
 
         let (entries, total) = outline_of(&scope, "lib.rs", &mut ReadFiles::default());
 
-        assert_eq!(total, 9);
+        assert_eq!(total, 9 + OUTLINE_MIN_LINES as u32);
         assert!(entries.contains(&("Store.open".to_string(), 6, 6)), "{entries:?}");
         assert!(entries.contains(&("Store.close".to_string(), 8, 8)), "{entries:?}");
         assert!(entries.iter().any(|(name, start, end)| name == "Store" && (*start, *end) == (5, 9)), "{entries:?}");
@@ -649,18 +656,40 @@ mod tests {
     /// plain read would be.
     #[test]
     fn a_file_without_a_parser_has_an_empty_outline_and_a_size() {
-        let (scope, _) = fixture("read-outline-plain", "one\ntwo\nthree\n");
-        assert_eq!(outline_of(&scope, "file.txt", &mut ReadFiles::default()), (vec![], 3));
+        let (scope, _) = fixture("read-outline-plain", &format!("one\ntwo\nthree\n{}", padding()));
+        assert_eq!(outline_of(&scope, "file.txt", &mut ReadFiles::default()), (vec![], 3 + OUTLINE_MIN_LINES as u32));
     }
 
     /// Seeing names and line numbers is not seeing the text a write would
     /// replace.
     #[test]
     fn an_outline_does_not_count_as_a_read() {
-        let (scope, _) = fixture("read-outline-no-unlock", "fn a() {}\n");
+        let body = format!("fn a() {{}}\n{}", padding());
+        let (scope, _) = fixture("read-outline-no-unlock", &body);
         let mut reads = ReadFiles::default();
         outline_of(&scope, "file.txt", &mut reads);
-        assert!(reads.check("file.txt", "fn a() {}\n", true).is_err());
+        assert!(reads.check("file.txt", &body, true).is_err());
+    }
+
+    /// Enough blank lines that an outline is an outline, not a read.
+    fn padding() -> String {
+        "\n".repeat(OUTLINE_MIN_LINES)
+    }
+
+    /// An outline of a short file is a wasted round, and an empty one for a
+    /// language with no parser: the file comes back whole, range and all
+    /// ignored, and counts as read.
+    #[test]
+    fn an_outline_of_a_small_file_is_the_file() {
+        let (scope, _) = fixture("read-outline-small", "one\ntwo\nthree\n");
+        let mut reads = ReadFiles::default();
+        let args = ReadFileArgs { path: "file.txt".into(), paths: None, start_line: Some(2), end_line: Some(2), outline: Some(true) };
+
+        let result = read_file(&scope, &args, &mut reads).unwrap();
+
+        let ToolResult::File { content, .. } = result else { panic!("expected the file, got {result:?}") };
+        assert_eq!(content, "one\ntwo\nthree\n");
+        assert_eq!(reads.check("file.txt", "one\ntwo\nthree\n", true), Ok(()));
     }
 
     fn many(path: &str, paths: &[&str]) -> ReadFileArgs {
