@@ -74,9 +74,13 @@ pub fn append(entry: &ToolCallLogEntry) {
 /// the log off. The switch is read once, here, so a turn logs all its calls
 /// or none of them. Unreadable settings leave it on — the default, and a log
 /// with no file content in it has nothing to be careful about.
+///
+/// The call is counted for the Usage pane either way: a tool's name and a
+/// count are not what the switch is for.
 pub fn recorder() -> impl Fn(&ToolCallLogEntry) {
     let enabled = crate::infra::settings_store::load().map_or(true, |s| s.tool_log.enabled);
     move |entry| {
+        crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::ToolCalls, &entry.tool, 1)]);
         if enabled {
             append(entry)
         }
@@ -197,6 +201,25 @@ mod tests {
 
     fn tools(page: &ToolCallLogPage) -> Vec<&str> {
         page.rows.iter().map(|r| r.entry.tool.as_str()).collect()
+    }
+
+    /// Counted for the Usage pane even with the log off: the switch is
+    /// about what a call carried, not that it happened.
+    #[test]
+    fn a_call_is_counted_by_tool_whether_or_not_it_is_logged() {
+        with_app_dir("log-counted", || {
+            let mut settings = crate::infra::settings_store::load().unwrap();
+            settings.tool_log.enabled = false;
+            crate::infra::settings_store::save(&settings).unwrap();
+
+            let record = recorder();
+            record(&entry("readFile", CallStatus::Ok, now_ms()));
+            record(&entry("readFile", CallStatus::Error, now_ms()));
+
+            assert_eq!(query(&ToolCallLogFilter::default()).unwrap().total, 0);
+            let calls = crate::infra::daily_metrics::read(&[crate::domain::metrics::Metric::ToolCalls]).unwrap();
+            assert_eq!(calls.iter().map(|r| (r.key.as_str(), r.value)).collect::<Vec<_>>(), [("readFile", 2)]);
+        });
     }
 
     #[test]

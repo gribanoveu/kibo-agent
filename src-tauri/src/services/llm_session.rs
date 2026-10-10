@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 
-use crate::domain::llm::{LlmError, LlmProvider};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider};
 use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, TurnLimits, DEFAULT_CONTEXT_LIMIT};
-use crate::infra::{llm_credentials_store, llm_providers, settings_store};
+use crate::infra::{daily_metrics, llm_credentials_store, llm_providers, settings_store};
 
 pub struct LlmSession {
     pub provider: Arc<dyn LlmProvider>,
@@ -55,7 +55,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
     let model = effective_model(config, provider.as_ref())?;
 
     Ok(LlmSession {
-        provider,
+        provider: Arc::new(Counted(provider, model.clone())),
         provider_id: config.id.clone(),
         model,
         debug_logging: settings.debug_logging,
@@ -180,6 +180,47 @@ pub fn pin_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
     settings_store::save(&settings)
 }
 
+/// The provider every session in the app talks through, counting what each
+/// answer says it spent into today's metrics, under the model it asked and
+/// the hour it answered. Here rather than in the turn loop: a chat's title, a
+/// commit message and a compaction summary ask the model too, and every one
+/// of them comes through a resolved session.
+struct Counted(Arc<dyn LlmProvider>, String);
+
+impl Counted {
+    fn count(&self, usage: Option<&crate::domain::llm::ChatUsage>) {
+        if let Some(usage) = usage {
+            let hour = chrono::Local::now().format("%H").to_string();
+            daily_metrics::record(&crate::domain::metrics::of_usage(&self.1, &hour, usage));
+        }
+    }
+}
+
+impl LlmProvider for Counted {
+    fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+        let response = self.0.chat(request)?;
+        self.count(response.usage.as_ref());
+        Ok(response)
+    }
+
+    fn chat_stream(
+        &self,
+        request: ChatRequest,
+        on_delta: &dyn Fn(&str),
+        on_reasoning: &dyn Fn(&str),
+        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<ChatStreamResult, LlmError> {
+        let result = self.0.chat_stream(request, on_delta, on_reasoning, on_tool_call_delta, cancelled)?;
+        self.count(result.usage.as_ref());
+        Ok(result)
+    }
+
+    fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+        self.0.list_models()
+    }
+}
+
 fn settings_error(e: SettingsError) -> LlmError {
     LlmError::Message(e.to_string())
 }
@@ -187,7 +228,8 @@ fn settings_error(e: SettingsError) -> LlmError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo};
+    use crate::domain::llm::ChatUsage;
+    use crate::domain::metrics::{DailyMetric, Metric};
     use crate::domain::settings::{AppSettings, LlmSettings};
     use crate::infra::llm_credentials_store;
     use crate::testing::with_app_dir;
@@ -440,6 +482,57 @@ mod tests {
             let settings = settings_store::load().unwrap().llm;
             assert!(settings.debug_logging);
             assert_eq!(settings.active_provider_id.as_deref(), Some("local"));
+        });
+    }
+
+    /// Answers with a fixed usage, streamed or not.
+    struct Spends(ChatUsage);
+
+    impl LlmProvider for Spends {
+        fn chat(&self, _: ChatRequest) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse { content: Some("a title".into()), tool_calls: Vec::new(), usage: Some(self.0) })
+        }
+
+        fn chat_stream(
+            &self,
+            _: ChatRequest,
+            _: &dyn Fn(&str),
+            _: &dyn Fn(&str),
+            _: &dyn Fn(&str, &str, &str),
+            _: &dyn Fn() -> bool,
+        ) -> Result<ChatStreamResult, LlmError> {
+            Ok(ChatStreamResult { usage: Some(self.0), ..Default::default() })
+        }
+
+        fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn every_answer_through_a_session_counts_for_today() {
+        with_app_dir("session-counted", || {
+            let usage = ChatUsage { prompt_tokens: 100, completion_tokens: 7, total_tokens: 107, cached_tokens: 90 };
+            let counted = Counted(Arc::new(Spends(usage)), "qwen".into());
+            let request = || ChatRequest { model: "m".into(), messages: Vec::new(), tools: Vec::new() };
+
+            counted.chat(request()).unwrap();
+            counted.chat_stream(request(), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false).unwrap();
+
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let row = |metric, key: &str, value| DailyMetric { day: today.clone(), metric, key: key.into(), value };
+            let read = daily_metrics::read(&[Metric::PromptTokens, Metric::CachedTokens, Metric::CompletionTokens, Metric::ModelTokens]);
+            assert_eq!(
+                read.unwrap(),
+                [
+                    row(Metric::CachedTokens, "", 180),
+                    row(Metric::CompletionTokens, "", 14),
+                    row(Metric::ModelTokens, "qwen", 214),
+                    row(Metric::PromptTokens, "", 200),
+                ]
+            );
+            let hours = daily_metrics::read(&[Metric::HourTokens]).unwrap();
+            assert_eq!(hours.iter().map(|r| r.value).sum::<u64>(), 214, "{hours:?}");
         });
     }
 }

@@ -67,6 +67,7 @@ pub async fn plain_chat_send<R: Runtime>(
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
+    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
     run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 

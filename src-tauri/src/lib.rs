@@ -335,6 +335,7 @@ pub fn run() {
             commands::tool_log::tool_log_clear,
             commands::tool_log::tool_log_enabled_get,
             commands::tool_log::tool_log_enabled_set,
+            commands::metrics::daily_metrics,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
