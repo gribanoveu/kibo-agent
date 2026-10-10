@@ -33,6 +33,7 @@ pub const CONTENT_FIELDS: &[&str] = &[
     // editFile
     "old",
     "new",
+    "repeatedHeadings",
     // every diff: writes, deletes, gitDiff
     "unifiedDiff",
     // runCommand, and a background process's output
@@ -184,6 +185,7 @@ pub fn redact_error(error: &ToolError) -> String {
         ToolError::EditTextNotFound { .. } => "edit text not found".to_string(),
         ToolError::EditTextAmbiguous(_, count) => format!("edit text is not unique — matched {count} times"),
         ToolError::EditInsideWord(..) => "edit text starts or ends inside a word".to_string(),
+        ToolError::EditAlreadyApplied(_) => "edit already applied".to_string(),
         ToolError::InEdit { index, of, reason } => format!("edit {index} of {of}: {}", redact_error(reason)),
         // The tool's own words, which can be anything it read.
         ToolError::McpToolFailed(_) => "the MCP tool reported an error".to_string(),
@@ -251,7 +253,7 @@ mod tests {
                     path: path(),
                     edits: vec![FileEdit { old: LEAK.into(), new: LEAK.into() }],
                 })),
-                ToolResult::FileEdited { path: path(), diff: diff() },
+                ToolResult::FileEdited { path: path(), diff: diff(), repeated_headings: vec![LEAK.into()] },
             ),
             ToolName::DeleteFile => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
             ToolName::CreateDirectory => (None, ToolResult::DirectoryCreated { path: path() }),
@@ -472,6 +474,7 @@ mod tests {
         assert_eq!(redact_error(&missing), "edit text not found");
         assert!(!redact_error(&ToolError::EditTextAmbiguous(LEAK.into(), 3)).contains(LEAK));
         assert!(!redact_error(&ToolError::EditInsideWord(LEAK.into(), LEAK.into())).contains(LEAK));
+        assert!(!redact_error(&ToolError::EditAlreadyApplied(LEAK.into())).contains(LEAK));
         let second = ToolError::InEdit { index: 2, of: 3, reason: Box::new(missing) };
         assert_eq!(redact_error(&second), "edit 2 of 3: edit text not found");
         assert_eq!(redact_error(&ToolError::NotFound("src/a.rs".into())), "not found: src/a.rs");

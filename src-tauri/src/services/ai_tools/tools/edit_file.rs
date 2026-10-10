@@ -17,6 +17,7 @@
 
 use crate::domain::file_write::{in_endings, line_ending};
 use crate::domain::llm::LlmToolDefinition;
+use crate::domain::repo_index::{detect_language, Language};
 use std::borrow::Cow;
 use std::fs;
 
@@ -58,10 +59,47 @@ pub fn edit_file(
     // so this must not become a licence to replace the file wholesale.
     reads.record_write(&relative, &edited, false);
 
+    let repeated_headings = match detect_language(&relative) {
+        Language::Markdown => repeated_headings(&content, &edited),
+        _ => Vec::new(),
+    };
     Ok(ToolResult::FileEdited {
         path: relative,
         diff: text_diff::diff_stats(&content, &edited),
+        repeated_headings,
     })
+}
+
+/// Headings `edited` has more of than `content` did and now holds more than
+/// once, each named once. A warning, not a refusal: a document may repeat a
+/// heading on purpose — `### Examples` under every section.
+fn repeated_headings(content: &str, edited: &str) -> Vec<String> {
+    let before = headings(content);
+    let after = headings(edited);
+    let count = |list: &[&str], heading: &str| list.iter().filter(|h| **h == heading).count();
+    let mut repeated: Vec<String> = Vec::new();
+    for heading in &after {
+        let now = count(&after, heading);
+        if now > 1 && now > count(&before, heading) && !repeated.iter().any(|r| r == heading) {
+            repeated.push((*heading).to_string());
+        }
+    }
+    repeated
+}
+
+/// Markdown's `#` headings, outside fenced code — where `# ` is a comment.
+fn headings(text: &str) -> Vec<&str> {
+    let mut fenced = false;
+    text.lines()
+        .map(str::trim_end)
+        .filter(|line| {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+            }
+            let hashes = line.len() - line.trim_start_matches('#').len();
+            !fenced && (1..=6).contains(&hashes) && line[hashes..].starts_with(' ')
+        })
+        .collect()
 }
 
 /// Splices every edit into `content` at once. Nothing is applied unless all of
@@ -93,13 +131,21 @@ fn exact_match_ranges<'a>(
             Some(_) => find_unique(content, &in_endings(&edit.old, ending)),
             None => find_in_mixed(content, &edit.old),
         };
-        let (start, end) = found.map_err(|reason| match edits.len() {
+        let in_edit = |reason| match edits.len() {
             1 => reason,
             of => ToolError::InEdit { index: index + 1, of, reason: Box::new(reason) },
-        })?;
+        };
+        let (start, end) = found.map_err(in_edit)?;
         // A mixed file's replacement takes the endings of the place it goes.
         let ending = ending.or_else(|| ending_at(content, start, end));
-        ranges.push((start, end, in_endings(&edit.new, ending)));
+        let new = in_endings(&edit.new, ending);
+        // `old` is unique, so if the file holds `new` and `new` holds `old`,
+        // that one `old` is inside an earlier application of this edit.
+        let old = &content[start..end];
+        if new != old && new.contains(old) && content.contains(new.as_ref()) {
+            return Err(in_edit(ToolError::EditAlreadyApplied(edit.old.clone())));
+        }
+        ranges.push((start, end, new));
     }
 
     ranges.sort_by_key(|&(start, _, _)| start);
@@ -368,7 +414,7 @@ mod tests {
         let result = edit_file(&scope, &edits(&[("= 1", "= 2")]), &mut reads).expect("edits");
 
         assert_eq!(on_disk(&root), "let x = 2;\n");
-        let ToolResult::FileEdited { path, diff } = result else {
+        let ToolResult::FileEdited { path, diff, .. } = result else {
             panic!("wrong result")
         };
         assert_eq!(path, "a.txt");
@@ -759,6 +805,83 @@ mod tests {
         edit_file(&scope, &edits(&[("мир", "世界")]), &mut reads).expect("edits");
 
         assert_eq!(on_disk(&root), "привет 世界\n");
+    }
+
+    /// A retry of an insertion that had in fact gone through: its anchor is
+    /// still there and still unique, so without the check it inserts twice.
+    #[test]
+    fn an_insertion_applied_twice_is_refused_the_second_time() {
+        let (scope, root, mut reads) = fixture("edit-twice", "## A\n- one\n");
+        let insert = edits(&[("- one\n", "- one\n- two\n")]);
+
+        edit_file(&scope, &insert, &mut reads).expect("first time applies");
+        let err = edit_file(&scope, &insert, &mut reads).expect_err("second time is a repeat");
+
+        assert!(matches!(err, ToolError::EditAlreadyApplied(_)), "{err:?}");
+        assert_eq!(on_disk(&root), "## A\n- one\n- two\n");
+    }
+
+    /// `new` equal to `old` holds it and is in the file, yet repeats nothing.
+    #[test]
+    fn an_edit_that_changes_nothing_is_not_a_repeat() {
+        let (scope, root, mut reads) = fixture("edit-noop", "x\n");
+
+        edit_file(&scope, &edits(&[("x", "x")]), &mut reads).expect("a no-op is harmless");
+
+        assert_eq!(on_disk(&root), "x\n");
+    }
+
+    fn markdown(label: &str, body: &str) -> (ToolScope, PathBuf, ReadFiles) {
+        let (scope, root, mut reads) = fixture(label, "");
+        std::fs::write(root.join("a.md"), body).expect("file is writable");
+        agent_reads(&scope, &mut reads, "a.md", None);
+        (scope, root, reads)
+    }
+
+    fn repeated_after(label: &str, body: &str, old: &str, new: &str) -> Vec<String> {
+        let (scope, _, mut reads) = markdown(label, body);
+        let args = EditFileArgs { path: "a.md".to_string(), ..edits(&[(old, new)]) };
+        match edit_file(&scope, &args, &mut reads).expect("edits") {
+            ToolResult::FileEdited { repeated_headings, .. } => repeated_headings,
+            other => panic!("wrong result: {other:?}"),
+        }
+    }
+
+    /// The anchor narrowed to a section's heading while the replacement kept
+    /// the section whole: the old body stays below, its headings twice.
+    #[test]
+    fn an_edit_that_repeats_a_heading_says_so() {
+        let body = "# Doc\n\n## A\n### A.1\nold\n";
+        let repeated = repeated_after("edit-heading-twice", body, "## A\n", "## A\n### A.1\nnew\n");
+
+        assert_eq!(repeated, vec!["### A.1".to_string()]);
+    }
+
+    /// A new heading, one already repeated before the edit, a `# ` comment in
+    /// fenced code, and what only looks like one — `#tag`, seven `#`s.
+    #[test]
+    fn repeats_the_edit_did_not_add_are_not_reported() {
+        assert!(repeated_after("edit-heading-new", "## A\nend\n", "end\n", "end\n## B\n").is_empty());
+        let lookalikes = "#tag\n####### seven\n";
+        let doubled = "#tag\n####### seven\n#tag\n####### seven\n";
+        assert!(repeated_after("edit-heading-lookalike", lookalikes, lookalikes, doubled).is_empty());
+
+        let body = "## A\n### Examples\n## B\n### Examples\nend\n";
+        assert!(repeated_after("edit-heading-had", body, "end\n", "the end\n").is_empty());
+
+        let fenced = "## Run\n```bash\n# build\n```\n";
+        let more = "## Run\n```bash\n# build\n```\n```bash\n# build\n```\n";
+        assert!(repeated_after("edit-heading-fenced", fenced, fenced, more).is_empty());
+    }
+
+    #[test]
+    fn the_warning_reaches_the_model() {
+        let result = ToolResult::FileEdited {
+            path: "a.md".into(),
+            diff: text_diff::diff_stats("", ""),
+            repeated_headings: vec!["### A.1".into()],
+        };
+        assert!(crate::services::ai_tools::model_text::for_model(&result).contains("### A.1"));
     }
 
     #[test]

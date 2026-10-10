@@ -1032,6 +1032,11 @@ pub enum ToolError {
     /// look plausible enough to miss.
     #[error("edit text starts or ends inside a word — it matched within `{1}`; anchor on whole words: {0}")]
     EditInsideWord(String, String),
+    /// The edit's `new` holds its `old`, and the file already holds `new`:
+    /// it was applied before — a retry of a call that had in fact succeeded.
+    /// Applied again it would add its insertion a second time.
+    #[error("edit already applied — the file already contains its new text, and applying it again would duplicate what it adds: {0}")]
+    EditAlreadyApplied(String),
     /// Which of several edits an anchor error is about. The call is refused
     /// whole, so without it the model rewrites every anchor to fix one.
     #[error("edit {index} of {of}: {reason}")]
@@ -1375,6 +1380,10 @@ pub enum ToolResult {
     FileEdited {
         path: String,
         diff: FileDiffStats,
+        /// Markdown headings the edit left more of than there were — most
+        /// often a section inserted beside the one it meant to replace.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        repeated_headings: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
     DirectoryCreated { path: String },
