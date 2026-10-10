@@ -1,8 +1,9 @@
 import { Fragment, useState, type ComponentProps } from "react";
-import { Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
+import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { KubeSettings } from "./KubeSettings";
 import { WebSearchSettings } from "./WebSearchSettings";
+import { UsagePane } from "./UsageHeatmap";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
 import { DEFAULT_TURN_LIMITS, type RememberScope, type ReplyLanguage, type SkillSourceItem, type SkillsView, type TurnLimits } from "../lib/chat";
@@ -26,6 +27,7 @@ const SECTIONS = [
   { id: "web", label: "Web search", icon: Globe },
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Shield },
+  { id: "usage", label: "Usage", icon: Activity },
 ] as const;
 
 export type SettingsSection = (typeof SECTIONS)[number]["id"];
@@ -366,6 +368,7 @@ export function Settings({
 
         {section === "kubernetes" && <KubeSettings kube={kube} />}
         {section === "web" && <WebSearchSettings />}
+        {section === "usage" && <UsagePane />}
 
         {section === "permissions" && (
           <>
