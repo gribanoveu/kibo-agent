@@ -203,7 +203,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                         "string",
                         "null"
                     ],
-                    "description": "Glob over each entry's file *name*, never its full path, so \"*.rs\" matches at any depth. Only the directories on the way to a matching file are kept."
+                    "description": "Glob over each entry's file *name*, never its full path, so \"*.rs\" matches at any depth; several types at once as \"*.{java,kt}\". Only the directories on the way to a matching file are kept."
                 }
             },
             "required": []
@@ -370,6 +370,21 @@ mod tests {
         );
 
         assert!(paths(&entries).contains(&"a/b/c/deep.rs"));
+    }
+
+    /// Several file types in one pattern — the description promises it.
+    #[test]
+    fn a_pattern_takes_alternatives() {
+        let (scope, root) = fixture("list-pattern-braces");
+        write(&root, "a/One.java", "");
+        write(&root, "b/Two.kt", "");
+        write(&root, "c/three.xml", "");
+
+        let (entries, _) = run(&scope, &ListFilesArgs { pattern: Some("*.{java,kt}".to_string()), ..ListFilesArgs::default() });
+
+        let listed = paths(&entries);
+        assert!(listed.contains(&"a/One.java") && listed.contains(&"b/Two.kt"), "{listed:?}");
+        assert!(!listed.iter().any(|p| p.starts_with('c')), "{listed:?}");
     }
 
     /// Folders left unopened at the depth limit are said, so an empty or

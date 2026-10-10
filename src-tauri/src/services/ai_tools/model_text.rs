@@ -43,7 +43,14 @@ pub fn for_model(result: &ToolResult) -> String {
             }
         }
         ToolResult::FileWritten { path, diff } => render_for_model("Wrote", path, diff, true),
-        ToolResult::FileEdited { path, diff } => render_for_model("Edited", path, diff, true),
+        ToolResult::FileEdited { path, diff, repeated_headings } if repeated_headings.is_empty() => {
+            render_for_model("Edited", path, diff, true)
+        }
+        ToolResult::FileEdited { path, diff, repeated_headings } => format!(
+            "{}\n[warning: now more than once in the file — check the edit did not duplicate a section: {}]",
+            render_for_model("Edited", path, diff, true),
+            repeated_headings.join(" | ")
+        ),
         // How much went, not the whole file read back.
         // With what went: the read it needed is gone after compaction, and
         // this is the only trace of an irreversible change.
