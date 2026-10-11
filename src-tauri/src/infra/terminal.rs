@@ -319,7 +319,6 @@ impl Drop for Terminals {
 
 /// Where it starts and what it is told about the terminal it is in.
 fn prepare(command: &mut CommandBuilder, cwd: &Path) {
-    let cwd = crate::domain::tools::plain(cwd);
     command.cwd(cwd);
     // Inherited, it would name the directory the app started in, and `pwd`
     // in a shell that trusts it would print that.
@@ -750,16 +749,5 @@ mod tests {
         assert_eq!(command.get_env("COLORTERM"), Some("truecolor".as_ref()));
         assert_eq!(command.get_env("TERM_PROGRAM"), None);
         assert!(command.get_env("LANG").is_some());
-    }
-
-    /// The folder as `workspace_open` keeps it on Windows: `cmd.exe` started
-    /// there would say it cannot use a UNC path and open in `C:\Windows`.
-    #[cfg(windows)]
-    #[test]
-    fn the_shell_starts_in_the_folder_without_the_extended_length_prefix() {
-        let mut command = CommandBuilder::new_default_prog();
-        prepare(&mut command, Path::new(r"\\?\C:\work\kibo"));
-        assert_eq!(command.get_cwd().map(PathBuf::from), Some(PathBuf::from(r"C:\work\kibo")));
-        assert_eq!(command.get_env("PWD"), Some(r"C:\work\kibo".as_ref()));
     }
 }

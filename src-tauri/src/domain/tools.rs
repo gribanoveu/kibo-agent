@@ -754,17 +754,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// What `canonicalize` gives on Windows, made what `cmd.exe` can start in;
-    /// a path that is already plain, as everywhere else, stays as it is.
-    #[test]
-    fn plain_drops_the_extended_length_prefix() {
-        #[cfg(windows)]
-        assert_eq!(plain(Path::new(r"\\?\C:\Users\me\spec")), Path::new(r"C:\Users\me\spec"));
-        let dir = temp_dir("plain");
-        assert_eq!(plain(&dir), dir.as_path());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     /// A root that cannot be resolved must fail loudly rather than degrade into
     /// an unconstrained one.
     #[test]
@@ -862,15 +851,6 @@ impl ToolScope {
 /// that, or with a reserved name (`CON`), keeps it rather than being corrupted.
 pub(crate) fn canonicalize_plain(path: &Path) -> std::io::Result<PathBuf> {
     dunce::canonicalize(path)
-}
-
-/// `path` without the `\\?\` prefix, under the same rule, and without I/O —
-/// for a path already canonical that a child process is about to start in.
-/// `cmd.exe` given `\\?\C:\…` as its directory says it cannot use a UNC path
-/// and starts in `C:\Windows` instead; the open folder still has the prefix,
-/// as `workspace_open` stored it and the chats and folder trust are keyed by.
-pub(crate) fn plain(path: &Path) -> &Path {
-    dunce::simplified(path)
 }
 
 /// What a call would do, worked out without doing it.
