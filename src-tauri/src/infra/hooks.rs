@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::command_exec::{CommandError, CommandOutput, CommandRequest, Shell};
+use crate::domain::command_exec::{CommandError, CommandOutput, CommandRequest};
 use crate::domain::hooks::{self, HookCommand, HooksConfig, HooksConfigError};
 use crate::infra::{app_dir, process_runner};
 
@@ -43,7 +43,8 @@ pub fn save_text(text: &str) -> Result<HooksConfig, HooksConfigError> {
     Ok(config)
 }
 
-/// Through `sh -c`, as Claude Code runs a hook, in the workspace, with
+/// Through `sh -c`, as Claude Code runs a hook — on Windows the shell picked
+/// in Settings, as the agent's commands are — in the workspace, with
 /// `CLAUDE_PROJECT_DIR` set to it — the variable hooks written for Claude
 /// Code use to find their own scripts.
 pub fn run(hook: &HookCommand, input: &str, cwd: &Path) -> Result<CommandOutput, CommandError> {
@@ -54,7 +55,7 @@ pub fn run(hook: &HookCommand, input: &str, cwd: &Path) -> Result<CommandOutput,
         background: None,
     };
     let project = cwd.display().to_string();
-    process_runner::run_with(&Shell::default(), &request, cwd, None, Some(input), &[("CLAUDE_PROJECT_DIR", &project)])
+    process_runner::run_with(&super::shells::for_commands(), &request, cwd, None, Some(input), &[("CLAUDE_PROJECT_DIR", &project)])
 }
 
 #[cfg(test)]
@@ -102,5 +103,25 @@ mod tests {
         let blocked = outcome(&hook, run(&hook, r#"{"tool_name":"runCommand"}"#, &dir));
         assert_eq!(blocked, HookOutcome::Block("no commands today".into()));
         assert_eq!(outcome(&hook, run(&hook, r#"{"tool_name":"readFile"}"#, &dir)), HookOutcome::Pass);
+    }
+
+    /// On Windows a hook runs in the shell picked in Settings: this one is
+    /// PowerShell and nothing else.
+    #[cfg(windows)]
+    #[test]
+    fn a_hook_runs_in_the_shell_picked() {
+        with_app_dir("hooks-shell", || {
+            let mut settings = crate::infra::settings_store::load().unwrap();
+            settings.shell = Some(crate::domain::command_exec::ShellKind::WindowsPowershell);
+            crate::infra::settings_store::save(&settings).unwrap();
+            let hook = HookCommand {
+                kind: "command".into(),
+                command: "[Console]::Error.WriteLine('from powershell'); exit 2".into(),
+                timeout: Some(30),
+                ..Default::default()
+            };
+            let dir = temp_dir("hooks-shell-run");
+            assert_eq!(outcome(&hook, run(&hook, "{}", &dir)), HookOutcome::Block("from powershell".into()));
+        });
     }
 }

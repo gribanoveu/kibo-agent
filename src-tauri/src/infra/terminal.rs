@@ -108,13 +108,18 @@ impl Terminals {
         Self { registry: Mutex::default(), changed: Arc::new(|_| {}), shell: Some(program.to_string()) }
     }
 
-    /// The user's login shell, in `cwd`.
+    /// The shell picked in Settings, in `cwd` — or, with none to pick, as
+    /// off Windows, the user's login shell.
     pub fn open(&self, cwd: &Path, size: TerminalSize) -> Result<TerminalInfo, TerminalError> {
-        let mut command = match &self.shell {
-            Some(program) => CommandBuilder::new(program),
+        let argv = match &self.shell {
+            Some(program) => Some(vec![program.clone()]),
+            None => super::shells::chosen().map(|shell| shell.for_terminal()),
+        };
+        let mut command = match &argv {
+            Some(argv) => CommandBuilder::from_argv(argv.iter().map(Into::into).collect()),
             None => CommandBuilder::new_default_prog(),
         };
-        let program = self.shell.clone().unwrap_or_else(|| command.get_shell());
+        let program = argv.and_then(|argv| argv.into_iter().next()).unwrap_or_else(|| command.get_shell());
         let shell = Path::new(&program)
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())

@@ -21,7 +21,6 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::domain::command_exec::Shell;
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::prompt::TurnContext;
 use crate::domain::conversation_mode::ConversationMode;
@@ -175,8 +174,11 @@ pub async fn workspace_open(
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
-    let resolved = PathBuf::from(&path)
-        .canonicalize()
+    // Without `\\?\` on Windows: it is what the folder is known by from
+    // here on — the shell started in it (`cmd.exe` refuses that prefix and
+    // opens in `C:\Windows`), the tools' root, the index's events, the keys
+    // chats and trust are saved under.
+    let resolved = crate::domain::tools::canonicalize_plain(std::path::Path::new(&path))
         .map_err(|e| format!("cannot open {path}: {e}"))?;
     if !resolved.is_dir() {
         return Err(format!("{path} is not a folder"));
@@ -458,7 +460,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
         _ => McpTools::default(),
     };
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
-    let shell = Shell::default();
+    let shell = crate::infra::shells::for_commands();
     let today = chrono::Local::now().format("%e %B %Y").to_string();
     context_compaction::request_frame(
         &TurnContext {
@@ -750,7 +752,7 @@ where
         let sleep = |d: Duration| std::thread::sleep(d);
         let take_steering = || state.steering.take();
         let notes_typed = || state.steering.typed();
-        let shell = Shell::default();
+        let shell = crate::infra::shells::for_commands();
         let shell_described = crate::domain::command_exec::describe_shell(
             &shell.program,
             crate::infra::process_runner::probe_shell(&shell).as_ref(),

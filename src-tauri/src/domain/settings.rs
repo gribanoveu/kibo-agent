@@ -211,6 +211,11 @@ pub struct AppSettings {
     pub web_search_agent: Option<WebSearchBackend>,
     /// Where the user's SearXNG answers; `None` is [`DEFAULT_SEARXNG_URL`].
     pub searxng_url: Option<String>,
+    /// The shell for commands and the terminal on Windows; `None` is never
+    /// chosen — see [`ShellOption::pick`].
+    ///
+    /// [`ShellOption::pick`]: crate::domain::command_exec::ShellOption::pick
+    pub shell: Option<crate::domain::command_exec::ShellKind>,
 }
 
 /// Where the web tools are offered: each has its own search, or none — Tavily

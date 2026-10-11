@@ -37,7 +37,9 @@ pub fn load() -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&text)
         .unwrap_or_default()
         .into_iter()
-        .filter(|folder| Path::new(folder).is_dir())
+        // `\\?\C:\…` is how older builds saved a folder on Windows;
+        // it is opened under its plain name now, so the old entry is dropped.
+        .filter(|folder| !folder.starts_with(r"\\?\") && Path::new(folder).is_dir())
         .collect()
 }
 
@@ -80,6 +82,18 @@ mod tests {
             record("/no/such/folder/anymore").unwrap();
             record(kept).unwrap();
             assert_eq!(load(), list(&[kept]));
+        });
+    }
+
+    /// An entry an older build saved under `\\?\` is dropped: the folder is
+    /// opened under its plain name now, and would be listed twice.
+    #[test]
+    fn a_folder_saved_under_the_prefix_is_dropped() {
+        with_app_dir("recent-prefixed", || {
+            let kept = std::env::temp_dir().display().to_string();
+            app_dir::ensure().unwrap();
+            fs::write(path().unwrap(), serde_json::to_string(&[format!(r"\\?\{kept}"), kept.clone()]).unwrap()).unwrap();
+            assert_eq!(load(), list(&[&kept]));
         });
     }
 
