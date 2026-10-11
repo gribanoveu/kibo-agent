@@ -387,25 +387,35 @@ pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
 /// Each speaks the console's OEM code page (CP-866 on a Russian Windows) to a
 /// pipe unless told otherwise, so its messages, `dir` and `Get-ChildItem`
 /// would arrive here as mojibake and `echo Привет > f` write a file no editor
-/// reads as UTF-8. `cmd` gets the line as written, too: `.arg` quotes the
-/// MSVC way — `"` becomes `\"` — and `cmd` keeps the backslashes. PowerShell
-/// and Git's bash read the MSVC way, so `.arg` is right for them.
+/// reads as UTF-8. PowerShell and Git's bash read their argument the MSVC way,
+/// so `.arg` is right for them.
+///
+/// `cmd` takes the most. It reads the code page once, when it starts: a
+/// `chcp 65001` on the same `/C` line changes the console and not the `echo`
+/// after it. So `chcp` runs first and a second `cmd`, started after it, runs
+/// the line. The line reaches that one as `!KIBO_CMD_LINE!`: delayed
+/// expansion comes after the outer `cmd` has parsed `&`, `|` and `>`, so they
+/// are the inner one's to read, and `%` is expanded once, by it. Through
+/// `raw_arg` throughout: `.arg` quotes the MSVC way — `"` becomes `\"` — and
+/// `cmd` keeps the backslashes.
 #[cfg(windows)]
 pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(&shell.program);
-    command.args(&shell.args).creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NO_WINDOW);
     let stem = Path::new(&shell.program)
         .file_stem()
         .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     match stem.as_str() {
-        "cmd" => command.raw_arg(format!("chcp 65001>nul & {line}")),
-        "powershell" | "pwsh" => command.arg(format!(
+        "cmd" => command
+            .env("KIBO_CMD_LINE", line)
+            .raw_arg(format!("/V:ON /C chcp 65001>nul & \"{}\" /D /C !KIBO_CMD_LINE!", shell.program)),
+        "powershell" | "pwsh" => command.args(&shell.args).arg(format!(
             "$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); {line}"
         )),
-        _ => command.arg(line),
+        _ => command.args(&shell.args).arg(line),
     };
     command
 }
@@ -741,13 +751,21 @@ mod tests {
     fn each_windows_shell_answers_in_utf8() {
         let shells = crate::infra::shells::available();
         assert!(shells.len() >= 2, "{shells:?}");
-        for option in shells {
-            let shell = option.for_commands();
-            let out = run(&shell, &ask(r#"echo "Привет мир""#, Some(30)), &temp_dir("run-shells"), None).expect("runs");
-            assert_eq!(out.stdout.trim_end().trim_matches('"'), "Привет мир", "{option:?}: {out:?}");
-            let failed = run(&shell, &ask("exit 3", Some(30)), &temp_dir("run-shells"), None).expect("runs");
-            assert_eq!(failed.exit_code, Some(3), "{option:?}");
-        }
+        // Every shell's answer, then one assert: a run shows all that fail.
+        let wrong: Vec<String> = shells
+            .iter()
+            .filter_map(|option| {
+                let shell = option.for_commands();
+                let run = |line: &str| run(&shell, &ask(line, Some(30)), &temp_dir("run-shells"), None);
+                let (said, failed) = match (run(r#"echo "Привет мир""#), run("exit 3")) {
+                    (Ok(said), Ok(failed)) => (said, failed),
+                    (said, failed) => return Some(format!("{option:?}: {said:?}, {failed:?}")),
+                };
+                let right = said.stdout.contains("Привет мир") && failed.exit_code == Some(3);
+                (!right).then(|| format!("{option:?}: {said:?}, exit {:?}", failed.exit_code))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Output that is not valid UTF-8 must cost one character, not the run.
