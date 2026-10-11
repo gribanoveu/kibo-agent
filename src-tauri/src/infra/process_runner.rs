@@ -140,7 +140,7 @@ fn run_inner(
 
     let mut command = shell_command(shell, &request.command);
     command
-        .current_dir(cwd)
+        .current_dir(crate::domain::tools::plain(cwd))
         // A command that waits for input nobody is going to type must fail at
         // once rather than hold the turn until the timeout.
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })

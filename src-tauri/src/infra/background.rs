@@ -187,7 +187,7 @@ impl BackgroundProcesses for Processes {
 
         let mut process = shell_command(shell, command);
         process
-            .current_dir(cwd)
+            .current_dir(crate::domain::tools::plain(cwd))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

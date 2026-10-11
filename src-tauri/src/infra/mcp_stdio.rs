@@ -46,7 +46,7 @@ pub fn start(config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool)
     command
         .args(&config.args)
         .envs(&config.env)
-        .current_dir(cwd)
+        .current_dir(crate::domain::tools::plain(cwd))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
