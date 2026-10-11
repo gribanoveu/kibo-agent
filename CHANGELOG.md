@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-11 Pick the shell on Windows in Settings → Agent: cmd, PowerShell 5, PowerShell 7 or Git Bash, for the agent's commands and the terminal tab; Git Bash is used when installed until another is picked
+- 2026-10-11 On Windows, `runCommand` output in Russian and other non-English text reads correctly instead of mojibake, files written by `cmd` are UTF-8, quoted arguments reach `cmd` as written, and no console window flashes up per command
 - 2026-10-10 See your usage in Settings → Usage: the last half year as a GitHub-style heatmap, and for all time, 30 or 7 days your tokens, sessions, prompts and tool calls, streaks and the busiest day, your models, peak hours, top projects and top tools; a new agent chat shows the last 14 days as a strip once anything is counted. Every request to the model counts, chat titles, commit messages and summaries included
 
 ## v0.8.0 — 2026-10-09

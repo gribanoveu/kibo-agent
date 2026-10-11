@@ -21,7 +21,6 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::domain::command_exec::Shell;
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::prompt::TurnContext;
 use crate::domain::conversation_mode::ConversationMode;
@@ -458,7 +457,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
         _ => McpTools::default(),
     };
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
-    let shell = Shell::default();
+    let shell = super::settings::command_shell();
     let today = chrono::Local::now().format("%e %B %Y").to_string();
     context_compaction::request_frame(
         &TurnContext {
@@ -750,7 +749,7 @@ where
         let sleep = |d: Duration| std::thread::sleep(d);
         let take_steering = || state.steering.take();
         let notes_typed = || state.steering.typed();
-        let shell = Shell::default();
+        let shell = super::settings::command_shell();
         let shell_described = crate::domain::command_exec::describe_shell(
             &shell.program,
             crate::infra::process_runner::probe_shell(&shell).as_ref(),

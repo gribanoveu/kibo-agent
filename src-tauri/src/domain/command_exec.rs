@@ -141,6 +141,59 @@ impl Default for Shell {
     }
 }
 
+/// A shell the user picks on Windows, for the agent's commands and the
+/// terminal tab alike. Elsewhere there is nothing to pick: commands run under
+/// `/bin/sh` and the terminal under the login shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShellKind {
+    Cmd,
+    /// 5.1, `powershell.exe`, part of Windows.
+    WindowsPowershell,
+    /// 7 and later, `pwsh.exe`, installed separately.
+    Powershell,
+    /// Git for Windows' `bin\bash.exe`, which puts Git's Unix tools on `PATH`.
+    GitBash,
+}
+
+/// A [`ShellKind`] found on this machine, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOption {
+    pub kind: ShellKind,
+    pub program: String,
+}
+
+impl ShellOption {
+    /// The one `chosen`, while it is still installed; otherwise Git Bash, as
+    /// the model's commands are written for bash, and cmd after that.
+    pub fn pick(chosen: Option<ShellKind>, found: &[ShellOption]) -> Option<&ShellOption> {
+        let of = |kind| found.iter().find(|o| o.kind == kind);
+        chosen.and_then(of).or_else(|| of(ShellKind::GitBash)).or_else(|| of(ShellKind::Cmd)).or(found.first())
+    }
+
+    /// How a command line is handed to it; the line itself is added by the
+    /// runner, which knows how each of them reads one.
+    pub fn for_commands(&self) -> Shell {
+        let args: &[&str] = match self.kind {
+            ShellKind::Cmd => &["/C"],
+            ShellKind::WindowsPowershell | ShellKind::Powershell => &["-NoProfile", "-NonInteractive", "-Command"],
+            ShellKind::GitBash => &["-c"],
+        };
+        Shell { program: self.program.clone(), args: args.iter().map(|a| a.to_string()).collect() }
+    }
+
+    /// What the terminal tab starts, interactive.
+    pub fn for_terminal(&self) -> Vec<String> {
+        let args: &[&str] = match self.kind {
+            ShellKind::Cmd => &[],
+            ShellKind::WindowsPowershell | ShellKind::Powershell => &["-NoLogo"],
+            ShellKind::GitBash => &["--login", "-i"],
+        };
+        std::iter::once(self.program.clone()).chain(args.iter().map(|a| a.to_string())).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputStream {
@@ -314,6 +367,36 @@ const PARTIAL_LINE_MIN: usize = 80;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn option(kind: ShellKind) -> ShellOption {
+        ShellOption { kind, program: format!("{kind:?}.exe") }
+    }
+
+    /// The choice holds while it is installed; gone, or never made, Git Bash
+    /// stands in, and cmd — always there — after it.
+    #[test]
+    fn the_chosen_shell_is_used_while_it_is_installed() {
+        use ShellKind::*;
+        let all = [option(Cmd), option(WindowsPowershell), option(GitBash)];
+        let kind = |chosen, found: &[ShellOption]| ShellOption::pick(chosen, found).map(|o| o.kind);
+        assert_eq!(kind(Some(WindowsPowershell), &all), Some(WindowsPowershell));
+        assert_eq!(kind(None, &all), Some(GitBash));
+        assert_eq!(kind(Some(Powershell), &all), Some(GitBash), "pwsh was uninstalled");
+        assert_eq!(kind(None, &all[..2]), Some(Cmd));
+        assert_eq!(kind(None, &all[1..2]), Some(WindowsPowershell));
+        assert_eq!(kind(Some(Cmd), &[]), None, "nothing to pick from off Windows");
+    }
+
+    /// Each is handed a line its own way, and the terminal's is interactive.
+    #[test]
+    fn each_shell_is_started_its_own_way() {
+        let args = |kind| option(kind).for_commands().args;
+        assert_eq!(args(ShellKind::Cmd), ["/C"]);
+        assert_eq!(args(ShellKind::Powershell), ["-NoProfile", "-NonInteractive", "-Command"]);
+        assert_eq!(args(ShellKind::GitBash), ["-c"]);
+        assert_eq!(option(ShellKind::GitBash).for_terminal(), ["GitBash.exe", "--login", "-i"]);
+        assert_eq!(option(ShellKind::Cmd).for_terminal(), ["Cmd.exe"]);
+    }
 
     fn found(bash: Option<&str>, zsh: Option<&str>) -> ShellFound {
         ShellFound { bash: bash.map(Into::into), zsh: zsh.map(Into::into) }

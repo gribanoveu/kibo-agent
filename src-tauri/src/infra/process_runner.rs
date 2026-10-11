@@ -138,10 +138,8 @@ fn run_inner(
         )));
     }
 
-    let mut command = Command::new(&shell.program);
+    let mut command = shell_command(shell, &request.command);
     command
-        .args(&shell.args)
-        .arg(&request.command)
         .current_dir(cwd)
         // A command that waits for input nobody is going to type must fail at
         // once rather than hold the turn until the timeout.
@@ -374,6 +372,42 @@ pub fn probe_shell(shell: &Shell) -> Option<ShellFound> {
 #[cfg(not(unix))]
 pub fn probe_shell(_shell: &Shell) -> Option<ShellFound> {
     None
+}
+
+/// `shell` told to run `line`.
+#[cfg(not(windows))]
+pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
+    let mut command = Command::new(&shell.program);
+    command.args(&shell.args).arg(line);
+    command
+}
+
+/// `shell` told to run `line`, without a console window flashing up for it.
+///
+/// Each speaks the console's OEM code page (CP-866 on a Russian Windows) to a
+/// pipe unless told otherwise, so its messages, `dir` and `Get-ChildItem`
+/// would arrive here as mojibake and `echo Привет > f` write a file no editor
+/// reads as UTF-8. `cmd` gets the line as written, too: `.arg` quotes the
+/// MSVC way — `"` becomes `\"` — and `cmd` keeps the backslashes. PowerShell
+/// and Git's bash read the MSVC way, so `.arg` is right for them.
+#[cfg(windows)]
+pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = Command::new(&shell.program);
+    command.args(&shell.args).creation_flags(CREATE_NO_WINDOW);
+    let stem = Path::new(&shell.program)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match stem.as_str() {
+        "cmd" => command.raw_arg(format!("chcp 65001>nul & {line}")),
+        "powershell" | "pwsh" => command.arg(format!(
+            "$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); {line}"
+        )),
+        _ => command.arg(line),
+    };
+    command
 }
 
 #[cfg(unix)]
@@ -687,6 +721,33 @@ mod tests {
         .expect("runs");
         assert_eq!(out.stdout, format!("x{letters}\u{FFFD}"));
         assert!(seen.lock().unwrap().iter().all(|e| !e.chunk.is_empty()), "no empty chunks are reported");
+    }
+
+    /// `cmd`'s own `echo` speaks UTF-8, and a quoted argument reaches it
+    /// without the backslashes `.arg` would have added.
+    #[cfg(windows)]
+    #[test]
+    fn cmd_answers_in_utf8_with_its_quotes_intact() {
+        let dir = temp_dir("run-cmd-utf8");
+        let out = run_in(&dir, r#"echo Привет "a b"&& echo Привет> f.txt"#);
+        assert_eq!(out.stdout.trim_end(), r#"Привет "a b""#, "{out:?}");
+        assert_eq!(std::fs::read_to_string(dir.join("f.txt")).expect("utf-8").trim_end(), "Привет");
+    }
+
+    /// Every shell there is to pick answers in UTF-8, quotes intact, and its
+    /// failure is a failure.
+    #[cfg(windows)]
+    #[test]
+    fn each_windows_shell_answers_in_utf8() {
+        let shells = crate::infra::shells::available();
+        assert!(shells.len() >= 2, "{shells:?}");
+        for option in shells {
+            let shell = option.for_commands();
+            let out = run(&shell, &ask(r#"echo "Привет мир""#, Some(30)), &temp_dir("run-shells"), None).expect("runs");
+            assert_eq!(out.stdout.trim_end().trim_matches('"'), "Привет мир", "{option:?}: {out:?}");
+            let failed = run(&shell, &ask("exit 3", Some(30)), &temp_dir("run-shells"), None).expect("runs");
+            assert_eq!(failed.exit_code, Some(3), "{option:?}");
+        }
     }
 
     /// Output that is not valid UTF-8 must cost one character, not the run.

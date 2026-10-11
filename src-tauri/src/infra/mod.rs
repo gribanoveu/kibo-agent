@@ -33,6 +33,7 @@ pub mod login_path;
 pub mod hooks;
 pub mod background;
 pub mod terminal;
+pub mod shells;
 pub mod git_aliases;
 pub mod git_head;
 pub mod git_branches;

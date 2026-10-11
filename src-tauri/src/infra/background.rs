@@ -9,7 +9,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use crate::domain::background::{
 use crate::domain::command_exec::{truncate_output, Shell, MAX_OUTPUT_CHARS};
 use crate::sync::lock;
 
-use super::process_runner::{kill_tree, set_process_group, Utf8Decoder};
+use super::process_runner::{kill_tree, set_process_group, shell_command, Utf8Decoder};
 
 /// How often an exit is looked for — and new output, which is signalled at
 /// most this often: a server writing a line per millisecond is one signal a
@@ -185,10 +185,8 @@ impl BackgroundProcesses for Processes {
         let mut registry = lock(&self.registry);
         room(&registry)?;
 
-        let mut process = Command::new(&shell.program);
+        let mut process = shell_command(shell, command);
         process
-            .args(&shell.args)
-            .arg(command)
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

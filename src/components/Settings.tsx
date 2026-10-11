@@ -3,6 +3,7 @@ import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, S
 import { ProviderSettings } from "./ProviderSettings";
 import { KubeSettings } from "./KubeSettings";
 import { WebSearchSettings } from "./WebSearchSettings";
+import { ShellSettings } from "./ShellSettings";
 import { UsagePane } from "./UsageHeatmap";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
@@ -206,6 +207,7 @@ export function Settings({
             <h3 className="settings-title">Agent</h3>
             {/* Keyed on the saved values, so a save or a reset redraws the fields from them. */}
             <TurnLimitsFields key={`${turnLimits.rounds}/${turnLimits.budget}`} limits={turnLimits} onSave={onTurnLimits} />
+            <ShellSettings />
           </>
         )}
 

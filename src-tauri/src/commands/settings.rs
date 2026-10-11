@@ -13,6 +13,7 @@ use tauri::State;
 
 use std::path::{Path, PathBuf};
 
+use crate::domain::command_exec::{Shell, ShellKind, ShellOption};
 use crate::domain::kube::{KubeContexts, KubePin};
 use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
@@ -114,6 +115,34 @@ pub fn web_search_backend_set(place: WebSearchPlace, backend: WebSearchBackend) 
     let mut settings = settings_store::load().map_err(|e| e.to_string())?;
     settings.set_web_search(place, backend);
     settings_store::save(&settings).map_err(|e| e.to_string())
+}
+
+/// The shells there are to pick from — none off Windows — and the one in use.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellChoices {
+    options: Vec<ShellOption>,
+    chosen: Option<ShellKind>,
+}
+
+#[tauri::command]
+pub fn shell_choices_get() -> ShellChoices {
+    let options = crate::infra::shells::available();
+    let chosen = ShellOption::pick(settings_store::load().ok().and_then(|s| s.shell), &options).map(|o| o.kind);
+    ShellChoices { options, chosen }
+}
+
+/// From the next command and the next terminal tab on.
+#[tauri::command]
+pub fn shell_set(kind: ShellKind) -> Result<(), String> {
+    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
+    settings.shell = Some(kind);
+    settings_store::save(&settings).map_err(|e| e.to_string())
+}
+
+/// What a turn's commands run under.
+pub(crate) fn command_shell() -> Shell {
+    crate::infra::shells::chosen().map(|o| o.for_commands()).unwrap_or_default()
 }
 
 /// Where the user's SearXNG answers, as saved or the default.

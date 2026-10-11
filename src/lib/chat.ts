@@ -453,6 +453,27 @@ export async function setWebSearchBackend(place: WebSearchPlace, backend: WebSea
   return invoke<void>("web_search_backend_set", { place, backend });
 }
 
+/** A shell to pick on Windows, for the agent's commands and the terminal tab. */
+export type ShellKind = "cmd" | "windowsPowershell" | "powershell" | "gitBash";
+
+export type ShellChoices = {
+  /** Installed here — none off Windows, where there is nothing to pick. */
+  options: { kind: ShellKind; program: string }[];
+  /** The one in use: the picked one while installed, else Git Bash, else cmd. */
+  chosen: ShellKind | null;
+};
+
+export async function shellChoices(): Promise<ShellChoices> {
+  requireBackend();
+  return invoke<ShellChoices>("shell_choices_get");
+}
+
+/** From the next command and the next terminal tab on. */
+export async function setShell(kind: ShellKind): Promise<void> {
+  requireBackend();
+  return invoke<void>("shell_set", { kind });
+}
+
 /** Where the user's SearXNG answers — `http://localhost:8080/` until one is saved. */
 export async function searxngUrl(): Promise<string> {
   requireBackend();
