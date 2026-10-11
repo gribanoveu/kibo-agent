@@ -189,7 +189,7 @@ impl BackgroundProcesses for Processes {
         process
             .args(&shell.args)
             .arg(command)
-            .current_dir(cwd)
+            .current_dir(crate::domain::tools::plain(cwd))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
