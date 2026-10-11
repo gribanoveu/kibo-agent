@@ -6,7 +6,13 @@
 //! as `bash.exe` on `PATH`: `System32\bash.exe` is WSL's, a Linux machine with
 //! its own files, not a shell in this folder.
 
-use crate::domain::command_exec::ShellOption;
+use crate::domain::command_exec::{Shell, ShellOption};
+
+/// What the agent's commands and the hooks run under: the shell picked, or
+/// [`Shell::default`] where there is nothing to pick.
+pub fn for_commands() -> Shell {
+    chosen().map(|shell| shell.for_commands()).unwrap_or_default()
+}
 
 /// The one picked in Settings, while installed — see [`ShellOption::pick`].
 /// `None` off Windows, where commands run under `Shell::default` and the

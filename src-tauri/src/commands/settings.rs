@@ -13,7 +13,7 @@ use tauri::State;
 
 use std::path::{Path, PathBuf};
 
-use crate::domain::command_exec::{Shell, ShellKind, ShellOption};
+use crate::domain::command_exec::{ShellKind, ShellOption};
 use crate::domain::kube::{KubeContexts, KubePin};
 use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
@@ -138,11 +138,6 @@ pub fn shell_set(kind: ShellKind) -> Result<(), String> {
     let mut settings = settings_store::load().map_err(|e| e.to_string())?;
     settings.shell = Some(kind);
     settings_store::save(&settings).map_err(|e| e.to_string())
-}
-
-/// What a turn's commands run under.
-pub(crate) fn command_shell() -> Shell {
-    crate::infra::shells::chosen().map(|o| o.for_commands()).unwrap_or_default()
 }
 
 /// Where the user's SearXNG answers, as saved or the default.
