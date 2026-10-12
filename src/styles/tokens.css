@@ -252,6 +252,19 @@
   --font-scale: 1;
 }
 
+/* What floats over the panels — menus, popovers — one step off them. The
+   sidebar and the composer are panel-soft, so a menu there must not be: in
+   a dark theme it rises lighter, in a light one it is white. */
+:root,
+[data-scheme="dark"] {
+  --bg-menu: var(--bg-hover);
+  --bg-menu-hover: var(--bg-active);
+}
+[data-scheme="light"] {
+  --bg-menu: var(--bg-panel);
+  --bg-menu-hover: var(--bg-hover);
+}
+
 /* The type scale. Five steps, not a size per component: monospace is for
    code, paths and diffs only — labels and chrome use --font-ui.
    Declared again on .chat-text so that there it is computed with the chat's

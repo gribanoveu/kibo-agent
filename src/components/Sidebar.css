@@ -65,57 +65,57 @@
   display: none;
 }
 
-/* Agent | Chat: a segmented control on its own row; on the rail, a column of icons. */
+/* The modes: a list of rows, one per mode, so another one is another row
+   (APP_MODES) rather than a narrower segment. Drawn as the chats below are;
+   on the rail, a column of icons. */
 .mode-switch {
   flex: 0 0 100%;
   display: flex;
+  flex-direction: column;
   gap: 2px;
-  padding: 2px;
-  background: var(--bg-hover);
-  border-radius: var(--radius-md);
+  margin-top: 4px;
 }
 .window.collapsed .mode-switch {
   flex: none;
-  flex-direction: column;
+  align-items: center;
 }
 .mode-opt {
-  flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 6px;
+  gap: 9px;
+  height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-faint);
+  color: var(--text-dim);
   font-family: inherit;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
+  text-align: left;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
 }
 .mode-opt:hover {
   background: var(--bg-hover);
-  color: var(--text-dim);
-}
-.mode-opt.active {
-  background: var(--bg-active);
   color: var(--text);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
-/* A light segment raised off the track, as AppKit draws it. */
-[data-scheme="light"] .mode-opt.active {
-  background: var(--bg-panel);
+/* A tint of the accent, not the grey of the open chat below: the two
+   selections in the sidebar read as different kinds. */
+.mode-opt.active,
+.mode-opt.active:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.mode-opt.active svg {
+  color: var(--accent);
 }
 .mode-opt svg {
   flex: none;
 }
 .window.collapsed .mode-opt {
-  flex: none;
-  width: 26px;
+  width: 30px;
   padding: 0;
+  justify-content: center;
 }
 .window.collapsed .mode-opt span {
   display: none;
@@ -177,11 +177,16 @@
   padding: 0 0 2px 8px;
   font-size: var(--fs-xs);
   color: var(--text-faint);
-  /* Stays over the rows as they scroll under it. */
+  /* Stays over the rows as they scroll under it, in the sidebar's own tone. */
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg-panel);
+  background: var(--bg-panel-soft);
+}
+
+/* Three short filters: no wider than they need, inside the sidebar. */
+.group-head .dropdown-menu {
+  min-width: 140px;
 }
 
 /* A row is the chat and its ⋮, which shows on hover or while its menu is open. */
@@ -199,12 +204,17 @@
   align-items: center;
   opacity: 0;
 }
+/* Shown on hover, to the keyboard, and while its menu is open — not for the
+   focus a click leaves on the chat (WebView2 focuses a clicked button), which
+   kept it over the title. The title leaves it room whenever it shows. */
 .chat-row:hover > .chat-menu-wrap,
-.chat-row:focus-within > .chat-menu-wrap,
+.chat-row:has(:focus-visible) > .chat-menu-wrap,
 .chat-row > .chat-menu-wrap:has(.chat-menu) {
   opacity: 1;
 }
-.chat-row:hover > .chat {
+.chat-row:hover > .chat,
+.chat-row:has(:focus-visible) > .chat,
+.chat-row:has(.chat-menu) > .chat {
   padding-right: 34px;
 }
 .chat-row .chat-menu-button {
@@ -356,7 +366,7 @@
   left: 0;
   right: 0;
   bottom: calc(100% + 6px);
-  background: var(--bg-panel-soft);
+  background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
@@ -385,7 +395,7 @@
   text-align: left;
 }
 .user-menu-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-menu-hover);
   color: var(--text);
 }
 .user-menu-item .ico {

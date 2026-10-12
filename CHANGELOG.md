@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-12 The sidebar's show/hide button sits beside the traffic lights (at the window's left edge in full screen), Agent and Chat are a list of modes, menus stand out from the sidebar, and the chat fades out above the message box instead of cutting a line
 - 2026-10-12 A new chat shows a pixel-art Kibo: coral in Agent mode, blue in Chat mode
 - 2026-10-12 With a light or dark theme picked rather than the system's, the window's edge follows it: a light theme on a dark Mac no longer has a black outline
 - 2026-10-12 A macOS-style window: the chat's buttons sit in the title bar, panels meet edge to edge, the sidebar has its own tone, and Agent and Chat share one rounded message box
