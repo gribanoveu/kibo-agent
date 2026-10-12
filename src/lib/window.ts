@@ -22,6 +22,9 @@ export const minimizeWindow = () => inTauri() && getCurrentWindow().minimize();
 export const toggleMaximizeWindow = () => inTauri() && getCurrentWindow().toggleMaximize();
 export const closeWindow = () => inTauri() && getCurrentWindow().close();
 export const startWindowDrag = () => inTauri() && getCurrentWindow().startDragging();
+// The OS draws the window's edge in its own appearance: a light theme in a dark
+// system got a black outline. `null` follows the system again.
+export const setWindowTheme = (theme: "light" | "dark" | null) => inTauri() && getCurrentWindow().setTheme(theme);
 
 /** In a Markdown viewer (`viewer.html`), the file it was opened on: its name and its text. */
 export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_file");

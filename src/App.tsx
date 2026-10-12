@@ -657,7 +657,7 @@ export default function App() {
         } as React.CSSProperties
       }
     >
-      <Titlebar slot={setHeadSlot} />
+      <Titlebar slot={setHeadSlot}>Kibo Agent</Titlebar>
 
       <div className="body">
         <Sidebar

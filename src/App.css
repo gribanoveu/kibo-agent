@@ -2,9 +2,10 @@
    what gives the window its rounded corners. */
 .window {
   height: 100%;
-  /* What shows of it is the titlebar: a strip of its own over the panels,
-     whatever sits under the traffic lights or beside Windows' buttons. */
-  background: var(--bg-window);
+  /* What shows of it is the titlebar: the chat's colour, over a hairline
+     that separates it from the panels, whatever sits under the traffic
+     lights or beside Windows' buttons. */
+  background: var(--bg-panel);
   border: 1px solid var(--window-border);
   border-radius: 12px;
   display: flex;
@@ -41,4 +42,11 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
+}
+
+/* The main window's traffic lights sit in the bar's middle
+   (tauri.macos.conf.json), so its title does too — not raised to meet them,
+   as the viewer's is. */
+.window.native-frame .titlebar-title {
+  transform: translateX(-50%);
 }
