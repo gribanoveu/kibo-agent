@@ -19,7 +19,7 @@
 .process {
   --state: var(--text-faint);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   overflow: hidden;
 }
@@ -100,7 +100,7 @@
   align-items: center;
   gap: 5px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-soft);
   background: var(--bg-panel);
   color: var(--text-dim);

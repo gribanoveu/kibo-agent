@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowUpRight,
   Brain,
@@ -14,7 +15,6 @@ import {
   GitBranch,
   Globe,
   ListTodo,
-  MessageSquare,
   Pencil,
   Download,
   Search,
@@ -53,6 +53,7 @@ import {
   type McpAnswer,
   type Task,
 } from "../lib/chat";
+import { dragOrMaximize } from "./Titlebar";
 import "./ChatPanel.css";
 
 const TOOL_ICON: Record<string, typeof FileText> = {
@@ -650,14 +651,10 @@ type Props = {
   onToggleIde?: () => void;
   /** Shows the side panel on one particular panel — the rest of that menu. */
   onOpenPanel?: (tab: AsideTab) => void;
-  /** The open chat's title; `null` for one not saved yet. */
-  title?: string | null;
-  /** Drawn in place of the title — the IDE layout's menu of chats. */
+  /** Drawn at the header's left — the IDE layout's menu of chats, where there is no sidebar. */
   heading?: ReactNode;
   /** Settings from the "…" menu, where the window has no sidebar to open them from. */
   onOpenSettings?: () => void;
-  /** Whether the open chat was branched off another one; its header icon says so. */
-  branched?: boolean;
   workspace: string | null;
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
@@ -687,6 +684,8 @@ type Props = {
   onFix?: (text: string) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
   onAnswerQuestion?: (id: string, answer: McpAnswer) => void;
+  /** The window's title bar, where the header is drawn when there is one. */
+  headSlot?: HTMLElement | null;
 };
 
 type TranscriptProps = Pick<
@@ -796,10 +795,8 @@ export function ChatPanel({
   ideLayout = false,
   onToggleIde,
   onOpenPanel,
-  title = null,
   heading,
   onOpenSettings,
-  branched = false,
   workspace,
   turn,
   onDecide,
@@ -817,6 +814,7 @@ export function ChatPanel({
   onRewind,
   onFix,
   onAnswerQuestion,
+  headSlot = null,
 }: Props) {
   const groups = group(turn.blocks);
   // Under a finished answer only: mid-turn the plan is not written yet, and
@@ -869,60 +867,57 @@ export function ChatPanel({
       : []),
   ];
 
+  const head = (
+    <header className="chat-head" onMouseDown={headSlot ? dragOrMaximize : undefined}>
+      <div className="head-left">{heading}</div>
+      <div className="head-right">
+        {turn.retrying && (
+          <span className="head-time" title="The provider refused; waiting before trying again">
+            retrying in {turn.retrying.delaySeconds}s ({turn.retrying.attempt}/
+            {turn.retrying.maxAttempts})
+          </span>
+        )}
+        {menu.length > 0 && <ChatMenu items={menu} />}
+        {onToggleIde && (
+          <button
+            type="button"
+            className={`iconbtn aside-button${ideLayout ? " on" : ""}`}
+            title={`${ideLayout ? "Leave the IDE layout" : "IDE layout: files, the file and the chat"} (${shortcutText("ideLayout")})`}
+            aria-pressed={ideLayout}
+            onClick={onToggleIde}
+          >
+            <Code size={15} />
+          </button>
+        )}
+        {onToggleTerminal && (
+          <button
+            type="button"
+            className={`iconbtn aside-button${terminalOpen ? " on" : ""}`}
+            title={`${terminalOpen ? "Hide terminal" : "Show terminal"} (${shortcutText("terminal")})`}
+            aria-pressed={terminalOpen}
+            onClick={onToggleTerminal}
+          >
+            <TerminalSquare size={15} />
+          </button>
+        )}
+        {onToggleAside && (
+          <button
+            type="button"
+            className={`iconbtn aside-button${asideOpen ? " on" : ""}`}
+            title={`${asideOpen ? "Hide changes" : "Show changes"} (${shortcutText("changes")})`}
+            aria-pressed={asideOpen}
+            onClick={onToggleAside}
+          >
+            <FileDiff size={15} />
+          </button>
+        )}
+      </div>
+    </header>
+  );
+
   return (
     <section className="chat-panel">
-      <header className="chat-head">
-        <div className="head-left">
-          {branched ? (
-            <GitBranch size={15} className="head-icon" aria-hidden />
-          ) : (
-            <MessageSquare size={15} className="head-icon" aria-hidden />
-          )}
-          {heading ?? <h1 title={title ?? undefined}>{title ?? "New chat"}</h1>}
-        </div>
-        <div className="head-right">
-          {turn.retrying && (
-            <span className="head-time" title="The provider refused; waiting before trying again">
-              retrying in {turn.retrying.delaySeconds}s ({turn.retrying.attempt}/
-              {turn.retrying.maxAttempts})
-            </span>
-          )}
-          {menu.length > 0 && <ChatMenu items={menu} />}
-          {onToggleIde && (
-            <button
-              type="button"
-              className={`iconbtn aside-button${ideLayout ? " on" : ""}`}
-              title={`${ideLayout ? "Leave the IDE layout" : "IDE layout: files, the file and the chat"} (${shortcutText("ideLayout")})`}
-              aria-pressed={ideLayout}
-              onClick={onToggleIde}
-            >
-              <Code size={15} />
-            </button>
-          )}
-          {onToggleTerminal && (
-            <button
-              type="button"
-              className={`iconbtn aside-button${terminalOpen ? " on" : ""}`}
-              title={`${terminalOpen ? "Hide terminal" : "Show terminal"} (${shortcutText("terminal")})`}
-              aria-pressed={terminalOpen}
-              onClick={onToggleTerminal}
-            >
-              <TerminalSquare size={15} />
-            </button>
-          )}
-          {onToggleAside && (
-            <button
-              type="button"
-              className={`iconbtn aside-button${asideOpen ? " on" : ""}`}
-              title={`${asideOpen ? "Hide changes" : "Show changes"} (${shortcutText("changes")})`}
-              aria-pressed={asideOpen}
-              onClick={onToggleAside}
-            >
-              <FileDiff size={15} />
-            </button>
-          )}
-        </div>
-      </header>
+      {headSlot ? createPortal(head, headSlot) : head}
       <CurrentTask checklist={checklist} onOpen={onOpenPlan} />
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>

@@ -23,7 +23,7 @@
 .entry-input {
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-md);

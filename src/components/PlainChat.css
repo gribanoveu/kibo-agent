@@ -2,31 +2,9 @@
   flex: 1;
   min-height: 0;
   background: var(--bg-panel);
-  border-radius: var(--radius);
+  border-radius: var(--radius-panel);
   display: flex;
   flex-direction: column;
-}
-
-.plain-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 18px 10px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.plain-head h1 {
-  /* As tall as the agent's header buttons, so the thread below starts where
-     the agent's does and nothing moves when the mode is switched. */
-  line-height: 30px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  letter-spacing: -0.01em;
 }
 
 .plain-thread {
@@ -51,9 +29,9 @@
 /* As large as the agent's on its empty chat. */
 .plain-welcome-mascot {
   position: relative;
-  width: 112px;
-  height: 112px;
-  margin: 0 auto 2px;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 8px;
 }
 .plain-welcome-logo {
   display: block;
@@ -64,8 +42,9 @@
    Kibo stays exactly where the agent's is. */
 .plain-welcome-cloud {
   position: absolute;
-  top: -44px;
-  left: calc(100% - 22px);
+  top: -36px;
+  /* Kibo's head fills its box: further right, the cloud clears its ear. */
+  left: calc(100% - 2px);
   width: 72px;
   height: 58px;
   color: var(--accent);
@@ -179,11 +158,16 @@
 /* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
 .plain-composer {
   flex: none;
-  background: var(--bg-panel);
+  margin: 0 14px 14px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px 11px;
+  padding: 12px 14px 9px;
 }
 .plain-composer textarea {
+  /* A block, as the agent's: inline, it sits on a baseline and leaves a gap
+     under itself, and the box comes out taller than the agent's. */
+  display: block;
   width: 100%;
   min-height: 48px;
   max-height: 160px;

@@ -16,7 +16,7 @@
   display: block;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius) / 2);
+  border-radius: 6px;
   overflow: hidden;
   background: var(--bg-panel-soft);
   cursor: zoom-in;

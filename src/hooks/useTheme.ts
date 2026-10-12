@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { setWindowTheme } from "../lib/window";
 
 /** Each palette in src/styles/tokens.css, and whether it is light or dark. */
 export const SCHEMES = {
@@ -78,6 +79,9 @@ export function useTheme() {
       document.documentElement.dataset.scheme = side;
     };
     apply();
+    // The window's edge in the app's side, not the system's. Under "system"
+    // it follows the system — pinned, the webview would stop seeing it change.
+    void setWindowTheme(choice.mode === "system" ? null : sideOf(choice));
     if (choice.mode !== "system") return;
     const mql = window.matchMedia("(prefers-color-scheme: light)");
     mql.addEventListener("change", apply);

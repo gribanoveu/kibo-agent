@@ -402,19 +402,26 @@ describe("how long the agent worked", () => {
 });
 
 describe("the header", () => {
-  /// The folder, its branch and its changes are on the composer's tab now.
-  test("names the chat, and only the chat", () => {
+  /// It is the window's title bar: the chat is named in the sidebar, the
+  /// folder, its branch and its changes on the composer's tab.
+  test("names neither the chat nor the folder", () => {
+    const { container } = panel(state([]));
+    expect(container.querySelector(".head-left")?.textContent).toBe("");
+    expect(screen.queryByTitle("/tmp/project")).toBeNull();
+  });
+
+  /// With no sidebar, the IDE layout's menu of chats is drawn there.
+  test("draws the heading it is given", () => {
     render(
       <ChatPanel
-        title="Fix the tax rounding"
+        heading={<button type="button">Chats</button>}
         workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
         onOpenRepo={() => {}}
       />,
     );
-    expect(screen.getByRole("heading", { name: "Fix the tax rounding" })).toBeTruthy();
-    expect(screen.queryByTitle("/tmp/project")).toBeNull();
+    expect(screen.getByRole("button", { name: "Chats" })).toBeTruthy();
   });
 
   test("shows and hides the side panel, and says which it would do", () => {
@@ -528,11 +535,6 @@ describe("the header", () => {
       />,
     );
     expect(screen.queryByTitle("More")).toBeNull();
-  });
-
-  test("a chat not saved yet is a new one", () => {
-    panel(state([]));
-    expect(screen.getByRole("heading", { name: "New chat" })).toBeTruthy();
   });
 });
 

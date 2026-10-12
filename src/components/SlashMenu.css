@@ -8,7 +8,7 @@
   flex-direction: column;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 4px;
   z-index: 30;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
@@ -19,7 +19,7 @@
   gap: 10px;
   width: 100%;
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   border: 0;
   background: none;
   font-family: inherit;
@@ -74,7 +74,7 @@
 .slash-keys kbd {
   display: inline-block;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
   font-family: var(--font-mono);

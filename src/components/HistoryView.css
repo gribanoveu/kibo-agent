@@ -37,7 +37,7 @@
 .history-commit {
   position: relative;
   padding: 7px 8px 9px 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .history-commit:hover {
   background: var(--bg-hover);
@@ -107,7 +107,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 1px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   color: var(--text-dim);
 }

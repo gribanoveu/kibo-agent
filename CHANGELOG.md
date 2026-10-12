@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 2026-10-12 A new chat shows a pixel-art Kibo: coral in Agent mode, blue in Chat mode
+- 2026-10-12 With a light or dark theme picked rather than the system's, the window's edge follows it: a light theme on a dark Mac no longer has a black outline
+- 2026-10-12 A macOS-style window: the chat's buttons sit in the title bar, panels meet edge to edge, the sidebar has its own tone, and Agent and Chat share one rounded message box
 - 2026-10-11 Pick the shell on Windows in Settings → Agent: cmd, PowerShell 5, PowerShell 7 or Git Bash, for the agent's commands, hooks and the terminal tab; Git Bash is used when installed until another is picked
 - 2026-10-11 On Windows, `runCommand` output in Russian and other non-English text reads correctly instead of mojibake, files written by `cmd` are UTF-8, quoted arguments reach `cmd` as written, and no console window flashes up per command
 - 2026-10-11 On Windows the terminal tab, commands, background processes and MCP servers start in the open folder; `cmd.exe` used to say it cannot use a UNC path and open in `C:\Windows`

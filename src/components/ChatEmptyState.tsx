@@ -1,5 +1,5 @@
 import { FolderGit2 } from "lucide-react";
-import logo from "../assets/kibo-logo.png";
+import logo from "../assets/kibo-agent-pixel.png";
 import { UsageStrip } from "./UsageHeatmap";
 import "./ChatEmptyState.css";
 
