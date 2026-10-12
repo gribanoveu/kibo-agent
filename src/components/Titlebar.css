@@ -9,6 +9,18 @@
   gap: 10px;
   padding: 0 14px;
   position: relative;
+  /* Menus opened from a header drawn here fall over the panels below. */
+  z-index: 10;
+}
+/* Between the controls and the edge (or Windows' buttons): a panel's header. */
+.titlebar-slot {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+}
+.titlebar.native .titlebar-slot {
+  margin-top: -5px;
 }
 /* Centred on the window, not on the room the controls leave. */
 .titlebar-title {

@@ -39,7 +39,7 @@
   resize: none;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
@@ -64,7 +64,7 @@
 .plan-progress {
   height: 3px;
   margin: 0 8px 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--bg-panel-soft);
   overflow: hidden;
 }
@@ -87,7 +87,7 @@
   align-items: flex-start;
   gap: 9px;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-md);
   color: var(--text-dim);
 }

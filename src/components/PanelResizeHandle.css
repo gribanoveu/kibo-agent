@@ -1,7 +1,9 @@
-/* Occupies the gap between two panels — that gap is the whole grab area. */
+/* Occupies the gap between two panels, and 4px of each panel beside it:
+   a hairline gutter alone would be too thin to grab. */
 .panel-resize-handle {
   flex: none;
-  width: 10px;
+  width: calc(var(--gutter) + 8px);
+  margin: 0 -4px;
   align-self: stretch;
   position: relative;
   z-index: 6;
@@ -17,7 +19,7 @@
   width: 3px;
   height: 28px;
   transform: translate(-50%, -50%);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: transparent;
   transition: background 0.12s ease;
 }
@@ -31,8 +33,8 @@
 /* Between panels stacked vertically: the same gap and grip, turned. */
 .panel-resize-handle.axis-y {
   width: auto;
-  height: 10px;
-  margin: -10px 0;
+  height: calc(var(--gutter) + 8px);
+  margin: calc(-4px - var(--gutter)) 0;
   cursor: row-resize;
 }
 .panel-resize-handle.axis-y::after {

@@ -9,7 +9,7 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
-  border-radius: var(--radius);
+  border-radius: var(--radius-panel);
   overflow: hidden;
   animation: file-viewer-in 0.18s ease-out;
 }
@@ -49,7 +49,7 @@
   display: flex;
   align-items: center;
   max-width: 220px;
-  border-radius: 7px 7px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   color: var(--text-faint);
 }
 .file-tab:hover {
@@ -94,7 +94,7 @@
   margin-right: 5px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   color: inherit;
   cursor: pointer;
@@ -134,7 +134,7 @@
 .file-viewer-side {
   flex: none;
   padding: 1px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   font-size: var(--fs-xs);
   color: var(--text-dim);

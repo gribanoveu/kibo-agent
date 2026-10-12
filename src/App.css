@@ -2,6 +2,8 @@
    what gives the window its rounded corners. */
 .window {
   height: 100%;
+  /* What shows of it is the titlebar: a strip of its own over the panels,
+     whatever sits under the traffic lights or beside Windows' buttons. */
   background: var(--bg-window);
   border: 1px solid var(--window-border);
   border-radius: 12px;
@@ -25,7 +27,9 @@
   flex: 1;
   display: flex;
   min-height: 0;
-  padding: 0 10px 10px;
+  /* The hairline under the titlebar and between the panels. */
+  padding-top: var(--gutter);
+  background: var(--border-soft);
   overflow-x: clip;
 }
 
@@ -36,5 +40,5 @@
   min-width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  background: var(--bg-panel);
 }

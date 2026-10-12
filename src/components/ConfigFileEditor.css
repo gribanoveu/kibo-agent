@@ -28,7 +28,7 @@
   resize: vertical;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

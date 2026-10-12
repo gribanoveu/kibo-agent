@@ -21,7 +21,7 @@
   flex: none;
   display: flex;
   align-items: center;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 .terminal-tab:hover,
 .terminal-tab.selected {
@@ -33,7 +33,7 @@
   padding: 4px 4px 4px 9px;
   background: none;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-dim);
@@ -57,7 +57,7 @@
   padding: 0;
   background: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
   cursor: pointer;
 }
@@ -95,7 +95,7 @@
 .terminal-running {
   min-width: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--green);
   color: var(--accent-contrast);
   font-size: var(--fs-2xs);
@@ -129,7 +129,7 @@
   bottom: 8px;
   padding: 5px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
   color: var(--text);
   font-family: var(--font-ui);

@@ -4,7 +4,7 @@
   left: 50%;
   transform: translateX(-50%) translateY(12px);
   padding: 8px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
   font-size: var(--fs-sm);

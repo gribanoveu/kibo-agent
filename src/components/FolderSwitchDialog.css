@@ -17,7 +17,7 @@
 }
 .switch-processes li {
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

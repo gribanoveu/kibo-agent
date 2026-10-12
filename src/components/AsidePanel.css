@@ -12,7 +12,7 @@
   min-width: 260px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--gutter);
   min-height: 0;
   transition: width 0.22s ease;
 }
@@ -23,7 +23,7 @@
 .aside {
   position: relative;
   background: var(--bg-panel);
-  border-radius: var(--radius);
+  border-radius: var(--radius-panel);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -78,7 +78,8 @@
   flex: none;
   display: flex;
   align-items: center;
-  padding: 10px 12px;
+  height: var(--head-height);
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -137,7 +138,7 @@
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

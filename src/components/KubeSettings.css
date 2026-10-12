@@ -7,7 +7,7 @@
   margin: 0 0 16px;
   padding: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
 }
 .kube-row {
   display: flex;
@@ -39,7 +39,7 @@
 }
 .kube-row-badge {
   padding: 0 6px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-active);
   font-size: var(--fs-xs);
   color: var(--text-dim);

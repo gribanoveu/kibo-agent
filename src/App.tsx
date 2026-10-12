@@ -112,6 +112,8 @@ export default function App() {
   // other dock, would otherwise throw away a message half written. A different
   // folder is a different repository, and starts empty.
   const [commitMessage, setCommitMessage] = useState("");
+  // The title bar's room for the chat's header, once it is on screen.
+  const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
   // Which background process a chat row asked the Terminal tab to show. The
   // row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number } | null>(null);
@@ -505,14 +507,13 @@ export default function App() {
       {agentMode ? (
         <>
           <ChatPanel
-            title={openChat?.title ?? null}
+            headSlot={headSlot}
             heading={
               ide ? (
                 <ChatSwitcher title={openChat?.title ?? null} chats={history.chats} activeChat={agent.chatId} onSelect={selectChat} onNew={newChat} />
               ) : undefined
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
-            branched={Boolean(openChat?.branchedFrom)}
             workspace={workspace.path}
             turn={agent.turn}
             onDecide={agent.decide}
@@ -656,9 +657,7 @@ export default function App() {
         } as React.CSSProperties
       }
     >
-      <Titlebar>
-        Kibo{workspace.path && <span> · {workspace.path.split("/").pop()}</span>}
-      </Titlebar>
+      <Titlebar slot={setHeadSlot} />
 
       <div className="body">
         <Sidebar

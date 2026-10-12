@@ -1,7 +1,7 @@
 .getting-started {
   margin-bottom: 8px;
   padding: 9px 10px 8px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   border: 1px solid var(--border-soft);
 }

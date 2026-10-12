@@ -29,7 +29,7 @@
   background: var(--bg-window);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 3px 6px;
   font: inherit;
   outline: none;
@@ -41,7 +41,7 @@
   background: transparent;
   color: var(--text-dim);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 3px 8px;
   font: inherit;
 }
@@ -60,7 +60,7 @@
   margin: 0 4px 0 0;
   vertical-align: -1px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 .file-editor .cm-editor .cm-panel.cm-search input[type="checkbox"]:checked {
   background: var(--accent);

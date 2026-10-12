@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
-import { ChangingText } from "./ChangingText";
 import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-logo.png";
@@ -131,12 +130,6 @@ export function PlainChat({
   return (
     <>
       <section className="plain-panel">
-        <header className="plain-head">
-          <h1>
-            {/* Keyed by the chat: opening another one is not its name changing. */}
-            <ChangingText key={chat.chatId ?? ""} text={chat.chats.find((c) => c.id === chat.chatId)?.title ?? "New chat"} />
-          </h1>
-        </header>
 
         <div ref={scrollRef} className="plain-thread chat-text">
           {empty ? (

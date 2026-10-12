@@ -230,8 +230,23 @@
 }
 
 :root {
-  --radius: 12px;
-  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Corners, after macOS: the window's panels are square and joined edge to
+     edge by a hairline gutter, drawn in the border colour behind them
+     (App.css); what floats — a sheet, a menu, the composer — is rounded, and
+     controls a little. The chat's own rendering keeps its literal radii. */
+  --radius-panel: 0;
+  --radius: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
+  --radius-pill: 999px;
+  --gutter: 1px;
+  /* Every panel's header, separator included: side by side, their lines
+     meet as one. */
+  --head-height: 48px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "IBM Plex Sans", sans-serif;
+  /* The chat keeps the face it was drawn in. */
+  --font-chat: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --font-scale: 1;
@@ -251,6 +266,8 @@
   --fs-lg: calc(14.5px * var(--font-scale));
 }
 .chat-text {
+  --font-ui: var(--font-chat);
+  font-family: var(--font-chat);
   --font-scale: var(--chat-font-scale, 1.1);
   /* Sizes in em inside the chat follow the preference too. */
   font-size: calc(16px * var(--font-scale));
@@ -321,7 +338,7 @@ textarea,
 }
 ::-webkit-scrollbar-thumb {
   background: var(--bg-active);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .btn {
@@ -329,7 +346,7 @@ textarea,
   align-items: center;
   gap: 6px;
   padding: 6px 11px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   border: 0;
   font-family: inherit;
   font-size: var(--fs-sm);
@@ -368,7 +385,7 @@ textarea,
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: none;
   border: 0;
   color: var(--text-dim);

@@ -12,7 +12,7 @@
   width: min(420px, 100%);
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
   overflow: hidden;
   /* A short window must not cut the dialog off at both ends: `overflow:
@@ -55,7 +55,7 @@
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-faint);
   cursor: pointer;
@@ -83,7 +83,7 @@
 .modal-field input {
   width: 100%;
   padding: 7px 9px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
   color: var(--text);
@@ -99,7 +99,7 @@
   display: flex;
   gap: 2px;
   padding: 2px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
 }
@@ -107,7 +107,7 @@
   flex: 1;
   padding: 5px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
   font-family: inherit;
