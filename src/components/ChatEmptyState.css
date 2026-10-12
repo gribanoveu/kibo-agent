@@ -10,9 +10,10 @@
 }
 
 .chat-empty-logo {
-  width: 112px;
-  height: 112px;
-  margin-bottom: 2px;
+  /* The head fills its square, with no margin of its own drawn in. */
+  width: 72px;
+  height: 72px;
+  margin-bottom: 8px;
 }
 
 .chat-empty-title {

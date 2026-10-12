@@ -3,7 +3,7 @@ import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizonta
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
-import logo from "../assets/kibo-chat-logo.png";
+import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/chat";

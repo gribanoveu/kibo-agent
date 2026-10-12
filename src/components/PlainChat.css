@@ -29,9 +29,9 @@
 /* As large as the agent's on its empty chat. */
 .plain-welcome-mascot {
   position: relative;
-  width: 112px;
-  height: 112px;
-  margin: 0 auto 2px;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 8px;
 }
 .plain-welcome-logo {
   display: block;
@@ -42,8 +42,9 @@
    Kibo stays exactly where the agent's is. */
 .plain-welcome-cloud {
   position: absolute;
-  top: -44px;
-  left: calc(100% - 22px);
+  top: -36px;
+  /* Kibo's head fills its box: further right, the cloud clears its ear. */
+  left: calc(100% - 2px);
   width: 72px;
   height: 58px;
   color: var(--accent);
