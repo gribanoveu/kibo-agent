@@ -9,6 +9,8 @@ pub mod settings_store;
 pub mod kube_client;
 pub mod open_web;
 pub mod tavily;
+pub mod catalog_http;
+pub mod catalog_store;
 pub mod llm_credentials_store;
 pub mod llm_debug_log;
 pub mod index_store;

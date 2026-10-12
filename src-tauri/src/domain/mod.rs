@@ -29,6 +29,7 @@ pub mod search_query;
 pub mod workspace_index;
 pub mod code_search;
 pub mod skills;
+pub mod catalog;
 pub mod slash_commands;
 pub mod project_rules;
 pub mod tool_call_log;

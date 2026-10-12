@@ -216,6 +216,9 @@ pub struct AppSettings {
     ///
     /// [`ShellOption::pick`]: crate::domain::command_exec::ShellOption::pick
     pub shell: Option<crate::domain::command_exec::ShellKind>,
+    /// Catalogs read besides the app's own (`domain::catalog::DEFAULT_SOURCE`),
+    /// by base address — `docs/32-catalog.md`.
+    pub catalog_sources: Vec<String>,
 }
 
 /// Where the web tools are offered: each has its own search, or none — Tavily

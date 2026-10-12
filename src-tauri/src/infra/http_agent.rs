@@ -235,7 +235,7 @@ pub fn parse_trusted_certs(pem: &str) -> Result<Vec<ureq::tls::Certificate<'stat
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // Two throwaway self-signed certificates, generated with
@@ -332,12 +332,18 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
     // `leaf` is issued by `ca` for localhost and 127.0.0.1.
     const SELF: &str = include_str!("testdata/tls/self.pem");
     const SELF_KEY: &str = include_str!("testdata/tls/self.key");
-    const CA: &str = include_str!("testdata/tls/ca.pem");
-    const LEAF: &str = include_str!("testdata/tls/leaf.pem");
-    const LEAF_KEY: &str = include_str!("testdata/tls/leaf.key");
+    pub(crate) const CA: &str = include_str!("testdata/tls/ca.pem");
+    pub(crate) const LEAF: &str = include_str!("testdata/tls/leaf.pem");
+    pub(crate) const LEAF_KEY: &str = include_str!("testdata/tls/leaf.key");
 
     /// Answers every request with an empty 200 over TLS; the port it listens on.
     fn serve_tls(cert_pem: &str, key_pem: &str) -> u16 {
+        serve_tls_with(cert_pem, key_pem, "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+    }
+
+    /// Answers every request with `reply` over TLS; the port it listens on.
+    pub(crate) fn serve_tls_with(cert_pem: &str, key_pem: &str, reply: &str) -> u16 {
+        let reply = reply.to_string();
         use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
         let certs = parse_trusted_certs(cert_pem)
             .unwrap()
@@ -365,7 +371,7 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
                 let mut tls = StreamOwned::new(rustls::ServerConnection::new(config.clone()).unwrap(), socket);
                 // A refused handshake fails the read; the next client is served.
                 if tls.read(&mut [0u8; 4096]).is_ok() {
-                    let _ = tls.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                    let _ = tls.write_all(reply.as_bytes());
                     let _ = tls.flush();
                 }
             }

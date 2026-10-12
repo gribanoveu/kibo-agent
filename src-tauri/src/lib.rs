@@ -303,6 +303,7 @@ pub fn run() {
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
             commands::skills::skills_list,
+            commands::catalog::catalog_list,
             commands::slash_commands::slash_commands_list,
             commands::folder_trust::folder_trust_get,
             commands::folder_trust::folder_trust_set,
