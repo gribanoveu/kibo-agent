@@ -727,7 +727,22 @@ export default function App() {
         <Columns
           ide={ide}
           chat={chat}
-          page={onPage && <onPage.Component key="page" openPane={openTab} />}
+          page={
+            onPage && (
+              <onPage.Component
+                key="page"
+                openPane={openTab}
+                sideHandle={
+                  <PanelResizeHandle
+                    invert
+                    ariaLabel="Resize the side panel"
+                    onResize={panels.resizeAsideBy}
+                    onResizeEnd={(size) => panels.endResize("aside", size)}
+                  />
+                }
+              />
+            )
+          }
           viewer={fileViewer}
           top={topPane}
           bottom={bottomPane || null}

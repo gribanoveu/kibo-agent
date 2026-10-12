@@ -1,27 +1,4 @@
-/* A page in the chat's place (pages.tsx): as wide as the chat may get, and
-   never narrower than it (`.main` in App.css, CHAT_MIN), so the columns beside
-   it give way by the same rule. */
-.page {
-  flex: 1;
-  min-width: 400px;
-  /* The agent chat's thread (.thread in ChatPanel.css), so a page lines up with the messages. */
-  padding: 16px 18px 24px;
-  background: var(--bg-panel);
-  overflow-y: auto;
-}
-.page > h1 {
-  margin: 0 0 8px;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  color: var(--text);
-}
-.page > p {
-  margin: 0;
-  font-size: var(--fs-md);
-  color: var(--text-dim);
-}
-
-/* The chat and the file beside it stay mounted under the page. */
+/* The chat and the file beside it stay mounted under a page (pages.tsx). */
 .window.on-page .main,
 .window.on-page .file-viewer {
   display: none;

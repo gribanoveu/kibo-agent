@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { Store } from "lucide-react";
 import { CatalogPage } from "./CatalogPage";
 import type { AsideTab } from "../types";
@@ -8,6 +8,9 @@ import "./pages.css";
 export type PageContext = {
   /** Shows a pane in the column beside the page — only a page with `dock` has one. */
   openPane: (id: AsideTab) => void;
+  /** The handle to put left of a panel the page shows on its right: it sizes
+      that panel as the dock's handle sizes the dock, to the same width. */
+  sideHandle: ReactElement;
 };
 
 export type PageDef = {
@@ -22,9 +25,12 @@ export type PageDef = {
   Component: (ctx: PageContext) => ReactNode;
 };
 
-// Every page the sidebar lists under the modes, in its order. A page takes the
-// chat's place, and the sidebar drops the chat list while it is open; the chat stays mounted underneath, so a draft or a running turn
-// survives a visit. Adding one is an entry here — nothing else names a page.
+// Every page the sidebar lists under the modes, in its order. A page is drawn
+// with `Page` (title, pinned bar, its content) and opens what it is about in a
+// `PagePanel` on its right (Page.tsx). It takes the chat's place, and the
+// sidebar drops the chat list while it is open; the chat stays mounted
+// underneath, so a draft or a running turn survives a visit. Adding one is an
+// entry here — nothing else names a page.
 export const PAGES = [
   { id: "catalog", label: "Catalog", title: "Catalog — skills, commands, MCP servers and hooks to install", icon: Store, dock: false, Component: CatalogPage },
 ] as const satisfies readonly PageDef[];

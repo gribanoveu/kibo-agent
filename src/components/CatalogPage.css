@@ -1,29 +1,4 @@
-/* The title and the kind tabs stay put while the cards scroll under them. The
-   negative margin and `top` cover the page's own padding: sticking is measured
-   from inside it, and the cards would show through above. */
-.catalog-top {
-  position: sticky;
-  top: -16px;
-  z-index: 1;
-  margin: -16px -18px 0;
-  padding: 16px 18px 12px;
-  background: var(--bg-panel);
-}
-.catalog-title {
-  margin: 0 0 20px;
-  font-size: calc(var(--fs-lg) * 1.7);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-
-/* Kind tabs, search and Refresh on one line; the search takes what is left. */
-.catalog-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
+/* In the page's bar: kind tabs, search and Refresh; the search takes what is left. */
 .catalog-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -91,7 +66,7 @@
   cursor: default;
   opacity: 0.6;
 }
-.catalog-refresh .spinning {
+.catalog-spin {
   animation: catalog-spin 0.9s linear infinite;
 }
 @keyframes catalog-spin {
@@ -169,6 +144,17 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  cursor: pointer;
+}
+.catalog-card:hover {
+  background: var(--bg-panel-soft);
+}
+.catalog-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.catalog-card.selected {
+  border-color: var(--accent);
 }
 .catalog-card-ico {
   flex: none;
@@ -237,4 +223,113 @@
 .catalog-card-add:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+/* Installed (a check) or taken (a cross) in the +'s place: a state, not a button. */
+.catalog-card-state {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--green);
+}
+.catalog-card-state.taken {
+  color: var(--text-faint);
+}
+.catalog-card-state.update,
+.catalog-card-state.changed {
+  color: var(--amber);
+}
+
+.catalog-detail-name {
+  margin: 0 0 6px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+.catalog-detail-desc {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+.catalog-detail-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.catalog-detail-state {
+  font-size: var(--fs-sm);
+  color: var(--green);
+}
+.catalog-detail-state.taken {
+  color: var(--text-faint);
+}
+.catalog-detail-state.update,
+.catalog-detail-state.changed {
+  color: var(--amber);
+}
+.catalog-detail-note {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.catalog-detail-error {
+  margin: 0 0 10px;
+  color: var(--red);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.catalog-detail-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 14px 0 18px;
+  font-size: var(--fs-sm);
+}
+.catalog-detail-facts dt {
+  color: var(--text-faint);
+}
+.catalog-detail-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.catalog-detail-facts .mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.catalog-detail-file {
+  margin: 0 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-faint);
+}
+.catalog-detail-text {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+pre.catalog-detail-text {
+  margin: 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.catalog-detail-confirm {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1.5;
 }

@@ -51,7 +51,7 @@ export function DataPolicy({ provider, debugLogging, mcpServers, hooks }: Props)
     {
       name: "Catalog",
       value: "when its page opens",
-      note: "Asks raw.githubusercontent.com — the app's own catalog — and any catalog you add for its list. Nothing of yours goes with it; the host sees your address and what you look at.",
+      note: "Asks raw.githubusercontent.com — the app's own catalog — and any catalog you add for its list, and for an entry's files when you open or install it. Nothing of yours goes with it; the host sees your address and what you look at and install.",
     },
     {
       name: "Agent commands",

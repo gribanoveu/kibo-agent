@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-12 Skills, commands and Kubernetes runbooks install from the Catalog page with one click and come off with Remove; a card opens a panel on the right with what it installs, where, and its text
 - 2026-10-12 A Catalog page in the sidebar, under Agent and Chat, lists the skills, commands, runbooks, MCP servers and hooks published to the app's catalog on GitHub as cards, by kind, with tabs, search and Refresh; without the network it shows the copy kept from last time. Installing from it comes next
 - 2026-10-12 In the IDE layout the file editor shows what changed since git in the text, as Cursor does: added lines in green, removed ones in red between them, and an Undo on each change that puts it back
 - 2026-10-12 A selection in the file editor is one colour throughout: the cursor's line is no longer lit grey over the part of it that is selected
