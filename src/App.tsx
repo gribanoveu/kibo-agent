@@ -52,7 +52,8 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode, type ImagePart } from "./lib/chat";
+import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ChatSummary, type ConversationMode, type ImagePart } from "./lib/chat";
+import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -85,6 +86,11 @@ type EntryDialog<K> = "json" | { entry: K | null } | null;
 
 /** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
 const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
+
+/** The open chat's name. A chat's first turn ends before it is saved and named: its first message is its name. */
+function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): string | null {
+  return chats.find((one) => one.id === id)?.title ?? turn.blocks.find((block) => block.kind === "user")?.text ?? null;
+}
 
 /** Why the open chat cannot be left: its turn would land in the next one. */
 const STAY = "Stop the running turn before leaving this chat";
@@ -215,11 +221,7 @@ export default function App() {
     status: agent.turn.status,
     failed: agent.error !== null,
     queued: agent.queued.length,
-    // A chat's first turn ends before it is saved and named: its first message is its name.
-    chatTitle:
-      history.chats.find((one) => one.id === agent.chatId)?.title ??
-      agent.turn.blocks.find((block) => block.kind === "user")?.text ??
-      null,
+    chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
   // Servers start with an Agent turn and may stop during one.
@@ -687,7 +689,9 @@ export default function App() {
           )
         }
       >
-        Kibo Agent
+        {/* The open chat's name, where the chat is on screen; the IDE layout's header names it already. */}
+        {(!ide && !onPage && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
+          "Kibo Agent"}
       </Titlebar>
 
       <div className="body">
