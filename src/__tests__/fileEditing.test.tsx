@@ -12,6 +12,8 @@ import type { FileTarget } from "../lib/chat";
 // file changes on disk under it or its tab is closed.
 
 let disk: Record<string, string | null>;
+// What git has of a file, where it is not what is on disk.
+let gitHas: Record<string, string>;
 let writes: { path: string; expected: string | null; content: string }[];
 let opened: string[] = [];
 // Set, a write lands only when it resolves: a slow disk, for typing during one.
@@ -21,7 +23,7 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     if (command === "file_view") {
       const text = disk[args!.path as string] ?? null;
-      return Promise.resolve({ old: text, new: text, unviewable: null });
+      return Promise.resolve({ old: gitHas[args!.path as string] ?? text, new: text, unviewable: null });
     }
     if (command === "file_write") {
       const { root, path, expected, content } = args as { root: string; path: string; expected: string | null; content: string };
@@ -171,6 +173,7 @@ const unsaved = () => document.querySelectorAll(".file-tab-unsaved").length;
 
 beforeEach(() => {
   disk = { "docs/a.adoc": "= Title\n", "docs/b.adoc": "= B\n" };
+  gitHas = {};
   writes = [];
   slowDisk = null;
 });
@@ -341,6 +344,22 @@ describe("editing in the IDE layout", () => {
     await ide([{ path: "src/Main.java", side: "worktree" }]);
     for (let i = 0; i < 50 && !editor().state.facet(language); i++) await settle(10);
     expect(editor().state.facet(language)?.name).toBe("java");
+  });
+
+  /// As Cursor draws it: what changed since git, in the text itself, with an
+  /// Undo on each change — an edit like any other, saved as one.
+  test("a line removed since git shows in the editor, and Undo puts it back and saves it", async () => {
+    gitHas["docs/a.adoc"] = "= Title\nGone.\n";
+    await ide();
+    expect(shown()).toBe("= Title\n");
+    expect(document.querySelector(".cm-deletedChunk")?.textContent).toContain("Gone.");
+    const undo = [...document.querySelectorAll(".cm-chunkButtons button")].find((b) => b.textContent === "Undo")!;
+    act(() => void fireEvent.mouseDown(undo));
+    expect(shown()).toBe("= Title\nGone.\n");
+    await settle(300);
+    save();
+    await settle(10);
+    expect(writes).toEqual([{ path: "docs/a.adoc", expected: "= Title\n", content: "= Title\nGone.\n" }]);
   });
 
   /// The cursor's line is lit over the selection, which is drawn under it:

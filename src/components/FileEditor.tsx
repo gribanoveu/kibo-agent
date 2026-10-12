@@ -6,6 +6,7 @@ import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting
 import { languages } from "@codemirror/language-data";
 import { closeSearchPanel, findNext, findPrevious, openSearchPanel, search } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
+import { unifiedMergeView } from "@codemirror/merge";
 import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
 import { languageOf } from "../lib/highlight";
@@ -34,6 +35,12 @@ type Props = {
    * (another tab). Whether there is anything to write is the caller's call.
    */
   onSave: (text: string, base: string) => void;
+  /**
+   * The file as git has it. Given, what changed since is drawn in the text:
+   * added lines tinted, removed ones between them, and an Undo on each change
+   * that puts it back — an edit like any other, saved as one.
+   */
+  original?: string | null;
 };
 
 /** How long typing pauses before the edit is passed up: every keystroke would redraw the window. */
@@ -111,8 +118,22 @@ const wrapping = new Compartment();
 const syntax = new Compartment();
 const lines = (wrap: boolean) => (wrap ? EditorView.lineWrapping : []);
 
+const changes = new Compartment();
+// Only Undo: the change is already in the file, so there is nothing to accept.
+const undoOnly = (type: "accept" | "reject", action: (e: MouseEvent) => void): HTMLElement => {
+  if (type === "accept") return document.createElement("span");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Undo";
+  button.title = "Put this change back as git has it";
+  button.onmousedown = action;
+  return button;
+};
+const changesFrom = (original: string | null | undefined) =>
+  original == null ? [] : unifiedMergeView({ original, mergeControls: undoOnly, syntaxHighlightDeletions: true });
+
 /** A file of the open folder, editable: CodeMirror, with the language of the documents it is for. */
-export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
+export function FileEditor({ path, text, wrap, onChange, onSave, original }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   // Set while an edit waits for typing to pause.
@@ -158,6 +179,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
           syntaxHighlighting(colours),
           theme,
           wrapping.of(lines(wrap)),
+          changes.of(changesFrom(original)),
           EditorView.updateListener.of((update) => {
             // Only what the user typed; a text put in from outside is not an edit.
             if (!update.docChanged || update.transactions.every((tr) => tr.annotation(Transaction.remote))) return;
@@ -186,6 +208,11 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
   useEffect(() => {
     view.current?.dispatch({ effects: wrapping.reconfigure(lines(wrap)) });
   }, [wrap]);
+
+  // A commit, a stage or a checkout moves what git has; the changes follow.
+  useEffect(() => {
+    view.current?.dispatch({ effects: changes.reconfigure(changesFrom(original)) });
+  }, [original]);
 
   useEffect(() => {
     const editor = view.current;
