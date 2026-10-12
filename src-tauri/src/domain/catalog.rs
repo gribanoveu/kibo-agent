@@ -7,6 +7,8 @@
 //! before anything is shown: a path that could leave the folder it is meant
 //! for never gets as far as a row.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -24,13 +26,22 @@ pub const INDEX_FILE: &str = "index.json";
 /// Past this an index is not a list of a few dozen entries.
 pub const MAX_INDEX_BYTES: u64 = 1024 * 1024;
 
+/// Past this a file is not a prompt or a config; the entry is refused rather than cut.
+pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Past this a skill is not a skill but a repository.
+pub const MAX_SKILL_FILES: usize = 100;
+
+/// The file every skill has — the one the skills loader reads first.
+pub const SKILL_MD: &str = "SKILL.md";
+
 /// The index format this app reads. A newer one is refused rather than guessed at.
 const INDEX_VERSION: u64 = 1;
 
 /// The roles a runbook may be for — the folders `infra::runbooks_store` reads.
 const RUNBOOK_ROLES: &[&str] = &["kubernetes"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ItemKind {
     Skill,
@@ -104,6 +115,18 @@ pub enum CatalogError {
     Unavailable(String),
     #[error("the catalog answered {0}")]
     Status(u16),
+    #[error("{0} is not in this catalog's list any more — refresh it")]
+    NotListed(String),
+    #[error("installing {0} from the catalog comes in a later version")]
+    NotYet(String),
+    #[error("{0} is already here — installed, or a file of that name is in its place")]
+    Present(String),
+    #[error("{0} was not installed from this catalog")]
+    NotInstalled(String),
+    #[error("the list of what the catalog installed: {0}")]
+    Record(String),
+    #[error("{0}")]
+    Disk(String),
 }
 
 /// A source's address as the base its paths are joined to: `https`, or
@@ -208,7 +231,8 @@ fn check(raw: RawItem) -> Result<CatalogItem, String> {
     }
     relative_path(&raw.path)?;
     match kind.extension() {
-        None if raw.files.is_empty() => return Err("a skill lists its files".into()),
+        None if !raw.files.iter().any(|file| file == SKILL_MD) => return Err(format!("a skill lists its files, {SKILL_MD} among them")),
+        None if raw.files.len() > MAX_SKILL_FILES => return Err(format!("more than {MAX_SKILL_FILES} files")),
         None => raw.files.iter().try_for_each(|file| relative_path(file))?,
         Some(_) if !raw.files.is_empty() => return Err("only a skill lists files".into()),
         Some(extension) if !raw.path.ends_with(extension) => {
@@ -232,6 +256,93 @@ fn check(raw: RawItem) -> Result<CatalogItem, String> {
         files: raw.files,
         role,
     })
+}
+
+/// What the catalog installed, one line per entry, kept in `installed.json`:
+/// enough to tell an update from a local edit, and to remove it again even
+/// once the catalog no longer lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Installed {
+    /// The source's base address, as [`source_base`] spells it.
+    pub source: String,
+    pub kind: ItemKind,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    pub rev: String,
+    /// A skill's files as written, relative to its folder; empty for a one-file kind.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// [`content_hash`] of what was written.
+    pub hash: String,
+}
+
+/// Where an entry goes, relative to the app directory — the folders the
+/// skills, commands and runbooks are read from. `None` for a kind installed
+/// into a config file instead (MCP, hooks: CT-3, CT-4), and for an id or role
+/// that is not one of ours: a record on disk can be edited, and what it names
+/// is deleted on Remove.
+pub fn target(kind: ItemKind, id: &str, role: Option<&str>) -> Option<PathBuf> {
+    validate_skill_name(id).ok()?;
+    match kind {
+        ItemKind::Skill => Some(PathBuf::from("skills").join(id)),
+        ItemKind::Command => Some(PathBuf::from("commands").join(format!("{id}.md"))),
+        ItemKind::Runbook => {
+            let role = role.filter(|role| RUNBOOK_ROLES.contains(role))?;
+            Some(PathBuf::from("runbooks").join(role).join(format!("{id}.md")))
+        }
+        ItemKind::Mcp | ItemKind::Hooks => None,
+    }
+}
+
+/// One hash for what an entry wrote: each file's name and bytes, in the order
+/// given, each length-prefixed so no two different sets hash alike.
+pub fn content_hash(files: &[(&str, &[u8])]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for (name, bytes) in files {
+        hasher.update(&(name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// What a row says about an entry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemState {
+    /// Nothing in its place: Install.
+    #[default]
+    Available,
+    /// As this catalog wrote it, at the rev it lists.
+    Installed,
+    /// As written, and the catalog has a newer rev.
+    Update,
+    /// Installed from here and edited since — an update would lose the edit.
+    Changed,
+    /// Something of that name is in its place that this catalog did not put
+    /// there: the user's own, or another catalog's.
+    Taken,
+}
+
+/// The state of `item` from `source`, given the record of its install, if
+/// any, and the hash of what is in its place now (`None`: nothing is).
+pub fn state(item: &CatalogItem, source: &str, record: Option<&Installed>, on_disk: Option<&str>) -> ItemState {
+    match (record, on_disk) {
+        (_, None) => ItemState::Available,
+        (Some(record), Some(hash)) if record.source == source => {
+            if record.hash != hash {
+                ItemState::Changed
+            } else if record.rev != item.rev {
+                ItemState::Update
+            } else {
+                ItemState::Installed
+            }
+        }
+        _ => ItemState::Taken,
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +450,68 @@ mod tests {
         for refused in ["http://example.com/", "file:///etc/", "ftp://example.com/", "https://example.com/?a=1", "https://example.com/#a", "not a url"] {
             assert!(matches!(source_base(refused), Err(CatalogError::BadSource(..))), "{refused}");
         }
+    }
+
+    #[test]
+    fn a_skill_has_its_skill_md_and_not_too_many_files() {
+        let skill = |files: &str| format!(r#"{{"id": "x", "kind": "skill", "name": "X", "rev": "1", "path": "skills/x", "files": [{files}]}}"#);
+        assert!(index(&skill(r#""notes.md""#)).problems[0].contains("SKILL.md"));
+        let most: Vec<String> = std::iter::once("\"SKILL.md\"".to_string()).chain((1..MAX_SKILL_FILES).map(|n| format!("\"f{n}.md\""))).collect();
+        assert_eq!(index(&skill(&most.join(","))).items.len(), 1);
+        let over = [most.clone(), vec!["\"one-more.md\"".into()]].concat();
+        assert!(index(&skill(&over.join(","))).problems[0].contains("more than 100 files"));
+    }
+
+    #[test]
+    fn each_kind_goes_to_the_folder_it_is_read_from() {
+        assert_eq!(target(ItemKind::Skill, "review", None), Some(PathBuf::from("skills/review")));
+        assert_eq!(target(ItemKind::Command, "changelog", None), Some(PathBuf::from("commands/changelog.md")));
+        assert_eq!(target(ItemKind::Runbook, "tls", Some("kubernetes")), Some(PathBuf::from("runbooks/kubernetes/tls.md")));
+        assert_eq!(target(ItemKind::Mcp, "github", None), None);
+        assert_eq!(target(ItemKind::Hooks, "block", None), None);
+        // What an edited installed.json could name instead.
+        assert_eq!(target(ItemKind::Runbook, "tls", None), None);
+        assert_eq!(target(ItemKind::Runbook, "tls", Some("../..")), None);
+        assert_eq!(target(ItemKind::Skill, "../../Documents", None), None);
+        assert_eq!(target(ItemKind::Command, "", None), None);
+    }
+
+    #[test]
+    fn a_hash_tells_names_and_bytes_apart() {
+        let one = content_hash(&[("a", b"bc")]);
+        assert_eq!(one, content_hash(&[("a", b"bc")]));
+        assert_ne!(one, content_hash(&[("ab", b"c")]));
+        assert_ne!(one, content_hash(&[("a", b"bd")]));
+        assert_ne!(one, content_hash(&[("a", b"bc"), ("d", b"")]));
+        // Without each name's length, two empty files read as one file whose
+        // name runs on through the first one's zero length.
+        assert_ne!(content_hash(&[("x", b""), ("y", b"")]), content_hash(&[("x\0\0\0\0\0\0\0\0y", b"")]));
+    }
+
+    #[test]
+    fn a_rows_state_comes_from_its_record_and_what_is_in_its_place() {
+        let item = index(SKILL).items.remove(0);
+        let record = Installed {
+            source: "https://a.example/".into(),
+            kind: ItemKind::Skill,
+            id: "review".into(),
+            role: None,
+            rev: "1".into(),
+            files: item.files.clone(),
+            hash: "h".into(),
+        };
+        let at = |record: Option<&Installed>, on_disk: Option<&str>| state(&item, "https://a.example/", record, on_disk);
+        assert_eq!(at(None, None), ItemState::Available);
+        // Deleted by hand since: the record is stale, and installing again is fine.
+        assert_eq!(at(Some(&record), None), ItemState::Available);
+        assert_eq!(at(None, Some("h")), ItemState::Taken);
+        assert_eq!(at(Some(&record), Some("h")), ItemState::Installed);
+        assert_eq!(at(Some(&record), Some("edited")), ItemState::Changed);
+        let older = Installed { rev: "0".into(), ..record.clone() };
+        assert_eq!(at(Some(&older), Some("h")), ItemState::Update);
+        assert_eq!(at(Some(&older), Some("edited")), ItemState::Changed);
+        let elsewhere = Installed { source: "https://b.example/".into(), ..record };
+        assert_eq!(at(Some(&elsewhere), Some("h")), ItemState::Taken);
     }
 
     #[test]

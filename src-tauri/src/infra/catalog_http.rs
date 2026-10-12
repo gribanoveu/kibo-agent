@@ -31,19 +31,31 @@ pub fn fetch_index(base: &Url, etag: Option<&str>) -> Result<Fetched, CatalogErr
     fetch_with(&agent, base, etag)
 }
 
-fn fetch_with(agent: &ureq::Agent, base: &Url, etag: Option<&str>) -> Result<Fetched, CatalogError> {
-    let url = catalog::file_url(base, catalog::INDEX_FILE)?;
+/// One of the source's files — `path` already checked by the index's parser —
+/// as bytes, refused past [`catalog::MAX_FILE_BYTES`] rather than cut.
+pub fn fetch_file(base: &Url, path: &str) -> Result<Vec<u8>, CatalogError> {
+    let agent = http_agent::build_agent(None).map_err(|e| CatalogError::Unavailable(e.to_string()))?;
+    fetch_file_with(&agent, base, path)
+}
+
+/// A GET of `url`, held to `https` when the source is — a redirect down to
+/// plain http fails rather than being followed.
+fn get(agent: &ureq::Agent, base: &Url, url: &Url, etag: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, CatalogError> {
     let mut request = agent.get(url.as_str());
     if let Some(etag) = etag {
         request = request.header("If-None-Match", etag);
     }
-    let mut response = request
+    request
         .config()
         .timeout_global(Some(TIMEOUT))
         .https_only(base.scheme() == "https")
         .build()
         .call()
-        .map_err(|e| CatalogError::Unavailable(e.to_string()))?;
+        .map_err(|e| CatalogError::Unavailable(e.to_string()))
+}
+
+fn fetch_with(agent: &ureq::Agent, base: &Url, etag: Option<&str>) -> Result<Fetched, CatalogError> {
+    let mut response = get(agent, base, &catalog::file_url(base, catalog::INDEX_FILE)?, etag)?;
     let status = response.status().as_u16();
     match status {
         304 => return Ok(Fetched::NotModified),
@@ -58,6 +70,21 @@ fn fetch_with(agent: &ureq::Agent, base: &Url, etag: Option<&str>) -> Result<Fet
         .read_to_string()
         .map_err(|e| CatalogError::Unavailable(e.to_string()))?;
     Ok(Fetched::Fresh { text, etag })
+}
+
+fn fetch_file_with(agent: &ureq::Agent, base: &Url, path: &str) -> Result<Vec<u8>, CatalogError> {
+    let mut response = get(agent, base, &catalog::file_url(base, path)?, None)?;
+    let status = response.status().as_u16();
+    if !(200..=299).contains(&status) {
+        return Err(CatalogError::Status(status));
+    }
+    response
+        .body_mut()
+        .with_config()
+        // ureq refuses a body that reaches its limit; one at the limit is fine here.
+        .limit(catalog::MAX_FILE_BYTES + 1)
+        .read_to_vec()
+        .map_err(|e| CatalogError::Unavailable(format!("{path}: {e}")))
 }
 
 #[cfg(test)]
@@ -123,6 +150,24 @@ mod tests {
         let body = " ".repeat(catalog::MAX_INDEX_BYTES as usize + 1);
         let (base, _heard) = serve_once(reply("200 OK", "", &body));
         assert!(matches!(fetch_index(&base, None), Err(CatalogError::Unavailable(_))));
+    }
+
+    #[test]
+    fn a_file_is_read_from_under_its_source() {
+        let (base, heard) = serve_once(reply("200 OK", "", "# Review"));
+        assert_eq!(fetch_file(&base, "skills/review/SKILL.md").unwrap(), b"# Review");
+        assert!(heard.recv().unwrap().starts_with("GET /cat/skills/review/SKILL.md "));
+        let (base, _heard) = serve_once(reply("404 Not Found", "", "nope"));
+        assert_eq!(fetch_file(&base, "x.md"), Err(CatalogError::Status(404)));
+    }
+
+    #[test]
+    fn a_file_past_the_limit_is_refused_not_cut() {
+        let at_limit = "x".repeat(catalog::MAX_FILE_BYTES as usize);
+        let (base, _heard) = serve_once(reply("200 OK", "", &at_limit));
+        assert_eq!(fetch_file(&base, "x.md").unwrap().len(), at_limit.len());
+        let (base, _heard) = serve_once(reply("200 OK", "", &format!("{at_limit}x")));
+        assert!(matches!(fetch_file(&base, "x.md"), Err(CatalogError::Unavailable(why)) if why.starts_with("x.md: ")));
     }
 
     /// What is read gets installed: an https catalog that sends the client on
