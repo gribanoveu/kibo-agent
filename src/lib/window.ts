@@ -34,17 +34,24 @@ export const viewerTextScale = () => invoke<number | null>("viewer_text_scale_ge
 export const setViewerTextScale = (scale: number) => invoke<void>("viewer_text_scale_set", { scale });
 
 /**
- * Whether the window is maximized: `onChange` gets it once now and again after
- * every resize, which is when it can change. Returns the unsubscribe.
+ * A state of the window that only a resize can change: `onChange` gets it once
+ * now and again after every resize. Returns the unsubscribe.
  */
-export function onMaximizedChange(onChange: (maximized: boolean) => void): () => void {
-  if (!inTauri()) return () => {};
-  const window = getCurrentWindow();
-  const read = () => void window.isMaximized().then(onChange, () => {});
-  read();
-  const unlisten = window.onResized(read);
-  return () => void unlisten.then((stop) => stop());
-}
+const onResizedState =
+  (read: (window: ReturnType<typeof getCurrentWindow>) => Promise<boolean>) =>
+  (onChange: (state: boolean) => void): (() => void) => {
+    if (!inTauri()) return () => {};
+    const window = getCurrentWindow();
+    const get = () => void read(window).then(onChange, () => {});
+    get();
+    const unlisten = window.onResized(get);
+    return () => void unlisten.then((stop) => stop());
+  };
+
+/** Whether the window is maximized. */
+export const onMaximizedChange = onResizedState((window) => window.isMaximized());
+/** Whether the window is full screen — on macOS, where its traffic lights are gone. */
+export const onFullscreenChange = onResizedState((window) => window.isFullscreen());
 
 /**
  * Before the window closes — its button, ⌘W, ⌘Q: `keep` resolves to whether

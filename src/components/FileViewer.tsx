@@ -418,6 +418,7 @@ export function FileViewer({
               key={target.path}
               path={target.path}
               text={draft?.text ?? onDisk ?? ""}
+              original={view?.unviewable ? null : view?.old}
               wrap={wrap}
               onChange={(text, base) => {
                 setLeaving(false);

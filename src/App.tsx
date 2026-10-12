@@ -15,7 +15,9 @@ import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
+import { PanelLeft } from "lucide-react";
 import { Titlebar } from "./components/Titlebar";
+import { shortcutText } from "./lib/shortcuts";
 import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
 import { useChatHistory } from "./hooks/useChatHistory";
@@ -657,7 +659,25 @@ export default function App() {
         } as React.CSSProperties
       }
     >
-      <Titlebar slot={setHeadSlot}>Kibo Agent</Titlebar>
+      <Titlebar
+        slot={setHeadSlot}
+        leading={
+          // The IDE layout has no sidebar to show.
+          !ide && (
+            <button
+              className="iconbtn"
+              type="button"
+              title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
+              aria-pressed={!rail}
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={15} />
+            </button>
+          )
+        }
+      >
+        Kibo Agent
+      </Titlebar>
 
       <div className="body">
         <Sidebar
@@ -676,7 +696,6 @@ export default function App() {
             if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
             history.remove(id).catch((e) => toast.show(String(e)));
           }}
-          onToggleCollapse={toggleSidebar}
           onOpenSettings={() => openSettings()}
           onOnboardingAction={openTab}
           themeSide={sideOf(theme.choice)}

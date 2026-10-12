@@ -25,7 +25,6 @@ const sidebar = (
       onNewChat={() => {}}
       onArchiveChat={on.archive ?? (() => {})}
       onDeleteChat={on.remove ?? (() => {})}
-      onToggleCollapse={() => {}}
       onOpenSettings={() => {}}
       onOnboardingAction={() => {}}
       themeSide={themeSide}

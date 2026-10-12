@@ -76,3 +76,38 @@
 .file-editor .cm-editor .cm-searchMatch-selected {
   background: color-mix(in srgb, var(--amber) 55%, transparent);
 }
+
+/* What changed since git's version, drawn in the text (unifiedMergeView), in
+   the theme's colours — the longer selectors outrank the package's own. */
+.file-editor .cm-editor.cm-merge-b .cm-changedLine {
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.file-editor .cm-editor.cm-merge-b .cm-changedText {
+  background: color-mix(in srgb, var(--green) 30%, transparent);
+}
+.file-editor .cm-editor .cm-deletedChunk {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.file-editor .cm-editor.cm-merge-b .cm-deletedChunk .cm-deletedText {
+  background: color-mix(in srgb, var(--red) 30%, transparent);
+}
+.file-editor .cm-editor .cm-changedLineGutter {
+  background: var(--green);
+}
+.file-editor .cm-editor .cm-deletedLineGutter {
+  background: var(--red);
+}
+.file-editor .cm-editor .cm-deletedChunk .cm-chunkButtons button {
+  margin: 0;
+  padding: 1px 7px;
+  background: var(--bg-menu);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+}
+.file-editor .cm-editor .cm-deletedChunk .cm-chunkButtons button:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}

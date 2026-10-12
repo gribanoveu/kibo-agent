@@ -10,7 +10,6 @@ import {
   MessageSquare,
   MessagesSquare,
   Moon,
-  PanelLeft,
   Plus,
   Settings,
   ShipWheel,
@@ -28,7 +27,7 @@ import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/chat";
-import type { AppMode, AsideTab } from "../types";
+import { APP_MODES, type AppMode, type AsideTab } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
 
@@ -52,10 +51,11 @@ const SHORTCUT_GROUPS = Object.entries(SHORTCUTS).reduce<Record<string, Listed[]
   return groups;
 }, {});
 
-const MODES: { value: AppMode; label: string; title: string; icon: React.ReactNode }[] = [
-  { value: "agent", label: "Agent", title: "Agent — works in the open folder with tools", icon: <CodeXml size={14} /> },
-  { value: "chat", label: "Chat", title: "Chat — talks with the model, no files or tools", icon: <MessagesSquare size={14} /> },
-];
+// Keyed by mode, so a mode added to APP_MODES does not build until it has a row here.
+const MODES: Record<AppMode, { label: string; title: string; icon: React.ReactNode }> = {
+  agent: { label: "Agent", title: "Agent — works in the open folder with tools", icon: <CodeXml size={14} /> },
+  chat: { label: "Chat", title: "Chat — talks with the model, no files or tools", icon: <MessagesSquare size={14} /> },
+};
 
 const EMPTY: Record<Filter, string> = {
   active: "Every chat here is archived.",
@@ -72,7 +72,6 @@ type Props = {
   onNewChat: () => void;
   onArchiveChat: (id: string, archived: boolean) => void;
   onDeleteChat: (id: string) => void;
-  onToggleCollapse: () => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
   /** The side the window shows now, and a switch to the other one. */
@@ -89,7 +88,6 @@ export function Sidebar({
   onNewChat,
   onArchiveChat,
   onDeleteChat,
-  onToggleCollapse,
   onOpenSettings,
   onOnboardingAction,
   themeSide,
@@ -129,22 +127,19 @@ export function Sidebar({
           <Plus size={14} />
           <span className="label">New chat</span>
         </button>
-        <button className="iconbtn" type="button" title="Collapse panel" onClick={onToggleCollapse}>
-          <PanelLeft size={15} />
-        </button>
-        <div className="mode-switch" role="tablist" aria-label="Mode">
-          {MODES.map((m) => (
+        <div className="mode-switch" role="tablist" aria-label="Mode" aria-orientation="vertical">
+          {APP_MODES.map((value) => (
             <button
-              key={m.value}
+              key={value}
               type="button"
               role="tab"
-              aria-selected={mode === m.value}
-              className={`mode-opt${mode === m.value ? " active" : ""}`}
-              title={m.title}
-              onClick={() => onMode(m.value)}
+              aria-selected={mode === value}
+              className={`mode-opt${mode === value ? " active" : ""}`}
+              title={MODES[value].title}
+              onClick={() => onMode(value)}
             >
-              {m.icon}
-              <span>{m.label}</span>
+              {MODES[value].icon}
+              <span>{MODES[value].label}</span>
             </button>
           ))}
         </div>

@@ -19,7 +19,7 @@
   right: 0;
   min-width: 230px;
   max-width: 320px;
-  background: var(--bg-panel-soft);
+  background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
@@ -44,7 +44,7 @@
   cursor: pointer;
 }
 .chat-menu-item:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-menu-hover);
   color: var(--text);
 }
 /* Opening a panel and acting on the chat are two different things. */
