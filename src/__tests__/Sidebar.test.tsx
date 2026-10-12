@@ -19,6 +19,10 @@ const sidebar = (
 ) =>
   render(
     <Sidebar
+      mode="agent"
+      onMode={() => {}}
+      page={null}
+      onPage={() => {}}
       chats={chats}
       activeChat={null}
       onSelectChat={() => {}}
@@ -130,5 +134,53 @@ describe("about", () => {
     expect(await screen.findByText("Version 9.9.9-1")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Download page" }));
     expect(opened).toEqual(["https://github.com/gribanoveu/kibo-agent/releases"]);
+  });
+});
+
+describe("pages", () => {
+  const views = (page: "catalog" | null, on: { mode?: (m: string) => void; page?: (p: string) => void } = {}) =>
+    render(
+      <Sidebar
+        mode="agent"
+        onMode={on.mode ?? (() => {})}
+        page={page}
+        onPage={on.page ?? (() => {})}
+        chats={chats}
+        activeChat={null}
+        onSelectChat={() => {}}
+        onNewChat={() => {}}
+        onArchiveChat={() => {}}
+        onDeleteChat={() => {}}
+        onOpenSettings={() => {}}
+        onOnboardingAction={() => {}}
+        themeSide="dark"
+        onToggleTheme={() => {}}
+      />,
+    );
+  const selected = () => screen.getAllByRole("tab").filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.textContent);
+
+  test("sit under the modes, and the open one is lit instead of the mode", () => {
+    const { unmount } = views(null);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Agent", "Chat", "Catalog"]);
+    expect(selected()).toEqual(["Agent"]);
+    unmount();
+    views("catalog");
+    expect(selected()).toEqual(["Catalog"]);
+  });
+
+  test("open by id, and a mode is still picked from one", () => {
+    const calls: string[] = [];
+    views("catalog", { mode: (m) => calls.push(m), page: (p) => calls.push(p) });
+    fireEvent.click(screen.getByRole("tab", { name: "Catalog" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    expect(calls).toEqual(["catalog", "agent"]);
+  });
+
+  test("an open page drops the chat list", () => {
+    const { unmount } = views(null);
+    expect(screen.queryByText("Chats")).not.toBeNull();
+    unmount();
+    views("catalog");
+    expect(screen.queryByText("Chats")).toBeNull();
   });
 });

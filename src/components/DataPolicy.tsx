@@ -49,6 +49,11 @@ export function DataPolicy({ provider, debugLogging, mcpServers, hooks }: Props)
       note: "Your own commands; they get each call's input and result, file contents included.",
     },
     {
+      name: "Catalog",
+      value: "when its page opens",
+      note: "Asks raw.githubusercontent.com — the app's own catalog — and any catalog you add for its list. Nothing of yours goes with it; the host sees your address and what you look at.",
+    },
+    {
       name: "Agent commands",
       value: "can reach the network",
       note: "A command that runs curl, ssh, git push and the like asks every time, even when commands are always allowed — but not in Auto. Code run by python or node is not seen.",
