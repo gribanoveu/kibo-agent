@@ -69,6 +69,9 @@ const theme = EditorView.theme({
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },
   ".cm-gutters": { backgroundColor: "transparent", color: "var(--text-faint)", border: "none" },
   ".cm-activeLine": { backgroundColor: "var(--bg-hover)" },
+  // The selection is drawn under the lines (drawSelection) and the cursor's
+  // line fill over it: lit while selecting, that line's part looked unselected.
+  "&.cm-selecting .cm-activeLine": { backgroundColor: "transparent" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--text-dim)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
     { backgroundColor: "color-mix(in srgb, var(--accent) 28%, transparent)" },
@@ -146,6 +149,9 @@ export function FileEditor({ path, text, wrap, onChange, onSave }: Props) {
           history(),
           drawSelection(),
           highlightActiveLine(),
+          EditorView.editorAttributes.compute(["selection"], (state): Record<string, string> =>
+            state.selection.ranges.every((range) => range.empty) ? {} : { class: "cm-selecting" },
+          ),
           keymap.of([searchKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           search({ top: true }),
           syntax.of(own ?? []),

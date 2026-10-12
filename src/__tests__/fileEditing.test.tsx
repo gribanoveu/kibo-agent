@@ -343,6 +343,18 @@ describe("editing in the IDE layout", () => {
     expect(editor().state.facet(language)?.name).toBe("java");
   });
 
+  /// The cursor's line is lit over the selection, which is drawn under it:
+  /// while selecting, the line goes unlit, or its selected part looks unselected.
+  test("the cursor's line is not lit while text is selected", async () => {
+    await ide();
+    const selecting = () => document.querySelector(".cm-editor")!.classList.contains("cm-selecting");
+    expect(selecting()).toBe(false);
+    act(() => editor().dispatch({ selection: { anchor: 0, head: 3 } }));
+    expect(selecting()).toBe(true);
+    act(() => editor().dispatch({ selection: { anchor: 3 } }));
+    expect(selecting()).toBe(false);
+  });
+
   test("closing the window saves what is being typed, past the draft passed up before it", async () => {
     await ide();
     await type("Mine.\n");
