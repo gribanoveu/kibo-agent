@@ -46,6 +46,7 @@
     "streamdown": "^2.5.0"
   },
   "devDependencies": {
+    "@babel/standalone": "^8.0.7",
     "@happy-dom/global-registrator": "^20.14.5",
     "@tauri-apps/cli": "^2",
     "@testing-library/dom": "^10.4.2",

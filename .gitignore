@@ -25,3 +25,6 @@ dist-ssr
 
 .claude/*
 .vscode/*
+# Prototype probe (docs/31, P-0): built libraries and its report
+scripts/prototype-probe/lib/
+scripts/prototype-probe/report.jsonl
