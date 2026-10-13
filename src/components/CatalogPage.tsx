@@ -68,12 +68,16 @@ const STATE_NOTE: Record<CatalogEntry["state"], string | null> = {
 
 type Actions = {
   busy: EntryKey | null;
-  /** Installs at once — or, for a server, asks first. */
+  /** Installs at once — or, for a server or hooks, asks first. */
   onInstall: (entry: EntryKey) => void;
 };
 
 /** What is in its place, as the panel names it: a server is a name in a shared file. */
-const placeOf = (item: CatalogEntry) => (item.kind === "mcp" ? `the server ${item.id} in ${item.target}` : item.target);
+const placeOf = (item: CatalogEntry) =>
+  item.kind === "mcp" ? `the server ${item.id} in ${item.target}` : item.kind === "hooks" ? `its hooks in ${item.target}` : item.target;
+
+/** What runs something on its own once installed: shown whole in a dialog before it is. */
+const asks = (kind: CatalogKind) => kind === "mcp" || kind === "hooks";
 
 function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry: Entry; icon: LucideIcon; selected: boolean; onOpen: () => void } & Actions) {
   const { item, source } = entry;
@@ -108,7 +112,7 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
           type="button"
           className="catalog-card-add"
           disabled={item.target === null || busy !== null}
-          title={item.target === null ? `Installing ${kindOf(item.kind).label} comes next` : "Install"}
+          title="Install"
           aria-label={`Install ${item.name}`}
           onClick={(e) => {
             e.stopPropagation();
@@ -165,11 +169,11 @@ function Details({
         {STATE_NOTE[item.state] && <span className={`catalog-detail-state ${item.state}`}>{STATE_NOTE[item.state]}</span>}
       </div>
       {error && <div className="catalog-detail-error">{error}</div>}
-      {item.target === null && <p className="catalog-detail-note">Installing {kind.label} from the catalog comes next.</p>}
       {item.state === "taken" && (
         <p className="catalog-detail-note">
-          {item.kind === "mcp" ? `A server named ${item.id} is already in ${item.target}` : `${item.target} is already there`} and was not installed
-          from this catalog — yours, or another catalog's. It is left as it is.
+          {item.kind === "hooks"
+            ? `Hooks named ${item.id} from another catalog are already in ${item.target}. They are left as they are.`
+            : `${item.kind === "mcp" ? `A server named ${item.id} is already in ${item.target}` : `${item.target} is already there`} and was not installed from this catalog — yours, or another catalog's. It is left as it is.`}
         </p>
       )}
       {item.state === "update" && <p className="catalog-detail-note">Updating comes next; Remove and Install gets the new one now.</p>}
@@ -242,21 +246,45 @@ function Details({
         }
       >
         <p className="catalog-detail-confirm">
-          It was changed here since it was installed: <b>{place}</b> goes with those changes, and installing it again brings back the catalog's.
+          {item.kind === "hooks" ? (
+            <>
+              Some of its hooks were changed here since it was installed: those stay in <b>{item.target}</b>, the rest come out.
+            </>
+          ) : (
+            <>
+              It was changed here since it was installed: <b>{place}</b> goes with those changes, and installing it again brings back the catalog's.
+            </>
+          )}
         </p>
       </Modal>
     </PagePanel>
   );
 }
 
-/** A server is a command the app will run, or an address it will send to:
-    it is shown whole and installed only from here, with its secrets typed in. */
-function InstallServer({ entry, onInstall, onClose }: { entry: Entry; onInstall: (secrets: Record<string, string>) => void; onClose: () => void }) {
+/** Hooks as the dialog lists them: event, matcher and the command as it runs —
+    unescaped, since the command is what has to be read. Null when the text is
+    not that shape; the backend has refused it already, and the raw text shows. */
+function hookLines(text: string): { event: string; matcher: string; command: string }[] | null {
+  try {
+    const { hooks } = JSON.parse(text) as { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+    return Object.entries(hooks).flatMap(([event, groups]) =>
+      groups.flatMap((group) => group.hooks.map(({ command }) => ({ event, matcher: group.matcher || "every tool", command }))),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** A server is a command the app will run, or an address it will send to;
+    a hook is a command run on tool calls with no card to approve it. Either is
+    shown whole and installed only from here — a server with its secrets typed in. */
+function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall: (secrets: Record<string, string>) => void; onClose: () => void }) {
   const { item } = entry;
   const preview = useCatalogPreview(keyOf(entry));
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const read = preview?.read;
   const ready = read !== undefined && read !== null && read.secrets.every((name) => secrets[name]?.trim());
+  const hooks = item.kind === "hooks" && read ? hookLines(read.text) : null;
 
   return (
     <Modal
@@ -274,17 +302,34 @@ function InstallServer({ entry, onInstall, onClose }: { entry: Entry; onInstall:
         </>
       }
     >
-      <p className="catalog-detail-confirm">
-        Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
-        sends to:
-      </p>
+      {item.kind === "hooks" ? (
+        <p className="catalog-detail-confirm">
+          Adds these hooks to {item.target}. From the next Agent turn each command runs on every tool call its <b>matcher</b> names, with no card to approve it:
+        </p>
+      ) : (
+        <p className="catalog-detail-confirm">
+          Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
+          sends to:
+        </p>
+      )}
       {preview?.error ? (
         <div className="catalog-detail-error">{preview.error}</div>
       ) : !read ? (
         <div className="catalog-detail-note">Reading…</div>
       ) : (
         <>
-          <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
+          {hooks ? (
+            hooks.map(({ event, matcher, command }, i) => (
+              <div key={i} className="catalog-hook">
+                <div className="catalog-hook-when">
+                  {event} · {matcher}
+                </div>
+                <pre className="catalog-detail-text catalog-server-entry">{command}</pre>
+              </div>
+            ))
+          ) : (
+            <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
+          )}
           {read.secrets.map((name) => (
             <div key={name} className="modal-field">
               <label htmlFor={`secret-${name}`}>{name}</label>
@@ -350,7 +395,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
   // Looked up again on every list, so the panel shows the state after an action.
   const shown = entries.find((entry) => sameEntry(keyOf(entry), open)) ?? null;
   const asked = entries.find((entry) => sameEntry(keyOf(entry), asking)) ?? null;
-  const onInstall = (key: EntryKey) => (key.kind === "mcp" ? setAsking(key) : void install(key));
+  const onInstall = (key: EntryKey) => (asks(key.kind) ? setAsking(key) : void install(key));
 
   return (
     <Page
@@ -431,8 +476,8 @@ export function CatalogPage({ sideHandle }: PageContext) {
         );
       })}
       {asked && (
-        <InstallServer
-          key={`${asked.source}/${asked.item.id}`}
+        <InstallDialog
+          key={`${asked.source}/${asked.item.kind}/${asked.item.id}`}
           entry={asked}
           onClose={() => setAsking(null)}
           onInstall={(secrets) => {

@@ -18,7 +18,9 @@ mock.module("@tauri-apps/api/core", () => ({
       return Promise.resolve(
         (args as { kind: string }).kind === "mcp"
           ? { text: '{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}', secrets: ["GITHUB_TOKEN"] }
-          : { text: "# Review\n\nRead the **diff**.", secrets: [] },
+          : (args as { kind: string }).kind === "hooks"
+            ? { text: '{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}', secrets: [] }
+            : { text: "# Review\n\nRead the **diff**.", secrets: [] },
       );
     if (command === "catalog_install" && failInstall) return Promise.reject(failInstall);
     return Promise.resolve(null);
@@ -49,7 +51,7 @@ const own: CatalogSource = {
   items: [
     entry({ id: "review", kind: "skill", name: "Code review", description: "Reviews a change", path: "skills/review", files: ["SKILL.md"] }),
     entry({ id: "github", kind: "mcp", name: "GitHub", description: "Issues and PRs", path: "mcp/github.json", target: "~/.kibo/mcp.json" }),
-    entry({ id: "no-force", kind: "hooks", name: "No force push", description: "Blocks git push -f", path: "hooks/no-force.json", target: null }),
+    entry({ id: "no-force", kind: "hooks", name: "No force push", description: "Blocks git push -f", path: "hooks/no-force.json", target: "~/.kibo/hooks.json" }),
   ],
   problems: ["x: \"agent\" is not a kind this app installs"],
   error: null,
@@ -69,8 +71,7 @@ describe("the catalog page", () => {
     expect(screen.queryByRole("region", { name: "Commands" })).toBeNull();
     expect(screen.getByText("1 entry left out")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Install Code review" }) as HTMLButtonElement).disabled).toBe(false);
-    // Hooks install in CT-4: the + is there, and off.
-    expect((screen.getByRole("button", { name: "Install No force push" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Install No force push" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   test("a tab lists one kind", async () => {
@@ -214,6 +215,20 @@ describe("the catalog page", () => {
     fireEvent.click(install);
     await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "mcp", id: "github", secrets: { GITHUB_TOKEN: "ghp_1" } }]));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("hooks are installed from a dialog that shows their commands", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install No force push" }));
+    const dialog = screen.getByRole("dialog", { name: "Install No force push?" });
+    expect(await within(dialog).findByText("exit 2")).toBeTruthy();
+    expect(within(dialog).getByText("PreToolUse · runCommand")).toBeTruthy();
+    expect(within(dialog).getByText(/no card to approve it/)).toBeTruthy();
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "hooks", id: "no-force", secrets: {} }]));
   });
 
   test("the panel's Install of a server asks too, and Cancel installs nothing", async () => {

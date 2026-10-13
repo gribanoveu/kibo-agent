@@ -340,3 +340,12 @@ pre.catalog-server-entry {
   margin: 10px 0 14px;
   overflow: auto;
 }
+.catalog-hook-when {
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.catalog-hook pre.catalog-server-entry {
+  margin-top: 4px;
+}
