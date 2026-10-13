@@ -23,7 +23,7 @@ export type CatalogState = "available" | "installed" | "update" | "changed" | "t
 /** An entry with what this machine has of it. */
 export type CatalogEntry = CatalogItem & {
   state: CatalogState;
-  /** Where it goes (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`); null for a kind not installed yet. */
+  /** Where it goes (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`, hooks' `~/.kibo/hooks.json`); null for an entry with no place. */
   target: string | null;
   /** A runbook named as one the app ships: installed, it is read instead. */
   replacesBuiltIn: boolean;

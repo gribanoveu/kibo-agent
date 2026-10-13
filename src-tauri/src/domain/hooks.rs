@@ -41,7 +41,7 @@ pub struct HooksConfig {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookGroup {
     /// A regular expression over the whole tool name; empty or `*` is every
     /// tool. Not read for `Stop`.
@@ -51,7 +51,7 @@ pub struct HookGroup {
     pub hooks: Vec<HookCommand>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookCommand {
     /// Only `command` runs here; Claude Code's `prompt` and `agent` hooks are
     /// kept in the file and skipped.

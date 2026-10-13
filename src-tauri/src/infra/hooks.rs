@@ -4,11 +4,12 @@
 //! every tool call of whoever opened it. Project hooks need a "trust this
 //! folder" step first, which is its own feature.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::command_exec::{CommandError, CommandOutput, CommandRequest};
-use crate::domain::hooks::{self, HookCommand, HooksConfig, HooksConfigError};
+use crate::domain::hooks::{self, HookCommand, HookGroup, HooksConfig, HooksConfigError};
 use crate::infra::{app_dir, process_runner};
 
 const FILE: &str = "hooks.json";
@@ -43,6 +44,42 @@ pub fn save_text(text: &str) -> Result<HooksConfig, HooksConfigError> {
     Ok(config)
 }
 
+/// `groups` added after what each event already has — by the catalog.
+/// Rewrites the file from the parsed config, so its layout is not kept.
+pub fn add_groups(groups: &BTreeMap<String, Vec<HookGroup>>) -> Result<HooksConfig, HooksConfigError> {
+    rewrite(|config| {
+        for (event, added) in groups {
+            config.hooks.entry(event.clone()).or_default().extend(added.iter().cloned());
+        }
+    })
+}
+
+/// Each of `groups` taken out where an equal one is still there, once; one
+/// edited since is not equal and stays. An event left with no group goes.
+pub fn remove_groups(groups: &BTreeMap<String, Vec<HookGroup>>) -> Result<HooksConfig, HooksConfigError> {
+    rewrite(|config| {
+        for (event, removed) in groups {
+            let Some(there) = config.hooks.get_mut(event) else { continue };
+            for group in removed {
+                if let Some(at) = there.iter().position(|g| g == group) {
+                    there.remove(at);
+                }
+            }
+            if there.is_empty() {
+                config.hooks.remove(event);
+            }
+        }
+    })
+}
+
+fn rewrite(edit: impl FnOnce(&mut HooksConfig)) -> Result<HooksConfig, HooksConfigError> {
+    let mut config = load()?;
+    edit(&mut config);
+    let text = serde_json::to_string_pretty(&config).map_err(|e| HooksConfigError::Write(e.to_string()))?;
+    app_dir::write_private(&path()?, format!("{text}\n").as_bytes()).map_err(HooksConfigError::Write)?;
+    Ok(config)
+}
+
 /// Through `sh -c`, as Claude Code runs a hook — on Windows the shell picked
 /// in Settings, as the agent's commands are — in the workspace, with
 /// `CLAUDE_PROJECT_DIR` set to it — the variable hooks written for Claude
@@ -63,6 +100,39 @@ mod tests {
     use super::*;
     use crate::domain::hooks::{outcome, HookOutcome};
     use crate::testing::{temp_dir, with_app_dir};
+
+    #[test]
+    fn groups_are_added_after_and_taken_out_only_while_unchanged() {
+        with_app_dir("hooks-groups", || {
+            let group = |command: &str| HookGroup { matcher: "runCommand".into(), hooks: vec![HookCommand { kind: "command".into(), command: command.into(), ..Default::default() }] };
+            save_text(r#"{"hooks":{"PreToolUse":[{"matcher":"runCommand","hooks":[{"type":"command","command":"mine"}]}]},"other":1}"#).unwrap();
+            let added = BTreeMap::from([("PreToolUse".to_string(), vec![group("a"), group("b")]), ("Stop".to_string(), vec![group("c")])]);
+            add_groups(&added).unwrap();
+            let config = load().unwrap();
+            assert_eq!(config.hooks["PreToolUse"], [group("mine"), group("a"), group("b")]);
+            assert_eq!(config.extra["other"], 1, "the rest of the file stays");
+
+            // `b` edited here: it stays, the rest goes, and so does an event left empty.
+            let text = read_text().unwrap().replace("\"b\"", "\"b2\"");
+            save_text(&text).unwrap();
+            remove_groups(&added).unwrap();
+            let config = load().unwrap();
+            assert_eq!(config.hooks["PreToolUse"], [group("mine"), group("b2")]);
+            assert!(!config.hooks.contains_key("Stop"));
+        });
+    }
+
+    #[test]
+    fn a_group_written_twice_comes_out_once_per_record() {
+        with_app_dir("hooks-groups-twice", || {
+            let group = HookGroup { hooks: vec![HookCommand { kind: "command".into(), command: "x".into(), ..Default::default() }], ..Default::default() };
+            let added = BTreeMap::from([("Stop".to_string(), vec![group.clone()])]);
+            add_groups(&added).unwrap();
+            add_groups(&added).unwrap();
+            remove_groups(&added).unwrap();
+            assert_eq!(load().unwrap().hooks["Stop"], [group]);
+        });
+    }
 
     #[test]
     fn no_file_is_no_hooks_and_a_broken_one_says_so() {

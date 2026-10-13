@@ -15,6 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 use url::Url;
 
+use super::hooks::{HookEvent, HookGroup, HooksConfig};
 use super::mcp::{self, McpConfig, McpServerConfig};
 use super::skills::validate_skill_name;
 
@@ -129,7 +130,7 @@ pub enum CatalogError {
     Record(String),
     #[error("{0}")]
     Disk(String),
-    #[error("the entry is not an MCP server this app reads: {0}")]
+    #[error("the entry is not one this app installs: {0}")]
     BadEntry(String),
     #[error("{0} is not filled in")]
     MissingSecret(String),
@@ -282,8 +283,13 @@ pub struct Installed {
     /// A skill's files as written, relative to its folder; empty for a one-file kind.
     #[serde(default)]
     pub files: Vec<String>,
-    /// [`content_hash`] of what was written.
+    /// [`content_hash`] of what was written; empty for hooks, whose groups
+    /// are kept whole below.
     pub hash: String,
+    /// Hooks' groups as added to `hooks.json`, by event: what Remove looks
+    /// for there — the catalog may have changed them since.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hooks: BTreeMap<String, Vec<HookGroup>>,
 }
 
 /// Where an entry goes, relative to the app directory — the folders the
@@ -444,6 +450,47 @@ pub fn mcp_state(item: &CatalogItem, source: &str, record: Option<&Installed>, c
     state(item, source, record, on_disk.as_deref())
 }
 
+// ------------------------------------------------------------ hooks
+
+/// The events a catalog's hooks may be for — the ones this app fires. A
+/// group for another would sit in `hooks.json` doing nothing.
+const HOOK_EVENTS: &[HookEvent] = &[HookEvent::PreToolUse, HookEvent::PostToolUse, HookEvent::Stop];
+
+/// A catalog's `hooks/<id>.json`: `{"hooks": {"<event>": [groups]}}`, as in
+/// `hooks.json`. Every group has a command to run; nothing else is read.
+pub fn parse_hooks(bytes: &[u8]) -> Result<BTreeMap<String, Vec<HookGroup>>, CatalogError> {
+    let config: HooksConfig = serde_json::from_slice(bytes).map_err(|e| CatalogError::BadEntry(e.to_string()))?;
+    if config.hooks.values().all(Vec::is_empty) {
+        return Err(CatalogError::BadEntry("it has no hooks".into()));
+    }
+    for (event, groups) in &config.hooks {
+        if !HOOK_EVENTS.iter().any(|known| known.name() == event) {
+            return Err(CatalogError::BadEntry(format!("this app fires no {event} event")));
+        }
+        let runs = |group: &HookGroup| !group.hooks.is_empty() && group.hooks.iter().all(|hook| hook.kind == "command" && !hook.command.trim().is_empty());
+        if !groups.iter().all(runs) {
+            return Err(CatalogError::BadEntry(format!("a {event} group has no command to run")));
+        }
+    }
+    Ok(config.hooks)
+}
+
+/// [`state`] for hooks: the record's groups looked for in `hooks.json`. All
+/// there is as installed; none, removed by hand; some, edited since. Without
+/// a record there is nothing to look for — hooks have no name to be taken.
+pub fn hooks_state(item: &CatalogItem, source: &str, record: Option<&Installed>, config: &HooksConfig) -> ItemState {
+    let Some(record) = record else { return ItemState::Available };
+    let groups: Vec<_> = record.hooks.iter().flat_map(|(event, groups)| groups.iter().map(move |group| (event, group))).collect();
+    let present = groups.iter().filter(|(event, group)| config.hooks.get(*event).is_some_and(|there| there.contains(group))).count();
+    let on_disk = match present {
+        0 => None,
+        n if n == groups.len() => Some(record.hash.as_str()),
+        // Never the record's: a hooks record's hash is empty.
+        _ => Some("edited"),
+    };
+    state(item, source, Some(record), on_disk)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,6 +645,7 @@ mod tests {
             rev: "1".into(),
             files: item.files.clone(),
             hash: "h".into(),
+            hooks: BTreeMap::new(),
         };
         let at = |record: Option<&Installed>, on_disk: Option<&str>| state(&item, "https://a.example/", record, on_disk);
         assert_eq!(at(None, None), ItemState::Available);
@@ -658,7 +706,7 @@ mod tests {
         let item = index(r#"{"id": "github", "kind": "mcp", "name": "GitHub", "rev": "1", "path": "mcp/github.json"}"#).items.remove(0);
         let server = parse_mcp(br#"{"command": "x"}"#).unwrap();
         let config = |pairs: &[(&str, &McpServerConfig)]| McpConfig { mcp_servers: pairs.iter().map(|(k, v)| (k.to_string(), (*v).clone())).collect() };
-        let record = Installed { source: "https://a.example/".into(), kind: ItemKind::Mcp, id: "github".into(), role: None, rev: "1".into(), files: vec![], hash: mcp_hash(&server) };
+        let record = Installed { source: "https://a.example/".into(), kind: ItemKind::Mcp, id: "github".into(), role: None, rev: "1".into(), files: vec![], hash: mcp_hash(&server), hooks: BTreeMap::new() };
         let at = |record: Option<&Installed>, config: &McpConfig| mcp_state(&item, "https://a.example/", record, config);
 
         assert_eq!(at(None, &config(&[("other", &server)])), ItemState::Available);
@@ -674,5 +722,48 @@ mod tests {
         assert_eq!(at(Some(&record), &config(&[("github", &hidden)])), ItemState::Installed);
         let edited = McpServerConfig { command: "y".into(), ..server.clone() };
         assert_eq!(at(Some(&record), &config(&[("github", &edited)])), ItemState::Changed);
+    }
+
+    const NO_FORCE: &[u8] = br#"{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 0", "timeout": 5}]}]}}"#;
+
+    #[test]
+    fn hooks_are_groups_with_a_command_for_an_event_this_app_fires() {
+        let hooks = parse_hooks(NO_FORCE).unwrap();
+        assert_eq!(hooks["PreToolUse"][0].matcher, "runCommand");
+        assert!(parse_hooks(br#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#).is_ok());
+        for bad in [
+            &br#"{}"#[..],
+            br#"{"hooks": {"PreToolUse": []}}"#,
+            br#"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#,
+            br#"{"hooks": {"PreToolUse": [{"matcher": "x", "hooks": []}]}}"#,
+            br#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "prompt", "command": "x"}]}]}}"#,
+            br#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": " "}]}]}}"#,
+            br#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "x"}]}, {"hooks": []}]}}"#,
+            b"[",
+        ] {
+            assert!(matches!(parse_hooks(bad), Err(CatalogError::BadEntry(_))), "{}", String::from_utf8_lossy(bad));
+        }
+    }
+
+    #[test]
+    fn hooks_read_as_installed_while_every_group_is_there() {
+        let item = index(r#"{"id": "no-force", "kind": "hooks", "name": "No force", "rev": "1", "path": "hooks/no-force.json"}"#).items.remove(0);
+        let mut hooks = parse_hooks(NO_FORCE).unwrap();
+        hooks.insert("Stop".into(), vec![HookGroup { hooks: hooks["PreToolUse"][0].hooks.clone(), ..HookGroup::default() }]);
+        let record = Installed { source: "https://a.example/".into(), kind: ItemKind::Hooks, id: "no-force".into(), role: None, rev: "1".into(), files: vec![], hash: String::new(), hooks: hooks.clone() };
+        let at = |record: Option<&Installed>, config: &HooksConfig| hooks_state(&item, "https://a.example/", record, config);
+        let mine = HookGroup { matcher: "editFile".into(), ..hooks["PreToolUse"][0].clone() };
+        let with = |pre: Vec<HookGroup>, stop: Vec<HookGroup>| HooksConfig { hooks: BTreeMap::from([("PreToolUse".into(), pre), ("Stop".into(), stop)]), ..HooksConfig::default() };
+
+        assert_eq!(at(None, &with(hooks["PreToolUse"].clone(), hooks["Stop"].clone())), ItemState::Available);
+        let all = with(vec![mine.clone(), hooks["PreToolUse"][0].clone()], hooks["Stop"].clone());
+        assert_eq!(at(Some(&record), &all), ItemState::Installed);
+        assert_eq!(at(Some(&Installed { rev: "0".into(), ..record.clone() }), &all), ItemState::Update);
+        assert_eq!(at(Some(&record), &with(vec![mine.clone()], hooks["Stop"].clone())), ItemState::Changed);
+        assert_eq!(at(Some(&record), &with(vec![mine], vec![])), ItemState::Available);
+        assert_eq!(at(Some(&Installed { source: "https://b.example/".into(), ..record.clone() }), &all), ItemState::Taken);
+        // A group under another event than it was added to is not it.
+        assert_eq!(at(Some(&record), &with(hooks["Stop"].clone(), hooks["PreToolUse"].clone())), ItemState::Available);
+        assert_eq!(at(Some(&Installed { hooks: BTreeMap::new(), ..record }), &all), ItemState::Available);
     }
 }

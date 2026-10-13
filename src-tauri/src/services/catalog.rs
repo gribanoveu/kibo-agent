@@ -10,11 +10,12 @@ use serde::Serialize;
 use url::Url;
 
 use crate::domain::catalog::{self, CatalogError, CatalogItem, Installed, ItemKind, ItemState};
+use crate::domain::hooks::HooksConfig;
 use crate::domain::mcp::McpConfig;
 use crate::domain::runbooks;
 use crate::infra::catalog_http::{self, Fetched};
 use crate::infra::catalog_store::{self, CachedIndex};
-use crate::infra::{app_dir, mcp_config, settings_store};
+use crate::infra::{app_dir, hooks as hooks_file, mcp_config, settings_store};
 
 /// An entry as its row shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -24,8 +25,8 @@ pub struct ItemView {
     pub item: CatalogItem,
     pub state: ItemState,
     /// Where it goes, as a path under the home folder reads
-    /// (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`); `None` for a
-    /// kind not installed yet.
+    /// (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`, hooks'
+    /// `~/.kibo/hooks.json`). `None` only for an entry with no place.
     pub target: Option<String>,
     /// A runbook named as one the app ships: installed, it is read instead.
     pub replaces_built_in: bool,
@@ -54,12 +55,23 @@ type FetchFile<'a> = &'a dyn Fn(&Url, &str) -> Result<Vec<u8>, CatalogError>;
 pub fn list() -> Vec<SourceView> {
     let added = settings_store::load().map(|settings| settings.catalog_sources).unwrap_or_default();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    // Unreadable, every entry in a place reads as taken: nothing offers to
-    // install over, or remove, what the record would have said.
-    let installed = catalog_store::load_installed().unwrap_or_default();
-    // Unreadable, no server reads as installed; installing one says why.
-    let servers = mcp_config::load().unwrap_or_default();
-    sources(&added).iter().map(|source| read(source, &catalog_http::fetch_index, now, &installed, &servers)).collect()
+    // The record unreadable, every entry in a place reads as taken: nothing
+    // offers to install over, or remove, what the record would have said.
+    // Unreadable, nothing in them reads as installed; installing says why.
+    let here = Here {
+        installed: catalog_store::load_installed().unwrap_or_default(),
+        servers: mcp_config::load().unwrap_or_default(),
+        hooks: hooks_file::load().unwrap_or_default(),
+    };
+    sources(&added).iter().map(|source| read(source, &catalog_http::fetch_index, now, &here)).collect()
+}
+
+/// What this machine has that a row's state is read from.
+#[derive(Default)]
+struct Here {
+    installed: Vec<Installed>,
+    servers: McpConfig,
+    hooks: HooksConfig,
 }
 
 /// The record of `kind`/`id`, whichever source it came from: the place is one per kind and id.
@@ -72,25 +84,27 @@ fn place_of(relative: &std::path::Path) -> Result<PathBuf, CatalogError> {
     app_dir::dir().map(|dir| dir.join(relative)).map_err(CatalogError::Disk)
 }
 
-/// Where a server goes, as the row says it.
+/// Where a server and hooks go, as the row says it.
 const MCP_TARGET: &str = "~/.kibo/mcp.json";
+const HOOKS_TARGET: &str = "~/.kibo/hooks.json";
 
-fn item_view(item: CatalogItem, source: &str, installed: &[Installed], servers: &McpConfig) -> ItemView {
+fn item_view(item: CatalogItem, source: &str, here: &Here) -> ItemView {
     let relative = catalog::target(item.kind, &item.id, item.role.as_deref());
-    let record = record(installed, item.kind, &item.id);
+    let record = record(&here.installed, item.kind, &item.id);
     let state = match relative.as_deref().map(place_of) {
         Some(Ok(target)) => {
             let files = record.map_or(&item.files, |record| &record.files);
             catalog::state(&item, source, record, catalog_store::hash_at(&target, item.kind == ItemKind::Skill, files).as_deref())
         }
-        _ if item.kind == ItemKind::Mcp => catalog::mcp_state(&item, source, record, servers),
-        // Hooks: installed into a config file, from CT-4 on.
+        _ if item.kind == ItemKind::Mcp => catalog::mcp_state(&item, source, record, &here.servers),
+        _ if item.kind == ItemKind::Hooks => catalog::hooks_state(&item, source, record, &here.hooks),
         _ => ItemState::Available,
     };
-    let target = match relative {
-        Some(path) => Some(format!("~/.kibo/{}", path.to_string_lossy().replace('\\', "/"))),
-        None if item.kind == ItemKind::Mcp => Some(MCP_TARGET.to_string()),
-        None => None,
+    let target = match (relative, item.kind) {
+        (Some(path), _) => Some(format!("~/.kibo/{}", path.to_string_lossy().replace('\\', "/"))),
+        (None, ItemKind::Mcp) => Some(MCP_TARGET.to_string()),
+        (None, ItemKind::Hooks) => Some(HOOKS_TARGET.to_string()),
+        (None, _) => None,
     };
     ItemView {
         target,
@@ -124,15 +138,23 @@ fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<Strin
     let (base, item) = listed(source, kind, id)?;
     let mut installed = catalog_store::load_installed().map_err(CatalogError::Record)?;
     let ours = record(&installed, kind, id);
-    let (files, hash) = if kind == ItemKind::Mcp {
-        let servers = mcp_config::load().map_err(|e| CatalogError::Disk(e.to_string()))?;
+    let disk = |e: &dyn std::fmt::Display| CatalogError::Disk(e.to_string());
+    let (files, hash, hooks) = if kind == ItemKind::Mcp {
+        let servers = mcp_config::load().map_err(|e| disk(&e))?;
         if catalog::mcp_state(&item, base.as_str(), ours, &servers) != ItemState::Available {
             return Err(CatalogError::Present(item.name));
         }
         let server = catalog::fill_secrets(&catalog::parse_mcp(&fetch(&base, &item.path)?)?, secrets)?;
         let hash = catalog::mcp_hash(&server);
-        mcp_config::add(id, server).map_err(|e| CatalogError::Disk(e.to_string()))?;
-        (Vec::new(), hash)
+        mcp_config::add(id, server).map_err(|e| disk(&e))?;
+        (Vec::new(), hash, BTreeMap::new())
+    } else if kind == ItemKind::Hooks {
+        if catalog::hooks_state(&item, base.as_str(), ours, &hooks_file::load().map_err(|e| disk(&e))?) != ItemState::Available {
+            return Err(CatalogError::Present(item.name));
+        }
+        let groups = catalog::parse_hooks(&fetch(&base, &item.path)?)?;
+        hooks_file::add_groups(&groups).map_err(|e| disk(&e))?;
+        (Vec::new(), String::new(), groups)
     } else {
         let relative = catalog::target(kind, id, item.role.as_deref()).ok_or_else(|| CatalogError::NotYet(item.name.clone()))?;
         let target = place_of(&relative)?;
@@ -148,26 +170,32 @@ fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<Strin
         };
         catalog_store::place(&target, folder, &files).map_err(CatalogError::Disk)?;
         let hash = catalog::content_hash(&files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect::<Vec<_>>());
-        (if folder { item.files } else { Vec::new() }, hash)
+        (if folder { item.files } else { Vec::new() }, hash, BTreeMap::new())
     };
     // A record left by an install deleted by hand since is replaced.
     installed.retain(|record| !(record.kind == kind && record.id == id));
-    installed.push(Installed { source: base.to_string(), kind, id: id.to_string(), role: item.role.clone(), rev: item.rev, files, hash });
+    let record = Installed { source: base.to_string(), kind, id: id.to_string(), role: item.role, rev: item.rev, files, hash, hooks };
+    installed.push(record.clone());
     catalog_store::save_installed(&installed).map_err(|e| {
         // Unrecorded, it would read as someone else's and never come off from here.
-        let _ = take_out(kind, id, item.role.as_deref());
+        let _ = take_out(&record);
         CatalogError::Record(e)
     })
 }
 
-/// `kind`/`id` taken out of its place: a server's name out of `mcp.json`,
+/// What `record` installed taken out of its place: a server's name out of
+/// `mcp.json`, hooks' groups out of `hooks.json` (those edited since stay),
 /// anything else's files from where [`catalog::target`] puts them.
-fn take_out(kind: ItemKind, id: &str, role: Option<&str>) -> Result<(), CatalogError> {
-    if kind == ItemKind::Mcp {
-        return mcp_config::remove(id).map(drop).map_err(|e| CatalogError::Disk(e.to_string()));
+fn take_out(record: &Installed) -> Result<(), CatalogError> {
+    let disk = |e: &dyn std::fmt::Display| CatalogError::Disk(e.to_string());
+    match record.kind {
+        ItemKind::Mcp => mcp_config::remove(&record.id).map(drop).map_err(|e| disk(&e)),
+        ItemKind::Hooks => hooks_file::remove_groups(&record.hooks).map(drop).map_err(|e| disk(&e)),
+        kind => {
+            let relative = catalog::target(kind, &record.id, record.role.as_deref()).ok_or_else(|| CatalogError::NotInstalled(record.id.clone()))?;
+            catalog_store::remove(&place_of(&relative)?, kind == ItemKind::Skill).map_err(CatalogError::Disk)
+        }
     }
-    let relative = catalog::target(kind, id, role).ok_or_else(|| CatalogError::NotInstalled(id.to_string()))?;
-    catalog_store::remove(&place_of(&relative)?, kind == ItemKind::Skill).map_err(CatalogError::Disk)
 }
 
 /// Removes what this source installed as `kind`/`id`, from where the record
@@ -178,7 +206,7 @@ pub fn remove(source: &str, kind: ItemKind, id: &str) -> Result<(), CatalogError
     let record = record(&installed, kind, id)
         .filter(|record| record.source == base.as_str())
         .ok_or_else(|| CatalogError::NotInstalled(id.to_string()))?;
-    take_out(kind, id, record.role.as_deref())?;
+    take_out(record)?;
     installed.retain(|record| !(record.kind == kind && record.id == id));
     catalog_store::save_installed(&installed).map_err(CatalogError::Record)
 }
@@ -194,7 +222,7 @@ pub struct Preview {
 }
 
 /// An entry read from the source, as an install would read it — a server's
-/// entry that would not install is an error here already.
+/// entry or hooks that would not install are an error here already.
 pub fn preview(source: &str, kind: ItemKind, id: &str) -> Result<Preview, CatalogError> {
     preview_with(source, kind, id, &catalog_http::fetch_file)
 }
@@ -203,7 +231,11 @@ fn preview_with(source: &str, kind: ItemKind, id: &str, fetch: FetchFile) -> Res
     let (base, item) = listed(source, kind, id)?;
     let path = if kind == ItemKind::Skill { format!("{}/{}", item.path, catalog::SKILL_MD) } else { item.path };
     let bytes = fetch(&base, &path)?;
-    let secrets = if kind == ItemKind::Mcp { catalog::mcp_secrets(&catalog::parse_mcp(&bytes)?) } else { Vec::new() };
+    let secrets = match kind {
+        ItemKind::Mcp => catalog::mcp_secrets(&catalog::parse_mcp(&bytes)?),
+        ItemKind::Hooks => catalog::parse_hooks(&bytes).map(|_| Vec::new())?,
+        _ => Vec::new(),
+    };
     Ok(Preview { text: String::from_utf8_lossy(&bytes).into_owned(), secrets })
 }
 
@@ -222,7 +254,7 @@ fn sources(added: &[String]) -> Vec<String> {
     listed
 }
 
-fn read(source: &str, fetch: Fetch, now: u64, installed: &[Installed], servers: &McpConfig) -> SourceView {
+fn read(source: &str, fetch: Fetch, now: u64, here: &Here) -> SourceView {
     let mut view = SourceView { url: source.to_string(), built_in: source == catalog::DEFAULT_SOURCE, ..SourceView::default() };
     let base = match catalog::source_base(source) {
         Ok(base) => base,
@@ -252,7 +284,7 @@ fn read(source: &str, fetch: Fetch, now: u64, installed: &[Installed], servers: 
     view.fetched_at = Some(shown.fetched_at);
     match catalog::parse_index(&shown.text) {
         Ok(index) => {
-            view.items = index.items.into_iter().map(|item| item_view(item, key, installed, servers)).collect();
+            view.items = index.items.into_iter().map(|item| item_view(item, key, here)).collect();
             view.problems = index.problems;
         }
         // A copy kept by an older app, in a format this one no longer reads.
@@ -294,7 +326,7 @@ mod tests {
     #[test]
     fn a_fresh_index_is_listed_kept_and_asked_for_by_its_etag_next() {
         with_app_dir("catalog-fresh", || {
-            let view = read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &[], &McpConfig::default());
+            let view = read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &Here::default());
             assert_eq!(view.items.iter().map(|i| i.item.id.as_str()).collect::<Vec<_>>(), ["changelog"]);
             assert_eq!(view.problems.len(), 1);
             assert_eq!((view.error, view.fetched_at, view.built_in), (None, Some(100), false));
@@ -307,8 +339,7 @@ mod tests {
                     Ok(Fetched::NotModified)
                 },
                 200,
-                &[],
-                &McpConfig::default(),
+                &Here::default(),
             );
             assert_eq!(asked.into_inner(), Some((BASE.to_string(), Some("\"v1\"".to_string()))));
             assert_eq!((again.items.len(), again.fetched_at, again.error), (1, Some(200), None));
@@ -320,12 +351,12 @@ mod tests {
     #[test]
     fn without_the_network_the_kept_copy_is_shown_with_why() {
         with_app_dir("catalog-offline", || {
-            let first = read(BASE, &|_, _| Err(CatalogError::Unavailable("no route".into())), 100, &[], &McpConfig::default());
+            let first = read(BASE, &|_, _| Err(CatalogError::Unavailable("no route".into())), 100, &Here::default());
             assert_eq!((first.items.len(), first.fetched_at), (0, None));
             assert!(first.error.unwrap().contains("no route"));
 
-            read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &[], &McpConfig::default());
-            let offline = read(BASE, &|_, _| Err(CatalogError::Status(503)), 300, &[], &McpConfig::default());
+            read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &Here::default());
+            let offline = read(BASE, &|_, _| Err(CatalogError::Status(503)), 300, &Here::default());
             assert_eq!((offline.items.len(), offline.fetched_at), (1, Some(100)));
             assert_eq!(offline.error.as_deref(), Some("the catalog answered 503"));
         });
@@ -334,14 +365,14 @@ mod tests {
     #[test]
     fn an_index_that_does_not_read_keeps_the_last_good_one() {
         with_app_dir("catalog-broken", || {
-            read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &[], &McpConfig::default());
-            let broken = read(BASE, &|_, _| fresh("<html>rate limited</html>", "\"v2\""), 200, &[], &McpConfig::default());
+            read(BASE, &|_, _| fresh(ONE, "\"v1\""), 100, &Here::default());
+            let broken = read(BASE, &|_, _| fresh("<html>rate limited</html>", "\"v2\""), 200, &Here::default());
             assert_eq!((broken.items.len(), broken.fetched_at), (1, Some(100)));
             assert!(broken.error.unwrap().contains("not JSON"));
             // Not written over: the next ask sends the good copy's ETag.
             assert_eq!(catalog_store::load(BASE).unwrap().etag.as_deref(), Some("\"v1\""));
 
-            let newer = read(BASE, &|_, _| fresh(r#"{"version": 2}"#, "\"v3\""), 300, &[], &McpConfig::default());
+            let newer = read(BASE, &|_, _| fresh(r#"{"version": 2}"#, "\"v3\""), 300, &Here::default());
             assert!(newer.error.unwrap().contains("newer app"));
             assert_eq!(newer.items.len(), 1);
         });
@@ -350,7 +381,7 @@ mod tests {
     #[test]
     fn a_source_that_is_not_an_address_is_never_asked() {
         with_app_dir("catalog-bad-source", || {
-            let view = read("http://cat.example/", &|_, _| panic!("asked"), 100, &[], &McpConfig::default());
+            let view = read("http://cat.example/", &|_, _| panic!("asked"), 100, &Here::default());
             assert!(view.error.unwrap().contains("only for this machine"));
             assert!(view.items.is_empty());
         });
@@ -359,7 +390,7 @@ mod tests {
     #[test]
     fn the_apps_own_is_marked() {
         with_app_dir("catalog-own", || {
-            assert!(read(catalog::DEFAULT_SOURCE, &|_, _| Err(CatalogError::Status(500)), 1, &[], &McpConfig::default()).built_in);
+            assert!(read(catalog::DEFAULT_SOURCE, &|_, _| Err(CatalogError::Status(500)), 1, &Here::default()).built_in);
         });
     }
 
@@ -388,6 +419,7 @@ mod tests {
             "skills/review/refs/list.md" => Ok(b"- bugs".to_vec()),
             "commands/changelog.md" => Ok(b"Add a line".to_vec()),
             "runbooks/kubernetes/crashloop.md" => Ok(b"Sign: mine".to_vec()),
+            "hooks/no-force.json" => Ok(br#"{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}"#.to_vec()),
             "mcp/github.json" => Ok(br#"{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}"#.to_vec()),
             _ => Err(CatalogError::Status(404)),
         }
@@ -395,11 +427,16 @@ mod tests {
 
     /// The catalog listed once, as the page would have: what install reads from.
     fn listed_once(text: &str) -> Vec<ItemView> {
-        read(BASE, &|_, _| fresh(text, "\"v1\""), 100, &[], &McpConfig::default()).items
+        read(BASE, &|_, _| fresh(text, "\"v1\""), 100, &Here::default()).items
+    }
+
+    /// What a list now would read its states from.
+    fn on_disk(installed: &[Installed]) -> Here {
+        Here { installed: installed.to_vec(), servers: mcp_config::load().unwrap(), hooks: hooks_file::load().unwrap() }
     }
 
     fn states(installed: &[Installed]) -> Vec<(String, ItemState)> {
-        read(BASE, &|_, _| Ok(Fetched::NotModified), 200, installed, &mcp_config::load().unwrap()).items.into_iter().map(|v| (v.item.id, v.state)).collect()
+        read(BASE, &|_, _| Ok(Fetched::NotModified), 200, &on_disk(installed)).items.into_iter().map(|v| (v.item.id, v.state)).collect()
     }
 
     fn here(relative: &str) -> PathBuf {
@@ -414,7 +451,7 @@ mod tests {
             assert_eq!(at("review").target.as_deref(), Some("~/.kibo/skills/review"));
             assert_eq!(at("crashloop").target.as_deref(), Some("~/.kibo/runbooks/kubernetes/crashloop.md"));
             assert_eq!(at("github").target.as_deref(), Some("~/.kibo/mcp.json"));
-            assert_eq!(at("no-force").target, None);
+            assert_eq!(at("no-force").target.as_deref(), Some("~/.kibo/hooks.json"));
             assert!(at("crashloop").replaces_built_in);
             assert!(!at("tls").replaces_built_in);
             // A built-in runbook's name on another kind replaces nothing.
@@ -507,9 +544,12 @@ mod tests {
             std::fs::set_permissions(&record_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
             let skill = install_with(BASE, ItemKind::Skill, "review", &none(), &files);
             let server = install_with(BASE, ItemKind::Mcp, "github", &token("t"), &files);
+            let hooks = install_with(BASE, ItemKind::Hooks, "no-force", &none(), &files);
             std::fs::set_permissions(&record_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert!(matches!(skill, Err(CatalogError::Record(_))), "{skill:?}");
             assert!(matches!(server, Err(CatalogError::Record(_))), "{server:?}");
+            assert!(matches!(hooks, Err(CatalogError::Record(_))), "{hooks:?}");
+            assert!(hooks_file::load().unwrap().hooks.is_empty());
             assert!(std::fs::symlink_metadata(here("skills/review")).is_err());
             assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
         });
@@ -526,13 +566,12 @@ mod tests {
     }
 
     #[test]
-    fn only_what_is_listed_installs_and_hooks_wait() {
+    fn only_what_is_listed_installs() {
         with_app_dir("catalog-not-listed", || {
             assert_eq!(install_with(BASE, ItemKind::Command, "changelog", &none(), &files), Err(CatalogError::NotListed("changelog".into())));
             listed_once(CAT);
             assert_eq!(install_with(BASE, ItemKind::Command, "other", &none(), &files), Err(CatalogError::NotListed("other".into())));
             assert_eq!(install_with(BASE, ItemKind::Skill, "changelog", &none(), &files), Err(CatalogError::NotListed("changelog".into())));
-            assert_eq!(install_with(BASE, ItemKind::Hooks, "no-force", &none(), &|_, _| panic!("fetched")), Err(CatalogError::NotYet("No force push".into())));
         });
     }
 
@@ -593,15 +632,56 @@ mod tests {
     }
 
     #[test]
+    fn hooks_go_after_the_users_own_and_only_theirs_come_out() {
+        with_app_dir("catalog-hooks", || {
+            hooks_file::save_text(r#"{"hooks": {"PreToolUse": [{"matcher": "editFile", "hooks": [{"type": "command", "command": "mine"}]}]}}"#).unwrap();
+            listed_once(CAT);
+            install_with(BASE, ItemKind::Hooks, "no-force", &none(), &files).unwrap();
+            let groups = &hooks_file::load().unwrap().hooks["PreToolUse"];
+            assert_eq!(groups.iter().map(|g| g.hooks[0].command.as_str()).collect::<Vec<_>>(), ["mine", "exit 2"]);
+            let installed = catalog_store::load_installed().unwrap();
+            assert_eq!(installed[0].hooks["PreToolUse"], groups[1..]);
+            let state = || states(&catalog_store::load_installed().unwrap()).into_iter().find(|(id, _)| id == "no-force").unwrap().1;
+            assert_eq!(state(), ItemState::Installed);
+            assert_eq!(install_with(BASE, ItemKind::Hooks, "no-force", &none(), &files), Err(CatalogError::Present("No force push".into())));
+
+            assert_eq!(remove("https://other.example/", ItemKind::Hooks, "no-force"), Err(CatalogError::NotInstalled("no-force".into())));
+            remove(BASE, ItemKind::Hooks, "no-force").unwrap();
+            assert_eq!(hooks_file::load().unwrap().hooks["PreToolUse"].len(), 1);
+            assert_eq!(hooks_file::load().unwrap().hooks["PreToolUse"][0].hooks[0].command, "mine");
+            assert_eq!(catalog_store::load_installed().unwrap(), Vec::new());
+            assert_eq!(state(), ItemState::Available);
+        });
+    }
+
+    #[test]
+    fn hooks_edited_here_read_as_changed_and_stay_on_remove() {
+        with_app_dir("catalog-hooks-edited", || {
+            listed_once(CAT);
+            install_with(BASE, ItemKind::Hooks, "no-force", &none(), &files).unwrap();
+            let text = hooks_file::read_text().unwrap().replace("exit 2", "exit 0");
+            hooks_file::save_text(&text).unwrap();
+            assert_eq!(states(&catalog_store::load_installed().unwrap()).into_iter().find(|(id, _)| id == "no-force").unwrap().1, ItemState::Available);
+            // Removed by hand, edited stays as the user's: install adds the catalog's beside it.
+            install_with(BASE, ItemKind::Hooks, "no-force", &none(), &files).unwrap();
+            assert_eq!(hooks_file::load().unwrap().hooks["PreToolUse"].len(), 2);
+            remove(BASE, ItemKind::Hooks, "no-force").unwrap();
+            assert_eq!(hooks_file::load().unwrap().hooks["PreToolUse"][0].hooks[0].command, "exit 0");
+        });
+    }
+
+    #[test]
     fn a_preview_is_a_skills_skill_md_or_the_one_file() {
         with_app_dir("catalog-preview", || {
             listed_once(CAT);
             assert_eq!(preview_with(BASE, ItemKind::Skill, "review", &files).unwrap(), Preview { text: "# Review".into(), secrets: vec![] });
             assert_eq!(preview_with(BASE, ItemKind::Command, "changelog", &files).unwrap().text, "Add a line");
             assert_eq!(preview_with(BASE, ItemKind::Mcp, "github", &files).unwrap().secrets, ["GITHUB_TOKEN"]);
+            assert!(preview_with(BASE, ItemKind::Hooks, "no-force", &files).unwrap().text.contains("exit 2"));
             // A server entry that would not install says so here already.
             let broken = |_: &Url, _: &str| Ok(br#"{"headers": {}}"#.to_vec());
             assert!(matches!(preview_with(BASE, ItemKind::Mcp, "github", &broken), Err(CatalogError::BadEntry(_))));
+            assert!(matches!(preview_with(BASE, ItemKind::Hooks, "no-force", &broken), Err(CatalogError::BadEntry(_))));
         });
     }
 
@@ -614,7 +694,7 @@ mod tests {
     fn live_catalog_installs_and_removes() {
         with_app_dir("catalog-live-install", || {
             let source = catalog::DEFAULT_SOURCE;
-            let listed = read(source, &catalog_http::fetch_index, 1, &[], &McpConfig::default());
+            let listed = read(source, &catalog_http::fetch_index, 1, &Here::default());
             assert_eq!(listed.error, None);
             let files: Vec<_> = listed.items.iter().filter(|v| v.target.is_some()).map(|v| (v.item.kind, v.item.id.clone())).collect();
             assert!(!files.is_empty());
@@ -625,7 +705,7 @@ mod tests {
                 let secrets = preview.secrets.iter().map(|name| (name.clone(), "live-test".to_string())).collect();
                 install(source, *kind, id, &secrets).unwrap();
             }
-            let again = read(source, &catalog_http::fetch_index, 2, &catalog_store::load_installed().unwrap(), &mcp_config::load().unwrap());
+            let again = read(source, &catalog_http::fetch_index, 2, &on_disk(&catalog_store::load_installed().unwrap()));
             for view in again.items.iter().filter(|v| v.target.is_some()) {
                 println!("{} {:?} -> {}", view.item.id, view.state, view.target.as_deref().unwrap_or(""));
                 assert_eq!(view.state, ItemState::Installed, "{}", view.item.id);

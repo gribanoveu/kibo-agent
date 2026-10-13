@@ -248,6 +248,7 @@ mod tests {
                 rev: "1".into(),
                 files: Vec::new(),
                 hash: "h".into(),
+                hooks: Default::default(),
             };
             save_installed(&[record.clone()]).unwrap();
             assert_eq!(load_installed(), Ok(vec![record]));
