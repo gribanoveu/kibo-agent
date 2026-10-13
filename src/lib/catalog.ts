@@ -23,7 +23,7 @@ export type CatalogState = "available" | "installed" | "update" | "changed" | "t
 /** An entry with what this machine has of it. */
 export type CatalogEntry = CatalogItem & {
   state: CatalogState;
-  /** Where it goes (`~/.kibo/skills/review`); null for a kind not installed as files yet. */
+  /** Where it goes (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`); null for a kind not installed yet. */
   target: string | null;
   /** A runbook named as one the app ships: installed, it is read instead. */
   replacesBuiltIn: boolean;
@@ -46,9 +46,9 @@ export async function catalogList(): Promise<CatalogSource[]> {
   return invoke<CatalogSource[]>("catalog_list");
 }
 
-/** Installs a skill, command or runbook as the source's kept index lists it. */
-export async function catalogInstall(source: string, kind: CatalogKind, id: string): Promise<void> {
-  return invoke("catalog_install", { source, kind, id });
+/** Installs an entry as the source's kept index lists it; a server with its `${NAME}`s filled from `secrets`. */
+export async function catalogInstall(source: string, kind: CatalogKind, id: string, secrets: Record<string, string> = {}): Promise<void> {
+  return invoke("catalog_install", { source, kind, id, secrets });
 }
 
 /** Removes what `source` installed as `kind`/`id`. */
@@ -56,7 +56,14 @@ export async function catalogRemove(source: string, kind: CatalogKind, id: strin
   return invoke("catalog_remove", { source, kind, id });
 }
 
-/** An entry's text from its source: a skill's SKILL.md, any other kind's one file. */
-export async function catalogPreview(source: string, kind: CatalogKind, id: string): Promise<string> {
-  return invoke<string>("catalog_preview", { source, kind, id });
+/** An entry as its source has it. */
+export type CatalogPreview = {
+  /** A skill's SKILL.md, any other kind's one file. */
+  text: string;
+  /** A server's `${NAME}` placeholders: installing it asks for each. */
+  secrets: string[];
+};
+
+export async function catalogPreview(source: string, kind: CatalogKind, id: string): Promise<CatalogPreview> {
+  return invoke<CatalogPreview>("catalog_preview", { source, kind, id });
 }

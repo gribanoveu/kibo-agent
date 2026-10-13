@@ -56,9 +56,33 @@ pub fn set_tool_shown(name: &str, tool: &str, shown: bool) -> Result<McpConfig, 
     change(name, |server| server.show_tool(tool, shown))
 }
 
+/// A server added under `name` — by the catalog, which has checked nothing
+/// is there. Reformats the file, as [`set_enabled`] does.
+pub fn add(name: &str, server: mcp::McpServerConfig) -> Result<McpConfig, McpConfigError> {
+    rewrite(|config| {
+        config.mcp_servers.insert(name.to_string(), server);
+        Ok(())
+    })
+}
+
+/// The server under `name` taken out; none there is nothing to do.
+pub fn remove(name: &str) -> Result<McpConfig, McpConfigError> {
+    rewrite(|config| {
+        config.mcp_servers.remove(name);
+        Ok(())
+    })
+}
+
 fn change(name: &str, edit: impl FnOnce(&mut mcp::McpServerConfig)) -> Result<McpConfig, McpConfigError> {
+    rewrite(|config| {
+        edit(config.mcp_servers.get_mut(name).ok_or_else(|| McpConfigError::NotFound(name.to_string()))?);
+        Ok(())
+    })
+}
+
+fn rewrite(edit: impl FnOnce(&mut McpConfig) -> Result<(), McpConfigError>) -> Result<McpConfig, McpConfigError> {
     let mut config = load()?;
-    edit(config.mcp_servers.get_mut(name).ok_or_else(|| McpConfigError::NotFound(name.to_string()))?);
+    edit(&mut config)?;
     let text = serde_json::to_string_pretty(&config).map_err(|e| McpConfigError::Write(e.to_string()))?;
     app_dir::write_private(&path()?, format!("{text}\n").as_bytes()).map_err(McpConfigError::Write)?;
     Ok(config)
@@ -118,6 +142,18 @@ mod tests {
             assert_eq!(load().unwrap().mcp_servers["a"].exposure_of("wipe"), mcp::Exposure::Hidden, "on disk");
             assert!(set_tool_shown("a", "wipe", true).unwrap().mcp_servers["a"].tool_exposure.is_empty());
             assert!(matches!(set_tool_shown("b", "wipe", true), Err(McpConfigError::NotFound(_))));
+        });
+    }
+
+    #[test]
+    fn a_server_is_added_and_taken_out_by_name() {
+        with_app_dir("mcp-config-add", || {
+            save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
+            add("b", mcp::McpServerConfig { command: "y".into(), ..Default::default() }).unwrap();
+            assert_eq!(load().unwrap().mcp_servers.keys().collect::<Vec<_>>(), ["a", "b"]);
+            remove("a").unwrap();
+            remove("a").unwrap();
+            assert_eq!(load().unwrap().mcp_servers.keys().collect::<Vec<_>>(), ["b"]);
         });
     }
 

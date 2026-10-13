@@ -7,6 +7,7 @@
 //! before anything is shown: a path that could leave the folder it is meant
 //! for never gets as far as a row.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 use url::Url;
 
+use super::mcp::{self, McpConfig, McpServerConfig};
 use super::skills::validate_skill_name;
 
 /// The catalog every install starts with — the app's own, on GitHub, read
@@ -127,6 +129,12 @@ pub enum CatalogError {
     Record(String),
     #[error("{0}")]
     Disk(String),
+    #[error("the entry is not an MCP server this app reads: {0}")]
+    BadEntry(String),
+    #[error("{0} is not filled in")]
+    MissingSecret(String),
+    #[error("{0} has a line break or another control character in it — paste the value alone")]
+    BadSecret(String),
 }
 
 /// A source's address as the base its paths are joined to: `https`, or
@@ -345,6 +353,97 @@ pub fn state(item: &CatalogItem, source: &str, record: Option<&Installed>, on_di
     }
 }
 
+// ------------------------------------------------------------ MCP entries
+
+/// A catalog's `mcp/<id>.json`: one `mcpServers` value, without its name —
+/// the name is the entry's `id`. A command or a url, one of them.
+pub fn parse_mcp(bytes: &[u8]) -> Result<McpServerConfig, CatalogError> {
+    let server: McpServerConfig = serde_json::from_slice(bytes).map_err(|e| CatalogError::BadEntry(e.to_string()))?;
+    if server.command.trim().is_empty() == server.url.is_none() {
+        return Err(CatalogError::BadEntry("it has to have a command or a url, one of them".into()));
+    }
+    Ok(server)
+}
+
+/// The `${NAME}` placeholders in an entry's `env` and `headers` values, each
+/// once, in the order they come. The catalog's convention, not the app's:
+/// nothing reads them when a server starts, so each is filled in at install.
+pub fn mcp_secrets(server: &McpServerConfig) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for value in server.env.values().chain(server.headers.values()) {
+        let _ = substitute(value, &mut |name| {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+            Ok(String::new())
+        });
+    }
+    names
+}
+
+/// The entry with every placeholder replaced by its value, trimmed — a token
+/// pasted with its newline is the token. Refused while one is empty, or has
+/// a control character in it: a line break in a header is another header.
+pub fn fill_secrets(server: &McpServerConfig, secrets: &BTreeMap<String, String>) -> Result<McpServerConfig, CatalogError> {
+    let mut value_of = |name: &str| {
+        let value = secrets.get(name).map(|v| v.trim()).filter(|v| !v.is_empty()).ok_or_else(|| CatalogError::MissingSecret(name.to_string()))?;
+        if value.chars().any(char::is_control) {
+            return Err(CatalogError::BadSecret(name.to_string()));
+        }
+        Ok(value.to_string())
+    };
+    let mut fill = |values: &BTreeMap<String, String>| -> Result<BTreeMap<String, String>, CatalogError> {
+        values.iter().map(|(key, value)| Ok((key.clone(), substitute(value, &mut value_of)?))).collect()
+    };
+    Ok(McpServerConfig { env: fill(&server.env)?, headers: fill(&server.headers)?, ..server.clone() })
+}
+
+/// `text` with each `${NAME}` replaced, in one pass: a value that itself
+/// holds `${…}` stays as typed. `${` not followed by a name and `}` is text.
+fn substitute(text: &str, value: &mut dyn FnMut(&str) -> Result<String, CatalogError>) -> Result<String, CatalogError> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}').map(|end| &after[..end]).filter(|name| is_secret_name(name)) {
+            Some(name) => {
+                out.push_str(&value(name)?);
+                rest = &after[name.len() + 1..];
+            }
+            None => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn is_secret_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// What an installed server's record holds: the entry as written, less the
+/// MCP tab's own switches — turning a server or a tool off there is not a
+/// change to what was installed.
+pub fn mcp_hash(server: &McpServerConfig) -> String {
+    let as_installed = McpServerConfig { disabled: false, tool_exposure: BTreeMap::new(), ..server.clone() };
+    content_hash(&[("", &serde_json::to_vec(&as_installed).unwrap_or_default())])
+}
+
+/// [`state`] for a server: what is under its name in `mcp.json`. A server
+/// named apart only by case or `_` takes the place too — both would become
+/// one prefix in tool names (`mcp::server_key`).
+pub fn mcp_state(item: &CatalogItem, source: &str, record: Option<&Installed>, config: &McpConfig) -> ItemState {
+    let on_disk = config.mcp_servers.get(&item.id).map(mcp_hash);
+    if on_disk.is_none() && config.mcp_servers.keys().any(|name| mcp::server_key(name) == item.id) {
+        return ItemState::Taken;
+    }
+    state(item, source, record, on_disk.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,5 +618,61 @@ mod tests {
         let base = source_base("https://raw.githubusercontent.com/o/r/main").unwrap();
         assert_eq!(file_url(&base, "skills/review/SKILL.md").unwrap().as_str(), "https://raw.githubusercontent.com/o/r/main/skills/review/SKILL.md");
         assert_eq!(file_url(&base, INDEX_FILE).unwrap().as_str(), "https://raw.githubusercontent.com/o/r/main/index.json");
+    }
+
+    const GITHUB: &[u8] = br#"{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}", "X-Org": "${ORG}-${ORG}"}, "env": {"A": "${A_1} and ${ 1} and $ORG and ${"}}"#;
+
+    #[test]
+    fn an_mcp_entry_has_a_command_or_a_url() {
+        assert!(parse_mcp(GITHUB).is_ok());
+        assert!(parse_mcp(br#"{"command": "npx", "args": ["-y", "x"]}"#).is_ok());
+        for bad in [&br#"{}"#[..], br#"{"command": " "}"#, br#"{"command": "x", "url": "https://a/"}"#, b"[]", b"{"] {
+            assert!(matches!(parse_mcp(bad), Err(CatalogError::BadEntry(_))), "{}", String::from_utf8_lossy(bad));
+        }
+    }
+
+    #[test]
+    fn placeholders_are_named_once_and_only_well_formed_ones() {
+        assert_eq!(mcp_secrets(&parse_mcp(GITHUB).unwrap()), ["A_1", "GITHUB_TOKEN", "ORG"]);
+        assert!(mcp_secrets(&parse_mcp(br#"{"command": "x", "args": ["${NOT_HERE}"]}"#).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn secrets_fill_every_placeholder_or_the_entry_is_refused() {
+        let server = parse_mcp(GITHUB).unwrap();
+        let secrets = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>();
+        let filled = fill_secrets(&server, &secrets(&[("GITHUB_TOKEN", " ghp_1\n"), ("ORG", "${A_1}"), ("A_1", "a")])).unwrap();
+        assert_eq!(filled.headers["Authorization"], "Bearer ghp_1");
+        // One pass: a value holding a placeholder stays as typed.
+        assert_eq!(filled.headers["X-Org"], "${A_1}-${A_1}");
+        assert_eq!(filled.env["A"], "a and ${ 1} and $ORG and ${");
+        assert_eq!(filled.url, server.url);
+
+        assert_eq!(fill_secrets(&server, &secrets(&[("GITHUB_TOKEN", "t"), ("ORG", "o")])), Err(CatalogError::MissingSecret("A_1".into())));
+        assert_eq!(fill_secrets(&server, &secrets(&[("GITHUB_TOKEN", "  "), ("ORG", "o"), ("A_1", "a")])), Err(CatalogError::MissingSecret("GITHUB_TOKEN".into())));
+        assert_eq!(fill_secrets(&server, &secrets(&[("GITHUB_TOKEN", "t\r\nX-Evil: 1"), ("ORG", "o"), ("A_1", "a")])), Err(CatalogError::BadSecret("GITHUB_TOKEN".into())));
+    }
+
+    #[test]
+    fn a_servers_state_reads_its_name_in_mcp_json() {
+        let item = index(r#"{"id": "github", "kind": "mcp", "name": "GitHub", "rev": "1", "path": "mcp/github.json"}"#).items.remove(0);
+        let server = parse_mcp(br#"{"command": "x"}"#).unwrap();
+        let config = |pairs: &[(&str, &McpServerConfig)]| McpConfig { mcp_servers: pairs.iter().map(|(k, v)| (k.to_string(), (*v).clone())).collect() };
+        let record = Installed { source: "https://a.example/".into(), kind: ItemKind::Mcp, id: "github".into(), role: None, rev: "1".into(), files: vec![], hash: mcp_hash(&server) };
+        let at = |record: Option<&Installed>, config: &McpConfig| mcp_state(&item, "https://a.example/", record, config);
+
+        assert_eq!(at(None, &config(&[("other", &server)])), ItemState::Available);
+        assert_eq!(at(Some(&record), &config(&[("github", &server)])), ItemState::Installed);
+        assert_eq!(at(None, &config(&[("github", &server)])), ItemState::Taken);
+        assert_eq!(at(None, &config(&[("GitHub", &server)])), ItemState::Taken);
+        assert_eq!(at(Some(&record), &config(&[])), ItemState::Available);
+        // The tab's switches are not an edit; a changed command is.
+        let off = McpServerConfig { disabled: true, ..server.clone() };
+        let mut hidden = server.clone();
+        hidden.show_tool("wipe", false);
+        assert_eq!(at(Some(&record), &config(&[("github", &off)])), ItemState::Installed);
+        assert_eq!(at(Some(&record), &config(&[("github", &hidden)])), ItemState::Installed);
+        let edited = McpServerConfig { command: "y".into(), ..server.clone() };
+        assert_eq!(at(Some(&record), &config(&[("github", &edited)])), ItemState::Changed);
     }
 }
