@@ -68,8 +68,12 @@ const STATE_NOTE: Record<CatalogEntry["state"], string | null> = {
 
 type Actions = {
   busy: EntryKey | null;
+  /** Installs at once — or, for a server, asks first. */
   onInstall: (entry: EntryKey) => void;
 };
+
+/** What is in its place, as the panel names it: a server is a name in a shared file. */
+const placeOf = (item: CatalogEntry) => (item.kind === "mcp" ? `the server ${item.id} in ${item.target}` : item.target);
 
 function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry: Entry; icon: LucideIcon; selected: boolean; onOpen: () => void } & Actions) {
   const { item, source } = entry;
@@ -138,6 +142,7 @@ function Details({
   const [confirming, setConfirming] = useState(false);
   const working = sameEntry(busy, key);
   const ours = item.state === "installed" || item.state === "update" || item.state === "changed";
+  const place = placeOf(item);
   const file = item.kind === "skill" ? "SKILL.md" : item.path.split("/").pop();
 
   return (
@@ -163,7 +168,8 @@ function Details({
       {item.target === null && <p className="catalog-detail-note">Installing {kind.label} from the catalog comes next.</p>}
       {item.state === "taken" && (
         <p className="catalog-detail-note">
-          {item.target} is already there and was not installed from this catalog — yours, or another catalog's. It is left as it is.
+          {item.kind === "mcp" ? `A server named ${item.id} is already in ${item.target}` : `${item.target} is already there`} and was not installed
+          from this catalog — yours, or another catalog's. It is left as it is.
         </p>
       )}
       {item.state === "update" && <p className="catalog-detail-note">Updating comes next; Remove and Install gets the new one now.</p>}
@@ -201,15 +207,15 @@ function Details({
       </dl>
 
       <h4 className="catalog-detail-file">{file}</h4>
-      {preview === null || (preview.text === null && preview.error === null) ? (
-        <div className="catalog-detail-note">Reading…</div>
-      ) : preview.error !== null ? (
+      {preview?.error ? (
         <div className="catalog-detail-error">{preview.error}</div>
+      ) : !preview?.read ? (
+        <div className="catalog-detail-note">Reading…</div>
       ) : file?.endsWith(".json") ? (
-        <pre className="catalog-detail-text">{preview.text}</pre>
+        <pre className="catalog-detail-text">{preview.read.text}</pre>
       ) : (
         <div className="catalog-detail-text">
-          <Markdown text={fencedFrontmatter(preview.text ?? "")} streaming={false} />
+          <Markdown text={fencedFrontmatter(preview.read.text)} streaming={false} />
         </div>
       )}
 
@@ -236,10 +242,67 @@ function Details({
         }
       >
         <p className="catalog-detail-confirm">
-          It was changed here since it was installed: <b>{item.target}</b> goes with those changes, and installing it again brings back the catalog's.
+          It was changed here since it was installed: <b>{place}</b> goes with those changes, and installing it again brings back the catalog's.
         </p>
       </Modal>
     </PagePanel>
+  );
+}
+
+/** A server is a command the app will run, or an address it will send to:
+    it is shown whole and installed only from here, with its secrets typed in. */
+function InstallServer({ entry, onInstall, onClose }: { entry: Entry; onInstall: (secrets: Record<string, string>) => void; onClose: () => void }) {
+  const { item } = entry;
+  const preview = useCatalogPreview(keyOf(entry));
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const read = preview?.read;
+  const ready = read !== undefined && read !== null && read.secrets.every((name) => secrets[name]?.trim());
+
+  return (
+    <Modal
+      title={`Install ${item.name}?`}
+      open
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!ready} onClick={() => onInstall(secrets)}>
+            Install
+          </button>
+        </>
+      }
+    >
+      <p className="catalog-detail-confirm">
+        Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
+        sends to:
+      </p>
+      {preview?.error ? (
+        <div className="catalog-detail-error">{preview.error}</div>
+      ) : !read ? (
+        <div className="catalog-detail-note">Reading…</div>
+      ) : (
+        <>
+          <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
+          {read.secrets.map((name) => (
+            <div key={name} className="modal-field">
+              <label htmlFor={`secret-${name}`}>{name}</label>
+              <input
+                id={`secret-${name}`}
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                value={secrets[name] ?? ""}
+                onChange={(e) => setSecrets({ ...secrets, [name]: e.target.value })}
+              />
+            </div>
+          ))}
+          {read.secrets.length > 0 && <p className="modal-note">Written into {item.target} in place of each {"${…}"}, and kept nowhere else.</p>}
+        </>
+      )}
+      <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>
+    </Modal>
   );
 }
 
@@ -277,6 +340,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
   const [tab, setTab] = useState<Tab>("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<EntryKey | null>(null);
+  const [asking, setAsking] = useState<EntryKey | null>(null);
 
   const entries: Entry[] = (sources ?? []).flatMap((source) => source.items.map((item) => ({ item, source: source.url })));
   const found = entries.filter((entry) => matches(entry, query));
@@ -285,6 +349,8 @@ export function CatalogPage({ sideHandle }: PageContext) {
     .filter(({ entries }) => entries.length > 0);
   // Looked up again on every list, so the panel shows the state after an action.
   const shown = entries.find((entry) => sameEntry(keyOf(entry), open)) ?? null;
+  const asked = entries.find((entry) => sameEntry(keyOf(entry), asking)) ?? null;
+  const onInstall = (key: EntryKey) => (key.kind === "mcp" ? setAsking(key) : void install(key));
 
   return (
     <Page
@@ -322,7 +388,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
             entry={shown}
             busy={busy}
             error={failed && sameEntry(failed.entry, open) ? failed.error : null}
-            onInstall={(key) => void install(key)}
+            onInstall={onInstall}
             onRemove={(key) => void remove(key)}
             onClose={() => setOpen(null)}
           />
@@ -357,13 +423,24 @@ export function CatalogPage({ sideHandle }: PageContext) {
                   selected={sameEntry(keyOf(entry), open)}
                   onOpen={() => setOpen(keyOf(entry))}
                   busy={busy}
-                  onInstall={(key) => void install(key)}
+                  onInstall={onInstall}
                 />
               ))}
             </div>
           </section>
         );
       })}
+      {asked && (
+        <InstallServer
+          key={`${asked.source}/${asked.item.id}`}
+          entry={asked}
+          onClose={() => setAsking(null)}
+          onInstall={(secrets) => {
+            setAsking(null);
+            void install(keyOf(asked), secrets);
+          }}
+        />
+      )}
       {sources !== null && entries.length > 0 && sections.length === 0 && (
         <div className="catalog-empty">{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</div>
       )}

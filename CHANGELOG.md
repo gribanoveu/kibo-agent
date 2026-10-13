@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-12 MCP servers install from the Catalog page too: a dialog shows the whole entry — the command it runs or the address it sends to — and asks for the tokens it needs; Remove takes the server back out of mcp.json
 - 2026-10-12 The open chat's name shows in the window's title bar in place of the app's
 - 2026-10-12 Skills, commands and Kubernetes runbooks install from the Catalog page with one click and come off with Remove; a card opens a panel on the right with what it installs, where, and its text
 - 2026-10-12 A Catalog page in the sidebar, under Agent and Chat, lists the skills, commands, runbooks, MCP servers and hooks published to the app's catalog on GitHub as cards, by kind, with tabs, search and Refresh; without the network it shows the copy kept from last time. Installing from it comes next

@@ -14,7 +14,12 @@ mock.module("@tauri-apps/api/core", () => ({
       return Promise.resolve(answer);
     }
     calls.push([command, args]);
-    if (command === "catalog_preview") return Promise.resolve("# Review\n\nRead the **diff**.");
+    if (command === "catalog_preview")
+      return Promise.resolve(
+        (args as { kind: string }).kind === "mcp"
+          ? { text: '{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}', secrets: ["GITHUB_TOKEN"] }
+          : { text: "# Review\n\nRead the **diff**.", secrets: [] },
+      );
     if (command === "catalog_install" && failInstall) return Promise.reject(failInstall);
     return Promise.resolve(null);
   },
@@ -43,7 +48,8 @@ const own: CatalogSource = {
   builtIn: true,
   items: [
     entry({ id: "review", kind: "skill", name: "Code review", description: "Reviews a change", path: "skills/review", files: ["SKILL.md"] }),
-    entry({ id: "github", kind: "mcp", name: "GitHub", description: "Issues and PRs", path: "mcp/github.json", target: null }),
+    entry({ id: "github", kind: "mcp", name: "GitHub", description: "Issues and PRs", path: "mcp/github.json", target: "~/.kibo/mcp.json" }),
+    entry({ id: "no-force", kind: "hooks", name: "No force push", description: "Blocks git push -f", path: "hooks/no-force.json", target: null }),
   ],
   problems: ["x: \"agent\" is not a kind this app installs"],
   error: null,
@@ -57,14 +63,14 @@ describe("the catalog page", () => {
     answer = [own];
     render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
     expect(await screen.findByText("Code review")).toBeTruthy();
-    expect(screen.getAllByText("gribanoveu/kibo-agent-catalog")).toHaveLength(2);
+    expect(screen.getAllByText("gribanoveu/kibo-agent-catalog")).toHaveLength(3);
     expect(screen.getByRole("region", { name: "Skills" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "MCP servers" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Hooks" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Commands" })).toBeNull();
     expect(screen.getByText("1 entry left out")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Install Code review" }) as HTMLButtonElement).disabled).toBe(false);
-    // MCP installs in CT-3: its + is there, and off.
-    expect((screen.getByRole("button", { name: "Install GitHub" }) as HTMLButtonElement).disabled).toBe(true);
+    // Hooks install in CT-4: the + is there, and off.
+    expect((screen.getByRole("button", { name: "Install No force push" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("a tab lists one kind", async () => {
@@ -127,10 +133,10 @@ describe("the catalog page", () => {
     asked = 0;
     render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
     await screen.findByText("Code review");
-    answer = [withItems({ ...own.items[0], state: "installed" }, own.items[1])];
+    answer = [withItems({ ...own.items[0], state: "installed" }, ...own.items.slice(1))];
     fireEvent.click(screen.getByRole("button", { name: "Install Code review" }));
     expect(await screen.findByLabelText("Installed")).toBeTruthy();
-    expect(calls).toEqual([["catalog_install", { source: own.url, kind: "skill", id: "review" }]]);
+    expect(calls).toEqual([["catalog_install", { source: own.url, kind: "skill", id: "review", secrets: {} }]]);
     expect(asked).toBe(2);
     // The + did not open the panel: it is an action of its own.
     expect(screen.queryByRole("complementary")).toBeNull();
@@ -190,5 +196,35 @@ describe("the catalog page", () => {
     expect(screen.queryByRole("button", { name: "Install /changelog" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Crash loop" }));
     expect(screen.getByText(/The app ships a runbook named crashloop/)).toBeTruthy();
+  });
+
+  test("a server is installed from a dialog that shows it whole and asks for its secrets", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install GitHub" }));
+    const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
+    expect(await within(dialog).findByText(/api\.example\/mcp/)).toBeTruthy();
+    const install = within(dialog).getByRole("button", { name: "Install" }) as HTMLButtonElement;
+    expect(install.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "  " } });
+    expect(install.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "ghp_1" } });
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+    fireEvent.click(install);
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "mcp", id: "github", secrets: { GITHUB_TOKEN: "ghp_1" } }]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("the panel's Install of a server asks too, and Cancel installs nothing", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Install" }));
+    const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
   });
 });

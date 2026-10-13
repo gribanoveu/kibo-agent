@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { catalogInstall, catalogList, catalogPreview, catalogRemove, type CatalogKind, type CatalogSource } from "../lib/catalog";
+import { catalogInstall, catalogList, catalogPreview, catalogRemove, type CatalogKind, type CatalogPreview, type CatalogSource } from "../lib/catalog";
 
 /** Which entry: its source's address, its kind and id — unique across the page. */
 export type EntryKey = { source: string; kind: CatalogKind; id: string };
@@ -55,14 +55,15 @@ export function useCatalog() {
     refresh,
     busy,
     failed,
-    install: (entry: EntryKey) => act(entry, catalogInstall),
+    /** `secrets`: a server's placeholders, by name. */
+    install: (entry: EntryKey, secrets: Record<string, string> = {}) => act(entry, (source, kind, id) => catalogInstall(source, kind, id, secrets)),
     remove: (entry: EntryKey) => act(entry, catalogRemove),
   };
 }
 
-/** The text of the entry a details panel shows, read when it is opened. */
+/** The entry a details panel or the install dialog shows, read when it is opened. */
 export function useCatalogPreview(entry: EntryKey | null) {
-  const [preview, setPreview] = useState<{ entry: EntryKey; text: string | null; error: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ entry: EntryKey; read: CatalogPreview | null; error: string | null } | null>(null);
   const source = entry?.source;
   const kind = entry?.kind;
   const id = entry?.id;
@@ -71,10 +72,10 @@ export function useCatalogPreview(entry: EntryKey | null) {
     if (source === undefined || kind === undefined || id === undefined) return;
     const asked = { source, kind, id };
     let current = true;
-    setPreview({ entry: asked, text: null, error: null });
+    setPreview({ entry: asked, read: null, error: null });
     catalogPreview(source, kind, id).then(
-      (text) => current && setPreview({ entry: asked, text, error: null }),
-      (e) => current && setPreview({ entry: asked, text: null, error: String(e) }),
+      (read) => current && setPreview({ entry: asked, read, error: null }),
+      (e) => current && setPreview({ entry: asked, read: null, error: String(e) }),
     );
     return () => {
       current = false;

@@ -333,3 +333,10 @@ pre.catalog-detail-text {
   font-size: var(--fs-md);
   line-height: 1.5;
 }
+
+/* The install dialog's server entry: short, but a long one scrolls rather than pushing Install off. */
+pre.catalog-server-entry {
+  max-height: 220px;
+  margin: 10px 0 14px;
+  overflow: auto;
+}
