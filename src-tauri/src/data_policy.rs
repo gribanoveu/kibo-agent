@@ -148,18 +148,36 @@ fn the_window_may_reach_nothing_but_the_app() {
     assert_eq!(csp["default-src"], "'self'");
     for (directive, sources) in csp {
         for source in sources.as_str().unwrap().split_whitespace() {
-            // Exact sources, not a pattern: `https:` or `*` would pass any
-            // rule that only looked for a host. `'wasm-unsafe-eval'` reaches
-            // nothing: it lets the app's own WebAssembly compile — Graphviz,
-            // which PlantUML diagrams are laid out with.
-            let allowed = [
-                "'self'", "'none'", "'unsafe-inline'", "'wasm-unsafe-eval'", "data:", "asset:", "ipc:",
-                "http://ipc.localhost", "http://asset.localhost",
-            ]
-            .contains(&source);
-            assert!(allowed, "csp {directive} lets the window reach {source}");
+            assert!(csp_allows(directive, source), "csp {directive} lets the window reach {source}");
         }
     }
+}
+
+/// Exact sources, not a pattern: `https:` or `*` would pass any rule that only
+/// looked for a host. `'wasm-unsafe-eval'` reaches nothing: it lets the app's
+/// own WebAssembly compile — Graphviz, which PlantUML diagrams are laid out
+/// with. `artifact:` is the Preview panel's frame, served by the app from the
+/// chat's folder (`infra::prototype_protocol`) — not the network, and only a
+/// frame: the window runs no script and loads nothing else from it.
+fn csp_allows(directive: &str, source: &str) -> bool {
+    [
+        "'self'", "'none'", "'unsafe-inline'", "'wasm-unsafe-eval'", "data:", "asset:", "ipc:",
+        "http://ipc.localhost", "http://asset.localhost",
+    ]
+    .contains(&source)
+        || (directive == "frame-src" && ["artifact:", "http://artifact.localhost"].contains(&source))
+}
+
+/// The preview's scheme is a frame's source and nothing else's: a script or a
+/// connection from it would be the model's page reaching into the window.
+#[test]
+fn the_preview_is_allowed_as_a_frame_only() {
+    assert!(csp_allows("frame-src", "artifact:") && csp_allows("frame-src", "http://artifact.localhost"));
+    for directive in ["default-src", "script-src", "connect-src", "img-src", "style-src"] {
+        assert!(!csp_allows(directive, "artifact:"), "{directive}");
+        assert!(!csp_allows(directive, "http://artifact.localhost"), "{directive}");
+    }
+    assert!(!csp_allows("frame-src", "https:"));
 }
 
 /// Dependency names from `Cargo.toml` without a TOML parser: a line

@@ -39,8 +39,9 @@ fn remove_in(base: &Path, chat_id: &str) -> Result<(), String> {
 }
 
 /// The id comes from the window and becomes a path: one segment of plain
-/// characters — what `crypto.randomUUID` makes — or no folder at all.
-fn chat_dir(base: &Path, chat_id: &str) -> Option<PathBuf> {
+/// characters — what `crypto.randomUUID` makes — or no folder at all. `base`
+/// is the app directory; the protocol asks here too, so the rule is one.
+pub(crate) fn chat_dir(base: &Path, chat_id: &str) -> Option<PathBuf> {
     let plain = !chat_id.is_empty()
         && chat_id.len() <= 64
         && chat_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');

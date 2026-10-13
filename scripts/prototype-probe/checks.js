@@ -79,4 +79,8 @@ export async function run(label) {
     return "navigated";
   });
   parent.postMessage({ kind: "topNavigation", label, topNav }, "*");
+
+  // The frame leaving for another host carries whatever it puts in the URL;
+  // only the window's `frame-src` stops it — in a built app, not in `tauri dev`.
+  setTimeout(() => (location.href = "https://example.com/?from-prototype"), 300);
 }
