@@ -130,18 +130,17 @@
   color: var(--text);
 }
 
-/* Two cards a row where there is room for them, one where there is not —
-   never three: a card's minimum is half the row. */
+/* As many cards a row as fit at their narrowest: one in a narrow window, four on a wide one. */
 .catalog-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(max(320px, calc((100% - 12px) / 2)), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
 }
 .catalog-card {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   cursor: pointer;
@@ -160,8 +159,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
@@ -186,8 +185,11 @@
   min-width: 0;
 }
 .catalog-card-body h3 {
-  margin: 0 0 4px;
-  font-size: var(--fs-lg);
+  margin: 0 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
   font-weight: 500;
   color: var(--text);
 }
@@ -196,21 +198,24 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   color: var(--text-dim);
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 .catalog-card-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-faint);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
 }
 .catalog-card-add {
   flex: none;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
@@ -230,8 +235,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   color: var(--green);
 }
 .catalog-card-state.taken {
