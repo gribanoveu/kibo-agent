@@ -36,8 +36,8 @@ const kindOf = (kind: CatalogKind) => KINDS.find((k) => k.kind === kind) ?? KIND
 type Tab = CatalogKind | "all";
 const TABS: { value: Tab; label: string }[] = [{ value: "all", label: "All" }, ...KINDS.map(({ kind, label }) => ({ value: kind, label }))];
 
-/** How many cards a kind shows under All before "Show all". */
-const PREVIEW = 4;
+/** How many cards a kind shows under All before "Show all": two rows of three, three of two. */
+const PREVIEW = 6;
 
 /** `raw.githubusercontent.com/<owner>/<repo>/<branch>/` as the repository it is; any other address as it is. */
 function sourceName(url: string): string {
@@ -101,7 +101,7 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
       onKeyDown={open}
     >
       <div className={`catalog-card-ico ${item.kind}`}>
-        <Icon size={18} />
+        <Icon size={16} />
       </div>
       <div className="catalog-card-body">
         <h3>{item.name}</h3>
@@ -120,11 +120,11 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
             onInstall(keyOf(entry));
           }}
         >
-          {working ? <Loader2 size={16} className="catalog-spin" /> : <Plus size={16} />}
+          {working ? <Loader2 size={14} className="catalog-spin" /> : <Plus size={14} />}
         </button>
       ) : (
         <span className={`catalog-card-state ${item.state}`} title={STATE_NOTE[item.state] ?? undefined} aria-label={STATE_NOTE[item.state] ?? undefined}>
-          {item.state === "taken" ? <X size={16} /> : <Check size={16} />}
+          {item.state === "taken" ? <X size={14} /> : <Check size={14} />}
         </span>
       )}
     </article>

@@ -109,12 +109,13 @@ describe("the catalog page", () => {
   });
 
   test("All shows a few of a long kind, and Show all opens its tab", async () => {
-    answer = [{ ...own, items: ["a", "b", "c", "d", "e"].map(skill) }];
+    answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g"].map(skill) }];
     render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
     await screen.findByText("Skill a");
-    expect(screen.queryByText("Skill e")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Show all 5/ }));
-    expect(screen.getByText("Skill e")).toBeTruthy();
+    expect(screen.getByText("Skill f")).toBeTruthy();
+    expect(screen.queryByText("Skill g")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all 7/ }));
+    expect(screen.getByText("Skill g")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Skills" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
   });
