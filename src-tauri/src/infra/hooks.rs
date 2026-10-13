@@ -47,29 +47,41 @@ pub fn save_text(text: &str) -> Result<HooksConfig, HooksConfigError> {
 /// `groups` added after what each event already has — by the catalog.
 /// Rewrites the file from the parsed config, so its layout is not kept.
 pub fn add_groups(groups: &BTreeMap<String, Vec<HookGroup>>) -> Result<HooksConfig, HooksConfigError> {
-    rewrite(|config| {
-        for (event, added) in groups {
-            config.hooks.entry(event.clone()).or_default().extend(added.iter().cloned());
-        }
-    })
+    rewrite(|config| put(config, groups))
 }
 
 /// Each of `groups` taken out where an equal one is still there, once; one
 /// edited since is not equal and stays. An event left with no group goes.
 pub fn remove_groups(groups: &BTreeMap<String, Vec<HookGroup>>) -> Result<HooksConfig, HooksConfigError> {
+    rewrite(|config| take(config, groups))
+}
+
+/// An update: `old` taken out as [`remove_groups`] does, `new` added, in one write.
+pub fn swap_groups(old: &BTreeMap<String, Vec<HookGroup>>, new: &BTreeMap<String, Vec<HookGroup>>) -> Result<HooksConfig, HooksConfigError> {
     rewrite(|config| {
-        for (event, removed) in groups {
-            let Some(there) = config.hooks.get_mut(event) else { continue };
-            for group in removed {
-                if let Some(at) = there.iter().position(|g| g == group) {
-                    there.remove(at);
-                }
-            }
-            if there.is_empty() {
-                config.hooks.remove(event);
+        take(config, old);
+        put(config, new);
+    })
+}
+
+fn put(config: &mut HooksConfig, groups: &BTreeMap<String, Vec<HookGroup>>) {
+    for (event, added) in groups {
+        config.hooks.entry(event.clone()).or_default().extend(added.iter().cloned());
+    }
+}
+
+fn take(config: &mut HooksConfig, groups: &BTreeMap<String, Vec<HookGroup>>) {
+    for (event, removed) in groups {
+        let Some(there) = config.hooks.get_mut(event) else { continue };
+        for group in removed {
+            if let Some(at) = there.iter().position(|g| g == group) {
+                there.remove(at);
             }
         }
-    })
+        if there.is_empty() {
+            config.hooks.remove(event);
+        }
+    }
 }
 
 fn rewrite(edit: impl FnOnce(&mut HooksConfig)) -> Result<HooksConfig, HooksConfigError> {
@@ -119,6 +131,19 @@ mod tests {
             let config = load().unwrap();
             assert_eq!(config.hooks["PreToolUse"], [group("mine"), group("b2")]);
             assert!(!config.hooks.contains_key("Stop"));
+        });
+    }
+
+    #[test]
+    fn an_update_swaps_the_groups_in_one_write() {
+        with_app_dir("hooks-groups-swap", || {
+            let group = |command: &str| HookGroup { hooks: vec![HookCommand { kind: "command".into(), command: command.into(), ..Default::default() }], ..Default::default() };
+            let old = BTreeMap::from([("Stop".to_string(), vec![group("v1")])]);
+            add_groups(&old).unwrap();
+            swap_groups(&old, &BTreeMap::from([("PreToolUse".to_string(), vec![group("v2")])])).unwrap();
+            let config = load().unwrap();
+            assert!(!config.hooks.contains_key("Stop"));
+            assert_eq!(config.hooks["PreToolUse"], [group("v2")]);
         });
     }
 

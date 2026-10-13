@@ -307,6 +307,8 @@ pub fn run() {
             commands::catalog::catalog_install,
             commands::catalog::catalog_remove,
             commands::catalog::catalog_preview,
+            commands::catalog::catalog_update_preview,
+            commands::catalog::catalog_update,
             commands::slash_commands::slash_commands_list,
             commands::folder_trust::folder_trust_get,
             commands::folder_trust::folder_trust_set,

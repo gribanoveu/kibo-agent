@@ -126,6 +126,8 @@ pub enum CatalogError {
     Present(String),
     #[error("{0} was not installed from this catalog")]
     NotInstalled(String),
+    #[error("{0} is already the catalog's version")]
+    UpToDate(String),
     #[error("the list of what the catalog installed: {0}")]
     Record(String),
     #[error("{0}")]
@@ -425,6 +427,57 @@ fn substitute(text: &str, value: &mut dyn FnMut(&str) -> Result<String, CatalogE
     }
     out.push_str(rest);
     Ok(out)
+}
+
+/// What a `${NAME}` was given, read back from `written`: `template` holds
+/// exactly one placeholder, and `written` is the template's text around it
+/// with something in between.
+fn read_back<'a>(template: &str, written: &'a str) -> Option<(String, &'a str)> {
+    let mut names = Vec::new();
+    let _ = substitute(template, &mut |name| {
+        names.push(name.to_string());
+        Ok(String::new())
+    });
+    let [name] = names.as_slice() else { return None };
+    let (prefix, suffix) = template.split_once(&format!("${{{name}}}"))?;
+    let value = written.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    (!value.is_empty()).then(|| (name.clone(), value))
+}
+
+/// The `env` and `headers` values of `template` beside the installed ones of the same key.
+fn beside<'a>(template: &'a McpServerConfig, installed: &'a McpServerConfig) -> impl Iterator<Item = (&'a str, &'a str)> {
+    [(&template.env, &installed.env), (&template.headers, &installed.headers)]
+        .into_iter()
+        .flat_map(|(template, installed)| template.iter().filter_map(|(key, value)| Some((value.as_str(), installed.get(key)?.as_str()))))
+}
+
+/// The secrets an installed server was given that a new version of its entry
+/// asks for again, by name — an update need not ask for them twice.
+pub fn known_secrets(template: &McpServerConfig, installed: &McpServerConfig) -> BTreeMap<String, String> {
+    beside(template, installed).filter_map(|(template, written)| read_back(template, written)).map(|(name, value)| (name, value.to_string())).collect()
+}
+
+/// Shown in an update's diff in place of a value that may be a secret.
+pub const HIDDEN: &str = "••••••";
+
+/// An installed server as an update's diff shows it: each `env` and
+/// `headers` value as the new entry's own text where it reads back as that
+/// (a filled-in placeholder shows as the placeholder), and [`HIDDEN`] where
+/// it differs otherwise — it may be a token the user typed in.
+pub fn masked(installed: &McpServerConfig, template: &McpServerConfig) -> McpServerConfig {
+    let mask = |written: &BTreeMap<String, String>, template: &BTreeMap<String, String>| {
+        written
+            .iter()
+            .map(|(key, value)| {
+                let shown = match template.get(key) {
+                    Some(t) if t == value || read_back(t, value).is_some() => t.clone(),
+                    _ => HIDDEN.to_string(),
+                };
+                (key.clone(), shown)
+            })
+            .collect()
+    };
+    McpServerConfig { env: mask(&installed.env, &template.env), headers: mask(&installed.headers, &template.headers), ..installed.clone() }
 }
 
 fn is_secret_name(name: &str) -> bool {
@@ -765,5 +818,25 @@ mod tests {
         // A group under another event than it was added to is not it.
         assert_eq!(at(Some(&record), &with(hooks["Stop"].clone(), hooks["PreToolUse"].clone())), ItemState::Available);
         assert_eq!(at(Some(&Installed { hooks: BTreeMap::new(), ..record }), &all), ItemState::Available);
+    }
+
+    #[test]
+    fn an_installed_servers_secrets_are_read_back_by_the_new_entry() {
+        let template = parse_mcp(br#"{"url": "https://a/", "headers": {"Authorization": "Bearer ${TOKEN}", "X-Two": "${A}${B}", "X-Plain": "v2"}, "env": {"KEY": "${KEY}", "NEW": "${NEW}"}}"#).unwrap();
+        let installed = parse_mcp(br#"{"url": "https://a/", "headers": {"Authorization": "Bearer ghp_1", "X-Two": "ab", "X-Plain": "v1", "Mine": "secret"}, "env": {"KEY": "k", "NEW": ""}}"#).unwrap();
+        assert_eq!(known_secrets(&template, &installed), BTreeMap::from([("KEY".to_string(), "k".to_string()), ("TOKEN".to_string(), "ghp_1".to_string())]));
+        // The prefix has to be there: a value typed over is not a token read back.
+        let retyped = parse_mcp(br#"{"url": "https://a/", "headers": {"Authorization": "Token ghp_1"}}"#).unwrap();
+        assert!(known_secrets(&template, &retyped).is_empty());
+
+        let shown = masked(&installed, &template);
+        assert_eq!(shown.headers["Authorization"], "Bearer ${TOKEN}");
+        assert_eq!(shown.env["KEY"], "${KEY}");
+        for hidden in [&shown.headers["X-Two"], &shown.headers["X-Plain"], &shown.headers["Mine"], &shown.env["NEW"]] {
+            assert_eq!(hidden, HIDDEN);
+        }
+        let same = masked(&parse_mcp(br#"{"url": "https://a/", "headers": {"X-Plain": "v2"}}"#).unwrap(), &template);
+        assert_eq!(same.headers["X-Plain"], "v2");
+        assert_eq!(same.url, installed.url);
     }
 }

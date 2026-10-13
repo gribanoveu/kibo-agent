@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::domain::catalog::{CatalogError, ItemKind};
 use crate::infra::mcp_config;
-use crate::services::catalog::{self, Preview, SourceView};
+use crate::services::catalog::{self, Preview, SourceView, UpdatePreview};
 use crate::services::mcp_servers::McpServers;
 
 /// Every catalog asked for its index — a conditional GET, so asking again
@@ -37,6 +37,31 @@ pub async fn catalog_install(source: String, kind: ItemKind, id: String, secrets
 #[tauri::command]
 pub async fn catalog_remove(source: String, kind: ItemKind, id: String, servers: State<'_, Arc<McpServers>>) -> Result<(), String> {
     blocking(move || catalog::remove(&source, kind, &id)).await?;
+    if kind == ItemKind::Mcp {
+        servers.prune(&mcp_config::load().map_err(|e| e.to_string())?);
+    }
+    Ok(())
+}
+
+/// What updating an entry would change — each file's diff against what is
+/// there now, the secrets to ask for, whether it was changed here.
+#[tauri::command]
+pub async fn catalog_update_preview(source: String, kind: ItemKind, id: String) -> Result<UpdatePreview, String> {
+    blocking(move || catalog::update_preview(&source, kind, &id)).await
+}
+
+/// Writes the catalog's new version over what `source` installed; a server
+/// keeps its secrets unless `secrets` gives them again. A server changed
+/// stops, to start again as it now is with the next Agent turn.
+#[tauri::command]
+pub async fn catalog_update(
+    source: String,
+    kind: ItemKind,
+    id: String,
+    secrets: BTreeMap<String, String>,
+    servers: State<'_, Arc<McpServers>>,
+) -> Result<(), String> {
+    blocking(move || catalog::update(&source, kind, &id, &secrets)).await?;
     if kind == ItemKind::Mcp {
         servers.prune(&mcp_config::load().map_err(|e| e.to_string())?);
     }

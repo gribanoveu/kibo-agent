@@ -27,6 +27,8 @@ export type CatalogEntry = CatalogItem & {
   target: string | null;
   /** A runbook named as one the app ships: installed, it is read instead. */
   replacesBuiltIn: boolean;
+  /** The rev this source installed, when it did: one other than `rev` can be updated. */
+  installedRev: string | null;
 };
 
 /** One catalog as the page shows it. `error` beside `items`: the items are the copy from `fetchedAt`. */
@@ -63,6 +65,27 @@ export type CatalogPreview = {
   /** A server's `${NAME}` placeholders: installing it asks for each. */
   secrets: string[];
 };
+
+/** One file of an update: what is there now beside what the catalog has now. */
+export type CatalogFileChange = { name: string; /** Unified; empty when the file is the same. */ diff: string; added: number; removed: number };
+
+export type CatalogUpdatePreview = {
+  changes: CatalogFileChange[];
+  /** A server's placeholders the installed entry does not give back a value for. */
+  secrets: string[];
+  /** Changed here since it was installed. */
+  edited: boolean;
+};
+
+/** What updating an entry `source` installed would change. */
+export async function catalogUpdatePreview(source: string, kind: CatalogKind, id: string): Promise<CatalogUpdatePreview> {
+  return invoke<CatalogUpdatePreview>("catalog_update_preview", { source, kind, id });
+}
+
+/** Writes the catalog's new version over what `source` installed; a server keeps its secrets unless `secrets` gives them again. */
+export async function catalogUpdate(source: string, kind: CatalogKind, id: string, secrets: Record<string, string> = {}): Promise<void> {
+  return invoke("catalog_update", { source, kind, id, secrets });
+}
 
 export async function catalogPreview(source: string, kind: CatalogKind, id: string): Promise<CatalogPreview> {
   return invoke<CatalogPreview>("catalog_preview", { source, kind, id });

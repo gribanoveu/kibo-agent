@@ -106,16 +106,63 @@ pub fn place(target: &Path, folder: bool, files: &[(String, Vec<u8>)]) -> Result
         return Err(format!("{} is already there", target.display()));
     }
     if !folder {
-        let [(_, bytes)] = files else { return Err("a one-file entry with other than one file".into()) };
-        return app_dir::write_private(target, bytes);
+        return write_one(target, files);
     }
-    if let Some((bad, _)) = files.iter().find(|(name, _)| !Path::new(name).components().all(|c| matches!(c, Component::Normal(_)))) {
-        return Err(format!("\"{bad}\" is not a path inside the folder"));
+    let temp = stage(target, files)?;
+    fs::rename(&temp, target).map_err(|e| {
+        let _ = fs::remove_dir_all(&temp);
+        format!("could not write {}: {e}", target.display())
+    })
+}
+
+/// An installed entry written over with its new version. A folder is staged
+/// whole beside it first, the old one moved aside, the new one renamed in,
+/// and only then is the old one deleted — a failure on the way puts the old
+/// one back, so the place never holds half of each.
+pub fn replace(target: &Path, folder: bool, files: &[(String, Vec<u8>)]) -> Result<(), String> {
+    if !folder {
+        return write_one(target, files);
     }
+    let temp = stage(target, files)?;
+    let old = beside(target, "old")?;
+    let _ = fs::remove_dir_all(&old);
+    let swapped = swap_in(&temp, target, &old, &|from, to| fs::rename(from, to));
+    let _ = fs::remove_dir_all(if swapped.is_ok() { &old } else { &temp });
+    swapped.map_err(|e| format!("could not write {}: {e}", target.display()))
+}
+
+/// `temp` renamed to `target`, what was there moved to `old` first — and
+/// back when the second rename fails. `rename` is `fs::rename` but in tests.
+fn swap_in(temp: &Path, target: &Path, old: &Path, rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    match rename(target, old) {
+        // Deleted by hand since: nothing to move aside.
+        Err(e) if e.kind() == ErrorKind::NotFound => rename(temp, target),
+        Err(e) => Err(e),
+        Ok(()) => rename(temp, target).inspect_err(|_| {
+            let _ = rename(old, target);
+        }),
+    }
+}
+
+fn write_one(target: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
+    let [(_, bytes)] = files else { return Err("a one-file entry with other than one file".into()) };
+    app_dir::write_private(target, bytes)
+}
+
+/// A hidden sibling of `target`, so a scan between here and the rename never lists it.
+fn beside(target: &Path, what: &str) -> Result<PathBuf, String> {
     let parent = target.parent().ok_or_else(|| format!("{} has no parent", target.display()))?;
     let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("entry");
-    // Hidden, so a scan between here and the rename never lists it.
-    let temp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+    Ok(parent.join(format!(".{name}.{}.{what}", std::process::id())))
+}
+
+/// A folder's `files` written into a fresh hidden sibling of `target`;
+/// nothing is left of it when one fails.
+fn stage(target: &Path, files: &[(String, Vec<u8>)]) -> Result<PathBuf, String> {
+    if let Some((bad, _)) = files.iter().find(|(name, _)| !inside(name)) {
+        return Err(format!("\"{bad}\" is not a path inside the folder"));
+    }
+    let temp = beside(target, "tmp")?;
     let _ = fs::remove_dir_all(&temp);
     let written = files.iter().try_for_each(|(file, bytes)| {
         let path = temp.join(file);
@@ -124,11 +171,24 @@ pub fn place(target: &Path, folder: bool, files: &[(String, Vec<u8>)]) -> Result
         }
         fs::write(&path, bytes)
     });
-    let renamed = written.and_then(|()| fs::rename(&temp, target));
-    renamed.map_err(|e| {
+    written.map(|()| temp.clone()).map_err(|e| {
         let _ = fs::remove_dir_all(&temp);
         format!("could not write {}: {e}", target.display())
     })
+}
+
+fn inside(name: &str) -> bool {
+    Path::new(name).components().all(|c| matches!(c, Component::Normal(_)))
+}
+
+/// What is installed at `target` now: the file, or a folder's `file` —
+/// empty when it is not there. For an update's diff.
+pub fn read_installed(target: &Path, file: Option<&str>) -> Vec<u8> {
+    match file {
+        Some(name) if !inside(name) => Vec::new(),
+        Some(name) => fs::read(target.join(name)).unwrap_or_default(),
+        None => fs::read(target).unwrap_or_default(),
+    }
 }
 
 /// Deletes an entry's place — a folder with all in it, or the file. Nothing
@@ -146,6 +206,52 @@ mod tests {
     use super::*;
     use crate::domain::catalog::ItemKind;
     use crate::testing::{temp_dir, with_app_dir};
+
+    #[test]
+    fn a_folder_is_replaced_whole_and_nothing_is_left_beside_it() {
+        let dir = temp_dir("catalog-replace");
+        let target = dir.join("review");
+        let files = |pairs: &[(&str, &str)]| pairs.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect::<Vec<_>>();
+        place(&target, true, &files(&[("SKILL.md", "v1"), ("old.md", "gone")])).unwrap();
+        replace(&target, true, &files(&[("SKILL.md", "v2"), ("refs/new.md", "new")])).unwrap();
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "v2");
+        assert_eq!(fs::read_to_string(target.join("refs/new.md")).unwrap(), "new");
+        assert!(!target.join("old.md").exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "nothing staged or set aside is left");
+
+        // A name that leaves the folder: the old one stays as it was.
+        assert!(replace(&target, true, &files(&[("../x", "bad")])).is_err());
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "v2");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+
+        // Deleted by hand since: written all the same.
+        fs::remove_dir_all(&target).unwrap();
+        replace(&target, true, &files(&[("SKILL.md", "v3")])).unwrap();
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "v3");
+
+        let one = dir.join("x.md");
+        place(&one, false, &files(&[("", "a")])).unwrap();
+        replace(&one, false, &files(&[("", "b")])).unwrap();
+        assert_eq!(fs::read_to_string(&one).unwrap(), "b");
+        assert_eq!(read_installed(&one, None), b"b");
+        assert_eq!(read_installed(&target, Some("SKILL.md")), b"v3");
+        assert_eq!(read_installed(&target, Some("missing.md")), b"");
+        fs::write(dir.join("secret"), "s").unwrap();
+        assert_eq!(read_installed(&target, Some("../secret")), b"", "a record's name that leaves the folder reads nothing");
+    }
+
+    #[test]
+    fn a_new_folder_that_does_not_go_in_puts_the_old_one_back() {
+        let dir = temp_dir("catalog-swap");
+        let (target, temp, old) = (dir.join("review"), dir.join("new"), dir.join("old"));
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("SKILL.md"), "v1").unwrap();
+        fs::create_dir_all(&temp).unwrap();
+        let refused = |from: &Path, to: &Path| if from == temp { Err(std::io::Error::other("refused")) } else { fs::rename(from, to) };
+        assert!(swap_in(&temp, &target, &old, &refused).is_err());
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "v1");
+        assert!(!old.exists());
+    }
 
     fn cached(source: &str) -> CachedIndex {
         CachedIndex { source: source.into(), etag: Some("\"e\"".into()), fetched_at: 7, text: "{}".into() }
