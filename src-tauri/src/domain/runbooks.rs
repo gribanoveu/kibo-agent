@@ -31,6 +31,12 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("spring-boot", include_str!("../../runbooks/kubernetes/spring-boot.md")),
 ];
 
+/// Whether the app ships a runbook of this name — a file of the user's by
+/// that name takes its place (`merged`).
+pub fn is_built_in(name: &str) -> bool {
+    BUILT_IN.iter().any(|(built_in, _)| *built_in == name)
+}
+
 /// A runbook from a file's name and text. The sign is the line that starts
 /// with `Sign:`, or else the first line that is not a heading. `None` for a
 /// name that is not lowercase letters, digits and dashes, or a file that

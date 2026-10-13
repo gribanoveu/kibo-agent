@@ -1,0 +1,5 @@
+/* The chat and the file beside it stay mounted under a page (pages.tsx). */
+.window.on-page .main,
+.window.on-page .file-viewer {
+  display: none;
+}

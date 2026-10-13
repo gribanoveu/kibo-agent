@@ -1,0 +1,290 @@
+import { describe, expect, mock, test } from "bun:test";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { CatalogEntry, CatalogSource } from "../lib/catalog";
+
+let answer: CatalogSource[] = [];
+let asked = 0;
+// Every action asked of the backend, but the list.
+let calls: [string, unknown][] = [];
+let failInstall: string | null = null;
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: (command: string, args: unknown) => {
+    if (command === "catalog_list") {
+      asked += 1;
+      return Promise.resolve(answer);
+    }
+    calls.push([command, args]);
+    if (command === "catalog_preview")
+      return Promise.resolve(
+        (args as { kind: string }).kind === "mcp"
+          ? { text: '{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}', secrets: ["GITHUB_TOKEN"] }
+          : (args as { kind: string }).kind === "hooks"
+            ? { text: '{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}', secrets: [] }
+            : { text: "# Review\n\nRead the **diff**.", secrets: [] },
+      );
+    if (command === "catalog_install" && failInstall) return Promise.reject(failInstall);
+    if (command === "catalog_update_preview")
+      return Promise.resolve({
+        changes: [
+          { name: "changelog.md", diff: "@@ -1 +1 @@\n-mine\n+Add a line and date it\n", added: 1, removed: 1 },
+          { name: "same.md", diff: "", added: 0, removed: 0 },
+        ],
+        secrets: (args as { kind: string }).kind === "mcp" ? ["ORG"] : [],
+        edited: true,
+      });
+    return Promise.resolve(null);
+  },
+  transformCallback: (callback: unknown) => callback,
+}));
+
+const { CatalogPage } = await import("../components/CatalogPage");
+
+const now = Math.floor(Date.now() / 1000);
+
+function entry(over: Partial<CatalogEntry> & Pick<CatalogEntry, "id" | "kind" | "name">): CatalogEntry {
+  return {
+    description: "",
+    rev: "1",
+    path: `${over.kind}s/${over.id}`,
+    files: [],
+    state: "available",
+    target: `~/.kibo/${over.kind}s/${over.id}`,
+    replacesBuiltIn: false,
+    installedRev: null,
+    ...over,
+  };
+}
+const withItems = (...items: CatalogEntry[]): CatalogSource => ({ ...own, problems: [], items });
+const own: CatalogSource = {
+  url: "https://raw.githubusercontent.com/gribanoveu/kibo-agent-catalog/main/",
+  builtIn: true,
+  items: [
+    entry({ id: "review", kind: "skill", name: "Code review", description: "Reviews a change", path: "skills/review", files: ["SKILL.md"] }),
+    entry({ id: "github", kind: "mcp", name: "GitHub", description: "Issues and PRs", path: "mcp/github.json", target: "~/.kibo/mcp.json" }),
+    entry({ id: "no-force", kind: "hooks", name: "No force push", description: "Blocks git push -f", path: "hooks/no-force.json", target: "~/.kibo/hooks.json" }),
+  ],
+  problems: ["x: \"agent\" is not a kind this app installs"],
+  error: null,
+  fetchedAt: now,
+};
+
+const skill = (id: string) => entry({ id, kind: "skill", name: `Skill ${id}`, files: ["SKILL.md"] });
+
+describe("the catalog page", () => {
+  test("lists entries as cards by kind, each with its source, and what was left out", async () => {
+    answer = [own];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    expect(await screen.findByText("Code review")).toBeTruthy();
+    expect(screen.getAllByText("gribanoveu/kibo-agent-catalog")).toHaveLength(3);
+    expect(screen.getByRole("region", { name: "Skills" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "MCP servers" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Commands" })).toBeNull();
+    expect(screen.getByText("1 entry left out")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Install Code review" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Install No force push" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("a tab lists one kind", async () => {
+    answer = [own];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    await screen.findByText("Code review");
+    fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
+    expect(screen.queryByText("Code review")).toBeNull();
+    expect(screen.getByText("GitHub")).toBeTruthy();
+  });
+
+  test("search narrows by name, id or description, and says when nothing matches", async () => {
+    answer = [own];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    await screen.findByText("Code review");
+    const search = screen.getByLabelText("Search the catalog");
+    fireEvent.change(search, { target: { value: "  PRS " } });
+    expect(screen.queryByText("Code review")).toBeNull();
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "review" } });
+    expect(screen.getByText("Code review")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
+    fireEvent.change(search, { target: { value: "nothing like it" } });
+    expect(screen.getByText("Nothing matches “nothing like it”.")).toBeTruthy();
+  });
+
+  test("All shows a few of a long kind, and Show all opens its tab", async () => {
+    answer = [{ ...own, items: ["a", "b", "c", "d", "e"].map(skill) }];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    await screen.findByText("Skill a");
+    expect(screen.queryByText("Skill e")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all 5/ }));
+    expect(screen.getByText("Skill e")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Skills" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
+  });
+
+  test("says when the list is the copy kept from last time, and asks again on Refresh", async () => {
+    answer = [{ ...own, error: "the catalog answered 503", url: "https://cat.example/main/", builtIn: false }];
+    asked = 0;
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    expect(await screen.findByText(/cat\.example\/main: showing the copy kept from last time — the catalog answered 503/)).toBeTruthy();
+    expect(screen.getByText("Code review")).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(asked).toBe(2));
+  });
+
+  test("an unreachable source with nothing kept shows only why", async () => {
+    answer = [{ ...own, items: [], problems: [], error: "the catalog could not be reached: no route", fetchedAt: null }];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    expect(await screen.findByText(/the catalog could not be reached: no route/)).toBeTruthy();
+    expect(screen.queryByText(/showing the copy/)).toBeNull();
+    expect(screen.queryByText(/Nothing/)).toBeNull();
+  });
+
+  test("+ installs, and the list is read again to show it", async () => {
+    answer = [own];
+    calls = [];
+    asked = 0;
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    await screen.findByText("Code review");
+    answer = [withItems({ ...own.items[0], state: "installed" }, ...own.items.slice(1))];
+    fireEvent.click(screen.getByRole("button", { name: "Install Code review" }));
+    expect(await screen.findByLabelText("Installed")).toBeTruthy();
+    expect(calls).toEqual([["catalog_install", { source: own.url, kind: "skill", id: "review", secrets: {} }]]);
+    expect(asked).toBe(2);
+    // The + did not open the panel: it is an action of its own.
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("a card opens its details beside the page, with the text it installs", async () => {
+    answer = [withItems({ ...own.items[0], files: ["SKILL.md", "checklist.md"] })];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Code review" }));
+    const panel = screen.getByRole("complementary", { name: "Code review details" });
+    expect(within(panel).getByText("~/.kibo/skills/review")).toBeTruthy();
+    expect(within(panel).getByText("checklist.md")).toBeTruthy();
+    expect(await within(panel).findByText("diff")).toBeTruthy();
+    expect(calls).toEqual([["catalog_preview", { source: own.url, kind: "skill", id: "review" }]]);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(calls.at(-1)?.[0]).toBe("catalog_install"));
+    fireEvent.click(within(panel).getByRole("button", { name: "Close panel" }));
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("a failed install says why in the panel", async () => {
+    answer = [own];
+    failInstall = "the catalog answered 404";
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    expect(await screen.findByText("the catalog answered 404")).toBeTruthy();
+    failInstall = null;
+  });
+
+  test("Remove asks first only when the installed copy was changed here", async () => {
+    answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "installed" }), entry({ id: "tls", kind: "runbook", name: "TLS", state: "changed", role: "kubernetes" }))];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(calls.filter(([c]) => c === "catalog_remove")).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "TLS" }));
+    expect(screen.getByText("Installed, and changed here since")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    const confirm = screen.getByRole("dialog", { name: "Remove TLS?" });
+    expect(calls.filter(([c]) => c === "catalog_remove")).toHaveLength(1);
+    fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(calls.filter(([c]) => c === "catalog_remove")).toHaveLength(2));
+    expect(calls.at(-1)).toEqual(["catalog_remove", { source: own.url, kind: "runbook", id: "tls" }]);
+  });
+
+  test("something else in the place is not installed over, and a built-in runbook's name is said", async () => {
+    answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "taken" }), entry({ id: "crashloop", kind: "runbook", name: "Crash loop", role: "kubernetes", replacesBuiltIn: true }))];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
+    expect((screen.getByRole("button", { name: "Install" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/was not installed from this catalog/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install /changelog" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Crash loop" }));
+    expect(screen.getByText(/The app ships a runbook named crashloop/)).toBeTruthy();
+  });
+
+  test("a server is installed from a dialog that shows it whole and asks for its secrets", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install GitHub" }));
+    const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
+    expect(await within(dialog).findByText(/api\.example\/mcp/)).toBeTruthy();
+    const install = within(dialog).getByRole("button", { name: "Install" }) as HTMLButtonElement;
+    expect(install.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "  " } });
+    expect(install.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "ghp_1" } });
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+    fireEvent.click(install);
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "mcp", id: "github", secrets: { GITHUB_TOKEN: "ghp_1" } }]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("hooks are installed from a dialog that shows their commands", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install No force push" }));
+    const dialog = screen.getByRole("dialog", { name: "Install No force push?" });
+    expect(await within(dialog).findByText("exit 2")).toBeTruthy();
+    expect(within(dialog).getByText("PreToolUse · runCommand")).toBeTruthy();
+    expect(within(dialog).getByText(/no card to approve it/)).toBeTruthy();
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "hooks", id: "no-force", secrets: {} }]));
+  });
+
+  test("the panel's Install of a server asks too, and Cancel installs nothing", async () => {
+    answer = [own];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Install" }));
+    const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+  });
+
+  test("an entry with a newer version updates from a dialog with each file's diff", async () => {
+    answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "changed", rev: "2", installedRev: "1" }))];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
+    const panel = screen.getByRole("complementary");
+    expect(within(panel).getByText("2 — 1 installed")).toBeTruthy();
+    expect(within(panel).getByText("The catalog has a newer version too.")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update /changelog?" });
+    expect(await within(dialog).findByText(/writes over those changes/)).toBeTruthy();
+    expect(within(dialog).getByText("mine")).toBeTruthy();
+    expect(within(dialog).getByText("Unchanged: same.md")).toBeTruthy();
+    expect(calls.filter(([c]) => c === "catalog_update")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_update", { source: own.url, kind: "command", id: "changelog", secrets: {} }]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("a server's update asks only for the secrets it does not have, and up to date shows no Update", async () => {
+    answer = [withItems({ ...own.items[1], state: "update", rev: "2", installedRev: "1" }, entry({ id: "x", kind: "command", name: "/x", state: "installed", installedRev: "1" }))];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/x" }));
+    expect(within(screen.getByRole("complementary")).queryByRole("button", { name: "Update" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update GitHub?" });
+    const update = (await within(dialog).findByText("ORG")) && (within(dialog).getByRole("button", { name: "Update" }) as HTMLButtonElement);
+    expect(update.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("ORG"), { target: { value: "o" } });
+    fireEvent.click(update);
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_update", { source: own.url, kind: "mcp", id: "github", secrets: { ORG: "o" } }]));
+  });
+});

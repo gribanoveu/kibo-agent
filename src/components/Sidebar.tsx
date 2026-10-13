@@ -23,6 +23,7 @@ import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
 import { GettingStarted } from "./GettingStarted";
+import { PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
@@ -66,6 +67,9 @@ const EMPTY: Record<Filter, string> = {
 type Props = {
   mode: AppMode;
   onMode: (mode: AppMode) => void;
+  /** The page open in place of the chat (pages.tsx); no mode is lit then. */
+  page: PageId | null;
+  onPage: (page: PageId) => void;
   chats: ChatSummary[];
   activeChat: string | null;
   onSelectChat: (id: string) => void;
@@ -82,6 +86,8 @@ type Props = {
 export function Sidebar({
   mode,
   onMode,
+  page,
+  onPage,
   chats,
   activeChat,
   onSelectChat,
@@ -127,91 +133,110 @@ export function Sidebar({
           <Plus size={14} />
           <span className="label">New chat</span>
         </button>
-        <div className="mode-switch" role="tablist" aria-label="Mode" aria-orientation="vertical">
-          {APP_MODES.map((value) => (
+        <div className="mode-switch" role="tablist" aria-label="View" aria-orientation="vertical">
+          {APP_MODES.map((value) => {
+            const active = page === null && mode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`mode-opt${active ? " active" : ""}`}
+                title={MODES[value].title}
+                onClick={() => onMode(value)}
+              >
+                {MODES[value].icon}
+                <span>{MODES[value].label}</span>
+              </button>
+            );
+          })}
+          {PAGES.map(({ id, label, title, icon: Icon }) => (
             <button
-              key={value}
+              key={id}
               type="button"
               role="tab"
-              aria-selected={mode === value}
-              className={`mode-opt${mode === value ? " active" : ""}`}
-              title={MODES[value].title}
-              onClick={() => onMode(value)}
+              aria-selected={page === id}
+              className={`mode-opt${page === id ? " active" : ""}`}
+              title={title}
+              onClick={() => onPage(id)}
             >
-              {MODES[value].icon}
-              <span>{MODES[value].label}</span>
+              <Icon size={14} />
+              <span>{label}</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="group">
-        {chats.length > 0 && (
-          <div className="group-head">
-            <span>Chats</span>
-            <Dropdown
-              label={FILTERS.find((f) => f.value === filter)?.label}
-              title="Which chats to list"
-              options={FILTERS}
-              value={filter}
-              onPick={(value) => setFilter(value as Filter)}
-              below
-              right
-            />
-          </div>
-        )}
-        {listed.length === 0 ? (
-          <div className="empty">{chats.length === 0 ? "No chats yet." : EMPTY[filter]}</div>
-        ) : (
-          listed.map((chat) => (
-            <div key={chat.id} className={`chat-row${chat.archived ? " archived" : ""}`}>
-              <button
-                type="button"
-                className={`chat${chat.id === activeChat ? " active" : ""}`}
-                onClick={() => onSelectChat(chat.id)}
-                title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
-              >
-                {chat.archived ? (
-                  <Archive size={14} />
-                ) : chat.branchedFrom ? (
-                  <GitBranch size={14} />
-                ) : chat.role === "kubernetes" ? (
-                  <ShipWheel size={14} />
-                ) : chat.role === "assistant" ? (
-                  <MessagesSquare size={14} />
-                ) : (
-                  <MessageSquare size={14} />
-                )}
-                <ChangingText text={chat.title} />
-              </button>
-              <ChatMenu
-                items={[
-                  chat.archived
-                    ? {
-                        id: "unarchive",
-                        label: "Unarchive",
-                        icon: <ArchiveRestore size={14} />,
-                        onSelect: () => onArchiveChat(chat.id, false),
-                      }
-                    : {
-                        id: "archive",
-                        label: "Archive",
-                        icon: <Archive size={14} />,
-                        onSelect: () => onArchiveChat(chat.id, true),
-                      },
-                  {
-                    id: "delete",
-                    label: "Delete",
-                    icon: <Trash2 size={14} />,
-                    divided: true,
-                    onSelect: () => setDeleting(chat),
-                  },
-                ]}
+      {page === null && (
+        <div className="group">
+          {chats.length > 0 && (
+            <div className="group-head">
+              <span>Chats</span>
+              <Dropdown
+                label={FILTERS.find((f) => f.value === filter)?.label}
+                title="Which chats to list"
+                options={FILTERS}
+                value={filter}
+                onPick={(value) => setFilter(value as Filter)}
+                below
+                right
               />
             </div>
-          ))
-        )}
-      </div>
+          )}
+          {listed.length === 0 ? (
+            <div className="empty">{chats.length === 0 ? "No chats yet." : EMPTY[filter]}</div>
+          ) : (
+            listed.map((chat) => (
+              <div key={chat.id} className={`chat-row${chat.archived ? " archived" : ""}`}>
+                <button
+                  type="button"
+                  className={`chat${chat.id === activeChat ? " active" : ""}`}
+                  onClick={() => onSelectChat(chat.id)}
+                  title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
+                >
+                  {chat.archived ? (
+                    <Archive size={14} />
+                  ) : chat.branchedFrom ? (
+                    <GitBranch size={14} />
+                  ) : chat.role === "kubernetes" ? (
+                    <ShipWheel size={14} />
+                  ) : chat.role === "assistant" ? (
+                    <MessagesSquare size={14} />
+                  ) : (
+                    <MessageSquare size={14} />
+                  )}
+                  <ChangingText text={chat.title} />
+                </button>
+                <ChatMenu
+                  items={[
+                    chat.archived
+                      ? {
+                          id: "unarchive",
+                          label: "Unarchive",
+                          icon: <ArchiveRestore size={14} />,
+                          onSelect: () => onArchiveChat(chat.id, false),
+                        }
+                      : {
+                          id: "archive",
+                          label: "Archive",
+                          icon: <Archive size={14} />,
+                          onSelect: () => onArchiveChat(chat.id, true),
+                        },
+                    {
+                      id: "delete",
+                      label: "Delete",
+                      icon: <Trash2 size={14} />,
+                      divided: true,
+                      onSelect: () => setDeleting(chat),
+                    },
+                  ]}
+                />
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       <Modal
         title="Delete this chat?"

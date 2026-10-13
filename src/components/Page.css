@@ -1,0 +1,104 @@
+/* A page in the chat's place (pages.tsx): as wide as the chat may get, and
+   never narrower than it (`.main` in App.css, CHAT_MIN), so the columns beside
+   it give way by the same rule. */
+.page {
+  flex: 1;
+  min-width: 400px;
+  /* The agent chat's thread (.thread in ChatPanel.css), so a page lines up with the messages. */
+  padding: 16px 18px 24px;
+  background: var(--bg-panel);
+  overflow-y: auto;
+}
+
+/* The title and the bar stay put while the page scrolls under them. The
+   negative margin and `top` cover the page's own padding: sticking is measured
+   from inside it, and what scrolls would show through above. */
+.page-top {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  margin: -16px -18px 0;
+  padding: 16px 18px 12px;
+  background: var(--bg-panel);
+}
+.page-title {
+  margin: 0;
+  font-size: calc(var(--fs-lg) * 1.7);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+/* One line under the title, wrapping where it must. */
+.page-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+/* Right of the page — the panes' place and look beside the chat
+   (AsidePanel.css). As wide as the panes' column, dragged by the same handle
+   (PageContext.sideHandle), and never past the window's edge: without room
+   it gives up width down to its minimum, as .dock-column does, while the
+   page keeps its own. */
+.page-panel {
+  flex: 0 1 auto;
+  width: var(--aside-width, 300px);
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  animation: page-panel-in 0.18s ease-out;
+}
+@keyframes page-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-panel {
+    animation: none;
+  }
+}
+.page-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: var(--head-height);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.page-panel-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+}
+.page-panel-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.page-panel-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.page-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 20px;
+}

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2026-10-13 An entry installed from the Catalog updates from its panel when the catalog has a newer version: a dialog shows each file's diff against what is there now, warns when that writes over a change made here, and a server keeps its tokens
+- 2026-10-13 Hooks install from the Catalog page too: a dialog lists each one's event, matcher and command before it goes into hooks.json; Remove takes out only the hooks it added, and leaves any you changed since
+- 2026-10-12 MCP servers install from the Catalog page too: a dialog shows the whole entry — the command it runs or the address it sends to — and asks for the tokens it needs; Remove takes the server back out of mcp.json
+- 2026-10-12 The open chat's name shows in the window's title bar in place of the app's
+- 2026-10-12 Skills, commands and Kubernetes runbooks install from the Catalog page with one click and come off with Remove; a card opens a panel on the right with what it installs, where, and its text
+- 2026-10-12 A Catalog page in the sidebar, under Agent and Chat, lists the skills, commands, runbooks, MCP servers and hooks published to the app's catalog on GitHub as cards, by kind, with tabs, search and Refresh; without the network it shows the copy kept from last time. Installing from it comes next
 - 2026-10-12 In the IDE layout the file editor shows what changed since git in the text, as Cursor does: added lines in green, removed ones in red between them, and an Undo on each change that puts it back
 - 2026-10-12 A selection in the file editor is one colour throughout: the cursor's line is no longer lit grey over the part of it that is selected
 - 2026-10-12 The sidebar's show/hide button sits beside the traffic lights (at the window's left edge in full screen), Agent and Chat are a list of modes, menus stand out from the sidebar, and the chat fades out above the message box instead of cutting a line

@@ -24,6 +24,11 @@
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  /* A chat's name can be a whole message: about 60 characters, and never
+     into the bar's buttons on a narrow window. */
+  max-width: min(50%, 60ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
   font-size: var(--fs-sm);

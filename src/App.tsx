@@ -13,6 +13,7 @@ import { ToolLog } from "./components/ToolLog";
 import { ConfigFileEditor } from "./components/ConfigFileEditor";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
+import { PAGES, type PageId } from "./components/pages";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft } from "lucide-react";
@@ -51,7 +52,8 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ConversationMode, type ImagePart } from "./lib/chat";
+import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ChatSummary, type ConversationMode, type ImagePart } from "./lib/chat";
+import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
@@ -85,6 +87,11 @@ type EntryDialog<K> = "json" | { entry: K | null } | null;
 /** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
 const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
 
+/** The open chat's name. A chat's first turn ends before it is saved and named: its first message is its name. */
+function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): string | null {
+  return chats.find((one) => one.id === id)?.title ?? turn.blocks.find((block) => block.kind === "user")?.text ?? null;
+}
+
 /** Why the open chat cannot be left: its turn would land in the next one. */
 const STAY = "Stop the running turn before leaving this chat";
 
@@ -99,6 +106,10 @@ export default function App() {
   // Files left, the file in the middle, the chat right: for reading and writing documents.
   const [ideLayout, setIdeLayout] = useStoredState("atlas-ide-layout", false, isBoolean);
   const ide = agentMode && ideLayout;
+  // A sidebar page in the chat's place; picking a mode or a chat leaves it.
+  // The IDE layout has no sidebar to pick one from.
+  const [page, setPage] = useState<PageId | null>(null);
+  const onPage = ide ? null : (PAGES.find((one) => one.id === page) ?? null);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -171,11 +182,13 @@ export default function App() {
   // Neither is stored — wider again, both come back as they were left.
   const frame = nativeFrame || windowsFrame ? 0 : 2;
   // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
-  const viewerOpen = agentMode && viewer.active !== null;
+  const viewerOpen = agentMode && !onPage && viewer.active !== null;
   const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
-  // What the column shows: what was opened, while it fits.
-  const topHidden = asideHidden || !dockFits || !agentMode;
-  const bottomShown = dockFits && agentMode ? bottomTab : null;
+  // What the column shows: what was opened, while it fits — beside an Agent
+  // chat, or beside a page that keeps it.
+  const docked = onPage ? onPage.dock : agentMode;
+  const topHidden = asideHidden || !dockFits || !docked;
+  const bottomShown = dockFits && docked ? bottomTab : null;
   // In the IDE layout the bottom dock sits under the file, not in the column.
   const dockShown = !topHidden || (bottomShown !== null && !ide);
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
@@ -208,11 +221,7 @@ export default function App() {
     status: agent.turn.status,
     failed: agent.error !== null,
     queued: agent.queued.length,
-    // A chat's first turn ends before it is saved and named: its first message is its name.
-    chatTitle:
-      history.chats.find((one) => one.id === agent.chatId)?.title ??
-      agent.turn.blocks.find((block) => block.kind === "user")?.text ??
-      null,
+    chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
   // Servers start with an Agent turn and may stop during one.
@@ -296,12 +305,15 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  const selectChat = (id: string) =>
+  const selectChat = (id: string) => {
+    setPage(null);
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
+  };
 
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
   const newChat = () => {
+    setPage(null);
     if (!agentMode) {
       if (!plain.newChat()) return toast.show(STAY);
       return focusComposer();
@@ -509,7 +521,8 @@ export default function App() {
       {agentMode ? (
         <>
           <ChatPanel
-            headSlot={headSlot}
+            // A page has the title bar to itself: the head stays in the hidden chat.
+            headSlot={onPage ? null : headSlot}
             heading={
               ide ? (
                 <ChatSwitcher title={openChat?.title ?? null} chats={history.chats} activeChat={agent.chatId} onSelect={selectChat} onNew={newChat} />
@@ -648,7 +661,7 @@ export default function App() {
   );
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -676,13 +689,20 @@ export default function App() {
           )
         }
       >
-        Kibo Agent
+        {/* The open chat's name, where the chat is on screen; the IDE layout's header names it already. */}
+        {(!ide && !onPage && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
+          "Kibo Agent"}
       </Titlebar>
 
       <div className="body">
         <Sidebar
           mode={mode}
-          onMode={setMode}
+          onMode={(next) => {
+            setPage(null);
+            setMode(next);
+          }}
+          page={onPage?.id ?? null}
+          onPage={setPage}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           onSelectChat={selectChat}
@@ -708,7 +728,31 @@ export default function App() {
           onResizeEnd={(size) => panels.endResize("sidebar", size)}
         />
 
-        <Columns ide={ide} chat={chat} viewer={fileViewer} top={topPane} bottom={bottomPane || null} topShown={!topHidden} panels={panels} />
+        <Columns
+          ide={ide}
+          chat={chat}
+          page={
+            onPage && (
+              <onPage.Component
+                key="page"
+                openPane={openTab}
+                sideHandle={
+                  <PanelResizeHandle
+                    invert
+                    ariaLabel="Resize the side panel"
+                    onResize={panels.resizeAsideBy}
+                    onResizeEnd={(size) => panels.endResize("aside", size)}
+                  />
+                }
+              />
+            )
+          }
+          viewer={fileViewer}
+          top={topPane}
+          bottom={bottomPane || null}
+          topShown={!topHidden}
+          panels={panels}
+        />
       </div>
 
       <FolderSwitchDialog
