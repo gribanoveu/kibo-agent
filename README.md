@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/kibo-logo.png" width="160" alt="Kibo Agent">
+  <img src="src-tauri/icons/icon.png" width="160" alt="Kibo Agent">
 </p>
 
 <h1 align="center">Kibo Agent</h1>
