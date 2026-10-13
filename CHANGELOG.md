@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-13 An entry installed from the Catalog updates from its panel when the catalog has a newer version: a dialog shows each file's diff against what is there now, warns when that writes over a change made here, and a server keeps its tokens
 - 2026-10-13 Hooks install from the Catalog page too: a dialog lists each one's event, matcher and command before it goes into hooks.json; Remove takes out only the hooks it added, and leaves any you changed since
 - 2026-10-12 MCP servers install from the Catalog page too: a dialog shows the whole entry — the command it runs or the address it sends to — and asks for the tokens it needs; Remove takes the server back out of mcp.json
 - 2026-10-12 The open chat's name shows in the window's title bar in place of the app's

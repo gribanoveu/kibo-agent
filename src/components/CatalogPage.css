@@ -349,3 +349,24 @@ pre.catalog-server-entry {
 .catalog-hook pre.catalog-server-entry {
   margin-top: 4px;
 }
+
+/* The update dialog: a warning when it writes over an edit, then each changed file's diff. */
+.catalog-update-edited {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--amber);
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+.catalog-update-file {
+  margin-top: 12px;
+}
+.catalog-update-file .catalog-detail-file {
+  border-top: none;
+  padding-top: 0;
+}
+.catalog-update-count {
+  margin-left: 6px;
+  color: var(--text-faint);
+}

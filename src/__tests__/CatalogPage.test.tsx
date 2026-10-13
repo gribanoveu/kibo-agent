@@ -23,6 +23,15 @@ mock.module("@tauri-apps/api/core", () => ({
             : { text: "# Review\n\nRead the **diff**.", secrets: [] },
       );
     if (command === "catalog_install" && failInstall) return Promise.reject(failInstall);
+    if (command === "catalog_update_preview")
+      return Promise.resolve({
+        changes: [
+          { name: "changelog.md", diff: "@@ -1 +1 @@\n-mine\n+Add a line and date it\n", added: 1, removed: 1 },
+          { name: "same.md", diff: "", added: 0, removed: 0 },
+        ],
+        secrets: (args as { kind: string }).kind === "mcp" ? ["ORG"] : [],
+        edited: true,
+      });
     return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
@@ -41,6 +50,7 @@ function entry(over: Partial<CatalogEntry> & Pick<CatalogEntry, "id" | "kind" | 
     state: "available",
     target: `~/.kibo/${over.kind}s/${over.id}`,
     replacesBuiltIn: false,
+    installedRev: null,
     ...over,
   };
 }
@@ -241,5 +251,40 @@ describe("the catalog page", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
+  });
+
+  test("an entry with a newer version updates from a dialog with each file's diff", async () => {
+    answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "changed", rev: "2", installedRev: "1" }))];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
+    const panel = screen.getByRole("complementary");
+    expect(within(panel).getByText("2 — 1 installed")).toBeTruthy();
+    expect(within(panel).getByText("The catalog has a newer version too.")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update /changelog?" });
+    expect(await within(dialog).findByText(/writes over those changes/)).toBeTruthy();
+    expect(within(dialog).getByText("mine")).toBeTruthy();
+    expect(within(dialog).getByText("Unchanged: same.md")).toBeTruthy();
+    expect(calls.filter(([c]) => c === "catalog_update")).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_update", { source: own.url, kind: "command", id: "changelog", secrets: {} }]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("a server's update asks only for the secrets it does not have, and up to date shows no Update", async () => {
+    answer = [withItems({ ...own.items[1], state: "update", rev: "2", installedRev: "1" }, entry({ id: "x", kind: "command", name: "/x", state: "installed", installedRev: "1" }))];
+    calls = [];
+    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    fireEvent.click(await screen.findByRole("button", { name: "/x" }));
+    expect(within(screen.getByRole("complementary")).queryByRole("button", { name: "Update" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update GitHub?" });
+    const update = (await within(dialog).findByText("ORG")) && (within(dialog).getByRole("button", { name: "Update" }) as HTMLButtonElement);
+    expect(update.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("ORG"), { target: { value: "o" } });
+    fireEvent.click(update);
+    await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_update", { source: own.url, kind: "mcp", id: "github", secrets: { ORG: "o" } }]));
   });
 });

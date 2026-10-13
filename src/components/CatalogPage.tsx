@@ -15,9 +15,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Markdown } from "./Markdown";
+import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
 import { Page, PagePanel } from "./Page";
-import { sameEntry, useCatalog, useCatalogPreview, type EntryKey } from "../hooks/useCatalog";
+import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import type { CatalogEntry, CatalogKind, CatalogSource } from "../lib/catalog";
 import type { PageContext } from "./pages";
 import "./CatalogPage.css";
@@ -137,8 +138,9 @@ function Details({
   error,
   onInstall,
   onRemove,
+  onUpdate,
   onClose,
-}: { entry: Entry; error: string | null; onRemove: (entry: EntryKey) => void; onClose: () => void } & Actions) {
+}: { entry: Entry; error: string | null; onRemove: (entry: EntryKey) => void; onUpdate: (entry: EntryKey) => void; onClose: () => void } & Actions) {
   const { item, source } = entry;
   const kind = kindOf(item.kind);
   const key = keyOf(entry);
@@ -146,6 +148,7 @@ function Details({
   const [confirming, setConfirming] = useState(false);
   const working = sameEntry(busy, key);
   const ours = item.state === "installed" || item.state === "update" || item.state === "changed";
+  const newer = ours && item.installedRev !== null && item.installedRev !== item.rev;
   const place = placeOf(item);
   const file = item.kind === "skill" ? "SKILL.md" : item.path.split("/").pop();
 
@@ -156,10 +159,17 @@ function Details({
 
       <div className="catalog-detail-actions">
         {ours ? (
-          <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => (item.state === "changed" ? setConfirming(true) : onRemove(key))}>
-            {working && <Loader2 size={13} className="catalog-spin" />}
-            Remove
-          </button>
+          <>
+            {newer && (
+              <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => onUpdate(key)}>
+                Update
+              </button>
+            )}
+            <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => (item.state === "changed" ? setConfirming(true) : onRemove(key))}>
+              {working && <Loader2 size={13} className="catalog-spin" />}
+              Remove
+            </button>
+          </>
         ) : (
           <button type="button" className="btn btn-primary" disabled={item.state !== "available" || item.target === null || busy !== null} onClick={() => onInstall(key)}>
             {working && <Loader2 size={13} className="catalog-spin" />}
@@ -176,7 +186,7 @@ function Details({
             : `${item.kind === "mcp" ? `A server named ${item.id} is already in ${item.target}` : `${item.target} is already there`} and was not installed from this catalog — yours, or another catalog's. It is left as it is.`}
         </p>
       )}
-      {item.state === "update" && <p className="catalog-detail-note">Updating comes next; Remove and Install gets the new one now.</p>}
+      {newer && item.state === "changed" && <p className="catalog-detail-note">The catalog has a newer version too.</p>}
       {item.replacesBuiltIn && item.state !== "taken" && (
         <p className="catalog-detail-note">The app ships a runbook named {item.id}: this one is read instead while it is installed.</p>
       )}
@@ -185,7 +195,7 @@ function Details({
         <dt>Source</dt>
         <dd title={source}>{sourceName(source)}</dd>
         <dt>Version</dt>
-        <dd>{item.rev}</dd>
+        <dd>{newer ? `${item.rev} — ${item.installedRev} installed` : item.rev}</dd>
         {item.role && (
           <>
             <dt>Role</dt>
@@ -261,6 +271,93 @@ function Details({
   );
 }
 
+/** A field for each `${NAME}` a server needs; the value goes only into mcp.json. */
+function SecretFields({ names, values, onChange, target }: { names: string[]; values: Record<string, string>; onChange: (values: Record<string, string>) => void; target: string | null }) {
+  if (names.length === 0) return null;
+  return (
+    <>
+      {names.map((name) => (
+        <div key={name} className="modal-field">
+          <label htmlFor={`secret-${name}`}>{name}</label>
+          <input
+            id={`secret-${name}`}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={values[name] ?? ""}
+            onChange={(e) => onChange({ ...values, [name]: e.target.value })}
+          />
+        </div>
+      ))}
+      <p className="modal-note">Written into {target} in place of each {"${…}"}, and kept nowhere else.</p>
+    </>
+  );
+}
+
+const filled = (names: string[], values: Record<string, string>) => names.every((name) => values[name]?.trim());
+
+/** What the update writes, file by file against what is there now, before it does. */
+function UpdateDialog({ entry, onUpdate, onClose }: { entry: Entry; onUpdate: (secrets: Record<string, string>) => void; onClose: () => void }) {
+  const { item } = entry;
+  const preview = useCatalogUpdatePreview(keyOf(entry));
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const read = preview?.read;
+  const changed = read?.changes.filter((change) => change.diff) ?? [];
+  const same = read?.changes.filter((change) => !change.diff) ?? [];
+
+  return (
+    <Modal
+      title={`Update ${item.name}?`}
+      open
+      wide
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!read || !filled(read.secrets, secrets)} onClick={() => onUpdate(secrets)}>
+            Update
+          </button>
+        </>
+      }
+    >
+      <p className="catalog-detail-confirm">
+        From version {item.installedRev} to {item.rev}. Each file as it is now, with the lines the update takes out (−) and puts in (+):
+      </p>
+      {preview?.error ? (
+        <div className="catalog-detail-error">{preview.error}</div>
+      ) : !read ? (
+        <div className="catalog-detail-note">Reading…</div>
+      ) : (
+        <>
+          {read.edited && (
+            <p className="catalog-update-edited">
+              {item.kind === "hooks"
+                ? "Some of its hooks were changed here since it was installed: those stay as they are, and the catalog's new ones go in beside them."
+                : "It was changed here since it was installed. The update writes over those changes — they are the lines it removes below."}
+            </p>
+          )}
+          {changed.map((change) => (
+            <div key={change.name} className="catalog-update-file">
+              <h4 className="catalog-detail-file">
+                {change.name} <span className="catalog-update-count">+{change.added} −{change.removed}</span>
+              </h4>
+              <DiffView unified={change.diff} />
+            </div>
+          ))}
+          {changed.length === 0 && <p className="catalog-detail-note">The text is the same; only the version changes.</p>}
+          {same.length > 0 && <p className="modal-note">Unchanged: {same.map((change) => change.name).join(", ")}</p>}
+          <SecretFields names={read.secrets} values={secrets} onChange={setSecrets} target={item.target} />
+        </>
+      )}
+      {(item.kind === "mcp" || item.kind === "hooks") && (
+        <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>
+      )}
+    </Modal>
+  );
+}
+
 /** Hooks as the dialog lists them: event, matcher and the command as it runs —
     unescaped, since the command is what has to be read. Null when the text is
     not that shape; the backend has refused it already, and the raw text shows. */
@@ -283,7 +380,7 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
   const preview = useCatalogPreview(keyOf(entry));
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const read = preview?.read;
-  const ready = read !== undefined && read !== null && read.secrets.every((name) => secrets[name]?.trim());
+  const ready = !!read && filled(read.secrets, secrets);
   const hooks = item.kind === "hooks" && read ? hookLines(read.text) : null;
 
   return (
@@ -330,20 +427,7 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
           ) : (
             <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
           )}
-          {read.secrets.map((name) => (
-            <div key={name} className="modal-field">
-              <label htmlFor={`secret-${name}`}>{name}</label>
-              <input
-                id={`secret-${name}`}
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                value={secrets[name] ?? ""}
-                onChange={(e) => setSecrets({ ...secrets, [name]: e.target.value })}
-              />
-            </div>
-          ))}
-          {read.secrets.length > 0 && <p className="modal-note">Written into {item.target} in place of each {"${…}"}, and kept nowhere else.</p>}
+          <SecretFields names={read.secrets} values={secrets} onChange={setSecrets} target={item.target} />
         </>
       )}
       <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>
@@ -381,11 +465,12 @@ function SourceLine({ source }: { source: CatalogSource }) {
 /** Skills, commands, runbooks, MCP servers and hooks published to the
     catalogs (docs/32-catalog.md), and installing them. */
 export function CatalogPage({ sideHandle }: PageContext) {
-  const { sources, loading, error, refresh, busy, failed, install, remove } = useCatalog();
+  const { sources, loading, error, refresh, busy, failed, install, remove, update } = useCatalog();
   const [tab, setTab] = useState<Tab>("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<EntryKey | null>(null);
   const [asking, setAsking] = useState<EntryKey | null>(null);
+  const [updating, setUpdating] = useState<EntryKey | null>(null);
 
   const entries: Entry[] = (sources ?? []).flatMap((source) => source.items.map((item) => ({ item, source: source.url })));
   const found = entries.filter((entry) => matches(entry, query));
@@ -395,6 +480,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
   // Looked up again on every list, so the panel shows the state after an action.
   const shown = entries.find((entry) => sameEntry(keyOf(entry), open)) ?? null;
   const asked = entries.find((entry) => sameEntry(keyOf(entry), asking)) ?? null;
+  const toUpdate = entries.find((entry) => sameEntry(keyOf(entry), updating)) ?? null;
   const onInstall = (key: EntryKey) => (asks(key.kind) ? setAsking(key) : void install(key));
 
   return (
@@ -435,6 +521,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
             error={failed && sameEntry(failed.entry, open) ? failed.error : null}
             onInstall={onInstall}
             onRemove={(key) => void remove(key)}
+            onUpdate={setUpdating}
             onClose={() => setOpen(null)}
           />
         )
@@ -483,6 +570,17 @@ export function CatalogPage({ sideHandle }: PageContext) {
           onInstall={(secrets) => {
             setAsking(null);
             void install(keyOf(asked), secrets);
+          }}
+        />
+      )}
+      {toUpdate && (
+        <UpdateDialog
+          key={`${toUpdate.source}/${toUpdate.item.kind}/${toUpdate.item.id}`}
+          entry={toUpdate}
+          onClose={() => setUpdating(null)}
+          onUpdate={(secrets) => {
+            setUpdating(null);
+            void update(keyOf(toUpdate), secrets);
           }}
         />
       )}
