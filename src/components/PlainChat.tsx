@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { Transcript } from "./ChatPanel";
@@ -25,6 +25,7 @@ const WRITES_ON = "changes";
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
+  prototype: AppWindow,
 };
 
 /** What the empty chat says the role can do — longer than its menu hint, and plain about the limits. */
@@ -32,6 +33,8 @@ const ROLE_WELCOME: Record<ChatRoleId, string> = {
   assistant: "The model answers in text here: it does not read your files, run commands or change anything.",
   kubernetes:
     "The model reads the cluster picked below: pods, events, logs. With Changes on it can change it too, asking you first.",
+  prototype:
+    "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
 };
 
 // A thought cloud: overlapping circles, then the bubbles trailing to the head.

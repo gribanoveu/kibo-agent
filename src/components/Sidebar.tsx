@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronRight,
@@ -201,6 +202,8 @@ export function Sidebar({
                     <GitBranch size={14} />
                   ) : chat.role === "kubernetes" ? (
                     <ShipWheel size={14} />
+                  ) : chat.role === "prototype" ? (
+                    <AppWindow size={14} />
                   ) : chat.role === "assistant" ? (
                     <MessagesSquare size={14} />
                   ) : (

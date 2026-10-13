@@ -120,11 +120,18 @@ pub fn preflight_tool_call(
         return Err(ToolError::NotOfferedInMode(tool));
     }
 
+    preflight_paths(scope, reads, &parsed)
+}
+
+/// The folder's half of the gate, for a folder the agent's or a chat's own:
+/// every path the call writes resolves under `scope`, and a file it replaces
+/// was read as it now stands.
+pub fn preflight_paths(scope: &ToolScope, reads: &ReadFiles, parsed: &ToolCall) -> Result<(), ToolError> {
     // Containment, checked here as well as inside each tool. The duplication is
     // the point: this runs before approval, the tool's own check runs before
     // the disk.
     let command_cwd: [&str; 1];
-    let paths: &[&str] = match &parsed {
+    let paths: &[&str] = match parsed {
         ToolCall::WriteFile(a) => &[&a.path],
         ToolCall::EditFile(a) => &[&a.path],
         ToolCall::DeleteFile(a) => &[&a.path],
@@ -149,7 +156,7 @@ pub fn preflight_tool_call(
     // "You have not read this file" is knowable without touching the disk and
     // without asking anyone, so asking would be pure ceremony.
     let deleting = matches!(parsed, ToolCall::DeleteFile(_));
-    if let Some((path, whole)) = match &parsed {
+    if let Some((path, whole)) = match parsed {
         ToolCall::WriteFile(a) => Some((a.path.as_str(), true)),
         ToolCall::DeleteFile(a) => Some((a.path.as_str(), true)),
         ToolCall::EditFile(a) => Some((a.path.as_str(), false)),

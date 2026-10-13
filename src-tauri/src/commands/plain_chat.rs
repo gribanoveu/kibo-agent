@@ -18,11 +18,11 @@ use crate::infra::kube_changes::ChangeStore;
 use crate::domain::runbooks;
 use crate::infra::runbooks_store;
 use crate::domain::tool_call_log::ToolCallLogEntry;
-use crate::domain::tools::{ApprovalPolicy, ToolPreview};
+use crate::domain::tools::{ApprovalPolicy, ToolPreview, ToolScope};
 use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, ToolCallDecision};
 use crate::services::llm_chat::TurnError;
 use crate::services::llm_session::LlmSession;
-use crate::infra::chat_store;
+use crate::infra::{chat_store, prototype_store};
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::services::{context_compaction, kubeconfigs, llm_session, plain_chat};
 
@@ -53,14 +53,16 @@ pub fn plain_chat_roles() -> Vec<RoleView> {
     ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
 }
 
-/// A turn in `role` on `messages`, the whole conversation so far. Its text and
-/// calls arrive on `chat:turn-event` under `turn_id` as they happen; this
-/// resolves with how it ended — done, stopped, or paused on the approval card.
+/// A turn of the chat `chat_id` in `role` on `messages`, the whole conversation
+/// so far. Its text and calls arrive on `chat:turn-event` under `turn_id` as
+/// they happen; this resolves with how it ended — done, stopped, or paused on
+/// the approval card.
 #[tauri::command]
 pub async fn plain_chat_send<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
@@ -68,7 +70,7 @@ pub async fn plain_chat_send<R: Runtime>(
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
+    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
 /// Continues a turn paused on the approval card, with the user's answers. The
@@ -79,13 +81,14 @@ pub async fn plain_chat_resume<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
+    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
 }
 
 /// "Always allow this tool", from a chat's approval card — for Chat mode's
@@ -101,6 +104,7 @@ async fn run_turn<R, F>(
     app: AppHandle<R>,
     state: Arc<PlainChatState>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     run: F,
@@ -112,8 +116,13 @@ where
     let events = chat_event_sink(&app, turn_id);
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
-    let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
+    let approval = role.approval(&*state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?);
     tauri::async_runtime::spawn_blocking(move || {
+        // The chat's own folder, for a role that works in one; made on its first turn.
+        let scope = match role.workspace() {
+            true => Some(ToolScope::new(&prototype_store::files_dir(&chat_id)?).map_err(|e| e.to_string())?),
+            false => None,
+        };
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
         // Asked every turn: a cluster that stopped answering, or a login that
         // expired, is what the model most needs to know. The client is kept,
@@ -138,6 +147,7 @@ where
             kube: &kube,
             runbooks: &runbooks,
             web: web.as_ref(),
+            scope: scope.as_ref(),
             cluster: api.as_ref().map(|api| api as &dyn KubeApi),
             changes: Some(&ChangeStore),
             approval: &approval,
@@ -272,6 +282,11 @@ mod tests {
             "id": "kubernetes",
             "name": "Kubernetes",
             "description": ChatRole::Kubernetes.description(),
+        }, {
+            // A debug build's: the menu lists it from P-5 (`ChatRole::ALL`).
+            "id": "prototype",
+            "name": "Prototype",
+            "description": ChatRole::Prototype.description(),
         }]));
     }
 }

@@ -92,5 +92,30 @@ pub fn chat_set_archived(id: String, archived: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn chat_delete(id: String) -> Result<(), String> {
-    chat_store::delete(&id).map_err(|e| e.to_string())
+    chat_store::delete(&id).map_err(|e| e.to_string())?;
+    // A Prototype chat's folder goes with it; any other chat has none.
+    crate::infra::prototype_store::remove(&id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::chat_role::ChatRole;
+    use crate::domain::llm::LlmMessage;
+    use crate::infra::prototype_store;
+
+    /// A Prototype chat's folder does not outlive the chat.
+    #[test]
+    fn deleting_a_chat_takes_its_folder_with_it() {
+        crate::testing::with_app_dir("chat-delete-folder", || {
+            let id = "5f0c2d1e-9a7b-4c3d-8e6f-1a2b3c4d5e6f";
+            chat_store::save_plain(id, ChatRole::Prototype, None, &[LlmMessage::user("a page")], &serde_json::json!([]))
+                .unwrap();
+            let folder = prototype_store::files_dir(id).unwrap();
+            std::fs::write(folder.join("index.html"), "<p>hi</p>").unwrap();
+
+            chat_delete(id.to_string()).unwrap();
+            assert!(!folder.parent().unwrap().exists());
+        });
+    }
 }

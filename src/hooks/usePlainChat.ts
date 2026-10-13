@@ -237,7 +237,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       void refresh();
       // Beside the turn; a chat the model could not name keeps its first message as its name.
       if (chatId === null) generateChatTitle(id).then(refresh, () => {});
-      finish(await plainChatSend(turnId.current, role, kube, history.current));
+      finish(await plainChatSend(turnId.current, id, role, kube, history.current));
     } catch (e) {
       failed(e);
     }
@@ -246,11 +246,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   /** Answers the approval card. `always` stops those tools asking in Chat mode first. */
   const decide = async (decisions: ToolCallDecision[], always: string[] = []) => {
     const checkpoint = turn.checkpoint;
-    if (!checkpoint) return;
+    if (!checkpoint || chatId === null) return;
     setTurn((state) => clearApproval(state));
     try {
       for (const tool of always) await plainChatAlwaysAllow(tool);
-      finish(await plainChatResume(turnId.current, role, kube, checkpoint, decisions));
+      finish(await plainChatResume(turnId.current, chatId, role, kube, checkpoint, decisions));
     } catch (e) {
       failed(e);
     }

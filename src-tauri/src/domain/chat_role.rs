@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::kube::{Access, KubeSetup, KubeTarget, Reach};
-use super::tools::ToolName;
+use super::tools::{ApprovalPolicy, ToolName};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,9 @@ pub enum ChatRole {
     Assistant,
     /// A Kubernetes engineer: clusters, manifests, Helm, debugging workloads.
     Kubernetes,
+    /// Builds pages — a site, a React app, an HTML deck — in a folder of the
+    /// chat's own (`docs/31-prototype-role.md`).
+    Prototype,
     /// The loop's own check of a role with tools, before any real role has
     /// one: a harmless tool that runs, and one that asks first.
     #[cfg(test)]
@@ -31,12 +34,19 @@ pub enum ChatRole {
 }
 
 impl ChatRole {
+    /// What the role menu lists. Prototype only in a debug build until its
+    /// pages can be seen (`docs/31-prototype-role.md`, P-5): a role that writes
+    /// files nobody can open is not one to offer.
+    #[cfg(debug_assertions)]
+    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes, ChatRole::Prototype];
+    #[cfg(not(debug_assertions))]
     pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes];
 
     pub fn name(self) -> &'static str {
         match self {
             ChatRole::Assistant => "Assistant",
             ChatRole::Kubernetes => "Kubernetes",
+            ChatRole::Prototype => "Prototype",
             #[cfg(test)]
             ChatRole::Tester => "Tester",
         }
@@ -47,6 +57,7 @@ impl ChatRole {
         match self {
             ChatRole::Assistant => "Answers in text and searches the web; no files or commands",
             ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
+            ChatRole::Prototype => "Builds pages — a site, a React app, an HTML deck — in a folder of its own",
             #[cfg(test)]
             ChatRole::Tester => "Tests the tool loop",
         }
@@ -61,6 +72,7 @@ impl ChatRole {
                  depends on code or output you have not been shown, ask for it rather than guessing."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
+            ChatRole::Prototype => PROTOTYPE_PROMPT,
             #[cfg(test)]
             ChatRole::Tester => "You test the tool loop.",
         }
@@ -71,7 +83,7 @@ impl ChatRole {
     /// same every turn until the setup changes, so a provider's prompt cache keeps it.
     pub fn setup_note(self, kube: &KubeSetup) -> Option<String> {
         match self {
-            ChatRole::Assistant => None,
+            ChatRole::Assistant | ChatRole::Prototype => None,
             #[cfg(test)]
             ChatRole::Tester => None,
             ChatRole::Kubernetes => Some(match kube {
@@ -132,6 +144,19 @@ impl ChatRole {
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ],
+            // Its own folder and nothing else; no command runs, so nothing it
+            // writes runs but in the preview's sandbox.
+            ChatRole::Prototype => &[
+                ToolName::ReadFile,
+                ToolName::ListFiles,
+                ToolName::WriteFile,
+                ToolName::EditFile,
+                ToolName::DeleteFile,
+                ToolName::CreateDirectory,
+                // Facts for the page's text; the page itself reaches no network.
+                ToolName::WebSearch,
+                ToolName::WebFetch,
+            ],
             // `todo` runs, `deleteFile` asks first — and then finds no folder.
             #[cfg(test)]
             ChatRole::Tester => &[ToolName::Todo, ToolName::DeleteFile],
@@ -139,6 +164,26 @@ impl ChatRole {
     }
 }
 
+
+impl ChatRole {
+    /// Whether the role works in a folder of the chat's own — the command
+    /// layer makes one per chat, and its file tools reach it and nothing else.
+    pub fn workspace(self) -> bool {
+        matches!(self, ChatRole::Prototype)
+    }
+
+    /// The approval the role's turns run under. A role with a folder writes in
+    /// it without a card: the folder is the chat's alone, the tools reach
+    /// nothing outside it, and nothing written there runs but in the preview's
+    /// sandbox. A card for every edit of a page would be a card per message.
+    pub fn approval(self, base: &ApprovalPolicy) -> ApprovalPolicy {
+        let mut policy = base.clone();
+        if self.workspace() {
+            policy.always_allowed.extend(self.tools().iter().copied());
+        }
+        policy
+    }
+}
 
 /// Where the chat works, in the form the model's commands should take, and
 /// what the cluster said. The same words every turn while nothing changes, so a
@@ -184,6 +229,17 @@ fn pinned_note(target: &KubeTarget) -> String {
 /// what to leave out the answers grew a section per rule (a one-field image
 /// change came back with a table, kubectl commands for a change the tools
 /// could make, a dry run, three cautions and a promise of what came next).
+/// A draft: the import map, the libraries and the deck's template arrive with
+/// them (`docs/31-prototype-role.md`, P-3).
+const PROTOTYPE_PROMPT: &str = r#"You build prototypes in a chat: a web page, a small app, an HTML slide deck, an interactive diagram — whatever the user wants to see working rather than read about.
+
+You work in a folder of this chat's own. Your file tools — readFile, listFiles, writeFile, editFile, deleteFile, createDirectory — reach it and nothing else, and paths are relative to it. Nothing there is the user's project: write freely.
+
+- Make a page one self-contained file, `index.html` unless the user names another: styles in a `<style>`, scripts inline.
+- The page cannot reach the network. No CDN scripts, web fonts or images from other sites: use system fonts, inline SVG, CSS gradients or emoji.
+- To change a page, read it and edit the part that changes rather than writing it again whole.
+- After a change, say in a line or two what changed and what to look at. Do not paste the file into the chat — the user sees the page, not its source."#;
+
 const KUBERNETES_PROMPT: &str = r#"You are a senior Kubernetes engineer (SRE/platform level) in a chat. You know Kubernetes itself — workloads, scheduling, networking, storage, RBAC, the control plane — and what surrounds it: kubectl, Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 Your tools read the user's cluster — the one this chat is pinned to, below: kubeDiagnose, kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout, kubeProbe. They change it, in the chat's own namespace only: kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a revision), kubeApply (a manifest: create or update objects), kubeDelete, and kubeUndo, which puts a change back from its backup by its change id — never undo by changing it back from memory. Changes work only while the chat's tab is on "Changes" (the note below says where it is now); the user approves each round of them on one card, and every object is backed up first. Prefer the narrow tool to kubeApply when one fits; for kubeApply, read the object first (kubeGet) and send it whole with your change. A rollout restart cannot be undone: restart only when a restart is what is wanted.
@@ -255,7 +311,54 @@ mod tests {
     fn the_wire_name_is_the_one_the_window_sends() {
         assert_eq!(serde_json::to_string(&ChatRole::Assistant).unwrap(), "\"assistant\"");
         assert_eq!(serde_json::to_string(&ChatRole::Kubernetes).unwrap(), "\"kubernetes\"");
+        assert_eq!(serde_json::to_string(&ChatRole::Prototype).unwrap(), "\"prototype\"");
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
+    }
+
+    /// The prototype role's tools are its folder's and the web's: no command,
+    /// no cluster, no MCP — so nothing it writes runs on the machine.
+    #[test]
+    fn the_prototype_role_reaches_its_folder_and_the_web_and_runs_nothing() {
+        let tools = ChatRole::Prototype.tools();
+        assert_eq!(
+            tools,
+            &[
+                ToolName::ReadFile,
+                ToolName::ListFiles,
+                ToolName::WriteFile,
+                ToolName::EditFile,
+                ToolName::DeleteFile,
+                ToolName::CreateDirectory,
+                ToolName::WebSearch,
+                ToolName::WebFetch,
+            ]
+        );
+        assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in a debug build");
+    }
+
+    /// The folder is the prototype role's alone; the others have none.
+    #[test]
+    fn only_the_prototype_role_works_in_a_folder() {
+        for &role in ChatRole::ALL {
+            assert_eq!(role.workspace(), role == ChatRole::Prototype, "{role:?}");
+        }
+    }
+
+    /// In its own folder the role writes without a card; every other role's
+    /// approval is the user's as it was — a change to a cluster still asks.
+    #[test]
+    fn the_prototype_role_writes_its_folder_without_asking_and_no_other_role_does() {
+        let base = ApprovalPolicy::default();
+        let prototype = ChatRole::Prototype.approval(&base);
+        for tool in [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::CreateDirectory] {
+            assert!(!prototype.requires_approval(tool, true), "{tool:?}");
+        }
+        assert!(prototype.requires_approval(ToolName::RunCommand, true), "only its own tools");
+        for role in [ChatRole::Assistant, ChatRole::Kubernetes] {
+            let policy = role.approval(&base);
+            assert!(policy.requires_approval(ToolName::KubeApply, true), "{role:?}");
+            assert!(policy.requires_approval(ToolName::WriteFile, true), "{role:?}");
+        }
     }
 
     use crate::domain::settings::Kubeconfig;

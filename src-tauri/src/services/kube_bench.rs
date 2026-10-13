@@ -249,6 +249,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         changes: Some(&ChangeStore),
         runbooks: &runbooks,
         web: None,
+        scope: None,
         approval: &approval,
         events: &events,
         cancelled: &cancelled,

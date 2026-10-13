@@ -116,6 +116,9 @@ describe("a turn in a role", () => {
     expect(resumed?.checkpoint).toEqual(card.value);
     expect(resumed?.decisions).toEqual(decision);
     expect(resumed?.role).toBe("assistant");
+    // The chat it is a turn of: a role with a folder finds its folder by it.
+    expect(resumed?.chatId).toBe(called("plain_chat_save")[0]?.args.id);
+    expect(called("plain_chat_send")[0]?.args.chatId).toBe(called("plain_chat_save")[0]?.args.id);
     // Saved at rest with what the model read, and the blocks as drawn.
     await waitFor(() => expect(called("plain_chat_save").length).toBe(2));
     const last = called("plain_chat_save")[1].args;

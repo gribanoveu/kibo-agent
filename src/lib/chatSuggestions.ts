@@ -98,10 +98,21 @@ export const KUBE_SUGGESTIONS = [
   "Explain what runs in this namespace",
 ];
 
+/** For the prototype role: something to see working. */
+const PROTOTYPE_SUGGESTIONS = [
+  "A landing page for a small coffee shop",
+  "A five-slide deck introducing our team",
+  "A pricing page with three plans",
+  "A to-do app that keeps its list while it is open",
+  "An interactive diagram of how a request reaches a service",
+  "A dashboard mock-up with a few charts",
+];
+
 /** Each role's set. */
 export const ROLE_SUGGESTIONS: Record<ChatRoleId, readonly string[]> = {
   assistant: CHAT_SUGGESTIONS,
   kubernetes: KUBE_SUGGESTIONS,
+  prototype: PROTOTYPE_SUGGESTIONS,
 };
 
 /** The empty chat's heading: one of these, or of the time of day's, as Claude greets. */

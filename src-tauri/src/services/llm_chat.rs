@@ -47,7 +47,7 @@ use crate::domain::turn::{
     ToolResultEvent,
 };
 use crate::infra::llm_debug_log;
-use crate::services::ai_tools::parse::{parse_tool_call, preflight_chat_call, preflight_tool_call};
+use crate::services::ai_tools::parse::{parse_tool_call, preflight_chat_call, preflight_paths, preflight_tool_call};
 use crate::services::ai_tools::model_text::for_model;
 use crate::services::ai_tools::resolve::{relative_to_root, resolve_existing};
 use crate::domain::rewind::FileChange;
@@ -262,6 +262,9 @@ pub enum Place<'a> {
         /// What `webSearch` and `webFetch` reach; `None` while web search is
         /// off, and then neither is offered.
         web: Option<&'a Web>,
+        /// The chat's own folder, for a role that works in one
+        /// (`ChatRole::workspace`); `None` for every other.
+        scope: Option<&'a ToolScope>,
     },
 }
 
@@ -270,7 +273,7 @@ impl<'a> Place<'a> {
     pub fn scope(&self) -> Option<&'a ToolScope> {
         match self {
             Place::Folder { scope, .. } => Some(scope),
-            Place::Chat { .. } => None,
+            Place::Chat { scope, .. } => *scope,
         }
     }
 
@@ -961,8 +964,11 @@ fn execute_call(
 fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), crate::domain::tools::ToolError> {
     match turn.place {
         Place::Folder { scope, mode, .. } => preflight_tool_call(scope, mode, reads, call),
-        Place::Chat { role, .. } => {
+        Place::Chat { role, scope, .. } => {
             let parsed = preflight_chat_call(role, call)?;
+            if let Some(scope) = scope {
+                preflight_paths(scope, reads, &parsed)?;
+            }
             // A change the cluster would refuse — read-only, RBAC, a
             // webhook — is refused here, before a card asks about it.
             crate::services::ai_tools::tools::cluster::preflight(pinned_cluster(turn), &parsed)
@@ -2132,7 +2138,7 @@ mod tests {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
-                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None },
+                    Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None, scope: None },
                     None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref() },
                 },
                 approval: &self.approval,

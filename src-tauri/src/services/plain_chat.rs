@@ -1,8 +1,9 @@
 //! One turn in Chat mode: the agent's own loop (`services::llm_chat`) in a
-//! chat's place — the role's prompt and tools, and no folder
-//! (`docs/21-kubernetes-mode.md`, K-1). Rounds, approval, a stop, retries and
-//! the loop guard are the agent's; what a chat does not have — a folder, a
-//! shell, skills, rules, hooks, MCP servers — is left empty.
+//! chat's place — the role's prompt and tools, and no folder but the chat's
+//! own for a role that works in one (`docs/21-kubernetes-mode.md`, K-1;
+//! `docs/31-prototype-role.md`, P-1). Rounds, approval, a stop, retries and
+//! the loop guard are the agent's; what a chat does not have — a shell,
+//! skills, rules, hooks, MCP servers — is left empty.
 
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use crate::domain::hooks::Hooks;
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::mcp::McpTools;
 use crate::domain::tool_call_log::ToolCallLogEntry;
-use crate::domain::tools::{ApprovalPolicy, ToolPreview};
+use crate::domain::tools::{ApprovalPolicy, ToolPreview, ToolScope};
 use crate::domain::turn::{ChatEventSink, ChatStreamOutcome, PendingApproval, SteeringNote, ToolCallDecision};
 use crate::services::llm_chat::{self, Place, Turn, TurnError};
 use crate::services::llm_session::LlmSession;
@@ -37,6 +38,8 @@ pub struct ChatTurn<'a> {
     pub runbooks: &'a [Runbook],
     /// The web, while web search is on.
     pub web: Option<&'a Web>,
+    /// The chat's own folder, for a role that works in one.
+    pub scope: Option<&'a ToolScope>,
     pub approval: &'a ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -94,7 +97,15 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
     let turn = Turn {
         events: chat.events,
         session: chat.session,
-        place: Place::Chat { role: chat.role, kube: chat.kube, cluster: chat.cluster, changes: chat.changes, runbooks: chat.runbooks, web: chat.web },
+        place: Place::Chat {
+            role: chat.role,
+            kube: chat.kube,
+            cluster: chat.cluster,
+            changes: chat.changes,
+            runbooks: chat.runbooks,
+            web: chat.web,
+            scope: chat.scope,
+        },
         approval: chat.approval,
         cancelled: chat.cancelled,
         sleep: &sleep,
@@ -127,6 +138,7 @@ mod tests {
     };
     use crate::domain::kube::{Access, KubeChange, KubeError, KubeKind, KubeTarget, ListPage, ListQuery, LogQuery, Reach};
     use crate::domain::turn::{ChatEventPayload, ChatTurnEvent};
+    use crate::domain::tools::ToolScope;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -182,6 +194,7 @@ mod tests {
         changes: Option<Arc<Kept>>,
         runbooks: Vec<Runbook>,
         web: Option<Web>,
+        scope: Option<ToolScope>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
     }
@@ -204,6 +217,7 @@ mod tests {
             changes: None,
             runbooks: crate::domain::runbooks::merged(Vec::new()),
             web: None,
+            scope: None,
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
         }
@@ -223,6 +237,7 @@ mod tests {
                 changes: self.changes.as_deref().map(|kept| kept as &dyn KubeChanges),
                 runbooks: &self.runbooks,
                 web: self.web.as_ref(),
+                scope: self.scope.as_ref(),
                 approval: &self.approval,
                 events: &events,
                 cancelled: &stop,
@@ -705,6 +720,87 @@ mod tests {
         chat.cluster = Some(Arc::new(OnePod));
         let done = done(chat.start(ChatRole::Kubernetes, vec![LlmMessage::user("pods?")]));
         assert!(tool_result(&done.history).contains("no cluster is pinned"), "{:?}", done.history);
+    }
+
+    /// A Prototype chat as the command layer sets one up: its folder, and the
+    /// role's approval over the user's.
+    fn prototype(replies: Vec<ChatStreamResult>, label: &str) -> (Chat, std::path::PathBuf) {
+        let folder = crate::testing::temp_dir(label).join("files");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut chat = chat(replies, None);
+        chat.scope = Some(ToolScope::new(&folder).unwrap());
+        chat.approval = ChatRole::Prototype.approval(&ApprovalPolicy::default());
+        (chat, folder)
+    }
+
+    /// The page is written into the chat's folder with no card, and the call
+    /// says what it changed — what a later rewind puts back.
+    #[test]
+    fn a_prototype_chat_writes_its_page_into_its_folder_without_a_card() {
+        crate::testing::with_app_dir("prototype-write", || {
+            let page = r#"{"path":"index.html","content":"<h1>Coffee</h1>"}"#;
+            let (chat, folder) = prototype(vec![calls("writeFile", page), said("made it")], "prototype-write");
+            let done = done(chat.start(ChatRole::Prototype, vec![LlmMessage::user("a landing page")]));
+
+            assert_eq!(std::fs::read_to_string(folder.join("index.html")).unwrap(), "<h1>Coffee</h1>");
+            assert_eq!(done.result.text, "made it");
+            let changed = chat.seen.lock().unwrap().iter().find_map(|e| match &e.event {
+                ChatEventPayload::ToolResult(r) if r.id == "c1" => Some(r.changes.clone()),
+                _ => None,
+            });
+            let changed = changed.expect("the write's result");
+            assert_eq!(changed.len(), 1);
+            assert_eq!(changed[0].path, "index.html");
+            assert_eq!(changed[0].before, crate::domain::rewind::FileState::Absent);
+        });
+    }
+
+    /// The folder is the boundary: a path out of it is refused before the
+    /// disk, and the model is told why.
+    #[test]
+    fn a_prototype_chat_cannot_write_outside_its_folder() {
+        let escape = r#"{"path":"../escaped.html","content":"x"}"#;
+        let (chat, folder) = prototype(vec![calls("writeFile", escape), said("cannot")], "prototype-escape");
+        let done = done(chat.start(ChatRole::Prototype, vec![LlmMessage::user("write above")]));
+
+        assert!(!folder.parent().unwrap().join("escaped.html").exists());
+        let refused = tool_result(&done.history);
+        assert!(refused.contains("escapes tool root"), "{refused}");
+    }
+
+    /// A page replaced whole must have been read as it stands — the agent's
+    /// rule, held in the chat's folder too.
+    #[test]
+    fn a_prototype_chat_rewrites_a_page_only_after_reading_it() {
+        let page = r#"{"path":"index.html","content":"new"}"#;
+        let (chat, folder) = prototype(vec![calls("writeFile", page), said("ok")], "prototype-unread");
+        std::fs::write(folder.join("index.html"), "old").unwrap();
+        let done = done(chat.start(ChatRole::Prototype, vec![LlmMessage::user("redo it")]));
+
+        assert_eq!(std::fs::read_to_string(folder.join("index.html")).unwrap(), "old");
+        assert!(tool_result(&done.history).contains("read"), "{:?}", done.history);
+    }
+
+    /// A call that could only fail is refused before a card asks about it —
+    /// in a chat's folder as in the agent's — for a role whose writes ask.
+    #[test]
+    fn a_doomed_write_in_a_chats_folder_is_refused_before_any_card() {
+        let escape = r#"{"path":"../outside.txt"}"#;
+        let (mut chat, _) = prototype(vec![calls("deleteFile", escape), said("cannot")], "prototype-doomed");
+        chat.approval = ApprovalPolicy::default();
+        let done = done(chat.start(ChatRole::Tester, vec![LlmMessage::user("delete it")]));
+        assert!(tool_result(&done.history).contains("escapes tool root"), "{:?}", done.history);
+    }
+
+    /// The prototype role is offered its folder's tools, in the order every
+    /// request lists them.
+    #[test]
+    fn the_prototype_role_is_offered_its_folders_tools() {
+        let (chat, _) = prototype(vec![said("ok")], "prototype-offered");
+        chat.start(ChatRole::Prototype, vec![LlmMessage::user("hi")]);
+        let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
+        // Web search is off in this chat.
+        assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "createDirectory", "deleteFile"]);
     }
 
     /// Stopped before the first round: nothing asked, nothing run.

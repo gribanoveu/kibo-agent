@@ -913,7 +913,7 @@ export async function setMcpToolShown(server: string, tool: string, shown: boole
 // ---------------------------------------------------------------- plain chat
 
 /** Mirrors `domain::chat_role::ChatRole`: who the model is in Chat mode, and which tools it has. */
-export type ChatRoleId = "assistant" | "kubernetes";
+export type ChatRoleId = "assistant" | "kubernetes" | "prototype";
 export type ChatRoleView = { id: ChatRoleId; name: string; description: string };
 
 export async function plainChatRoles(): Promise<ChatRoleView[]> {
@@ -922,31 +922,34 @@ export async function plainChatRoles(): Promise<ChatRoleView[]> {
 }
 
 /**
- * A turn in `role` on `messages`, the whole conversation so far, outside any
- * folder — the agent's loop with the role's prompt and tools. Its text, calls
+ * A turn of the chat `chatId` in `role` on `messages`, the whole conversation
+ * so far, outside any folder but the chat's own for a role that works in one —
+ * the agent's loop with the role's prompt and tools. Its text, calls
  * and results arrive on `onTurnEvent(turnId)` as the agent's do; this resolves
  * with how it ended: done, stopped, or paused on the approval card.
  */
 export async function plainChatSend(
   turnId: string,
+  chatId: string,
   role: ChatRoleId,
   kube: KubePin | null,
   messages: LlmMessage[],
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("plain_chat_send", { turnId, role, kube, messages });
+  return invoke<Outcome>("plain_chat_send", { turnId, chatId, role, kube, messages });
 }
 
 /** Continues a chat's turn paused on the approval card, with the user's answers. */
 export async function plainChatResume(
   turnId: string,
+  chatId: string,
   role: ChatRoleId,
   kube: KubePin | null,
   checkpoint: Checkpoint,
   decisions: ToolCallDecision[],
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("plain_chat_resume", { turnId, role, kube, checkpoint, decisions });
+  return invoke<Outcome>("plain_chat_resume", { turnId, chatId, role, kube, checkpoint, decisions });
 }
 
 /** "Always" on a chat's card: this tool stops asking in Chat mode until the app quits. */
