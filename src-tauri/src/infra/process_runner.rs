@@ -756,7 +756,9 @@ mod tests {
             .iter()
             .filter_map(|option| {
                 let shell = option.for_commands();
-                let run = |line: &str| run(&shell, &ask(line, Some(30)), &temp_dir("run-shells"), None);
+                // The app's own default, not less: pwsh's first start on a CI
+                // runner busy with the rest of the suite has taken over 30 s.
+                let run = |line: &str| run(&shell, &ask(line, None), &temp_dir("run-shells"), None);
                 let (said, failed) = match (run(r#"echo "Привет мир""#), run("exit 3")) {
                     (Ok(said), Ok(failed)) => (said, failed),
                     (said, failed) => return Some(format!("{option:?}: {said:?}, {failed:?}")),
