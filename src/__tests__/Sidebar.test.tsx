@@ -161,7 +161,7 @@ describe("pages", () => {
 
   test("sit under the modes, and the open one is lit instead of the mode", () => {
     const { unmount } = views(null);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Agent", "Chat", "Catalog"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Agent", "Chat", "Catalog", "Board"]);
     expect(selected()).toEqual(["Agent"]);
     unmount();
     views("catalog");

@@ -78,6 +78,7 @@ export const LABELS: Record<string, string> = {
   kubeDelete: "Delete object",
   webSearch: "Web",
   webFetch: "Page",
+  board: "Board",
   toolSearch: "Find tools",
 };
 
@@ -268,6 +269,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.url) ?? "",
         meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
         detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
+      };
+    }
+
+    // The card the call was about; the board itself is on its page.
+    case "board": {
+      const cards = Array.isArray(result.cards) ? result.cards.length : undefined;
+      const op = str(args.op);
+      return {
+        name,
+        arg: op === "add" ? (str(args.title) ?? "") : op === "move" ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}` : "list",
+        meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
+        detail: str(args.note) ?? "",
       };
     }
 

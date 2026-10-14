@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-13 Ask the Assistant to remind you of something and it puts a card on the new Board page in the sidebar: To do, Doing and Done, moved by the model or by you, removed from any column; Done keeps the last five and older ones go to an archive under the columns. Chats are told today's date and weekday
+
 ## v0.9.0 — 2026-10-13
 
 - 2026-10-13 An entry installed from the Catalog updates from its panel when the catalog has a newer version: a dialog shows each file's diff against what is there now, warns when that writes over a change made here, and a server keeps its tokens

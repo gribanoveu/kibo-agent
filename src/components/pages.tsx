@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
-import { Store } from "lucide-react";
+import { SquareKanban, Store } from "lucide-react";
+import { BoardPage } from "./BoardPage";
 import { CatalogPage } from "./CatalogPage";
 import type { AsideTab } from "../types";
 import "./pages.css";
@@ -33,6 +34,7 @@ export type PageDef = {
 // entry here — nothing else names a page.
 export const PAGES = [
   { id: "catalog", label: "Catalog", title: "Catalog — skills, commands, MCP servers and hooks to install", icon: Store, dock: false, Component: CatalogPage },
+  { id: "board", label: "Board", title: "Board — what the Assistant keeps for later", icon: SquareKanban, dock: false, Component: BoardPage },
 ] as const satisfies readonly PageDef[];
 
 export type PageId = (typeof PAGES)[number]["id"];

@@ -1,0 +1,115 @@
+/* Three columns side by side, each as tall as its cards. */
+.board-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+  align-items: start;
+}
+.board-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.board-column-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.board-count {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.board-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.board-card-title {
+  font-size: var(--fs-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.board-card-note {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The id the model names a card by, and the moves — right-aligned. */
+.board-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.board-card-id {
+  margin-right: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.board-card-actions button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.board-card-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.board-empty {
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.board-error {
+  color: var(--red);
+  font-size: var(--fs-md);
+}
+/* Under the columns, folded until asked for. */
+.board-archive {
+  margin-top: 20px;
+}
+.board-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.board-archive-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.board-archive-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.board-archive-list .board-card {
+  opacity: 0.75;
+}
