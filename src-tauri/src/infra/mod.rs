@@ -38,6 +38,7 @@ pub mod board_store;
 pub mod terminal;
 pub mod shells;
 pub mod git_aliases;
+pub mod git_cli;
 pub mod git_head;
 pub mod git_branches;
 pub mod git_changes;
