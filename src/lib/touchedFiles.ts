@@ -22,7 +22,9 @@ const TOUCH: Record<string, Touch> = {
   readFile: "read",
   editFile: "edited",
   writeFile: "written",
+  // `deleteFile` is the name older chats saved; `delete` a file's now.
   deleteFile: "deleted",
+  delete: "deleted",
 };
 
 /**
@@ -55,6 +57,8 @@ export function touchedFiles(blocks: Block[], root: string | null): TouchedFile[
       touch(to, "moved", moved);
       continue;
     }
+    // A folder deleted: this list is of files.
+    if (block.name === "delete" && result.diff === undefined) continue;
     if (block.name === "readFile" && Array.isArray(result.files)) {
       // Several at once: each one that was read, not one that failed.
       for (const file of result.files as Json[]) {

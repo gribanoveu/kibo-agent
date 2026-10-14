@@ -40,6 +40,8 @@ export const LABELS: Record<string, string> = {
   writeFile: "Write",
   editFile: "Edit",
   createDirectory: "Mkdir",
+  delete: "Delete",
+  // Names older chats saved, drawn as they were.
   deleteFile: "Delete",
   deleteDirectory: "Delete",
   move: "Move",
@@ -175,6 +177,11 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     };
   }
 
+  // A folder's `delete` has no diff: drawn as `deleteDirectory` was.
+  if (block.name === "delete" && block.result !== undefined && result.diff === undefined) {
+    return { name, arg: str(args.path) ?? "", detail: "" };
+  }
+
   switch (block.name) {
     case "readFile": {
       // Several files: named in the row, each under its own header when opened.
@@ -305,6 +312,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    case "delete":
     case "writeFile":
     case "editFile":
     case "deleteFile": {
@@ -481,7 +489,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
-    // Typed, not run to the end: the terminal is where it goes on.
+    // Typed, not run to the end: the terminal is where it goes on. No longer
+    // offered; kept so older chats still read.
     case "runInTerminal": {
       const id = num(asObject(result.terminal).id);
       return { name, arg: str(args.command) ?? "", meta: id === undefined ? undefined : `terminal #${id}`, detail: "" };

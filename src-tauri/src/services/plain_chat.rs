@@ -483,7 +483,7 @@ mod tests {
         let chat = chat(vec![said("ok")], None);
         chat.start(ChatRole::Tester, vec![LlmMessage::user("hi")]);
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["deleteFile", "todo"]);
+        assert_eq!(offered, ["delete", "todo"]);
     }
 
     /// A tool that changes nothing runs without a card, and the turn goes on.
@@ -513,7 +513,7 @@ mod tests {
     /// A tool that asks pauses the turn with nothing run; the answer resumes it.
     #[test]
     fn a_risky_tool_waits_for_the_card_and_runs_on_approval() {
-        let chat = chat(vec![calls("deleteFile", r#"{"path":"a.txt"}"#), said("could not")], None);
+        let chat = chat(vec![calls("delete", r#"{"path":"a.txt"}"#), said("could not")], None);
         let paused = match chat.start(ChatRole::Tester, vec![LlmMessage::user("delete it")]) {
             ChatStreamOutcome::PendingApproval(paused) => paused,
             other => panic!("expected a card: {other:?}"),
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn a_denied_call_tells_the_model_the_users_reason() {
-        let chat = chat(vec![calls("deleteFile", r#"{"path":"a.txt"}"#), said("ok, kept")], None);
+        let chat = chat(vec![calls("delete", r#"{"path":"a.txt"}"#), said("ok, kept")], None);
         let ChatStreamOutcome::PendingApproval(paused) = chat.start(ChatRole::Tester, vec![LlmMessage::user("x")]) else {
             panic!("expected a card");
         };

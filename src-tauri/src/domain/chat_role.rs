@@ -132,9 +132,9 @@ impl ChatRole {
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ],
-            // `todo` runs, `deleteFile` asks first — and then finds no folder.
+            // `todo` runs, `delete` asks first — and then finds no folder.
             #[cfg(test)]
-            ChatRole::Tester => &[ToolName::Todo, ToolName::DeleteFile],
+            ChatRole::Tester => &[ToolName::Todo, ToolName::Delete],
         }
     }
 }

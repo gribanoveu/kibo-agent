@@ -51,12 +51,8 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
             Err(e) => ToolPreview::Failed { reason: e.to_string() },
         },
 
-        ToolCall::DeleteFile(args) => match resolve_existing(scope, &args.path) {
-            Ok(path) => diff_preview(args.path, &fs::read_to_string(&path).unwrap_or_default(), ""),
-            Err(e) => ToolPreview::Failed { reason: e.to_string() },
-        },
-
-        ToolCall::DeleteDirectory(args) => match resolve_existing(scope, &args.path) {
+        ToolCall::Delete(args) => match resolve_existing(scope, &args.path) {
+            Ok(path) if !path.is_dir() => diff_preview(args.path, &fs::read_to_string(&path).unwrap_or_default(), ""),
             Ok(path) => ToolPreview::Removes {
                 path: args.path,
                 // Counted the same way the tools walk: ignored files are not
@@ -79,7 +75,6 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
         }
 
         // Where that terminal is now is the user's doing, not a path of ours.
-        ToolCall::RunInTerminal(args) => ToolPreview::Command { command: args.command, cwd: "your terminal".to_string() },
 
         // A rename, a new directory, a read: the arguments already say it.
         _ => ToolPreview::Nothing,
@@ -116,15 +111,6 @@ mod tests {
     fn preview(root: &Path, name: &str, arguments: &str) -> ToolPreview {
         let scope = ToolScope::new(root).expect("scope");
         preview_tool_call(&scope, &call(name, arguments))
-    }
-
-    #[test]
-    fn a_line_for_the_terminal_runs_in_the_users_terminal() {
-        let root = crate::testing::temp_dir("preview-terminal");
-        assert_eq!(
-            preview(&root, "runInTerminal", r#"{"command":"npm run dev"}"#),
-            ToolPreview::Command { command: "npm run dev".into(), cwd: "your terminal".into() }
-        );
     }
 
     fn diff(preview: ToolPreview) -> FileDiffStats {
@@ -206,7 +192,7 @@ mod tests {
         let root = temp_dir("preview-delete");
         std::fs::write(root.join("a.rs"), "one\ntwo\nthree\n").unwrap();
 
-        let shown = diff(preview(&root, "deleteFile", r#"{"path":"a.rs"}"#));
+        let shown = diff(preview(&root, "delete", r#"{"path":"a.rs"}"#));
 
         assert_eq!((shown.lines_added, shown.lines_removed), (0, 3));
     }
@@ -222,7 +208,7 @@ mod tests {
             std::fs::write(dir.join(format!("f{i}.rs")), "x").unwrap();
         }
 
-        let shown = preview(&root, "deleteDirectory", r#"{"path":"src","recursive":true}"#);
+        let shown = preview(&root, "delete", r#"{"path":"src","recursive":true}"#);
 
         assert_eq!(
             shown,

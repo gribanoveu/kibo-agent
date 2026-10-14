@@ -34,8 +34,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "listFiles" => ToolCall::ListFiles(args(call)?),
         "writeFile" => ToolCall::WriteFile(args(call)?),
         "editFile" => ToolCall::EditFile(args(call)?),
-        "deleteFile" => ToolCall::DeleteFile(args(call)?),
-        "deleteDirectory" => ToolCall::DeleteDirectory(args(call)?),
+        "delete" => ToolCall::Delete(args(call)?),
         "move" => ToolCall::Move(args(call)?),
         "todo" => ToolCall::Todo(args(call)?),
         "gitDiff" => ToolCall::GitDiff(args(call)?),
@@ -51,7 +50,6 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "readOutput" => ToolCall::ReadOutput(args(call)?),
         "stopProcess" => ToolCall::StopProcess(args(call)?),
         "readTerminal" => ToolCall::ReadTerminal(args(call)?),
-        "runInTerminal" => ToolCall::RunInTerminal(args(call)?),
         "kubeList" => ToolCall::KubeList(args(call)?),
         "kubeGet" => ToolCall::KubeGet(args(call)?),
         "kubeEvents" => ToolCall::KubeEvents(args(call)?),
@@ -127,8 +125,7 @@ pub fn preflight_tool_call(
     let paths: &[&str] = match &parsed {
         ToolCall::WriteFile(a) => &[&a.path],
         ToolCall::EditFile(a) => &[&a.path],
-        ToolCall::DeleteFile(a) => &[&a.path],
-        ToolCall::DeleteDirectory(a) => &[&a.path],
+        ToolCall::Delete(a) => &[&a.path],
         ToolCall::Move(a) => &[&a.path, &a.new_path],
         // The working directory only. What the command line then names is
         // beyond any check here — see `domain::command_exec`.
@@ -147,10 +144,12 @@ pub fn preflight_tool_call(
 
     // "You have not read this file" is knowable without touching the disk and
     // without asking anyone, so asking would be pure ceremony.
-    let deleting = matches!(parsed, ToolCall::DeleteFile(_));
+    let deleting = matches!(parsed, ToolCall::Delete(_));
     if let Some((path, whole)) = match &parsed {
         ToolCall::WriteFile(a) => Some((a.path.as_str(), true)),
-        ToolCall::DeleteFile(a) => Some((a.path.as_str(), true)),
+        // A directory has no text to have read: `read_to_string` below fails
+        // on it, and the check is skipped.
+        ToolCall::Delete(a) => Some((a.path.as_str(), true)),
         ToolCall::EditFile(a) => Some((a.path.as_str(), false)),
         _ => None,
     } {
@@ -249,8 +248,7 @@ mod tests {
             ("listFiles", "{}"),
             ("writeFile", r#"{"path": "a", "content": "x"}"#),
             ("editFile", r#"{"path": "a", "edits": []}"#),
-            ("deleteFile", r#"{"path": "a"}"#),
-            ("deleteDirectory", r#"{"path": "a"}"#),
+            ("delete", r#"{"path": "a"}"#),
             ("move", r#"{"path": "a", "newPath": "b"}"#),
             ("todo", r#"{"op": "write", "tasks": ["x"]}"#),
             ("gitDiff", r#"{"path": "a"}"#),
@@ -426,7 +424,7 @@ mod tests {
         assert!(err.to_string().ends_with("an outline is not a read"), "{err}");
 
         // A deletion is refused as one, read not at all or only in part.
-        let delete = call("deleteFile", r#"{"path": "a.txt"}"#);
+        let delete = call("delete", r#"{"path": "a.txt"}"#);
         let err = preflight_tool_call(&scope, ConversationMode::Agent, &reads, &delete).expect_err("never read");
         assert!(matches!(err, ToolError::DeleteNotReadInFull(_)), "{err}");
         let mut part = reads.clone();
