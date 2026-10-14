@@ -401,6 +401,9 @@ mod tests {
             ),
             // What was searched and found stays: names of tools and what
             // their servers say they do, nobody's content.
+            // Like the checklist: a card's words are what the user asked
+            // to keep, not file content.
+            ToolName::Board => (None, ToolResult::Board { cards: vec![] }),
             ToolName::ToolSearch => (
                 None,
                 ToolResult::ToolsFound {

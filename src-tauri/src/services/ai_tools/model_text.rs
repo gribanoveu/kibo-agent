@@ -131,7 +131,37 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
         ToolResult::ToolsFound { tools } => found_tools(tools),
+        ToolResult::Board { cards } => board(cards),
     }
+}
+
+/// By column, a line a card: `c3 file the memory request — wlbuh`. The
+/// archive only as a count: it is the past, and up to a hundred lines of it.
+fn board(cards: &[crate::domain::board::Card]) -> String {
+    use crate::domain::board::Column;
+    let archived = cards.iter().filter(|c| c.column == Column::Archived).count();
+    if cards.len() == archived {
+        return match archived {
+            0 => "The board is empty.".to_string(),
+            n => format!("The board is empty; {n} finished cards are in its archive."),
+        };
+    }
+    let mut out = String::from("The board, as the user sees it on the Board page:");
+    for (column, name) in [(Column::Todo, "To do"), (Column::Doing, "Doing"), (Column::Done, "Done")] {
+        let mut rows = cards.iter().filter(|c| c.column == column).peekable();
+        if rows.peek().is_none() {
+            continue;
+        }
+        out.push_str(&format!("\n\n{name}:"));
+        for card in rows {
+            let note = card.note.as_deref().map(|n| format!(" — {}", n.replace('\n', " "))).unwrap_or_default();
+            out.push_str(&format!("\n- {} {}{note}", card.id, card.title));
+        }
+    }
+    if archived > 0 {
+        out.push_str(&format!("\n\nArchived: {archived} older finished cards, not listed."));
+    }
+    out
 }
 
 /// The full names, so the next round's declarations and the model's calls
@@ -536,6 +566,27 @@ mod tests {
     use crate::domain::background::{ProcessInfo, ProcessState};
     use crate::domain::tools::TodoStatus;
     use crate::domain::tools::FileDiffStats;
+
+    #[test]
+    fn the_board_reads_by_column_with_ids_and_notes_on_one_line() {
+        use crate::domain::board::{Card, Column};
+        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), column };
+        let cards = [
+            card("c1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
+            card("c2", "renew cert", None, Column::Done),
+            card("c3", "call the bank", None, Column::Todo),
+        ];
+        assert_eq!(
+            for_model(&ToolResult::Board { cards: cards.to_vec() }),
+            "The board, as the user sees it on the Board page:\n\nTo do:\n- c1 file the request — wlbuh 16 GB\n- c3 call the bank\n\nDone:\n- c2 renew cert"
+        );
+        assert_eq!(for_model(&ToolResult::Board { cards: vec![] }), "The board is empty.");
+
+        let old = card("c4", "renewed last year", None, Column::Archived);
+        let with_archive: Vec<Card> = cards.iter().cloned().chain([old.clone()]).collect();
+        assert!(for_model(&ToolResult::Board { cards: with_archive }).ends_with("- c2 renew cert\n\nArchived: 1 older finished cards, not listed."));
+        assert_eq!(for_model(&ToolResult::Board { cards: vec![old] }), "The board is empty; 1 finished cards are in its archive.");
+    }
 
     fn hit(path: &str, line: u32, text: &str, before: &[&str], after: &[&str]) -> GrepMatch {
         GrepMatch {

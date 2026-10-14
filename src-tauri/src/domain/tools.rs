@@ -87,6 +87,9 @@ pub enum ToolName {
     WebSearch,
     /// A chat's read of one page the search found or the user named.
     WebFetch,
+    /// The Assistant's board: cards kept for later, which the user sees on
+    /// the Board page (`domain::board`).
+    Board,
     /// Finds the MCP tools left out of the request (`Exposure::Deferred`)
     /// and declares them from the next round on.
     ToolSearch,
@@ -149,6 +152,7 @@ impl ToolName {
         ToolName::KubeDelete,
         ToolName::WebSearch,
         ToolName::WebFetch,
+        ToolName::Board,
         ToolName::ToolSearch,
         ToolName::Mcp,
     ];
@@ -201,6 +205,7 @@ impl ToolName {
             ToolName::KubeDelete => "kubeDelete",
             ToolName::WebSearch => "webSearch",
             ToolName::WebFetch => "webFetch",
+            ToolName::Board => "board",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
@@ -287,7 +292,9 @@ impl ToolName {
             // Checked against a diff in memory.
             | ToolName::ReportFinding
             // A scan of the connected servers' tool lists, in memory.
-            | ToolName::ToolSearch => 1,
+            | ToolName::ToolSearch
+            // A small file in the app directory, read and written.
+            | ToolName::Board => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.
@@ -506,7 +513,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            46,
+            47,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -961,6 +968,8 @@ pub struct ToolDeps<'a> {
     pub web: Option<crate::domain::web_search::Web>,
     /// The conversation so far: `webFetch` opens only an address that is in it.
     pub history: &'a [crate::domain::llm::LlmMessage],
+    /// The board `board` keeps cards on; `None` where there is none.
+    pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -1164,6 +1173,8 @@ pub enum ToolError {
     WebSearch(#[from] crate::domain::web_search::WebSearchError),
     #[error(transparent)]
     Kube(#[from] crate::domain::kube::KubeError),
+    #[error(transparent)]
+    Board(#[from] crate::domain::board::BoardError),
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -1231,6 +1242,7 @@ pub enum ToolCall {
     KubeDelete(KubeDeleteArgs),
     WebSearch(WebSearchArgs),
     WebFetch(WebFetchArgs),
+    Board(BoardArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
 }
@@ -1282,6 +1294,7 @@ impl ToolCall {
             ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::WebSearch(_) => ToolName::WebSearch,
             ToolCall::WebFetch(_) => ToolName::WebFetch,
+            ToolCall::Board(_) => ToolName::Board,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
@@ -1545,6 +1558,8 @@ pub enum ToolResult {
     /// `toolSearch`: the MCP tools found, best first — declared from the
     /// next round on.
     ToolsFound { tools: Vec<FoundTool> },
+    /// `board`: the whole board after the call.
+    Board { cards: Vec<crate::domain::board::Card> },
 }
 
 /// One MCP tool `toolSearch` found: the name it is called by now, its
@@ -1575,6 +1590,31 @@ pub struct WebSearchArgs {
     pub max_results: Option<u32>,
     #[serde(default)]
     pub time_range: Option<crate::domain::web_search::TimeRange>,
+}
+
+/// `board`. One flat object rather than a tagged enum: which fields go with
+/// which `op` is the tool's to check, and its error says so to the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardArgs {
+    pub op: BoardOp,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub column: Option<crate::domain::board::Column>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardOp {
+    #[default]
+    List,
+    Add,
+    Move,
 }
 
 /// `webFetch`. `query` picks the passages of a long page.

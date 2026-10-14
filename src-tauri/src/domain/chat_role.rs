@@ -45,7 +45,7 @@ impl ChatRole {
     /// One line for the role's menu: what the model does in it.
     pub fn description(self) -> &'static str {
         match self {
-            ChatRole::Assistant => "Answers in text and searches the web; no files or commands",
+            ChatRole::Assistant => "Answers in text, searches the web and keeps your board; no files or commands",
             ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
             #[cfg(test)]
             ChatRole::Tester => "Tests the tool loop",
@@ -58,7 +58,8 @@ impl ChatRole {
             ChatRole::Assistant => {
                 "You are a helpful assistant in a plain chat. You cannot read the user's files, run commands \
                  or change anything on their machine — answer from what the user writes here. When an answer \
-                 depends on code or output you have not been shown, ask for it rather than guessing."
+                 depends on code or output you have not been shown, ask for it rather than guessing. What the \
+                 user asks you to remind them of or keep for later goes on their board."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
             #[cfg(test)]
@@ -107,7 +108,7 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch],
+            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
                 ToolName::KubeList,
@@ -221,13 +222,13 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 mod tests {
     use super::*;
 
-    /// The assistant talks and searches the web. The Kubernetes role's tools
+    /// The assistant talks, searches the web and keeps the board. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
     #[test]
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
-        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch]);
+        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board]);
         let tools = ChatRole::Kubernetes.tools();
         assert_eq!(tools.len(), 19);
         assert!(

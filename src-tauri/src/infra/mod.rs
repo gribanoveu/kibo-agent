@@ -34,6 +34,7 @@ pub mod mcp_stdio;
 pub mod login_path;
 pub mod hooks;
 pub mod background;
+pub mod board_store;
 pub mod terminal;
 pub mod shells;
 pub mod git_aliases;

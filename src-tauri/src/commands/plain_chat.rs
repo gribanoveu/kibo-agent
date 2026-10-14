@@ -111,6 +111,7 @@ where
 {
     let events = chat_event_sink(&app, turn_id);
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    let board: Arc<dyn crate::domain::board::TaskBoard> = app.state::<Arc<crate::infra::board_store::Board>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -144,6 +145,7 @@ where
             events: &events,
             cancelled: &cancelled,
             log_call: &log_call,
+            board: Some(board),
         };
         run(&chat).map_err(|e| e.to_string())
     })

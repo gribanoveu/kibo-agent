@@ -228,6 +228,8 @@ pub struct Turn<'a> {
     /// Where an MCP server's question waits for the user's answer; `None`
     /// where there is no window to ask in, and the question is declined.
     pub questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
+    /// The board `board` keeps cards on; `None` has none.
+    pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
 }
 
 
@@ -952,6 +954,7 @@ fn execute_call(
             Place::Chat { web, .. } | Place::Folder { web, .. } => web.cloned(),
         },
         history,
+        board: turn.board.clone(),
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1157,6 +1160,7 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         review: None,
         agents: None,
         questions: None,
+        board: None,
     };
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
@@ -1463,15 +1467,22 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode, .. } => (scope, mode),
         Place::Chat { role, kube, runbooks, web, .. } => {
-            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some());
+            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &today());
             messages.extend_from_slice(history);
             return messages;
         }
     };
-    let today = Local::now().format("%e %B %Y").to_string();
+    let today = today();
     let mut messages = prompt::system_messages(&turn_context(turn, scope, mode, &today));
     messages.extend_from_slice(history);
     messages
+}
+
+/// The date the prompt gives, with its weekday: "Tuesday, 13 October 2026" —
+/// "remind me on Friday" needs both. The meter asks it too, so what it counts
+/// is what is sent.
+pub fn today() -> String {
+    Local::now().format("%A, %-d %B %Y").to_string()
 }
 
 /// What a request in the open folder is told before the conversation.
@@ -1496,7 +1507,7 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
 fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
     let frame = match turn.place {
         Place::Folder { scope, mode, web } => {
-            let today = Local::now().format("%e %B %Y").to_string();
+            let today = today();
             context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some())
         }
         Place::Chat { role, kube, runbooks, web, .. } => {
@@ -2155,6 +2166,7 @@ mod tests {
                 review: None,
                 agents: self.agents.clone(),
                 questions: self.questions.clone(),
+                board: None,
             };
             f(&turn)
         }
@@ -3917,6 +3929,15 @@ mod tests {
     }
 
     /// The model is offered the tools this build actually has, every round.
+    /// "Remind me on Friday" needs the weekday as well as the date.
+    #[test]
+    fn today_names_the_weekday_then_the_date() {
+        let now = Local::now();
+        let day = today();
+        assert!(day.starts_with(&now.format("%A, ").to_string()), "{day}");
+        assert!(day.ends_with(&now.format(" %B %Y").to_string()) && !day.contains("  "), "{day}");
+    }
+
     #[test]
     fn every_request_carries_the_tool_schemas() {
         let h = harness("loop-tools", vec![text("hi")]);
@@ -3925,10 +3946,10 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one but a review's own and the Kubernetes role's;
-        // MCP tools come from servers, and none is connected — so neither is
-        // `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 3 - ChatRole::Kubernetes.tools().len());
+        // Every built-in one but a review's own, the Assistant's board and
+        // the Kubernetes role's; MCP tools come from servers, and none is
+        // connected — so neither is `toolSearch`, with nothing to find.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 4 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

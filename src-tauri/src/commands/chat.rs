@@ -461,7 +461,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
     };
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
     let shell = crate::infra::shells::for_commands();
-    let today = chrono::Local::now().format("%e %B %Y").to_string();
+    let today = crate::services::llm_chat::today();
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -802,6 +802,7 @@ where
             review,
             agents,
             questions,
+            board: None,
         };
         let outcome = run(&turn).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);
