@@ -15,6 +15,10 @@ import {
   GitBranch,
   Globe,
   ListTodo,
+  NotebookPen,
+  ScrollText,
+  SquareKanban,
+  Telescope,
   Pencil,
   Download,
   Search,
@@ -71,6 +75,12 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Diff: GitBranch,
   Blame: GitBranch,
   Web: Globe,
+  Page: Globe,
+  Search: Search,
+  Memory: NotebookPen,
+  Plan: ScrollText,
+  Explore: Telescope,
+  Board: SquareKanban,
 };
 
 
@@ -159,6 +169,10 @@ function ToolRow({
   // A background start has nothing to unfold here: its output is the
   // Terminal tab's, and the row goes there.
   const process = shown.process !== undefined && onOpenProcess ? shown.process : undefined;
+  // A call with no body of its own (a note kept, a folder made) unfolds to
+  // its argument in full: the row cuts it off at the width of the panel.
+  const detail = shown.detail || shown.arg;
+  const diff = shown.diff && !!shown.detail;
 
   return (
     <div className={`tool-item${open ? " open" : ""} ${block.status}`}>
@@ -167,7 +181,7 @@ function ToolRow({
         type="button"
         title={process !== undefined ? "Show in Terminal" : undefined}
         onClick={() => (process !== undefined ? onOpenProcess?.(process) : setOpen((v) => !v))}
-        disabled={!shown.detail && process === undefined}
+        disabled={!detail && process === undefined}
       >
         <span className="ico">
           <Icon size={13} />
@@ -178,7 +192,7 @@ function ToolRow({
         {process !== undefined ? (
           <ArrowUpRight className="chev" size={12} />
         ) : (
-          shown.detail && <ChevronRight className="chev" size={12} />
+          detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
       {/* Unfolded rather than instead of it, as a process row does: the
@@ -190,13 +204,13 @@ function ToolRow({
         </button>
       )}
       {open &&
-        shown.detail &&
-        (shown.diff ? (
+        detail &&
+        (diff ? (
           <div className="tool-detail-diff">
-            <DiffView unified={shown.detail} />
+            <DiffView unified={detail} />
           </div>
         ) : (
-          <pre className="tool-detail">{shown.detail}</pre>
+          <pre className="tool-detail">{detail}</pre>
         ))}
     </div>
   );

@@ -934,3 +934,27 @@ describe("a message with pictures", () => {
     expect(screen.queryAllByRole("img")).toHaveLength(0);
   });
 });
+
+describe("a call with no body of its own", () => {
+  test("unfolds to its argument in full, which the row cuts off", () => {
+    const fact = "The user wants every reply in Russian, and the tests run on bun, not vitest";
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "m1",
+          round: 1,
+          name: "remember",
+          arguments: JSON.stringify({ fact }),
+          status: "done",
+          result: {},
+          output: "",
+        } as Block,
+      ]),
+    );
+    const row = container.querySelector(".tool-item button.tool") as HTMLButtonElement;
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+    expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
+  });
+});
