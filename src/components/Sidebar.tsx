@@ -23,7 +23,7 @@ import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
 import { GettingStarted } from "./GettingStarted";
-import { PAGES, type PageId } from "./pages";
+import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
@@ -67,6 +67,8 @@ const EMPTY: Record<Filter, string> = {
 type Props = {
   mode: AppMode;
   onMode: (mode: AppMode) => void;
+  /** The pages to list under the modes — those of features that are off left out (`pagesShown`). */
+  pages: readonly (typeof PAGES)[number][];
   /** The page open in place of the chat (pages.tsx); no mode is lit then. */
   page: PageId | null;
   onPage: (page: PageId) => void;
@@ -86,6 +88,7 @@ type Props = {
 export function Sidebar({
   mode,
   onMode,
+  pages,
   page,
   onPage,
   chats,
@@ -151,7 +154,7 @@ export function Sidebar({
               </button>
             );
           })}
-          {PAGES.map(({ id, label, title, icon: Icon }) => (
+          {pages.map(({ id, label, title, icon: Icon }) => (
             <button
               key={id}
               type="button"

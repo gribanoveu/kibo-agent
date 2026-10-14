@@ -13,7 +13,8 @@ import { ToolLog } from "./components/ToolLog";
 import { ConfigFileEditor } from "./components/ConfigFileEditor";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
-import { PAGES, type PageId } from "./components/pages";
+import { pagesShown, type PageId } from "./components/pages";
+import { useFeatures } from "./hooks/useFeatures";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft } from "lucide-react";
@@ -109,7 +110,10 @@ export default function App() {
   // A sidebar page in the chat's place; picking a mode or a chat leaves it.
   // The IDE layout has no sidebar to pick one from.
   const [page, setPage] = useState<PageId | null>(null);
-  const onPage = ide ? null : (PAGES.find((one) => one.id === page) ?? null);
+  // A feature's page only while it is on: turned off, an open one closes.
+  const features = useFeatures();
+  const pages = pagesShown(features.isOn);
+  const onPage = ide ? null : (pages.find((one) => one.id === page) ?? null);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -701,6 +705,7 @@ export default function App() {
             setPage(null);
             setMode(next);
           }}
+          pages={pages}
           page={onPage?.id ?? null}
           onPage={setPage}
           chats={agentMode ? history.chats : plain.chats}

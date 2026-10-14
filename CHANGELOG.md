@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them
+
 - 2026-10-13 Ask the Assistant to remind you of something and it puts a card on the new Board page in the sidebar: To do, Doing and Done, moved by the model or by you, removed from any column; Done keeps the last five and older ones go to an archive under the columns. Chats are told today's date and weekday
 
 ## v0.9.0 — 2026-10-13
