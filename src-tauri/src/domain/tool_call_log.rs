@@ -256,7 +256,6 @@ mod tests {
                 ToolResult::FileEdited { path: path(), diff: diff(), repeated_headings: vec![LEAK.into()] },
             ),
             ToolName::DeleteFile => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
-            ToolName::CreateDirectory => (None, ToolResult::DirectoryCreated { path: path() }),
             ToolName::DeleteDirectory => (None, ToolResult::DirectoryDeleted { path: path(), files: 0, listed: vec![] }),
             ToolName::Move => (None, ToolResult::Moved { from: path(), to: path(), files: None }),
             ToolName::Todo => (None, ToolResult::Todo { tasks: vec![] }),

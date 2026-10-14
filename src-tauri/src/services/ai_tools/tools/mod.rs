@@ -22,7 +22,6 @@ use crate::domain::tools::{
 };
 
 pub mod board;
-pub mod create_directory;
 pub mod delete_directory;
 pub mod delete_file;
 pub mod edit_file;
@@ -68,7 +67,6 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::GitLog, git::log_definition),
     (ToolName::WriteFile, write_file::definition),
     (ToolName::EditFile, edit_file::definition),
-    (ToolName::CreateDirectory, create_directory::definition),
     (ToolName::DeleteFile, delete_file::definition),
     (ToolName::DeleteDirectory, delete_directory::definition),
     (ToolName::Move, move_path::definition),
@@ -145,7 +143,6 @@ pub fn dispatch(
         ToolCall::ListFiles(args) => list_files::list_files(folder()?, args),
         ToolCall::WriteFile(args) => write_file::write_file(folder()?, args, reads),
         ToolCall::EditFile(args) => edit_file::edit_file(folder()?, args, reads),
-        ToolCall::CreateDirectory(args) => create_directory::create_directory(folder()?, args),
         ToolCall::DeleteFile(args) => delete_file::delete_file(folder()?, args, reads),
         ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(folder()?, args),
         ToolCall::Move(args) => move_path::move_path(folder()?, args, reads),
@@ -199,7 +196,7 @@ mod definition_tests {
         DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
-        CreateDirectoryArgs, ProcessArgs, ReadOutputArgs, ReadTerminalArgs, RunInTerminalArgs,
+        ProcessArgs, ReadOutputArgs, ReadTerminalArgs, RunInTerminalArgs,
         KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
@@ -295,10 +292,6 @@ mod definition_tests {
                         new: "b".to_string(),
                     }],
                 })],
-            ),
-            ToolName::CreateDirectory => (
-                r#"{"path":"src"}"#,
-                vec![ToolCall::CreateDirectory(CreateDirectoryArgs { path: path() })],
             ),
             ToolName::DeleteFile => (
                 r#"{"path":"a.rs"}"#,

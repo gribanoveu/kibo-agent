@@ -2605,15 +2605,13 @@ mod tests {
     #[test]
     fn nothing_else_is_ever_suppressed() {
         let mut seen = HashMap::new();
-        let written = ToolResult::DirectoryCreated {
-            path: "src".to_string(),
-        };
-        let call = call("createDirectory", r#"{"path":"src"}"#);
+        let written = ToolResult::Moved { from: "a".to_string(), to: "b".to_string(), files: None };
+        let call = call("move", r#"{"path":"a","newPath":"b"}"#);
 
         for _ in 0..3 {
             let content =
-                dedupe_repeat_result(&mut seen, &call, Some(&written), "created".to_string());
-            assert_eq!(content, "created");
+                dedupe_repeat_result(&mut seen, &call, Some(&written), "moved".to_string());
+            assert_eq!(content, "moved");
         }
         for _ in 0..3 {
             let content = dedupe_repeat_result(&mut seen, &call, None, "failed".to_string());
@@ -3224,7 +3222,7 @@ mod tests {
         let h = harness(
             "loop-tool",
             vec![
-                asks(vec![wants("c1", "createDirectory", r#"{"path":"src"}"#)]),
+                asks(vec![wants("c1", "writeFile", r#"{"path":"src/a.txt","content":"x"}"#)]),
                 text("made it"),
             ],
         );
@@ -3232,12 +3230,12 @@ mod tests {
         let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("make src")], vec![]));
 
         assert!(matches!(outcome.expect("finishes"), ChatStreamOutcome::Done(_)));
-        assert!(h.root.join("src").is_dir(), "the tool actually ran");
+        assert!(h.root.join("src/a.txt").is_file(), "the tool actually ran");
 
         let second = &h.provider.requests()[1];
         let results = tool_contents(second);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], "Created directory src");
+        assert!(results[0].starts_with("Wrote src/a.txt"), "{}", results[0]);
         // The assistant's own tool-call turn has to precede its results, or
         // the provider sees answers to a question it was never shown.
         let assistant = second
@@ -3255,7 +3253,7 @@ mod tests {
         let h = harness(
             "loop-events",
             vec![
-                asks(vec![wants("c1", "createDirectory", r#"{"path":"a"}"#)]),
+                asks(vec![wants("c1", "writeFile", r#"{"path":"a","content":"x"}"#)]),
                 text("ok"),
             ],
         );
@@ -3289,7 +3287,7 @@ mod tests {
     fn each_round_says_what_its_request_costs() {
         let h = harness(
             "loop-estimate",
-            vec![asks(vec![wants("c1", "createDirectory", r#"{"path":"a"}"#)]), text("ok")],
+            vec![asks(vec![wants("c1", "writeFile", r#"{"path":"a","content":"x"}"#)]), text("ok")],
         );
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
 
@@ -3688,7 +3686,7 @@ mod tests {
             "loop-cancel-mid",
             vec![Step::Reply(ChatStreamResult {
                 text: "making it".to_string(),
-                tool_calls: vec![wants("w1", "createDirectory", r#"{"path":"never"}"#)],
+                tool_calls: vec![wants("w1", "writeFile", r#"{"path":"never","content":"x"}"#)],
                 ..Default::default()
             })],
         );
@@ -3806,8 +3804,8 @@ mod tests {
             .map(|i| {
                 asks(vec![wants(
                     &format!("c{i}"),
-                    "createDirectory",
-                    &format!(r#"{{"path":"d{i}"}}"#),
+                    "writeFile",
+                    &format!(r#"{{"path":"d{i}","content":"x"}}"#),
                 )])
             })
             .collect();
@@ -3827,12 +3825,12 @@ mod tests {
         assert_eq!(results, ["c0", "c1", "c2"]);
     }
 
-    /// The weighted budget is the user's too: three cheap calls a round
-    /// spend a budget of five within two rounds.
+    /// The weighted budget is the user's too: two writes a round, at two
+    /// each, spend a budget of five within two rounds.
     #[test]
     fn a_turn_is_cut_off_at_the_set_budget() {
         let steps = (0..10)
-            .map(|i| asks((0..3).map(|j| wants(&format!("c{i}-{j}"), "createDirectory", &format!(r#"{{"path":"d{i}-{j}"}}"#))).collect()))
+            .map(|i| asks((0..2).map(|j| wants(&format!("c{i}-{j}"), "writeFile", &format!(r#"{{"path":"d{i}-{j}","content":"x"}}"#))).collect()))
             .collect();
         let mut h = harness("budget-ceiling", steps);
         h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 5 };
