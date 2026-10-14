@@ -43,6 +43,8 @@ pub struct ChatTurn<'a> {
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
     /// The board the Assistant's `board` keeps cards on.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The features the user has on.
+    pub features: crate::domain::features::Features,
 }
 
 /// A fresh turn on `messages`, the whole conversation so far.
@@ -118,6 +120,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         agents: None,
         questions: None,
         board: chat.board.clone(),
+        features: chat.features.clone(),
     };
     run(&turn)
 }
@@ -188,6 +191,7 @@ mod tests {
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
         board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
+        features: crate::domain::features::Features,
     }
 
     fn chat(replies: Vec<ChatStreamResult>, language: Option<&'static str>) -> Chat {
@@ -211,6 +215,7 @@ mod tests {
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
             board: None,
+            features: Default::default(),
         }
     }
 
@@ -233,6 +238,7 @@ mod tests {
                 cancelled: &stop,
                 log_call: &log,
                 board: self.board.clone(),
+                features: self.features.clone(),
             })
         }
 
@@ -268,12 +274,30 @@ mod tests {
             None,
         );
         chat.board = Some(board.clone());
+        chat.features = crate::domain::features::Features::all();
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни создать заявку на память в wlbuh")]));
 
+        let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(offered, ["board"]);
         assert_eq!(done.result.text, "Записал на доску.");
         let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
         assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
         assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+    }
+
+    /// The board turned off since: a call from memory is refused before it
+    /// runs, and the model is told where the user turns it back on.
+    #[test]
+    fn a_board_call_while_the_feature_is_off_is_refused_and_says_where_to_turn_it_on() {
+        let path = crate::testing::temp_dir("plain-chat-board-off").join("board.json");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(path.clone()), Arc::new(|_| {})));
+        let mut chat = chat(vec![calls("board", r#"{"op":"add","title":"x"}"#), said("Доска выключена.")], None);
+        chat.board = Some(board);
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни")]));
+
+        let result = tool_result(&done.history);
+        assert!(result.contains("turned off") && result.contains("Catalog"), "{result}");
+        assert!(!path.exists(), "nothing was written");
     }
 
     /// The meter is the estimate of what a turn sends: the role's prompt, its
@@ -285,14 +309,14 @@ mod tests {
         for (&role, web) in ChatRole::ALL.iter().flat_map(|role| [(role, false), (role, true)]) {
             chat.web = web.then(|| Web::search_only(web_search(Vec::new()).0));
             let sent = chat.run(role, false, |c| in_place(c, |turn| llm_chat::estimate_request(turn, &history)));
-            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language, chat.web.is_some());
+            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language, chat.web.is_some(), &chat.features);
             let usage = crate::services::context_compaction::usage(&chat.session, frame, &history);
             assert_eq!(usage.total, sent, "{role:?}");
         }
     }
 
     #[test]
-    fn the_role_speaks_first_the_conversation_follows_and_only_the_board_is_offered() {
+    fn the_role_speaks_first_the_conversation_follows_and_no_tool_is_offered() {
         let chat = chat(vec![said("hello")], Some("Russian"));
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("hi")]));
 
@@ -304,8 +328,7 @@ mod tests {
         assert_eq!(messages[2], LlmMessage::system("Reply in Russian. Think in English."));
         assert_eq!(messages[3], LlmMessage::system(format!("Today is {}.", llm_chat::today())));
         assert_eq!(messages[4], LlmMessage::user("hi"));
-        let offered: Vec<&str> = asked[0].tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(offered, ["board"]);
+        assert!(asked[0].tools.is_empty(), "the board is off until the user turns it on");
         assert_eq!(done.history.last(), Some(&LlmMessage::assistant("hello")), "the answer closes the history");
 
         let deltas: Vec<String> = chat
@@ -388,7 +411,7 @@ mod tests {
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("when is tokio 2 out?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["webSearch", "webFetch", "board"]);
+        assert_eq!(offered, ["webSearch", "webFetch"]);
         assert!(!system_text(&chat.asked()[0].messages).contains("Web search is off"));
         assert_eq!(*searched.lock().unwrap(), ["tokio 2 release date"]);
         let result = tool_result(&done.history);

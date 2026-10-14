@@ -45,7 +45,7 @@ impl ChatRole {
     /// One line for the role's menu: what the model does in it.
     pub fn description(self) -> &'static str {
         match self {
-            ChatRole::Assistant => "Answers in text, searches the web and keeps your board; no files or commands",
+            ChatRole::Assistant => "Answers in text and searches the web; no files or commands",
             ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
             #[cfg(test)]
             ChatRole::Tester => "Tests the tool loop",
@@ -58,8 +58,7 @@ impl ChatRole {
             ChatRole::Assistant => {
                 "You are a helpful assistant in a plain chat. You cannot read the user's files, run commands \
                  or change anything on their machine — answer from what the user writes here. When an answer \
-                 depends on code or output you have not been shown, ask for it rather than guessing. What the \
-                 user asks you to remind them of or keep for later goes on their board."
+                 depends on code or output you have not been shown, ask for it rather than guessing."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
             #[cfg(test)]

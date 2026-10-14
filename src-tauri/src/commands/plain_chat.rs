@@ -133,6 +133,8 @@ where
         // Read each turn: a runbook the user just wrote is there for this answer.
         let runbooks = runbooks::merged(runbooks_store::own());
         let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings);
+        let features = crate::services::features::enabled();
+        let board = Some(board).filter(|_| features.is_on(crate::domain::features::Feature::Board));
         let chat = plain_chat::ChatTurn {
             session: &session,
             role,
@@ -145,7 +147,8 @@ where
             events: &events,
             cancelled: &cancelled,
             log_call: &log_call,
-            board: Some(board),
+            board,
+            features,
         };
         run(&chat).map_err(|e| e.to_string())
     })
@@ -203,6 +206,7 @@ fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Re
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
         super::settings::web_search_on(crate::domain::settings::WebSearchPlace::Chat),
+        &crate::services::features::enabled(),
     );
     Ok((session, frame))
 }

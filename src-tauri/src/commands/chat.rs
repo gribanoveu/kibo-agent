@@ -478,6 +478,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
         },
         &mcp,
         super::settings::web_search_on(WebSearchPlace::Agent),
+        &crate::services::features::enabled(),
     )
 }
 
@@ -738,6 +739,9 @@ where
     let terminals = app
         .try_state::<Arc<crate::infra::terminal::Terminals>>()
         .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>);
+    let board = app
+        .try_state::<Arc<crate::infra::board_store::Board>>()
+        .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>);
 
     tauri::async_runtime::spawn_blocking(move || {
         let emit = chat_event_sink(&app, turn_id.clone());
@@ -777,6 +781,8 @@ where
         // Read each turn, as the chat's is: a search turned on in Settings is
         // there for the next answer.
         let web = embeddings.as_ref().and_then(|model| super::settings::web_for(WebSearchPlace::Agent, model));
+        let features = crate::services::features::enabled();
+        let board = board.filter(|_| features.is_on(crate::domain::features::Feature::Board));
 
         let turn = Turn {
             events: &events,
@@ -802,7 +808,8 @@ where
             review,
             agents,
             questions,
-            board: None,
+            board,
+            features,
         };
         let outcome = run(&turn).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);

@@ -15,6 +15,7 @@ use crate::infra::llm_debug_log;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubeSetup;
 use crate::domain::runbooks::Runbook;
+use crate::domain::features::Features;
 
 use crate::services::llm_chat::{tool_definitions_for, tool_definitions_for_role};
 use crate::services::llm_session::LlmSession;
@@ -37,14 +38,14 @@ pub struct Compacted {
 /// list in it — and the tool schemas, MCP servers' included. One large server
 /// can outweigh everything else here, and a window that looks 60% free can be
 /// nearly full.
-pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool) -> RequestFrame {
+pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool, features: &Features) -> RequestFrame {
     let skills = prompt::skills_block(ctx.skills).map_or(0, |list| compaction::estimate_tokens(&[LlmMessage::system(list)]));
     let system = compaction::estimate_tokens(&prompt::system_messages(ctx));
     // A server's instructions are in the prompt and are the server's cost.
     let said = prompt::mcp_block(ctx.mcp_servers).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
     // Before the conversation: a deferred tool its `toolSearch` found is not
     // counted. `toolSearch` is there for the servers, and is theirs.
-    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[], web)
+    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[], web, features)
         .into_iter()
         .partition(|definition| matches!(ToolName::from_wire_name(&definition.name), Some(ToolName::Mcp | ToolName::ToolSearch)));
     RequestFrame {
@@ -57,11 +58,18 @@ pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool) -> Re
 
 /// [`request_frame`] for a chat in `role`: its one system message and its
 /// tools, as `llm_chat` sends them — no skills, rules or MCP servers.
-pub fn chat_request_frame(role: ChatRole, kube: &KubeSetup, runbooks: &[Runbook], language: Option<&str>, web: bool) -> RequestFrame {
+pub fn chat_request_frame(
+    role: ChatRole,
+    kube: &KubeSetup,
+    runbooks: &[Runbook],
+    language: Option<&str>,
+    web: bool,
+    features: &Features,
+) -> RequestFrame {
     RequestFrame {
         instructions: compaction::estimate_tokens(&prompt::chat_system_messages(role, kube, runbooks, language, web, &crate::services::llm_chat::today())),
         skills: 0,
-        tools: compaction::estimate_tool_schema_tokens(&tool_definitions_for_role(role, web)),
+        tools: compaction::estimate_tool_schema_tokens(&tool_definitions_for_role(role, web, features)),
         mcp: 0,
     }
 }
@@ -206,6 +214,7 @@ mod tests {
             },
             mcp,
             false,
+            &Features::default(),
         )
     }
 

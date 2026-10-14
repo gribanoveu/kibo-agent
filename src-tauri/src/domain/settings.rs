@@ -219,6 +219,9 @@ pub struct AppSettings {
     /// Catalogs read besides the app's own (`domain::catalog::DEFAULT_SOURCE`),
     /// by base address — `docs/32-catalog.md`.
     pub catalog_sources: Vec<String>,
+    /// Features turned on or off from the Catalog, by id; one not here is
+    /// its default — `domain::features`, `docs/33-features.md`.
+    pub features: std::collections::BTreeMap<String, bool>,
 }
 
 /// Where the web tools are offered: each has its own search, or none — Tavily

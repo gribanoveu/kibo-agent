@@ -1175,6 +1175,10 @@ pub enum ToolError {
     Kube(#[from] crate::domain::kube::KubeError),
     #[error(transparent)]
     Board(#[from] crate::domain::board::BoardError),
+    /// A tool of a feature the user has off — called from memory of a turn
+    /// when it was on.
+    #[error("the tool `{tool}` belongs to {feature}, which is turned off — tell the user they can turn it on on the Catalog page")]
+    FeatureOff { tool: String, feature: String },
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
