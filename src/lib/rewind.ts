@@ -23,6 +23,8 @@ const ACCOUNTED = new Set([
   "webSearch",
   "webFetch",
   "toolSearch",
+  // The app's own board, not the folder.
+  "board",
   "skill",
   "writePlan",
   "readOutput",

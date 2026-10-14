@@ -37,6 +37,8 @@ pub mod metrics;
 pub mod mcp;
 pub mod hooks;
 pub mod agents;
+pub mod board;
+pub mod features;
 pub mod background;
 pub mod terminal;
 pub mod command_risk;

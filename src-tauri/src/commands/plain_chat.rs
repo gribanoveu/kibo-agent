@@ -111,6 +111,7 @@ where
 {
     let events = chat_event_sink(&app, turn_id);
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
+    let board: Arc<dyn crate::domain::board::TaskBoard> = app.state::<Arc<crate::infra::board_store::Board>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -132,6 +133,8 @@ where
         // Read each turn: a runbook the user just wrote is there for this answer.
         let runbooks = runbooks::merged(runbooks_store::own());
         let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings);
+        let features = crate::services::features::enabled();
+        let board = Some(board).filter(|_| features.is_on(crate::domain::features::Feature::Board));
         let chat = plain_chat::ChatTurn {
             session: &session,
             role,
@@ -144,6 +147,8 @@ where
             events: &events,
             cancelled: &cancelled,
             log_call: &log_call,
+            board,
+            features,
         };
         run(&chat).map_err(|e| e.to_string())
     })
@@ -201,6 +206,7 @@ fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Re
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
         super::settings::web_search_on(crate::domain::settings::WebSearchPlace::Chat),
+        &crate::services::features::enabled(),
     );
     Ok((session, frame))
 }

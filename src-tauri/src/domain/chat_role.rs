@@ -107,7 +107,7 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch],
+            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
                 ToolName::KubeList,
@@ -221,13 +221,13 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 mod tests {
     use super::*;
 
-    /// The assistant talks and searches the web. The Kubernetes role's tools
+    /// The assistant talks, searches the web and keeps the board. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
     #[test]
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
-        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch]);
+        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board]);
         let tools = ChatRole::Kubernetes.tools();
         assert_eq!(tools.len(), 19);
         assert!(

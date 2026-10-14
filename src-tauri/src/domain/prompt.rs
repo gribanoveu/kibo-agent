@@ -423,7 +423,8 @@ current information — versions, releases, news — answer from what you know, 
 that the user can turn on web search in Settings → Web search.";
 
 /// What goes in front of a Chat mode conversation, steadiest first: the
-/// role, the runbooks it may read, the language, and last what it is told of
+/// role, the runbooks it may read, the language, the date — it changes once a
+/// day — and last what it is told of
 /// the user's cluster — the part that changes with the chat's pin and with a
 /// cluster that stops answering. Separate messages, as the agent's are: a
 /// provider's prompt cache serves a prefix, and one that matches whole
@@ -435,6 +436,7 @@ pub fn chat_system_messages(
     runbooks: &[Runbook],
     language: Option<&str>,
     web: bool,
+    today: &str,
 ) -> Vec<LlmMessage> {
     let mut messages = vec![LlmMessage::system(role.prompt())];
     let reads_runbooks = role.tools().contains(&crate::domain::tools::ToolName::KubeRunbook);
@@ -448,6 +450,7 @@ pub fn chat_system_messages(
     if let Some(language) = language {
         messages.push(LlmMessage::system(format!("Reply in {language}. Think in English.")));
     }
+    messages.push(LlmMessage::system(format!("Today is {today}.")));
     if let Some(note) = role.setup_note(kube) {
         messages.push(LlmMessage::system(note));
     }
@@ -889,29 +892,31 @@ mod tests {
     /// The role, the runbooks, the language, and the cluster last: what
     /// changes most comes after everything a cache can keep.
     #[test]
-    fn a_chat_is_told_its_role_its_runbooks_the_language_and_the_cluster_last() {
+    fn a_chat_is_told_its_role_its_runbooks_the_language_the_date_and_the_cluster_last() {
         let kube = KubeSetup::NotSet;
         let note = ChatRole::Kubernetes.setup_note(&kube).unwrap();
         let texts = |messages: Vec<LlmMessage>| messages.into_iter().map(|m| (m.role, m.content.unwrap())).collect::<Vec<_>>();
         let system = |text: &str| (crate::domain::llm::LlmRole::System, text.to_string());
         let books = runbooks::merged(Vec::new());
         let list = runbooks::listing(&books).unwrap();
+        let day = "Tuesday, 13 October 2026";
+        let date = system("Today is Tuesday, 13 October 2026.");
         assert_eq!(
-            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), true)),
-            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian. Think in English."), system(&note)]
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), true, day)),
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system("Reply in Russian. Think in English."), date.clone(), system(&note)]
         );
-        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, true)), [system(ChatRole::Kubernetes.prompt()), system(&note)]);
+        assert_eq!(texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, true, day)), [system(ChatRole::Kubernetes.prompt()), date.clone(), system(&note)]);
         // A role that cannot read a runbook is not told of any.
-        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, true)), [system(ChatRole::Assistant.prompt())]);
+        assert_eq!(texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, true, day)), [system(ChatRole::Assistant.prompt()), date.clone()]);
         // Without a key, after the runbooks and before the language: it
         // changes once, when the key is saved.
         assert_eq!(
-            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), false)),
-            [system(ChatRole::Kubernetes.prompt()), system(&list), system(NO_WEB_SEARCH), system("Reply in Russian. Think in English."), system(&note)]
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &books, Some("Russian"), false, day)),
+            [system(ChatRole::Kubernetes.prompt()), system(&list), system(NO_WEB_SEARCH), system("Reply in Russian. Think in English."), date.clone(), system(&note)]
         );
         assert_eq!(
-            texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false)),
-            [system(ChatRole::Assistant.prompt()), system(NO_WEB_SEARCH)]
+            texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false, day)),
+            [system(ChatRole::Assistant.prompt()), system(NO_WEB_SEARCH), date]
         );
     }
 }

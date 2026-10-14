@@ -6,6 +6,8 @@
 //! without a model at the other end.
 
 use std::cell::{Cell, RefCell};
+
+use crate::domain::features::Features;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -228,6 +230,11 @@ pub struct Turn<'a> {
     /// Where an MCP server's question waits for the user's answer; `None`
     /// where there is no window to ask in, and the question is declined.
     pub questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
+    /// The board `board` keeps cards on; `None` has none.
+    pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The features the user has on, read once a turn: a tool of one that is
+    /// off is neither offered nor run (`domain::features`).
+    pub features: crate::domain::features::Features,
 }
 
 
@@ -952,6 +959,7 @@ fn execute_call(
             Place::Chat { web, .. } | Place::Folder { web, .. } => web.cloned(),
         },
         history,
+        board: turn.board.clone(),
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -959,6 +967,12 @@ fn execute_call(
 /// The half of the gate the model cannot see: in a folder, the mode and
 /// containment; in a chat, the role's own tools and nothing else.
 fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), crate::domain::tools::ToolError> {
+    // Before the place's own gate: a call from memory of a turn when the
+    // feature was on is told where to turn it on, not that the tool is unknown.
+    if let Some(tool) = ToolName::from_wire_name(&call.name).filter(|&tool| !turn.features.offers(tool)) {
+        let feature = crate::domain::features::Feature::owning(tool).map(|f| f.manifest().name).unwrap_or_default();
+        return Err(crate::domain::tools::ToolError::FeatureOff { tool: call.name.clone(), feature: feature.to_string() });
+    }
     match turn.place {
         Place::Folder { scope, mode, .. } => preflight_tool_call(scope, mode, reads, call),
         Place::Chat { role, .. } => {
@@ -1157,6 +1171,9 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         review: None,
         agents: None,
         questions: None,
+        board: None,
+        // A helper reads; no feature of the user's is for it.
+        features: Features::default(),
     };
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
@@ -1408,7 +1425,14 @@ fn keep_plan_through_fold(history: &mut [LlmMessage], written_plan: Option<&str>
 /// request its schema for nothing.
 /// `web`: whether the agent's web search is on — off, `webSearch` and
 /// `webFetch` are left out, as in a chat.
-pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, history: &[LlmMessage], web: bool) -> Vec<LlmToolDefinition> {
+/// `features`: the ones the user has on — a tool of one that is off is left out.
+pub(crate) fn tool_definitions_for(
+    mode: ConversationMode,
+    mcp: &McpTools,
+    history: &[LlmMessage],
+    web: bool,
+    features: &Features,
+) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
         .chain(mcp.definitions(&crate::domain::mcp::loaded_tools(history)))
@@ -1417,6 +1441,7 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, histo
                 conversation_mode::offers(mode, tool)
                     && (tool != ToolName::ToolSearch || mcp.has_deferred())
                     && (web || !tool.is_web())
+                    && features.offers(tool)
             })
         })
         .collect()
@@ -1425,20 +1450,20 @@ pub(crate) fn tool_definitions_for(mode: ConversationMode, mcp: &McpTools, histo
 /// What the turn advertises: the mode's tools in a folder, the role's in a chat.
 fn offered(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmToolDefinition> {
     match turn.place {
-        Place::Folder { mode, web, .. } => tool_definitions_for(mode, turn.mcp, history, web.is_some()),
-        Place::Chat { role, web, .. } => tool_definitions_for_role(role, web.is_some()),
+        Place::Folder { mode, web, .. } => tool_definitions_for(mode, turn.mcp, history, web.is_some(), &turn.features),
+        Place::Chat { role, web, .. } => tool_definitions_for_role(role, web.is_some(), &turn.features),
     }
 }
 
 /// The tools a chat in `role` is offered.
 /// `web`: whether web search is on. Off, `webSearch` and `webFetch` are left
 /// out — offered, they could only fail, and their schemas cost every request.
-pub(crate) fn tool_definitions_for_role(role: ChatRole, web: bool) -> Vec<LlmToolDefinition> {
+pub(crate) fn tool_definitions_for_role(role: ChatRole, web: bool, features: &Features) -> Vec<LlmToolDefinition> {
     tool_definitions()
         .into_iter()
         .filter(|definition| {
             ToolName::from_wire_name(&definition.name)
-                .is_some_and(|tool| role.tools().contains(&tool) && (web || !tool.is_web()))
+                .is_some_and(|tool| role.tools().contains(&tool) && (web || !tool.is_web()) && features.offers(tool))
         })
         .collect()
 }
@@ -1463,15 +1488,22 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode, .. } => (scope, mode),
         Place::Chat { role, kube, runbooks, web, .. } => {
-            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some());
+            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &today());
             messages.extend_from_slice(history);
             return messages;
         }
     };
-    let today = Local::now().format("%e %B %Y").to_string();
+    let today = today();
     let mut messages = prompt::system_messages(&turn_context(turn, scope, mode, &today));
     messages.extend_from_slice(history);
     messages
+}
+
+/// The date the prompt gives, with its weekday: "Tuesday, 13 October 2026" —
+/// "remind me on Friday" needs both. The meter asks it too, so what it counts
+/// is what is sent.
+pub fn today() -> String {
+    Local::now().format("%A, %-d %B %Y").to_string()
 }
 
 /// What a request in the open folder is told before the conversation.
@@ -1496,11 +1528,11 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
 fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
     let frame = match turn.place {
         Place::Folder { scope, mode, web } => {
-            let today = Local::now().format("%e %B %Y").to_string();
-            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some())
+            let today = today();
+            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some(), &turn.features)
         }
         Place::Chat { role, kube, runbooks, web, .. } => {
-            context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some())
+            context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some(), &turn.features)
         }
     };
     context_compaction::usage(turn.session, frame, history)
@@ -2046,6 +2078,7 @@ mod tests {
         questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
         /// The agent's web, as Settings would give it; `None` is off.
         web: Option<Web>,
+        features: Features,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -2097,6 +2130,7 @@ mod tests {
             agents: None,
             questions: None,
             web: None,
+            features: Features::default(),
         }
     }
 
@@ -2155,6 +2189,8 @@ mod tests {
                 review: None,
                 agents: self.agents.clone(),
                 questions: self.questions.clone(),
+                board: None,
+                features: self.features.clone(),
             };
             f(&turn)
         }
@@ -3917,6 +3953,28 @@ mod tests {
     }
 
     /// The model is offered the tools this build actually has, every round.
+    /// "Remind me on Friday" needs the weekday as well as the date.
+    #[test]
+    fn today_names_the_weekday_then_the_date() {
+        let now = Local::now();
+        let day = today();
+        assert!(day.starts_with(&now.format("%A, ").to_string()), "{day}");
+        assert!(day.ends_with(&now.format(" %B %Y").to_string()) && !day.contains("  "), "{day}");
+    }
+
+    /// The board is offered in a folder too — once the user turns it on.
+    #[test]
+    fn the_agent_is_offered_the_board_only_while_the_feature_is_on() {
+        let offered = |features: Features| {
+            let mut h = harness("loop-board", vec![text("hi")]);
+            h.features = features;
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            h.provider.requests()[0].tools.iter().any(|t| t.name == "board")
+        };
+        assert!(!offered(Features::default()));
+        assert!(offered(Features::all()));
+    }
+
     #[test]
     fn every_request_carries_the_tool_schemas() {
         let h = harness("loop-tools", vec![text("hi")]);
@@ -3925,10 +3983,10 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one but a review's own and the Kubernetes role's;
-        // MCP tools come from servers, and none is connected — so neither is
-        // `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 3 - ChatRole::Kubernetes.tools().len());
+        // Every built-in one but a review's own, the Assistant's board and
+        // the Kubernetes role's; MCP tools come from servers, and none is
+        // connected — so neither is `toolSearch`, with nothing to find.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 4 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

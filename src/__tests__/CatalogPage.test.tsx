@@ -13,6 +13,8 @@ mock.module("@tauri-apps/api/core", () => ({
       asked += 1;
       return Promise.resolve(answer);
     }
+    // The app's own features have their file (features.test.tsx); none here.
+    if (command === "features_list") return Promise.resolve([]);
     calls.push([command, args]);
     if (command === "catalog_preview")
       return Promise.resolve(

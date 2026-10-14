@@ -116,19 +116,22 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::ToolSearch,
                 ToolName::Explore,
                 ToolName::Remember,
+                // While the user has the feature on (`domain::features`).
+                ToolName::Board,
             ]);
         }
         // `writePlan` is chat state, not the working tree: writing the plan
         // is the one thing Plan mode is for. Agent has it too, so a plan
         // that meets reality can be corrected where the user reads it.
         ConversationMode::Plan => {
-            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember]);
+            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember, ToolName::Board]);
         }
         // Research handed off reads the same files, only somewhere else.
         // `remember` writes the agent's memory, not the tree: "remember
-        // that" is something the user says in any mode they talk in.
+        // that" is something the user says in any mode they talk in — and
+        // "remind me", which is the board's.
         ConversationMode::Ask => {
-            tools.extend([ToolName::Explore, ToolName::Remember]);
+            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that

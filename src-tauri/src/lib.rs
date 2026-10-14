@@ -186,6 +186,10 @@ pub fn run() {
             app.manage(std::sync::Arc::new(domain::agents::Agents::new(
                 commands::agents::agent_event_sink(app.handle()),
             )));
+            // The Assistant's board, for its `board` tool and the Board page.
+            app.manage(std::sync::Arc::new(infra::board_store::Board::in_app_dir(
+                commands::board::board_event_sink(app.handle()),
+            )));
             // The user's own shells, in the Terminal tab.
             app.manage(std::sync::Arc::new(infra::terminal::Terminals::new(
                 commands::terminal::terminal_event_sink(app.handle()),
@@ -327,6 +331,11 @@ pub fn run() {
             commands::processes::processes_running,
             commands::processes::process_stop,
             commands::agents::agents_list,
+            commands::board::board_list,
+            commands::board::board_change,
+            commands::features::features_list,
+            commands::features::features_set,
+            commands::features::features_delete_data,
             commands::agents::agent_stop,
             commands::terminal::terminal_open,
             commands::terminal::terminal_list,

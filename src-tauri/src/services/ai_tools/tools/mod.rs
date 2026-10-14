@@ -21,6 +21,7 @@ use crate::domain::tools::{
     ReadFiles, Task, ToolCall, ToolDeps, ToolError, ToolName, ToolResult, ToolScope,
 };
 
+pub mod board;
 pub mod create_directory;
 pub mod delete_directory;
 pub mod delete_file;
@@ -101,6 +102,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeDelete, cluster::delete_definition),
     (ToolName::WebSearch, web_search::definition),
     (ToolName::WebFetch, web_fetch::definition),
+    (ToolName::Board, board::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
@@ -166,6 +168,7 @@ pub fn dispatch(
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
         ToolCall::WebFetch(args) => web_fetch::web_fetch(args, deps),
+        ToolCall::Board(args) => board::board(args, deps),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
@@ -536,6 +539,16 @@ mod definition_tests {
                 vec![ToolCall::WebFetch(crate::domain::tools::WebFetchArgs {
                     url: "https://tokio.rs".into(),
                     query: Some("release".into()),
+                })],
+            ),
+            ToolName::Board => (
+                r#"{"op":"list"}"#,
+                vec![ToolCall::Board(crate::domain::tools::BoardArgs {
+                    op: crate::domain::tools::BoardOp::Move,
+                    title: Some("file the request".into()),
+                    note: Some("wlbuh".into()),
+                    id: Some("c1".into()),
+                    column: Some(crate::domain::board::Column::Done),
                 })],
             ),
             ToolName::ToolSearch => (
