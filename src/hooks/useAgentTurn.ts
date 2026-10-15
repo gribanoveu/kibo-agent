@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom } from "../lib/rewind";
+import { useTurnChannel } from "./useTurnChannel";
 import {
   answerMcpQuestion,
   cancelChat,
@@ -12,7 +13,6 @@ import {
   loadChat,
   logNextPrompt,
   nextPromptSent,
-  onTurnEvent,
   resumeChat,
   saveChat,
   generateChatTitle,
@@ -31,13 +31,10 @@ import {
   type ImagePart,
 } from "../lib/chat";
 import {
-  acceptEvent,
   acceptOutcome,
   appendNotice,
   appendUserMessage,
   clearApproval,
-  compactionEnded,
-  compactionStarted,
   endTurn,
   emptyTurn,
   restoredTurn,
@@ -111,7 +108,6 @@ export function useAgentTurn({
   // at. A counter rather than the text alone, so the same text twice still
   // lands.
   const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
-  const subscribed = useRef<(() => void) | null>(null);
   const compacting = useRef(false);
   const [queued, setQueued] = useState<Queued[]>([]);
   const queueSeq = useRef(0);
@@ -130,20 +126,8 @@ export function useAgentTurn({
   const journaled = useRef<Promise<string | null> | null>(null);
   const giveBackRef = useRef(onGiveBack);
   giveBackRef.current = onGiveBack;
-  const modelRef = useRef(model);
-  modelRef.current = model;
-
-  useEffect(() => () => subscribed.current?.(), []);
-
-  const listen = useCallback(async (id: string) => {
-    subscribed.current?.();
-    const off = await onTurnEvent(id, (event) => {
-      // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
-      const now = Date.now();
-      setTurn((state) => acceptEvent(state, event, now, modelRef.current));
-    });
-    subscribed.current = off;
-  }, []);
+  const channel = useTurnChannel(setTurn, model);
+  const listen = channel.listen;
 
   const finish = useCallback((outcome: Awaited<ReturnType<typeof startChat>>) => {
     setTurn((state) => acceptOutcome(state, outcome));
@@ -152,8 +136,7 @@ export function useAgentTurn({
       // The turn's own history, calls and results included: the next
       // message is sent with what the model read, not only what it answered.
       history.current = outcome.value.history;
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
     }
   }, [keepTodos]);
 
@@ -239,15 +222,7 @@ export function useAgentTurn({
     // is being made, which only it knows. Its end is what the call returns —
     // so a start arriving after that is stale, not a second pass.
     const id = `compact-${++turnId.current}`;
-    let ended = false;
-    const off = await onTurnEvent(id, (event) => {
-      if (event.type === "historyCompacting" && !ended) setTurn(compactionStarted);
-    });
-    const end = (result: { folded: number } | null) => {
-      ended = true;
-      off();
-      setTurn((state) => compactionEnded(state, result));
-    };
+    const end = await channel.watchCompaction(id);
     try {
       const shorter = await compactHistory(history.current, force, planRef.current, id);
       end(shorter && { folded: shorter.folded });
@@ -454,8 +429,7 @@ export function useAgentTurn({
     journaled.current = null;
     try {
       const record = await loadChat(id);
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       history.current = record.messages;
       keepTodos(record.todos);
       keepPlan(record.plan ?? null);
@@ -477,8 +451,7 @@ export function useAgentTurn({
   const reset = useCallback(() => {
     if (busy) return false;
     journaled.current = null;
-    subscribed.current?.();
-    subscribed.current = null;
+    channel.stop();
     history.current = [];
     keepTodos([]);
     keepPlan(null);
@@ -521,8 +494,7 @@ export function useAgentTurn({
         ? { blocks: turn.blocks, history: history.current, text: null }
         : branchAt(turn.blocks, history.current, bubbleId);
       if (!cut || (whole && cut.blocks.length === 0)) return;
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       journaled.current = null;
       branchedFrom.current = chatId;
       history.current = cut.history;
@@ -601,8 +573,7 @@ export function useAgentTurn({
         setError(String(e));
         return null;
       }
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       history.current = summary ? [...cut.history, summary] : cut.history;
       keepTodos([]);
       keepPlan(writtenPlan(cut.blocks));

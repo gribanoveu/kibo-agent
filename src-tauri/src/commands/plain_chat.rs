@@ -17,7 +17,7 @@ use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::runbooks;
 use crate::infra::runbooks_store;
 use crate::domain::tools::{ApprovalPolicy, ToolPreview};
-use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, ToolCallDecision};
+use crate::domain::turn::{ChatStreamOutcome, PendingApproval, PendingToolCall, ToolCallDecision};
 use crate::services::llm_chat::TurnError;
 use crate::services::llm_session::LlmSession;
 use crate::infra::chat_store;
@@ -156,10 +156,7 @@ pub async fn plain_chat_compact<R: Runtime>(
     let sink = chat_event_sink(&app, turn_id);
     tauri::async_runtime::spawn_blocking(move || {
         let (session, frame) = chat_frame(&clusters, role, kube.as_ref())?;
-        let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
-        context_compaction::compact_if_needed(&session, frame, &messages, force, &started)
-            .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
-            .map_err(|e| e.to_string())
+        super::chat::compact(&session, frame, &messages, force, sink)
     })
     .await
     .map_err(|e| format!("the compaction thread failed: {e}"))?

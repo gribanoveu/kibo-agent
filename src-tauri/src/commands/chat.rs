@@ -394,25 +394,26 @@ pub async fn chat_compact(
     // IPC loop freezes every other command for its duration.
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        let started = || {
-            sink(ChatTurnEvent {
-                seq: 1,
-                round: 0,
-                target_id: None,
-                event: ChatEventPayload::HistoryCompacting,
-            })
-        };
-        context_compaction::compact_if_needed(&session, frame, &messages, force, &started)
-            .map(|compacted| {
-                compacted.map(|compacted| CompactedHistory {
-                    history: compacted.history,
-                    folded: compacted.folded,
-                })
-            })
-            .map_err(|e| e.to_string())
+        compact(&session, frame, &messages, force, sink)
     })
     .await
     .map_err(|e| format!("the compaction thread failed: {e}"))?
+}
+
+/// Folds the older history when the next request is worth it — or at once,
+/// `force` — saying on `sink` when a summary is being made. The agent's and
+/// a chat's compaction differ only in the frame they measure against.
+pub(super) fn compact(
+    session: &llm_session::LlmSession,
+    frame: RequestFrame,
+    messages: &[LlmMessage],
+    force: bool,
+    sink: ChatEventSink,
+) -> Result<Option<CompactedHistory>, String> {
+    let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
+    context_compaction::compact_if_needed(session, frame, messages, force, &started)
+        .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
+        .map_err(|e| e.to_string())
 }
 
 /// The message that stands for the part of a chat being rewound away from —
