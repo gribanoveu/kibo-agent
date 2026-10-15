@@ -100,13 +100,10 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
             tools.extend([
                 ToolName::WriteFile,
                 ToolName::EditFile,
-                ToolName::DeleteFile,
-                ToolName::DeleteDirectory,
+                ToolName::Delete,
                 ToolName::Move,
                 ToolName::Todo,
                 ToolName::RunCommand,
-                // The same line, typed where the user can see it run.
-                ToolName::RunInTerminal,
                 ToolName::StopProcess,
                 ToolName::WritePlan,
                 // Agent only: nothing says a foreign tool changes nothing.
@@ -197,7 +194,6 @@ mod tests {
     fn the_terminal_is_read_in_every_mode_and_typed_into_in_agent_alone() {
         for mode in picked() {
             assert!(offers(*mode, ToolName::ReadTerminal), "{mode:?}");
-            assert_eq!(offers(*mode, ToolName::RunInTerminal), *mode == ConversationMode::Agent, "{mode:?}");
         }
     }
 
@@ -267,7 +263,7 @@ mod tests {
         for tool in [ToolName::ReadFile, ToolName::Grep, ToolName::SemanticSearch, ToolName::GitDiff, ToolName::RunCommand, ToolName::ReportFinding] {
             assert!(review.contains(&tool), "{tool:?}");
         }
-        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::DeleteDirectory, ToolName::Move];
+        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::Delete, ToolName::Move];
         assert!(writes.iter().all(|tool| !review.contains(tool)));
         assert!(!review.contains(&ToolName::WritePlan) && !review.contains(&ToolName::Todo));
     }

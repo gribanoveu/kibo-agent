@@ -255,8 +255,7 @@ mod tests {
                 })),
                 ToolResult::FileEdited { path: path(), diff: diff(), repeated_headings: vec![LEAK.into()] },
             ),
-            ToolName::DeleteFile => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
-            ToolName::DeleteDirectory => (None, ToolResult::DirectoryDeleted { path: path(), files: 0, listed: vec![] }),
+            ToolName::Delete => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
             ToolName::Move => (None, ToolResult::Moved { from: path(), to: path(), files: None }),
             ToolName::Todo => (None, ToolResult::Todo { tasks: vec![] }),
             ToolName::GitStatus => (
@@ -385,18 +384,6 @@ mod tests {
                     output: LEAK.into(),
                     cut: 0,
                 }),
-            ),
-            // The command line stays in the log, as runCommand's does.
-            ToolName::RunInTerminal => (
-                Some(ToolCall::RunInTerminal(crate::domain::tools::RunInTerminalArgs { command: "npm run dev".into(), id: None })),
-                ToolResult::TerminalTyped {
-                    terminal: crate::domain::terminal::TerminalInfo {
-                        id: 1,
-                        shell: "zsh".into(),
-                        state: crate::domain::terminal::TerminalState::Running,
-                    },
-                    command: "npm run dev".into(),
-                },
             ),
             // What was searched and found stays: names of tools and what
             // their servers say they do, nobody's content.

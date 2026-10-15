@@ -62,8 +62,10 @@ fn touched(scope: &ToolScope, call: &ToolCall) -> Option<Vec<(String, PathBuf)>>
     match call {
         ToolCall::WriteFile(args) => one(&args.path),
         ToolCall::EditFile(args) => one(&args.path),
-        ToolCall::DeleteFile(args) => one(&args.path),
-        ToolCall::DeleteDirectory(args) => Some(under(&resolve_existing(scope, &args.path).ok()?)),
+        ToolCall::Delete(args) => {
+            let at = resolve_existing(scope, &args.path).ok()?;
+            if at.is_dir() { Some(under(&at)) } else { one(&args.path) }
+        }
         ToolCall::Move(args) => {
             let from = resolve_existing(scope, &args.path).ok()?;
             let to = resolve_writable(scope, &args.new_path).ok()?;
@@ -105,7 +107,7 @@ fn states(files: &[(String, PathBuf)]) -> Vec<FileState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::tools::{DeleteDirectoryArgs, MoveArgs, WriteFileArgs};
+    use crate::domain::tools::{DeleteArgs, MoveArgs, WriteFileArgs};
     use crate::testing::{temp_dir, with_app_dir};
 
     fn stored(content: &[u8]) -> FileState {
@@ -177,7 +179,7 @@ mod tests {
                 ]
             );
 
-            let deleted = around(&root, ToolCall::DeleteDirectory(DeleteDirectoryArgs { path: "lib".into(), recursive: Some(true) }), || {
+            let deleted = around(&root, ToolCall::Delete(DeleteArgs { path: "lib".into(), recursive: Some(true) }), || {
                 fs::remove_dir_all(root.join("lib")).unwrap()
             });
             assert_eq!(deleted.len(), 2);
@@ -216,7 +218,7 @@ mod tests {
             for i in 0..=MAX_FILES {
                 fs::write(root.join(format!("many/{i:03}")), i.to_string()).unwrap();
             }
-            let deleted = around(&root, ToolCall::DeleteDirectory(DeleteDirectoryArgs { path: "many".into(), recursive: Some(true) }), || {
+            let deleted = around(&root, ToolCall::Delete(DeleteArgs { path: "many".into(), recursive: Some(true) }), || {
                 fs::remove_dir_all(root.join("many")).unwrap()
             });
             assert_eq!(deleted.len(), MAX_FILES + 1);

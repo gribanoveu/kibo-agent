@@ -113,10 +113,6 @@ pub fn for_model(result: &ToolResult) -> String {
         }
         ToolResult::ProcessStopped(process) => format!("{}, with everything it started.", process.describe()),
         ToolResult::TerminalScreen(screen) => terminal_screen(screen),
-        ToolResult::TerminalTyped { terminal, command } => format!(
-            "Typed into the user's terminal #{} ({}): `{command}`. It runs there now; readTerminal shows what it printed.",
-            terminal.id, terminal.shell
-        ),
         ToolResult::SearchResults { matches, meta } => search(matches, meta),
         ToolResult::Skill { name, instructions, files, from } => skill(name, instructions, files, from),
         ToolResult::SkillFile { name, path, content } => format!("{name}/{path}:\n{content}"),
@@ -800,7 +796,7 @@ mod tests {
     /// the screen — then the lines.
     #[test]
     fn a_terminal_screen_says_whose_and_how_it_stands() {
-        use crate::domain::terminal::{TerminalInfo, TerminalScreen, TerminalState};
+        use crate::domain::terminal::{TerminalScreen, TerminalState};
         let screen = |state, alternate, output: &str| {
             for_model(&ToolResult::TerminalScreen(TerminalScreen {
                 id: 2,
@@ -829,11 +825,6 @@ mod tests {
             screen(TerminalState::Exited { code: None }, true, "~"),
             "The user's terminal #2 (zsh, its shell was ended by a signal) — a full-screen program is drawing it:\n~"
         );
-        let typed = for_model(&ToolResult::TerminalTyped {
-            terminal: TerminalInfo { id: 3, shell: "bash".into(), state: TerminalState::Running },
-            command: "npm run dev".into(),
-        });
-        assert_eq!(typed, "Typed into the user's terminal #3 (bash): `npm run dev`. It runs there now; readTerminal shows what it printed.");
     }
 
     /// The model has no clock: how long a run took is worth a few words.

@@ -22,8 +22,8 @@ use crate::domain::tools::{
 };
 
 pub mod board;
+pub mod delete;
 pub mod delete_directory;
-pub mod delete_file;
 pub mod edit_file;
 pub mod explore;
 pub mod git;
@@ -67,8 +67,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::GitLog, git::log_definition),
     (ToolName::WriteFile, write_file::definition),
     (ToolName::EditFile, edit_file::definition),
-    (ToolName::DeleteFile, delete_file::definition),
-    (ToolName::DeleteDirectory, delete_directory::definition),
+    (ToolName::Delete, delete::definition),
     (ToolName::Move, move_path::definition),
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
@@ -80,7 +79,6 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::ReadOutput, process::read_definition),
     (ToolName::StopProcess, process::stop_definition),
     (ToolName::ReadTerminal, terminal::read_definition),
-    (ToolName::RunInTerminal, terminal::run_definition),
     (ToolName::KubeList, cluster::list_definition),
     (ToolName::KubeGet, cluster::get_definition),
     (ToolName::KubeEvents, cluster::events_definition),
@@ -143,8 +141,7 @@ pub fn dispatch(
         ToolCall::ListFiles(args) => list_files::list_files(folder()?, args),
         ToolCall::WriteFile(args) => write_file::write_file(folder()?, args, reads),
         ToolCall::EditFile(args) => edit_file::edit_file(folder()?, args, reads),
-        ToolCall::DeleteFile(args) => delete_file::delete_file(folder()?, args, reads),
-        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(folder()?, args),
+        ToolCall::Delete(args) => delete::delete(folder()?, args, reads),
         ToolCall::Move(args) => move_path::move_path(folder()?, args, reads),
         ToolCall::Todo(args) => todo::todo(todos, args),
         ToolCall::GitStatus => git::git_status(folder()?),
@@ -161,7 +158,6 @@ pub fn dispatch(
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
-        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
         ToolCall::WebFetch(args) => web_fetch::web_fetch(args, deps),
@@ -193,10 +189,10 @@ mod definition_tests {
     use crate::domain::llm::LlmToolCall;
     use crate::domain::tools::WebSearchArgs;
     use crate::domain::tools::{
-        DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
+        DeleteArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
-        ProcessArgs, ReadOutputArgs, ReadTerminalArgs, RunInTerminalArgs,
+        ProcessArgs, ReadOutputArgs, ReadTerminalArgs,
         KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
@@ -293,13 +289,9 @@ mod definition_tests {
                     }],
                 })],
             ),
-            ToolName::DeleteFile => (
-                r#"{"path":"a.rs"}"#,
-                vec![ToolCall::DeleteFile(DeleteFileArgs { path: path() })],
-            ),
-            ToolName::DeleteDirectory => (
-                r#"{"path":"src"}"#,
-                vec![ToolCall::DeleteDirectory(DeleteDirectoryArgs {
+            ToolName::Delete => (
+                r#"{"path":"src","recursive":true}"#,
+                vec![ToolCall::Delete(DeleteArgs {
                     path: path(),
                     recursive: Some(true),
                 })],
@@ -411,10 +403,6 @@ mod definition_tests {
             ToolName::ReadTerminal => (
                 r#"{"id":"2","lines":40}"#,
                 vec![ToolCall::ReadTerminal(ReadTerminalArgs { id: Some(2), lines: Some(40) })],
-            ),
-            ToolName::RunInTerminal => (
-                r#"{"command":"npm run dev"}"#,
-                vec![ToolCall::RunInTerminal(RunInTerminalArgs { command: "npm run dev".into(), id: None })],
             ),
             ToolName::KubeList => (
                 r#"{"kind":"pods"}"#,
