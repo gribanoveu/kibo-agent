@@ -104,7 +104,9 @@ const code = (text: string) =>
 
 function offenders(rule: Rule): string[] {
   const found: string[] = [];
-  for (const path of new Bun.Glob(rule.files).scanSync(SRC)) {
+  for (const scanned of new Bun.Glob(rule.files).scanSync(SRC)) {
+    // Windows scans with backslashes; the lists here use forward ones.
+    const path = scanned.replaceAll("\\", "/");
     if (path.startsWith("__tests__/") || rule.outside?.(path)) continue;
     if (code(readFileSync(join(SRC, path), "utf8")).some((line) => rule.pattern.test(line))) found.push(path);
   }
