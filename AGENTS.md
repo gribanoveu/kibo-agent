@@ -55,7 +55,21 @@ Dependency direction points inward: `commands → services → domain`, and `inf
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
-The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, the approval gate) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool is a variant in the two enums, a module under `services/ai_tools/tools/`, and a branch in the `match` — if a fifth place needs editing, that contract is broken. A tool the user turns on from the Catalog belongs to a feature: a row in `domain/features.rs`, and `feature: "<id>"` on its page in `components/pages.tsx` (`docs/33-features.md`); the filters and the Catalog read the manifest.
+The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, the approval gate) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool touches more places than one would like, so each is held by the compiler or a test, and the few held by neither only change how a call looks:
+
+| Place | Held by |
+|---|---|
+| `ToolName` variant and its row in `ToolName::ALL` (`domain/tools.rs`) | test `all_is_complete` (the count) |
+| `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees` on `ToolName` | compiler — exhaustive `match`, no wildcard |
+| `ToolCall` / `ToolResult` variants, a module under `services/ai_tools/tools/`, its arm in `dispatch`, its text in `model_text.rs` | compiler |
+| its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
+| its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |
+| its redaction in `domain/tool_call_log.rs` | test `every_tool_is_redacted` |
+| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed, and nothing mutating outside Agent (test) |
+| `ACCOUNTED` in `src/lib/rewind.ts` | test `every_tools_rewind_flag_matches_the_window` against `rewind_sees` |
+| its label and summary in `src/lib/describeTool.ts`, its icon in `ChatPanel.tsx` | nobody — without them the call shows its raw name and the default icon |
+
+A sixth kind of place, or a list here that neither the compiler nor a test holds, is the contract breaking. A tool the user turns on from the Catalog belongs to a feature: a row in `domain/features.rs`, and `feature: "<id>"` on its page in `components/pages.tsx` (`docs/33-features.md`); the filters and the Catalog read the manifest.
 
 ## Errors
 

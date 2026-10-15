@@ -3,7 +3,9 @@
 //! Every call routes through [`execute_tool`], which is why permission
 //! checking, logging and redaction each have exactly one site rather than one
 //! per tool. Adding a tool is a variant in `ToolCall`, a variant in
-//! `ToolResult`, a module here, an arm below, and a row in [`DEFINITIONS`].
+//! `ToolResult`, a module here, an arm below, and a row in [`DEFINITIONS`] —
+//! plus the places outside this module AGENTS.md lists, each held by the
+//! compiler or a test.
 //!
 //! A tool's schema lives in its own module, beside the code that runs it. The
 //! pair being one file is the point: a field added to an args struct without a

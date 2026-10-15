@@ -225,32 +225,124 @@ impl ToolName {
     }
 
     pub fn is_mutating(self) -> bool {
-        matches!(
-            self,
+        // No wildcard: a tool left out of this would skip the approval gate,
+        // so a new one has to be put on one side.
+        match self {
             ToolName::WriteFile
-                | ToolName::EditFile
-                | ToolName::Delete
-                | ToolName::Move
-                // Every command is treated as mutating, because a command
-                // line is not a tool name: `ls` and `rm -rf /` are the same
-                // call with different arguments. Narrowing that back down is a
-                // question about the command line, and it is asked in
-                // `domain::command_risk`, not here.
-                | ToolName::RunCommand
-                // Changes the user's cluster.
-                | ToolName::KubeScale
-                | ToolName::KubeUndo
-                | ToolName::KubeSuspend
-                | ToolName::KubeRolloutRestart
-                | ToolName::KubeRolloutUndo
-                | ToolName::KubeApply
-                | ToolName::KubeDelete
-                // Nothing is known about what a foreign tool does, and its
-                // server's own hints are untrusted by the specification: it
-                // asks, and it stays out of the modes that promise nothing
-                // changes.
-                | ToolName::Mcp
-        )
+            | ToolName::EditFile
+            | ToolName::Delete
+            | ToolName::Move
+            // Every command is treated as mutating, because a command
+            // line is not a tool name: `ls` and `rm -rf /` are the same
+            // call with different arguments. Narrowing that back down is a
+            // question about the command line, and it is asked in
+            // `domain::command_risk`, not here.
+            | ToolName::RunCommand
+            // Changes the user's cluster.
+            | ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete
+            // Nothing is known about what a foreign tool does, and its
+            // server's own hints are untrusted by the specification: it
+            // asks, and it stays out of the modes that promise nothing
+            // changes.
+            | ToolName::Mcp => true,
+            ToolName::ReadFile
+            | ToolName::Grep
+            | ToolName::ListFiles
+            | ToolName::Todo
+            | ToolName::GitDiff
+            | ToolName::GitBlame
+            | ToolName::GitLog
+            | ToolName::GitStatus
+            | ToolName::SemanticSearch
+            | ToolName::Skill
+            | ToolName::WritePlan
+            | ToolName::ReadOutput
+            | ToolName::StopProcess
+            | ToolName::ReadTerminal
+            | ToolName::ReportFinding
+            | ToolName::Explore
+            | ToolName::Remember
+            | ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory
+            | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
+            | ToolName::KubeProbe
+            | ToolName::KubeRunbook
+            | ToolName::WebSearch
+            | ToolName::WebFetch
+            | ToolName::Board
+            | ToolName::ToolSearch => false,
+        }
+    }
+
+    /// Whether a rewind accounts for what a call did: its file changes are
+    /// recorded on its block, or it made none a rewind should undo. A call of
+    /// any other tool may have changed things that stay — the rewind dialog
+    /// counts it. No wildcard: a new tool has to be put on one side.
+    ///
+    /// The window's copy is `ACCOUNTED` in `src/lib/rewind.ts`, kept equal by
+    /// `architecture::every_tools_rewind_flag_matches_the_window`.
+    pub fn rewind_sees(self) -> bool {
+        match self {
+            // Recorded on the block.
+            ToolName::WriteFile | ToolName::EditFile | ToolName::Delete | ToolName::Move => true,
+            // Reads, and state outside the folder that a rewind leaves alone
+            // on purpose: the checklist, the plan, the board, a process.
+            ToolName::ReadFile
+            | ToolName::Grep
+            | ToolName::ListFiles
+            | ToolName::Todo
+            | ToolName::GitStatus
+            | ToolName::GitDiff
+            | ToolName::GitBlame
+            | ToolName::GitLog
+            | ToolName::SemanticSearch
+            | ToolName::WebSearch
+            | ToolName::WebFetch
+            | ToolName::ToolSearch
+            | ToolName::Board
+            | ToolName::Skill
+            | ToolName::WritePlan
+            | ToolName::ReadOutput
+            | ToolName::StopProcess
+            | ToolName::ReadTerminal
+            // Reads only, in a turn of its own.
+            | ToolName::Explore => true,
+            // Anything at all; a command line is not a tool name.
+            ToolName::RunCommand | ToolName::Mcp => false,
+            // The folder's memory file, which stays.
+            ToolName::Remember => false,
+            // A review worker's, never in a chat that can be rewound.
+            ToolName::ReportFinding => false,
+            // The cluster, in a chat — no folder to rewind.
+            ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory
+            | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
+            | ToolName::KubeProbe
+            | ToolName::KubeRunbook
+            | ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete => false,
+        }
     }
 
     /// What one call charges against the turn's tool budget — an estimate of

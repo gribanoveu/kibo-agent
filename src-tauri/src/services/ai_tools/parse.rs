@@ -219,7 +219,7 @@ fn humanize_serde_error(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::tools::{ReadFileArgs, TodoArgs, TodoUpdateStatus};
+    use crate::domain::tools::{ReadFileArgs, TodoArgs, TodoUpdateStatus, ToolName};
     use crate::testing::temp_dir;
     use std::path::PathBuf;
 
@@ -280,6 +280,21 @@ mod tests {
                 matches!(parse_tool_call(&call("mcp__gh__search", not_an_object)), Err(ToolError::InvalidArguments { .. })),
                 "{not_an_object}"
             );
+        }
+    }
+
+    /// The `match` above is by string, so the compiler does not see a tool
+    /// left out of it: every wire name reaches its variant — with arguments it
+    /// may refuse, but never as an unknown tool.
+    #[test]
+    fn every_tool_in_all_reaches_its_variant() {
+        for &tool in ToolName::ALL {
+            let name = tool.wire_name();
+            match parse_tool_call(&call(name, "{}")) {
+                Ok(parsed) => assert_eq!(parsed.name(), tool, "{name}"),
+                Err(ToolError::InvalidArguments { tool: refused, .. }) => assert_eq!(refused, name),
+                Err(other) => panic!("{name} does not reach its variant: {other}"),
+            }
         }
     }
 

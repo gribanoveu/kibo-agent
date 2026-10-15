@@ -294,3 +294,27 @@ fn a_viewer_window_may_call_only_its_own_commands() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// What a rewind accounts for is decided per tool on the backend
+/// (`ToolName::rewind_sees`, a match the compiler holds complete); the window
+/// counts the rest from its copy, `ACCOUNTED` in `src/lib/rewind.ts`. Names
+/// there that are no tool any more are older chats' and stay.
+#[test]
+fn every_tools_rewind_flag_matches_the_window() {
+    use crate::domain::tools::ToolName;
+    let rewind = fs::read_to_string(crate_dir().join("../src/lib/rewind.ts")).unwrap();
+    let set = rewind.split("const ACCOUNTED = new Set([").nth(1).and_then(|rest| rest.split("]);").next()).unwrap();
+    let window: HashSet<&str> = code_ts(set).flat_map(|line| line.split('"').skip(1).step_by(2)).collect();
+    assert!(window.len() > 10, "read {} names from ACCOUNTED: its shape changed?", window.len());
+    let failures: Vec<String> = ToolName::ALL
+        .iter()
+        .filter(|tool| tool.rewind_sees() != window.contains(tool.wire_name()))
+        .map(|tool| format!("{}: rewind_sees is {}, ACCOUNTED says {}", tool.wire_name(), tool.rewind_sees(), !tool.rewind_sees()))
+        .collect();
+    assert!(failures.is_empty(), "src/lib/rewind.ts is out of step with ToolName::rewind_sees:\n{}", failures.join("\n"));
+}
+
+/// TypeScript lines that are not `//` comments.
+fn code_ts(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().map(str::trim).filter(|line| !line.starts_with("//"))
+}
