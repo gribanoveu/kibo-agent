@@ -114,7 +114,7 @@ describe("the account menu", () => {
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
     expect(screen.getByText("Show or hide the sidebar")).toBeTruthy();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

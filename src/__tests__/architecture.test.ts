@@ -29,15 +29,7 @@ const RULES: Rule[] = [
     files: "**/*.{ts,tsx}",
     pattern: /@tauri-apps\//,
     outside: (path) => path.startsWith("lib/"),
-    known: [
-      // `openUrl` straight from the plugin, and the app's version: one wrapper in lib/window.ts (#23).
-      "components/AsciiDocPreview.tsx",
-      "components/Markdown.tsx",
-      "components/McpQuestionCard.tsx",
-      "components/Sidebar.tsx",
-      "components/WebSearchSettings.tsx",
-      "hooks/useTerminalScreen.ts",
-    ],
+    known: [],
     why: "components and hooks reach Tauri through a wrapper in src/lib/, never directly",
   },
   {
@@ -48,16 +40,6 @@ const RULES: Rule[] = [
     known: [
       // Enter or Space on an element with role="button" is its activation, not a shortcut — stays.
       "components/CatalogPage.tsx",
-      // Through `matches(e, …)` (#22).
-      "components/ChatMenu.tsx",
-      "components/ConfigFileEditor.tsx",
-      "components/ContextMeter.tsx",
-      "components/Dropdown.tsx",
-      "components/FileViewer.tsx",
-      "components/Modal.tsx",
-      "components/PlanPanel.tsx",
-      "components/ProviderSettings.tsx",
-      "components/Sidebar.tsx",
     ],
     why: "a key the app answers to is an entry in src/lib/shortcuts.ts, checked with matches(e, id)",
   },
@@ -83,10 +65,7 @@ const RULES: Rule[] = [
     files: "**/*.css",
     pattern: /#[0-9a-fA-F]{3,8}\b/,
     outside: (path) => path === "styles/tokens.css",
-    known: [
-      // The traffic lights and the Windows close button: --wc-* tokens (#27).
-      "components/WindowControls.css",
-    ],
+    known: [],
     why: "colours come from the tokens in src/styles/tokens.css",
   },
   {

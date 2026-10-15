@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentProps, type MouseEvent } from "react";
+import { openExternal } from "../lib/window";
 import type { Element as HastElement, Nodes } from "hast";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { createPortal } from "react-dom";
@@ -6,7 +7,6 @@ import { parseFragment } from "parse5";
 import { fromParse5 } from "hast-util-from-parse5";
 import { defaultSchema, sanitize, type Schema } from "hast-util-sanitize";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { asciidocHtml } from "../lib/asciidoc";
 import { fileView } from "../lib/chat";
 import { plantumlSvg } from "../lib/plantuml";
@@ -148,7 +148,7 @@ export function AsciiDocPreview({ text, path }: { text: string; path: string }) 
     if (!href) return;
     e.preventDefault();
     if (href.startsWith("#")) document.getElementById(PREFIX + decodeURIComponent(href.slice(1)))?.scrollIntoView();
-    else if (/^(https?:|mailto:)/i.test(href)) void openUrl(href);
+    else if (/^(https?:|mailto:)/i.test(href)) void openExternal(href);
   };
 
   if (error) return <div className="file-viewer-note">Could not render: {error}</div>;

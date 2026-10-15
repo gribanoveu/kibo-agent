@@ -370,7 +370,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
   z-index: 20;
 }
 .window.collapsed .user-menu {

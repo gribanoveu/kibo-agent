@@ -273,7 +273,7 @@ describe("saving", () => {
 
     fireEvent.change(field("API key"), { target: { value: "sk-typed" } });
     await act(async () => {
-      fireEvent.keyDown(field("API key"), { key: "Enter" });
+      fireEvent.keyDown(field("API key"), { code: "Enter", key: "Enter" });
     });
 
     expect(saved).toHaveLength(1);
@@ -396,7 +396,7 @@ describe("the model list", () => {
 
     fireEvent.change(search, { target: { value: "sonnet 4" } });
     expect(screen.queryByText("model-3")).toBeNull();
-    fireEvent.keyDown(search, { key: "Enter" });
+    fireEvent.keyDown(search, { code: "Enter", key: "Enter" });
     expect(saved).toHaveLength(0);
 
     await saveNow();

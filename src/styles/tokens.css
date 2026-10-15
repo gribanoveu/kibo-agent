@@ -250,6 +250,16 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --font-scale: 1;
+
+  /* The shadow under what floats over the panels: a menu, a popover. */
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* The platform's own window controls — macOS traffic lights, Windows'
+     red close — which no theme recolours. */
+  --wc-close: #ff5f57;
+  --wc-minimize: #febc2e;
+  --wc-zoom: #28c840;
+  --wc-close-windows: #c42b1c;
+  --wc-close-windows-text: #fff;
 }
 
 /* What floats over the panels — menus, popovers — one step off them. The

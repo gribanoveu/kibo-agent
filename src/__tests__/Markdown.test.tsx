@@ -175,7 +175,7 @@ describe("a mermaid block", () => {
     const dialog = getByRole("dialog", { name: "Diagram" });
     expect(decodeURIComponent(dialog.querySelector("img")?.getAttribute("src") ?? "")).toContain("big");
     expect(dialog.querySelector(".diagram-view.themed")).toBeTruthy();
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(queryByRole("dialog")).toBeNull();
   });
 

@@ -250,7 +250,7 @@ describe("the Plan tab", () => {
 
     fireEvent.click(screen.getByLabelText("Edit plan"));
     fireEvent.change(screen.getByLabelText("Plan"), { target: { value: "# Two" } });
-    fireEvent.keyDown(screen.getByLabelText("Plan"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("Plan"), { code: "Escape", key: "Escape" });
     expect(edits).toEqual(["# One", "# Two"]);
     expect(screen.queryByLabelText("Plan")).toBeNull();
   });

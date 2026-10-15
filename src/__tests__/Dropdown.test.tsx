@@ -37,7 +37,7 @@ test("closes on an outside pointerdown", () => {
 
 test("closes on Escape", () => {
   open();
-  fireEvent.keyDown(document, { key: "Escape" });
+  fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
@@ -95,10 +95,10 @@ test("a typed value is picked on Enter, and an empty box picks nothing", () => {
   fireEvent.click(screen.getByRole("button", { name: /namespace/ }));
   expect(screen.getByText("The cluster did not list its namespaces")).toBeTruthy();
   const box = screen.getByLabelText("Another namespace") as HTMLInputElement;
-  fireEvent.keyDown(box, { key: "Enter" });
+  fireEvent.keyDown(box, { code: "Enter", key: "Enter" });
   expect(typed).toEqual([]);
   box.value = "  orders ";
-  fireEvent.keyDown(box, { key: "Enter" });
+  fireEvent.keyDown(box, { code: "Enter", key: "Enter" });
   expect(typed).toEqual(["orders"]);
   expect(screen.queryByRole("listbox")).toBeNull();
 });

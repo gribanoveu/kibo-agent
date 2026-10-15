@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MoreVertical } from "lucide-react";
 import "./ChatMenu.css";
+import { matches } from "../lib/shortcuts";
 
 /**
  * One thing the menu can do to the open chat. `hint` is the line under the
@@ -40,7 +41,7 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (matches(e, "close")) setOpen(false);
     };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);

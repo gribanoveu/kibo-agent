@@ -99,7 +99,7 @@ describe("the context meter", () => {
   test("closes on Escape", () => {
     meter();
     openMeter();
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();
   });
 

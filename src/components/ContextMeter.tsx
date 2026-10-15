@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 import "./ContextMeter.css";
+import { matches } from "../lib/shortcuts";
 
 // How full the model's window is, as a ring beside the send button; a click opens
 // what the tokens are spent on and the one thing to do about it — fold the
@@ -52,7 +53,7 @@ export function ContextMeter({ context, usage, running, onCompact, up = false }:
     const onDown = (e: PointerEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => matches(e, "close") && setOpen(false);
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {

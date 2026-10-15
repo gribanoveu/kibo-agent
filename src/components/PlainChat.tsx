@@ -303,7 +303,7 @@ export function PlainChat({
             onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (matches(e, "send") && !e.nativeEvent.isComposing) {
+              if (matches(e, "send")) {
                 e.preventDefault();
                 send();
               }

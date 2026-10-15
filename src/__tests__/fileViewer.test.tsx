@@ -116,7 +116,7 @@ describe("FileViewer", () => {
   test("Escape closes it all", async () => {
     let closed = 0;
     await open(undefined, () => closed++);
-    fireEvent.keyDown(document.querySelector(".file-viewer")!, { key: "Escape" });
+    fireEvent.keyDown(document.querySelector(".file-viewer")!, { code: "Escape", key: "Escape" });
     expect(closed).toBe(1);
   });
 
@@ -278,7 +278,7 @@ describe("FileViewer", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
     expect(rows()).toHaveLength(9);
     // Escape is a key the editor's user presses for other things: it closes nothing here.
-    fireEvent.keyDown(row, { key: "Escape" });
+    fireEvent.keyDown(row, { code: "Escape", key: "Escape" });
     expect(closed).toBe(0);
   });
 

@@ -3,6 +3,8 @@ import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lu
 import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/chat";
 import { certificateCount, EFFORTS, filterModels, pemFromBytes } from "../lib/providerForm";
 import "./ProviderSettings.css";
+import "./Segmented.css";
+import { matches } from "../lib/shortcuts";
 
 // The provider form. Segmented controls rather than the app's dropdown,
 // because a popup menu is clipped by the modal's own overflow — the same
@@ -210,7 +212,7 @@ export function ProviderSettings({
         // implicit submission — which a webview can decline, and which is
         // indistinguishable from a settings panel that does not save.
         onKeyDown={(e) => {
-          if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+          if (!matches(e, "accept") || !(e.target instanceof HTMLInputElement)) return;
           e.preventDefault();
           save();
         }}
@@ -514,7 +516,7 @@ function ModelList({
             onChange={(e) => setQuery(e.target.value)}
             // Enter picks the first match rather than saving the form.
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
+              if (!matches(e, "accept")) return;
               e.preventDefault();
               e.stopPropagation();
               const first = shown[0] ?? typed;

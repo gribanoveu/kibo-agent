@@ -342,7 +342,7 @@ export function FileViewer({
       aria-label="File viewer"
       onKeyDown={(e) => {
         if (e.defaultPrevented) return;
-        if (e.key === "Escape" && !compact) onCloseAll();
+        if (matches(e, "close") && !compact) onCloseAll();
         else if (matches(e, "nextFile") || matches(e, "prevFile")) {
           e.preventDefault();
           step(matches(e, "nextFile") ? 1 : -1);

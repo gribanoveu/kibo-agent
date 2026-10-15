@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { openExternal } from "../lib/window";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { pasteAtPrompt } from "../lib/pasteAtPrompt";
 import { terminalAttach, terminalResize, terminalWrite } from "../lib/terminal";
 import "@xterm/xterm/css/xterm.css";
@@ -78,7 +78,7 @@ export function useTerminalScreen(
     const term = new Terminal({ ...look(element), cursorBlink: true, scrollback: 5000 });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon((_, uri) => void openUrl(uri)));
+    term.loadAddon(new WebLinksAddon((_, uri) => void openExternal(uri)));
     term.open(element);
     shown.current = term;
 

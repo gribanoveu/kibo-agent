@@ -3,6 +3,7 @@ import { Dropdown } from "./Dropdown";
 import { LABELS, toolLabel } from "../lib/describeTool";
 import type { CallStatus, ToolLogFilter, ToolLogRow } from "../lib/chat";
 import "./ToolLog.css";
+import "./Segmented.css";
 
 type Props = {
   rows: ToolLogRow[];

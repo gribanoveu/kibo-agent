@@ -13,6 +13,7 @@ import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type Them
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
 import type { AlertPrefs, Attention } from "../lib/attention";
 import "./Settings.css";
+import "./Segmented.css";
 
 // The settings dialog: one subject per section, picked on the left, so the
 // provider form is not scrolled past to reach the theme.
