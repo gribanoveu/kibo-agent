@@ -132,7 +132,7 @@ where
         let log_call = |entry: ToolCallLogEntry| record(&entry);
         // Read each turn: a runbook the user just wrote is there for this answer.
         let runbooks = runbooks::merged(runbooks_store::own());
-        let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings);
+        let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings)?;
         let features = crate::services::features::enabled();
         let board = Some(board).filter(|_| features.is_on(crate::domain::features::Feature::Board));
         let chat = plain_chat::ChatTurn {

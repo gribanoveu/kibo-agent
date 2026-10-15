@@ -40,6 +40,9 @@ pub struct LlmSettingsView {
     turn_limits: TurnLimits,
     /// Where the key the API keys are sealed under is kept.
     key_store: KeyStore,
+    /// Why the saved API keys cannot be read, when they cannot — every
+    /// provider then shows no key, and this says it is not that none was saved.
+    key_error: Option<String>,
 }
 
 /// Off the main thread: whether each provider has a key is asked of the key
@@ -51,15 +54,21 @@ pub async fn llm_settings_get() -> Result<LlmSettingsView, String> {
 
 fn llm_settings_view() -> Result<LlmSettingsView, String> {
     let settings = settings_store::load().map_err(|e| e.to_string())?.llm;
+    let mut key_error = None;
+    let providers = settings
+        .providers
+        .into_iter()
+        .map(|config| ProviderView {
+            has_api_key: llm_credentials_store::has_api_key(&config.id).unwrap_or_else(|e| {
+                key_error.get_or_insert(e.to_string());
+                false
+            }),
+            config,
+        })
+        .collect();
     Ok(LlmSettingsView {
-        providers: settings
-            .providers
-            .into_iter()
-            .map(|config| ProviderView {
-                has_api_key: llm_credentials_store::has_api_key(&config.id),
-                config,
-            })
-            .collect(),
+        providers,
+        key_error,
         active_provider_id: settings.active_provider_id,
         debug_logging: settings.debug_logging,
         reply_language: settings.reply_language,
@@ -117,12 +126,20 @@ fn save_api_key(id: &str, key: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn web_search_backend_get(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
     // Whether a Tavily key is saved is asked of the key store.
-    super::blocking(move || Ok::<_, String>(backend_in(place))).await
+    super::blocking(move || backend_in(place)).await
 }
 
-fn backend_in(place: WebSearchPlace) -> WebSearchBackend {
-    // An unreadable file is the default's to answer, as for every setting read here.
-    settings_store::load().unwrap_or_default().web_search_in(place, crate::infra::tavily::has_saved_key())
+/// An unreadable settings file is the default's to answer, as for every
+/// setting read here. The saved keys are asked only when the answer turns on
+/// them — a search never chosen, where a Tavily key decides — so keys that
+/// cannot be read stop only what needs one.
+fn backend_in(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
+    let settings = settings_store::load().unwrap_or_default();
+    let without = settings.web_search_in(place, false);
+    if without == settings.web_search_in(place, true) {
+        return Ok(without);
+    }
+    Ok(settings.web_search_in(place, crate::infra::tavily::has_saved_key()?))
 }
 
 #[tauri::command]
@@ -186,33 +203,45 @@ pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
 
 /// Whether `place` is given the web tools: a search chosen there, and
 /// Tavily's with a key.
+///
+/// For the context meter's estimate: keys that cannot be read count as off
+/// here, and the turn itself says why ([`web_for`]).
 pub(crate) fn web_search_on(place: WebSearchPlace) -> bool {
-    backend_in(place).is_on(crate::infra::tavily::has_saved_key())
+    let has_key = crate::infra::tavily::has_saved_key().unwrap_or(false);
+    backend_in(place).is_ok_and(|backend| backend.is_on(has_key))
 }
 
 /// What `place` reaches the web with, as Settings → Web search says; `None`
-/// while it is off there, or Tavily's has no key.
+/// while it is off there, or Tavily's has no key. A search that is on but
+/// cannot be set up — a SearXNG address that is not one, keys that cannot be
+/// read — is an error, and the turn stops with it: quietly without the tools,
+/// the model only says it cannot search, and nobody learns why.
 pub(crate) fn web_for(
     place: WebSearchPlace,
     embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>,
-) -> Option<crate::domain::web_search::Web> {
+) -> Result<Option<crate::domain::web_search::Web>, String> {
     use crate::infra::{open_web, tavily};
-    let search = match backend_in(place) {
-        WebSearchBackend::Off => return None,
+    let fix = |e: String| format!("web search is on but cannot start: {e} — fix it or turn it off in Settings → Web search");
+    let search = match backend_in(place).map_err(fix)? {
+        WebSearchBackend::Off => return Ok(None),
         WebSearchBackend::Searxng => {
-            let base = searxng_base(&web_search_searxng_url_get()).ok()?;
-            open_web::searxng(base, Arc::clone(embeddings)).ok()?
+            let url = web_search_searxng_url_get();
+            let base = searxng_base(&url).map_err(|e| fix(format!("SearXNG's address {url:?} — {e}")))?;
+            open_web::searxng(base, Arc::clone(embeddings)).map_err(|e| fix(e.to_string()))?
         }
-        WebSearchBackend::Tavily => tavily::saved()?,
+        WebSearchBackend::Tavily => match tavily::saved().map_err(|e| fix(e.into()))? {
+            Some(search) => search,
+            None => return Ok(None),
+        },
     };
-    open_web::web(search, Arc::clone(embeddings)).ok()
+    open_web::web(search, Arc::clone(embeddings)).map(Some).map_err(|e| fix(e.to_string()))
 }
 
 /// Whether a key for the chat's web search is saved — all the window learns
 /// of it (`docs/24-web-search.md`).
 #[tauri::command]
 pub async fn web_search_key_status() -> Result<bool, String> {
-    super::blocking(|| Ok::<_, String>(crate::infra::tavily::has_saved_key())).await
+    super::blocking(crate::infra::tavily::has_saved_key).await
 }
 
 /// Seals the Tavily key beside the providers'; an empty one deletes it.
@@ -408,6 +437,78 @@ mod tests {
     use super::*;
     use crate::testing::with_app_dir;
 
+    struct NoModel;
+    impl crate::domain::embeddings::EmbeddingProvider for NoModel {
+        fn embed(&self, _: &[&str]) -> Result<Vec<crate::domain::embeddings::Embedding>, crate::domain::embeddings::EmbeddingError> {
+            Err(crate::domain::embeddings::EmbeddingError::Invalid("no model in this test".into()))
+        }
+        fn dimensions(&self) -> usize {
+            2
+        }
+    }
+
+    /// Saved keys that do not open: a blob sealed under no key of this machine.
+    fn break_the_keys() {
+        let dir = crate::infra::app_dir::ensure().unwrap();
+        crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
+    }
+
+    /// A search turned on that cannot start stops the turn with what to fix,
+    /// rather than leaving the model quietly without its tools.
+    #[test]
+    fn a_search_that_cannot_start_says_why() {
+        with_app_dir("web-broken-address", || {
+            let model: Arc<dyn crate::domain::embeddings::EmbeddingProvider> = Arc::new(NoModel);
+            let mut settings = settings_store::load().unwrap();
+            settings.web_search = Some(WebSearchBackend::Searxng);
+            settings.searxng_url = Some("not a url".into());
+            settings_store::save(&settings).unwrap();
+
+            let Err(why) = web_for(WebSearchPlace::Chat, &model) else { panic!("a broken address started") };
+            assert!(why.contains("SearXNG") && why.contains("Settings → Web search"), "{why}");
+        });
+    }
+
+    /// Keys that cannot be read stop what needs one — Tavily, or a search never
+    /// chosen, which a Tavily key would turn on — and nothing else.
+    #[test]
+    fn unreadable_keys_stop_only_the_search_that_needs_one() {
+        with_app_dir("web-broken-keys", || {
+            let model: Arc<dyn crate::domain::embeddings::EmbeddingProvider> = Arc::new(NoModel);
+            break_the_keys();
+
+            assert!(web_for(WebSearchPlace::Agent, &model).unwrap().is_none(), "the agent's search is off by default");
+            let Err(why) = web_for(WebSearchPlace::Chat, &model) else { panic!("never chosen: the key decides") };
+            assert!(why.contains("does not open"), "{why}");
+            assert!(wait(web_search_key_status()).is_err(), "Settings is told, not shown \"no key\"");
+
+            web_search_backend_set(WebSearchPlace::Chat, WebSearchBackend::Searxng).unwrap();
+            assert!(web_for(WebSearchPlace::Chat, &model).unwrap().is_some(), "SearXNG needs no key");
+            web_search_backend_set(WebSearchPlace::Chat, WebSearchBackend::Tavily).unwrap();
+            assert!(web_for(WebSearchPlace::Chat, &model).is_err());
+        });
+    }
+
+    /// Every provider shows no key then, and Settings says it is not that none
+    /// was saved.
+    #[test]
+    fn settings_say_why_no_key_shows() {
+        with_app_dir("settings-broken-keys", || {
+            llm_provider_save(ProviderConfig {
+                id: "gateway".into(),
+                base_url: "https://llm.example/v1".into(),
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(wait(llm_settings_get()).unwrap().key_error, None);
+
+            break_the_keys();
+            let view = wait(llm_settings_get()).unwrap();
+            assert!(!view.providers[0].has_api_key);
+            assert!(view.key_error.is_some_and(|why| why.contains("does not open")));
+        });
+    }
+
     /// A command run to its end, as the window awaits it.
     fn wait<F: std::future::Future>(command: F) -> F::Output {
         tauri::async_runtime::block_on(command)
@@ -434,18 +535,18 @@ mod tests {
         with_app_dir("web-search-key", || {
             wait(llm_api_key_save("openai".into(), "sk-provider".into())).unwrap();
             assert!(!wait(web_search_key_status()).unwrap());
-            assert!(crate::infra::tavily::saved().is_none());
+            assert!(crate::infra::tavily::saved().unwrap().is_none());
 
             wait(web_search_key_save("  tvly-key  ".into())).unwrap();
             assert!(wait(web_search_key_status()).unwrap());
-            assert!(crate::infra::tavily::saved().is_some());
-            let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap();
+            assert!(crate::infra::tavily::saved().unwrap().is_some());
+            let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap().unwrap();
             assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "tvly-key");
 
             wait(web_search_key_save(" ".into())).unwrap();
             assert!(!wait(web_search_key_status()).unwrap());
-            assert!(crate::infra::tavily::saved().is_none());
-            assert!(llm_credentials_store::has_api_key("openai"));
+            assert!(crate::infra::tavily::saved().unwrap().is_none());
+            assert!(llm_credentials_store::has_api_key("openai").unwrap());
         });
     }
 
@@ -474,7 +575,7 @@ mod tests {
             assert!(view.providers[0].has_api_key, "the key did not survive");
 
             // And it is the key itself that survived, not merely a flag.
-            let stored = llm_credentials_store::get_api_key("gateway").expect("stored");
+            let stored = llm_credentials_store::get_api_key("gateway").unwrap().expect("stored");
             assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "sk-live");
         });
     }

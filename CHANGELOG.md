@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-15 When saved API keys cannot be read — the machine's key out of reach, a damaged file — Settings and the chat say so, instead of showing "no key" and failing with the provider's 401; saving the key again fixes it
+- 2026-10-15 Web search that is on but cannot start — a SearXNG address that is not one, unreadable keys — stops the turn with the reason and where to fix it, instead of the model quietly answering that it cannot search
 - 2026-10-15 A Markdown file opened in its own viewer window can only read that file and its text size: the app's other commands — writing files, the terminal, starting a turn — are refused there
 - 2026-10-15 A setting changed while the agent is working — a toggle in Settings while a turn pins its model — is no longer lost or refused, and two saves at once no longer fail with "could not replace"
 - 2026-10-15 The window no longer stalls while the chat list, a long chat, the tool log, Usage or the provider settings load, or while the context meter asks a provider without a pinned model for its models

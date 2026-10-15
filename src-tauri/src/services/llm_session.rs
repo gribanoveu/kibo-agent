@@ -50,7 +50,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
             .ok_or_else(|| LlmError::Message("no LLM provider is configured".to_string()))?,
     };
 
-    let api_key = llm_credentials_store::get_api_key(&config.id);
+    let api_key = llm_credentials_store::get_api_key(&config.id).map_err(|e| LlmError::Message(e.to_string()))?;
     let provider: Arc<dyn LlmProvider> = Arc::from(llm_providers::provider_for(config, api_key)?);
     let model = effective_model(config, provider.as_ref())?;
 
@@ -101,7 +101,10 @@ pub fn effective_model(
 /// model list. The key is the one typed into the form, or else the one stored
 /// under the provider's name.
 pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -> Result<Vec<String>, LlmError> {
-    let api_key = api_key.or_else(|| llm_credentials_store::get_api_key(&config.id));
+    let api_key = match api_key {
+        Some(typed) => Some(typed),
+        None => llm_credentials_store::get_api_key(&config.id).map_err(|e| LlmError::Message(e.to_string()))?,
+    };
     let provider = llm_providers::provider_for(config, api_key)?;
     Ok(provider.list_models()?.into_iter().map(|m| m.id).collect())
 }
@@ -294,6 +297,19 @@ mod tests {
         });
     }
 
+    /// Keys that cannot be read are not "no key": the turn says why rather
+    /// than sending a request the provider answers with 401.
+    #[test]
+    fn unreadable_keys_say_so() {
+        with_app_dir("session-broken-keys", || {
+            configure(vec![provider("local", Some("qwen"))], None);
+            let dir = crate::infra::app_dir::ensure().unwrap();
+            crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
+            let Err(err) = resolve(None) else { panic!("expected an error") };
+            assert!(err.to_string().contains("does not open"), "{err}");
+        });
+    }
+
     #[test]
     fn resolution_uses_the_pinned_model_and_the_key_of_that_provider() {
         with_app_dir("session-resolve", || {
@@ -419,7 +435,7 @@ mod tests {
             remove_provider("local").unwrap();
 
             assert!(settings_store::load().unwrap().llm.providers.is_empty());
-            assert!(!llm_credentials_store::has_api_key("local"));
+            assert!(!llm_credentials_store::has_api_key("local").unwrap());
         });
     }
 

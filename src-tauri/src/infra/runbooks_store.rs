@@ -15,7 +15,7 @@ use crate::infra::app_dir;
 const MAX_FILE_BYTES: u64 = 32 * 1024;
 
 pub fn dir() -> Result<PathBuf, String> {
-    app_dir::dir().map(|dir| dir.join("runbooks").join("kubernetes"))
+    Ok(app_dir::dir()?.join("runbooks").join("kubernetes"))
 }
 
 /// Every runbook in the folder. A missing folder is none; a file that cannot

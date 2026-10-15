@@ -788,7 +788,10 @@ where
         let worktree_of = crate::infra::git_head::worktree_of(&workspace);
         // Read each turn, as the chat's is: a search turned on in Settings is
         // there for the next answer.
-        let web = embeddings.as_ref().and_then(|model| super::settings::web_for(WebSearchPlace::Agent, model));
+        let web = match embeddings.as_ref() {
+            Some(model) => super::settings::web_for(WebSearchPlace::Agent, model)?,
+            None => None,
+        };
         let features = crate::services::features::enabled();
         let board = board.filter(|_| features.is_on(crate::domain::features::Feature::Board));
 

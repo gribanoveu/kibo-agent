@@ -43,6 +43,16 @@ const field = (label: string) => {
 };
 
 describe("editing a provider", () => {
+  /// Keys that cannot be read show as none on every provider; this line is
+  /// how the user learns that is not because none was saved.
+  test("says why no key shows when the saved keys cannot be read", () => {
+    form({ keyError: "llm_credentials.enc does not open with this machine's key — save the API keys again" });
+    expect(screen.getByText(/does not open with this machine's key/)).toBeTruthy();
+    cleanup();
+    form();
+    expect(screen.queryByText(/does not open/)).toBeNull();
+  });
+
   test("opens on the active one, with its values", () => {
     form();
 

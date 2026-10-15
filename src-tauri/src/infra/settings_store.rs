@@ -52,7 +52,7 @@ pub fn save(settings: &AppSettings) -> Result<(), SettingsError> {
 }
 
 fn write(settings: &AppSettings) -> Result<(), SettingsError> {
-    app_dir::ensure().map_err(SettingsError::AppDir)?;
+    app_dir::ensure().map_err(SettingsError::Write)?;
     let text = serde_json::to_string_pretty(settings).map_err(SettingsError::Serialize)?;
     app_dir::write_private(&path()?, text.as_bytes()).map_err(SettingsError::Write)
 }

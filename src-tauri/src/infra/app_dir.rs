@@ -10,19 +10,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::settings::AppDirError;
+
 /// The app directory. Not created — see [`ensure`].
 #[cfg(not(test))]
-pub fn dir() -> Result<PathBuf, String> {
-    dirs::home_dir()
-        .map(|home| home.join(".kibo"))
-        .ok_or_else(|| "no home directory".to_string())
+pub fn dir() -> Result<PathBuf, AppDirError> {
+    dirs::home_dir().map(|home| home.join(".kibo")).ok_or(AppDirError::NoHome)
 }
 
 /// Under test the real home is never used: the suite installs a throwaway
 /// directory, and a test that forgot to gets an error rather than the
 /// developer's own settings and keys.
 #[cfg(test)]
-pub fn dir() -> Result<PathBuf, String> {
+pub fn dir() -> Result<PathBuf, AppDirError> {
     test_support::installed()
 }
 
@@ -95,12 +95,8 @@ pub mod test_support {
     static LOCK: Mutex<()> = Mutex::new(());
     static INSTALLED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-    pub fn installed() -> Result<PathBuf, String> {
-        INSTALLED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| "no app directory is installed for this test".to_string())
+    pub fn installed() -> Result<PathBuf, AppDirError> {
+        INSTALLED.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or(AppDirError::NotInstalled)
     }
 
     /// Serialises every test that touches the app directory, across modules.

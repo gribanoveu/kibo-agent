@@ -41,8 +41,9 @@ export function useWebSearchKey() {
       ([chat, agent]) => setBackends({ chat, agent }),
       (e) => setError(String(e)),
     );
-    searxngUrl().then(setSearxng, () => {});
-    webSearchKeyStatus().then(setHasKey, () => {});
+    searxngUrl().then(setSearxng, (e) => setError(String(e)));
+    // Fails when the saved keys cannot be read — said here, not shown as "no key".
+    webSearchKeyStatus().then(setHasKey, (e) => setError(String(e)));
     void readUsage();
   }, []);
 

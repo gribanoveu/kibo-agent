@@ -166,7 +166,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   };
 
   useEffect(() => {
-    plainChatRoles().then(setRoles, () => {});
+    plainChatRoles().then(setRoles, (e) => setError(String(e)));
     void refresh();
     if (chatId) void open(chatId);
   }, []);

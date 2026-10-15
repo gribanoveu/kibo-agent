@@ -407,6 +407,8 @@ export type LlmSettings = {
   replyLanguage: ReplyLanguage;
   turnLimits: TurnLimits;
   keyStore: KeyStore;
+  /** Why the saved API keys cannot be read, when they cannot: then no provider shows a key, though one was saved. */
+  keyError?: string | null;
 };
 
 export async function llmSettings(): Promise<LlmSettings> {

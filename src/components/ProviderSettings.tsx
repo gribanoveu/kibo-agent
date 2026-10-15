@@ -278,6 +278,7 @@ export function ProviderSettings({
               }}
             />
           </div>
+          {settings?.keyError && <p className="modal-note provider-error">{settings.keyError}</p>}
           <KeyStorage store={settings?.keyStore ?? "file"} busy={busy} onMove={onKeyStore} />
         </section>
 
