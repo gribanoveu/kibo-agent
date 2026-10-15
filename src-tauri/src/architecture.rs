@@ -261,3 +261,36 @@ fn every_event_name_matches_the_window() {
     let missing: Vec<&String> = names.iter().filter(|name| !window.contains(&format!("\"{name}\""))).collect();
     assert!(missing.is_empty(), "events the window does not listen for by this name: {missing:?}");
 }
+
+/// Which window may call which command, as the built app resolves it from
+/// `capabilities/` and the commands `build.rs` declares: the main window all
+/// of them, a Markdown viewer only its own — it shows a file and nothing more,
+/// so a page it renders cannot write files or start a turn.
+#[test]
+fn a_viewer_window_may_call_only_its_own_commands() {
+    let mut context: tauri::Context<tauri::test::MockRuntime> = tauri::generate_context!(test = true);
+    let authority = context.runtime_authority_mut();
+    let allowed = |command: &str, window: &str| {
+        authority.resolve_access(command, window, window, &tauri::ipc::Origin::Local).is_some()
+    };
+    let viewer = format!("{}1", crate::commands::viewer::LABEL);
+    let commands = commands();
+
+    // Undeclared, the ACL knows no app command at all — and the runtime then
+    // lets every window call every one (`webview/mod.rs`, `has_app_manifest`).
+    assert!(
+        commands.iter().any(|command| allowed(&command.name, "main")),
+        "the app declares no commands, so every window may call every one — build.rs passes them to AppManifest"
+    );
+    let mut failures = Vec::new();
+    for command in commands {
+        let name = command.name.as_str();
+        if !allowed(name, "main") {
+            failures.push(format!("{name}: refused in the main window"));
+        }
+        if allowed(name, &viewer) != name.starts_with("viewer_") {
+            failures.push(format!("{name}: {} in a viewer", if allowed(name, &viewer) { "allowed" } else { "refused" }));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

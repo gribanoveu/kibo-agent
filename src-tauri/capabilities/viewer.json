@@ -5,6 +5,9 @@
   "windows": ["viewer-*"],
   "permissions": [
     "core:default",
+    "allow-viewer-file",
+    "allow-viewer-text-scale-get",
+    "allow-viewer-text-scale-set",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",

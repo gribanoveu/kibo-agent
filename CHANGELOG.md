@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-15 A Markdown file opened in its own viewer window can only read that file and its text size: the app's other commands — writing files, the terminal, starting a turn — are refused there
 - 2026-10-15 A setting changed while the agent is working — a toggle in Settings while a turn pins its model — is no longer lost or refused, and two saves at once no longer fail with "could not replace"
 - 2026-10-15 The window no longer stalls while the chat list, a long chat, the tool log, Usage or the provider settings load, or while the context meter asks a provider without a pinned model for its models
 - 2026-10-15 Typing in Japanese, Chinese or Korean in the agent's message box: Enter that picks a word no longer sends the message, and ⌘/Ctrl+Enter no longer sends either — as in the chat
