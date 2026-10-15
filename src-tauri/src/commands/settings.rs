@@ -42,8 +42,14 @@ pub struct LlmSettingsView {
     key_store: KeyStore,
 }
 
+/// Off the main thread: whether each provider has a key is asked of the key
+/// store, which may be the system keychain.
 #[tauri::command]
-pub fn llm_settings_get() -> Result<LlmSettingsView, String> {
+pub async fn llm_settings_get() -> Result<LlmSettingsView, String> {
+    super::blocking(llm_settings_view).await
+}
+
+fn llm_settings_view() -> Result<LlmSettingsView, String> {
     let settings = settings_store::load().map_err(|e| e.to_string())?.llm;
     Ok(LlmSettingsView {
         providers: settings
@@ -93,11 +99,15 @@ pub fn llm_provider_remove(id: String) -> Result<(), String> {
 /// Seals the key under the app master key. There is no command that reads one
 /// back, which is the point.
 #[tauri::command]
-pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
+pub async fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
+    super::blocking(move || save_api_key(&id, &key)).await
+}
+
+fn save_api_key(id: &str, key: &str) -> Result<(), String> {
     if key.trim().is_empty() {
-        return llm_credentials_store::delete_api_key(&id);
+        return llm_credentials_store::delete_api_key(id);
     }
-    llm_credentials_store::save_api_key(&id, key.trim())
+    llm_credentials_store::save_api_key(id, key.trim())
 }
 
 /// Which search `webSearch` asks in `place`: the one chosen in Settings → Web
@@ -105,7 +115,12 @@ pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
 ///
 /// [`AppSettings::web_search_in`]: crate::domain::settings::AppSettings::web_search_in
 #[tauri::command]
-pub fn web_search_backend_get(place: WebSearchPlace) -> WebSearchBackend {
+pub async fn web_search_backend_get(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
+    // Whether a Tavily key is saved is asked of the key store.
+    super::blocking(move || Ok::<_, String>(backend_in(place))).await
+}
+
+fn backend_in(place: WebSearchPlace) -> WebSearchBackend {
     // An unreadable file is the default's to answer, as for every setting read here.
     settings_store::load().unwrap_or_default().web_search_in(place, crate::infra::tavily::has_saved_key())
 }
@@ -178,7 +193,7 @@ pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
 /// Whether `place` is given the web tools: a search chosen there, and
 /// Tavily's with a key.
 pub(crate) fn web_search_on(place: WebSearchPlace) -> bool {
-    web_search_backend_get(place).is_on(crate::infra::tavily::has_saved_key())
+    backend_in(place).is_on(crate::infra::tavily::has_saved_key())
 }
 
 /// What `place` reaches the web with, as Settings → Web search says; `None`
@@ -188,7 +203,7 @@ pub(crate) fn web_for(
     embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>,
 ) -> Option<crate::domain::web_search::Web> {
     use crate::infra::{open_web, tavily};
-    let search = match web_search_backend_get(place) {
+    let search = match backend_in(place) {
         WebSearchBackend::Off => return None,
         WebSearchBackend::Searxng => {
             let base = searxng_base(&web_search_searxng_url_get()).ok()?;
@@ -202,14 +217,14 @@ pub(crate) fn web_for(
 /// Whether a key for the chat's web search is saved — all the window learns
 /// of it (`docs/24-web-search.md`).
 #[tauri::command]
-pub fn web_search_key_status() -> bool {
-    crate::infra::tavily::has_saved_key()
+pub async fn web_search_key_status() -> Result<bool, String> {
+    super::blocking(|| Ok::<_, String>(crate::infra::tavily::has_saved_key())).await
 }
 
 /// Seals the Tavily key beside the providers'; an empty one deletes it.
 #[tauri::command]
-pub fn web_search_key_save(key: String) -> Result<(), String> {
-    llm_api_key_save(crate::infra::tavily::KEY_ID.to_string(), key)
+pub async fn web_search_key_save(key: String) -> Result<(), String> {
+    super::blocking(move || save_api_key(crate::infra::tavily::KEY_ID, &key)).await
 }
 
 /// What the saved key has spent, asked of Tavily; `None` without a key. A
@@ -399,6 +414,11 @@ mod tests {
     use super::*;
     use crate::testing::with_app_dir;
 
+    /// A command run to its end, as the window awaits it.
+    fn wait<F: std::future::Future>(command: F) -> F::Output {
+        tauri::async_runtime::block_on(command)
+    }
+
     #[test]
     fn a_searxng_address_is_saved_as_a_base_and_read_back() {
         with_app_dir("searxng-url", || {
@@ -418,18 +438,18 @@ mod tests {
     #[test]
     fn a_saved_search_key_turns_the_chats_search_on_and_an_empty_one_off() {
         with_app_dir("web-search-key", || {
-            llm_api_key_save("openai".into(), "sk-provider".into()).unwrap();
-            assert!(!web_search_key_status());
+            wait(llm_api_key_save("openai".into(), "sk-provider".into())).unwrap();
+            assert!(!wait(web_search_key_status()).unwrap());
             assert!(crate::infra::tavily::saved().is_none());
 
-            web_search_key_save("  tvly-key  ".into()).unwrap();
-            assert!(web_search_key_status());
+            wait(web_search_key_save("  tvly-key  ".into())).unwrap();
+            assert!(wait(web_search_key_status()).unwrap());
             assert!(crate::infra::tavily::saved().is_some());
             let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap();
             assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "tvly-key");
 
-            web_search_key_save(" ".into()).unwrap();
-            assert!(!web_search_key_status());
+            wait(web_search_key_save(" ".into())).unwrap();
+            assert!(!wait(web_search_key_status()).unwrap());
             assert!(crate::infra::tavily::saved().is_none());
             assert!(llm_credentials_store::has_api_key("openai"));
         });
@@ -451,10 +471,10 @@ mod tests {
     fn a_saved_key_is_reported_as_stored() {
         with_app_dir("cmd-settings-key", || {
             llm_provider_save(provider("gateway")).unwrap();
-            llm_api_key_save("gateway".to_string(), "sk-live".to_string()).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
             llm_active_provider_set(Some("gateway".to_string())).unwrap();
 
-            let view = llm_settings_get().unwrap();
+            let view = wait(llm_settings_get()).unwrap();
             assert_eq!(view.active_provider_id.as_deref(), Some("gateway"));
             assert_eq!(view.providers.len(), 1);
             assert!(view.providers[0].has_api_key, "the key did not survive");
@@ -480,7 +500,7 @@ mod tests {
             let parsed: ProviderConfig = serde_json::from_value(wire).expect("accepted");
 
             llm_provider_save(parsed).unwrap();
-            assert_eq!(llm_settings_get().unwrap().providers.len(), 1);
+            assert_eq!(wait(llm_settings_get()).unwrap().providers.len(), 1);
         });
     }
 
@@ -490,10 +510,10 @@ mod tests {
     fn an_emptied_key_box_removes_the_key() {
         with_app_dir("cmd-settings-clear", || {
             llm_provider_save(provider("gateway")).unwrap();
-            llm_api_key_save("gateway".to_string(), "sk-live".to_string()).unwrap();
-            llm_api_key_save("gateway".to_string(), "  ".to_string()).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "  ".to_string())).unwrap();
 
-            assert!(!llm_settings_get().unwrap().providers[0].has_api_key);
+            assert!(!wait(llm_settings_get()).unwrap().providers[0].has_api_key);
         });
     }
 
@@ -505,7 +525,7 @@ mod tests {
             assert!(llm_provider_save(with(Some(-0.1), None)).is_err());
             assert!(llm_provider_save(with(None, Some(1.5))).is_err());
             llm_provider_save(with(Some(2.0), Some(0.0))).unwrap();
-            let saved = &llm_settings_get().unwrap().providers[0].config;
+            let saved = &wait(llm_settings_get()).unwrap().providers[0].config;
             assert_eq!((saved.temperature, saved.top_p), (Some(2.0), Some(0.0)));
         });
     }
@@ -518,7 +538,7 @@ mod tests {
             let err = llm_provider_save(with("not a certificate")).expect_err("refused");
             assert!(err.contains("certificate"), "{err}");
             llm_provider_save(with("  \n")).unwrap();
-            assert_eq!(llm_settings_get().unwrap().providers[0].config.trusted_cert_pem, None);
+            assert_eq!(wait(llm_settings_get()).unwrap().providers[0].config.trusted_cert_pem, None);
         });
     }
 

@@ -239,22 +239,22 @@ pub async fn plain_chat_preview<R: Runtime>(
 
 /// Chat mode's conversations, newest first — whatever folder is open.
 #[tauri::command]
-pub fn plain_chat_list() -> Result<Vec<ChatSummary>, String> {
-    chat_store::list(NO_FOLDER).map_err(|e| e.to_string())
+pub async fn plain_chat_list() -> Result<Vec<ChatSummary>, String> {
+    super::blocking(|| chat_store::list(NO_FOLDER)).await
 }
 
 /// Writes the conversation as it now stands: as a message is sent, and again
 /// with the reply. `messages` is what the model is sent; `blocks` what the
 /// window draws, thinking included — opaque here, as the agent's are.
 #[tauri::command]
-pub fn plain_chat_save(
+pub async fn plain_chat_save(
     id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
     blocks: serde_json::Value,
 ) -> Result<ChatSummary, String> {
-    chat_store::save_plain(&id, role, kube, &messages, &blocks).map_err(|e| e.to_string())
+    super::blocking(move || chat_store::save_plain(&id, role, kube, &messages, &blocks)).await
 }
 
 /// Returns at once; the reply stops at its next chunk.

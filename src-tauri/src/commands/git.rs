@@ -55,10 +55,7 @@ async fn in_repo<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
     op: impl FnOnce(PathBuf) -> Result<T, E> + Send + 'static,
 ) -> Result<T, String> {
     let root = state.workspace()?;
-    tauri::async_runtime::spawn_blocking(move || op(root))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    super::blocking(move || op(root)).await
 }
 
 #[tauri::command]

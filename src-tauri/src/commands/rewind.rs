@@ -9,6 +9,7 @@ use crate::domain::rewind::{FileChange, FileRewind};
 use crate::domain::tools::ToolScope;
 use crate::services::rewind;
 
+use super::blocking;
 use super::chat::AgentState;
 
 fn scope(state: &AgentState) -> Result<ToolScope, String> {
@@ -17,12 +18,14 @@ fn scope(state: &AgentState) -> Result<ToolScope, String> {
 
 /// What a rewind would do, file by file. Touches nothing.
 #[tauri::command]
-pub fn rewind_preview(changes: Vec<FileChange>, state: State<'_, Arc<AgentState>>) -> Result<Vec<FileRewind>, String> {
-    Ok(rewind::preview(&scope(&state)?, &changes))
+pub async fn rewind_preview(changes: Vec<FileChange>, state: State<'_, Arc<AgentState>>) -> Result<Vec<FileRewind>, String> {
+    let scope = scope(&state)?;
+    blocking(move || Ok::<_, String>(rewind::preview(&scope, &changes))).await
 }
 
 /// Does it, and says how each file went.
 #[tauri::command]
-pub fn rewind_apply(changes: Vec<FileChange>, state: State<'_, Arc<AgentState>>) -> Result<Vec<FileRewind>, String> {
-    Ok(rewind::apply(&scope(&state)?, &changes))
+pub async fn rewind_apply(changes: Vec<FileChange>, state: State<'_, Arc<AgentState>>) -> Result<Vec<FileRewind>, String> {
+    let scope = scope(&state)?;
+    blocking(move || Ok::<_, String>(rewind::apply(&scope, &changes))).await
 }

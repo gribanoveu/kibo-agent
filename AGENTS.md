@@ -67,7 +67,7 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 
 - Every `#[tauri::command]` gets a matching typed wrapper in `src/lib/` — components/hooks call the wrapper, never `invoke()` directly.
 - New commands must be registered in `generate_handler![]` in `lib.rs` (`main.rs` only calls `run()`), and any new plugin/API surface needs a corresponding entry in `src-tauri/capabilities/*.json` — a command that "does nothing" at runtime usually means a missing capability entry, not a missing registration.
-- A synchronous `#[tauri::command]` runs on the main thread, so a command that touches the disk, SQLite, git, the keychain or the network is `async` and does its work in `spawn_blocking` (`in_repo` in `commands/git.rs` is the pattern) — otherwise the window freezes while it runs. Only commands that read or change in-memory state (`chat_cancel`, `workspace_current`) stay plain `fn`. Long-running git operations (clone, fetch) are the extreme case of the same rule.
+- A synchronous `#[tauri::command]` runs on the main thread, so a command that touches SQLite, git, the keychain, the user's files, a process or the network is `async` and does its work through `commands::blocking` (`spawn_blocking` underneath) — otherwise the window freezes while it runs. Plain `fn` is for in-memory state (`chat_cancel`, `workspace_current`) and for reading or writing the app's own small settings file. `architecture.rs` (`a_command_that_waits_on_io_is_async`) holds the list of what counts as slow; a new slow module goes there.
 
 ### Keeping the frontend current
 

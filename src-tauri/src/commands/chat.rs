@@ -247,17 +247,18 @@ pub fn workspace_current(state: State<'_, Arc<AgentState>>) -> Option<String> {
 /// The branch checked out in the open folder; `None` when it is not a
 /// repository or nothing is open.
 #[tauri::command]
-pub fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Option<String> {
-    let root = state.workspace.lock().ok()?.clone()?;
-    crate::infra::git_head::current_branch(&root)
+pub async fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Ok(root) = state.workspace() else { return Ok(None) };
+    super::blocking(move || Ok::<_, String>(crate::infra::git_head::current_branch(&root))).await
 }
 
 /// The main working tree when the open folder is a worktree of it; `None`
 /// for an ordinary folder or repository.
 #[tauri::command]
-pub fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Option<String> {
-    let root = state.workspace.lock().ok()?.clone()?;
-    crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())
+pub async fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Ok(root) = state.workspace() else { return Ok(None) };
+    super::blocking(move || Ok::<_, String>(crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())))
+        .await
 }
 
 /// The open folder's index as it stands — what a window that was not
@@ -339,12 +340,11 @@ pub async fn chat_resume<R: Runtime>(
 /// Asked for the whole round at once: the card shows every call, and one round
 /// trip beats one per call. Nothing here runs anything.
 #[tauri::command]
-pub fn chat_preview(
+pub async fn chat_preview(
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
     let workspace = state.workspace()?;
-    let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -353,7 +353,12 @@ pub fn chat_preview(
             arguments: call.arguments,
         })
         .collect();
-    Ok(preview::preview_round(&scope, &calls))
+    // Reads the files the calls would change, and diffs them.
+    super::blocking(move || {
+        let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
+        Ok::<_, String>(preview::preview_round(&scope, &calls))
+    })
+    .await
 }
 
 /// What the conversation looks like once the older part of it is a summary.
@@ -430,18 +435,23 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>) -> Result<Option<Llm
 ///
 /// Asked rather than computed there: the numbers on the meter have to be the
 /// ones that decide, or a reader watches a gauge that is not connected to the
-/// thing it appears to measure. Cheap — arithmetic over the history, one
-/// serialization of the tool schemas and a read of the rules and skills, no
-/// provider call — so it is a plain command rather than another thread.
+/// thing it appears to measure. Not cheap enough for the main thread: the
+/// session reads the key, and with no model pinned asks the provider for its
+/// list and saves the first as the pin; the frame reads the rules, skills and
+/// the repository.
 #[tauri::command]
-pub fn chat_context_usage(
+pub async fn chat_context_usage(
     messages: Vec<LlmMessage>,
     plan: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
-    let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-    Ok(context_compaction::usage(&session, next_request_frame(&app, &state, plan.as_deref()), &messages))
+    let state = Arc::clone(&state);
+    super::blocking(move || {
+        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, plan.as_deref()), &messages))
+    })
+    .await
 }
 
 /// What the next turn will send in front of the conversation: the prompt
@@ -487,7 +497,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
 /// transcript shows it. `None` when there is nothing to journal — the turn is
 /// not the last one that ended, was journaled already, or said nothing.
 #[tauri::command]
-pub fn next_prompt_log(
+pub async fn next_prompt_log(
     chat_id: String,
     turn_id: String,
     user: String,
@@ -497,13 +507,13 @@ pub fn next_prompt_log(
         return Ok(None);
     };
     let input = finished.model_input(&user, &home());
-    crate::infra::next_prompt_log::record(&chat_id, &input).map(Some).map_err(|e| e.to_string())
+    super::blocking(move || crate::infra::next_prompt_log::record(&chat_id, &input).map(Some)).await
 }
 
 /// What the user sent after the journaled turn `id`.
 #[tauri::command]
-pub fn next_prompt_sent(id: String, text: String) -> Result<(), String> {
-    crate::infra::next_prompt_log::record_sent(&id, &next_prompt::clean(&text, &home())).map_err(|e| e.to_string())
+pub async fn next_prompt_sent(id: String, text: String) -> Result<(), String> {
+    super::blocking(move || crate::infra::next_prompt_log::record_sent(&id, &next_prompt::clean(&text, &home()))).await
 }
 
 fn home() -> String {

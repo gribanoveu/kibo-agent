@@ -161,9 +161,16 @@ fn string_errors_outside_commands_only_decrease() {
     assert!(count == STRING_ERRORS, "down to {count} from {STRING_ERRORS} — lower STRING_ERRORS to {count}");
 }
 
-/// The names of the `#[tauri::command]` functions under `commands/`.
-fn commands() -> Vec<String> {
-    let mut names = Vec::new();
+struct Command {
+    name: String,
+    sync: bool,
+    /// From the signature to the closing brace.
+    body: Vec<String>,
+}
+
+/// The `#[tauri::command]` functions under `commands/`.
+fn commands() -> Vec<Command> {
+    let mut found = Vec::new();
     for (_, code) in sources("commands") {
         let mut lines = code.iter();
         while let Some(line) = lines.next() {
@@ -172,12 +179,45 @@ fn commands() -> Vec<String> {
             }
             let signature = lines.find(|l| l.contains("fn ")).expect("a command attribute with no fn after it");
             let name = signature.split("fn ").nth(1).unwrap();
-            let name: String = name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-            names.push(name);
+            let name = name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let mut body = vec![signature.clone()];
+            let mut opened = signature.contains('{');
+            let mut depth = signature.matches('{').count() as i64 - signature.matches('}').count() as i64;
+            while !opened || depth > 0 {
+                let Some(line) = lines.next() else { break };
+                opened |= line.contains('{');
+                depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                body.push(line.clone());
+            }
+            found.push(Command { name, sync: !signature.contains("async fn "), body });
         }
     }
-    assert!(names.len() > 100, "read {} commands: the attribute or the folder moved?", names.len());
-    names
+    assert!(found.len() > 100, "read {} commands: the attribute or the folder moved?", found.len());
+    found
+}
+
+/// What a command reaches that can take long enough to freeze the window:
+/// SQLite, git, the keychain, the provider, the user's files.
+const SLOW: &[&str] = &[
+    "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
+    "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",
+];
+
+/// Sync commands that reach one of [`SLOW`] today. Only shrinks.
+const SLOW_SYNC_KNOWN: &[&str] = &[];
+
+/// A synchronous command runs on the main thread (AGENTS.md, IPC conventions).
+#[test]
+fn a_command_that_waits_on_io_is_async() {
+    let slow: Vec<String> = commands()
+        .into_iter()
+        .filter(|command| command.sync && command.body.iter().any(|line| SLOW.iter().any(|s| line.contains(s))))
+        .map(|command| command.name)
+        .collect();
+    let new: Vec<&String> = slow.iter().filter(|name| !SLOW_SYNC_KNOWN.contains(&name.as_str())).collect();
+    assert!(new.is_empty(), "synchronous commands that block the window — make them async with commands::blocking: {new:?}");
+    let fixed: Vec<&&str> = SLOW_SYNC_KNOWN.iter().filter(|name| !slow.iter().any(|s| s == *name)).collect();
+    assert!(fixed.is_empty(), "async now or no longer slow — delete from SLOW_SYNC_KNOWN: {fixed:?}");
 }
 
 /// The window's IPC layer: every `.ts` under `src/lib`, as one text.
@@ -197,7 +237,7 @@ fn every_command_is_registered_and_wrapped() {
     let window = window_lib();
     let failures: Vec<String> = commands()
         .into_iter()
-        .flat_map(|name| {
+        .flat_map(|Command { name, .. }| {
             let unregistered = (!registered.contains(name.as_str())).then(|| format!("{name}: not in generate_handler!"));
             let unwrapped = (!window.contains(&format!("\"{name}\""))).then(|| format!("{name}: no wrapper in src/lib/"));
             unregistered.into_iter().chain(unwrapped)
