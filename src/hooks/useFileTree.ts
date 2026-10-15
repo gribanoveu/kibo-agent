@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onGitChanged, onIndexEvent, workspaceList, type FolderListing } from "../lib/chat";
+import { type FolderListing, onFolderChanged, workspaceList } from "../lib/chat";
 
 /**
  * The open folder as a tree, one folder read at a time as it is unfolded —
@@ -53,14 +53,12 @@ export function useFileTree(visible: boolean, workspace: string | null) {
     if (!visible || !workspace) return;
     const reload = () => ["", ...open.current].forEach((dir) => load(dir));
     reload();
-    const stops: (() => void)[] = [];
+    let unlisten: (() => void) | undefined;
     let live = true;
-    const keep = (stop: () => void) => (live ? stops.push(stop) : stop());
-    onIndexEvent((event) => event.root === workspace && event.kind === "syncStarted" && reload()).then(keep);
-    onGitChanged((root) => root === workspace && reload()).then(keep);
+    onFolderChanged(workspace, () => reload()).then((off) => (live ? (unlisten = off) : off()));
     return () => {
       live = false;
-      stops.forEach((stop) => stop());
+      unlisten?.();
     };
   }, [visible, workspace, load]);
 

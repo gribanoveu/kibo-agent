@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fileView, onGitChanged, onIndexEvent, type FileTarget, type FileView } from "../lib/chat";
+import { type FileTarget, type FileView, fileView, onFolderChanged } from "../lib/chat";
 
 /**
  * The two versions of the file the viewer shows, read when it opens and again
@@ -35,13 +35,11 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
     reload.current = { path, side, load };
     setView(null);
     void load();
-    const stops: (() => void)[] = [];
-    const keep = (stop: () => void) => (live ? stops.push(stop) : stop());
-    onIndexEvent((event) => event.root === workspace && event.kind === "syncStarted" && void load()).then(keep);
-    onGitChanged((root) => root === workspace && void load()).then(keep);
+    let unlisten: (() => void) | undefined;
+    onFolderChanged(workspace, () => void load()).then((off) => (live ? (unlisten = off) : off()));
     return () => {
       live = false;
-      stops.forEach((stop) => stop());
+      unlisten?.();
     };
   }, [path, side, workspace]);
 

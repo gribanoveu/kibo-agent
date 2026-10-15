@@ -1177,6 +1177,20 @@ export async function onGitChanged(handler: (root: string) => void): Promise<Unl
   return listen<{ root: string }>(GIT_EVENT, ({ payload }) => handler(payload.root));
 }
 
+/**
+ * Something in the folder `root` changed: its tree (the index's watcher
+ * starting a sync) or its `.git`, which that watcher leaves out. The two
+ * signals a view of the folder reads again on, as one. No folder (`null`)
+ * hears nothing.
+ */
+export async function onFolderChanged(root: string | null, handler: () => void): Promise<UnlistenFn> {
+  const stops = await Promise.all([
+    onIndexEvent((event) => event.root === root && event.kind === "syncStarted" && handler()),
+    onGitChanged((changed) => changed === root && handler()),
+  ]);
+  return () => stops.forEach((stop) => stop());
+}
+
 /** Mirrors `domain::git_changes::ChangeTotals`: the open folder against the last commit. */
 export type ChangeTotals = { files: number; add: number; del: number };
 

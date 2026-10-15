@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+import { useLiveRead } from "./useLiveRead";
 import { boardChange, boardList, onBoardChanged, type BoardChange, type Card } from "../lib/board";
 
 /**
@@ -6,28 +7,7 @@ import { boardChange, boardList, onBoardChanged, type BoardChange, type Card } f
  * backend says it changed — a card the model just added shows up on its own.
  */
 export function useBoard() {
-  const [cards, setCards] = useState<Card[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      boardList().then(
-        (list) => {
-          if (!live) return;
-          setCards(list);
-          setError(null);
-        },
-        (e) => live && setError(String(e)),
-      );
-    load();
-    let unlisten: (() => void) | undefined;
-    onBoardChanged(() => void load()).then((off) => (live ? (unlisten = off) : off()));
-    return () => {
-      live = false;
-      unlisten?.();
-    };
-  }, []);
+  const { value: cards, setValue: setCards, error, setError } = useLiveRead(boardList, onBoardChanged, [] as Card[]);
 
   const change = useCallback(async (next: BoardChange) => {
     try {

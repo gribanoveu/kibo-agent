@@ -1,13 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
+import { useFileSave } from "../hooks/useFileSave";
 import { useFileView } from "../hooks/useFileView";
 import { fileRows, paintRows, type Painted } from "../lib/diffRows";
 import { highlight, languageOf } from "../lib/highlight";
-import { fileWrite, type FileSide, type FileTarget } from "../lib/chat";
+import { type FileSide, type FileTarget } from "../lib/chat";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { AsciiDocPreview, PlantumlPreview } from "./AsciiDocPreview";
-import { sameFile, sameText, stepThrough, type Edits } from "../hooks/useOpenFiles";
+import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
 import { matches } from "../lib/shortcuts";
@@ -180,60 +181,10 @@ export function FileViewer({
   const draft = draftOf(target);
   const onDisk = view && !view.unviewable ? view.new : null;
   const editing = compact && edits && target.side === "worktree" && shown === "file" && view && !view.unviewable;
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { saving, saveError, unsaved, inflight, persist } = useFileSave(workspace, edits, reload);
   // The file changed on disk under the edit — the agent wrote it, or it is
   // gone. Not while a save is landing: the re-read comes before the draft goes.
   const stale = !!draft && !!view && !view.unviewable && draft.base !== onDisk && !saving;
-  // The files whose last save did not land, by path, which a closing tab
-  // waits on; and the save under way. A save right after one that landed has
-  // nothing to write: the re-read told the editor what the disk holds.
-  const unsaved = useRef(new Set<string>());
-  const inflight = useRef<Promise<unknown> | null>(null);
-
-  /**
-   * Writes `file`'s text over `from`, the disk version it was made on — if it
-   * says anything that is not there yet. Not over a file that changed on disk
-   * under the edit (`conflict`): the banner asks first.
-   */
-  const persist = (file: FileTarget, text: string, from: string | null, conflict: boolean) => {
-    const path = file.path;
-    if (sameText(from, text)) {
-      if (!inflight.current) unsaved.current.delete(path);
-      return;
-    }
-    // ponytail: a second save while one is landing waits for the next pause,
-    // blur or tab change; queue it if typing that fast turns out to matter.
-    if (conflict || inflight.current) {
-      unsaved.current.add(path);
-      return;
-    }
-    setSaving(true);
-    setSaveError(null);
-    const run = (async () => {
-      try {
-        const saved = (await fileWrite(workspace ?? "", path, from, text)).kind === "saved";
-        const now = await reload(file);
-        if (saved) {
-          unsaved.current.delete(path);
-          // Typed on while it was written: what came after stays a draft, now
-          // over the text just saved. A tab not on screen had no one typing.
-          const disk = now && !now.unviewable ? now.new : null;
-          if (disk !== null) edits?.rebase(path, disk);
-          else edits?.drop(path);
-        } else {
-          unsaved.current.add(path);
-        }
-      } catch (e) {
-        unsaved.current.add(path);
-        setSaveError(String(e));
-      } finally {
-        inflight.current = null;
-        setSaving(false);
-      }
-    })();
-    inflight.current = run;
-  };
   // From the editor: ⌘S, a pause, focus leaving, the tab going. `base` is what
   // the text was made on — saved straight after typing, before any draft, the
   // disk may already hold something newer.

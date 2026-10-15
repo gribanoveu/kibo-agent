@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { gitTotals, onGitChanged, onIndexEvent, type ChangeTotals } from "../lib/chat";
+import { type ChangeTotals, gitTotals, onFolderChanged } from "../lib/chat";
 
 /**
  * Lines added and removed in the open folder since the last commit, for the
@@ -20,13 +20,11 @@ export function useChangeTotals(workspace: string | null): ChangeTotals | null {
         () => live && setTotals(null),
       );
     void load();
-    const stops: (() => void)[] = [];
-    const keep = (stop: () => void) => (live ? stops.push(stop) : stop());
-    onIndexEvent((event) => event.root === workspace && event.kind === "syncStarted" && void load()).then(keep);
-    onGitChanged((root) => root === workspace && void load()).then(keep);
+    let unlisten: (() => void) | undefined;
+    onFolderChanged(workspace, () => void load()).then((off) => (live ? (unlisten = off) : off()));
     return () => {
       live = false;
-      stops.forEach((stop) => stop());
+      unlisten?.();
     };
   }, [workspace]);
 
