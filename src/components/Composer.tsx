@@ -300,7 +300,7 @@ export function Composer({
                   setDismissed(true);
                   return;
                 }
-                if (offered.length > 0 && e.key === "Enter" && !e.shiftKey) {
+                if (offered.length > 0 && matches(e, "send") && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   pick(offered[at]);
                   return;
@@ -309,7 +309,8 @@ export function Composer({
               if (matches(e, "queue")) {
                 e.preventDefault();
                 queue();
-              } else if (e.key === "Enter" && !e.shiftKey) {
+              } else if (matches(e, "send") && !e.nativeEvent.isComposing) {
+                // Not mid-composition: there Enter commits the IME's word.
                 e.preventDefault();
                 send();
               }

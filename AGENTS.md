@@ -51,7 +51,7 @@ src-tauri/src/
 
 Dependency direction points inward: `commands → services → domain`, and `infra` implements traits that `domain`/`services` define — never the reverse. Don't reach for `git2` or `tauri::` types from inside `domain/` or `services/`.
 
-**Reporting outward crosses a port, never an `AppHandle`.** A service that needs to tell the UI something takes a sink — `Arc<dyn Fn(Event) + Send + Sync>`, with the event type in `domain/` — and the command layer is the only place that turns those into Tauri events. The one that exists here today is `domain::turn::ChatEventSink`, adapted in `commands/chat_events.rs`; `domain::command_exec::CommandSink` is the same shape one layer down. The index layer's is `domain::workspace_index::IndexEventSink` (one `IndexEvent` enum: sync started, keywords ready, embedding progress, sync finished, failed), taken by `services::index_sync::RepoIndexer::sync` and `services::workspace_index::WorkspaceIndex::open`, adapted in `commands/workspace_events.rs`. The background processes' is `domain::background::ProcessEventSink` (one `ProcessChanged { id }` signal), taken by `infra::background::Processes::new`, adapted in `commands/processes.rs`. The helper agents' is `domain::agents::AgentEventSink` (one `AgentChanged { id }` signal), taken by `domain::agents::Agents::new`, adapted in `commands/agents.rs`. When a service reports more than one kind of thing, use one enum rather than several callbacks. `tauri::async_runtime` used purely as a thread pool (`spawn_blocking`) is fine in `services/` — that's a runtime, not the UI.
+**Reporting outward crosses a port, never an `AppHandle`.** A service that needs to tell the UI something takes a sink — `Arc<dyn Fn(Event) + Send + Sync>`, with the event type in `domain/` — and the command layer is the only place that turns those into Tauri events. The one that exists here today is `domain::turn::ChatEventSink`, adapted in `commands/chat_events.rs`; `domain::command_exec::CommandSink` is the same shape one layer down. The index layer's is `domain::workspace_index::IndexEventSink` (one `IndexEvent` enum: sync started, keywords ready, embedding progress, sync finished, failed), taken by `services::index_sync::RepoIndexer::sync` and `services::workspace_index::WorkspaceIndex::open`, adapted in `commands/workspace_events.rs`. The background processes' is `domain::background::ProcessEventSink` (one `ProcessChanged { id }` signal), taken by `infra::background::Processes::new`, adapted in `commands/processes.rs`. The helper agents' is `domain::agents::AgentEventSink` (one `AgentChanged { id }` signal), taken by `domain::agents::Agents::new`, adapted in `commands/agents.rs`. The board's is `domain::board::BoardEventSink` (one `BoardChanged` signal), taken by `infra::board_store::Board::new`, adapted in `commands/board.rs`; the terminals' is `domain::terminal::TerminalEventSink` (one `TerminalChanged { id }` signal), taken by `infra::terminal::Terminals::new`, adapted in `commands/terminal.rs`. When a service reports more than one kind of thing, use one enum rather than several callbacks. `tauri::async_runtime` used purely as a thread pool (`spawn_blocking`) is fine in `services/` — that's a runtime, not the UI.
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
@@ -67,7 +67,7 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 
 - Every `#[tauri::command]` gets a matching typed wrapper in `src/lib/` — components/hooks call the wrapper, never `invoke()` directly.
 - New commands must be registered in `generate_handler![]` in `lib.rs` (`main.rs` only calls `run()`), and any new plugin/API surface needs a corresponding entry in `src-tauri/capabilities/*.json` — a command that "does nothing" at runtime usually means a missing capability entry, not a missing registration.
-- Long-running git operations (clone, fetch) run as `async` commands or via `spawn_blocking`, not on the IPC event loop.
+- A synchronous `#[tauri::command]` runs on the main thread, so a command that touches the disk, SQLite, git, the keychain or the network is `async` and does its work in `spawn_blocking` (`in_repo` in `commands/git.rs` is the pattern) — otherwise the window freezes while it runs. Only commands that read or change in-memory state (`chat_cancel`, `workspace_current`) stay plain `fn`. Long-running git operations (clone, fetch) are the extreme case of the same rule.
 
 ### Keeping the frontend current
 
@@ -80,7 +80,7 @@ The frontend does not poll the backend for state. When backend state changes, th
 - **Reuse a signal before adding one.** A change to the working tree already arrives as the index's `syncStarted`; `.git` is the one part that watcher leaves out, which is why `workspace-git:changed` exists. A new channel is for a change no existing one reports.
 - **Listen only while it matters.** A hook subscribes while its pane is on screen and unsubscribes on cleanup (`useStaging` is the pattern), reading once when it starts listening — what changed while it was hidden is not replayed.
 - **A source that changes fast is throttled where it changes**, not in the listener. A background process writing a line per millisecond is signalled at most once per 100 ms tick (`infra/background.rs`, `watch`), so the IPC channel never carries a burst the frontend then has to debounce.
-- Wrappers in `src/lib/` own the channel: `onIndexEvent`, `onGitChanged`, `onProcessChanged`, `onAgentChanged`, `onTurnEvent` — components and hooks never call `listen()` directly, as with `invoke()`.
+- Wrappers in `src/lib/` own the channel: `onIndexEvent`, `onGitChanged`, `onProcessChanged`, `onAgentChanged`, `onTurnEvent`, `onBoardChanged`, `onFeaturesChanged`, `onTerminalChanged` — components and hooks never call `listen()` directly, as with `invoke()`.
 
 A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 
@@ -95,6 +95,7 @@ A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 - Prefer immutable data and explicit, exhaustive error handling (`match` over ignoring `Err`).
 - Keep abstractions proportionate to actual need — don't add a layer, trait, or generic parameter for a hypothetical future case.
 - Match existing patterns in the file/module you're editing before introducing a new one.
+- A `ponytail:` comment marks a deliberate shortcut and names its ceiling and the way past it (a poll where no event exists yet, one lock for a whole file). It is not a bug to fix in passing: change it when the ceiling is actually hit, and move or update the comment with it.
 
 ### UI
 

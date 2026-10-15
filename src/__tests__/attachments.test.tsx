@@ -84,7 +84,7 @@ function box({ imagesEnabled = true, running = false } = {}) {
   const area = screen.getByRole("textbox");
   const paste = (files: File[]) => fireEvent.paste(area, { clipboardData: { files } });
   const type = (text: string) => fireEvent.change(area, { target: { value: text } });
-  const enter = () => fireEvent.keyDown(area, { key: "Enter" });
+  const enter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
   return { sent, area, paste, type, enter };
 }
 

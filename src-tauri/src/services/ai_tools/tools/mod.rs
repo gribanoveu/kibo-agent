@@ -102,14 +102,10 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
-/// What the model is offered for a turn.
-///
-/// No filtering argument: this build has one axis of control, the approval
-/// gate, and it acts on a call rather than on what may be described. Alfa
-/// Atlas filters here by a project allowlist and a conversation mode; the
-/// first is not ported (`docs/07-upstream-findings.md`, B-2), the second
-/// arrives with conversation modes at stage 4 — and it will be a filter on
-/// this list, not a second list.
+/// Every tool the model can be offered. No filtering argument: what a turn
+/// actually offers — by mode or role, web search and features — is a filter
+/// on this list (`llm_chat::tool_definitions_for`, `tool_definitions_for_role`),
+/// not a second list.
 pub fn tool_definitions() -> Vec<LlmToolDefinition> {
     DEFINITIONS.iter().map(|(_, build)| build()).collect()
 }

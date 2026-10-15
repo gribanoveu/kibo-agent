@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-15 Typing in Japanese, Chinese or Korean in the agent's message box: Enter that picks a word no longer sends the message, and ⌘/Ctrl+Enter no longer sends either — as in the chat
 - 2026-10-14 Every tool call in the chat opens: a saved memory, a folder made or a file moved shows what it was about in full, and Memory, Search, Plan, Explore and Board calls have their own icons
 - 2026-10-14 Your messages in the chat keep the line breaks you typed, and a long link wraps instead of running past the edge of the window
 - 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them
