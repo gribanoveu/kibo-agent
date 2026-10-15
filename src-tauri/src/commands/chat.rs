@@ -598,10 +598,8 @@ fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -
     // costs the memory, not the choice made for this turn.
     // No folder open, nothing to remember it for.
     let Ok(folder) = state.workspace() else { return Ok(()) };
-    let mut settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    if settings.approval.set_auto(chat_id, &folder.display().to_string(), unattended) {
-        crate::infra::settings_store::save(&settings).map_err(|e| e.to_string())?;
-    }
+    crate::infra::settings_store::update(|s| s.approval.set_auto(chat_id, &folder.display().to_string(), unattended))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -629,9 +627,7 @@ pub fn approval_remember_get() -> Result<RememberScope, String> {
 /// Refuses on settings it cannot read, rather than saving defaults over them.
 #[tauri::command]
 pub fn approval_remember_set(remember: RememberScope) -> Result<(), String> {
-    let mut settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    settings.approval.remember = remember;
-    crate::infra::settings_store::save(&settings).map_err(|e| e.to_string())
+    crate::infra::settings_store::update(|s| s.approval.remember = remember).map_err(|e| e.to_string())
 }
 
 /// A chat switched to Auto before its first save had no id to be remembered
@@ -639,10 +635,12 @@ pub fn approval_remember_set(remember: RememberScope) -> Result<(), String> {
 /// memory that failed to save only means it asks next time.
 pub(super) fn remember_new_chat(state: &AgentState, id: &str) {
     let auto = state.approval.lock().is_ok_and(|approval| approval.skip_all);
-    let Ok(mut settings) = crate::infra::settings_store::load() else { return };
-    if auto && settings.approval.remember == RememberScope::Chat && settings.approval.set_auto(Some(id), "", true) {
-        let _ = crate::infra::settings_store::save(&settings);
+    if !auto {
+        return;
     }
+    let _ = crate::infra::settings_store::update(|s| {
+        s.approval.remember == RememberScope::Chat && s.approval.set_auto(Some(id), "", true)
+    });
 }
 
 fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {

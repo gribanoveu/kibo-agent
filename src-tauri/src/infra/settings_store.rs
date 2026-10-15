@@ -2,11 +2,26 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::domain::settings::{AppSettings, SettingsError};
 use crate::infra::app_dir;
 
 const FILE: &str = "settings.json";
+
+/// Held from the read to the write of an [`update`]:
+/// a turn pinning its model and Settings saving a toggle each read the file,
+/// and without it the second write puts back what the first one changed.
+///
+/// ponytail: one lock for the whole file, the file being small and written
+/// rarely. If writes ever queue behind it, split the file, not the lock.
+static WRITING: Mutex<()> = Mutex::new(());
+
+fn writing() -> MutexGuard<'static, ()> {
+    // Poisoned means a writer panicked between read and write: the file is
+    // still whole (the rename is atomic), so there is nothing to protect.
+    WRITING.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 pub fn path() -> Result<PathBuf, SettingsError> {
     Ok(app_dir::dir().map_err(SettingsError::AppDir)?.join(FILE))
@@ -27,10 +42,31 @@ pub fn load() -> Result<AppSettings, SettingsError> {
     serde_json::from_str(&text).map_err(SettingsError::Parse)
 }
 
+/// Writes the settings whole — for tests that set the scene. The app changes
+/// them through [`update`]: `load` then `save` loses whatever another thread
+/// wrote in between.
+#[cfg(test)]
 pub fn save(settings: &AppSettings) -> Result<(), SettingsError> {
+    let _writing = writing();
+    write(settings)
+}
+
+fn write(settings: &AppSettings) -> Result<(), SettingsError> {
     app_dir::ensure().map_err(SettingsError::AppDir)?;
     let text = serde_json::to_string_pretty(settings).map_err(SettingsError::Serialize)?;
     app_dir::write_private(&path()?, text.as_bytes()).map_err(SettingsError::Write)
+}
+
+/// Reads the settings, lets `change` edit them, and writes them back, with no
+/// other write in between. Fails on settings it cannot read rather than save
+/// the defaults over them. `change` must not save settings itself — the lock
+/// is not reentrant.
+pub fn update<T>(change: impl FnOnce(&mut AppSettings) -> T) -> Result<T, SettingsError> {
+    let _writing = writing();
+    let mut settings = load()?;
+    let out = change(&mut settings);
+    write(&settings)?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -83,6 +119,29 @@ mod tests {
             catalog_sources: vec!["https://cat.example/".to_string()],
             web_search_agent: Some(crate::domain::settings::WebSearchBackend::Tavily),
         }
+    }
+
+    /// Two threads changing different settings at once — a turn pinning its
+    /// model while Settings saves a toggle — both land.
+    #[test]
+    fn concurrent_updates_keep_every_change() {
+        with_app_dir("settings-concurrent", || {
+            let writer = |field: fn(&mut AppSettings) -> &mut Vec<String>, tag: &'static str| {
+                std::thread::spawn(move || {
+                    for i in 0..40 {
+                        update(|s| field(s).push(format!("{tag}{i}"))).unwrap();
+                    }
+                })
+            };
+            let skills = writer(|s| &mut s.skills.disabled, "s");
+            let rules = writer(|s| &mut s.rules.disabled, "r");
+            skills.join().unwrap();
+            rules.join().unwrap();
+
+            let saved = load().unwrap();
+            assert_eq!(saved.skills.disabled.len(), 40, "skills lost an update");
+            assert_eq!(saved.rules.disabled.len(), 40, "rules lost an update");
+        });
     }
 
     #[test]

@@ -112,9 +112,7 @@ pub fn list(root: &Path) -> Vec<RuleListItem> {
 /// Refuses on settings it cannot read, rather than saving the defaults over
 /// the user's whole configuration.
 pub fn set_enabled(path: &str, enabled: bool) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.rules.set_enabled(path, enabled);
-    settings_store::save(&settings)
+    settings_store::update(|s| s.rules.set_enabled(path, enabled))
 }
 
 fn key(path: &Path) -> String {

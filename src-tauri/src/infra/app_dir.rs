@@ -68,7 +68,11 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
 
     // Beside the target, so the rename below stays within one filesystem.
-    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+    // One per write, not per process: two threads writing at once would
+    // otherwise share it, and one's rename takes the file from under the other.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_extension(format!("{}-{write}.tmp", std::process::id()));
     fs::write(&temp, bytes).map_err(|e| format!("could not write {}: {e}", temp.display()))?;
 
     #[cfg(unix)]
@@ -115,6 +119,23 @@ pub mod test_support {
 mod tests {
     use super::*;
     use crate::testing::temp_dir;
+
+    /// Two threads writing the same file — a turn and Settings — both succeed,
+    /// and what is left is one of the two whole.
+    #[test]
+    fn concurrent_private_writes_all_succeed() {
+        let path = temp_dir("app-dir-concurrent").join("settings.json");
+        let writer = |byte: u8| {
+            let path = path.clone();
+            std::thread::spawn(move || (0..40).map(|_| write_private(&path, &[byte; 4096])).collect::<Vec<_>>())
+        };
+        let (a, b) = (writer(b'a'), writer(b'b'));
+        for result in a.join().unwrap().into_iter().chain(b.join().unwrap()) {
+            assert_eq!(result, Ok(()));
+        }
+        let left = fs::read(&path).unwrap();
+        assert!(left == [b'a'; 4096] || left == [b'b'; 4096]);
+    }
 
     #[test]
     fn a_private_write_replaces_the_previous_contents_and_leaves_no_temp_file() {

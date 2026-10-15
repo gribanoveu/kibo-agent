@@ -23,7 +23,5 @@ pub fn tool_log_enabled_get() -> Result<bool, String> {
 /// Refuses on settings it cannot read, rather than saving defaults over them.
 #[tauri::command]
 pub fn tool_log_enabled_set(enabled: bool) -> Result<(), String> {
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.tool_log.enabled = enabled;
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.tool_log.enabled = enabled).map_err(|e| e.to_string())
 }

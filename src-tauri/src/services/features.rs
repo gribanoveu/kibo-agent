@@ -49,9 +49,9 @@ pub fn list() -> Vec<FeatureView> {
 
 pub fn set(id: &str, on: bool) -> Result<(), String> {
     let feature = Feature::from_id(id).ok_or_else(|| format!("no feature \"{id}\""))?;
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.features.insert(feature.manifest().id.to_string(), on);
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.features.insert(feature.manifest().id.to_string(), on))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Removes the feature's file. Only while it is off: the model could be

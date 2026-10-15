@@ -89,6 +89,7 @@ A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 - Prefer `git2` over shelling out to `git` for programmatic operations (diff, blame, branch listing); shell out only for actions you don't want to reimplement, isolated to one module.
 - Validate/canonicalize any path coming from the frontend against the opened repo root before touching it.
 - Use `std::path::Path`/`PathBuf` throughout — no manual path string concatenation (the app targets macOS/Windows/Linux).
+- Settings change through `settings_store::update(|s| …)`, which holds a lock from the read to the write; `save` exists only for tests. A `load` then `save` from two threads loses one of the changes.
 
 ## Style
 

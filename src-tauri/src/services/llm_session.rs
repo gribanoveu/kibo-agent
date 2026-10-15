@@ -112,17 +112,10 @@ pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -
 /// the end of a list the user arranged, and the first entry is what an
 /// unpinned setup uses.
 pub fn save_provider(config: ProviderConfig) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    match settings
-        .llm
-        .providers
-        .iter_mut()
-        .find(|p| p.id == config.id)
-    {
+    settings_store::update(|settings| match settings.llm.providers.iter_mut().find(|p| p.id == config.id) {
         Some(existing) => *existing = config,
         None => settings.llm.providers.push(config),
-    }
-    settings_store::save(&settings)
+    })
 }
 
 /// Removes a provider and the key sealed under its id.
@@ -130,12 +123,12 @@ pub fn save_provider(config: ProviderConfig) -> Result<(), SettingsError> {
 /// The key goes with it: an id that is later reused for a different endpoint
 /// would otherwise inherit a credential the user thought they had deleted.
 pub fn remove_provider(id: &str) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.providers.retain(|p| p.id != id);
-    if settings.llm.active_provider_id.as_deref() == Some(id) {
-        settings.llm.active_provider_id = None;
-    }
-    settings_store::save(&settings)?;
+    settings_store::update(|settings| {
+        settings.llm.providers.retain(|p| p.id != id);
+        if settings.llm.active_provider_id.as_deref() == Some(id) {
+            settings.llm.active_provider_id = None;
+        }
+    })?;
     // Best effort: settings are already written, and a key left behind is
     // unreachable rather than dangerous.
     let _ = llm_credentials_store::delete_api_key(id);
@@ -144,40 +137,31 @@ pub fn remove_provider(id: &str) -> Result<(), SettingsError> {
 
 /// Pins which provider a turn uses. `None` falls back to the first configured.
 pub fn set_active_provider(id: Option<String>) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.active_provider_id = id;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.active_provider_id = id)
 }
 
 pub fn set_debug_logging(enabled: bool) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.debug_logging = enabled;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.debug_logging = enabled)
 }
 
 pub fn set_reply_language(language: ReplyLanguage) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.reply_language = language;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.reply_language = language)
 }
 
 pub fn set_turn_limits(limits: TurnLimits) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.turn_limits = limits;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.turn_limits = limits)
 }
 
 /// Stores `model` as `provider_id`'s pin, leaving its other fields alone.
 pub fn pin_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    let Some(config) = settings.llm.providers.iter_mut().find(|p| p.id == provider_id) else {
-        // Nothing to pin it to. Adding an entry here would invent a provider
-        // with no endpoint, which every later lookup would then have to
-        // special-case.
-        return Ok(());
-    };
-    config.model = Some(model.to_string());
-    settings_store::save(&settings)
+    settings_store::update(|settings| {
+        // Nothing to pin it to when the provider is gone: adding an entry here
+        // would invent a provider with no endpoint, which every later lookup
+        // would then have to special-case.
+        if let Some(config) = settings.llm.providers.iter_mut().find(|p| p.id == provider_id) {
+            config.model = Some(model.to_string());
+        }
+    })
 }
 
 /// The provider every session in the app talks through, counting what each

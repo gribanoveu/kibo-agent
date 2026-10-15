@@ -127,9 +127,7 @@ fn backend_in(place: WebSearchPlace) -> WebSearchBackend {
 
 #[tauri::command]
 pub fn web_search_backend_set(place: WebSearchPlace, backend: WebSearchBackend) -> Result<(), String> {
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.set_web_search(place, backend);
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.set_web_search(place, backend)).map_err(|e| e.to_string())
 }
 
 /// The shells there are to pick from — none off Windows — and the one in use.
@@ -150,9 +148,7 @@ pub fn shell_choices_get() -> ShellChoices {
 /// From the next command and the next terminal tab on.
 #[tauri::command]
 pub fn shell_set(kind: ShellKind) -> Result<(), String> {
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.shell = Some(kind);
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.shell = Some(kind)).map_err(|e| e.to_string())
 }
 
 /// Where the user's SearXNG answers, as saved or the default.
@@ -170,9 +166,7 @@ pub fn web_search_searxng_url_get() -> String {
 #[tauri::command]
 pub fn web_search_searxng_url_set(url: String) -> Result<String, String> {
     let base = searxng_base(&url)?;
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.searxng_url = Some(base.to_string());
-    settings_store::save(&settings).map_err(|e| e.to_string())?;
+    settings_store::update(|s| s.searxng_url = Some(base.to_string())).map_err(|e| e.to_string())?;
     Ok(base.to_string())
 }
 
