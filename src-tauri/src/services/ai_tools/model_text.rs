@@ -55,7 +55,6 @@ pub fn for_model(result: &ToolResult) -> String {
         // With what went: the read it needed is gone after compaction, and
         // this is the only trace of an irreversible change.
         ToolResult::FileDeleted { path, diff } => render_for_model("Deleted", path, diff, true),
-        ToolResult::DirectoryCreated { path } => format!("Created directory {path}"),
         ToolResult::DirectoryDeleted { path, files: 0, .. } => format!("Deleted empty directory {path}"),
         ToolResult::DirectoryDeleted { path, files, listed } => {
             let mut out = format!("Deleted directory {path} with {files} {}", if *files == 1 { "file" } else { "files" });

@@ -349,6 +349,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // `createDirectory` is no longer offered (`writeFile` makes the folders a
+    // file needs); kept so older chats still read.
     case "createDirectory":
     case "deleteDirectory":
       return { name, arg: str(args.path) ?? "", detail: "" };

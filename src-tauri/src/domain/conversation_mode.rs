@@ -101,7 +101,6 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
-                ToolName::CreateDirectory,
                 ToolName::DeleteDirectory,
                 ToolName::Move,
                 ToolName::Todo,
@@ -268,7 +267,7 @@ mod tests {
         for tool in [ToolName::ReadFile, ToolName::Grep, ToolName::SemanticSearch, ToolName::GitDiff, ToolName::RunCommand, ToolName::ReportFinding] {
             assert!(review.contains(&tool), "{tool:?}");
         }
-        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::CreateDirectory, ToolName::DeleteDirectory, ToolName::Move];
+        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::DeleteDirectory, ToolName::Move];
         assert!(writes.iter().all(|tool| !review.contains(tool)));
         assert!(!review.contains(&ToolName::WritePlan) && !review.contains(&ToolName::Todo));
     }

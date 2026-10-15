@@ -31,7 +31,6 @@ pub enum ToolName {
     WriteFile,
     EditFile,
     DeleteFile,
-    CreateDirectory,
     DeleteDirectory,
     Move,
     Todo,
@@ -114,7 +113,6 @@ impl ToolName {
         ToolName::WriteFile,
         ToolName::EditFile,
         ToolName::DeleteFile,
-        ToolName::CreateDirectory,
         ToolName::DeleteDirectory,
         ToolName::Move,
         ToolName::Todo,
@@ -167,7 +165,6 @@ impl ToolName {
             ToolName::WriteFile => "writeFile",
             ToolName::EditFile => "editFile",
             ToolName::DeleteFile => "deleteFile",
-            ToolName::CreateDirectory => "createDirectory",
             ToolName::DeleteDirectory => "deleteDirectory",
             ToolName::Move => "move",
             ToolName::Todo => "todo",
@@ -239,7 +236,6 @@ impl ToolName {
             ToolName::WriteFile
                 | ToolName::EditFile
                 | ToolName::DeleteFile
-                | ToolName::CreateDirectory
                 | ToolName::DeleteDirectory
                 | ToolName::Move
                 // Every command is treated as mutating, because a command
@@ -275,7 +271,6 @@ impl ToolName {
             ToolName::ReadFile
             | ToolName::ListFiles
             | ToolName::DeleteFile
-            | ToolName::CreateDirectory
             | ToolName::DeleteDirectory
             | ToolName::Todo
             // A file or two out of the app directory.
@@ -513,7 +508,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            47,
+            46,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -584,7 +579,6 @@ mod tests {
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::DeleteFile,
-                ToolName::CreateDirectory,
                 ToolName::DeleteDirectory,
                 // Not a writing tool by shape, and mutating all the same: the
                 // tool name says nothing about what the command line does.
@@ -1207,7 +1201,6 @@ pub enum ToolCall {
     ListFiles(ListFilesArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
-    CreateDirectory(CreateDirectoryArgs),
     DeleteFile(DeleteFileArgs),
     DeleteDirectory(DeleteDirectoryArgs),
     Move(MoveArgs),
@@ -1259,7 +1252,6 @@ impl ToolCall {
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
             ToolCall::EditFile(_) => ToolName::EditFile,
-            ToolCall::CreateDirectory(_) => ToolName::CreateDirectory,
             ToolCall::DeleteFile(_) => ToolName::DeleteFile,
             ToolCall::DeleteDirectory(_) => ToolName::DeleteDirectory,
             ToolCall::Move(_) => ToolName::Move,
@@ -1402,8 +1394,6 @@ pub enum ToolResult {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         repeated_headings: Vec<String>,
     },
-    #[serde(rename_all = "camelCase")]
-    DirectoryCreated { path: String },
     /// Carries the diff for the same reason a write does: the model should see
     /// the size of what it just removed, not only that something was removed.
     #[serde(rename_all = "camelCase")]
@@ -2233,12 +2223,6 @@ pub struct FileEdit {
 pub struct EditFileArgs {
     pub path: String,
     pub edits: Vec<FileEdit>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateDirectoryArgs {
-    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

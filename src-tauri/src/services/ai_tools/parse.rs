@@ -34,7 +34,6 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "listFiles" => ToolCall::ListFiles(args(call)?),
         "writeFile" => ToolCall::WriteFile(args(call)?),
         "editFile" => ToolCall::EditFile(args(call)?),
-        "createDirectory" => ToolCall::CreateDirectory(args(call)?),
         "deleteFile" => ToolCall::DeleteFile(args(call)?),
         "deleteDirectory" => ToolCall::DeleteDirectory(args(call)?),
         "move" => ToolCall::Move(args(call)?),
@@ -129,7 +128,6 @@ pub fn preflight_tool_call(
         ToolCall::WriteFile(a) => &[&a.path],
         ToolCall::EditFile(a) => &[&a.path],
         ToolCall::DeleteFile(a) => &[&a.path],
-        ToolCall::CreateDirectory(a) => &[&a.path],
         ToolCall::DeleteDirectory(a) => &[&a.path],
         ToolCall::Move(a) => &[&a.path, &a.new_path],
         // The working directory only. What the command line then names is
@@ -251,7 +249,6 @@ mod tests {
             ("listFiles", "{}"),
             ("writeFile", r#"{"path": "a", "content": "x"}"#),
             ("editFile", r#"{"path": "a", "edits": []}"#),
-            ("createDirectory", r#"{"path": "a"}"#),
             ("deleteFile", r#"{"path": "a"}"#),
             ("deleteDirectory", r#"{"path": "a"}"#),
             ("move", r#"{"path": "a", "newPath": "b"}"#),
