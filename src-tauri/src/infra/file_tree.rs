@@ -7,7 +7,7 @@ use std::path::{Component, Path};
 use git2::{Repository, Status, StatusOptions};
 
 use crate::domain::file_tree::{FileStatus, FileTreeError, FolderListing, TreeEntry, MAX_ENTRIES};
-use crate::domain::tools::canonicalize_plain;
+use crate::infra::paths::canonicalize_plain;
 use crate::infra::workspace_scanner::scan_entries;
 
 /// `dir` is relative to `root`; empty is `root` itself.

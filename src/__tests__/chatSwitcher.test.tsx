@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ChatSwitcher } from "../components/ChatSwitcher";
-import type { ChatSummary } from "../lib/chat";
+import type { ChatSummary } from "../lib/savedChats";
 
 const chat = (id: string, title: string, archived = false): ChatSummary => ({ id, title, updatedAt: 0, archived });
 const chats = [chat("a", "Document the API"), chat("b", "Old one", true), chat("c", "Fix the index")];

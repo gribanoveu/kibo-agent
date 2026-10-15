@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { GitHistory, WorkingChanges } from "../lib/chat";
+import type { GitHistory, WorkingChanges } from "../lib/git";
 
 // The Changes tab: the repository's unstaged and staged files with their line
 // counts, moved between the two by the row's button, and committed.

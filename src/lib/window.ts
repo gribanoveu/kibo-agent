@@ -1,6 +1,8 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { inTauri } from "./chat";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { inTauri } from "./backend";
 
 // The window is undecorated and transparent (tauri.conf.json), so the app's own
 // titlebar drives it. Components call these wrappers, never the API directly.
@@ -96,3 +98,9 @@ export function onFileDrop(handler: (drop: FileDrop) => void): () => void {
   });
   return () => void unlisten.then((stop) => stop());
 }
+
+/** A web or mail address, opened by the system — its browser, its mail app — never in this window. */
+export const openExternal = (url: string): Promise<void> => openUrl(url);
+
+/** The app's version, for About. */
+export const appVersion = (): Promise<string> => getVersion();

@@ -103,6 +103,44 @@ pub struct WebPage {
 
 pub type WebFetchFn = Arc<dyn Fn(&PageQuery) -> Result<WebPage, WebSearchError> + Send + Sync>;
 
+/// Why a SearXNG address cannot be searched through.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SearxngAddressError {
+    #[error("not an address: {0}")]
+    NotAnAddress(String),
+    #[error("SearXNG's address starts with http:// or https://")]
+    NotHttp,
+}
+
+/// The SearXNG address as a base its `/search` is joined to: an http(s)
+/// address, and a path that ends with `/` — `http://host/searx` would
+/// otherwise lose its last segment to the join.
+pub fn searxng_base(text: &str) -> Result<url::Url, SearxngAddressError> {
+    let mut base = url::Url::parse(text.trim()).map_err(|e| SearxngAddressError::NotAnAddress(e.to_string()))?;
+    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+        return Err(SearxngAddressError::NotHttp);
+    }
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
+    }
+    base.set_query(None);
+    base.set_fragment(None);
+    Ok(base)
+}
+
+/// Why a search that is on cannot start. Each says where to fix it: the turn
+/// stops with it rather than going on without the tools.
+#[derive(Debug, Error)]
+pub enum WebSetupError {
+    #[error("web search is on but SearXNG's address {address:?} is not one: {reason} — fix it or turn it off in Settings → Web search")]
+    Address { address: String, reason: SearxngAddressError },
+    #[error("web search is on but cannot start: {0} — fix it or turn it off in Settings → Web search")]
+    Keys(#[from] crate::domain::settings::CredentialsError),
+    #[error("web search is on but cannot start: {0} — fix it or turn it off in Settings → Web search")]
+    Client(String),
+}
+
 /// What a chat reaches the web with: the search the user chose, and the page
 /// reader, which needs no service.
 #[derive(Clone)]

@@ -1,4 +1,4 @@
-import type { CommitSummary, GitHistory } from "../lib/chat";
+import type { CommitSummary, GitHistory } from "../lib/git";
 import "./HistoryView.css";
 
 /** How long ago, as a person says it: "now", "55m ago", "yesterday", "3d ago", then the date. */

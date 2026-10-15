@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import "./Dropdown.css";
+import { matches } from "../lib/shortcuts";
 
 /** `label` when what the caller sends and what the reader sees differ — a wire
     value like "plan" is not a word to put in a menu. */
@@ -57,7 +58,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (matches(e, "close")) setOpen(false);
     };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
@@ -99,7 +100,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
               // A form field's Enter, as in every settings form here — not a shortcut.
               onKeyDown={(e) => {
                 const typed = e.currentTarget.value.trim();
-                if (e.key !== "Enter" || !typed) return;
+                if (!matches(e, "accept") || !typed) return;
                 e.preventDefault();
                 custom.onEnter(typed);
                 setOpen(false);

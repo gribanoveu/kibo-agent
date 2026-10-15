@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use secrecy::SecretString;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::domain::settings::CredentialsError;
 use crate::infra::app_dir;
 use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
@@ -55,27 +56,30 @@ impl Drop for Credentials {
     }
 }
 
-/// A missing file, an unreachable master key and a damaged blob all read as
-/// "no keys configured".
-///
-/// Degrading rather than erroring is deliberate, and it is safe here for one
-/// specific reason: sealing needs the same master key that opening does, so
-/// whenever this returns an empty map by mistake, the write that would
-/// overwrite the real file with it fails too.
-fn load_all() -> Credentials {
-    let Ok(path) = path() else {
-        return Credentials::default();
+/// The saved keys. No file yet is none saved; a file that cannot be read —
+/// the master key out of reach, a blob sealed under another one, damage — is
+/// an error that says so. Read as "no key", it reached the user as a provider's
+/// 401 with nothing to say why.
+fn load_all() -> Result<Credentials, CredentialsError> {
+    let path = app_dir::dir()?.join(FILE);
+    let shown = || path.display().to_string();
+    let blob = match std::fs::read(&path) {
+        Ok(blob) => blob,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Credentials::default()),
+        Err(e) => return Err(CredentialsError::Read { path: shown(), reason: e.to_string() }),
     };
-    let Ok(blob) = std::fs::read(&path) else {
-        return Credentials::default();
-    };
-    let Ok(key) = master_key::resolve() else {
-        return Credentials::default();
-    };
-    let Ok(plain) = secret_store::open(&key, PURPOSE, &blob) else {
-        return Credentials::default();
-    };
-    Credentials(serde_json::from_slice(&plain).unwrap_or_default())
+    let key = master_key::resolve().map_err(CredentialsError::MasterKey)?;
+    let plain = secret_store::open(&key, PURPOSE, &blob).map_err(|_| CredentialsError::Foreign(shown()))?;
+    serde_json::from_slice(&plain).map(Credentials).map_err(|_| CredentialsError::Damaged(shown()))
+}
+
+/// What a save starts from. A file that does not open is started over: the
+/// keys in it are lost either way, and this is how the user gets back to
+/// working ones. Safe for one reason — sealing needs the same master key that
+/// opening does, so with the key out of reach the write fails too and the
+/// file is left as it was.
+fn load_for_save() -> Credentials {
+    load_all().unwrap_or_default()
 }
 
 fn save_all(map: &Credentials) -> Result<(), String> {
@@ -89,25 +93,23 @@ fn save_all(map: &Credentials) -> Result<(), String> {
 }
 
 pub fn save_api_key(provider_id: &str, api_key: &str) -> Result<(), String> {
-    let mut map = load_all();
+    let mut map = load_for_save();
     map.insert(provider_id.to_string(), api_key.to_string());
     save_all(&map)
 }
 
 /// The stored key, for constructing a provider. Never crosses the IPC
 /// boundary.
-pub fn get_api_key(provider_id: &str) -> Option<SecretString> {
-    load_all()
-        .get(provider_id)
-        .map(|key| SecretString::from(key.as_str()))
+pub fn get_api_key(provider_id: &str) -> Result<Option<SecretString>, CredentialsError> {
+    Ok(load_all()?.get(provider_id).map(|key| SecretString::from(key.as_str())))
 }
 
-pub fn has_api_key(provider_id: &str) -> bool {
-    load_all().contains_key(provider_id)
+pub fn has_api_key(provider_id: &str) -> Result<bool, CredentialsError> {
+    Ok(load_all()?.contains_key(provider_id))
 }
 
 pub fn delete_api_key(provider_id: &str) -> Result<(), String> {
-    let mut map = load_all();
+    let mut map = load_for_save();
     // `remove` moves the key out of the map, past the wipe-on-drop above — so
     // this copy gets wiped by hand.
     if let Some(mut removed) = map.remove(provider_id) {
@@ -129,9 +131,9 @@ mod tests {
             save_api_key("openai", "sk-one").unwrap();
             save_api_key("local", "sk-two").unwrap();
 
-            assert_eq!(get_api_key("openai").unwrap().expose_secret(), "sk-one");
-            assert_eq!(get_api_key("local").unwrap().expose_secret(), "sk-two");
-            assert!(get_api_key("anthropic").is_none());
+            assert_eq!(get_api_key("openai").unwrap().unwrap().expose_secret(), "sk-one");
+            assert_eq!(get_api_key("local").unwrap().unwrap().expose_secret(), "sk-two");
+            assert!(get_api_key("anthropic").unwrap().is_none());
         });
     }
 
@@ -142,8 +144,8 @@ mod tests {
             save_api_key("local", "sk-two").unwrap();
             save_api_key("openai", "sk-rotated").unwrap();
 
-            assert_eq!(get_api_key("openai").unwrap().expose_secret(), "sk-rotated");
-            assert_eq!(get_api_key("local").unwrap().expose_secret(), "sk-two");
+            assert_eq!(get_api_key("openai").unwrap().unwrap().expose_secret(), "sk-rotated");
+            assert_eq!(get_api_key("local").unwrap().unwrap().expose_secret(), "sk-two");
         });
     }
 
@@ -154,13 +156,13 @@ mod tests {
             save_api_key("local", "sk-two").unwrap();
 
             delete_api_key("openai").unwrap();
-            assert!(!has_api_key("openai"));
-            assert!(has_api_key("local"));
+            assert!(!has_api_key("openai").unwrap());
+            assert!(has_api_key("local").unwrap());
 
             // Deleting what is not there is not an error, and must not
             // rewrite the file.
             delete_api_key("openai").unwrap();
-            assert!(has_api_key("local"));
+            assert!(has_api_key("local").unwrap());
         });
     }
 
@@ -183,9 +185,10 @@ mod tests {
     }
 
     /// A blob sealed under a different master key is unreadable, not a
-    /// panic and not someone else's key.
+    /// panic and not someone else's key — and it says so rather than reading
+    /// as no key at all. Saving a key again starts the file over.
     #[test]
-    fn a_blob_from_another_key_reads_as_no_keys() {
+    fn a_blob_from_another_key_is_an_error_until_a_key_is_saved_again() {
         with_app_dir("creds-foreign", || {
             save_api_key("openai", "sk-one").unwrap();
 
@@ -197,7 +200,21 @@ mod tests {
             .unwrap();
             app_dir::write_private(&path().unwrap(), &stolen).unwrap();
 
-            assert!(get_api_key("openai").is_none());
+            let refused = get_api_key("openai").expect_err("another key's blob").to_string();
+            assert!(refused.contains("does not open"), "{refused}");
+            assert!(!refused.contains("sk-"), "{refused}");
+            assert!(has_api_key("openai").is_err());
+
+            save_api_key("openai", "sk-again").unwrap();
+            assert_eq!(get_api_key("openai").unwrap().unwrap().expose_secret(), "sk-again");
+        });
+    }
+
+    #[test]
+    fn no_file_yet_is_no_keys_not_an_error() {
+        with_app_dir("creds-none", || {
+            assert!(get_api_key("openai").unwrap().is_none());
+            assert!(!has_api_key("openai").unwrap());
         });
     }
 }

@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 
 // The user's own shells, in the Terminal tab — `src-tauri/src/commands/terminal.rs`.
 

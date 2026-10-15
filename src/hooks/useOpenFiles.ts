@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { fileWrite, type FileTarget } from "../lib/chat";
+import { type FileTarget, fileWrite } from "../lib/git";
 import { onWindowClose } from "../lib/window";
 
 /**

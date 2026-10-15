@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  gitChanges,
-  gitCommit,
-  gitCommitMessage,
-  gitStage,
-  gitUnstage,
-  onGitChanged,
-  onIndexEvent,
-  type WorkingChanges,
-} from "../lib/chat";
+import { gitChanges, gitCommit, gitCommitMessage, gitStage, gitUnstage, onFolderChanged, type WorkingChanges } from "../lib/git";
 
 const none: WorkingChanges = { staged: [], unstaged: [] };
 
@@ -40,14 +31,12 @@ export function useStaging(visible: boolean, workspace: string | null) {
   useEffect(() => {
     if (!visible) return;
     void load();
-    const stops: (() => void)[] = [];
+    let unlisten: (() => void) | undefined;
     let live = true;
-    const keep = (stop: () => void) => (live ? stops.push(stop) : stop());
-    onIndexEvent((event) => event.root === workspace && event.kind === "syncStarted" && void load()).then(keep);
-    onGitChanged((root) => root === workspace && void load()).then(keep);
+    onFolderChanged(workspace, () => void load()).then((off) => (live ? (unlisten = off) : off()));
     return () => {
       live = false;
-      stops.forEach((stop) => stop());
+      unlisten?.();
     };
   }, [visible, workspace, load]);
 

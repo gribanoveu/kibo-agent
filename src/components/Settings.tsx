@@ -7,12 +7,15 @@ import { ShellSettings } from "./ShellSettings";
 import { UsagePane } from "./UsageHeatmap";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
-import { DEFAULT_TURN_LIMITS, type RememberScope, type ReplyLanguage, type SkillSourceItem, type SkillsView, type TurnLimits } from "../lib/chat";
+import type { RememberScope } from "../lib/chat";
+import { DEFAULT_TURN_LIMITS, type ReplyLanguage, type TurnLimits } from "../lib/settings";
+import type { SkillSourceItem, SkillsView } from "../lib/skills";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
 import type { AlertPrefs, Attention } from "../lib/attention";
 import "./Settings.css";
+import "./Segmented.css";
 
 // The settings dialog: one subject per section, picked on the left, so the
 // provider form is not scrolled past to reach the theme.

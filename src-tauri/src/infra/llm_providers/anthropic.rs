@@ -35,6 +35,7 @@ use zeroize::Zeroizing;
 
 use super::openai_compatible::{header_value, ok_or_status_error};
 use crate::domain::image::ImagePart;
+use crate::domain::llm::StreamEvent as ReplyEvent;
 use crate::domain::llm::{
     ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmMessage, LlmModelInfo,
     LlmProvider, LlmRole, LlmToolCall,
@@ -102,7 +103,7 @@ impl AnthropicProvider {
 
 impl LlmProvider for AnthropicProvider {
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let result = self.chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)?;
+        let result = self.chat_stream(request, &|_| {}, &|| false)?;
         Ok(ChatResponse {
             content: (!result.text.is_empty()).then_some(result.text),
             tool_calls: result.tool_calls,
@@ -113,9 +114,7 @@ impl LlmProvider for AnthropicProvider {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(ReplyEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
         let mut body = body(
@@ -152,19 +151,19 @@ impl LlmProvider for AnthropicProvider {
                     if content_block["type"] == "tool_use" {
                         let id = content_block["id"].as_str().unwrap_or_default().to_string();
                         let name = content_block["name"].as_str().unwrap_or_default().to_string();
-                        on_tool_call_delta(&id, &name, "");
+                        on_event(ReplyEvent::ToolCall { id: &id, name: &name, arguments: "" });
                         calls.push((index, LlmToolCall { id, name, arguments: String::new() }));
                     }
                     blocks.push((index, content_block));
                 }
                 StreamEvent::ContentBlockDelta { index, delta } => match delta {
                     BlockDelta::TextDelta { text } if !text.is_empty() => {
-                        on_delta(&text);
+                        on_event(ReplyEvent::Text(&text));
                         result.text.push_str(&text);
                         append(&mut blocks, index, "text", &text);
                     }
                     BlockDelta::ThinkingDelta { thinking } if !thinking.is_empty() => {
-                        on_reasoning(&thinking);
+                        on_event(ReplyEvent::Reasoning(&thinking));
                         result.reasoning.push_str(&thinking);
                         append(&mut blocks, index, "thinking", &thinking);
                     }
@@ -174,7 +173,7 @@ impl LlmProvider for AnthropicProvider {
                     BlockDelta::InputJsonDelta { partial_json } => {
                         if let Some((_, call)) = calls.iter_mut().find(|(i, _)| *i == index) {
                             call.arguments.push_str(&partial_json);
-                            on_tool_call_delta(&call.id, &call.name, &call.arguments);
+                            on_event(ReplyEvent::ToolCall { id: &call.id, name: &call.name, arguments: &call.arguments });
                         }
                     }
                     _ => {}
@@ -615,7 +614,7 @@ mod tests {
 
     fn stream(url: String) -> ChatStreamResult {
         provider(url)
-            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|| false)
             .expect("streams")
     }
 
@@ -804,9 +803,11 @@ mod tests {
         let result = provider(url)
             .chat_stream(
                 request(vec![LlmMessage::user("hi")]),
-                &|_| {},
-                &|_| {},
-                &move |id, _, args| progress.lock().unwrap().push(format!("{id}={args}")),
+                &move |event| {
+                    if let ReplyEvent::ToolCall { id, arguments, .. } = event {
+                        progress.lock().unwrap().push(format!("{id}={arguments}"));
+                    }
+                },
                 &|| false,
             )
             .expect("streams");
@@ -846,7 +847,7 @@ mod tests {
         };
         crate::infra::llm_providers::provider_for(&config, Some(SecretString::from("sk-ant")))
             .expect("builds")
-            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|| false)
             .expect("streams");
         let sent = server.join().expect("served").to_lowercase();
 
@@ -886,9 +887,11 @@ mod tests {
         let result = provider(url)
             .chat_stream(
                 request(vec![]),
-                &|_| stop.store(true, Ordering::SeqCst),
-                &|_| {},
-                &|_, _, _| {},
+                &|event| {
+                    if matches!(event, ReplyEvent::Text(_)) {
+                        stop.store(true, Ordering::SeqCst);
+                    }
+                },
                 &|| stop.load(Ordering::SeqCst),
             )
             .expect("cancelling is not an error");
@@ -1025,7 +1028,7 @@ mod tests {
             };
             crate::infra::llm_providers::provider_for(&config, Some(SecretString::from("k")))
                 .expect("builds")
-                .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+                .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|| false)
                 .expect("streams");
             let sent = server.join().expect("served");
             let body: Value = serde_json::from_str(sent.split("\r\n\r\n").nth(1).expect("a body")).expect("json");
@@ -1049,7 +1052,7 @@ mod tests {
             ]),
         );
         let err = provider(url)
-            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![LlmMessage::user("hi")]), &|_| {}, &|| false)
             .expect_err("a refusal");
         server.join().ok();
         let message = err.to_string();
@@ -1094,7 +1097,7 @@ mod tests {
             sse(&[r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#]),
         );
         let err = provider(url)
-            .chat_stream(request(vec![]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![]), &|_| {}, &|| false)
             .unwrap_err();
         server.join().ok();
         assert!(matches!(err, LlmError::RateLimited { retry_after_seconds: None, .. }), "{err}");
@@ -1104,7 +1107,7 @@ mod tests {
             sse(&[r#"{"type":"error","error":{"type":"api_error","message":"boom"}}"#]),
         );
         let err = provider(url)
-            .chat_stream(request(vec![]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![]), &|_| {}, &|| false)
             .unwrap_err();
         server.join().ok();
         assert!(matches!(&err, LlmError::Provider(m) if m == "api_error: boom"), "{err}");
@@ -1115,7 +1118,7 @@ mod tests {
     fn an_overloaded_status_is_retryable() {
         let (url, server) = serve_with_headers("529 Overloaded", "retry-after: 3\r\n", "{}".into());
         let err = provider(url)
-            .chat_stream(request(vec![]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![]), &|_| {}, &|| false)
             .unwrap_err();
         server.join().ok();
         assert!(matches!(err, LlmError::RateLimited { retry_after_seconds: Some(3), .. }), "{err}");
@@ -1130,7 +1133,7 @@ mod tests {
             r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#.into(),
         );
         let err = provider(url)
-            .chat_stream(request(vec![]), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request(vec![]), &|_| {}, &|| false)
             .unwrap_err();
         server.join().ok();
         assert!(crate::domain::compaction::is_context_length_error(&err.to_string()), "{err}");

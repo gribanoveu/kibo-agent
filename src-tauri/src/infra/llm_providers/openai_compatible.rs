@@ -25,10 +25,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::domain::llm::{
-    ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmMessage, LlmModelInfo,
-    LlmProvider, LlmRole, LlmToolCall,
-};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmMessage, LlmModelInfo, LlmProvider, LlmRole, LlmToolCall, StreamEvent};
 
 /// Placeholder a configured request header can carry to get a fresh
 /// correlation id per request — several corporate gateways require one.
@@ -147,7 +144,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
     /// Runs the streaming endpoint and collects it. See the module comment for
     /// why there is no separate non-streaming path.
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let result = self.chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)?;
+        let result = self.chat_stream(request, &|_| {}, &|| false)?;
         Ok(ChatResponse {
             content: (!result.text.is_empty()).then_some(result.text),
             tool_calls: result.tool_calls,
@@ -158,9 +155,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(StreamEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
         let body = serde_json::to_value(self.body(&request, true)).map_err(|e| LlmError::Message(e.to_string()))?;
@@ -190,11 +185,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 } => {
                     echo_reasoning = echo_reasoning.or(reasoning_field);
                     if let Some(text) = delta {
-                        on_delta(&text);
+                        on_event(StreamEvent::Text(&text));
                         result.text.push_str(&text);
                     }
                     if let Some(text) = reasoning {
-                        on_reasoning(&text);
+                        on_event(StreamEvent::Reasoning(&text));
                         result.reasoning.push_str(&text);
                     }
                     // Whichever chunk carries it, rather than assuming the
@@ -205,7 +200,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     if !tool_calls.is_empty() {
                         calls.ingest(tool_calls);
                         for (id, name, arguments) in calls.snapshots() {
-                            on_tool_call_delta(&id, name, arguments);
+                            on_event(StreamEvent::ToolCall { id: &id, name: name, arguments: arguments });
                         }
                     }
                     // Latched, not assigned: exactly one chunk carries a
@@ -852,8 +847,6 @@ pub(super) mod tests {
             .chat_stream(
                 ChatRequest { messages: vec![], tools: vec![], model: "m".into() },
                 &|_| {},
-                &|_| {},
-                &|_, _, _| {},
                 &|| false,
             )
             .expect("streams");
@@ -1193,9 +1186,11 @@ pub(super) mod tests {
                     tools: Vec::new(),
                     model: "m".into(),
                 },
-                &move |d| seen.lock().unwrap().push(d.to_string()),
-                &|_| {},
-                &|_, _, _| {},
+                &move |event| {
+                    if let StreamEvent::Text(delta) = event {
+                        seen.lock().unwrap().push(delta.to_string());
+                    }
+                },
                 &|| false,
             )
             .expect("streams");
@@ -1225,8 +1220,6 @@ pub(super) mod tests {
             .chat_stream(
                 ChatRequest { messages: vec![], tools: vec![], model: "m".into() },
                 &|_| {},
-                &|_| {},
-                &|_, _, _| {},
                 &|| false,
             )
             .expect("streams");
@@ -1252,9 +1245,11 @@ pub(super) mod tests {
         let result = provider(url)
             .chat_stream(
                 ChatRequest { messages: vec![], tools: vec![], model: "m".into() },
-                &|_| stop.store(true, Ordering::SeqCst),
-                &|_| {},
-                &|_, _, _| {},
+                &|event| {
+                    if matches!(event, StreamEvent::Text(_)) {
+                        stop.store(true, Ordering::SeqCst);
+                    }
+                },
                 &|| stop.load(Ordering::SeqCst),
             )
             .expect("cancelling is not an error");
@@ -1276,8 +1271,6 @@ pub(super) mod tests {
             .chat_stream(
                 ChatRequest { messages: vec![], tools: vec![], model: "m".into() },
                 &|_| {},
-                &|_| {},
-                &|_, _, _| {},
                 &|| false,
             )
             .expect_err("400");
@@ -1303,8 +1296,6 @@ pub(super) mod tests {
             .chat_stream(
                 ChatRequest { messages: vec![], tools: vec![], model: "m".into() },
                 &|_| {},
-                &|_| {},
-                &|_, _, _| {},
                 &|| false,
             )
             .expect_err("429");

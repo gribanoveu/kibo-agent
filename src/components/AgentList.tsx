@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
-import { agentStatus, tokensSpent, type AgentInfo } from "../lib/chat";
+import { type AgentInfo, agentStatus, tokensSpent } from "../lib/agents";
 import type { AgentFocus } from "../lib/describeTool";
 import "./AgentList.css";
 

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { processesList, type ProcessView } from "../lib/chat";
+import { processesList, type ProcessView } from "../lib/processes";
 import { terminalList, type TerminalInfo } from "../lib/terminal";
 
 /** What stands between the user and another folder. */

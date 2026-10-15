@@ -1,38 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ContextUsage, LlmMessage, Outcome, PendingToolCall, ToolCallDecision } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
+import { type ChatRoleId, type ChatRoleView, plainChatAlwaysAllow, plainChatCancel, plainChatCompact, plainChatContextUsage, plainChatList, plainChatPreview, plainChatResume, plainChatRoles, plainChatSave, plainChatSend } from "../lib/plainChat";
+import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
 import {
-  deleteChat,
-  loadChat,
-  onTurnEvent,
-  plainChatAlwaysAllow,
-  plainChatCancel,
-  plainChatCompact,
-  plainChatContextUsage,
-  plainChatList,
-  plainChatPreview,
-  plainChatResume,
-  plainChatRoles,
-  plainChatSave,
-  generateChatTitle,
-  plainChatSend,
-  setChatArchived,
-  type ChatRoleId,
-  type ChatRoleView,
-  type ChatSummary,
-  type ContextUsage,
-  type LlmMessage,
-  type Outcome,
-  type PendingToolCall,
-  type ToolCallDecision,
-  type ImagePart,
-} from "../lib/chat";
-import {
-  acceptEvent,
   acceptOutcome,
   appendNotice,
   appendUserMessage,
   clearApproval,
-  compactionEnded,
-  compactionStarted,
   emptyTurn,
   endTurn,
   restoredTurn,
@@ -41,6 +16,7 @@ import {
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
 import { useStoredState } from "./useStoredState";
+import { useTurnChannel } from "./useTurnChannel";
 
 const isId = (value: unknown): value is string | null => value === null || typeof value === "string";
 
@@ -92,8 +68,6 @@ export function chatBlocks(saved: unknown, messages: LlmMessage[]): Block[] {
  * `model` is the one turns run on — `acceptEvent` says when a cache miss came with a switch.
  */
 export function usePlainChat(lastKubeconfig: string | null = null, model?: string) {
-  const modelRef = useRef(model);
-  modelRef.current = model;
   const [chats, setChats] = useState<ChatSummary[]>([]);
   // Which chat is open, so the next launch opens it again. Null until the first message is saved.
   const [chatId, setChatId] = useStoredState<string | null>("plain-chat-open", null, isId);
@@ -111,7 +85,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   const [compacting, setCompacting] = useState(false);
   // The running turn's id on the one event channel, and its listener.
   const turnId = useRef("");
-  const subscribed = useRef<(() => void) | null>(null);
+  const channel = useTurnChannel(setTurn, model);
   // Set when something happened worth writing down, so opening a chat does
   // not save it straight back and move it up the sidebar.
   const unsaved = useRef(false);
@@ -123,7 +97,6 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
 
   const refresh = useCallback(() => plainChatList().then(setChats, (e) => setError(String(e))), []);
 
-  useEffect(() => () => subscribed.current?.(), []);
 
   // As the agent's meter: every point the history, the role or the cluster can
   // have changed. Asking reaches the pinned cluster, so an answer that comes
@@ -138,8 +111,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   useEffect(refreshContext, [refreshContext, turn.status, chatId]);
 
   const show = (id: string | null, blocks: Block[], messages: LlmMessage[], shownRole: ChatRoleId, pin: KubePin | null) => {
-    subscribed.current?.();
-    subscribed.current = null;
+    channel.stop();
     history.current = messages;
     unsaved.current = false;
     setChatId(id);
@@ -166,7 +138,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   };
 
   useEffect(() => {
-    plainChatRoles().then(setRoles, () => {});
+    plainChatRoles().then(setRoles, (e) => setError(String(e)));
     void refresh();
     if (chatId) void open(chatId);
   }, []);
@@ -202,8 +174,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     // The turn's own history, calls and results included: the next message
     // is sent with what the model read, not only what it answered.
     history.current = outcome.value.history;
-    subscribed.current?.();
-    subscribed.current = null;
+    channel.stop();
   };
 
   // In the transcript, where the turn was: one that fails before its first
@@ -225,12 +196,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     setPinned(kube);
     turnId.current = crypto.randomUUID();
     try {
-      subscribed.current?.();
-      subscribed.current = await onTurnEvent(turnId.current, (event) => {
-      // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
-      const now = Date.now();
-      setTurn((state) => acceptEvent(state, event, now, modelRef.current));
-    });
+      await channel.listen(turnId.current);
       // Saved before the turn: one that fails leaves what the user said to
       // retry, not retype — and the chat is in the sidebar from its first message.
       await plainChatSave(id, role, kube, history.current, asked.blocks);
@@ -267,14 +233,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     setCompacting(true);
     // On the turn channel, as the agent's pass: the backend says when a summary is being made.
     const id = `compact-${crypto.randomUUID()}`;
-    let ended = false;
-    const off = await onTurnEvent(id, (event) => {
-      if (event.type === "historyCompacting" && !ended) setTurn(compactionStarted);
-    });
+    const ended = await channel.watchCompaction(id);
     const end = (result: { folded: number } | null) => {
-      ended = true;
-      off();
-      setTurn((state) => compactionEnded(state, result));
+      ended(result);
       setCompacting(false);
     };
     try {

@@ -1,7 +1,8 @@
-import { cloneElement, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { openExternal } from "../lib/window";
+import { useCopied } from "../hooks/useCopied";
 import { createPortal } from "react-dom";
 import { Check, Code2, Copy, ImageOff, SquareTerminal, Workflow } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { defaultRemarkPlugins, Streamdown, useIsCodeFenceIncomplete, type Components } from "streamdown";
 import { highlight, splitLines, type Token } from "../lib/highlight";
 import { renderMermaid } from "../lib/mermaid";
@@ -20,9 +21,7 @@ function textOf(node: ReactNode): string {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const { copied, copy } = useCopied();
   const label = copied ? "Copied" : "Copy code";
   return (
     <button
@@ -30,14 +29,7 @@ function CopyButton({ text }: { text: string }) {
       className={`md-code-action${copied ? " copied" : ""}`}
       title={label}
       aria-label={label}
-      onClick={() => {
-        // A clipboard that refuses loses nothing: the code is on screen.
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), 1500);
-        }, () => {});
-      }}
+      onClick={() => copy(text)}
     >
       {copied ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
     </button>
@@ -297,7 +289,7 @@ export const Markdown = memo(function Markdown({
             onClick={(event) => {
               event.preventDefault();
               if (file !== null) onOpenFile?.(file);
-              else if (href) void openUrl(href);
+              else if (href) void openExternal(href);
             }}
           >
             {children}

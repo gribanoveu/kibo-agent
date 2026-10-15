@@ -1,5 +1,5 @@
 import { Modal } from "./Modal";
-import type { FolderTrust } from "../lib/chat";
+import type { FolderTrust } from "../lib/skills";
 import "./FolderTrustDialog.css";
 
 type Props = {

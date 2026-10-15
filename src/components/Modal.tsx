@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { X } from "lucide-react";
 import "./Modal.css";
+import { matches } from "../lib/shortcuts";
 
 type Props = {
   title: string;
@@ -17,7 +18,7 @@ type Props = {
 export function Modal({ title, open, onClose, children, footer, wide, full }: Props) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => matches(e, "close") && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);

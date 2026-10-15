@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- 2026-10-15 The index badge no longer stays on "Indexing…" after a folder's first sync ends while the window is still starting up
+- 2026-10-15 When saved API keys cannot be read — the machine's key out of reach, a damaged file — Settings and the chat say so, instead of showing "no key" and failing with the provider's 401; saving the key again fixes it
+- 2026-10-15 Web search that is on but cannot start — a SearXNG address that is not one, unreadable keys — stops the turn with the reason and where to fix it, instead of the model quietly answering that it cannot search
+- 2026-10-15 A Markdown file opened in its own viewer window can only read that file and its text size: the app's other commands — writing files, the terminal, starting a turn — are refused there
+- 2026-10-15 A setting changed while the agent is working — a toggle in Settings while a turn pins its model — is no longer lost or refused, and two saves at once no longer fail with "could not replace"
+- 2026-10-15 The window no longer stalls while the chat list, a long chat, the tool log, Usage or the provider settings load, or while the context meter asks a provider without a pinned model for its models
+- 2026-10-15 Typing in Japanese, Chinese or Korean: Enter that picks a word no longer sends the message or takes what is in a field, anywhere in the app; ⌘/Ctrl+Enter no longer sends in the agent's box either
+- 2026-10-15 An approval card whose preview could not be worked out says why, instead of showing the call without its diff
 - 2026-10-14 Every tool call in the chat opens: a saved memory, a folder made or a file moved shows what it was about in full, and Memory, Search, Plan, Explore and Board calls have their own icons
 - 2026-10-14 Your messages in the chat keep the line breaks you typed, and a long link wraps instead of running past the edge of the window
 - 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them

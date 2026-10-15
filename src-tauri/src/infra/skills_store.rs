@@ -23,7 +23,7 @@ const MAX_LISTED_FILES: usize = 100;
 
 /// The app's own skills folder — the one an empty tab points to.
 pub fn dir() -> Result<PathBuf, SkillError> {
-    Ok(app_dir::dir().map_err(SkillError::Io)?.join("skills"))
+    Ok(app_dir::dir().map_err(|e| SkillError::Io(e.into()))?.join("skills"))
 }
 
 /// The user's skills dirs, in the order a name is looked up in them: the
@@ -42,7 +42,7 @@ fn home() -> Result<PathBuf, SkillError> {
 /// developer's own `~/.agents` and `~/.claude` never reach a test.
 #[cfg(test)]
 fn home() -> Result<PathBuf, SkillError> {
-    app_dir::dir().map_err(SkillError::Io)
+    app_dir::dir().map_err(|e| SkillError::Io(e.into()))
 }
 
 /// The open folder's repository: the nearest folder from it up that has a

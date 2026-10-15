@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { ProcessView } from "../lib/chat";
+import type { ProcessView } from "../lib/processes";
 
 // The Terminal tab: the agent's background processes, asked for while the tab
 // is open, newest first, with the end of what each wrote and a Stop for the

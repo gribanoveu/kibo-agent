@@ -274,6 +274,14 @@ describe("the approval card", () => {
     expect(screen.queryByText("update")).toBeNull();
   });
 
+  /// A card without its diff says so: otherwise it reads as a call that
+  /// changes nothing, and is approved as one.
+  test("says why a call's preview is missing", async () => {
+    render(<Transcript turn={state([approval])} onDecide={() => {}} preview={() => Promise.reject("the file is gone")} />);
+    await settle();
+    expect(screen.getByText("Preview unavailable: the file is gone")).toBeTruthy();
+  });
+
   test("always allow names the tool it should stop asking about", async () => {
     const decided: { always: string[] }[] = [];
     panel(state([approval]), (_decisions, always) => decided.push({ always }));
@@ -522,7 +530,7 @@ describe("the header", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("More"));
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     unmount();
 

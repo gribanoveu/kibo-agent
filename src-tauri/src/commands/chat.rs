@@ -16,7 +16,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -33,17 +32,16 @@ use crate::domain::turn::{
     ToolCallDecision,
 };
 use crate::services::ai_tools::preview;
-use crate::services::llm_chat::{self, Place, SteeringQueue, Turn, TurnError};
+use crate::services::llm_chat::{self, SteeringQueue, Turn, TurnError};
 use crate::services::context_compaction;
 use crate::domain::review::ReviewDesk;
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
 use crate::domain::mcp::McpTools;
-use crate::domain::hooks::Hooks;
 use crate::infra::background::Processes;
-use crate::infra::mcp_config;
 use crate::services::llm_session;
+use crate::services::turn_setup::{self, FolderHandles, FolderTurn};
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::chat_events::chat_event_sink;
@@ -178,7 +176,7 @@ pub async fn workspace_open(
     // here on — the shell started in it (`cmd.exe` refuses that prefix and
     // opens in `C:\Windows`), the tools' root, the index's events, the keys
     // chats and trust are saved under.
-    let resolved = crate::domain::tools::canonicalize_plain(std::path::Path::new(&path))
+    let resolved = crate::infra::paths::canonicalize_plain(std::path::Path::new(&path))
         .map_err(|e| format!("cannot open {path}: {e}"))?;
     if !resolved.is_dir() {
         return Err(format!("{path} is not a folder"));
@@ -247,17 +245,18 @@ pub fn workspace_current(state: State<'_, Arc<AgentState>>) -> Option<String> {
 /// The branch checked out in the open folder; `None` when it is not a
 /// repository or nothing is open.
 #[tauri::command]
-pub fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Option<String> {
-    let root = state.workspace.lock().ok()?.clone()?;
-    crate::infra::git_head::current_branch(&root)
+pub async fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Ok(root) = state.workspace() else { return Ok(None) };
+    super::blocking(move || Ok::<_, String>(crate::infra::git_head::current_branch(&root))).await
 }
 
 /// The main working tree when the open folder is a worktree of it; `None`
 /// for an ordinary folder or repository.
 #[tauri::command]
-pub fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Option<String> {
-    let root = state.workspace.lock().ok()?.clone()?;
-    crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())
+pub async fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Ok(root) = state.workspace() else { return Ok(None) };
+    super::blocking(move || Ok::<_, String>(crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())))
+        .await
 }
 
 /// The open folder's index as it stands — what a window that was not
@@ -339,12 +338,11 @@ pub async fn chat_resume<R: Runtime>(
 /// Asked for the whole round at once: the card shows every call, and one round
 /// trip beats one per call. Nothing here runs anything.
 #[tauri::command]
-pub fn chat_preview(
+pub async fn chat_preview(
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
     let workspace = state.workspace()?;
-    let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -353,7 +351,12 @@ pub fn chat_preview(
             arguments: call.arguments,
         })
         .collect();
-    Ok(preview::preview_round(&scope, &calls))
+    // Reads the files the calls would change, and diffs them.
+    super::blocking(move || {
+        let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
+        Ok::<_, String>(preview::preview_round(&scope, &calls))
+    })
+    .await
 }
 
 /// What the conversation looks like once the older part of it is a summary.
@@ -391,25 +394,26 @@ pub async fn chat_compact(
     // IPC loop freezes every other command for its duration.
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        let started = || {
-            sink(ChatTurnEvent {
-                seq: 1,
-                round: 0,
-                target_id: None,
-                event: ChatEventPayload::HistoryCompacting,
-            })
-        };
-        context_compaction::compact_if_needed(&session, frame, &messages, force, &started)
-            .map(|compacted| {
-                compacted.map(|compacted| CompactedHistory {
-                    history: compacted.history,
-                    folded: compacted.folded,
-                })
-            })
-            .map_err(|e| e.to_string())
+        compact(&session, frame, &messages, force, sink)
     })
     .await
     .map_err(|e| format!("the compaction thread failed: {e}"))?
+}
+
+/// Folds the older history when the next request is worth it — or at once,
+/// `force` — saying on `sink` when a summary is being made. The agent's and
+/// a chat's compaction differ only in the frame they measure against.
+pub(super) fn compact(
+    session: &llm_session::LlmSession,
+    frame: RequestFrame,
+    messages: &[LlmMessage],
+    force: bool,
+    sink: ChatEventSink,
+) -> Result<Option<CompactedHistory>, String> {
+    let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
+    context_compaction::compact_if_needed(session, frame, messages, force, &started)
+        .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
+        .map_err(|e| e.to_string())
 }
 
 /// The message that stands for the part of a chat being rewound away from —
@@ -430,18 +434,23 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>) -> Result<Option<Llm
 ///
 /// Asked rather than computed there: the numbers on the meter have to be the
 /// ones that decide, or a reader watches a gauge that is not connected to the
-/// thing it appears to measure. Cheap — arithmetic over the history, one
-/// serialization of the tool schemas and a read of the rules and skills, no
-/// provider call — so it is a plain command rather than another thread.
+/// thing it appears to measure. Not cheap enough for the main thread: the
+/// session reads the key, and with no model pinned asks the provider for its
+/// list and saves the first as the pin; the frame reads the rules, skills and
+/// the repository.
 #[tauri::command]
-pub fn chat_context_usage(
+pub async fn chat_context_usage(
     messages: Vec<LlmMessage>,
     plan: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
-    let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-    Ok(context_compaction::usage(&session, next_request_frame(&app, &state, plan.as_deref()), &messages))
+    let state = Arc::clone(&state);
+    super::blocking(move || {
+        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, plan.as_deref()), &messages))
+    })
+    .await
 }
 
 /// What the next turn will send in front of the conversation: the prompt
@@ -477,7 +486,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             mcp_servers: mcp.notes(),
         },
         &mcp,
-        super::settings::web_search_on(WebSearchPlace::Agent),
+        crate::services::web_search::is_on(WebSearchPlace::Agent),
         &crate::services::features::enabled(),
     )
 }
@@ -487,7 +496,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
 /// transcript shows it. `None` when there is nothing to journal — the turn is
 /// not the last one that ended, was journaled already, or said nothing.
 #[tauri::command]
-pub fn next_prompt_log(
+pub async fn next_prompt_log(
     chat_id: String,
     turn_id: String,
     user: String,
@@ -497,13 +506,13 @@ pub fn next_prompt_log(
         return Ok(None);
     };
     let input = finished.model_input(&user, &home());
-    crate::infra::next_prompt_log::record(&chat_id, &input).map(Some).map_err(|e| e.to_string())
+    super::blocking(move || crate::infra::next_prompt_log::record(&chat_id, &input).map(Some)).await
 }
 
 /// What the user sent after the journaled turn `id`.
 #[tauri::command]
-pub fn next_prompt_sent(id: String, text: String) -> Result<(), String> {
-    crate::infra::next_prompt_log::record_sent(&id, &next_prompt::clean(&text, &home())).map_err(|e| e.to_string())
+pub async fn next_prompt_sent(id: String, text: String) -> Result<(), String> {
+    super::blocking(move || crate::infra::next_prompt_log::record_sent(&id, &next_prompt::clean(&text, &home()))).await
 }
 
 fn home() -> String {
@@ -588,10 +597,8 @@ fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -
     // costs the memory, not the choice made for this turn.
     // No folder open, nothing to remember it for.
     let Ok(folder) = state.workspace() else { return Ok(()) };
-    let mut settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    if settings.approval.set_auto(chat_id, &folder.display().to_string(), unattended) {
-        crate::infra::settings_store::save(&settings).map_err(|e| e.to_string())?;
-    }
+    crate::infra::settings_store::update(|s| s.approval.set_auto(chat_id, &folder.display().to_string(), unattended))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -619,9 +626,7 @@ pub fn approval_remember_get() -> Result<RememberScope, String> {
 /// Refuses on settings it cannot read, rather than saving defaults over them.
 #[tauri::command]
 pub fn approval_remember_set(remember: RememberScope) -> Result<(), String> {
-    let mut settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    settings.approval.remember = remember;
-    crate::infra::settings_store::save(&settings).map_err(|e| e.to_string())
+    crate::infra::settings_store::update(|s| s.approval.remember = remember).map_err(|e| e.to_string())
 }
 
 /// A chat switched to Auto before its first save had no id to be remembered
@@ -629,10 +634,12 @@ pub fn approval_remember_set(remember: RememberScope) -> Result<(), String> {
 /// memory that failed to save only means it asks next time.
 pub(super) fn remember_new_chat(state: &AgentState, id: &str) {
     let auto = state.approval.lock().is_ok_and(|approval| approval.skip_all);
-    let Ok(mut settings) = crate::infra::settings_store::load() else { return };
-    if auto && settings.approval.remember == RememberScope::Chat && settings.approval.set_auto(Some(id), "", true) {
-        let _ = crate::infra::settings_store::save(&settings);
+    if !auto {
+        return;
     }
+    let _ = crate::infra::settings_store::update(|s| {
+        s.approval.remember == RememberScope::Chat && s.approval.set_auto(Some(id), "", true)
+    });
 }
 
 fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {
@@ -644,31 +651,6 @@ fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {
 /// index is open — or when `setup` never ran, as under a mock runtime.
 fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
     app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
-}
-
-/// Only an Agent turn starts servers: the others cannot offer their tools,
-/// and a server's start is already something done on the user's machine.
-/// A configuration that does not parse costs the turn its servers, not the
-/// turn — the tab says what is wrong with the file.
-fn mcp_for_turn(
-    servers: Option<&McpServers>,
-    mode: ConversationMode,
-    workspace: &std::path::Path,
-    cancelled: &(dyn Fn() -> bool + Sync),
-) -> McpTools {
-    match servers {
-        Some(servers) if mode == ConversationMode::Agent => {
-            servers.for_turn(&mcp_config::load().unwrap_or_default(), workspace, cancelled)
-        }
-        _ => McpTools::default(),
-    }
-}
-
-/// The turn's policy with the workspace's git aliases in it. Read per turn:
-/// an alias added in a terminal a minute ago counts.
-fn with_git_aliases(mut policy: ApprovalPolicy, workspace: &std::path::Path) -> ApprovalPolicy {
-    policy.git_aliases = crate::infra::git_aliases::read(workspace);
-    policy
 }
 
 /// `/review`: a turn in Review mode over the open folder's working tree
@@ -726,22 +708,24 @@ where
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
     let workspace = state.workspace()?;
-    let approval = with_git_aliases(state.approval()?, &workspace);
+    let approval = state.approval()?;
     let (mode, review) = state.turn_mode();
-    let search = searcher_of(&app);
-    let embeddings = app.try_state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().map(|index| index.embeddings());
-    let mcp_servers = app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers));
-    let processes = app
-        .try_state::<Arc<Processes>>()
-        .map(|processes| Arc::clone(&processes) as Arc<dyn crate::domain::background::BackgroundProcesses>);
-    let agents = app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents));
-    let questions = app.try_state::<Arc<McpQuestions>>().map(|questions| Arc::clone(&questions));
-    let terminals = app
-        .try_state::<Arc<crate::infra::terminal::Terminals>>()
-        .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>);
-    let board = app
-        .try_state::<Arc<crate::infra::board_store::Board>>()
-        .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>);
+    let handles = FolderHandles {
+        search: searcher_of(&app),
+        embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
+        mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
+        processes: app
+            .try_state::<Arc<Processes>>()
+            .map(|processes| Arc::clone(&processes) as Arc<dyn crate::domain::background::BackgroundProcesses>),
+        agents: app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
+        questions: app.try_state::<Arc<McpQuestions>>().map(|questions| Arc::clone(&questions)),
+        terminals: app
+            .try_state::<Arc<crate::infra::terminal::Terminals>>()
+            .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>),
+        board: app
+            .try_state::<Arc<crate::infra::board_store::Board>>()
+            .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
+    };
 
     tauri::async_runtime::spawn_blocking(move || {
         let emit = chat_event_sink(&app, turn_id.clone());
@@ -750,68 +734,21 @@ where
             observed.observe(&event.event);
             emit(event)
         });
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
         let cancelled = || state.cancel.load(Ordering::SeqCst);
-        let sleep = |d: Duration| std::thread::sleep(d);
         let take_steering = || state.steering.take();
         let notes_typed = || state.steering.typed();
-        let shell = crate::infra::shells::for_commands();
-        let shell_described = crate::domain::command_exec::describe_shell(
-            &shell.program,
-            crate::infra::process_runner::probe_shell(&shell).as_ref(),
-        );
-        // A skills folder that cannot be read costs the turn its skills, not
-        // the turn itself: nothing the user asked for depends on it existing.
-        let skills = crate::services::skills::enabled_catalog(Some(&workspace)).unwrap_or_default();
-        let rules = crate::services::project_rules::load(&workspace);
-        let record = crate::infra::tool_call_log::recorder();
-        let log_call = |entry: crate::domain::tool_call_log::ToolCallLogEntry| record(&entry);
-        // Started only where they can be offered. A configuration that does
-        // not parse costs the turn its servers, not the turn: the tab says
-        // what is wrong with the file.
-        // A file that does not parse stops the turn rather than running it
-        // without the hooks: a guard the user wrote, silently off, is worse
-        // than a turn that says why it did not start.
-        let hooks = crate::infra::hooks::load()
-            .map(|config| Hooks::new(config, Arc::new(crate::infra::hooks::run)))
-            .map_err(|e| format!("{e} — fix or remove {}", crate::infra::hooks::path().map(|p| p.display().to_string()).unwrap_or_default()))?;
-        let mcp = mcp_for_turn(mcp_servers.as_deref(), mode, &workspace, &cancelled);
-        let worktree_of = crate::infra::git_head::worktree_of(&workspace);
-        // Read each turn, as the chat's is: a search turned on in Settings is
-        // there for the next answer.
-        let web = embeddings.as_ref().and_then(|model| super::settings::web_for(WebSearchPlace::Agent, model));
-        let features = crate::services::features::enabled();
-        let board = board.filter(|_| features.is_on(crate::domain::features::Feature::Board));
-
-        let turn = Turn {
+        let folder = FolderTurn {
+            workspace: &workspace,
+            mode,
+            review,
+            approval,
+            plan: plan.as_deref(),
             events: &events,
-            session: &session,
-            place: Place::Folder { scope: &scope, mode, web: web.as_ref() },
-            approval: &approval,
             cancelled: &cancelled,
-            sleep: &sleep,
             take_steering: &take_steering,
             notes_typed: &notes_typed,
-            shell: &shell,
-            shell_described: &shell_described,
-            search,
-            skills: &skills,
-            rules: &rules,
-            log_call: &log_call,
-            plan: plan.as_deref(),
-            worktree_of: worktree_of.as_deref(),
-            mcp: &mcp,
-            hooks: &hooks,
-            processes,
-            terminals,
-            review,
-            agents,
-            questions,
-            board,
-            features,
         };
-        let outcome = run(&turn).map_err(|e| e.to_string())?;
+        let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
         state.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
@@ -888,26 +825,6 @@ mod tests {
         assert_eq!(folders[1], RecentFolder { path: main.display().to_string(), worktree_of: None });
     }
 
-    #[test]
-    fn only_an_agent_turn_starts_mcp_servers() {
-        crate::testing::with_app_dir("cmd-mcp-mode", || {
-            mcp_config::save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
-            let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let counted = Arc::clone(&starts);
-            let servers = McpServers::new(Arc::new(move |_, _, _| {
-                counted.fetch_add(1, Ordering::SeqCst);
-                Err(crate::domain::mcp::McpError::NotStarted("test".into()))
-            }));
-            let root = temp_dir("cmd-mcp-mode-root");
-            for mode in [ConversationMode::Plan, ConversationMode::Ask] {
-                mcp_for_turn(Some(&servers), mode, &root, &|| false);
-            }
-            assert_eq!(starts.load(Ordering::SeqCst), 0);
-            mcp_for_turn(Some(&servers), ConversationMode::Agent, &root, &|| false);
-            assert_eq!(starts.load(Ordering::SeqCst), 1);
-        });
-    }
-
     fn skip_all(state: &AgentState) -> bool {
         state.approval.lock().unwrap().skip_all
     }
@@ -973,20 +890,6 @@ mod tests {
         let opened = state.workspace().unwrap();
         assert!(!opened.to_string_lossy().contains(".."), "{opened:?}");
         assert!(opened.is_dir());
-    }
-
-    /// Each turn reads the folder's git aliases, keeping what the session
-    /// already allowed.
-    #[test]
-    fn a_turn_s_policy_carries_the_workspace_s_git_aliases() {
-        let dir = temp_dir("cmd-git-aliases");
-        git2::Repository::init(&dir).unwrap().config().unwrap().set_str("alias.pf", "push --force").unwrap();
-        let mut base = ApprovalPolicy::default();
-        base.always_allowed.insert(ToolName::RunCommand);
-
-        let policy = with_git_aliases(base, &dir);
-        assert_eq!(policy.git_aliases.get("pf").map(String::as_str), Some("push --force"));
-        assert!(policy.always_allowed.contains(&ToolName::RunCommand));
     }
 
     /// The card's third button. It lasts for the session and is not written
@@ -1102,7 +1005,7 @@ mod tests {
         // Not "the first finish": FSEvents may still report the files written
         // above, and the sync that wakes is running when the first one ends.
         let shot = loop {
-            finished.recv_timeout(Duration::from_secs(10)).expect("the sync never finished");
+            finished.recv_timeout(std::time::Duration::from_secs(10)).expect("the sync never finished");
             let shot = snapshot(&index).unwrap();
             if !shot.syncing {
                 break shot;

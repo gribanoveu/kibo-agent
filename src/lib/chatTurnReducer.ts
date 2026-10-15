@@ -1,16 +1,7 @@
-import {
-  type ChatUsage,
-  type Checkpoint,
-  type ContextUsage,
-  type FileChange,
-  type ImagePart,
-  type McpAnswer,
-  type McpQuestion,
-  type Outcome,
-  type PendingToolCall,
-  type ProcessInfo,
-  type TurnEvent,
-} from "./chat";
+import type { ChatUsage, Checkpoint, ContextUsage, FileChange, Outcome, PendingToolCall, TurnEvent } from "./chat";
+import type { ImagePart } from "./images";
+import type { McpAnswer, McpQuestion } from "./mcp";
+import type { ProcessInfo } from "./processes";
 
 // The transcript, assembled from one ordered stream of events.
 //

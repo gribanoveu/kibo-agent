@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 
-use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, StreamEvent};
 use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, TurnLimits, DEFAULT_CONTEXT_LIMIT};
 use crate::infra::{daily_metrics, llm_credentials_store, llm_providers, settings_store};
 
@@ -50,7 +50,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
             .ok_or_else(|| LlmError::Message("no LLM provider is configured".to_string()))?,
     };
 
-    let api_key = llm_credentials_store::get_api_key(&config.id);
+    let api_key = llm_credentials_store::get_api_key(&config.id).map_err(|e| LlmError::Message(e.to_string()))?;
     let provider: Arc<dyn LlmProvider> = Arc::from(llm_providers::provider_for(config, api_key)?);
     let model = effective_model(config, provider.as_ref())?;
 
@@ -101,7 +101,10 @@ pub fn effective_model(
 /// model list. The key is the one typed into the form, or else the one stored
 /// under the provider's name.
 pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -> Result<Vec<String>, LlmError> {
-    let api_key = api_key.or_else(|| llm_credentials_store::get_api_key(&config.id));
+    let api_key = match api_key {
+        Some(typed) => Some(typed),
+        None => llm_credentials_store::get_api_key(&config.id).map_err(|e| LlmError::Message(e.to_string()))?,
+    };
     let provider = llm_providers::provider_for(config, api_key)?;
     Ok(provider.list_models()?.into_iter().map(|m| m.id).collect())
 }
@@ -112,17 +115,10 @@ pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -
 /// the end of a list the user arranged, and the first entry is what an
 /// unpinned setup uses.
 pub fn save_provider(config: ProviderConfig) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    match settings
-        .llm
-        .providers
-        .iter_mut()
-        .find(|p| p.id == config.id)
-    {
+    settings_store::update(|settings| match settings.llm.providers.iter_mut().find(|p| p.id == config.id) {
         Some(existing) => *existing = config,
         None => settings.llm.providers.push(config),
-    }
-    settings_store::save(&settings)
+    })
 }
 
 /// Removes a provider and the key sealed under its id.
@@ -130,12 +126,12 @@ pub fn save_provider(config: ProviderConfig) -> Result<(), SettingsError> {
 /// The key goes with it: an id that is later reused for a different endpoint
 /// would otherwise inherit a credential the user thought they had deleted.
 pub fn remove_provider(id: &str) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.providers.retain(|p| p.id != id);
-    if settings.llm.active_provider_id.as_deref() == Some(id) {
-        settings.llm.active_provider_id = None;
-    }
-    settings_store::save(&settings)?;
+    settings_store::update(|settings| {
+        settings.llm.providers.retain(|p| p.id != id);
+        if settings.llm.active_provider_id.as_deref() == Some(id) {
+            settings.llm.active_provider_id = None;
+        }
+    })?;
     // Best effort: settings are already written, and a key left behind is
     // unreachable rather than dangerous.
     let _ = llm_credentials_store::delete_api_key(id);
@@ -144,40 +140,31 @@ pub fn remove_provider(id: &str) -> Result<(), SettingsError> {
 
 /// Pins which provider a turn uses. `None` falls back to the first configured.
 pub fn set_active_provider(id: Option<String>) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.active_provider_id = id;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.active_provider_id = id)
 }
 
 pub fn set_debug_logging(enabled: bool) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.debug_logging = enabled;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.debug_logging = enabled)
 }
 
 pub fn set_reply_language(language: ReplyLanguage) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.reply_language = language;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.reply_language = language)
 }
 
 pub fn set_turn_limits(limits: TurnLimits) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.llm.turn_limits = limits;
-    settings_store::save(&settings)
+    settings_store::update(|s| s.llm.turn_limits = limits)
 }
 
 /// Stores `model` as `provider_id`'s pin, leaving its other fields alone.
 pub fn pin_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    let Some(config) = settings.llm.providers.iter_mut().find(|p| p.id == provider_id) else {
-        // Nothing to pin it to. Adding an entry here would invent a provider
-        // with no endpoint, which every later lookup would then have to
-        // special-case.
-        return Ok(());
-    };
-    config.model = Some(model.to_string());
-    settings_store::save(&settings)
+    settings_store::update(|settings| {
+        // Nothing to pin it to when the provider is gone: adding an entry here
+        // would invent a provider with no endpoint, which every later lookup
+        // would then have to special-case.
+        if let Some(config) = settings.llm.providers.iter_mut().find(|p| p.id == provider_id) {
+            config.model = Some(model.to_string());
+        }
+    })
 }
 
 /// The provider every session in the app talks through, counting what each
@@ -206,12 +193,10 @@ impl LlmProvider for Counted {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(StreamEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
-        let result = self.0.chat_stream(request, on_delta, on_reasoning, on_tool_call_delta, cancelled)?;
+        let result = self.0.chat_stream(request, on_event, cancelled)?;
         self.count(result.usage.as_ref());
         Ok(result)
     }
@@ -246,9 +231,7 @@ mod tests {
         fn chat_stream(
             &self,
             _: ChatRequest,
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            _on_event: &dyn Fn(StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             unreachable!("resolution never streams")
@@ -307,6 +290,19 @@ mod tests {
             configure(vec![provider("local", Some("qwen"))], None);
             let Err(err) = resolve(None) else { panic!("expected an error") };
             assert!(err.to_string().contains("API key"), "{err}");
+        });
+    }
+
+    /// Keys that cannot be read are not "no key": the turn says why rather
+    /// than sending a request the provider answers with 401.
+    #[test]
+    fn unreadable_keys_say_so() {
+        with_app_dir("session-broken-keys", || {
+            configure(vec![provider("local", Some("qwen"))], None);
+            let dir = crate::infra::app_dir::ensure().unwrap();
+            crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
+            let Err(err) = resolve(None) else { panic!("expected an error") };
+            assert!(err.to_string().contains("does not open"), "{err}");
         });
     }
 
@@ -435,7 +431,7 @@ mod tests {
             remove_provider("local").unwrap();
 
             assert!(settings_store::load().unwrap().llm.providers.is_empty());
-            assert!(!llm_credentials_store::has_api_key("local"));
+            assert!(!llm_credentials_store::has_api_key("local").unwrap());
         });
     }
 
@@ -496,9 +492,7 @@ mod tests {
         fn chat_stream(
             &self,
             _: ChatRequest,
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            _on_event: &dyn Fn(StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             Ok(ChatStreamResult { usage: Some(self.0), ..Default::default() })
@@ -517,7 +511,7 @@ mod tests {
             let request = || ChatRequest { model: "m".into(), messages: Vec::new(), tools: Vec::new() };
 
             counted.chat(request()).unwrap();
-            counted.chat_stream(request(), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false).unwrap();
+            counted.chat_stream(request(), &|_| {}, &|| false).unwrap();
 
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
             let row = |metric, key: &str, value| DailyMetric { day: today.clone(), metric, key: key.into(), value };

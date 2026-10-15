@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { setShell, shellChoices, type ShellChoices, type ShellKind } from "../lib/chat";
+import { setShell, shellChoices, type ShellChoices, type ShellKind } from "../lib/settings";
 
 /** Settings → Agent → Shell: what is installed and which one runs, read when the pane opens. */
 export function useShellChoice() {

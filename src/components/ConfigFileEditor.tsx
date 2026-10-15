@@ -70,7 +70,7 @@ export function ConfigFileEditor({ label, text, error, note, merge, onSave, onCl
     if (matches(e, "save")) {
       e.preventDefault();
       void save();
-    } else if (e.key === "Tab" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    } else if (matches(e, "indent")) {
       // An indent, as in any editor. Shift+Tab still leaves the box.
       // `insertText` keeps the edit on the undo stack; a plain value change would not.
       e.preventDefault();

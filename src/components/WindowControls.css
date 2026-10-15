@@ -17,13 +17,13 @@
 }
 /* macOS traffic-light colours are the platform's, not the theme's. */
 .window-controls .dot.r {
-  background: #ff5f57;
+  background: var(--wc-close);
 }
 .window-controls .dot.y {
-  background: #febc2e;
+  background: var(--wc-minimize);
 }
 .window-controls .dot.g {
-  background: #28c840;
+  background: var(--wc-zoom);
 }
 
 .window-controls .dot svg {
@@ -68,8 +68,8 @@
 }
 /* Close turns the platform's red, not the theme's. */
 .window-controls .caption.close:hover {
-  background: #c42b1c;
-  color: #fff;
+  background: var(--wc-close-windows);
+  color: var(--wc-close-windows-text);
 }
 .window-controls .caption svg {
   width: 10px;

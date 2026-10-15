@@ -39,6 +39,7 @@ afterAll(() => {
 });
 
 const chat = await import("../lib/chat");
+const savedChats = await import("../lib/savedChats");
 
 afterEach(() => {
   calls.length = 0;
@@ -167,7 +168,7 @@ describe("saved chats", () => {
     const messages = [{ role: "user" as const, content: "fix the parser" }];
     const blocks = [{ kind: "user" as const, id: "user:0", text: "fix the parser" }];
 
-    const summary = await chat.saveChat("c1", messages, blocks, [], null);
+    const summary = await savedChats.saveChat("c1", messages, blocks, [], null);
 
     expect(calls).toEqual([
       { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null } },
@@ -177,13 +178,13 @@ describe("saved chats", () => {
 
   test("a chat is loaded by id", async () => {
     invokeResult = { id: "c1", messages: [], blocks: [], todos: [] };
-    await chat.loadChat("c1");
+    await savedChats.loadChat("c1");
     expect(calls).toEqual([{ command: "chat_load", args: { id: "c1" } }]);
   });
 
   test("the list asks for nothing: the backend knows which folder is open", async () => {
     invokeResult = [];
-    await chat.listChats();
+    await savedChats.listChats();
     expect(calls).toEqual([{ command: "chat_list", args: undefined }]);
   });
 
@@ -194,7 +195,7 @@ describe("saved chats", () => {
     const internals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     try {
-      expect(await chat.listChats()).toEqual([]);
+      expect(await savedChats.listChats()).toEqual([]);
       expect(calls).toEqual([]);
     } finally {
       (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = internals;

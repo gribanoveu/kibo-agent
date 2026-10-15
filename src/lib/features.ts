@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 
 /** A feature built into the app that the user turns on from the Catalog
     (`domain::features`, docs/33-features.md). Its id is what a page's `feature` names. */

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import type { ChangeTotals } from "../lib/chat";
+import type { ChangeTotals } from "../lib/git";
 
 // The folder tab's count of lines added and removed since the last commit:
 // read when the folder opens and on the backend's change events for it.

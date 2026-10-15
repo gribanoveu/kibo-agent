@@ -46,19 +46,12 @@ import { describeActive, describeRun, describeTool, type AgentFocus } from "../l
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
-import {
-  previewCalls,
-  processStatus,
-  type ProcessInfo,
-  type ToolCallDecision,
-  type PendingToolCall,
-  type FileDiffStats,
-  type ToolPreview,
-  type McpAnswer,
-  type Task,
-} from "../lib/chat";
+import { type FileDiffStats, type PendingToolCall, previewCalls, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
+import type { McpAnswer } from "../lib/mcp";
+import { type ProcessInfo, processStatus } from "../lib/processes";
 import { dragOrMaximize } from "./Titlebar";
 import "./ChatPanel.css";
+import { useToolPreviews } from "../hooks/useToolPreviews";
 
 const TOOL_ICON: Record<string, typeof FileText> = {
   Read: FileText,
@@ -226,9 +219,7 @@ function ApprovalCard({
   preview?: PreviewCalls;
 }) {
   const [reason, setReason] = useState("");
-  // What each call would do. Approving a write means approving its contents,
-  // and the arguments alone do not show them.
-  const [previews, setPreviews] = useState<ToolPreview[]>([]);
+  const { previews, error: previewError } = useToolPreviews(block.calls, preview);
   const asked = block.calls.filter((call) => call.requiresConfirmation);
   // Bundled into the round but not in question — six todo updates are one
   // line, not six lines of "update" between the diff and the buttons.
@@ -236,16 +227,6 @@ function ApprovalCard({
     block.calls.filter((call) => !call.requiresConfirmation).map((call) => describeTool({ ...emptyTool, ...call }).name),
   );
 
-  useEffect(() => {
-    let live = true;
-    preview(block.calls)
-      // `?? []`: the card is worth drawing even if the previews are not.
-      .then((next) => live && setPreviews(next ?? []))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [block.calls, preview]);
   const answer = (approved: boolean, always: string[] = []) =>
     onDecide(
       asked.map((call) => ({
@@ -261,6 +242,7 @@ function ApprovalCard({
       <div className="approval-label">
         Approval required · {asked.map((call) => describeTool({ ...emptyTool, ...call }).name).join(", ")}
       </div>
+      {previewError && <div className="approval-why">Preview unavailable: {previewError}</div>}
       {block.calls.map((call, index) =>
         call.requiresConfirmation ? (
           <div key={call.id}>

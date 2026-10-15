@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { describeUsage } from "../lib/chat";
+import { describeUsage } from "../lib/settings";
 
 // The line under the Tavily key: what it has spent, and what is left of it.
 

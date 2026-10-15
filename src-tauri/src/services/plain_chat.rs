@@ -151,16 +151,14 @@ mod tests {
         fn chat_stream(
             &self,
             request: ChatRequest,
-            on_delta: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            on_event: &dyn Fn(crate::domain::llm::StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             self.asked.lock().unwrap().push(request);
             let reply = self.replies.lock().unwrap().pop_front().expect("a reply left in the script");
             let (head, tail) = reply.text.split_at(reply.text.len() / 2);
-            on_delta(head);
-            on_delta(tail);
+            on_event(crate::domain::llm::StreamEvent::Text(head));
+            on_event(crate::domain::llm::StreamEvent::Text(tail));
             Ok(reply)
         }
 

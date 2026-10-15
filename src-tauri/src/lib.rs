@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod architecture;
 pub mod commands;
 pub mod domain;
 pub mod infra;

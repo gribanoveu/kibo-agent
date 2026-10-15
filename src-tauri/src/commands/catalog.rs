@@ -5,23 +5,18 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::catalog::{CatalogError, ItemKind};
+use crate::domain::catalog::ItemKind;
 use crate::infra::mcp_config;
 use crate::services::catalog::{self, Preview, SourceView, UpdatePreview};
 use crate::services::mcp_servers::McpServers;
+
+use super::blocking;
 
 /// Every catalog asked for its index — a conditional GET, so asking again
 /// with nothing new costs a `304`. Off the IPC loop: it is the network.
 #[tauri::command]
 pub async fn catalog_list() -> Result<Vec<SourceView>, String> {
     tauri::async_runtime::spawn_blocking(catalog::list).await.map_err(|e| format!("the catalog thread failed: {e}"))
-}
-
-async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, CatalogError> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|e| format!("the catalog thread failed: {e}"))?
-        .map_err(|e| e.to_string())
 }
 
 /// Installs an entry from `source`'s kept index — the one the page shows; a

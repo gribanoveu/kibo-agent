@@ -4,7 +4,7 @@
 // has no field for (`disabled`, Claude Code's extra keys) is carried over
 // untouched.
 
-import type { McpExposure } from "./chat";
+import type { McpExposure } from "./mcp";
 import { isObject, parseFile, stringify, type Json } from "./configSnippets";
 
 export type Written = { text: string } | { error: string };

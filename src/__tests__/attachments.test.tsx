@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ImagePart } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
 
 // Pictures pasted or dropped into the box: each goes to the backend to be
 // sanitized and only what comes back is attached, sent, and drawn — and a
@@ -84,7 +84,7 @@ function box({ imagesEnabled = true, running = false } = {}) {
   const area = screen.getByRole("textbox");
   const paste = (files: File[]) => fireEvent.paste(area, { clipboardData: { files } });
   const type = (text: string) => fireEvent.change(area, { target: { value: text } });
-  const enter = () => fireEvent.keyDown(area, { key: "Enter" });
+  const enter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
   return { sent, area, paste, type, enter };
 }
 

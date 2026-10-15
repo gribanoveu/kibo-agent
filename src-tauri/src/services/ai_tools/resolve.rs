@@ -24,9 +24,24 @@
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
-use crate::domain::tools::canonicalize_plain;
+use crate::infra::paths::canonicalize_plain;
 
 use crate::domain::tools::{ToolError, ToolScope};
+
+impl ToolScope {
+    /// Canonicalizes `root`. Fails if it does not exist — an access boundary
+    /// that cannot be resolved must not silently become "anywhere". Here
+    /// rather than beside the type: resolving the root is I/O.
+    pub fn new(root: &Path) -> Result<Self, ToolError> {
+        // Plain, as every path checked against it is: on Windows `canonicalize`
+        // gives `\\?\C:\…`, which no `C:\…` path starts with.
+        let root = canonicalize_plain(root).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ToolError::NotFound(root.display().to_string()),
+            _ => ToolError::Io(e),
+        })?;
+        Ok(Self { root })
+    }
+}
 
 /// The path the model named, proven to be inside the scope and to exist.
 pub fn resolve_existing(scope: &ToolScope, path: &str) -> Result<PathBuf, ToolError> {
