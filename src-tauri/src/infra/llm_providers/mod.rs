@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use secrecy::SecretString;
 use serde_json::Value;
 
-use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, StreamEvent};
 use crate::domain::settings::{ProviderConfig, ProviderKind};
 use crate::infra::http_agent;
 
@@ -69,12 +69,10 @@ impl LlmProvider for WithoutImages {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(StreamEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
-        self.0.chat_stream(without_images(request), on_delta, on_reasoning, on_tool_call_delta, cancelled)
+        self.0.chat_stream(without_images(request), on_event, cancelled)
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -307,7 +305,7 @@ mod tests {
             };
             let provider = provider_for(&config, Some(SecretString::from("k"))).expect("builds");
             if stream {
-                let _ = provider.chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false);
+                let _ = provider.chat_stream(request, &|_| {}, &|| false);
             } else {
                 let _ = provider.chat(request);
             }

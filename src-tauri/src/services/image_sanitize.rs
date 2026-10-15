@@ -533,7 +533,7 @@ mod tests {
         };
         let result = session
             .provider
-            .chat_stream(request, &|_| {}, &|_| {}, &|_, _, _| {}, &|| false)
+            .chat_stream(request, &|_| {}, &|| false)
             .expect("the provider takes the picture");
         let answer = result.text.to_lowercase().replace(' ', "");
         println!("{}", result.text);

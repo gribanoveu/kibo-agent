@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 
-use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, StreamEvent};
 use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, TurnLimits, DEFAULT_CONTEXT_LIMIT};
 use crate::infra::{daily_metrics, llm_credentials_store, llm_providers, settings_store};
 
@@ -193,12 +193,10 @@ impl LlmProvider for Counted {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(StreamEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
-        let result = self.0.chat_stream(request, on_delta, on_reasoning, on_tool_call_delta, cancelled)?;
+        let result = self.0.chat_stream(request, on_event, cancelled)?;
         self.count(result.usage.as_ref());
         Ok(result)
     }
@@ -233,9 +231,7 @@ mod tests {
         fn chat_stream(
             &self,
             _: ChatRequest,
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            _on_event: &dyn Fn(StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             unreachable!("resolution never streams")
@@ -496,9 +492,7 @@ mod tests {
         fn chat_stream(
             &self,
             _: ChatRequest,
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            _on_event: &dyn Fn(StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             Ok(ChatStreamResult { usage: Some(self.0), ..Default::default() })
@@ -517,7 +511,7 @@ mod tests {
             let request = || ChatRequest { model: "m".into(), messages: Vec::new(), tools: Vec::new() };
 
             counted.chat(request()).unwrap();
-            counted.chat_stream(request(), &|_| {}, &|_| {}, &|_, _, _| {}, &|| false).unwrap();
+            counted.chat_stream(request(), &|_| {}, &|| false).unwrap();
 
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
             let row = |metric, key: &str, value| DailyMetric { day: today.clone(), metric, key: key.into(), value };
