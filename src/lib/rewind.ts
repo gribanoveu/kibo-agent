@@ -7,9 +7,11 @@ import type { FileChange } from "./chat";
 const ACCOUNTED = new Set([
   "writeFile",
   "editFile",
-  "createDirectory",
+  "delete",
+  // Names older chats saved.
   "deleteFile",
   "deleteDirectory",
+  "createDirectory",
   "move",
   "readFile",
   "grep",

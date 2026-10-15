@@ -1003,7 +1003,7 @@ mod tests {
 
         let policy = state.approval().unwrap();
         assert!(!policy.requires_approval(ToolName::WriteFile, true));
-        assert!(policy.requires_approval(ToolName::DeleteFile, true));
+        assert!(policy.requires_approval(ToolName::Delete, true));
     }
 
     /// A review's turn runs in Review mode — its resume too — and the next

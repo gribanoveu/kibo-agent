@@ -61,7 +61,7 @@ Write it in the language of what you search — for code usually English, even w
 a Russian question about English code matches far worse. \
 Unsure how the code puts it, add other wordings in queries: one call searches them all. \
 Put the identifiers you expect the code to use in fts (sendNotification, RetryPolicy), not the words of the question. \
-Documentation is left out unless you set includeDocs; glob and exclude narrow the search to paths, as in grep. \
+Documentation is left out unless you set includeDocs. \
 If meta.hint is present, follow it. Use grep instead when you need every occurrence of an exact string. \
 Returns at most {MAX_TOP_K} matches."
         ),

@@ -59,8 +59,6 @@ struct Entry {
     /// To the writer thread; dropping it ends that thread.
     input: Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    /// The shell's; `None` where the platform does not say.
-    pid: Option<u32>,
     shared: Arc<Mutex<Shared>>,
 }
 
@@ -84,16 +82,6 @@ impl Registry {
 impl Entry {
     fn info(&self) -> TerminalInfo {
         TerminalInfo { id: self.id, shell: self.shell.clone(), state: lock(&self.shared).state }
-    }
-
-    /// Something other than the shell holds the terminal: the foreground
-    /// process group is not the shell's own.
-    fn busy(&self) -> bool {
-        #[cfg(unix)]
-        if let (Some(group), Some(pid)) = (self.master.process_group_leader(), self.pid) {
-            return u32::try_from(group).ok() != Some(pid);
-        }
-        false
     }
 }
 
@@ -145,7 +133,6 @@ impl Terminals {
         }));
         let (input, typed) = mpsc::channel();
         let killer = child.clone_killer();
-        let pid = child.process_id();
 
         let mut registry = lock(&self.registry);
         registry.next_id += 1;
@@ -154,7 +141,7 @@ impl Terminals {
         write(writer, typed);
         wait(child, Arc::clone(&shared), Arc::clone(&self.changed), id);
         let info = TerminalInfo { id, shell: shell.clone(), state: TerminalState::Running };
-        registry.entries.push(Entry { id, shell, master: pair.master, input, killer, pid, shared });
+        registry.entries.push(Entry { id, shell, master: pair.master, input, killer, shared });
         drop(registry);
         (self.changed)(TerminalChanged { id });
         Ok(info)
@@ -258,31 +245,6 @@ impl UserTerminals for Terminals {
             output: last_lines(screen, lines),
             cut: 0,
         })
-    }
-
-    fn run(&self, id: Option<u32>, command: &str, cwd: &Path) -> Result<TerminalInfo, TerminalError> {
-        if command.contains(['\n', '\r']) {
-            return Err(TerminalError::MultiLine);
-        }
-        let target = {
-            let registry = lock(&self.registry);
-            let entry = match id {
-                Some(id) => Some(registry.entry(id)?),
-                None => registry.entries.iter().rev().find(|e| lock(&e.shared).state == TerminalState::Running),
-            };
-            if let Some(busy) = entry.filter(|e| e.busy()) {
-                return Err(TerminalError::Busy(busy.id));
-            }
-            entry.map(Entry::info)
-        };
-        let terminal = match target {
-            Some(terminal) => terminal,
-            // The size the tab replaces with its own once it draws it. What
-            // is typed before the shell is up waits in the PTY until it reads.
-            None => self.open(cwd, TerminalSize { cols: 80, rows: 24 })?,
-        };
-        self.write(terminal.id, format!("{command}\r").into_bytes())?;
-        Ok(terminal)
     }
 }
 
@@ -679,52 +641,10 @@ mod tests {
         });
     }
 
-    /// A full-screen program owns the terminal: the agent is told, and does
-    /// not type into it.
     #[test]
-    fn a_program_in_the_foreground_holds_the_terminal() {
-        let terminals = Terminals::default();
-        let dir = folder("term-busy");
-        let id = open_sh(&terminals, &dir);
-        type_line(&terminals, id, r"printf '\033[?1049h'; sleep 30");
-        until("the alternate screen", || UserTerminals::screen(&terminals, Some(id), 10).unwrap().alternate);
-        until("sleep in the foreground", || {
-            matches!(UserTerminals::run(&terminals, Some(id), "echo hi", &dir), Err(TerminalError::Busy(busy)) if busy == id)
-        });
-        assert_eq!(UserTerminals::run(&terminals, None, "echo hi", &dir), Err(TerminalError::Busy(id)), "the newest, too");
-    }
-
-    #[test]
-    fn a_command_goes_to_the_newest_running_shell() {
-        let terminals = Terminals::default();
-        let dir = folder("term-run");
-        let (first, second) = (open_sh(&terminals, &dir), open_sh(&terminals, &dir));
-        type_line(&terminals, second, "exit");
-        until("the second's exit", || terminals.list()[1].state != TerminalState::Running);
-
-        let ran = UserTerminals::run(&terminals, None, "echo ran-$((3+4))", &dir).unwrap();
-        assert_eq!(ran.id, first, "the ended one is passed over");
-        assert_eq!(UserTerminals::screen(&terminals, None, 5).unwrap().id, second, "but read: it is the newest");
-        until("the answer", || UserTerminals::screen(&terminals, Some(first), 20).unwrap().output.contains("ran-7"));
-        assert_eq!(UserTerminals::run(&terminals, Some(second), "echo x", &dir), Err(TerminalError::Ended(second)));
-        assert_eq!(UserTerminals::run(&terminals, Some(9), "echo x", &dir), Err(TerminalError::NotFound(9)));
-        assert_eq!(UserTerminals::run(&terminals, None, "echo a\necho b", &dir), Err(TerminalError::MultiLine));
-        assert_eq!(UserTerminals::run(&terminals, None, "echo a\recho b", &dir), Err(TerminalError::MultiLine));
-    }
-
-    /// With none running, one is opened for it, in the folder.
-    #[test]
-    fn a_command_with_no_shell_running_opens_one() {
+    fn with_none_open_there_is_no_screen_to_read() {
         let terminals = Terminals::with_shell("/bin/sh");
-        let dir = folder("term-run-new");
         assert_eq!(UserTerminals::screen(&terminals, None, 10), Err(TerminalError::NoneOpen));
-        let ran = UserTerminals::run(&terminals, None, "echo made-$((1+1)); pwd", &dir).unwrap();
-        assert_eq!((ran.shell.as_str(), terminals.list().len()), ("sh", 1));
-        until("the answer", || {
-            // The path is longer than the screen is wide: joined, it is whole.
-            let output = UserTerminals::screen(&terminals, None, 20).unwrap().output.replace('\n', "");
-            output.contains("made-2") && output.contains(&dir.display().to_string())
-        });
     }
 
     #[test]

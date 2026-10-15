@@ -1,16 +1,15 @@
-//! `deleteDirectory` — removal of a folder, non-recursive unless asked.
+//! `delete` of a folder, non-recursive unless asked.
 //!
-//! Deliberately *not* guarded by the read registry, unlike `deleteFile`.
+//! Deliberately *not* guarded by the read registry, unlike a file's.
 //! "Has the agent read this directory" has no meaning, and requiring a read of
 //! every file inside would make the tool unusable on the trees it exists for.
 //! What stands in its place is approval: this is a mutating tool, so a human
 //! sees the path before anything happens. The non-recursive default is the
 //! other half — an over-broad path costs one refusal rather than a tree.
 
-use crate::domain::llm::LlmToolDefinition;
 use std::fs;
 
-use crate::domain::tools::{DeleteDirectoryArgs, ToolError, ToolResult, ToolScope};
+use crate::domain::tools::{DeleteArgs, ToolError, ToolResult, ToolScope};
 
 use super::super::resolve::{relative_to_root, resolve_existing};
 
@@ -19,7 +18,7 @@ const MAX_LISTED: usize = 50;
 
 pub fn delete_directory(
     scope: &ToolScope,
-    args: &DeleteDirectoryArgs,
+    args: &DeleteArgs,
 ) -> Result<ToolResult, ToolError> {
     let path = resolve_existing(scope, &args.path)?;
     if !path.is_dir() {
@@ -50,34 +49,6 @@ pub fn delete_directory(
     Ok(ToolResult::DirectoryDeleted { path: relative, files, listed })
 }
 
-/// What the model is told `deleteDirectory` is for.
-pub(super) fn definition() -> LlmToolDefinition {
-    LlmToolDefinition {
-        name: "deleteDirectory".to_string(),
-        description: "Delete a directory. Without `recursive` a directory with contents is refused, so a path that turned out broader than you meant costs one refusal instead of a tree."
-            .to_string(),
-        parameters: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory path relative to the workspace root. The workspace root itself cannot be deleted."
-                },
-                "recursive": {
-                    "type": [
-                        "boolean",
-                        "null"
-                    ],
-                    "description": "Default false. True deletes the directory and everything under it. Prefer listing it first."
-                }
-            },
-            "required": [
-                "path"
-            ]
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,7 +77,7 @@ mod tests {
 
         let result = delete_directory(
             &scope,
-            &DeleteDirectoryArgs { path: "empty".into(), recursive: None },
+            &DeleteArgs { path: "empty".into(), recursive: None },
         )
         .expect("removes");
 
@@ -123,7 +94,7 @@ mod tests {
 
         let err = delete_directory(
             &scope,
-            &DeleteDirectoryArgs { path: "full".into(), recursive: None },
+            &DeleteArgs { path: "full".into(), recursive: None },
         )
         .expect_err("not empty");
 
@@ -139,7 +110,7 @@ mod tests {
 
         let result = delete_directory(
             &scope,
-            &DeleteDirectoryArgs { path: "full".into(), recursive: Some(true) },
+            &DeleteArgs { path: "full".into(), recursive: Some(true) },
         )
         .expect("removes");
 
@@ -159,7 +130,7 @@ mod tests {
             assert!(
                 delete_directory(
                     &scope,
-                    &DeleteDirectoryArgs { path: path.into(), recursive: Some(true) },
+                    &DeleteArgs { path: path.into(), recursive: Some(true) },
                 )
                 .is_err(),
                 "{path:?} was accepted"
@@ -174,7 +145,7 @@ mod tests {
         assert!(matches!(
             delete_directory(
                 &scope,
-                &DeleteDirectoryArgs { path: "../outside".into(), recursive: Some(true) },
+                &DeleteArgs { path: "../outside".into(), recursive: Some(true) },
             ),
             Err(ToolError::PathEscape(_))
         ));
@@ -183,10 +154,10 @@ mod tests {
     #[test]
     fn the_call_wire_shape_is_stable_and_counts_as_risky() {
         let call: ToolCall = serde_json::from_str(
-            r#"{"tool": "deleteDirectory", "args": {"path": "sub", "recursive": "yes"}}"#,
+            r#"{"tool": "delete", "args": {"path": "sub", "recursive": "yes"}}"#,
         )
         .expect("parses, spelled-out boolean and all");
-        let ToolCall::DeleteDirectory(parsed) = &call else {
+        let ToolCall::Delete(parsed) = &call else {
             panic!("wrong variant")
         };
         assert_eq!(parsed.recursive, Some(true));

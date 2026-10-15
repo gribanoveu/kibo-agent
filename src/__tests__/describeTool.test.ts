@@ -462,6 +462,16 @@ describe("what each call shows", () => {
     expect(shown).toMatchObject({ arg: "a.rs", meta: "1+ hunks", detail: "3-4  abc1234  2026-09-01  Ann  fix" });
   });
 
+  test("a delete draws a file as its diff and a folder as its path", () => {
+    const file = describeTool(
+      tool({ name: "delete", arguments: '{"path":"a.rs"}', result: { path: "a.rs", diff: { linesAdded: 0, linesRemoved: 2, unifiedDiff: "-a\n-b\n" } } }),
+    );
+    expect(file).toMatchObject({ name: "Delete", arg: "a.rs", meta: "+0 -2", diff: true });
+    const folder = describeTool(tool({ name: "delete", arguments: '{"path":"build","recursive":true}', result: { path: "build", files: 4, listed: [] } }));
+    expect(folder).toMatchObject({ name: "Delete", arg: "build", detail: "" });
+    expect(folder.diff).toBeUndefined();
+  });
+
   test("a folder made or removed shows its path and nothing to open", () => {
     const shown = describeTool(tool({ name: "createDirectory", arguments: '{"path":"src/new"}', result: { path: "src/new" } }));
     expect(shown).toMatchObject({ name: "Mkdir", arg: "src/new", detail: "" });
