@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useLiveRead } from "./useLiveRead";
-import { agentsList, onAgentChanged, stopAgent, type AgentInfo } from "../lib/chat";
+import { type AgentInfo, agentsList, onAgentChanged, stopAgent } from "../lib/agents";
 
 /**
  * The helper agents' runs, read while the Agents tab is open: when it opens,

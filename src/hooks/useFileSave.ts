@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { fileWrite, type FileTarget, type FileView } from "../lib/chat";
+import { type FileTarget, type FileView, fileWrite } from "../lib/git";
 import { sameText, type Edits } from "./useOpenFiles";
 
 /**

@@ -1,13 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  gitChanges,
-  gitCommit,
-  gitCommitMessage,
-  gitStage,
-  gitUnstage,
-  onFolderChanged,
-  type WorkingChanges,
-} from "../lib/chat";
+import { gitChanges, gitCommit, gitCommitMessage, gitStage, gitUnstage, onFolderChanged, type WorkingChanges } from "../lib/git";
 
 const none: WorkingChanges = { staged: [], unstaged: [] };
 

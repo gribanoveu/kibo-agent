@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { folderTrust, setFolderTrust, type FolderTrust } from "../lib/chat";
+import { folderTrust, type FolderTrust, setFolderTrust } from "../lib/skills";
 
 /**
  * Whether the open folder is trusted with its own skills and `/` commands,

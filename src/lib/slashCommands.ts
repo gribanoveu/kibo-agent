@@ -1,4 +1,5 @@
-import type { CommandFile, McpPromptItem } from "./chat";
+import type { McpPromptItem } from "./mcp";
+import type { CommandFile } from "./skills";
 
 /**
  * A command typed into the composer as `/name` or `/name arguments`.

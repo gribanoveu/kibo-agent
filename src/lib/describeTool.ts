@@ -1,5 +1,6 @@
 import type { Block } from "./chatTurnReducer";
-import { processStatus, tokensSpent, type AgentTokens, type ProcessState } from "./chat";
+import { type AgentTokens, tokensSpent } from "./agents";
+import { type ProcessState, processStatus } from "./processes";
 
 // One tool call, as a row in the transcript: what it did, to what, and the
 // body you get when you expand it.

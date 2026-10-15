@@ -1,16 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  saveSearxngUrl,
-  saveWebSearchKey,
-  searxngUrl,
-  setWebSearchBackend,
-  webSearchBackend,
-  webSearchKeyStatus,
-  webSearchUsage,
-  type WebSearchBackend,
-  type WebSearchPlace,
-  type WebUsage,
-} from "../lib/chat";
+import { saveSearxngUrl, saveWebSearchKey, searxngUrl, setWebSearchBackend, webSearchBackend, type WebSearchBackend, webSearchKeyStatus, type WebSearchPlace, webSearchUsage, type WebUsage } from "../lib/settings";
 
 /**
  * Settings → Web search: which search a chat and an agent use, where SearXNG is,

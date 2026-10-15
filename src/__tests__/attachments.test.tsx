@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ImagePart } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
 
 // Pictures pasted or dropped into the box: each goes to the backend to be
 // sanitized and only what comes back is attached, sent, and drawn — and a

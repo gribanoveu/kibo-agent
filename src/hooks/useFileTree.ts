@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type FolderListing, onFolderChanged, workspaceList } from "../lib/chat";
+import { type FolderListing, workspaceList } from "../lib/fileTree";
+import { onFolderChanged } from "../lib/git";
 
 /**
  * The open folder as a tree, one folder read at a time as it is unfolded —

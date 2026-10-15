@@ -26,7 +26,7 @@ import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
-import type { ChatSummary } from "../lib/chat";
+import type { ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";

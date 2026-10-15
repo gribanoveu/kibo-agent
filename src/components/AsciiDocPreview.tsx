@@ -8,7 +8,7 @@ import { fromParse5 } from "hast-util-from-parse5";
 import { defaultSchema, sanitize, type Schema } from "hast-util-sanitize";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { asciidocHtml } from "../lib/asciidoc";
-import { fileView } from "../lib/chat";
+import { fileView } from "../lib/git";
 import { plantumlSvg } from "../lib/plantuml";
 import { highlight, type Token } from "../lib/highlight";
 import { DiagramView } from "./DiagramView";

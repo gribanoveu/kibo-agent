@@ -5,7 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { language } from "@codemirror/language";
 import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { IS_MAC } from "../lib/shortcuts";
-import type { FileTarget } from "../lib/chat";
+import type { FileTarget } from "../lib/git";
 
 // Editing a file in the IDE layout's viewer: the edit kept as a draft by
 // path, saved over the version it began from, and what happens when the

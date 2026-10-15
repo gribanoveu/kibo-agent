@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { hooksConfig, saveHooksConfig, type HooksView } from "../lib/chat";
+import { hooksConfig, type HooksView, saveHooksConfig } from "../lib/agentHooks";
 
 /** The hooks file, re-read whenever the tab or the editor opens: it is the user's, and may change outside the app. */
 export function useHooks(visible: boolean) {

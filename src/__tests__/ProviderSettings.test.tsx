@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
-import type { LlmSettings, ProviderConfig } from "../lib/chat";
+import type { LlmSettings, ProviderConfig } from "../lib/settings";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no

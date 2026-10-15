@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { WorktreeCheck } from "../lib/chat";
+import type { WorktreeCheck } from "../lib/git";
 
 // Removing the open worktree: shown first, then the window goes back to the
 // main folder, and only then is the worktree deleted with its chats. Work

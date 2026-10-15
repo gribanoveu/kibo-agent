@@ -6,7 +6,7 @@ import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
-import type { ChatRoleId } from "../lib/chat";
+import type { ChatRoleId } from "../lib/plainChat";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
 import type { PlainChatState } from "../hooks/usePlainChat";

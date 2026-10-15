@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listChats, deleteChat, setChatArchived, type ChatSummary } from "../lib/chat";
+import { type ChatSummary, deleteChat, listChats, setChatArchived } from "../lib/savedChats";
 
 /**
  * The sidebar's list of saved conversations.

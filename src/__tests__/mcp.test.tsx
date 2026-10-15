@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { McpView } from "../lib/chat";
+import type { McpView } from "../lib/mcp";
 
 // The MCP file is the user's: the tab re-reads it, a switch is settled by
 // what was saved, and a config that does not parse leaves the file alone and

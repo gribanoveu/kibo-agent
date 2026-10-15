@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { type FileTarget, type FileView, fileView, onFolderChanged } from "../lib/chat";
+import { type FileTarget, type FileView, fileView, onFolderChanged } from "../lib/git";
 
 /**
  * The two versions of the file the viewer shows, read when it opens and again

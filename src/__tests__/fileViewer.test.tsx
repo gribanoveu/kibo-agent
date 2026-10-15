@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { FileTarget, FileView, WorkingChanges } from "../lib/chat";
+import type { FileTarget, FileView, WorkingChanges } from "../lib/git";
 
 // The viewer beside the chat: one file, its changes or the whole of it, read
 // again when the folder changes.

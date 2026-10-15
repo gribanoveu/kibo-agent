@@ -1,7 +1,8 @@
 import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2 } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { IndexBadge } from "./IndexBadge";
-import type { BranchRef, ChangeTotals, RecentFolder } from "../lib/chat";
+import type { RecentFolder } from "../lib/chat";
+import type { BranchRef, ChangeTotals } from "../lib/git";
 import type { IndexState } from "../lib/indexStatus";
 import "./FolderTab.css";
 

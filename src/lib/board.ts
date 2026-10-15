@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 
 /** The Assistant's board (`domain::board`): what the user asked to keep for later. */
 /** `archived`: Done's oldest, past the last five (`domain::board::MAX_DONE`). */

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { ToolLogFilter, ToolLogRow } from "../lib/chat";
+import type { ToolLogFilter, ToolLogRow } from "../lib/toolLog";
 
 // The log window asks again on every opening and every filter change — the
 // log grows while a turn runs — and pages by offset.

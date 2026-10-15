@@ -46,17 +46,9 @@ import { describeActive, describeRun, describeTool, type AgentFocus } from "../l
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
-import {
-  previewCalls,
-  processStatus,
-  type ProcessInfo,
-  type ToolCallDecision,
-  type PendingToolCall,
-  type FileDiffStats,
-  type ToolPreview,
-  type McpAnswer,
-  type Task,
-} from "../lib/chat";
+import { type FileDiffStats, type PendingToolCall, previewCalls, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
+import type { McpAnswer } from "../lib/mcp";
+import { type ProcessInfo, processStatus } from "../lib/processes";
 import { dragOrMaximize } from "./Titlebar";
 import "./ChatPanel.css";
 import { useToolPreviews } from "../hooks/useToolPreviews";

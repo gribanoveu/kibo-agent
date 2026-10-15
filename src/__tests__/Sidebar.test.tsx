@@ -6,7 +6,7 @@ mock.module("@tauri-apps/api/app", () => ({ getVersion: async () => "9.9.9-1" })
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Sidebar } from "../components/Sidebar";
 import { PAGES, pagesShown } from "../components/pages";
-import type { ChatSummary } from "../lib/chat";
+import type { ChatSummary } from "../lib/savedChats";
 import { IS_MAC } from "../lib/shortcuts";
 
 const chats: ChatSummary[] = [

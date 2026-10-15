@@ -9,7 +9,7 @@ import {
   suggestCommands,
   type SlashCommand,
 } from "../lib/slashCommands";
-import type { CommandFile } from "../lib/chat";
+import type { CommandFile } from "../lib/skills";
 
 const command = (name: string): SlashCommand => ({ name, hint: "", run: () => {} });
 const commands = [command("compact"), command("fork")];
@@ -188,7 +188,7 @@ describe("a command's prompt and the reply language", () => {
   // The prompt is the app's words; what the user typed — the one thing in
   // their language — is not what the model gets, so the prompt says it.
   test("ends by naming the chosen language, and auto adds nothing", async () => {
-    const { withLanguageReminder } = await import("../lib/chat");
+    const { withLanguageReminder } = await import("../lib/settings");
     expect(withLanguageReminder("Write AGENTS.md.", "russian")).toBe("Write AGENTS.md.\n\n[Reply in Russian.]");
     expect(withLanguageReminder("Write AGENTS.md.", "english")).toBe("Write AGENTS.md.\n\n[Reply in English.]");
     expect(withLanguageReminder("Write AGENTS.md.", "auto")).toBe("Write AGENTS.md.");

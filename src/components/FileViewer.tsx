@@ -4,7 +4,7 @@ import { useFileSave } from "../hooks/useFileSave";
 import { useFileView } from "../hooks/useFileView";
 import { fileRows, paintRows, type Painted } from "../lib/diffRows";
 import { highlight, languageOf } from "../lib/highlight";
-import { type FileSide, type FileTarget } from "../lib/chat";
+import type { FileSide, FileTarget } from "../lib/git";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { AsciiDocPreview, PlantumlPreview } from "./AsciiDocPreview";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type ChangeTotals, gitTotals, onFolderChanged } from "../lib/chat";
+import { type ChangeTotals, gitTotals, onFolderChanged } from "../lib/git";
 
 /**
  * Lines added and removed in the open folder since the last commit, for the

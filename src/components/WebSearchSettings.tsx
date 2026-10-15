@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { openExternal } from "../lib/window";
 import { ExternalLink } from "lucide-react";
 import { useWebSearchKey } from "../hooks/useWebSearchKey";
-import { describeUsage, type WebSearchBackend, type WebSearchPlace } from "../lib/chat";
+import { describeUsage, type WebSearchBackend, type WebSearchPlace } from "../lib/settings";
 import "./WebSearchSettings.css";
 import "./Segmented.css";
 

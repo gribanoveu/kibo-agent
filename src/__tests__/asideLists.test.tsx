@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { RuleListItem, SkillListItem, SkillsView } from "../lib/chat";
+import type { RuleListItem, SkillListItem, SkillsView } from "../lib/skills";
 
 // The skills folder and a repository's AGENTS.md are edited outside the app,
 // so each tab re-reads them; a switch is shown at once and then settled by

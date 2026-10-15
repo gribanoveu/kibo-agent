@@ -1,4 +1,4 @@
-import type { ChatRoleId } from "./chat";
+import type { ChatRoleId } from "./plainChat";
 
 /**
  * What Chat mode's empty chat offers to ask — the questions of a Spring

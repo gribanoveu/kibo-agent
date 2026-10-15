@@ -1,4 +1,6 @@
-import type { HookItem, McpServerItem, ProviderView } from "../lib/chat";
+import type { HookItem } from "../lib/agentHooks";
+import type { McpServerItem } from "../lib/mcp";
+import type { ProviderView } from "../lib/settings";
 import "./DataPolicy.css";
 
 // Where the workspace's contents can go, drawn from what is configured right

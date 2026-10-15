@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, render, renderHook, screen } from "@testing-library/react";
-import type { HooksView } from "../lib/chat";
+import type { HooksView } from "../lib/agentHooks";
 
 // The hooks file is the user's: the tab re-reads it and lists each command
 // with what it runs on, and a hook that will not run says why rather than

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useLiveRead } from "./useLiveRead";
-import { onProcessChanged, processesList, processesRunning, stopProcess, type ProcessInfo, type ProcessView } from "../lib/chat";
+import { onProcessChanged, processesList, processesRunning, type ProcessInfo, type ProcessView, stopProcess } from "../lib/processes";
 
 /**
  * The background processes, read while the Terminal tab is open: when it

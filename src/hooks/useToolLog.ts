@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  setToolLogEnabled,
-  toolLogClear,
-  toolLogEnabled,
-  toolLogQuery,
-  type ToolLogFilter,
-  type ToolLogRow,
-} from "../lib/chat";
+import { setToolLogEnabled, toolLogClear, toolLogEnabled, type ToolLogFilter, toolLogQuery, type ToolLogRow } from "../lib/toolLog";
 
 export const PAGE = 100;
 

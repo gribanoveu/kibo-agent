@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { connectMcpServer, mcpConfig, saveMcpConfig, setMcpServerEnabled, setMcpToolShown, type McpView } from "../lib/chat";
+import { connectMcpServer, mcpConfig, type McpView, saveMcpConfig, setMcpServerEnabled, setMcpToolShown } from "../lib/mcp";
 
 /**
  * The MCP configuration, re-read whenever the tab or the editor opens: the

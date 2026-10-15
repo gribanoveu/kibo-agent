@@ -1,29 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  deleteChat,
-  loadChat,
-  plainChatAlwaysAllow,
-  plainChatCancel,
-  plainChatCompact,
-  plainChatContextUsage,
-  plainChatList,
-  plainChatPreview,
-  plainChatResume,
-  plainChatRoles,
-  plainChatSave,
-  generateChatTitle,
-  plainChatSend,
-  setChatArchived,
-  type ChatRoleId,
-  type ChatRoleView,
-  type ChatSummary,
-  type ContextUsage,
-  type LlmMessage,
-  type Outcome,
-  type PendingToolCall,
-  type ToolCallDecision,
-  type ImagePart,
-} from "../lib/chat";
+import type { ContextUsage, LlmMessage, Outcome, PendingToolCall, ToolCallDecision } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
+import { type ChatRoleId, type ChatRoleView, plainChatAlwaysAllow, plainChatCancel, plainChatCompact, plainChatContextUsage, plainChatList, plainChatPreview, plainChatResume, plainChatRoles, plainChatSave, plainChatSend } from "../lib/plainChat";
+import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
 import {
   acceptOutcome,
   appendNotice,

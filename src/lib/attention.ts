@@ -1,5 +1,5 @@
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 import type { TurnStatus } from "./chatTurnReducer";
 import type { Sound } from "./sounds";
 

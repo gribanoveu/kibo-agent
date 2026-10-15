@@ -2,7 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 
 // The window is undecorated and transparent (tauri.conf.json), so the app's own
 // titlebar drives it. Components call these wrappers, never the API directly.

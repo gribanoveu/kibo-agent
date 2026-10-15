@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import { DataPolicy } from "../components/DataPolicy";
-import type { HookItem, McpServerItem, ProviderView } from "../lib/chat";
+import type { HookItem } from "../lib/agentHooks";
+import type { McpServerItem } from "../lib/mcp";
+import type { ProviderView } from "../lib/settings";
 
 // "Where your data goes" says what is configured now, not what could be.
 

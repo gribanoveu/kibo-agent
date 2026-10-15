@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
-import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/chat";
+import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
 import { certificateCount, EFFORTS, filterModels, pemFromBytes } from "../lib/providerForm";
 import "./ProviderSettings.css";
 import "./Segmented.css";

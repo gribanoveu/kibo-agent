@@ -2,7 +2,7 @@ import { useState } from "react";
 import { openExternal } from "../lib/window";
 import { MessageCircleQuestion } from "lucide-react";
 import { Dropdown } from "./Dropdown";
-import type { McpAnswer, McpField } from "../lib/chat";
+import type { McpAnswer, McpField } from "../lib/mcp";
 import type { Block } from "../lib/chatTurnReducer";
 import "./McpQuestionCard.css";
 
