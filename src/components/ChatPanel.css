@@ -341,6 +341,10 @@ button.turn-processes:hover {
   font-size: var(--fs-md);
   line-height: 1.55;
   color: var(--text);
+  /* What the user typed keeps its line breaks, and a long URL breaks
+     anywhere rather than running past the edge of the window. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .msg {
   min-width: 0;
@@ -542,6 +546,7 @@ button.turn-processes:hover {
   line-height: 1.55;
   color: var(--text-dim);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-detail-diff {

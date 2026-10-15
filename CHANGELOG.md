@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-14 Every tool call in the chat opens: a saved memory, a folder made or a file moved shows what it was about in full, and Memory, Search, Plan, Explore and Board calls have their own icons
+- 2026-10-14 Your messages in the chat keep the line breaks you typed, and a long link wraps instead of running past the edge of the window
 - 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them
 
 - 2026-10-13 Ask the Assistant to remind you of something and it puts a card on the new Board page in the sidebar: To do, Doing and Done, moved by the model or by you, removed from any column; Done keeps the last five and older ones go to an archive under the columns. Chats are told today's date and weekday
