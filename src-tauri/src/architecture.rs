@@ -34,9 +34,10 @@ const RULES: &[Rule] = &[
         ],
         except: &[],
         known: &[
-            // `ToolScope::new` canonicalizes its root: to `services/ai_tools/resolve` (#8).
-            ("domain/tools.rs", "dunce::"),
-            // The `Child` in the processes' trait (#8).
+            // The `Child` a timed-out `runCommand` hands to the processes'
+            // trait. It crosses as a trait object from services into infra, so
+            // an opaque handle would need a downcast that can fail at run time —
+            // kept on purpose (docs/34, A-7).
             ("domain/background.rs", "std::process"),
         ],
         why: "domain/ is types and rules — no I/O, no framework types, nothing from the layers around it",

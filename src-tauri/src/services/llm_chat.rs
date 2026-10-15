@@ -2684,7 +2684,7 @@ mod tests {
         );
         // As the scope has it, canonical: on Windows a temp folder's short
         // name (`RUNNER~1`) is not part of its long one.
-        let root = crate::domain::tools::canonicalize_plain(&h.root).unwrap();
+        let root = crate::infra::paths::canonicalize_plain(&h.root).unwrap();
         assert!(
             facts_of(&requests[0]).contains(&root.display().to_string()),
             "the open folder is not in the prompt"

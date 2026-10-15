@@ -19,7 +19,7 @@ use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLan
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
-use crate::services::{kube_changes, kubeconfigs, llm_session};
+use crate::services::{kube_changes, kubeconfigs, llm_session, web_search};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,27 +119,11 @@ fn save_api_key(id: &str, key: &str) -> Result<(), String> {
     llm_credentials_store::save_api_key(id, key.trim())
 }
 
-/// Which search `webSearch` asks in `place`: the one chosen in Settings → Web
-/// search, or, never chosen, what [`AppSettings::web_search_in`] says.
-///
-/// [`AppSettings::web_search_in`]: crate::domain::settings::AppSettings::web_search_in
+/// Which search `webSearch` asks in `place` (`services::web_search::backend`).
 #[tauri::command]
 pub async fn web_search_backend_get(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
-    // Whether a Tavily key is saved is asked of the key store.
-    super::blocking(move || backend_in(place)).await
-}
-
-/// An unreadable settings file is the default's to answer, as for every
-/// setting read here. The saved keys are asked only when the answer turns on
-/// them — a search never chosen, where a Tavily key decides — so keys that
-/// cannot be read stop only what needs one.
-fn backend_in(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
-    let settings = settings_store::load().unwrap_or_default();
-    let without = settings.web_search_in(place, false);
-    if without == settings.web_search_in(place, true) {
-        return Ok(without);
-    }
-    Ok(settings.web_search_in(place, crate::infra::tavily::has_saved_key()?))
+    // Whether a Tavily key is saved may be asked of the key store.
+    super::blocking(move || web_search::backend(place)).await
 }
 
 #[tauri::command]
@@ -171,70 +155,15 @@ pub fn shell_set(kind: ShellKind) -> Result<(), String> {
 /// Where the user's SearXNG answers, as saved or the default.
 #[tauri::command]
 pub fn web_search_searxng_url_get() -> String {
-    settings_store::load()
-        .ok()
-        .and_then(|settings| settings.searxng_url)
-        .unwrap_or_else(|| crate::domain::settings::DEFAULT_SEARXNG_URL.to_string())
+    web_search::searxng_url()
 }
 
-/// Saves the SearXNG address, as a base its `/search` is joined to: an
-/// http(s) address, and a path that ends with `/` — `http://host/searx` would
-/// otherwise lose its last segment to the join.
+/// Saves the SearXNG address, as the base its `/search` is joined to.
 #[tauri::command]
 pub fn web_search_searxng_url_set(url: String) -> Result<String, String> {
-    let base = searxng_base(&url)?;
+    let base = crate::domain::web_search::searxng_base(&url).map_err(|e| e.to_string())?;
     settings_store::update(|s| s.searxng_url = Some(base.to_string())).map_err(|e| e.to_string())?;
     Ok(base.to_string())
-}
-
-pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
-    let mut base = url::Url::parse(text.trim()).map_err(|e| format!("not an address: {e}"))?;
-    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
-        return Err("SearXNG's address starts with http:// or https://".to_string());
-    }
-    if !base.path().ends_with('/') {
-        let path = format!("{}/", base.path());
-        base.set_path(&path);
-    }
-    base.set_query(None);
-    base.set_fragment(None);
-    Ok(base)
-}
-
-/// Whether `place` is given the web tools: a search chosen there, and
-/// Tavily's with a key.
-///
-/// For the context meter's estimate: keys that cannot be read count as off
-/// here, and the turn itself says why ([`web_for`]).
-pub(crate) fn web_search_on(place: WebSearchPlace) -> bool {
-    let has_key = crate::infra::tavily::has_saved_key().unwrap_or(false);
-    backend_in(place).is_ok_and(|backend| backend.is_on(has_key))
-}
-
-/// What `place` reaches the web with, as Settings → Web search says; `None`
-/// while it is off there, or Tavily's has no key. A search that is on but
-/// cannot be set up — a SearXNG address that is not one, keys that cannot be
-/// read — is an error, and the turn stops with it: quietly without the tools,
-/// the model only says it cannot search, and nobody learns why.
-pub(crate) fn web_for(
-    place: WebSearchPlace,
-    embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>,
-) -> Result<Option<crate::domain::web_search::Web>, String> {
-    use crate::infra::{open_web, tavily};
-    let fix = |e: String| format!("web search is on but cannot start: {e} — fix it or turn it off in Settings → Web search");
-    let search = match backend_in(place).map_err(fix)? {
-        WebSearchBackend::Off => return Ok(None),
-        WebSearchBackend::Searxng => {
-            let url = web_search_searxng_url_get();
-            let base = searxng_base(&url).map_err(|e| fix(format!("SearXNG's address {url:?} — {e}")))?;
-            open_web::searxng(base, Arc::clone(embeddings)).map_err(|e| fix(e.to_string()))?
-        }
-        WebSearchBackend::Tavily => match tavily::saved().map_err(|e| fix(e.into()))? {
-            Some(search) => search,
-            None => return Ok(None),
-        },
-    };
-    open_web::web(search, Arc::clone(embeddings)).map(Some).map_err(|e| fix(e.to_string()))
 }
 
 /// Whether a key for the chat's web search is saved — all the window learns
@@ -437,56 +366,10 @@ mod tests {
     use super::*;
     use crate::testing::with_app_dir;
 
-    struct NoModel;
-    impl crate::domain::embeddings::EmbeddingProvider for NoModel {
-        fn embed(&self, _: &[&str]) -> Result<Vec<crate::domain::embeddings::Embedding>, crate::domain::embeddings::EmbeddingError> {
-            Err(crate::domain::embeddings::EmbeddingError::Invalid("no model in this test".into()))
-        }
-        fn dimensions(&self) -> usize {
-            2
-        }
-    }
-
     /// Saved keys that do not open: a blob sealed under no key of this machine.
     fn break_the_keys() {
         let dir = crate::infra::app_dir::ensure().unwrap();
         crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
-    }
-
-    /// A search turned on that cannot start stops the turn with what to fix,
-    /// rather than leaving the model quietly without its tools.
-    #[test]
-    fn a_search_that_cannot_start_says_why() {
-        with_app_dir("web-broken-address", || {
-            let model: Arc<dyn crate::domain::embeddings::EmbeddingProvider> = Arc::new(NoModel);
-            let mut settings = settings_store::load().unwrap();
-            settings.web_search = Some(WebSearchBackend::Searxng);
-            settings.searxng_url = Some("not a url".into());
-            settings_store::save(&settings).unwrap();
-
-            let Err(why) = web_for(WebSearchPlace::Chat, &model) else { panic!("a broken address started") };
-            assert!(why.contains("SearXNG") && why.contains("Settings → Web search"), "{why}");
-        });
-    }
-
-    /// Keys that cannot be read stop what needs one — Tavily, or a search never
-    /// chosen, which a Tavily key would turn on — and nothing else.
-    #[test]
-    fn unreadable_keys_stop_only_the_search_that_needs_one() {
-        with_app_dir("web-broken-keys", || {
-            let model: Arc<dyn crate::domain::embeddings::EmbeddingProvider> = Arc::new(NoModel);
-            break_the_keys();
-
-            assert!(web_for(WebSearchPlace::Agent, &model).unwrap().is_none(), "the agent's search is off by default");
-            let Err(why) = web_for(WebSearchPlace::Chat, &model) else { panic!("never chosen: the key decides") };
-            assert!(why.contains("does not open"), "{why}");
-            assert!(wait(web_search_key_status()).is_err(), "Settings is told, not shown \"no key\"");
-
-            web_search_backend_set(WebSearchPlace::Chat, WebSearchBackend::Searxng).unwrap();
-            assert!(web_for(WebSearchPlace::Chat, &model).unwrap().is_some(), "SearXNG needs no key");
-            web_search_backend_set(WebSearchPlace::Chat, WebSearchBackend::Tavily).unwrap();
-            assert!(web_for(WebSearchPlace::Chat, &model).is_err());
-        });
     }
 
     /// Every provider shows no key then, and Settings says it is not that none
@@ -520,7 +403,7 @@ mod tests {
             assert_eq!(web_search_searxng_url_get(), "http://localhost:8080/");
             assert_eq!(web_search_searxng_url_set(" http://searx.lan:8888/searx?q=x#top ".into()).unwrap(), "http://searx.lan:8888/searx/");
             assert_eq!(web_search_searxng_url_get(), "http://searx.lan:8888/searx/");
-            assert_eq!(searxng_base("http://localhost:8080").unwrap().join("search").unwrap().as_str(), "http://localhost:8080/search");
+            assert_eq!(crate::domain::web_search::searxng_base("http://localhost:8080").unwrap().join("search").unwrap().as_str(), "http://localhost:8080/search");
             for bad in ["localhost:8080", "ftp://searx.lan/", "not a url", "file:///etc/"] {
                 assert!(web_search_searxng_url_set(bad.into()).is_err(), "{bad}");
             }

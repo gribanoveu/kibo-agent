@@ -14,16 +14,15 @@ use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::{KubeApi, KubePin, KubeSetup};
 use crate::infra::kube_client::{ClusterApi, Clusters};
 use crate::domain::llm::{LlmMessage, LlmToolCall};
-use crate::infra::kube_changes::ChangeStore;
 use crate::domain::runbooks;
 use crate::infra::runbooks_store;
-use crate::domain::tool_call_log::ToolCallLogEntry;
 use crate::domain::tools::{ApprovalPolicy, ToolPreview};
 use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, ToolCallDecision};
 use crate::services::llm_chat::TurnError;
 use crate::services::llm_session::LlmSession;
 use crate::infra::chat_store;
 use crate::domain::compaction::{ContextUsage, RequestFrame};
+use crate::services::turn_setup::{self, ChatTurnInput};
 use crate::services::{context_compaction, kubeconfigs, llm_session, plain_chat};
 
 use super::chat::CompactedHistory;
@@ -115,42 +114,9 @@ where
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        // Asked every turn: a cluster that stopped answering, or a login that
-        // expired, is what the model most needs to know. The client is kept,
-        // so it is two quick requests, not a new login.
-        let kube = kubeconfigs::setup(kube.as_ref(), &clusters).map_err(|e| e.to_string())?;
-        // Read through the pin alone: the tools cannot name another cluster.
-        let api = match &kube {
-            KubeSetup::Pinned(target) => {
-                Some(ClusterApi::new(clusters.clone(), std::path::Path::new(&target.config.path), &target.context))
-            }
-            _ => None,
-        };
         let cancelled = || state.cancel.load(Ordering::SeqCst);
-        let record = crate::infra::tool_call_log::recorder();
-        let log_call = |entry: ToolCallLogEntry| record(&entry);
-        // Read each turn: a runbook the user just wrote is there for this answer.
-        let runbooks = runbooks::merged(runbooks_store::own());
-        let web = super::settings::web_for(crate::domain::settings::WebSearchPlace::Chat, &embeddings)?;
-        let features = crate::services::features::enabled();
-        let board = Some(board).filter(|_| features.is_on(crate::domain::features::Feature::Board));
-        let chat = plain_chat::ChatTurn {
-            session: &session,
-            role,
-            kube: &kube,
-            runbooks: &runbooks,
-            web: web.as_ref(),
-            cluster: api.as_ref().map(|api| api as &dyn KubeApi),
-            changes: Some(&ChangeStore),
-            approval: &approval,
-            events: &events,
-            cancelled: &cancelled,
-            log_call: &log_call,
-            board,
-            features,
-        };
-        run(&chat).map_err(|e| e.to_string())
+        let chat = ChatTurnInput { role, kube, clusters, board, embeddings, approval, events: &events, cancelled: &cancelled };
+        turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("the chat thread failed: {e}"))?
@@ -205,7 +171,7 @@ fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Re
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
-        super::settings::web_search_on(crate::domain::settings::WebSearchPlace::Chat),
+        crate::services::web_search::is_on(crate::domain::settings::WebSearchPlace::Chat),
         &crate::services::features::enabled(),
     );
     Ok((session, frame))

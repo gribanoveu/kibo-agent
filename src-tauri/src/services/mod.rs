@@ -29,3 +29,5 @@ pub mod mcp_questions;
 pub mod mcp_servers;
 pub mod rewind;
 pub mod image_sanitize;
+pub mod web_search;
+pub mod turn_setup;

@@ -789,7 +789,7 @@ mod tests {
 
         let scope = ToolScope::new(&dir.join("nested").join("..")).expect("root resolves");
 
-        assert_eq!(scope.root(), canonicalize_plain(&dir).expect("dir resolves"));
+        assert_eq!(scope.root(), crate::infra::paths::canonicalize_plain(&dir).expect("dir resolves"));
         assert!(!scope.root().to_string_lossy().contains(".."));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -860,37 +860,20 @@ mod tests {
 /// canonical root: a boundary compared against a path with `..` or a symlink
 /// still in it is not a boundary.
 #[derive(Debug, Clone)]
+///
+/// Built by `ToolScope::new` in `services::ai_tools::resolve`, which resolves
+/// the root on disk — I/O this layer does not do.
 pub struct ToolScope {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
 impl ToolScope {
-    /// Canonicalizes `root`. Fails if it does not exist — an access boundary
-    /// that cannot be resolved must not silently become "anywhere".
-    pub fn new(root: &Path) -> Result<Self, ToolError> {
-        // Plain, as every path checked against it is: on Windows `canonicalize`
-        // gives `\\?\C:\…`, which no `C:\…` path starts with.
-        let root = canonicalize_plain(root).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => ToolError::NotFound(root.display().to_string()),
-            _ => ToolError::Io(e),
-        })?;
-        Ok(Self { root })
-    }
-
     /// The canonical root. Every path a tool touches has to resolve under it —
     /// enforced in one place, `services::ai_tools::resolve`, rather than by
     /// each tool remembering to check.
     pub fn root(&self) -> &Path {
         &self.root
     }
-}
-
-/// `canonicalize` in the form a path may leave this process in: on Windows
-/// without the `\\?\` prefix — which libgit2 rejects, and which no plain path
-/// starts with — wherever the path stays valid without it. One too long for
-/// that, or with a reserved name (`CON`), keeps it rather than being corrupted.
-pub(crate) fn canonicalize_plain(path: &Path) -> std::io::Result<PathBuf> {
-    dunce::canonicalize(path)
 }
 
 /// What a call would do, worked out without doing it.
