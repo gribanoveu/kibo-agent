@@ -314,6 +314,22 @@ describe("what each call shows", () => {
     expect(page(false).meta).toBeUndefined();
   });
 
+  test("DeepSeek's search and page read are shown as the web's, under their own names", () => {
+    const search = tool({
+      name: "deepseekSearch",
+      arguments: '{"query":"v4 site:github.com"}',
+      result: { result: "webResults", hits: [{ title: "V4", url: "https://github.com/deepseek-ai", content: "Released." }] },
+    });
+    expect(describeTool(search)).toMatchObject({
+      name: "DeepSeek web",
+      arg: "v4 site:github.com",
+      meta: "1 page",
+      detail: "[1] V4\nhttps://github.com/deepseek-ai\nReleased.",
+    });
+    const reading = tool({ name: "deepseekFetch", arguments: '{"url":"https://github.com/deepseek-ai"}', result: undefined });
+    expect(describeActive(reading)).toBe("Reading with DeepSeek https://github.com/deepseek-ai");
+  });
+
   test("a tool search shows its query and the tools it declared, by server", () => {
     const running = tool({ name: "toolSearch", arguments: '{"query":"create issue"}', result: undefined });
     expect(describeTool(running)).toMatchObject({ name: "Find tools", arg: "create issue", meta: undefined });

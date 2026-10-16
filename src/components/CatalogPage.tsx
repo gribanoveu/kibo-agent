@@ -49,6 +49,7 @@ const TABS: { value: Tab; label: string }[] = [
 const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   board: SquareKanban,
   "provider-balance": DeepSeekIcon,
+  "deepseek-search": DeepSeekIcon,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {

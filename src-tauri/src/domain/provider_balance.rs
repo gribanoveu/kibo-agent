@@ -24,15 +24,21 @@ pub struct BalanceAmount {
     pub topped_up: String,
 }
 
+pub const DEEPSEEK_API: &str = "https://api.deepseek.com";
 const DEEPSEEK_BALANCE: &str = "https://api.deepseek.com/user/balance";
 
+/// Whether the provider at `base_url` is DeepSeek itself. Known by the host,
+/// not by the provider's name: the name is the user's, and a gateway in front
+/// of DeepSeek has none of its own endpoints. Only that host — what is asked
+/// of it carries the key.
+pub fn is_deepseek(base_url: &str) -> bool {
+    Url::parse(base_url.trim()).is_ok_and(|url| url.host_str() == Some("api.deepseek.com"))
+}
+
 /// Where the provider at `base_url` tells its balance; `None` for one that
-/// does not. Known by the host, not by the provider's name: the name is the
-/// user's, and a gateway in front of DeepSeek has no `/user/balance`. Only
-/// that host — the request carries the key.
+/// does not.
 pub fn balance_url(base_url: &str) -> Option<&'static str> {
-    let url = Url::parse(base_url.trim()).ok()?;
-    (url.host_str() == Some("api.deepseek.com")).then_some(DEEPSEEK_BALANCE)
+    is_deepseek(base_url).then_some(DEEPSEEK_BALANCE)
 }
 
 #[cfg(test)]

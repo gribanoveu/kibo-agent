@@ -107,7 +107,9 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board],
+            ChatRole::Assistant => {
+                &[ToolName::WebSearch, ToolName::WebFetch, ToolName::DeepseekSearch, ToolName::DeepseekFetch, ToolName::Board]
+            }
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
                 ToolName::KubeList,
@@ -227,7 +229,10 @@ mod tests {
     /// side effect.
     #[test]
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
-        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch, ToolName::Board]);
+        assert_eq!(
+            ChatRole::Assistant.tools(),
+            &[ToolName::WebSearch, ToolName::WebFetch, ToolName::DeepseekSearch, ToolName::DeepseekFetch, ToolName::Board]
+        );
         let tools = ChatRole::Kubernetes.tools();
         assert_eq!(tools.len(), 19);
         assert!(
