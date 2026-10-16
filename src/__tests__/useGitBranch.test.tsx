@@ -1,8 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
-// The header's branch: asked for when the folder opens and again when a turn
-// ends — the agent may have switched it — but not in the middle of one.
+// The header's branch: asked for when the folder opens, when a turn ends, and
+// whenever HEAD moves — including in the middle of a turn, when the agent
+// switched it with a command.
 
 let branch: string | null = "main";
 let asked = 0;
@@ -34,7 +35,7 @@ const gitChanged = (root: string) => listeners.forEach((handler) => handler({ pa
 const { useGitBranch, useWorktreeOf } = await import("../hooks/useGitBranch");
 
 describe("the checked-out branch", () => {
-  test("is read for the open folder and again after a turn, not during one", async () => {
+  test("is read for the open folder and again after a turn", async () => {
     asked = 0;
     branch = "main";
     const { result, rerender } = renderHook(({ status }) => useGitBranch("/work/a", status), {
@@ -42,13 +43,24 @@ describe("the checked-out branch", () => {
     });
     await waitFor(() => expect(result.current).toBe("main"));
 
-    branch = "feature/x";
     rerender({ status: "running" });
-    expect(asked).toBe(1);
+    await waitFor(() => expect(asked).toBe(2));
 
+    branch = "feature/x";
     rerender({ status: "done" });
     await waitFor(() => expect(result.current).toBe("feature/x"));
-    expect(asked).toBe(2);
+  });
+
+  // The agent ran `git switch` in the middle of a turn.
+  test("follows HEAD while a turn is running", async () => {
+    asked = 0;
+    branch = "main";
+    const { result } = renderHook(() => useGitBranch("/work/a", "running"));
+    await waitFor(() => expect(result.current).toBe("main"));
+
+    branch = "feature/y";
+    act(() => gitChanged("/work/a"));
+    await waitFor(() => expect(result.current).toBe("feature/y"));
   });
 
   // A switch from the branch menu, or one made in a terminal, moves HEAD.

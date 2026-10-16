@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-16 The branch in the chat header changes as soon as the agent switches it, not when its turn ends
 - 2026-10-16 The agent's checklist shows above "Working…" while it works, three tasks at a time, scrolling to keep the current one in the middle — no more strip under the header
 - 2026-10-16 A project in the folder menu can be dropped from the list, its worktrees with it — the folders themselves and their chats stay where they are
 - 2026-10-15 The index badge no longer stays on "Indexing…" after a folder's first sync ends while the window is still starting up

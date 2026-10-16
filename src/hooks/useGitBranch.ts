@@ -4,15 +4,15 @@ import { onGitChanged } from "../lib/git";
 
 /**
  * The branch checked out in the open folder, for the chat header. Read again
- * when the folder changes, whenever a turn ends — the agent can switch
- * branches itself, with a command — and when the repository says HEAD moved:
- * a switch from the branch menu, or one made in a terminal.
+ * when the folder changes, when the repository says HEAD moved — a switch from
+ * the branch menu, in a terminal, or by the agent mid-turn — and when a turn
+ * starts or ends, for a `.git` that could not be watched.
  */
 export function useGitBranch(workspace: string | null, turnStatus: string) {
   const [branch, setBranch] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!workspace || turnStatus === "running") return;
+    if (!workspace) return;
     let live = true;
     const load = () =>
       currentBranch()
