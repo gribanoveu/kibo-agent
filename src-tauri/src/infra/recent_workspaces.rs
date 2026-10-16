@@ -147,15 +147,15 @@ mod tests {
     #[test]
     fn a_forgotten_project_takes_its_worktrees_along() {
         with_app_dir("recent-forget-worktrees", || {
-            let main = temp_dir("recent-forget-main").canonicalize().unwrap();
+            let main = crate::infra::paths::canonicalize_plain(&temp_dir("recent-forget-main")).unwrap();
             let repo = git2::Repository::init(&main).unwrap();
             repo.set_head("refs/heads/main").unwrap();
             let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
             let sig = git2::Signature::now("Test", "test@example.com").unwrap();
             repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
-            let home = temp_dir("recent-forget-main-home").canonicalize().unwrap();
+            let home = crate::infra::paths::canonicalize_plain(&temp_dir("recent-forget-main-home")).unwrap();
             let linked = crate::infra::git_branches::add_worktree(&main, "main", "t", &home).unwrap();
-            let other = temp_dir("recent-forget-other").canonicalize().unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("recent-forget-other")).unwrap();
             let [main, linked, other] = [main, linked, other].map(|p| p.display().to_string());
             app_dir::ensure().unwrap();
             fs::write(path().unwrap(), serde_json::to_string(&[&linked, &main, &other]).unwrap()).unwrap();
