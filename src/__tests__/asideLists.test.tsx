@@ -171,6 +171,17 @@ describe("the side panel", () => {
     },
     hooks: { view: null, error: null, onAdd: () => {}, onEditHook: () => {}, onRemoveHook: () => {}, onEditFile: () => {} },
     plan: { plan: null, checklist: [], onEdit: () => {}, locked: false },
+    overview: {
+      branch: null,
+      changes: null,
+      context: null,
+      usage: null,
+      running: false,
+      onCompact: () => {},
+      onOpenProcess: () => {},
+      onOpenAgent: () => {},
+      onOpenPanel: () => {},
+    },
   });
 
   test("a pane reads its own data, and only while the panel is on screen", async () => {
@@ -191,6 +202,13 @@ describe("the side panel", () => {
     rerender(<AsidePanel tab="files" dock="bottom" ctx={ctx(true)} onClose={() => closed++} />);
     fireEvent.click(screen.getByTitle("Close panel"));
     expect(closed).toBe(2);
+  });
+
+  // Overview and Terminal have their own buttons in the chat header, which name them and close them.
+  test("a pane with its own header button has no heading of its own", () => {
+    render(<AsidePanel tab="overview" dock="right" ctx={ctx(true)} onClose={() => {}} />);
+    expect(screen.queryByTitle("Close panel")).toBeNull();
+    expect(screen.getByText("Connectors")).toBeTruthy();
   });
 });
 

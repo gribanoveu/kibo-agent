@@ -437,33 +437,6 @@ describe("the header", () => {
     expect(screen.getByRole("button", { name: "Chats" })).toBeTruthy();
   });
 
-  test("shows and hides the side panel, and says which it would do", () => {
-    let toggled = 0;
-    const { rerender } = render(
-      <ChatPanel
-        workspace="/tmp/project"
-        turn={state([])}
-        onDecide={() => {}}
-        onOpenRepo={() => {}}
-        onToggleAside={() => toggled++}
-      />,
-    );
-    fireEvent.click(screen.getByTitle(/^Show changes/));
-    expect(toggled).toBe(1);
-
-    rerender(
-      <ChatPanel
-        workspace="/tmp/project"
-        turn={state([])}
-        onDecide={() => {}}
-        onOpenRepo={() => {}}
-        asideOpen
-        onToggleAside={() => toggled++}
-      />,
-    );
-    expect(screen.getByTitle(/^Hide changes/).getAttribute("aria-pressed")).toBe("true");
-  });
-
   test("the … menu opens a side panel by name", () => {
     const opened: string[] = [];
     render(
@@ -476,6 +449,7 @@ describe("the header", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitem", { name: "Terminal" }));
 
     expect(opened).toEqual(["terminal"]);
@@ -502,6 +476,28 @@ describe("the header", () => {
 
     fireEvent.click(screen.getByTitle("More"));
     expect(screen.queryByRole("menuitem", { name: "Terminal" })).toBeNull();
+  });
+
+  test("Overview has its own header button right of Terminal's, and stays in the … menu", () => {
+    let toggled = 0;
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenPanel={() => {}}
+        onToggleTerminal={() => {}}
+        onToggleOverview={() => toggled++}
+      />,
+    );
+    const button = screen.getByTitle(/^Show overview/);
+    expect(button.previousElementSibling?.getAttribute("title")).toMatch(/^Show terminal/);
+    fireEvent.click(button);
+    expect(toggled).toBe(1);
+
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: "Overview" })).toBeTruthy();
   });
 
   test("the … menu offers the export, and closes once it is picked", () => {

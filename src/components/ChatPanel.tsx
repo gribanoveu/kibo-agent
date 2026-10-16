@@ -12,10 +12,10 @@ import {
   CircleX,
   FileText,
   Folder,
-  FileDiff,
   FolderTree,
   FoldVertical,
   GitBranch,
+  Info,
   Globe,
   ListTodo,
   NotebookPen,
@@ -640,12 +640,12 @@ function ToolRun({
 }
 
 type Props = {
-  /** Whether Changes is showing; the header's button shows and hides it, and only it. */
-  asideOpen?: boolean;
+  /** Whether Overview is showing; the header's last button shows and hides it. */
+  overviewOpen?: boolean;
+  onToggleOverview?: () => void;
   /** Writes the conversation out as a file. One entry of the header's "…" menu. */
   onExport?: () => void;
-  onToggleAside?: () => void;
-  /** Whether Terminal is showing; its own header button, beside Changes', shows and hides it. */
+  /** Whether Terminal is showing; its own header button shows and hides it. */
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
   /** Whether the window is laid out for documents: files left, the file in the middle, the chat right. */
@@ -794,9 +794,9 @@ export function Transcript({
 }
 
 export function ChatPanel({
-  asideOpen = false,
+  overviewOpen = false,
+  onToggleOverview,
   onExport,
-  onToggleAside,
   terminalOpen = false,
   onToggleTerminal,
   ideLayout = false,
@@ -907,15 +907,15 @@ export function ChatPanel({
             <TerminalSquare size={15} />
           </button>
         )}
-        {onToggleAside && (
+        {onToggleOverview && (
           <button
             type="button"
-            className={`iconbtn aside-button${asideOpen ? " on" : ""}`}
-            title={`${asideOpen ? "Hide changes" : "Show changes"} (${shortcutText("changes")})`}
-            aria-pressed={asideOpen}
-            onClick={onToggleAside}
+            className={`iconbtn aside-button${overviewOpen ? " on" : ""}`}
+            title={`${overviewOpen ? "Hide overview" : "Show overview"} (${shortcutText("overview")})`}
+            aria-pressed={overviewOpen}
+            onClick={onToggleOverview}
           >
-            <FileDiff size={15} />
+            <Info size={15} />
           </button>
         )}
       </div>

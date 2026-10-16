@@ -52,7 +52,7 @@ import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, setConversationMode } from "./lib/chat";
 import type { ImagePart } from "./lib/images";
@@ -238,7 +238,7 @@ export default function App() {
   });
   // Servers start with an Agent turn and may stop during one.
   // Settings shows both in "Where your data goes".
-  const mcp = useMcp(shown("mcp") || mcpEditing || settingsOpen, agent.turn.status);
+  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
   // Settings has its own copy: which skills folders are read. The Skills
   // pane reads the same list for itself while it is open.
@@ -447,6 +447,16 @@ export default function App() {
     agent.send(IMPLEMENT_PLAN, undefined, [], true);
   };
 
+  // A chat row or Overview asking to see one: Terminal shows it.
+  const openProcess = (id: number) => {
+    openTab("terminal");
+    setProcessFocus({ id });
+  };
+  const openAgent = (agent: AgentFocus) => {
+    openTab("terminal");
+    setAgentFocus({ ...agent });
+  };
+
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
     workspace: workspace.path,
@@ -486,6 +496,17 @@ export default function App() {
       },
       onEditFile: () => setHooksDialog("json"),
     },
+    overview: {
+      branch,
+      changes: changeTotals,
+      context: agent.context,
+      usage: agent.turn.usage,
+      running: agent.turn.status === "running",
+      onCompact: () => void compactNow(),
+      onOpenProcess: openProcess,
+      onOpenAgent: openAgent,
+      onOpenPanel: openTab,
+    },
     plan: {
       plan: agent.plan,
       checklist: agent.checklist,
@@ -513,8 +534,8 @@ export default function App() {
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
             onOpenRepo={chooseFolder}
-            asideOpen={changesShown(docks)}
-            onToggleAside={() => setDocks(toggleChanges(docks))}
+            overviewOpen={shown("overview")}
+            onToggleOverview={() => setDocks(togglePane(docks, "overview", "right"))}
             terminalOpen={bottomShown === "terminal"}
             onToggleTerminal={() => setDocks(toggleTerminal(docks))}
             ideLayout={ide}
@@ -524,14 +545,8 @@ export default function App() {
             onImplement={conversation.value === "plan" ? implement : undefined}
             onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
-            onOpenProcess={(id) => {
-              openTab("terminal");
-              setProcessFocus({ id });
-            }}
-            onOpenAgent={(agent) => {
-              openTab("terminal");
-              setAgentFocus({ ...agent });
-            }}
+            onOpenProcess={openProcess}
+            onOpenAgent={openAgent}
             runningProcesses={runningProcesses.map((process) => process.id)}
             onPasteCommand={workspace.path ? pasteInTerminal : undefined}
             onOpenFile={workspace.path ? openFileLink : undefined}

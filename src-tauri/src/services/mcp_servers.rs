@@ -20,8 +20,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::domain::mcp::{
-    items, prompt_arguments, ConnectedServer, McpAnswer, McpCallResult, McpClient, McpConfig, McpError, McpPrompt,
-    McpQuestion, McpServerConfig, McpServerState, McpTool, McpToolInfo, McpTools,
+    items, prompt_arguments, ConnectedServer, McpAnswer, McpCallResult, McpChanged, McpClient, McpConfig, McpError,
+    McpEventSink, McpPrompt, McpQuestion, McpServerConfig, McpServerState, McpTool, McpToolInfo, McpTools,
 };
 use crate::sync::lock;
 
@@ -36,6 +36,8 @@ pub type Start =
 pub struct McpServers {
     start: Start,
     pool: Mutex<Pool>,
+    /// Told whenever what `state` reports may have changed.
+    changed: McpEventSink,
 }
 
 #[derive(Default)]
@@ -56,8 +58,12 @@ enum SlotState {
 }
 
 impl McpServers {
-    pub fn new(start: Start) -> Self {
-        Self { start, pool: Mutex::default() }
+    pub fn new(start: Start, changed: McpEventSink) -> Self {
+        Self { start, pool: Mutex::default(), changed }
+    }
+
+    fn report(&self) {
+        (self.changed)(McpChanged);
     }
 
     /// Brings the running servers in line with `config` and returns their
@@ -68,20 +74,26 @@ impl McpServers {
     /// its whole timeout. One that fails to start gives no tools; one stopped
     /// by the user's Stop is simply tried again next turn.
     pub fn for_turn(&self, config: &McpConfig, cwd: &Path, cancelled: &(dyn Fn() -> bool + Sync)) -> McpTools {
-        let missing: Vec<(String, McpServerConfig)> = {
+        let (missing, moved) = {
             let mut pool = lock(&self.pool);
+            let before = pool.slots.len();
             if pool.cwd.as_deref() != Some(cwd) {
                 pool.slots.clear();
                 pool.cwd = Some(cwd.to_path_buf());
             }
             let wanted = runnable(config);
             pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
+            let gone = pool.slots.len() != before;
             let missing: Vec<_> = wanted.into_iter().filter(|(name, _)| !pool.slots.contains_key(name)).collect();
             for (name, config) in &missing {
                 pool.slots.insert(name.clone(), Slot { config: config.clone(), state: SlotState::Starting });
             }
-            missing
+            let moved = gone || !missing.is_empty();
+            (missing, moved)
         };
+        if moved {
+            self.report();
+        }
 
         let started: Vec<(String, Option<SlotState>)> = std::thread::scope(|scope| {
             let handles: Vec<_> = missing
@@ -96,7 +108,7 @@ impl McpServers {
             handles.into_iter().filter_map(|handle| handle.join().ok()).collect()
         });
 
-        {
+        if !started.is_empty() {
             let mut pool = lock(&self.pool);
             for (name, state) in started {
                 // Switched off or edited while it started: `prune` has removed
@@ -110,6 +122,8 @@ impl McpServers {
                     }
                 }
             }
+            drop(pool);
+            self.report();
         }
 
         // A server someone else is starting — the `/` menu, the tab, another
@@ -154,6 +168,7 @@ impl McpServers {
                 })
                 .collect()
         };
+        let any = !stale.is_empty();
         for (name, stale) in stale {
             let Ok(listed) = stale.list_tools() else { continue };
             let offered = stale.list_prompts();
@@ -167,6 +182,9 @@ impl McpServers {
                     }
                 }
             }
+        }
+        if any {
+            self.report();
         }
     }
 
@@ -205,6 +223,7 @@ impl McpServers {
             !known
         };
         if start_now {
+            self.report();
             // Nothing to stop it: the tab has no Stop for a server it asked
             // to start, and the start bounded by the server's own timeout.
             let started = self.start_one(&entry, cwd, &|| false);
@@ -219,6 +238,8 @@ impl McpServers {
                     pool.slots.remove(name);
                 }
             }
+            drop(pool);
+            self.report();
         }
         self.state(name, &entry)
     }
@@ -239,6 +260,7 @@ impl McpServers {
                     current: Mutex::new(client),
                     restarted: AtomicBool::new(false),
                     last_error: Mutex::new(None),
+                    changed: Arc::clone(&self.changed),
                 }),
                 tools,
             }),
@@ -252,7 +274,14 @@ impl McpServers {
     /// stop it.
     pub fn prune(&self, config: &McpConfig) {
         let wanted = runnable(config);
-        lock(&self.pool).slots.retain(|name, slot| keep(slot, wanted.get(name)));
+        let mut pool = lock(&self.pool);
+        let before = pool.slots.len();
+        pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
+        let gone = pool.slots.len() != before;
+        drop(pool);
+        if gone {
+            self.report();
+        }
     }
 
     /// What the tab says about a server whose entry is `entry` now. A server
@@ -374,6 +403,8 @@ struct Supervised {
     restarted: AtomicBool,
     /// How it stopped, for the tab.
     last_error: Mutex<Option<String>>,
+    /// Told when it stops or is started again: the tab's row changes.
+    changed: McpEventSink,
 }
 
 impl Supervised {
@@ -385,10 +416,20 @@ impl Supervised {
         if self.restarted.swap(true, Ordering::SeqCst) {
             return Err(McpError::NotRestarted);
         }
-        *current = (self.start)(&self.config, &self.cwd, cancelled).inspect_err(|error| {
+        let started = (self.start)(&self.config, &self.cwd, cancelled);
+        (self.changed)(McpChanged);
+        *current = started.inspect_err(|error| {
             *lock(&self.last_error) = Some(error.to_string());
         })?;
         Ok(Arc::clone(&current))
+    }
+
+    /// A call that found the process gone: the row says how it ended.
+    fn ended(&self, result: &Result<McpCallResult, McpError>) {
+        if let Err(error @ McpError::Exited { .. }) = result {
+            *lock(&self.last_error) = Some(error.to_string());
+            (self.changed)(McpChanged);
+        }
     }
 }
 
@@ -399,9 +440,7 @@ impl McpClient for Supervised {
 
     fn call_tool(&self, name: &str, arguments: Value, cancelled: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
         let result = self.live(cancelled)?.call_tool(name, arguments, cancelled);
-        if let Err(error @ McpError::Exited { .. }) = &result {
-            *lock(&self.last_error) = Some(error.to_string());
-        }
+        self.ended(&result);
         result
     }
 
@@ -413,9 +452,7 @@ impl McpClient for Supervised {
         ask: &dyn Fn(&McpQuestion) -> McpAnswer,
     ) -> Result<McpCallResult, McpError> {
         let result = self.live(cancelled)?.call_tool_asking(name, arguments, cancelled, ask);
-        if let Err(error @ McpError::Exited { .. }) = &result {
-            *lock(&self.last_error) = Some(error.to_string());
-        }
+        self.ended(&result);
         result
     }
 
@@ -535,7 +572,7 @@ mod tests {
             }
             Ok(Process::started(run))
         });
-        (McpServers::new(start), starts)
+        (McpServers::new(start, Arc::new(|_| {})), starts)
     }
 
     fn config(entries: &[(&str, &str)]) -> McpConfig {
@@ -557,6 +594,72 @@ mod tests {
         PathBuf::from("/work")
     }
 
+    /// Servers that count how often they told the tab something changed.
+    fn told() -> (McpServers, impl Fn() -> usize) {
+        let told = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&told);
+        let servers = McpServers::new(
+            Arc::new(|config: &McpServerConfig, _: &Path, _: &dyn Fn() -> bool| match config.command.as_str() {
+                "broken" => Err(McpError::NotStarted("no such command".into())),
+                _ => Ok(Process::started(1)),
+            }),
+            Arc::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        (servers, move || told.swap(0, Ordering::SeqCst))
+    }
+
+    /// The tab is not polled: it is told whenever what it shows of a server
+    /// may have changed, and only then.
+    #[test]
+    fn the_tab_is_told_when_a_server_starts_ends_or_is_switched_off() {
+        let (servers, told) = told();
+        let mut config = config(&[("a", "ok")]);
+
+        let tools = servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(told(), 2, "starting, then running");
+        servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(told(), 0, "nothing changed");
+
+        assert!(call(&tools, "crash").is_err());
+        assert_eq!(told(), 1, "a call found it gone");
+        assert!(call(&tools, "echo").is_ok());
+        assert_eq!(told(), 1, "started again");
+        servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(told(), 1, "its tools read anew");
+
+        config.mcp_servers.get_mut("a").unwrap().disabled = true;
+        servers.prune(&config);
+        assert_eq!(told(), 1, "switched off");
+        servers.prune(&config);
+        servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(told(), 0, "nothing left to change");
+    }
+
+    /// An entry gone from the file by the next turn, without the tab's
+    /// switch: the turn stops its server, and the tab is told.
+    #[test]
+    fn the_tab_is_told_when_a_turn_drops_a_server() {
+        let (servers, told) = told();
+        servers.for_turn(&config(&[("a", "ok")]), &cwd(), NO);
+        told();
+        servers.for_turn(&McpConfig::default(), &cwd(), NO);
+        assert_eq!(told(), 1);
+    }
+
+    #[test]
+    fn the_tab_is_told_when_a_row_starts_its_server_and_when_it_fails() {
+        let (servers, told) = told();
+        let config = config(&[("a", "ok"), ("b", "broken")]);
+        servers.connect("a", &config, &cwd());
+        assert_eq!(told(), 2, "starting, then running");
+        servers.connect("a", &config, &cwd());
+        assert_eq!(told(), 0, "already running");
+        servers.connect("b", &config, &cwd());
+        assert_eq!(told(), 2, "starting, then failed");
+    }
+
     /// Servers whose start holds until `release` is sent to.
     fn gated() -> (McpServers, std::sync::mpsc::Sender<()>) {
         let (release, gate) = std::sync::mpsc::channel::<()>();
@@ -565,7 +668,7 @@ mod tests {
             let _ = lock(&gate).recv();
             Ok(Process::started(1))
         });
-        (McpServers::new(start), release)
+        (McpServers::new(start, Arc::new(|_| {})), release)
     }
 
     fn starting(servers: &McpServers, config: &McpConfig) {
@@ -801,7 +904,7 @@ mod tests {
             wait.lock().unwrap().recv().unwrap();
             Ok(Process::started(1))
         });
-        let servers = Arc::new(McpServers::new(start));
+        let servers = Arc::new(McpServers::new(start, Arc::new(|_| {})));
         let mut config = config(&[("a", "ok")]);
         let turn = {
             let (servers, config) = (Arc::clone(&servers), config.clone());

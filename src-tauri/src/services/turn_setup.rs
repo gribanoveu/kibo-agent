@@ -375,7 +375,7 @@ mod tests {
             let servers = McpServers::new(Arc::new(move |_, _, _| {
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Err(crate::domain::mcp::McpError::NotStarted("test".into()))
-            }));
+            }), Arc::new(|_| {}));
             let root = temp_dir("cmd-mcp-mode-root");
             for mode in [ConversationMode::Plan, ConversationMode::Ask] {
                 mcp_for_turn(Some(&servers), mode, &root, &|| false);

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri, requireBackend } from "./backend";
 
 // MCP servers: their configuration, their state and their prompts.
@@ -41,6 +42,17 @@ export type McpServerItem = {
 };
 /** The file (`text`, for the editor), where it is, and its servers as rows. */
 export type McpView = { path: string; text: string; servers: McpServerItem[] };
+
+/**
+ * A server started, ended, stopped or listed its tools anew. Pinned on the
+ * Rust side in `commands/mcp.rs`.
+ */
+export const MCP_EVENT = "mcp:changed";
+
+export async function onMcpChanged(handler: () => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => {};
+  return listen(MCP_EVENT, () => handler());
+}
 
 /** Mirrors `domain::mcp::McpFieldKind`. */
 export type McpFieldKind =

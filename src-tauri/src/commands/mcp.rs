@@ -3,12 +3,23 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::commands::chat::AgentState;
-use crate::domain::mcp::{self, McpConfig, McpServerItem};
+use crate::domain::mcp::{self, McpChanged, McpConfig, McpEventSink, McpServerItem};
 use crate::infra::mcp_config;
 use crate::services::mcp_servers::McpServers;
+
+/// A server started, ended, stopped or listed its tools anew: the tab reads
+/// its view again.
+pub const MCP_EVENT: &str = "mcp:changed";
+
+pub fn mcp_event_sink<R: Runtime>(app: &AppHandle<R>) -> McpEventSink {
+    let app = app.clone();
+    Arc::new(move |_: McpChanged| {
+        let _ = app.emit(MCP_EVENT, ());
+    })
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +172,11 @@ mod tests {
     use super::*;
     use crate::domain::mcp::{McpClient, McpError, McpServerState, McpTool};
 
+    #[test]
+    fn the_channel_name_is_pinned() {
+        assert_eq!(MCP_EVENT, "mcp:changed");
+    }
+
     struct Idle;
     impl McpClient for Idle {
         fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
@@ -177,7 +193,7 @@ mod tests {
     fn a_change_stops_what_it_switched_off_and_the_view_shows_it() {
         crate::testing::with_app_dir("cmd-mcp-changed", || {
             let config = mcp_config::save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
-            let servers = McpServers::new(Arc::new(|_, _, _| Ok(Arc::new(Idle) as Arc<dyn McpClient>)));
+            let servers = McpServers::new(Arc::new(|_, _, _| Ok(Arc::new(Idle) as Arc<dyn McpClient>)), Arc::new(|_| {}));
             servers.for_turn(&config, &crate::testing::temp_dir("cmd-mcp-changed-root"), &|| false);
             assert_eq!(view(config.clone(), &servers).unwrap().servers[0].state, McpServerState::Running { tools: vec![], instructions: None });
 
@@ -209,7 +225,7 @@ mod tests {
             let servers = McpServers::new(Arc::new(move |_, _, _| {
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Arc::new(Two) as Arc<dyn McpClient>)
-            }));
+            }), Arc::new(|_| {}));
             let root = crate::testing::temp_dir("cmd-mcp-tool-switch-root");
             servers.for_turn(&config, &root, &|| false);
 

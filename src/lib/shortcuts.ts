@@ -13,13 +13,14 @@ type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
 const PANE_SHORTCUTS: Record<AsideTab, Shortcut> = {
-  changes: { label: "Changes", group: "Panels", combos: [{ code: "Digit1", mod: true }] },
-  plan: { label: "Plan", group: "Panels", combos: [{ code: "Digit2", mod: true }] },
-  files: { label: "Files", group: "Panels", combos: [{ code: "Digit3", mod: true }] },
-  rules: { label: "Rules", group: "Panels", combos: [{ code: "Digit4", mod: true }] },
-  skills: { label: "Skills", group: "Panels", combos: [{ code: "Digit5", mod: true }] },
-  mcp: { label: "MCP", group: "Panels", combos: [{ code: "Digit6", mod: true }] },
-  hooks: { label: "Hooks", group: "Panels", combos: [{ code: "Digit7", mod: true }] },
+  overview: { label: "Overview", group: "Panels", combos: [{ code: "Digit1", mod: true }] },
+  changes: { label: "Changes", group: "Panels", combos: [{ code: "Digit2", mod: true }] },
+  plan: { label: "Plan", group: "Panels", combos: [{ code: "Digit3", mod: true }] },
+  files: { label: "Files", group: "Panels", combos: [{ code: "Digit4", mod: true }] },
+  rules: { label: "Rules", group: "Panels", combos: [{ code: "Digit5", mod: true }] },
+  skills: { label: "Skills", group: "Panels", combos: [{ code: "Digit6", mod: true }] },
+  mcp: { label: "MCP", group: "Panels", combos: [{ code: "Digit7", mod: true }] },
+  hooks: { label: "Hooks", group: "Panels", combos: [{ code: "Digit8", mod: true }] },
   // As in VS Code.
   terminal: { label: "Terminal", group: "Panels", combos: [{ code: "Backquote", ctrl: true }] },
 };

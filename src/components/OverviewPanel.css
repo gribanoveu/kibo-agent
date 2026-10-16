@@ -1,0 +1,171 @@
+/* Cards, one per thing to look at, each with a heading that says which. */
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.overview-card {
+  padding: 10px 6px 8px;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+
+.overview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 0 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.overview-count {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.overview-chev {
+  color: var(--text-faint);
+}
+.overview-link {
+  width: 100%;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.overview-link .overview-chev {
+  margin-left: auto;
+}
+.overview-link:hover .overview-chev {
+  color: var(--text);
+}
+
+.overview-rows {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.overview-rows li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+.overview-rows svg {
+  flex: none;
+  color: var(--text-faint);
+}
+/* A row that opens what it names: the whole row is the button. */
+.overview-rows li:has(> .overview-row) {
+  padding: 0;
+}
+.overview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.overview-row:hover {
+  background: var(--bg-hover);
+}
+.overview-row svg {
+  flex: none;
+  color: var(--text-faint);
+}
+.overview-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.overview-ended {
+  margin-top: 4px;
+}
+
+.overview-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.overview-status {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.overview-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.overview-status.ok {
+  color: var(--green);
+}
+.overview-status.warn {
+  color: var(--amber);
+}
+
+.overview-empty {
+  margin: 0;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+/* The ring's breakdown, set in the card: its heading the size of the
+   others', and Compact a small button at the foot rather than a full-width bar. */
+.overview-ctx {
+  display: flex;
+  flex-direction: column;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.overview-ctx .ctx-head {
+  margin-bottom: 8px;
+  font-size: var(--fs-sm);
+}
+.overview-ctx .ctx-rows {
+  margin-bottom: 8px;
+}
+.overview-ctx .ctx-note {
+  margin-bottom: 4px;
+}
+.overview-ctx .ctx-compact {
+  align-self: flex-end;
+  width: auto;
+  margin-top: 4px;
+  padding: 3px 9px;
+  font-size: var(--fs-xs);
+}
+
+.overview-lines {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
