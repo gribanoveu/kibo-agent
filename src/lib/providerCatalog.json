@@ -1,0 +1,1262 @@
+[
+ {
+  "id": "302ai",
+  "name": "302.AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.302.ai/v1"
+ },
+ {
+  "id": "abacus",
+  "name": "Abacus",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://routellm.abacus.ai/v1"
+ },
+ {
+  "id": "abliteration-ai",
+  "name": "abliteration.ai",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.abliteration.ai/v1"
+ },
+ {
+  "id": "above",
+  "name": "above.dev",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.above.dev/v1"
+ },
+ {
+  "id": "agentrouter",
+  "name": "AgentRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://agentrouter.org/v1"
+ },
+ {
+  "id": "agnes",
+  "name": "Agnes AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://apihub.agnes-ai.com/v1"
+ },
+ {
+  "id": "aiand",
+  "name": "ai&",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.aiand.com/v1"
+ },
+ {
+  "id": "ai-router",
+  "name": "AI-ROUTER",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.ai-router.dev/v1"
+ },
+ {
+  "id": "aimlapi",
+  "name": "AI/ML API",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.aimlapi.com/v1"
+ },
+ {
+  "id": "ai21",
+  "name": "AI21 Labs",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.ai21.com/studio/v1"
+ },
+ {
+  "id": "ainetcafe",
+  "name": "ainetcafe",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://microquickjs.com/v1"
+ },
+ {
+  "id": "aixy",
+  "name": "Aixy",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.aixy-gateway.com/v1"
+ },
+ {
+  "id": "aki-io",
+  "name": "AKI.IO",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://aki.io/v1"
+ },
+ {
+  "id": "alibaba",
+  "name": "Alibaba",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+ },
+ {
+  "id": "alibaba-cn",
+  "name": "Alibaba (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+ },
+ {
+  "id": "alibaba-coding-plan",
+  "name": "Alibaba Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1"
+ },
+ {
+  "id": "alibaba-coding-plan-cn",
+  "name": "Alibaba Coding Plan (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://coding.dashscope.aliyuncs.com/v1"
+ },
+ {
+  "id": "alibaba-token-plan",
+  "name": "Alibaba Token Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+ },
+ {
+  "id": "alibaba-token-plan-cn",
+  "name": "Alibaba Token Plan (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+ },
+ {
+  "id": "ambient",
+  "name": "Ambient",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.ambient.xyz/v1"
+ },
+ {
+  "id": "amd",
+  "name": "AMD",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://developer.amd.com.cn/radeon/api/v1"
+ },
+ {
+  "id": "anthropic",
+  "name": "Anthropic",
+  "kind": "anthropic",
+  "baseUrl": "https://api.anthropic.com/v1"
+ },
+ {
+  "id": "anyapi",
+  "name": "AnyAPI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.anyapi.ai/v1"
+ },
+ {
+  "id": "arcee",
+  "name": "Arcee",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.arcee.ai/api/v1"
+ },
+ {
+  "id": "auriko",
+  "name": "Auriko",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.auriko.ai/v1"
+ },
+ {
+  "id": "bailing",
+  "name": "Bailing",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.tbox.cn/api/llm/v1"
+ },
+ {
+  "id": "baseten",
+  "name": "Baseten",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.baseten.co/v1"
+ },
+ {
+  "id": "bee",
+  "name": "Bee by HEOSSI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.bee.heossi.com/bee"
+ },
+ {
+  "id": "berget",
+  "name": "Berget.AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.berget.ai/v1"
+ },
+ {
+  "id": "blueclaw",
+  "name": "Blue Claw",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://openai.blueclaw.network/v1"
+ },
+ {
+  "id": "bothub",
+  "name": "Bothub",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://openai.bothub.ru/v1"
+ },
+ {
+  "id": "boundless",
+  "name": "Boundless",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inference.boundless.network/v1"
+ },
+ {
+  "id": "cerebras",
+  "name": "Cerebras",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.cerebras.ai/v1"
+ },
+ {
+  "id": "hyper",
+  "name": "Charm Hyper",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://hyper.charm.land/v1"
+ },
+ {
+  "id": "chutes",
+  "name": "Chutes",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://llm.chutes.ai/v1"
+ },
+ {
+  "id": "clarifai",
+  "name": "Clarifai",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.clarifai.com/v2/ext/openai/v1"
+ },
+ {
+  "id": "claudinio",
+  "name": "Claudinio",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.claudin.io/v1"
+ },
+ {
+  "id": "cline-pass",
+  "name": "ClinePass",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.cline.bot/api/v1"
+ },
+ {
+  "id": "cloudferro-sherlock",
+  "name": "CloudFerro Sherlock",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api-sherlock.cloudferro.com/openai/v1"
+ },
+ {
+  "id": "cloudflare-workers-ai",
+  "name": "Cloudflare Workers AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+ },
+ {
+  "id": "coralbricks",
+  "name": "CoralBricks",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.coralbricks.ai/v1"
+ },
+ {
+  "id": "wandb",
+  "name": "CoreWeave",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inference.wandb.ai/v1"
+ },
+ {
+  "id": "cortecs",
+  "name": "Cortecs",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.cortecs.ai/v1"
+ },
+ {
+  "id": "crof",
+  "name": "CrofAI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://crof.ai/v1"
+ },
+ {
+  "id": "crossmodel",
+  "name": "CrossModel",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.crossmodel.ai/v1"
+ },
+ {
+  "id": "crusoe",
+  "name": "Crusoe",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inference.crusoecloud.com/v1"
+ },
+ {
+  "id": "drun",
+  "name": "D.Run (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://chat.d.run/v1"
+ },
+ {
+  "id": "daoxe",
+  "name": "DaoXE",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://daoxe.com/v1"
+ },
+ {
+  "id": "databricks",
+  "name": "Databricks",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1"
+ },
+ {
+  "id": "deepinfra",
+  "name": "Deep Infra",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.deepinfra.com/v1/openai"
+ },
+ {
+  "id": "deepseek",
+  "name": "DeepSeek",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.deepseek.com"
+ },
+ {
+  "id": "llmgateway",
+  "name": "DevPass (LLM Gateway)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.llmgateway.io/v1"
+ },
+ {
+  "id": "digitalocean",
+  "name": "DigitalOcean",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.do-ai.run/v1"
+ },
+ {
+  "id": "dinference",
+  "name": "DInference",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.dinference.com/v1"
+ },
+ {
+  "id": "ebcloud",
+  "name": "EBCloud",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://maas-api.ebcloud.com/v1"
+ },
+ {
+  "id": "echo",
+  "name": "Echo",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://echo.tracerml.ai/v1"
+ },
+ {
+  "id": "edenai",
+  "name": "Eden AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.edenai.run/v3"
+ },
+ {
+  "id": "empiriolabs",
+  "name": "EmpirioLabs AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.empiriolabs.ai/v1"
+ },
+ {
+  "id": "engy",
+  "name": "engy",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.engy.ai/v1"
+ },
+ {
+  "id": "evroc",
+  "name": "evroc",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://models.think.evroc.com/v1"
+ },
+ {
+  "id": "fastrouter",
+  "name": "FastRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://go.fastrouter.ai/api/v1"
+ },
+ {
+  "id": "fireworks-ai",
+  "name": "Fireworks AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.fireworks.ai/inference/v1"
+ },
+ {
+  "id": "freemodel",
+  "name": "FreeModel",
+  "kind": "anthropic",
+  "baseUrl": "https://cc.freemodel.dev/v1"
+ },
+ {
+  "id": "friendli",
+  "name": "Friendli",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.friendli.ai/serverless/v1"
+ },
+ {
+  "id": "frogbot",
+  "name": "FrogBot",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://app.frogbot.ai/api/v1"
+ },
+ {
+  "id": "github-copilot",
+  "name": "GitHub Copilot",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.githubcopilot.com"
+ },
+ {
+  "id": "gmicloud",
+  "name": "GMI Cloud",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.gmi-serving.com/v1"
+ },
+ {
+  "id": "google",
+  "name": "Google",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai"
+ },
+ {
+  "id": "greenpt",
+  "name": "GreenPT",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.greenpt.ai/v1"
+ },
+ {
+  "id": "groq",
+  "name": "Groq",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.groq.com/openai/v1"
+ },
+ {
+  "id": "helicone",
+  "name": "Helicone",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://ai-gateway.helicone.ai/v1"
+ },
+ {
+  "id": "hetzner",
+  "name": "Hetzner",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.hetzner.com/api/v1"
+ },
+ {
+  "id": "hpc-ai",
+  "name": "HPC-AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.hpc-ai.com/inference/v1"
+ },
+ {
+  "id": "huggingface",
+  "name": "Hugging Face",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://router.huggingface.co/v1"
+ },
+ {
+  "id": "iflowcn",
+  "name": "iFlow",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://apis.iflow.cn/v1"
+ },
+ {
+  "id": "impossibl",
+  "name": "Impossibl",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.impossibl.com/v1"
+ },
+ {
+  "id": "inception",
+  "name": "Inception",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inceptionlabs.ai/v1"
+ },
+ {
+  "id": "inceptron",
+  "name": "Inceptron",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inceptron.io/v1"
+ },
+ {
+  "id": "inco",
+  "name": "Inco",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.inco.ai/v1"
+ },
+ {
+  "id": "infer",
+  "name": "Infer by Flow7",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://infer.flow7.org/v1"
+ },
+ {
+  "id": "inference",
+  "name": "Inference",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.net/v1"
+ },
+ {
+  "id": "inferx",
+  "name": "InferX",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://model.inferx.net/endpoints/v1"
+ },
+ {
+  "id": "infomaniak",
+  "name": "Infomaniak",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.infomaniak.com/2/ai/${INFOMANIAK_PRODUCT_ID}/openai/v1"
+ },
+ {
+  "id": "io-net",
+  "name": "IO.NET",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.intelligence.io.solutions/api/v1"
+ },
+ {
+  "id": "iteracompute",
+  "name": "IteraCompute",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.iteracompute.com/v1"
+ },
+ {
+  "id": "jalapeno",
+  "name": "Jalapeno Cloud",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.jalapeno-cloud.ai/v1"
+ },
+ {
+  "id": "jiekou",
+  "name": "Jiekou.AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.jiekou.ai/openai"
+ },
+ {
+  "id": "kenari",
+  "name": "Kenari",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://kenari.id/v1"
+ },
+ {
+  "id": "kilo",
+  "name": "Kilo Gateway",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.kilo.ai/api/gateway"
+ },
+ {
+  "id": "kimi-code-plan-global",
+  "name": "Kimi For Coding (kimi.ai)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.kimi.ai/coding/v1"
+ },
+ {
+  "id": "kimi-code-plan-cn",
+  "name": "Kimi For Coding (kimi.com)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.kimi.com/coding/v1"
+ },
+ {
+  "id": "klokintegration",
+  "name": "klokintegration.se",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api-gw.klok.ipaas.se/proxy/kloker-key/v1"
+ },
+ {
+  "id": "kosmik",
+  "name": "Kosmik Compute",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.koscompute.com/v1"
+ },
+ {
+  "id": "kuae-cloud-coding-plan",
+  "name": "KUAE Cloud Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://coding-plan-endpoint.kuaecloud.net/v1"
+ },
+ {
+  "id": "lilac",
+  "name": "Lilac",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.getlilac.com/v1"
+ },
+ {
+  "id": "llama",
+  "name": "Llama",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.llama.com/compat/v1"
+ },
+ {
+  "id": "llmgateway-providers",
+  "name": "LLM Gateway",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.llmgateway.io/v1"
+ },
+ {
+  "id": "llmtech",
+  "name": "LLM Tech",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.llmtech.eu/v1"
+ },
+ {
+  "id": "llmtr",
+  "name": "LLMTR",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://llmtr.com/v1"
+ },
+ {
+  "id": "longcat",
+  "name": "LongCat",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.longcat.chat/openai"
+ },
+ {
+  "id": "lowrouter",
+  "name": "LowRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.lowrouter.ai/v1"
+ },
+ {
+  "id": "lucidquery",
+  "name": "LucidQuery",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.lucidquery.com/v1"
+ },
+ {
+  "id": "meganova",
+  "name": "Meganova",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.meganova.ai/v1"
+ },
+ {
+  "id": "melious",
+  "name": "Melious",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.melious.ai/v1"
+ },
+ {
+  "id": "merge-gateway",
+  "name": "Merge Gateway",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api-gateway.merge.dev/v1/ai-sdk"
+ },
+ {
+  "id": "meta",
+  "name": "Meta",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.meta.ai/v1"
+ },
+ {
+  "id": "minimax-cn",
+  "name": "MiniMax (minimax.cn)",
+  "kind": "anthropic",
+  "baseUrl": "https://api.minimax.cn/anthropic/v1"
+ },
+ {
+  "id": "minimax",
+  "name": "MiniMax (minimax.io)",
+  "kind": "anthropic",
+  "baseUrl": "https://api.minimax.io/anthropic/v1"
+ },
+ {
+  "id": "minimax-cn-coding-plan",
+  "name": "MiniMax Token Plan (minimax.cn)",
+  "kind": "anthropic",
+  "baseUrl": "https://api.minimax.cn/anthropic/v1"
+ },
+ {
+  "id": "minimax-coding-plan",
+  "name": "MiniMax Token Plan (minimax.io)",
+  "kind": "anthropic",
+  "baseUrl": "https://api.minimax.io/anthropic/v1"
+ },
+ {
+  "id": "mistral",
+  "name": "Mistral",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.mistral.ai/v1"
+ },
+ {
+  "id": "mixlayer",
+  "name": "Mixlayer",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://models.mixlayer.ai/v1"
+ },
+ {
+  "id": "moark",
+  "name": "Moark",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://moark.com/v1"
+ },
+ {
+  "id": "modal",
+  "name": "Modal",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.us-west.modal.direct/v1"
+ },
+ {
+  "id": "model-oracle-ai",
+  "name": "Model Oracle AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.modeloracle.com/api/v1"
+ },
+ {
+  "id": "modelis",
+  "name": "Modelis",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://modelishub.com/v1"
+ },
+ {
+  "id": "modelscope",
+  "name": "ModelScope",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api-inference.modelscope.cn/v1"
+ },
+ {
+  "id": "moonshotai",
+  "name": "Moonshot AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.moonshot.ai/v1"
+ },
+ {
+  "id": "moonshotai-cn",
+  "name": "Moonshot AI (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.moonshot.cn/v1"
+ },
+ {
+  "id": "morph",
+  "name": "Morph",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.morphllm.com/v1"
+ },
+ {
+  "id": "nan",
+  "name": "NaN",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.nan.builders/v1"
+ },
+ {
+  "id": "nano-gpt",
+  "name": "NanoGPT",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://nano-gpt.com/api/v1"
+ },
+ {
+  "id": "nearai",
+  "name": "NEAR AI Cloud",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://cloud-api.near.ai/v1"
+ },
+ {
+  "id": "nebius",
+  "name": "Nebius Token Factory",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.tokenfactory.nebius.com/v1"
+ },
+ {
+  "id": "neosmith",
+  "name": "NeoSmith",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://router.neosmith.ai/v1"
+ },
+ {
+  "id": "neuralwatt",
+  "name": "Neuralwatt",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.neuralwatt.com/v1"
+ },
+ {
+  "id": "nova",
+  "name": "Nova",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.nova.amazon.com/v1"
+ },
+ {
+  "id": "novita-ai",
+  "name": "Novita AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.novita.ai/openai"
+ },
+ {
+  "id": "nvidia",
+  "name": "Nvidia",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://integrate.api.nvidia.com/v1"
+ },
+ {
+  "id": "oci",
+  "name": "OCI Generative AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
+ },
+ {
+  "id": "ofox",
+  "name": "Ofox",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.ofox.ai/v1"
+ },
+ {
+  "id": "ollama-cloud",
+  "name": "Ollama Cloud",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://ollama.com/v1"
+ },
+ {
+  "id": "openai",
+  "name": "OpenAI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.openai.com/v1"
+ },
+ {
+  "id": "opencode",
+  "name": "OpenCode",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://opencode.ai/inference/openai/v1"
+ },
+ {
+  "id": "opencode-go",
+  "name": "OpenCode Go",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://opencode.ai/inference/go/openai/v1"
+ },
+ {
+  "id": "openreason",
+  "name": "OpenReason",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.openreason.app/v1"
+ },
+ {
+  "id": "openrouter",
+  "name": "OpenRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://openrouter.ai/api/v1"
+ },
+ {
+  "id": "opper",
+  "name": "Opper",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.opper.ai/v3/compat"
+ },
+ {
+  "id": "orcarouter",
+  "name": "OrcaRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.orcarouter.ai/v1"
+ },
+ {
+  "id": "ovhcloud",
+  "name": "OVHcloud AI Endpoints",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+ },
+ {
+  "id": "pareto",
+  "name": "Pareto Inference",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.paretoinference.com/v1"
+ },
+ {
+  "id": "pendra",
+  "name": "Pendra",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.pendra.ai/api/v1"
+ },
+ {
+  "id": "perplexity-agent",
+  "name": "Perplexity Agent",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.perplexity.ai/v1"
+ },
+ {
+  "id": "pioneer",
+  "name": "Pioneer",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.fastino.ai/v1"
+ },
+ {
+  "id": "poe",
+  "name": "Poe",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.poe.com/v1"
+ },
+ {
+  "id": "poolside",
+  "name": "Poolside",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.poolside.ai/v1"
+ },
+ {
+  "id": "prime",
+  "name": "Prime Inference",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.pinference.ai/api/v1"
+ },
+ {
+  "id": "qihang-ai",
+  "name": "QiHang",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.qhaigc.net/v1"
+ },
+ {
+  "id": "qiniu-ai",
+  "name": "Qiniu",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.qnaigc.com/v1"
+ },
+ {
+  "id": "reflection",
+  "name": "Reflection",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.reflection.ai/openai/v1"
+ },
+ {
+  "id": "regolo-ai",
+  "name": "Regolo AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.regolo.ai/v1"
+ },
+ {
+  "id": "requesty",
+  "name": "Requesty",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://router.requesty.ai/v1"
+ },
+ {
+  "id": "routing-run",
+  "name": "routing.run",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.routing.run/v1"
+ },
+ {
+  "id": "runinfra",
+  "name": "RunInfra",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.runinfra.ai/v1"
+ },
+ {
+  "id": "sakana",
+  "name": "Sakana AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.sakana.ai/v1"
+ },
+ {
+  "id": "sambanova",
+  "name": "SambaNova",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.sambanova.ai/v1"
+ },
+ {
+  "id": "sarvam",
+  "name": "Sarvam AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.sarvam.ai/v1"
+ },
+ {
+  "id": "scaleway",
+  "name": "Scaleway",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.scaleway.ai/v1"
+ },
+ {
+  "id": "scnet-token-plan",
+  "name": "SCNet Token Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.scnet.cn/api/llm/v1"
+ },
+ {
+  "id": "scx-ai",
+  "name": "SCX.ai",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.scx.ai/v1"
+ },
+ {
+  "id": "sensenova",
+  "name": "SenseNova (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token.sensenova.cn/v1"
+ },
+ {
+  "id": "siliconflow",
+  "name": "SiliconFlow",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.siliconflow.com/v1"
+ },
+ {
+  "id": "siliconflow-cn",
+  "name": "SiliconFlow (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.siliconflow.cn/v1"
+ },
+ {
+  "id": "snowflake-cortex",
+  "name": "Snowflake Cortex",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/api/v2/cortex/v1"
+ },
+ {
+  "id": "stackit",
+  "name": "STACKIT",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1"
+ },
+ {
+  "id": "standardcompute",
+  "name": "Standard Compute",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.stdcmpt.com/v1"
+ },
+ {
+  "id": "stepfun",
+  "name": "StepFun (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.stepfun.com/v1"
+ },
+ {
+  "id": "stepfun-ai",
+  "name": "StepFun (Global)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.stepfun.ai/v1"
+ },
+ {
+  "id": "stepfun-step-plan",
+  "name": "StepFun Step Plan (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.stepfun.com/step_plan/v1"
+ },
+ {
+  "id": "stepfun-ai-step-plan",
+  "name": "StepFun Step Plan (Global)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.stepfun.ai/step_plan/v1"
+ },
+ {
+  "id": "subconscious",
+  "name": "Subconscious",
+  "kind": "anthropic",
+  "baseUrl": "https://api.subconscious.dev/v1"
+ },
+ {
+  "id": "submodel",
+  "name": "submodel",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://llm.submodel.ai/v1"
+ },
+ {
+  "id": "synthetic",
+  "name": "Synthetic",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.synthetic.new/openai/v1"
+ },
+ {
+  "id": "tempr",
+  "name": "Tempr Gateway",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.temprhq.io/v1"
+ },
+ {
+  "id": "tencent-coding-plan",
+  "name": "Tencent Coding Plan (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.lkeap.cloud.tencent.com/coding/v3"
+ },
+ {
+  "id": "tencent-token-plan",
+  "name": "Tencent Token Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3"
+ },
+ {
+  "id": "tencent-tokenhub",
+  "name": "Tencent TokenHub",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://tokenhub.tencentmaas.com/v1"
+ },
+ {
+  "id": "tensorx",
+  "name": "TensorX",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.tensorx.ai/v1"
+ },
+ {
+  "id": "the-grid-ai",
+  "name": "The Grid AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.thegrid.ai/v1"
+ },
+ {
+  "id": "thinkingmachines",
+  "name": "Thinking Machines",
+  "kind": "anthropic",
+  "baseUrl": "https://tinker.thinkingmachines.dev/services/tinker-prod/anthropic/api/v1"
+ },
+ {
+  "id": "tinfoil",
+  "name": "Tinfoil",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://inference.tinfoil.sh/v1"
+ },
+ {
+  "id": "togetherai",
+  "name": "Together AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.together.xyz/v1"
+ },
+ {
+  "id": "tokengo",
+  "name": "TokenGo",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.tokengo.com/v1"
+ },
+ {
+  "id": "tokenrouter",
+  "name": "TokenRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.tokenrouter.com/v1"
+ },
+ {
+  "id": "trustedrouter",
+  "name": "TrustedRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.trustedrouter.com/v1"
+ },
+ {
+  "id": "umans-ai",
+  "name": "Umans AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.code.umans.ai/v1"
+ },
+ {
+  "id": "umans-ai-coding-plan",
+  "name": "Umans AI Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.code.umans.ai/v1"
+ },
+ {
+  "id": "unorouter",
+  "name": "UnoRouter",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.unorouter.com/v1"
+ },
+ {
+  "id": "upstage",
+  "name": "Upstage",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.upstage.ai/v1/solar"
+ },
+ {
+  "id": "vancine",
+  "name": "Vancine",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://vancine.com/v1"
+ },
+ {
+  "id": "vispark",
+  "name": "Vispark",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.lab.vispark.in/v1"
+ },
+ {
+  "id": "vivgrid",
+  "name": "Vivgrid",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.vivgrid.com/v1"
+ },
+ {
+  "id": "volcengine",
+  "name": "Volcengine Ark",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://ark.cn-beijing.volces.com/api/v3"
+ },
+ {
+  "id": "volcengine-coding-plan",
+  "name": "Volcengine Ark Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+ },
+ {
+  "id": "vultr",
+  "name": "Vultr",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.vultrinference.com/v1"
+ },
+ {
+  "id": "wafer.ai",
+  "name": "Wafer",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://pass.wafer.ai/v1"
+ },
+ {
+  "id": "wallaby",
+  "name": "Wallaby",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.wallabytoken.com/v1"
+ },
+ {
+  "id": "xai",
+  "name": "xAI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.x.ai/v1"
+ },
+ {
+  "id": "xiaomi",
+  "name": "Xiaomi",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.xiaomimimo.com/v1"
+ },
+ {
+  "id": "xiaomi-token-plan-cn",
+  "name": "Xiaomi Token Plan (China)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1"
+ },
+ {
+  "id": "xiaomi-token-plan-ams",
+  "name": "Xiaomi Token Plan (Europe)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1"
+ },
+ {
+  "id": "xiaomi-token-plan-sgp",
+  "name": "Xiaomi Token Plan (Singapore)",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1"
+ },
+ {
+  "id": "xpersona",
+  "name": "Xpersona",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://www.xpersona.co/v1"
+ },
+ {
+  "id": "zai",
+  "name": "Z.AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.z.ai/api/paas/v4"
+ },
+ {
+  "id": "zai-coding-plan",
+  "name": "Z.AI Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.z.ai/api/coding/paas/v4"
+ },
+ {
+  "id": "zeldoc",
+  "name": "Zeldoc",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://api.zeldoc.ai/v1"
+ },
+ {
+  "id": "zenifra",
+  "name": "Zenifra",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://ai.zenifra.com/v1"
+ },
+ {
+  "id": "zenmux",
+  "name": "ZenMux",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://zenmux.ai/api/v1"
+ },
+ {
+  "id": "zhipuai",
+  "name": "Zhipu AI",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://open.bigmodel.cn/api/paas/v4"
+ },
+ {
+  "id": "zhipuai-coding-plan",
+  "name": "Zhipu AI Coding Plan",
+  "kind": "openAiCompatible",
+  "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4"
+ }
+]
