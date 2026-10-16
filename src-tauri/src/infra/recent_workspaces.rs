@@ -8,6 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::settings::RecentFoldersError;
 use crate::infra::app_dir;
 
 const FILE: &str = "recent.json";
@@ -43,10 +44,8 @@ pub fn load() -> Vec<String> {
         .collect()
 }
 
-pub fn record(opened: &str) -> Result<(), String> {
-    app_dir::ensure()?;
-    let text = serde_json::to_string_pretty(&remember(&load(), opened)).map_err(|e| e.to_string())?;
-    app_dir::write_private(&path()?, text.as_bytes())
+pub fn record(opened: &str) -> Result<(), RecentFoldersError> {
+    save(&remember(&load(), opened))
 }
 
 /// Drops `gone` from the list: the entry only, never the folder — its chats,
@@ -54,7 +53,7 @@ pub fn record(opened: &str) -> Result<(), String> {
 /// list is not an error: two open windows, and the other dropped it first.
 /// Its worktrees go with it: the menu draws them under it, and left behind
 /// they would surface as rows of their own.
-pub fn forget(gone: &str) -> Result<(), String> {
+pub fn forget(gone: &str) -> Result<(), RecentFoldersError> {
     let list = load();
     let gone = Path::new(gone);
     // Compared through `Path`, as `commands::git::removable` compares them: the
@@ -66,9 +65,14 @@ pub fn forget(gone: &str) -> Result<(), String> {
             path != gone && crate::infra::git_head::worktree_of(path).as_deref() != Some(gone)
         })
         .collect();
-    app_dir::ensure()?;
-    let text = serde_json::to_string_pretty(&left).map_err(|e| e.to_string())?;
-    app_dir::write_private(&path()?, text.as_bytes())
+    save(&left)
+}
+
+fn save(list: &impl serde::Serialize) -> Result<(), RecentFoldersError> {
+    app_dir::ensure().map_err(RecentFoldersError)?;
+    let text = serde_json::to_string_pretty(list).map_err(|e| RecentFoldersError(e.to_string()))?;
+    let path = path().map_err(RecentFoldersError)?;
+    app_dir::write_private(&path, text.as_bytes()).map_err(RecentFoldersError)
 }
 
 #[cfg(test)]

@@ -227,7 +227,7 @@ pub fn workspace_recent() -> Vec<RecentFolder> {
 /// may be dropped too: it stays open, and the next launch opens another one.
 #[tauri::command]
 pub fn workspace_forget(path: String) -> Result<(), String> {
-    crate::infra::recent_workspaces::forget(&path)
+    crate::infra::recent_workspaces::forget(&path).map_err(|e| e.to_string())
 }
 
 fn recent_folders(paths: Vec<String>) -> Vec<RecentFolder> {
