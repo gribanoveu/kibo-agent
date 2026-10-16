@@ -157,6 +157,14 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     rest.ends_with(last)
 }
 
+/// Something about the running servers changed: one started, ended, stopped
+/// or listed its tools anew. A signal to read the tab's view again, not the
+/// change itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct McpChanged;
+
+pub type McpEventSink = Arc<dyn Fn(McpChanged) + Send + Sync>;
+
 /// One row of the MCP tab.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { connectMcpServer, mcpConfig, type McpView, saveMcpConfig, setMcpServerEnabled, setMcpToolShown } from "../lib/mcp";
+import { connectMcpServer, mcpConfig, type McpView, onMcpChanged, saveMcpConfig, setMcpServerEnabled, setMcpToolShown } from "../lib/mcp";
 
 /**
  * The MCP configuration, re-read whenever the tab or the editor opens: the
- * file is the user's, and may have been edited outside the app. Re-read too
- * when `refreshKey` changes while shown — the turn's status, since a turn is
- * what starts the servers and what finds one gone.
+ * file is the user's, and may have been edited outside the app. Re-read too,
+ * while shown, each time the backend says a server started, ended or was
+ * stopped, and when `refreshKey` changes — the turn's status.
  */
 export function useMcp(visible: boolean, refreshKey?: unknown) {
   const [view, setView] = useState<McpView | null>(null);
@@ -23,6 +23,17 @@ export function useMcp(visible: boolean, refreshKey?: unknown) {
   useEffect(() => {
     if (visible) reload();
   }, [visible, refreshKey, reload]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    onMcpChanged(() => live && void reload()).then((off) => (live ? (unlisten = off) : off()));
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, [visible, reload]);
 
   /** Resolves to whether it was stored; a refusal is left in `error` for the editor to show. */
   const save = useCallback(async (text: string) => {

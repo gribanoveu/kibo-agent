@@ -164,16 +164,6 @@ pub fn run() {
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
-        // The MCP servers, kept running between turns.
-        .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
-            |config, cwd, cancelled| {
-                Ok(match config.url {
-                    Some(_) => std::sync::Arc::new(infra::mcp_http::start(config, cancelled)?)
-                        as std::sync::Arc<dyn domain::mcp::McpClient>,
-                    None => std::sync::Arc::new(infra::mcp_stdio::start(config, cwd, cancelled)?),
-                })
-            },
-        ))))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -183,6 +173,18 @@ pub fn run() {
             // Here because what they report goes out through the app.
             app.manage(std::sync::Arc::new(infra::background::Processes::new(
                 commands::processes::process_event_sink(app.handle()),
+            )));
+            // The MCP servers, kept running between turns. Here because their
+            // starts and ends go out through the app.
+            app.manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(
+                std::sync::Arc::new(|config, cwd, cancelled| {
+                    Ok(match config.url {
+                        Some(_) => std::sync::Arc::new(infra::mcp_http::start(config, cancelled)?)
+                            as std::sync::Arc<dyn domain::mcp::McpClient>,
+                        None => std::sync::Arc::new(infra::mcp_stdio::start(config, cwd, cancelled)?),
+                    })
+                }),
+                commands::mcp::mcp_event_sink(app.handle()),
             )));
             // Every `explore` run, for the Agents tab; the record outlives the run.
             app.manage(std::sync::Arc::new(domain::agents::Agents::new(
