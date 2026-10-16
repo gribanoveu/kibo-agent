@@ -238,6 +238,7 @@ pub fn run() {
             commands::images::image_prepare,
             commands::images::image_prepare_file,
             commands::chat::workspace_recent,
+            commands::chat::workspace_forget,
             commands::chat::workspace_index_status,
             commands::chat::chat_start,
             commands::chat::chat_resume,

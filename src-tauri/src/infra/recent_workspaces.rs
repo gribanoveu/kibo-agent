@@ -49,10 +49,23 @@ pub fn record(opened: &str) -> Result<(), String> {
     app_dir::write_private(&path()?, text.as_bytes())
 }
 
+/// Drops `gone` from the list: the entry only, never the folder — its chats,
+/// its index and whatever is in it stay where they are. One that is not in the
+/// list is not an error: two open windows, and the other dropped it first.
+pub fn forget(gone: &str) -> Result<(), String> {
+    let list = load();
+    // Compared through `Path`, as `commands::git::removable` compares them: the
+    // same folder spelled with or without its trailing separator is one entry.
+    let left: Vec<&String> = list.iter().filter(|path| Path::new(path.as_str()) != Path::new(gone)).collect();
+    app_dir::ensure()?;
+    let text = serde_json::to_string_pretty(&left).map_err(|e| e.to_string())?;
+    app_dir::write_private(&path()?, text.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::with_app_dir;
+    use crate::testing::{temp_dir, with_app_dir};
 
     fn list(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -94,6 +107,40 @@ mod tests {
             app_dir::ensure().unwrap();
             fs::write(path().unwrap(), serde_json::to_string(&[format!(r"\\?\{kept}"), kept.clone()]).unwrap()).unwrap();
             assert_eq!(load(), list(&[&kept]));
+        });
+    }
+
+    /// The entry goes and the folder stays; an entry that is not in the list
+    /// at all changes nothing.
+    #[test]
+    fn a_forgotten_folder_leaves_the_list_and_the_disk_alone() {
+        with_app_dir("recent-forget", || {
+            let one = temp_dir("recent-forget-one");
+            let two = temp_dir("recent-forget-two");
+            let (one, two) = (one.display().to_string(), two.display().to_string());
+            app_dir::ensure().unwrap();
+            fs::write(path().unwrap(), serde_json::to_string(&[one.clone(), two.clone()]).unwrap()).unwrap();
+
+            forget(&one).unwrap();
+            assert_eq!(load(), list(&[&two]));
+            assert!(Path::new(&one).is_dir(), "the folder itself is left as it is");
+
+            forget("/no/such/folder/in/the/list").unwrap();
+            assert_eq!(load(), list(&[&two]), "an entry that is not there changes nothing");
+        });
+    }
+
+    /// The menu hands back the path it was given, and a folder spelled with a
+    /// trailing separator is not a second entry.
+    #[test]
+    fn a_folder_spelled_with_a_trailing_separator_is_the_same_entry() {
+        with_app_dir("recent-forget-spelled", || {
+            let folder = temp_dir("recent-forget-spelled-folder").display().to_string();
+            app_dir::ensure().unwrap();
+            fs::write(path().unwrap(), serde_json::to_string(&[format!("{folder}/")]).unwrap()).unwrap();
+
+            forget(&folder).unwrap();
+            assert!(load().is_empty());
         });
     }
 
