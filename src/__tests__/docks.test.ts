@@ -1,22 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { changesShown, ideDocks, isSavedDocks, openPane, togglePane, toggleChanges, toggleTerminal, type Docks } from "../lib/docks";
+import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "../lib/docks";
 
 const docks = (top: Docks["top"], topHidden: boolean, bottom: Docks["bottom"] = null): Docks => ({ top, topHidden, bottom });
 
-describe("the Changes button", () => {
+describe("the Changes shortcut", () => {
   test("opens Changes on top when nothing is there", () => {
-    expect(toggleChanges(docks("plan", true))).toEqual(docks("changes", false));
+    expect(togglePane(docks("plan", true), "changes", "right")).toEqual(docks("changes", false));
   });
 
   test("does not replace another pane on top: Changes goes under it", () => {
-    const next = toggleChanges(docks("plan", false, "terminal"));
+    const next = togglePane(docks("plan", false, "terminal"), "changes", "right");
     expect(next).toEqual(docks("plan", false, "changes"));
-    expect(changesShown(next)).toBe(true);
   });
 
   test("hides Changes wherever it is, and leaves the rest", () => {
-    expect(toggleChanges(docks("changes", false, "terminal"))).toEqual(docks("changes", true, "terminal"));
-    expect(toggleChanges(docks("plan", false, "changes"))).toEqual(docks("plan", false, null));
+    expect(togglePane(docks("changes", false, "terminal"), "changes", "right")).toEqual(docks("changes", true, "terminal"));
+    expect(togglePane(docks("plan", false, "changes"), "changes", "right")).toEqual(docks("plan", false, null));
   });
 });
 
@@ -58,7 +57,7 @@ describe("the IDE layout", () => {
 
   test("a pane takes the top's place instead of going under it; Terminal still goes under", () => {
     expect(openPane(swapping("files", false, "terminal"), "plan", "right")).toMatchObject(docks("plan", false, "terminal"));
-    expect(toggleChanges(swapping("files", false))).toMatchObject(docks("changes", false));
+    expect(togglePane(swapping("files", false), "changes", "right")).toMatchObject(docks("changes", false));
     expect(togglePane(swapping("plan", false), "files", "right")).toMatchObject(docks("files", false));
     expect(toggleTerminal(swapping("files", false))).toMatchObject(docks("files", false, "terminal"));
   });

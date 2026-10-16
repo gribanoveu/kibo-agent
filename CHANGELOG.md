@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-16 Changes no longer has its own button in the chat header; it opens from the … menu, ⌘1 or the +/− count by the branch
 - 2026-10-16 Add Provider balance to the Catalog's features: turned on, the message box shows what is left on a DeepSeek account and reads it again after each answer
 - 2026-10-16 A new message drops the checklist items the agent's last answer left open, so the next task doesn't queue behind a stale one; a plan handed over from Plan mode keeps its checklist
 - 2026-10-16 The branch in the chat header changes as soon as the agent switches it, not when its turn ends

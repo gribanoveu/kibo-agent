@@ -51,7 +51,7 @@ import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, setConversationMode } from "./lib/chat";
 import type { ImagePart } from "./lib/images";
@@ -512,8 +512,6 @@ export default function App() {
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
             onOpenRepo={chooseFolder}
-            asideOpen={changesShown(docks)}
-            onToggleAside={() => setDocks(toggleChanges(docks))}
             terminalOpen={bottomShown === "terminal"}
             onToggleTerminal={() => setDocks(toggleTerminal(docks))}
             ideLayout={ide}
