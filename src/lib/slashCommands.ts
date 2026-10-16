@@ -1,4 +1,5 @@
-import type { CommandFile, McpPromptItem } from "./chat";
+import type { McpPromptItem } from "./mcp";
+import type { CommandFile } from "./skills";
 
 /**
  * A command typed into the composer as `/name` or `/name arguments`.
@@ -181,4 +182,65 @@ export function mcpPromptCommands(
         );
       },
     }));
+}
+
+/** What the app's own commands depend on: whether each can run now. */
+export type BuiltInState = {
+  /** A turn is running or waiting on a card. */
+  busy: boolean;
+  /** The chat has anything in it to fork. */
+  started: boolean;
+  /** A folder is open. */
+  folder: boolean;
+  /** Agent mode, the one that writes files. */
+  agentMode: boolean;
+};
+
+/** What each of the app's own commands does when run. */
+export type BuiltInActions = {
+  compact: () => void;
+  fork: () => void;
+  review: () => void;
+  init: (args: string) => void;
+  trust: () => void;
+};
+
+const NOT_NOW = "Not while a turn is running";
+
+/** The app's own `/` commands, each with why it cannot run now when it cannot. */
+export function builtInCommands(state: BuiltInState, run: BuiltInActions): SlashCommand[] {
+  const { busy, started, folder, agentMode } = state;
+  return [
+    {
+      name: "compact",
+      hint: "Fold older history into a summary to free the context window",
+      unavailable: busy ? NOT_NOW : undefined,
+      run: () => run.compact(),
+    },
+    {
+      name: "fork",
+      hint: "Continue in a new chat with a copy of this conversation",
+      unavailable: busy ? NOT_NOW : !started ? "Nothing to fork yet" : undefined,
+      run: () => run.fork(),
+    },
+    {
+      name: "review",
+      hint: "Review the uncommitted changes for bugs, and list what it finds",
+      unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : undefined,
+      run: () => run.review(),
+    },
+    {
+      name: "init",
+      hint: "Write AGENTS.md and CLAUDE.md for this repository, or suggest edits to the ones it has",
+      argumentHint: "[what to focus on]",
+      unavailable: busy ? NOT_NOW : !agentMode ? "Switch to Agent mode — it writes files" : undefined,
+      run: (args) => run.init(args),
+    },
+    {
+      name: "trust",
+      hint: "Trust this folder with its own skills and / commands, or stop trusting it",
+      unavailable: !folder ? "Open a folder first" : undefined,
+      run: () => run.trust(),
+    },
+  ];
 }

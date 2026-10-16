@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getRememberScope, restoreUnattended, setRememberScope, setUnattended, type RememberScope } from "../lib/chat";
+import { getRememberScope, type RememberScope, restoreUnattended, setRememberScope, setUnattended } from "../lib/chat";
 
 /**
  * The composer's Ask/Auto, remembered per chat or per folder (Settings says

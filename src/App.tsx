@@ -53,7 +53,11 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { changesShown, ideDocks, isSavedDocks, openPane, toggleChanges, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { DEFAULT_TURN_LIMITS, exportChat, mcpPromptGet, setConversationMode, withLanguageReminder, type ChatSummary, type ConversationMode, type ImagePart } from "./lib/chat";
+import { type ConversationMode, setConversationMode } from "./lib/chat";
+import type { ImagePart } from "./lib/images";
+import { mcpPromptGet } from "./lib/mcp";
+import { type ChatSummary, exportChat } from "./lib/savedChats";
+import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { useFolderSwitch } from "./hooks/useFolderSwitch";
@@ -67,7 +71,7 @@ import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
 import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
-import { expandTemplate, fileCommands, mcpPromptCommands, typedCommand, type SlashCommand } from "./lib/slashCommands";
+import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
@@ -144,6 +148,9 @@ export default function App() {
   const terminalPasted = useCallback(() => setTerminalPaste(null), []);
   // A terminal selection on its way to the composer, from the other subtree.
   const [quote, setQuote] = useState<{ text: string; seq: number } | null>(null);
+  // Text put into the box: a message not sent after all (the composer had
+  // cleared the box), a terminal selection, a fix to ask for.
+  const giveBack = (text: string) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Which section it opens at: Models, unless something sent the user elsewhere.
   const [settingsAt, setSettingsAt] = useState<SettingsSection | undefined>();
@@ -209,7 +216,7 @@ export default function App() {
   const agent = useAgentTurn({
     model,
     onSaved: history.refresh,
-    onGiveBack: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
+    onGiveBack: giveBack,
   });
   const approval = useApprovalMemory(agent.chatId, workspace.path, () =>
     toast.show("Auto is on here — the agent will change files without asking"),
@@ -336,47 +343,17 @@ export default function App() {
   // What `/name` in the composer runs: the app's own, then the user's files
   // in `.kibo/commands`. The composer takes whatever is in the list.
   const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
-  const builtIn: SlashCommand[] = [
+  const builtIn = builtInCommands(
+    { busy, started: agent.turn.blocks.length > 0, folder: !!workspace.path, agentMode: conversation.value === "agent" },
     {
-      name: "compact",
-      hint: "Fold older history into a summary to free the context window",
-      unavailable: busy ? "Not while a turn is running" : undefined,
-      run: () => void compactNow(),
+      compact: () => void compactNow(),
+      fork: () => agent.branch(),
+      review: () => void agent.review(),
+      // `send` is declared further down; the arrow reaches it when a command runs.
+      init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
+      trust: trust.ask,
     },
-    {
-      name: "fork",
-      hint: "Continue in a new chat with a copy of this conversation",
-      unavailable: busy
-        ? "Not while a turn is running"
-        : agent.turn.blocks.length === 0
-          ? "Nothing to fork yet"
-          : undefined,
-      run: () => agent.branch(),
-    },
-    {
-      name: "review",
-      hint: "Review the uncommitted changes for bugs, and list what it finds",
-      unavailable: busy ? "Not while a turn is running" : !workspace.path ? "Open a folder first" : undefined,
-      run: () => void agent.review(),
-    },
-    {
-      name: "init",
-      hint: "Write AGENTS.md and CLAUDE.md for this repository, or suggest edits to the ones it has",
-      argumentHint: "[what to focus on]",
-      unavailable: busy
-        ? "Not while a turn is running"
-        : conversation.value !== "agent"
-          ? "Switch to Agent mode — it writes files"
-          : undefined,
-      run: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
-    },
-    {
-      name: "trust",
-      hint: "Trust this folder with its own skills and / commands, or stop trusting it",
-      unavailable: !workspace.path ? "Open a folder first" : undefined,
-      run: trust.ask,
-    },
-  ];
+  );
   // `send` is declared further down; the arrow reaches it when a command runs.
   const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
   const commands = [
@@ -424,9 +401,6 @@ export default function App() {
   const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
   const rewinding = useRewind({ preview: agent.previewRewind, rewind: agent.rewind, notify: toast.show });
-  // The composer cleared the box when the message went; one that is not sent
-  // after all is put back rather than typed again.
-  const giveBack = (text: string) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
 
   // Asking before the first message rather than refusing it — and then sending
   // it: the composer has already cleared the box, so anything not sent here is
@@ -482,7 +456,7 @@ export default function App() {
     agentFocus,
     terminalPaste,
     onTerminalPasted: terminalPasted,
-    onAddToChat: (text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 })),
+    onAddToChat: giveBack,
     chatBlocks: agent.turn.blocks,
     openFile: viewer.active,
     onOpenFile: viewer.open,
@@ -563,7 +537,7 @@ export default function App() {
             branchable={agent.branchable}
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
-            onFix={(text) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }))}
+            onFix={giveBack}
           />
           <Composer
             tab={

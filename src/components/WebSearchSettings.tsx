@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
+import { openExternal } from "../lib/window";
 import { ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWebSearchKey } from "../hooks/useWebSearchKey";
-import { describeUsage, type WebSearchBackend, type WebSearchPlace } from "../lib/chat";
+import { describeUsage, type WebSearchBackend, type WebSearchPlace } from "../lib/settings";
 import "./WebSearchSettings.css";
+import "./Segmented.css";
 
 const KEYS_PAGE = "https://app.tavily.com";
 
@@ -114,7 +115,7 @@ export function WebSearchSettings() {
                 Remove key
               </button>
             )}
-            <button type="button" className="btn btn-ghost" title={KEYS_PAGE} onClick={() => void openUrl(KEYS_PAGE)}>
+            <button type="button" className="btn btn-ghost" title={KEYS_PAGE} onClick={() => void openExternal(KEYS_PAGE)}>
               <ExternalLink size={13} />
               Get a key
             </button>

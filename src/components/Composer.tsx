@@ -5,7 +5,8 @@ import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
 import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { ChatUsage, ContextUsage, ConversationMode, ImagePart } from "../lib/chat";
+import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
@@ -300,7 +301,7 @@ export function Composer({
                   setDismissed(true);
                   return;
                 }
-                if (offered.length > 0 && e.key === "Enter" && !e.shiftKey) {
+                if (offered.length > 0 && matches(e, "send")) {
                   e.preventDefault();
                   pick(offered[at]);
                   return;
@@ -309,7 +310,7 @@ export function Composer({
               if (matches(e, "queue")) {
                 e.preventDefault();
                 queue();
-              } else if (e.key === "Enter" && !e.shiftKey) {
+              } else if (matches(e, "send")) {
                 e.preventDefault();
                 send();
               }

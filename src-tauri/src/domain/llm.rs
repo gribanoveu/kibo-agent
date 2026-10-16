@@ -281,6 +281,21 @@ fn is_json_object(arguments: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|v| v.is_object())
 }
 
+/// What a streaming reply reports as it arrives — one enum rather than a
+/// callback per kind (AGENTS.md, "When a service reports more than one kind
+/// of thing").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEvent<'a> {
+    /// A non-empty chunk of the reply's text.
+    Text(&'a str),
+    /// The same for thinking text. Most providers never send it, which is fine.
+    Reasoning(&'a str),
+    /// A tool call as far as it has arrived: its arguments accumulated *so
+    /// far*, not the fragment. A long write otherwise sits invisible until the
+    /// stream ends, which looks like a hung connection.
+    ToolCall { id: &'a str, name: &'a str, arguments: &'a str },
+}
+
 /// One model backend.
 ///
 /// Synchronous on purpose: the agent loop is sequential by nature, a blocking
@@ -294,14 +309,7 @@ pub trait LlmProvider: Send + Sync {
     /// The callbacks are `&dyn Fn` rather than generics because this trait is
     /// used as a trait object.
     ///
-    /// - `on_delta` fires per non-empty text chunk.
-    /// - `on_reasoning` is the same for thinking text. A chunk carries one or
-    ///   the other, never both meaningfully, so they are separate callbacks.
-    ///   Most providers never call it, which is fine.
-    /// - `on_tool_call_delta` receives `(id, name, arguments)` with the
-    ///   arguments accumulated *so far*, not the fragment. A long write
-    ///   otherwise sits invisible until the stream ends, which looks like a
-    ///   hung connection.
+    /// - `on_event` hears each piece as it arrives ([`StreamEvent`]).
     /// - `cancelled` is polled between chunks, so a stop takes effect within
     ///   roughly one chunk instead of after the whole response. Returning
     ///   early this way is not an error: whatever accumulated comes back as a
@@ -309,9 +317,7 @@ pub trait LlmProvider: Send + Sync {
     fn chat_stream(
         &self,
         request: ChatRequest,
-        on_delta: &dyn Fn(&str),
-        on_reasoning: &dyn Fn(&str),
-        on_tool_call_delta: &dyn Fn(&str, &str, &str),
+        on_event: &dyn Fn(StreamEvent),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError>;
 

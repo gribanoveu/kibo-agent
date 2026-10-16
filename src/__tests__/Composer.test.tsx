@@ -464,6 +464,17 @@ describe("slash commands", () => {
     expect(sent).toEqual([]);
   });
 
+  test("Enter sends nothing while an IME composes, or with a modifier held", () => {
+    const { sent, box, type } = withCommands();
+    type("こんにちは");
+    fireEvent.keyDown(box, { code: "Enter", key: "Enter", isComposing: true });
+    fireEvent.keyDown(box, { code: "Enter", key: "Enter", metaKey: true });
+    fireEvent.keyDown(box, { code: "Enter", key: "Enter", ctrlKey: true });
+    expect(sent).toEqual([]);
+    fireEvent.keyDown(box, { code: "Enter", key: "Enter" });
+    expect(sent).toEqual(["こんにちは"]);
+  });
+
   /// Command files are edited outside the app: the list is asked for again
   /// each time the menu opens, not once at start-up.
   test("opening the menu asks for the list again, and shows what to type after a name", () => {

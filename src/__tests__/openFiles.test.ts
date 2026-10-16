@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { draftKey, fileLinkPath, openFilesReducer, stepThrough, viewerReducer, type OpenFiles } from "../hooks/useOpenFiles";
-import type { FileTarget } from "../lib/chat";
+import type { FileTarget } from "../lib/git";
 
 // The viewer's tabs: one per file and side, a single preview tab that the
 // next single click reuses, and where the view goes when a tab is closed.

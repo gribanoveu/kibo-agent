@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { AgentInfo } from "../lib/chat";
+import type { AgentInfo } from "../lib/agents";
 
 // The Agents tab: every explore run, asked for while the tab is open, newest
 // first, with its steps, its cost and its answer, and a Stop for a running one.
@@ -37,7 +37,7 @@ afterAll(() => {
 
 const { useAgents } = await import("../hooks/useAgents");
 const { AgentList } = await import("../components/AgentList");
-const { tokensSpent } = await import("../lib/chat");
+const { tokensSpent } = await import("../lib/agents");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 beforeEach(() => {

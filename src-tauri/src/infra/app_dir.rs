@@ -10,19 +10,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::settings::AppDirError;
+
 /// The app directory. Not created — see [`ensure`].
 #[cfg(not(test))]
-pub fn dir() -> Result<PathBuf, String> {
-    dirs::home_dir()
-        .map(|home| home.join(".kibo"))
-        .ok_or_else(|| "no home directory".to_string())
+pub fn dir() -> Result<PathBuf, AppDirError> {
+    dirs::home_dir().map(|home| home.join(".kibo")).ok_or(AppDirError::NoHome)
 }
 
 /// Under test the real home is never used: the suite installs a throwaway
 /// directory, and a test that forgot to gets an error rather than the
 /// developer's own settings and keys.
 #[cfg(test)]
-pub fn dir() -> Result<PathBuf, String> {
+pub fn dir() -> Result<PathBuf, AppDirError> {
     test_support::installed()
 }
 
@@ -68,7 +68,11 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
 
     // Beside the target, so the rename below stays within one filesystem.
-    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+    // One per write, not per process: two threads writing at once would
+    // otherwise share it, and one's rename takes the file from under the other.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_extension(format!("{}-{write}.tmp", std::process::id()));
     fs::write(&temp, bytes).map_err(|e| format!("could not write {}: {e}", temp.display()))?;
 
     #[cfg(unix)]
@@ -91,12 +95,8 @@ pub mod test_support {
     static LOCK: Mutex<()> = Mutex::new(());
     static INSTALLED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-    pub fn installed() -> Result<PathBuf, String> {
-        INSTALLED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| "no app directory is installed for this test".to_string())
+    pub fn installed() -> Result<PathBuf, AppDirError> {
+        INSTALLED.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or(AppDirError::NotInstalled)
     }
 
     /// Serialises every test that touches the app directory, across modules.
@@ -115,6 +115,23 @@ pub mod test_support {
 mod tests {
     use super::*;
     use crate::testing::temp_dir;
+
+    /// Two threads writing the same file — a turn and Settings — both succeed,
+    /// and what is left is one of the two whole.
+    #[test]
+    fn concurrent_private_writes_all_succeed() {
+        let path = temp_dir("app-dir-concurrent").join("settings.json");
+        let writer = |byte: u8| {
+            let path = path.clone();
+            std::thread::spawn(move || (0..40).map(|_| write_private(&path, &[byte; 4096])).collect::<Vec<_>>())
+        };
+        let (a, b) = (writer(b'a'), writer(b'b'));
+        for result in a.join().unwrap().into_iter().chain(b.join().unwrap()) {
+            assert_eq!(result, Ok(()));
+        }
+        let left = fs::read(&path).unwrap();
+        assert!(left == [b'a'; 4096] || left == [b'b'; 4096]);
+    }
 
     #[test]
     fn a_private_write_replaces_the_previous_contents_and_leaves_no_temp_file() {

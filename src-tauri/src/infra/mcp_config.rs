@@ -21,7 +21,7 @@ const FILE: &str = "mcp.json";
 pub const TEMPLATE: &str = "{\n  \"mcpServers\": {}\n}\n";
 
 pub fn path() -> Result<PathBuf, McpConfigError> {
-    Ok(app_dir::dir().map_err(McpConfigError::Read)?.join(FILE))
+    Ok(app_dir::dir().map_err(|e| McpConfigError::Read(e.into()))?.join(FILE))
 }
 
 /// The file's text, or the template while there is none.

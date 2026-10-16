@@ -114,9 +114,7 @@ fn configured(name: &str) -> Result<Option<Kubeconfig>, SettingsError> {
 }
 
 fn update(change: impl FnOnce(&mut KubeSettings)) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    change(&mut settings.kube);
-    settings_store::save(&settings)
+    settings_store::update(|s| change(&mut s.kube))
 }
 
 #[cfg(test)]

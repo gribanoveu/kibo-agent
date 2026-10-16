@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+import { useLiveRead } from "./useLiveRead";
 import { deleteFeatureData, featuresList, onFeaturesChanged, setFeature, type FeatureView } from "../lib/features";
 
 /**
@@ -7,28 +8,7 @@ import { deleteFeatureData, featuresList, onFeaturesChanged, setFeature, type Fe
  * switch in either reaches both through the event.
  */
 export function useFeatures() {
-  const [features, setFeatures] = useState<FeatureView[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      featuresList().then(
-        (list) => {
-          if (!live) return;
-          setFeatures(list);
-          setError(null);
-        },
-        (e) => live && setError(String(e)),
-      );
-    load();
-    let unlisten: (() => void) | undefined;
-    onFeaturesChanged(() => void load()).then((off) => (live ? (unlisten = off) : off()));
-    return () => {
-      live = false;
-      unlisten?.();
-    };
-  }, []);
+  const { value: features, setValue: setFeatures, error, setError } = useLiveRead(featuresList, onFeaturesChanged, [] as FeatureView[]);
 
   const act = useCallback(async (run: () => Promise<FeatureView[]>) => {
     try {

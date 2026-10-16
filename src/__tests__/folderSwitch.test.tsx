@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { ProcessView } from "../lib/chat";
+import type { ProcessView } from "../lib/processes";
 import type { TerminalInfo } from "../lib/terminal";
 
 // Opening another folder stops the background processes, closes the user's

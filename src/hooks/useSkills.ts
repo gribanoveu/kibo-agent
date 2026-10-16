@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { setSkillEnabled, setSkillSourceEnabled, skillsList, type SkillSourceItem, type SkillsView } from "../lib/chat";
+import { setSkillEnabled, setSkillSourceEnabled, skillsList, type SkillSourceItem, type SkillsView } from "../lib/skills";
 
 /**
  * The skills — the open folder's and the user's — re-read whenever the tab

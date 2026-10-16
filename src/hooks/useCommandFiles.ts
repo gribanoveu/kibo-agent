@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { commandFilesList, type CommandFile } from "../lib/chat";
+import { type CommandFile, commandFilesList } from "../lib/skills";
 
 /**
  * The commands the user wrote in `.kibo/commands`, read when another folder

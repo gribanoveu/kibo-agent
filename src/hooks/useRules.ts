@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { rulesList, setRuleEnabled, type RuleListItem } from "../lib/chat";
+import { type RuleListItem, rulesList, setRuleEnabled } from "../lib/skills";
 
 /**
  * The open folder's instruction files, re-read when the tab opens or the

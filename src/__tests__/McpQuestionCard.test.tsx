@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { McpAnswer, McpField, McpQuestion } from "../lib/chat";
+import type { McpAnswer, McpField, McpQuestion } from "../lib/mcp";
 import type { Block } from "../lib/chatTurnReducer";
 
 const opened: string[] = [];

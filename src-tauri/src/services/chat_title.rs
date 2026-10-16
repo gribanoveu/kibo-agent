@@ -70,9 +70,7 @@ mod tests {
         fn chat_stream(
             &self,
             _: ChatRequest,
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            _on_event: &dyn Fn(crate::domain::llm::StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             unreachable!("a title is never streamed")

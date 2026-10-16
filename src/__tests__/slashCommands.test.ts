@@ -1,15 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import {
-  commandFor,
-  expandTemplate,
-  fileCommands,
-  mcpPromptCommands,
-  pendingHint,
-  parseCommand,
-  suggestCommands,
-  type SlashCommand,
-} from "../lib/slashCommands";
-import type { CommandFile } from "../lib/chat";
+import { builtInCommands, commandFor, expandTemplate, fileCommands, mcpPromptCommands, parseCommand, pendingHint, type SlashCommand, suggestCommands } from "../lib/slashCommands";
+import type { CommandFile } from "../lib/skills";
 
 const command = (name: string): SlashCommand => ({ name, hint: "", run: () => {} });
 const commands = [command("compact"), command("fork")];
@@ -188,7 +179,7 @@ describe("a command's prompt and the reply language", () => {
   // The prompt is the app's words; what the user typed — the one thing in
   // their language — is not what the model gets, so the prompt says it.
   test("ends by naming the chosen language, and auto adds nothing", async () => {
-    const { withLanguageReminder } = await import("../lib/chat");
+    const { withLanguageReminder } = await import("../lib/settings");
     expect(withLanguageReminder("Write AGENTS.md.", "russian")).toBe("Write AGENTS.md.\n\n[Reply in Russian.]");
     expect(withLanguageReminder("Write AGENTS.md.", "english")).toBe("Write AGENTS.md.\n\n[Reply in English.]");
     expect(withLanguageReminder("Write AGENTS.md.", "auto")).toBe("Write AGENTS.md.");
@@ -248,5 +239,40 @@ describe("an MCP server's prompts", () => {
     await new Promise((settled) => setTimeout(settled, 0));
     expect(sent).toHaveLength(1);
     expect(failed[0]).toContain("not running");
+  });
+});
+
+describe("the app's own commands", () => {
+  const ran: string[] = [];
+  const actions = {
+    compact: () => ran.push("compact"),
+    fork: () => ran.push("fork"),
+    review: () => ran.push("review"),
+    init: (args: string) => ran.push(`init:${args}`),
+    trust: () => ran.push("trust"),
+  };
+  const why = (state: Partial<Parameters<typeof builtInCommands>[0]>) =>
+    Object.fromEntries(
+      builtInCommands({ busy: false, started: true, folder: true, agentMode: true, ...state }, actions).map((c) => [
+        c.name,
+        c.unavailable ?? null,
+      ]),
+    );
+
+  /// Each says why it cannot run, in its place in the menu.
+  test("say why they cannot run now", () => {
+    expect(why({})).toEqual({ compact: null, fork: null, review: null, init: null, trust: null });
+    const running = why({ busy: true });
+    expect([running.compact, running.fork, running.review, running.init]).toEqual(Array(4).fill("Not while a turn is running"));
+    expect(running.trust).toBeNull();
+    expect(why({ started: false }).fork).toBe("Nothing to fork yet");
+    expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", trust: "Open a folder first" });
+    expect(why({ agentMode: false }).init).toBe("Switch to Agent mode — it writes files");
+  });
+
+  test("run what they are given, init with what was typed after it", () => {
+    ran.length = 0;
+    for (const command of builtInCommands({ busy: false, started: true, folder: true, agentMode: true }, actions)) command.run("docs only");
+    expect(ran).toEqual(["compact", "fork", "review", "init:docs only", "trust"]);
   });
 });

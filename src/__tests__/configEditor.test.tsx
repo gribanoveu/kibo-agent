@@ -126,7 +126,7 @@ describe("the editor", () => {
   test("Tab indents instead of leaving the box", () => {
     editor({ text: "{}" });
     box().setSelectionRange(1, 1);
-    fireEvent.keyDown(box(), { key: "Tab" });
+    fireEvent.keyDown(box(), { code: "Tab", key: "Tab" });
     expect(box().value).toBe("{  }");
   });
 });

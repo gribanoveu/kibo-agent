@@ -3,7 +3,8 @@ import type { FileChange } from "./chat";
 
 // Tools whose effect on files is recorded, or that have none. Anything else
 // that ran — a command, the terminal, an MCP server's tool — may have written
-// files a rewind cannot see.
+// files a rewind cannot see. Decided per tool by `ToolName::rewind_sees` on the
+// backend; a test there (`architecture.rs`) keeps this copy equal to it.
 const ACCOUNTED = new Set([
   "writeFile",
   "editFile",

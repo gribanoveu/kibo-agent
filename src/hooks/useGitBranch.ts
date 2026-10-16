@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { currentBranch, onGitChanged, worktreeOf } from "../lib/chat";
+import { currentBranch, worktreeOf } from "../lib/chat";
+import { onGitChanged } from "../lib/git";
 
 /**
  * The branch checked out in the open folder, for the chat header. Read again

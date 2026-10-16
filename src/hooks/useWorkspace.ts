@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { currentWorkspace, forgetWorkspace, openWorkspace, recentWorkspaces, type RecentFolder } from "../lib/chat";
+import { currentWorkspace, forgetWorkspace, openWorkspace, type RecentFolder, recentWorkspaces } from "../lib/chat";
 import { pickFolder } from "../lib/dialog";
 
 /** The folder the agent acts on. Resolved by the backend, displayed here. */

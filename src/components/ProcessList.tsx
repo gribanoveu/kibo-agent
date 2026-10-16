@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Folder, Square } from "lucide-react";
-import { processStatus, type ProcessView } from "../lib/chat";
+import { processStatus, type ProcessView } from "../lib/processes";
 import "./ProcessList.css";
 
 type Props = {

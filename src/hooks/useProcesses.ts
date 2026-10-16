@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { onProcessChanged, processesList, processesRunning, stopProcess, type ProcessInfo, type ProcessView } from "../lib/chat";
+import { useCallback } from "react";
+import { useLiveRead } from "./useLiveRead";
+import { onProcessChanged, processesList, processesRunning, type ProcessInfo, type ProcessView, stopProcess } from "../lib/processes";
 
 /**
  * The background processes, read while the Terminal tab is open: when it
@@ -7,29 +8,7 @@ import { onProcessChanged, processesList, processesRunning, stopProcess, type Pr
  * tick per process however much it writes.
  */
 export function useProcesses(visible: boolean) {
-  const [processes, setProcesses] = useState<ProcessView[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!visible) return;
-    let live = true;
-    const load = () =>
-      processesList().then(
-        (list) => {
-          if (!live) return;
-          setProcesses(list);
-          setError(null);
-        },
-        (e) => live && setError(String(e)),
-      );
-    load();
-    let unlisten: (() => void) | undefined;
-    onProcessChanged(() => void load()).then((off) => (live ? (unlisten = off) : off()));
-    return () => {
-      live = false;
-      unlisten?.();
-    };
-  }, [visible]);
+  const { value: processes, setValue: setProcesses, error, setError } = useLiveRead(processesList, onProcessChanged, [] as ProcessView[], visible);
 
   const stop = useCallback(async (id: number) => {
     try {
@@ -49,19 +28,6 @@ export function useProcesses(visible: boolean) {
  * it starts listening.
  */
 export function useRunningProcesses() {
-  const [running, setRunning] = useState<ProcessInfo[]>([]);
-
-  useEffect(() => {
-    let live = true;
-    const load = () => processesRunning().then((list) => live && setRunning(list), () => {});
-    load();
-    let unlisten: (() => void) | undefined;
-    onProcessChanged(() => void load()).then((off) => (live ? (unlisten = off) : off()));
-    return () => {
-      live = false;
-      unlisten?.();
-    };
-  }, []);
-
-  return running;
+  // A count that cannot be read stays as it was: the chat has nowhere to say why.
+  return useLiveRead(processesRunning, onProcessChanged, [] as ProcessInfo[]).value;
 }

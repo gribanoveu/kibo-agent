@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { FolderListing, TreeEntry } from "../lib/chat";
+import type { FolderListing, TreeEntry } from "../lib/fileTree";
 
 // The Files tab's folder tree: one folder read at a time as it is unfolded,
 // git's marks on each entry, and every unfolded folder read again when the

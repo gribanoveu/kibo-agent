@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FolderTab, folderOptions } from "../components/FolderTab";
-import type { ChangeTotals, RecentFolder } from "../lib/chat";
+import type { RecentFolder } from "../lib/chat";
+import type { ChangeTotals } from "../lib/git";
 import { fromSnapshot, type IndexState } from "../lib/indexStatus";
 
 // The strip on the composer's top edge: which folder the next message is

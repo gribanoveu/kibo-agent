@@ -5,7 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { language } from "@codemirror/language";
 import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { IS_MAC } from "../lib/shortcuts";
-import type { FileTarget } from "../lib/chat";
+import type { FileTarget } from "../lib/git";
 
 // Editing a file in the IDE layout's viewer: the edit kept as a draft by
 // path, saved over the version it began from, and what happens when the
@@ -610,7 +610,7 @@ describe("editing in the IDE layout", () => {
     expect(level()).toBe("Fit");
     fireEvent.click(screen.getByText("100%"));
     expect(level()).toBe("100%");
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await toEdit();

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { prepareImage, prepareImageFile, type ImagePart } from "../lib/chat";
+import { type ImagePart, prepareImage, prepareImageFile } from "../lib/images";
 import { onFileDrop } from "../lib/window";
 
 /** Past this many a message takes no more: each is up to a megabyte in the chat file. */

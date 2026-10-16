@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { gitHistory, onGitChanged, type GitHistory } from "../lib/chat";
+import { gitHistory, type GitHistory, onGitChanged } from "../lib/git";
 
 /** Commits asked for at a time: the first screen, then each "Load more". */
 const PAGE = 50;

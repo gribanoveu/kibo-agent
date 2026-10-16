@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Loader2, Minus, Plus, Sparkles } from "lucide-react";
 import { useStaging } from "../hooks/useStaging";
-import type { ChangedFile, FileTarget } from "../lib/chat";
+import type { ChangedFile, FileTarget } from "../lib/git";
 import { useGitHistory } from "../hooks/useGitHistory";
 import { HistoryView } from "./HistoryView";
 import { Tabs } from "./Tabs";

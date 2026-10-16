@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
-import type { LlmSettings, ProviderConfig } from "../lib/chat";
+import type { LlmSettings, ProviderConfig } from "../lib/settings";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no
@@ -43,6 +43,16 @@ const field = (label: string) => {
 };
 
 describe("editing a provider", () => {
+  /// Keys that cannot be read show as none on every provider; this line is
+  /// how the user learns that is not because none was saved.
+  test("says why no key shows when the saved keys cannot be read", () => {
+    form({ keyError: "llm_credentials.enc does not open with this machine's key — save the API keys again" });
+    expect(screen.getByText(/does not open with this machine's key/)).toBeTruthy();
+    cleanup();
+    form();
+    expect(screen.queryByText(/does not open/)).toBeNull();
+  });
+
   test("opens on the active one, with its values", () => {
     form();
 
@@ -263,7 +273,7 @@ describe("saving", () => {
 
     fireEvent.change(field("API key"), { target: { value: "sk-typed" } });
     await act(async () => {
-      fireEvent.keyDown(field("API key"), { key: "Enter" });
+      fireEvent.keyDown(field("API key"), { code: "Enter", key: "Enter" });
     });
 
     expect(saved).toHaveLength(1);
@@ -386,7 +396,7 @@ describe("the model list", () => {
 
     fireEvent.change(search, { target: { value: "sonnet 4" } });
     expect(screen.queryByText("model-3")).toBeNull();
-    fireEvent.keyDown(search, { key: "Enter" });
+    fireEvent.keyDown(search, { code: "Enter", key: "Enter" });
     expect(saved).toHaveLength(0);
 
     await saveNow();
