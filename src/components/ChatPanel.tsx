@@ -6,7 +6,10 @@ import {
   Loader2,
   ChevronRight,
   Code,
-  CircleDot,
+  Circle,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
   FileText,
   Folder,
   FileDiff,
@@ -659,7 +662,7 @@ type Props = {
   onImplement?: () => void;
   /** Opens the Plan tab, where the plan is read and edited before handing it over. */
   onOpenPlan?: () => void;
-  /** The agent's checklist; the task in progress, if any, sits in a strip under the header. */
+  /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
@@ -698,6 +701,7 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onAnswerQuestion"
+  | "checklist"
 > & {
   /** Who answers, over their turns: the agent, or a chat's role. */
   speaker?: string;
@@ -727,6 +731,7 @@ export function Transcript({
   onRewind,
   onFix,
   onAnswerQuestion,
+  checklist = [],
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -774,9 +779,12 @@ export function Transcript({
         </div>
       ))}
       {turn.status === "running" && turn.runningSince !== null && (
-        <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
-          <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
-        </WorkingClock>
+        <>
+          <TaskTicker checklist={checklist} />
+          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
+            <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
+          </WorkingClock>
+        </>
       )}
     </>
   );
@@ -914,7 +922,6 @@ export function ChatPanel({
   return (
     <section className="chat-panel">
       {headSlot ? createPortal(head, headSlot) : head}
-      <CurrentTask checklist={checklist} onOpen={onOpenPlan} />
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
         {groups.length === 0 ? (
@@ -934,6 +941,7 @@ export function ChatPanel({
               onRewind={onRewind}
               onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
+              checklist={checklist}
             />
             {planReady && (
               <div className="plan-handoff">
@@ -1111,22 +1119,40 @@ function renderBlock(
   }
 }
 
+const TASK_MARK: Record<Task["status"], { icon: typeof Circle; label: string }> = {
+  completed: { icon: CircleCheck, label: "Done" },
+  inProgress: { icon: Loader2, label: "In progress" },
+  pending: { icon: CircleDashed, label: "To do" },
+  cancelled: { icon: CircleX, label: "Dropped" },
+};
+
 /**
- * The checklist item the agent is on, in a strip under the header — the Plan
- * tab may be closed, and this is where the eye already is. Nothing while no
- * item is in progress: a list only waiting, or all done, is not news.
+ * The agent's checklist above the clock while it works — the Plan tab may be
+ * closed, and this is where the eye already is. Three rows show; a longer list
+ * scrolls itself so the task under way sits in the middle.
  */
-function CurrentTask({ checklist, onOpen }: { checklist: Task[]; onOpen?: () => void }) {
-  const index = checklist.findIndex((task) => task.status === "inProgress");
-  if (index < 0) return null;
-  const done = checklist.filter((task) => task.status === "completed").length;
+function TaskTicker({ checklist }: { checklist: Task[] }) {
+  const list = useRef<HTMLUListElement>(null);
+  const at = checklist.findIndex((task) => task.status === "inProgress");
+  const current = at >= 0 ? at : Math.max(0, checklist.findIndex((task) => task.status === "pending"));
+  useEffect(() => {
+    const box = list.current;
+    const row = box?.children[current] as HTMLElement | undefined;
+    if (!box || !row) return;
+    box.scrollTo?.({ top: row.offsetTop - (box.clientHeight - row.offsetHeight) / 2, behavior: "smooth" });
+  }, [current, checklist.length]);
+  if (checklist.length === 0) return null;
   return (
-    <button type="button" className="current-task" onClick={onOpen} disabled={!onOpen} title="Show the plan">
-      <CircleDot size={13} className="current-task-mark" aria-label="In progress" />
-      <span className="current-task-title">{checklist[index].title}</span>
-      <span className="current-task-count">
-        {done}/{checklist.length}
-      </span>
-    </button>
+    <ul ref={list} className="task-ticker" aria-label="Checklist">
+      {checklist.map((task, index) => {
+        const { icon: Icon, label } = TASK_MARK[task.status];
+        return (
+          <li key={task.id} className={`task-ticker-row ${task.status}`} aria-current={index === current || undefined}>
+            <Icon size={14} className="task-ticker-mark" aria-label={label} />
+            <span className="task-ticker-title">{task.title}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

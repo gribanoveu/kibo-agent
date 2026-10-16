@@ -25,46 +25,6 @@
   padding: 0;
   border-bottom: 0;
 }
-/* The checklist item in progress: one line under the header, the whole
-   strip a button to the Plan tab. */
-.current-task {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 18px;
-  border: none;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-panel-soft);
-  color: var(--text-dim);
-  font: inherit;
-  font-size: var(--fs-sm);
-  text-align: left;
-  cursor: pointer;
-}
-.current-task:hover:not(:disabled) {
-  color: var(--text);
-}
-.current-task:disabled {
-  cursor: default;
-}
-.current-task-mark {
-  flex: none;
-  color: var(--accent);
-}
-.current-task-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.current-task-count {
-  flex: none;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
 .head-left {
   min-width: 0;
   display: flex;
@@ -311,6 +271,54 @@
 .turn-clock-sep {
   color: var(--text-faint);
 }
+/* The checklist while the agent works: three rows show, the list scrolls
+   itself to keep the task under way in the middle. */
+.task-ticker {
+  --task-row: 26px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 6px 14px;
+  max-height: calc(3 * var(--task-row) + 12px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-soft);
+  font-size: var(--fs-sm);
+}
+.task-ticker-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: var(--task-row);
+  color: var(--text-dim);
+}
+.task-ticker-row[aria-current] {
+  color: var(--text);
+}
+.task-ticker-row.completed,
+.task-ticker-row.cancelled {
+  color: var(--text-faint);
+}
+.task-ticker-row.cancelled .task-ticker-title {
+  text-decoration: line-through;
+}
+.task-ticker-mark {
+  flex: none;
+  color: var(--text-faint);
+}
+.task-ticker-row.inProgress .task-ticker-mark {
+  color: var(--accent);
+  animation: tool-run-spin 0.9s linear infinite;
+}
+.task-ticker-row.completed .task-ticker-mark {
+  color: var(--accent);
+}
+.task-ticker-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .turn-processes {
   padding: 0;
   background: none;
@@ -434,7 +442,8 @@ button.turn-processes:hover {
 }
 @media (prefers-reduced-motion: reduce) {
   .tool-run-spin,
-  .tool-run-step {
+  .tool-run-step,
+  .task-ticker-row.inProgress .task-ticker-mark {
     animation: none;
   }
 }
