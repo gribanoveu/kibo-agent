@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { Composer } from "./components/Composer";
+import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
 import { FolderTab } from "./components/FolderTab";
 import { AsidePanel } from "./components/AsidePanel";
@@ -553,6 +554,7 @@ export default function App() {
                 index={index}
                 changes={changeTotals}
                 onOpenChanges={() => openTab("changes")}
+                end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={
                   unstarted
                     ? {

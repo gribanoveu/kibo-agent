@@ -1,4 +1,5 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type ComponentType, type KeyboardEvent } from "react";
+import { DeepSeekIcon } from "./DeepSeekIcon";
 import {
   ArrowRight,
   BookOpen,
@@ -12,7 +13,6 @@ import {
   Sparkles,
   SquareKanban,
   SquareSlash,
-  Wallet,
   Webhook,
   X,
   type LucideIcon,
@@ -46,7 +46,10 @@ const TABS: { value: Tab; label: string }[] = [
 ];
 
 /** A feature's icon, by its id; one without its own gets the generic piece. */
-const FEATURE_ICONS: Record<string, LucideIcon> = { board: SquareKanban, "provider-balance": Wallet };
+const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
+  board: SquareKanban,
+  "provider-balance": DeepSeekIcon,
+};
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
   const q = query.trim().toLowerCase();

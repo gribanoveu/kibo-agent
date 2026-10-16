@@ -17,9 +17,11 @@ export async function providerBalance(id: string): Promise<ProviderBalance | nul
 
 const SIGNS: Record<string, string> = { CNY: "¥", USD: "$" };
 
-/** `¥110.00 · $2.50` — the chip. */
+/** `¥110.00 · $2.50` — the chip. A currency with nothing on it is left
+    out (the title still has it), unless every one is empty. */
 export function balanceText(balance: ProviderBalance): string {
-  return balance.amounts
+  const held = balance.amounts.filter((a) => Number(a.total) !== 0);
+  return (held.length > 0 ? held : balance.amounts.slice(0, 1))
     .map((a) => (SIGNS[a.currency] ? `${SIGNS[a.currency]}${a.total}` : `${a.total} ${a.currency}`))
     .join(" · ");
 }

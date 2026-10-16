@@ -282,6 +282,9 @@ export function PlainChat({
               onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
             />
           )}
+          <span className="plain-tab-end">
+            <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
+          </span>
         </div>
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
           {attachments.dragging && (
@@ -345,7 +348,6 @@ export function PlainChat({
             )}
             {chat.context && (
               <span className="plain-meter">
-                <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up />
               </span>
             )}

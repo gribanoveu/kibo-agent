@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SendHorizontal, Square, ShieldCheck, Bot, Brain, CornerDownRight, MessageSquareReply, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
-import { ProviderBalance } from "./ProviderBalance";
 import { SlashMenu } from "./SlashMenu";
 import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
@@ -387,7 +386,6 @@ export function Composer({
               empty conversation already costs the prompt and the schemas. */}
           {context && (
             <span className="composer-meter">
-              <ProviderBalance providerId={models.current?.providerId ?? null} running={running} />
               <ContextMeter context={context} usage={usage} running={running} onCompact={onCompact} up />
             </span>
           )}

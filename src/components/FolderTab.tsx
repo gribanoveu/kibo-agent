@@ -1,4 +1,5 @@
 import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { Dropdown } from "./Dropdown";
 import { IndexBadge } from "./IndexBadge";
 import type { RecentFolder } from "../lib/chat";
@@ -62,6 +63,8 @@ type Props = {
     base?: string | null;
     onWorktree: (on: boolean) => void;
   };
+  /** At the strip's right end — the provider's balance. */
+  end?: ReactNode;
 };
 
 /** Where the next message will be worked on: the folder, its branch, its
@@ -80,6 +83,7 @@ export function FolderTab({
   changes = null,
   onOpenChanges,
   branchPicker,
+  end,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
   return (
@@ -194,6 +198,7 @@ export function FolderTab({
           <span className="del">−{changes.del}</span>
         </button>
       )}
+      {end && <span className="folder-tab-end">{end}</span>}
     </div>
   );
 }

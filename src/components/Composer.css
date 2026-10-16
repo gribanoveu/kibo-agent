@@ -79,8 +79,6 @@
 /* The meter and the send button share the right end of the bar. */
 .composer-meter {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
 }
 .composer .composer-meter + .send {
   margin-left: 0;
