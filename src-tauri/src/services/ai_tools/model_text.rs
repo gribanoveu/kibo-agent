@@ -191,7 +191,7 @@ fn web_results(hits: &[crate::domain::web_search::WebHit]) -> String {
 /// Fenced off as `web_results` is; a cut page says how to read the rest.
 fn web_page(page: &crate::domain::web_search::WebPage) -> String {
     let cut = if page.truncated {
-        "\n\n[Only part of the page — call webFetch again with another `query` for other parts of it.]"
+        "\n\n[Only part of the page — call the same tool again with another `query` for other parts of it.]"
     } else {
         ""
     };

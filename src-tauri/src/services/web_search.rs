@@ -7,7 +7,9 @@ use std::sync::Arc;
 use crate::domain::embeddings::EmbeddingProvider;
 use crate::domain::settings::{CredentialsError, WebSearchBackend, WebSearchPlace, DEFAULT_SEARXNG_URL};
 use crate::domain::web_search::{searxng_base, Web, WebSetupError};
-use crate::infra::{open_web, settings_store, tavily};
+use crate::domain::features::{Feature, Features};
+use crate::domain::provider_balance::is_deepseek;
+use crate::infra::{deepseek_web, llm_credentials_store, open_web, settings_store, tavily};
 
 /// Which search `webSearch` asks in `place`: the one chosen, or, never chosen,
 /// what `AppSettings::web_search_in` says. An unreadable settings file is the
@@ -63,6 +65,22 @@ pub fn web_for(place: WebSearchPlace, embeddings: &Arc<dyn EmbeddingProvider>) -
     open_web::web(search, Arc::clone(embeddings)).map(Some).map_err(client)
 }
 
+/// What `deepseekSearch` and `deepseekFetch` reach the web with: DeepSeek's
+/// own, with the key of the first provider on DeepSeek's address that has
+/// one. `None` while the feature is off, or there is no such provider — the
+/// tools then tell the model where the user adds one. Apart from `web_for`:
+/// Settings → Web search does not decide it.
+pub fn deepseek_for(features: &Features, embeddings: &Arc<dyn EmbeddingProvider>) -> Option<Web> {
+    if !features.is_on(Feature::DeepseekSearch) {
+        return None;
+    }
+    let settings = settings_store::load().ok()?.llm;
+    settings.providers.iter().filter(|p| is_deepseek(&p.base_url)).find_map(|provider| {
+        let key = llm_credentials_store::get_api_key(&provider.id).ok().flatten()?;
+        deepseek_web::web(key, provider.trusted_cert_pem.as_deref(), Arc::clone(embeddings)).ok()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +131,31 @@ mod tests {
             assert!(web_for(WebSearchPlace::Chat, &model).unwrap().is_some(), "SearXNG needs no key");
             settings_store::update(|s| s.set_web_search(WebSearchPlace::Chat, WebSearchBackend::Tavily)).unwrap();
             assert!(web_for(WebSearchPlace::Chat, &model).is_err());
+        });
+    }
+
+    /// Only while the feature is on, and only with a key of a provider on
+    /// DeepSeek's own address — not one behind a gateway, whatever its name.
+    #[test]
+    fn deepseeks_web_needs_the_feature_and_a_deepseek_key() {
+        with_app_dir("web-deepseek", || {
+            use crate::domain::settings::ProviderConfig;
+            let model: Arc<dyn EmbeddingProvider> = Arc::new(NoModel);
+            let provider = |id: &str, base_url: &str| ProviderConfig { id: id.into(), base_url: base_url.into(), ..Default::default() };
+            settings_store::update(|s| {
+                s.llm.providers = vec![
+                    provider("deepseek", "https://api.deepseek.com"),
+                    provider("gateway", "https://gateway.example/deepseek/v1"),
+                ]
+            })
+            .unwrap();
+            llm_credentials_store::save_api_key("gateway", "sk-gateway").unwrap();
+            let on = Features::from_settings(&[("deepseek-search".to_string(), true)].into());
+
+            assert!(deepseek_for(&on, &model).is_none(), "the gateway's key is not DeepSeek's");
+            llm_credentials_store::save_api_key("deepseek", "sk-ds").unwrap();
+            assert!(deepseek_for(&on, &model).is_some());
+            assert!(deepseek_for(&Features::default(), &model).is_none(), "off");
         });
     }
 }

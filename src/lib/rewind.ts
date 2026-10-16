@@ -25,6 +25,8 @@ const ACCOUNTED = new Set([
   "semanticSearch",
   "webSearch",
   "webFetch",
+  "deepseekSearch",
+  "deepseekFetch",
   "toolSearch",
   // The app's own board, not the folder.
   "board",

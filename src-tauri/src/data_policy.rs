@@ -24,6 +24,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/kube_client.rs",
     "src/infra/tavily.rs",
     "src/infra/open_web.rs",
+    "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
 ];
 

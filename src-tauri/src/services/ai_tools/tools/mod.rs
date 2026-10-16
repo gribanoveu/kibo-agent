@@ -24,6 +24,7 @@ use crate::domain::tools::{
 };
 
 pub mod board;
+pub mod deepseek;
 pub mod delete;
 pub mod delete_directory;
 pub mod edit_file;
@@ -100,6 +101,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeDelete, cluster::delete_definition),
     (ToolName::WebSearch, web_search::definition),
     (ToolName::WebFetch, web_fetch::definition),
+    (ToolName::DeepseekSearch, deepseek::search_definition),
+    (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -159,6 +162,8 @@ pub fn dispatch(
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
         ToolCall::WebFetch(args) => web_fetch::web_fetch(args, deps),
+        ToolCall::DeepseekSearch(args) => deepseek::deepseek_search(args, deps),
+        ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -516,6 +521,20 @@ mod definition_tests {
             ToolName::WebFetch => (
                 r#"{"url":"https://tokio.rs"}"#,
                 vec![ToolCall::WebFetch(crate::domain::tools::WebFetchArgs {
+                    url: "https://tokio.rs".into(),
+                    query: Some("release".into()),
+                })],
+            ),
+            ToolName::DeepseekSearch => (
+                r#"{"query":"v4 site:github.com"}"#,
+                vec![ToolCall::DeepseekSearch(crate::domain::tools::DeepseekSearchArgs {
+                    query: "v4 site:github.com".into(),
+                    max_results: Some(3),
+                })],
+            ),
+            ToolName::DeepseekFetch => (
+                r#"{"url":"https://tokio.rs"}"#,
+                vec![ToolCall::DeepseekFetch(crate::domain::tools::WebFetchArgs {
                     url: "https://tokio.rs".into(),
                     query: Some("release".into()),
                 })],

@@ -81,6 +81,8 @@ export const LABELS: Record<string, string> = {
   kubeDelete: "Delete object",
   webSearch: "Web",
   webFetch: "Page",
+  deepseekSearch: "DeepSeek web",
+  deepseekFetch: "DeepSeek page",
   board: "Board",
   toolSearch: "Find tools",
 };
@@ -258,7 +260,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     }
 
     // The pages as the model got them: title, address, the passages.
-    case "webSearch": {
+    case "webSearch":
+    case "deepseekSearch": {
       const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
       return {
         name,
@@ -269,7 +272,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     }
 
     // The page as the model got it: where it ended up, and its text.
-    case "webFetch": {
+    case "webFetch":
+    case "deepseekFetch": {
       const page = asObject(result.page);
       const cut = page.truncated === true;
       return {
@@ -641,6 +645,8 @@ const ACTIVE_VERBS: Record<string, string> = {
   Search: "Searching the code for",
   Web: "Searching the web for",
   Page: "Reading",
+  "DeepSeek web": "Searching the web with DeepSeek for",
+  "DeepSeek page": "Reading with DeepSeek",
   "Find tools": "Finding tools for",
   List: "Listing",
   Write: "Writing",
@@ -675,6 +681,8 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Search: (n) => `searched the code${n > 1 ? ` ${n} times` : ""}`,
   Web: (n) => `searched the web${n > 1 ? ` ${n} times` : ""}`,
   Page: (n) => `read ${n === 1 ? "a page" : `${n} pages`}`,
+  "DeepSeek web": (n) => `searched the web with DeepSeek${n > 1 ? ` ${n} times` : ""}`,
+  "DeepSeek page": (n) => `read ${n === 1 ? "a page" : `${n} pages`} with DeepSeek`,
   List: (n) => `listed ${n === 1 ? "a folder" : `${n} folders`}`,
   Write: (n) => `wrote ${n === 1 ? "a file" : `${n} files`}`,
   Edit: (n) => `edited ${n === 1 ? "a file" : `${n} files`}`,

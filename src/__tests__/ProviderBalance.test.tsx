@@ -74,13 +74,32 @@ describe("ProviderBalance", () => {
     expect(screen.getByText("¥5.00")).toBeTruthy();
   });
 
+  test("a currency with nothing on it is left out of the chip but not the title", async () => {
+    answer = {
+      available: true,
+      amounts: [
+        { currency: "USD", total: "0.00", granted: "0.00", toppedUp: "0.00" },
+        { currency: "CNY", total: "37.70", granted: "0.00", toppedUp: "37.70" },
+      ],
+    };
+    render(<ProviderBalance providerId="deepseek" running={false} />);
+    await settle();
+    const chip = screen.getByText("¥37.70");
+    expect(chip.closest(".provider-balance")!.getAttribute("title")).toContain("0.00 USD");
+
+    answer = cny("0.00", false);
+    render(<ProviderBalance providerId="other" running={false} />);
+    await settle();
+    expect(screen.getByText("¥0.00")).toBeTruthy();
+  });
+
   test("an account that no longer covers a request is marked", async () => {
     answer = cny("0.00", false);
     render(<ProviderBalance providerId="deepseek" running={false} />);
     await settle();
-    const chip = screen.getByText("¥0.00");
+    const chip = screen.getByText("¥0.00").closest(".provider-balance")!;
     expect(chip.className).toContain("spent");
-    expect(chip.title).toContain("top up");
+    expect(chip.getAttribute("title")).toContain("top up");
   });
 
   test("a failed read says so in the title, not as a number", async () => {

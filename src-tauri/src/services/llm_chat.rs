@@ -229,6 +229,9 @@ pub struct Turn<'a> {
     pub questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
     /// The board `board` keeps cards on; `None` has none.
     pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
+    /// DeepSeek's search and page reader, for `deepseekSearch` and
+    /// `deepseekFetch`; `None` while the feature is off or there is no key.
+    pub deepseek: Option<Web>,
     /// The features the user has on, read once a turn: a tool of one that is
     /// off is neither offered nor run (`domain::features`).
     pub features: crate::domain::features::Features,
@@ -1003,6 +1006,7 @@ fn execute_call(
         web: match turn.place {
             Place::Chat { web, .. } | Place::Folder { web, .. } => web.cloned(),
         },
+        deepseek: turn.deepseek.clone(),
         history,
         board: turn.board.clone(),
     };
@@ -1217,6 +1221,7 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         agents: None,
         questions: None,
         board: None,
+        deepseek: None,
         // A helper reads; no feature of the user's is for it.
         features: Features::default(),
     };
@@ -2228,6 +2233,7 @@ mod tests {
                 agents: self.agents.clone(),
                 questions: self.questions.clone(),
                 board: None,
+                deepseek: None,
                 features: self.features.clone(),
             };
             f(&turn)
@@ -4019,10 +4025,11 @@ mod tests {
 
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
-        // Every built-in one but a review's own, the Assistant's board and
-        // the Kubernetes role's; MCP tools come from servers, and none is
-        // connected — so neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 4 - ChatRole::Kubernetes.tools().len());
+        // Every built-in one but a review's own, the features' — the board,
+        // DeepSeek's two — and the Kubernetes role's; MCP tools come from
+        // servers, and none is connected — so neither is `toolSearch`, with
+        // nothing to find.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 6 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

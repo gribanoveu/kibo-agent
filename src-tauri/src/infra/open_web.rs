@@ -165,7 +165,7 @@ fn fetch(agent: &ureq::Agent, model: &dyn EmbeddingProvider, query: &PageQuery) 
 
 /// The page whole when it fits; otherwise its passages about the question, or
 /// without one — or without the model — its beginning.
-fn shape(page: WebPage, query: &PageQuery, model: &dyn EmbeddingProvider) -> WebPage {
+pub(crate) fn shape(page: WebPage, query: &PageQuery, model: &dyn EmbeddingProvider) -> WebPage {
     if page.content.chars().count() <= query.max_chars {
         return page;
     }
