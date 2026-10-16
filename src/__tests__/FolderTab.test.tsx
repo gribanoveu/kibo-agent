@@ -135,6 +135,29 @@ describe("the folder menu", () => {
     ]);
   });
 
+  test("drops a folder from the list, without opening it", () => {
+    const forgotten: string[] = [];
+    const opened: string[] = [];
+    render(
+      <FolderTab
+        path="/work/kibo"
+        recent={[folder("/work/kibo"), folder("/work/atlas")]}
+        onOpenFolder={(path) => opened.push(path)}
+        onPickFolder={() => {}}
+        onForgetFolder={(path) => forgotten.push(path)}
+        onOpenChanges={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    const buttons = screen.getAllByTitle("Remove from the list — the folder itself is left as it is");
+    expect(buttons).toHaveLength(2);
+
+    fireEvent.click(buttons[1]);
+    expect(forgotten).toEqual(["/work/atlas"]);
+    expect(opened).toEqual([]);
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
   test("draws the nested rows as such", () => {
     render(
       <FolderTab
