@@ -1,0 +1,17 @@
+.provider-balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.provider-balance.unknown {
+  color: var(--text-faint);
+}
+.provider-balance.spent {
+  color: var(--red);
+}

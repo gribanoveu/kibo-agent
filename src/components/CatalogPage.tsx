@@ -12,6 +12,7 @@ import {
   Sparkles,
   SquareKanban,
   SquareSlash,
+  Wallet,
   Webhook,
   X,
   type LucideIcon,
@@ -45,7 +46,7 @@ const TABS: { value: Tab; label: string }[] = [
 ];
 
 /** A feature's icon, by its id; one without its own gets the generic piece. */
-const FEATURE_ICONS: Record<string, LucideIcon> = { board: SquareKanban };
+const FEATURE_ICONS: Record<string, LucideIcon> = { board: SquareKanban, "provider-balance": Wallet };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
   const q = query.trim().toLowerCase();
@@ -365,20 +366,26 @@ function FeatureDetails({
             Delete data
           </button>
         )}
-        {feature.on && <span className="catalog-detail-state installed">On — from the next message</span>}
+        {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
       </div>
       {error && <div className="catalog-detail-error">{error}</div>}
-      <p className="catalog-detail-note">
-        {feature.on
-          ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
-          : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
-      </p>
+      {feature.tools.length > 0 && (
+        <p className="catalog-detail-note">
+          {feature.on
+            ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
+            : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
+        </p>
+      )}
 
       <dl className="catalog-detail-facts">
         <dt>Source</dt>
         <dd>Built into the app</dd>
-        <dt>Where</dt>
-        <dd>{feature.places.join(", ")}</dd>
+        {feature.places.length > 0 && (
+          <>
+            <dt>Where</dt>
+            <dd>{feature.places.join(", ")}</dd>
+          </>
+        )}
         {feature.data && (
           <>
             <dt>Keeps</dt>

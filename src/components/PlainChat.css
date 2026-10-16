@@ -233,6 +233,8 @@
 }
 .plain-meter {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
 }
 .plain-meter + .plain-send {
   margin-left: 0;
