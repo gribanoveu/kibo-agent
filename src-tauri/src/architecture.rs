@@ -70,7 +70,7 @@ const RULES: &[Rule] = &[
 /// `Result<…, String>` outside `commands/`: errors as data are `thiserror`
 /// enums, flattened to a string only at the IPC boundary. Only goes down —
 /// when it does, lower it here (#7).
-const STRING_ERRORS: usize = 80;
+const STRING_ERRORS: usize = 79;
 
 /// The lines of `path` that are code: no comments, no `#[cfg(test)]` items.
 ///

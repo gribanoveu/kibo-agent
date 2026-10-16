@@ -547,6 +547,7 @@ export default function App() {
                 onOpenFolder={openFolder}
                 onPickFolder={chooseFolder}
                 onRemoveWorktree={worktreeRemoval.ask}
+                onForgetFolder={(path) => void workspace.forget(path)}
                 branch={branch}
                 worktreeOf={worktreeOf}
                 index={index}

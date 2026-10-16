@@ -482,6 +482,12 @@ impl From<AppDirError> for String {
     }
 }
 
+/// Why `recent.json`, the folders opened lately, could not be written. Only
+/// the list misses the change: the folder opened stays open.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0}")]
+pub struct RecentFoldersError(pub String);
+
 /// Why the saved API keys cannot be read. Not "no key": that one is
 /// `Ok(None)`, and reading this as it sent providers a request without a key
 /// that came back 401 with nothing to say why.

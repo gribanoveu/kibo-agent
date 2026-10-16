@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { currentWorkspace, openWorkspace, type RecentFolder, recentWorkspaces } from "../lib/chat";
+import { currentWorkspace, forgetWorkspace, openWorkspace, type RecentFolder, recentWorkspaces } from "../lib/chat";
 import { pickFolder } from "../lib/dialog";
 
 /** The folder the agent acts on. Resolved by the backend, displayed here. */
@@ -53,5 +53,20 @@ export function useWorkspace() {
     recentWorkspaces().then(setRecent).catch(() => {});
   }, []);
 
-  return { path, error, recent, resumed, open, pick, refreshRecent };
+  /** Drops a folder from the list: left on disk, and left open if it is open. */
+  const forget = useCallback(
+    async (path: string) => {
+      try {
+        await forgetWorkspace(path);
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        refreshRecent();
+      }
+    },
+    [refreshRecent],
+  );
+
+  return { path, error, recent, resumed, open, pick, refreshRecent, forget };
 }

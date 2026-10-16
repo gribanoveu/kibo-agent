@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-16 A project in the folder menu can be dropped from the list, its worktrees with it — the folders themselves and their chats stay where they are
 - 2026-10-15 The index badge no longer stays on "Indexing…" after a folder's first sync ends while the window is still starting up
 - 2026-10-15 When saved API keys cannot be read — the machine's key out of reach, a damaged file — Settings and the chat say so, instead of showing "no key" and failing with the provider's 401; saving the key again fixes it
 - 2026-10-15 Web search that is on but cannot start — a SearXNG address that is not one, unreadable keys — stops the turn with the reason and where to fix it, instead of the model quietly answering that it cannot search

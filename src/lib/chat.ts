@@ -143,6 +143,12 @@ export async function recentWorkspaces(): Promise<RecentFolder[]> {
   return invoke<RecentFolder[]>("workspace_recent");
 }
 
+/** Drops a folder from the list offered at launch; the folder itself stays. */
+export async function forgetWorkspace(path: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("workspace_forget", { path });
+}
+
 // --------------------------------------------------------- the folder index
 
 /**
