@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { certificateCount, filterModels, pemFromBytes } from "../lib/providerForm";
+import { CATALOG, certificateCount, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
 
 describe("filterModels", () => {
   const models = ["gpt-4o", "claude-sonnet-4-5", "claude-opus-4-1", "Qwen3-Coder"];
@@ -12,6 +12,24 @@ describe("filterModels", () => {
 
   test("an empty search leaves everything", () => {
     expect(filterModels(models, "  ")).toEqual(models);
+  });
+});
+
+describe("the provider catalog", () => {
+  // The snapshot is regenerated from models.dev; what the form relies on is checked here.
+  test("is unique names, HTTPS URLs and a protocol the app speaks", () => {
+    expect(new Set(CATALOG.map((p) => p.id)).size).toBe(CATALOG.length);
+    for (const p of CATALOG) {
+      expect(p.baseUrl).toStartWith("https://");
+      expect(["openAiCompatible", "anthropic"]).toContain(p.kind);
+    }
+    expect(CATALOG.find((p) => p.id === "anthropic")?.kind).toBe("anthropic");
+    expect(CATALOG.find((p) => p.id === "openai")?.baseUrl).toBe("https://api.openai.com/v1");
+  });
+
+  test("a taken name gets the next free number", () => {
+    expect(freeName("deepseek", [])).toBe("deepseek");
+    expect(freeName("deepseek", ["deepseek", "deepseek-2"])).toBe("deepseek-3");
   });
 });
 

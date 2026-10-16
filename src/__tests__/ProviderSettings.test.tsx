@@ -265,6 +265,44 @@ describe("with nothing configured", () => {
   });
 });
 
+describe("the known providers", () => {
+  const add = () => fireEvent.click(screen.getByText("Add"));
+  const search = (text: string) =>
+    fireEvent.change(screen.getByPlaceholderText(/^Search \d+ providers$/), { target: { value: text } });
+  const protocol = () => screen.getByRole("radiogroup", { name: "Protocol" }).querySelector("[aria-checked=true]")?.textContent;
+
+  test("are offered only for a new provider", () => {
+    form();
+    expect(screen.queryByRole("radiogroup", { name: "Known provider" })).toBeNull();
+    add();
+    expect(screen.getByRole("radiogroup", { name: "Known provider" })).toBeTruthy();
+  });
+
+  test("a pick fills the name, protocol and base URL", () => {
+    form();
+    add();
+    search("deepseek");
+    fireEvent.click(screen.getByRole("radio", { name: /^DeepSeek/ }));
+
+    expect(field("Name").value).toBe("deepseek");
+    expect(field("Base URL").value).toBe("https://api.deepseek.com");
+    expect(protocol()).toBe("OpenAI-compatible");
+
+    search("anthropic");
+    fireEvent.click(screen.getByRole("radio", { name: /^Anthropic api\.anthropic/ }));
+    expect(protocol()).toBe("Anthropic");
+  });
+
+  /// Saving under a taken name replaces that provider.
+  test("a name already saved gets a number instead", () => {
+    form();
+    add();
+    search("openai");
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
+    expect(field("Name").value).toBe("openai-2");
+  });
+});
+
 describe("saving", () => {
   /// Every other box in this app sends on Enter. One that quietly does nothing
   /// looks exactly like one that saved — which is how a typed key goes missing.
