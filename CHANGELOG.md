@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- 2026-10-16 Changes no longer has its own button in the chat header; it opens from the … menu, ⌘1 or the +/− count by the branch
+- 2026-10-16 Overview and Terminal open without a heading and close button of their own: their buttons in the chat header, ⌘1 and ⌃` show and hide them
+- 2026-10-16 MCP servers' status in Overview and the MCP pane changes as they start, fail or stop, without reopening the pane
+- 2026-10-16 Add the Overview pane, from the button right of Terminal's or ⌘1: the context window, the MCP servers that are on, the processes and helper agents running in the background, and the branch with its lines changed
+- 2026-10-16 Changes no longer has its own button in the chat header; it opens from the … menu, ⌘2 or the +/− count by the branch; the other panes' keys move one up
 - 2026-10-16 Add Provider balance to the Catalog's features: turned on, the message box shows what is left on a DeepSeek account and reads it again after each answer
 - 2026-10-16 A new message drops the checklist items the agent's last answer left open, so the next task doesn't queue behind a stale one; a plan handed over from Plan mode keeps its checklist
 - 2026-10-16 The branch in the chat header changes as soon as the agent switches it, not when its turn ends

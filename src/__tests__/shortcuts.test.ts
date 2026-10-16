@@ -36,7 +36,7 @@ describe("a shortcut", () => {
     expect(comboKeys(SHORTCUTS.newChat.combos[0], true)).toEqual(["⌘", "N"]);
     expect(comboKeys(SHORTCUTS.newChat.combos[0], false)).toEqual(["Ctrl", "N"]);
     expect(comboKeys(SHORTCUTS.nextFile.combos[0], true)).toEqual(["⌥", "↓"]);
-    expect(shortcutText("changes", true)).toBe("⌘1");
+    expect(shortcutText("overview", true)).toBe("⌘1");
     expect(shortcutText("terminal", false)).toBe("Ctrl+`");
   });
 
@@ -71,9 +71,9 @@ describe("a pane's shortcut", () => {
 });
 
 describe("the pane keys", () => {
-  test("go Changes, Plan, Files, Rules, Skills, MCP, Hooks", () => {
-    const keys = ["changes", "plan", "files", "rules", "skills", "mcp", "hooks"] as const;
-    expect(keys.map((id) => shortcutText(id, true))).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7"]);
+  test("go Overview, Changes, Plan, Files, Rules, Skills, MCP, Hooks", () => {
+    const keys = ["overview", "changes", "plan", "files", "rules", "skills", "mcp", "hooks"] as const;
+    expect(keys.map((id) => shortcutText(id, true))).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7", "⌘8"]);
   });
 });
 

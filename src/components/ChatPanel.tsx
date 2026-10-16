@@ -15,6 +15,7 @@ import {
   FolderTree,
   FoldVertical,
   GitBranch,
+  Info,
   Globe,
   ListTodo,
   NotebookPen,
@@ -637,6 +638,9 @@ function ToolRun({
 }
 
 type Props = {
+  /** Whether Overview is showing; the header's last button shows and hides it. */
+  overviewOpen?: boolean;
+  onToggleOverview?: () => void;
   /** Writes the conversation out as a file. One entry of the header's "…" menu. */
   onExport?: () => void;
   /** Whether Terminal is showing; its own header button shows and hides it. */
@@ -788,6 +792,8 @@ export function Transcript({
 }
 
 export function ChatPanel({
+  overviewOpen = false,
+  onToggleOverview,
   onExport,
   terminalOpen = false,
   onToggleTerminal,
@@ -897,6 +903,17 @@ export function ChatPanel({
             onClick={onToggleTerminal}
           >
             <TerminalSquare size={15} />
+          </button>
+        )}
+        {onToggleOverview && (
+          <button
+            type="button"
+            className={`iconbtn aside-button${overviewOpen ? " on" : ""}`}
+            title={`${overviewOpen ? "Hide overview" : "Show overview"} (${shortcutText("overview")})`}
+            aria-pressed={overviewOpen}
+            onClick={onToggleOverview}
+          >
+            <Info size={15} />
           </button>
         )}
       </div>

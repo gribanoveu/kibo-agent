@@ -478,6 +478,28 @@ describe("the header", () => {
     expect(screen.queryByRole("menuitem", { name: "Terminal" })).toBeNull();
   });
 
+  test("Overview has its own header button right of Terminal's, and stays in the … menu", () => {
+    let toggled = 0;
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenPanel={() => {}}
+        onToggleTerminal={() => {}}
+        onToggleOverview={() => toggled++}
+      />,
+    );
+    const button = screen.getByTitle(/^Show overview/);
+    expect(button.previousElementSibling?.getAttribute("title")).toMatch(/^Show terminal/);
+    fireEvent.click(button);
+    expect(toggled).toBe(1);
+
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: "Overview" })).toBeTruthy();
+  });
+
   test("the … menu offers the export, and closes once it is picked", () => {
     let exported = 0;
     render(

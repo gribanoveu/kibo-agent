@@ -34,6 +34,78 @@ const PARTS = [
 const R = 7;
 const CIRCUMFERENCE = 2 * Math.PI * R;
 
+// No window is a number with no scale — the ring stays empty rather than
+// filling against a guess.
+const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.total / context.limit) : null);
+
+/** What the tokens are spent on, and the one thing to do about it: the ring's panel, and the Overview pane's. */
+export function ContextDetails({ context, usage, running, onCompact }: Omit<Props, "up">) {
+  const share = shareOf(context);
+  const percent = share === null ? null : Math.round(share * 100);
+  return (
+    <>
+      <div className="ctx-head">
+        <span>Context window</span>
+        {percent !== null && <span className="ctx-percent">{percent}%</span>}
+      </div>
+
+      {context.limit ? (
+        <>
+          <div className="ctx-bar" aria-hidden="true">
+            {PARTS.map(({ key }) => (
+              <span
+                key={key}
+                className={`ctx-part--${key}`}
+                style={{ width: `${(context[key] / (context.limit ?? 1)) * 100}%` }}
+              />
+            ))}
+          </div>
+          <p className="ctx-total">
+            {compact(context.total)} of {compact(context.limit)} tokens
+          </p>
+        </>
+      ) : (
+        <p className="ctx-total">
+          About {compact(context.total)} tokens in the next request. The model's window is not known —
+          set it in Settings → Models.
+        </p>
+      )}
+
+      <dl className="ctx-rows">
+        {PARTS.map(({ key, label }) => (
+          <div key={key}>
+            <dt>
+              <i className={`ctx-dot ctx-part--${key}`} />
+              {label}
+            </dt>
+            <dd>{compact(context[key])}</dd>
+          </div>
+        ))}
+      </dl>
+
+      {context.compactsAt && (
+        <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
+      )}
+      {usage && (
+        <p className="ctx-note">
+          The last request actually cost {compact(usage.promptTokens)}
+          {cacheNote(usage)}.
+        </p>
+      )}
+
+      <button
+        type="button"
+        className="btn btn-ghost ctx-compact"
+        disabled={running}
+        title={running ? "Not while a turn is running" : undefined}
+        onClick={onCompact}
+      >
+        Compact now
+      </button>
+    </>
+  );
+}
+
 type Props = {
   context: ContextUsage;
   usage: ChatUsage | null;
@@ -62,9 +134,7 @@ export function ContextMeter({ context, usage, running, onCompact, up = false }:
     };
   }, [open]);
 
-  // No window is a number with no scale — the ring stays empty rather than
-  // filling against a guess.
-  const share = context.limit ? Math.min(1, context.total / context.limit) : null;
+  const share = shareOf(context);
   const percent = share === null ? null : Math.round(share * 100);
   const tone = share === null || share < 0.7 ? "ok" : share < 0.9 ? "warn" : "full";
 
@@ -94,67 +164,15 @@ export function ContextMeter({ context, usage, running, onCompact, up = false }:
 
       {open && (
         <div className={`ctx-pop${up ? " up" : ""}`} role="dialog" aria-label="Context">
-          <div className="ctx-head">
-            <span>Context window</span>
-            {percent !== null && <span className="ctx-percent">{percent}%</span>}
-          </div>
-
-          {context.limit ? (
-            <>
-              <div className="ctx-bar" aria-hidden="true">
-                {PARTS.map(({ key }) => (
-                  <span
-                    key={key}
-                    className={`ctx-part--${key}`}
-                    style={{ width: `${(context[key] / (context.limit ?? 1)) * 100}%` }}
-                  />
-                ))}
-              </div>
-              <p className="ctx-total">
-                {compact(context.total)} of {compact(context.limit)} tokens
-              </p>
-            </>
-          ) : (
-            <p className="ctx-total">
-              About {compact(context.total)} tokens in the next request. The model's window is not known —
-              set it in Settings → Models.
-            </p>
-          )}
-
-          <dl className="ctx-rows">
-            {PARTS.map(({ key, label }) => (
-              <div key={key}>
-                <dt>
-                  <i className={`ctx-dot ctx-part--${key}`} />
-                  {label}
-                </dt>
-                <dd>{compact(context[key])}</dd>
-              </div>
-            ))}
-          </dl>
-
-          {context.compactsAt && (
-            <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
-          )}
-          {usage && (
-            <p className="ctx-note">
-              The last request actually cost {compact(usage.promptTokens)}
-              {cacheNote(usage)}.
-            </p>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-ghost ctx-compact"
-            disabled={running}
-            title={running ? "Not while a turn is running" : undefined}
-            onClick={() => {
+          <ContextDetails
+            context={context}
+            usage={usage}
+            running={running}
+            onCompact={() => {
               setOpen(false);
               onCompact();
             }}
-          >
-            Compact now
-          </button>
+          />
         </div>
       )}
     </div>
