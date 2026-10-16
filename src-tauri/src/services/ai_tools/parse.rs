@@ -69,6 +69,8 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "kubeDelete" => ToolCall::KubeDelete(args(call)?),
         "webSearch" => ToolCall::WebSearch(args(call)?),
         "webFetch" => ToolCall::WebFetch(args(call)?),
+        "deepseekSearch" => ToolCall::DeepseekSearch(args(call)?),
+        "deepseekFetch" => ToolCall::DeepseekFetch(args(call)?),
         "board" => ToolCall::Board(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to

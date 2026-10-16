@@ -320,6 +320,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         agents: Some(Arc::clone(&agents)),
         questions: None,
         board: None,
+        deepseek: None,
         features: Default::default(),
     };
     let outcome = llm_chat::stream(&turn, vec![LlmMessage::user(task.prompt.clone())], Vec::new());

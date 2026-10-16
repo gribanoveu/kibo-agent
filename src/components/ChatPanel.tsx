@@ -73,6 +73,8 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Blame: GitBranch,
   Web: Globe,
   Page: Globe,
+  "DeepSeek web": Globe,
+  "DeepSeek page": Globe,
   Search: Search,
   Memory: NotebookPen,
   Plan: ScrollText,

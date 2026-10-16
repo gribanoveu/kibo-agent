@@ -8,6 +8,7 @@ pub mod app_dir;
 pub mod settings_store;
 pub mod kube_client;
 pub mod open_web;
+pub mod deepseek_web;
 pub mod tavily;
 pub mod catalog_http;
 pub mod catalog_store;

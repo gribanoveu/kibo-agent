@@ -1,5 +1,5 @@
-import type { ReactElement, ReactNode } from "react";
-import { X, type LucideIcon } from "lucide-react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
+import { X } from "lucide-react";
 import "./Page.css";
 
 type PageProps = {
@@ -36,7 +36,7 @@ export function Page({ title, bar, panel, sideHandle, children }: PageProps) {
 }
 
 type PanelProps = {
-  icon: LucideIcon;
+  icon: ComponentType<{ size?: number }>;
   /** The heading's word, as a pane names itself ("Skill", "MCP"). */
   title: string;
   /** What a screen reader calls the panel — the thing it is about. */

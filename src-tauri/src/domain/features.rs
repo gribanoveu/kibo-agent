@@ -18,6 +18,7 @@ use super::tools::ToolName;
 pub enum Feature {
     Board,
     ProviderBalance,
+    DeepseekSearch,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -33,7 +34,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -53,6 +54,15 @@ impl Feature {
                     known by its address api.deepseek.com. Read again after each answer.",
                 enabled_by_default: false,
                 tools: &[],
+                data: None,
+            },
+            Feature::DeepseekSearch => Manifest {
+                id: "deepseek-search",
+                name: "DeepSeek search",
+                description: "Two tools for the model, deepseekSearch and deepseekFetch: DeepSeek's own web search and page reader, \
+                    paid from the DeepSeek account set up in Settings → Models. Apart from the web search chosen in Settings.",
+                enabled_by_default: false,
+                tools: &[ToolName::DeepseekSearch, ToolName::DeepseekFetch],
                 data: None,
             },
         }
@@ -122,7 +132,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search"]);
     }
 
     #[test]
@@ -138,6 +148,7 @@ mod tests {
         let chosen = |pairs: &[(&str, bool)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect::<BTreeMap<_, _>>();
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Board), "the board is off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::ProviderBalance), "a live call per answer, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::DeepseekSearch), "paid per call, off until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.

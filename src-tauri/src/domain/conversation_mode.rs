@@ -75,6 +75,9 @@ fn base_tools() -> HashSet<ToolName> {
         // agent a search (`llm_chat::tool_definitions_for`).
         ToolName::WebSearch,
         ToolName::WebFetch,
+        // The same through DeepSeek, while the user has that feature on.
+        ToolName::DeepseekSearch,
+        ToolName::DeepseekFetch,
     ]
     .into_iter()
     .collect()

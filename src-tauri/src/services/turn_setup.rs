@@ -126,6 +126,7 @@ pub fn run_in_folder(
     };
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
+    let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
 
     let turn = Turn {
         events: folder.events,
@@ -152,6 +153,7 @@ pub fn run_in_folder(
         agents: app.agents,
         questions: app.questions,
         board,
+        deepseek,
         features,
     };
     Ok(run(&turn)?)
@@ -195,6 +197,7 @@ pub fn run_in_chat(
     let web = web_search::web_for(WebSearchPlace::Chat, &chat.embeddings)?;
     let features = features::enabled();
     let board = Some(chat.board).filter(|_| features.is_on(Feature::Board));
+    let deepseek = web_search::deepseek_for(&features, &chat.embeddings);
     let turn = plain_chat::ChatTurn {
         session: &session,
         role: chat.role,
@@ -208,6 +211,7 @@ pub fn run_in_chat(
         cancelled: chat.cancelled,
         log_call: &log_call,
         board,
+        deepseek,
         features,
     };
     Ok(run(&turn)?)

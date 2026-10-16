@@ -326,7 +326,7 @@ mod tests {
             | ToolName::KubeDelete => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
             // The query stays: what left the machine is what the log is for.
             // A page's words are the pages' authors', not the user's record.
-            ToolName::WebSearch => (
+            ToolName::WebSearch | ToolName::DeepseekSearch => (
                 None,
                 ToolResult::WebResults {
                     hits: vec![crate::domain::web_search::WebHit {
@@ -337,8 +337,8 @@ mod tests {
                 },
             ),
             // The address stays, as a search's do; the page's words go.
-            ToolName::WebFetch => (
-                Some(ToolCall::WebFetch(crate::domain::tools::WebFetchArgs { url: "https://tokio.rs".into(), query: None })),
+            ToolName::WebFetch | ToolName::DeepseekFetch => (
+                Some(ToolCall::DeepseekFetch(crate::domain::tools::WebFetchArgs { url: "https://tokio.rs".into(), query: None })),
                 ToolResult::WebPage {
                     page: crate::domain::web_search::WebPage {
                         title: "Tokio".into(),

@@ -84,6 +84,10 @@ pub enum ToolName {
     WebSearch,
     /// A chat's read of one page the search found or the user named.
     WebFetch,
+    /// The same two through DeepSeek's own search and page reader, with the
+    /// DeepSeek provider's key (`Feature::DeepseekSearch`).
+    DeepseekSearch,
+    DeepseekFetch,
     /// The Assistant's board: cards kept for later, which the user sees on
     /// the Board page (`domain::board`).
     Board,
@@ -146,6 +150,8 @@ impl ToolName {
         ToolName::KubeDelete,
         ToolName::WebSearch,
         ToolName::WebFetch,
+        ToolName::DeepseekSearch,
+        ToolName::DeepseekFetch,
         ToolName::Board,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -196,6 +202,8 @@ impl ToolName {
             ToolName::KubeDelete => "kubeDelete",
             ToolName::WebSearch => "webSearch",
             ToolName::WebFetch => "webFetch",
+            ToolName::DeepseekSearch => "deepseekSearch",
+            ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -280,6 +288,8 @@ impl ToolName {
             | ToolName::KubeRunbook
             | ToolName::WebSearch
             | ToolName::WebFetch
+            | ToolName::DeepseekSearch
+            | ToolName::DeepseekFetch
             | ToolName::Board
             | ToolName::ToolSearch => false,
         }
@@ -309,6 +319,8 @@ impl ToolName {
             | ToolName::SemanticSearch
             | ToolName::WebSearch
             | ToolName::WebFetch
+            | ToolName::DeepseekSearch
+            | ToolName::DeepseekFetch
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Skill
@@ -424,6 +436,8 @@ impl ToolName {
             ToolName::WebSearch => 2,
             // A page, and its redirects.
             ToolName::WebFetch => 2,
+            // One request each; DeepSeek reads the page on its side.
+            ToolName::DeepseekSearch | ToolName::DeepseekFetch => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -578,7 +592,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            44,
+            46,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -982,6 +996,9 @@ pub struct ToolDeps<'a> {
     /// The web a chat's `webSearch` and `webFetch` reach; `None` while web
     /// search is off.
     pub web: Option<crate::domain::web_search::Web>,
+    /// What `deepseekSearch` and `deepseekFetch` reach the web with; `None`
+    /// while the feature is off or no DeepSeek provider has a key.
+    pub deepseek: Option<crate::domain::web_search::Web>,
     /// The conversation so far: `webFetch` opens only an address that is in it.
     pub history: &'a [crate::domain::llm::LlmMessage],
     /// The board `board` keeps cards on; `None` where there is none.
@@ -1185,6 +1202,10 @@ pub enum ToolError {
     /// of an earlier turn.
     #[error("web search is off — tell the user they can turn it on in Settings → Web search, and answer without searching")]
     NoWebSearch,
+    /// `deepseekSearch` or `deepseekFetch` with no DeepSeek provider to
+    /// take the key from.
+    #[error("no DeepSeek provider with an API key is set up — tell the user to add DeepSeek in Settings → Models, and answer without searching")]
+    NoDeepseek,
     #[error(transparent)]
     WebSearch(#[from] crate::domain::web_search::WebSearchError),
     #[error(transparent)]
@@ -1259,6 +1280,8 @@ pub enum ToolCall {
     KubeDelete(KubeDeleteArgs),
     WebSearch(WebSearchArgs),
     WebFetch(WebFetchArgs),
+    DeepseekSearch(DeepseekSearchArgs),
+    DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1308,6 +1331,8 @@ impl ToolCall {
             ToolCall::KubeDelete(_) => ToolName::KubeDelete,
             ToolCall::WebSearch(_) => ToolName::WebSearch,
             ToolCall::WebFetch(_) => ToolName::WebFetch,
+            ToolCall::DeepseekSearch(_) => ToolName::DeepseekSearch,
+            ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -1596,6 +1621,15 @@ pub struct WebSearchArgs {
     pub max_results: Option<u32>,
     #[serde(default)]
     pub time_range: Option<crate::domain::web_search::TimeRange>,
+}
+
+/// `deepseekSearch`: `webSearch`'s, less `timeRange` — `after:` in the query says it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepseekSearchArgs {
+    pub query: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub max_results: Option<u32>,
 }
 
 /// `board`. One flat object rather than a tagged enum: which fields go with

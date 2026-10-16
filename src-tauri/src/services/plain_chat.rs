@@ -43,6 +43,8 @@ pub struct ChatTurn<'a> {
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
     /// The board the Assistant's `board` keeps cards on.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// DeepSeek's search and page reader, while that feature is on.
+    pub deepseek: Option<Web>,
     /// The features the user has on.
     pub features: crate::domain::features::Features,
 }
@@ -120,6 +122,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         agents: None,
         questions: None,
         board: chat.board.clone(),
+        deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
     };
     run(&turn)
@@ -236,6 +239,7 @@ mod tests {
                 cancelled: &stop,
                 log_call: &log,
                 board: self.board.clone(),
+                deepseek: None,
                 features: self.features.clone(),
             })
         }
@@ -272,7 +276,7 @@ mod tests {
             None,
         );
         chat.board = Some(board.clone());
-        chat.features = crate::domain::features::Features::all();
+        chat.features = crate::domain::features::Features::from_settings(&[("board".to_string(), true)].into());
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни создать заявку на память в wlbuh")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
