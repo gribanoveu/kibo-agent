@@ -28,39 +28,44 @@ const panel = (
     />,
   );
 
-describe("the task in progress", () => {
+describe("the checklist while the agent works", () => {
   const task = (id: string, title: string, status: "pending" | "inProgress" | "completed") => ({ id, title, status });
-
-  test("sits under the header with how far the list is, and opens the plan", () => {
-    let opened = 0;
+  const list = [task("1", "read", "completed"), task("2", "fix the parser", "inProgress"), task("3", "test", "pending")];
+  const withList = (over: Partial<TurnState>) =>
     render(
       <ChatPanel
         workspace="/tmp/project"
-        turn={state([])}
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }], over)}
         onDecide={() => {}}
         onOpenRepo={() => {}}
-        onOpenPlan={() => opened++}
-        checklist={[task("1", "read", "completed"), task("2", "fix the parser", "inProgress"), task("3", "test", "pending")]}
+        checklist={list}
       />,
     );
-    const strip = screen.getByTitle("Show the plan");
-    expect(strip.textContent).toContain("fix the parser");
-    expect(strip.textContent).toContain("1/3");
-    fireEvent.click(strip);
-    expect(opened).toBe(1);
+
+  test("sits above the clock, the task under way marked current", () => {
+    withList({ status: "running", runningSince: Date.now() });
+    const ticker = screen.getByRole("list", { name: "Checklist" });
+    expect(ticker.querySelectorAll("li")).toHaveLength(3);
+    expect(ticker.querySelector("[aria-current]")?.textContent).toBe("fix the parser");
+    expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("is not there while nothing is in progress", () => {
+  test("is not there once nothing on it is open", () => {
     render(
       <ChatPanel
         workspace="/tmp/project"
-        turn={state([])}
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() })}
         onDecide={() => {}}
         onOpenRepo={() => {}}
-        checklist={[task("1", "read", "completed"), task("2", "test", "pending")]}
+        checklist={[task("1", "read", "completed"), { id: "2", title: "fix", status: "cancelled" as const }]}
       />,
     );
-    expect(screen.queryByTitle("Show the plan")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();
+  });
+
+  test("is gone once the turn ends", () => {
+    withList({ status: "done" });
+    expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();
   });
 });
 

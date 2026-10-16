@@ -443,7 +443,7 @@ export default function App() {
   const implement = async () => {
     const failed = await conversation.pick("agent");
     if (failed) return toast.show(failed);
-    agent.send(IMPLEMENT_PLAN);
+    agent.send(IMPLEMENT_PLAN, undefined, [], true);
   };
 
   // What every pane is drawn from, whichever dock it sits in.

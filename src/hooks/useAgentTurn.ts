@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { writtenChecklist, writtenPlan } from "../lib/plan";
+import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom } from "../lib/rewind";
 import { useTurnChannel } from "./useTurnChannel";
@@ -230,9 +230,13 @@ export function useAgentTurn({
    * Sends what the user typed. While a turn is running the same text steers it.
    * `sent`, when given, is what the model gets instead — a `/` command's prompt,
    * with `text` (`/init`) what the transcript shows.
+   *
+   * A new request drops what the last answer left open on the checklist —
+   * unless `keepChecklist`: the plan handed over from Plan mode is the work
+   * this message asks for.
    */
   const send = useCallback(
-    async (text: string, sent?: string, images: ImagePart[] = []) => {
+    async (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) => {
       const trimmed = text.trim();
       const content = sent?.trim() || trimmed;
       // A picture alone is a message: "what is this?" can go unsaid.
@@ -255,6 +259,8 @@ export function useAgentTurn({
       // history it hands back, folded or not, is what the next message sends.
       history.current = [...history.current, { role: "user", content, ...(images.length > 0 && { images }) }];
 
+      if (!keepChecklist) keepTodos(dropOpen(todos.current));
+
       const id = `turn-${++turnId.current}`;
       lastTurn.current = { id, user: trimmed };
       try {
@@ -267,7 +273,7 @@ export function useAgentTurn({
         setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
       }
     },
-    [turn.status, turn.blocks.length, listen, finish, makeRoom],
+    [turn.status, turn.blocks.length, listen, finish, makeRoom, keepTodos],
   );
 
   /**
@@ -286,6 +292,7 @@ export function useAgentTurn({
     unsaved.current = true;
     turnStart.current = turn.blocks.length;
     setTurn((state) => appendUserMessage(state, "/review", Date.now()));
+    keepTodos(dropOpen(todos.current));
 
     const id = `turn-${++turnId.current}`;
     lastTurn.current = { id, user: "/review" };
@@ -301,7 +308,7 @@ export function useAgentTurn({
       history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: `[The review failed: ${e}]` }];
       setTurn((state) => appendNotice(endTurn(state), `The review failed: ${e}`));
     }
-  }, [turn.status, turn.blocks.length, listen, finish, makeRoom]);
+  }, [turn.status, turn.blocks.length, listen, finish, makeRoom, keepTodos]);
 
   /** Takes a message out of the queue and hands it back to the composer. */
   const unqueue = useCallback(
