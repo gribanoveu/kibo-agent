@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-10-16 A project in the folder menu can be dropped from the list — the folder itself and its chats stay where they are
+- 2026-10-16 A project in the folder menu can be dropped from the list, its worktrees with it — the folders themselves and their chats stay where they are
 - 2026-10-14 Every tool call in the chat opens: a saved memory, a folder made or a file moved shows what it was about in full, and Memory, Search, Plan, Explore and Board calls have their own icons
 - 2026-10-14 Your messages in the chat keep the line breaks you typed, and a long link wraps instead of running past the edge of the window
 - 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them

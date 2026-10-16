@@ -52,11 +52,20 @@ pub fn record(opened: &str) -> Result<(), String> {
 /// Drops `gone` from the list: the entry only, never the folder — its chats,
 /// its index and whatever is in it stay where they are. One that is not in the
 /// list is not an error: two open windows, and the other dropped it first.
+/// Its worktrees go with it: the menu draws them under it, and left behind
+/// they would surface as rows of their own.
 pub fn forget(gone: &str) -> Result<(), String> {
     let list = load();
+    let gone = Path::new(gone);
     // Compared through `Path`, as `commands::git::removable` compares them: the
     // same folder spelled with or without its trailing separator is one entry.
-    let left: Vec<&String> = list.iter().filter(|path| Path::new(path.as_str()) != Path::new(gone)).collect();
+    let left: Vec<&String> = list
+        .iter()
+        .filter(|path| {
+            let path = Path::new(path.as_str());
+            path != gone && crate::infra::git_head::worktree_of(path).as_deref() != Some(gone)
+        })
+        .collect();
     app_dir::ensure()?;
     let text = serde_json::to_string_pretty(&left).map_err(|e| e.to_string())?;
     app_dir::write_private(&path()?, text.as_bytes())
@@ -127,6 +136,29 @@ mod tests {
 
             forget("/no/such/folder/in/the/list").unwrap();
             assert_eq!(load(), list(&[&two]), "an entry that is not there changes nothing");
+        });
+    }
+
+    /// A project's worktrees leave with it; another project's stay.
+    #[test]
+    fn a_forgotten_project_takes_its_worktrees_along() {
+        with_app_dir("recent-forget-worktrees", || {
+            let main = temp_dir("recent-forget-main").canonicalize().unwrap();
+            let repo = git2::Repository::init(&main).unwrap();
+            repo.set_head("refs/heads/main").unwrap();
+            let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            let home = temp_dir("recent-forget-main-home").canonicalize().unwrap();
+            let linked = crate::infra::git_branches::add_worktree(&main, "main", "t", &home).unwrap();
+            let other = temp_dir("recent-forget-other").canonicalize().unwrap();
+            let [main, linked, other] = [main, linked, other].map(|p| p.display().to_string());
+            app_dir::ensure().unwrap();
+            fs::write(path().unwrap(), serde_json::to_string(&[&linked, &main, &other]).unwrap()).unwrap();
+
+            forget(&main).unwrap();
+            assert_eq!(load(), list(&[&other]));
+            assert!(Path::new(&linked).is_dir(), "the worktree itself is left as it is");
         });
     }
 
