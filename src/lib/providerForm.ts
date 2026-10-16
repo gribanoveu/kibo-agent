@@ -1,5 +1,8 @@
-// Pure pieces of the provider form: which models a search leaves, and what a
-// certificate file holds.
+// Pure pieces of the provider form: which models a search leaves, the known
+// providers, and what a certificate file holds.
+
+import type { ProviderKind } from "./settings";
+import catalog from "./providerCatalog.json";
 
 /**
  * The models a search leaves, in the order given. Every word has to appear
@@ -7,12 +10,36 @@
  * `claude-sonnet-4-5`.
  */
 export function filterModels(models: string[], query: string): string[] {
+  return filterBy(models, query, (model) => model);
+}
+
+/** What `filterModels` does, for anything that has a text to search. */
+export function filterBy<T>(items: T[], query: string, text: (item: T) => string): T[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return models;
-  return models.filter((model) => {
-    const name = model.toLowerCase();
+  if (!words.length) return items;
+  return items.filter((item) => {
+    const name = text(item).toLowerCase();
     return words.every((word) => name.includes(word));
   });
+}
+
+export type CatalogEntry = { id: string; name: string; kind: ProviderKind; baseUrl: string };
+
+/**
+ * Providers the form can fill in from a list instead of a typed URL: a
+ * snapshot of models.dev, the list OpenCode uses, rebuilt by
+ * `scripts/update-provider-catalog.py`.
+ */
+export const CATALOG = catalog as CatalogEntry[];
+
+/**
+ * `id`, or `id-2`, `id-3`… when a provider is already saved under it: saving
+ * under a taken name replaces that provider.
+ */
+export function freeName(id: string, taken: string[]): string {
+  let name = id;
+  for (let n = 2; taken.includes(name); n++) name = `${id}-${n}`;
+  return name;
 }
 
 /** How many certificates a PEM holds — what the form shows instead of the text. */
