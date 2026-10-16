@@ -50,6 +50,19 @@ describe("the checklist while the agent works", () => {
     expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  test("is not there once nothing on it is open", () => {
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() })}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        checklist={[task("1", "read", "completed"), { id: "2", title: "fix", status: "cancelled" as const }]}
+      />,
+    );
+    expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();
+  });
+
   test("is gone once the turn ends", () => {
     withList({ status: "done" });
     expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();

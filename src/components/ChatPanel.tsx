@@ -36,6 +36,7 @@ import {
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
 import { findingOf } from "../lib/finding";
+import { hasOpen } from "../lib/plan";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
 import { PANES } from "./panes";
@@ -1129,7 +1130,8 @@ const TASK_MARK: Record<Task["status"], { icon: typeof Circle; label: string }> 
 /**
  * The agent's checklist above the clock while it works — the Plan tab may be
  * closed, and this is where the eye already is. Three rows show; a longer list
- * scrolls itself so the task under way sits in the middle.
+ * scrolls itself so the task under way sits in the middle. Nothing once no
+ * task is open: a finished or dropped list is not news.
  */
 function TaskTicker({ checklist }: { checklist: Task[] }) {
   const list = useRef<HTMLUListElement>(null);
@@ -1141,7 +1143,7 @@ function TaskTicker({ checklist }: { checklist: Task[] }) {
     if (!box || !row) return;
     box.scrollTo?.({ top: row.offsetTop - (box.clientHeight - row.offsetHeight) / 2, behavior: "smooth" });
   }, [current, checklist.length]);
-  if (checklist.length === 0) return null;
+  if (!hasOpen(checklist)) return null;
   return (
     <ul ref={list} className="task-ticker" aria-label="Checklist">
       {checklist.map((task, index) => {
