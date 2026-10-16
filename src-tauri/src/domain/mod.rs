@@ -39,6 +39,7 @@ pub mod hooks;
 pub mod agents;
 pub mod board;
 pub mod features;
+pub mod provider_balance;
 pub mod background;
 pub mod terminal;
 pub mod command_risk;

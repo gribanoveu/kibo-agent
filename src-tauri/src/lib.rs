@@ -309,6 +309,7 @@ pub fn run() {
             commands::settings::kube_runbooks,
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
+            commands::settings::provider_balance,
             commands::skills::skills_list,
             commands::catalog::catalog_list,
             commands::catalog::catalog_install,

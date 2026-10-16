@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::command_exec::{ShellKind, ShellOption};
 use crate::domain::kube::{KubeContexts, KubePin};
+use crate::domain::provider_balance::ProviderBalance;
 use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
@@ -359,6 +360,13 @@ pub async fn llm_models_probe(provider: ProviderConfig, api_key: Option<String>)
     })
     .await
     .map_err(|e| format!("the request thread failed: {e}"))?
+}
+
+/// What is left on `id`'s account; `null` while the feature is off or the
+/// provider does not say. A live call, read again after each answer.
+#[tauri::command]
+pub async fn provider_balance(id: String) -> Result<Option<ProviderBalance>, String> {
+    super::blocking(move || crate::services::provider_balance::balance(&id)).await
 }
 
 #[cfg(test)]

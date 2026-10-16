@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod balance;
 pub mod openai_compatible;
 
 use std::io::{BufRead, BufReader};

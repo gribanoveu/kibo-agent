@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
+import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
@@ -344,6 +345,7 @@ export function PlainChat({
             )}
             {chat.context && (
               <span className="plain-meter">
+                <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up />
               </span>
             )}
