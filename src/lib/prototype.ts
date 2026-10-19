@@ -95,3 +95,34 @@ export async function exportPrototype(chatId: string, version: number | null, pa
   requireBackend();
   return invoke<void>("prototype_export", { chatId, version, page, path });
 }
+
+/** An element the user pointed at on a page in the preview, to ask for a change to it alone. */
+export type Pointed = { page: string; selector: string; html: string; text: string };
+
+/** The most of the element's HTML the model is sent: enough to find it, not the page. */
+const POINTED_HTML = 800;
+
+/**
+ * What the preview's pointer said it picked on `page`, if that is what it is.
+ * The page is the model's code, so it is checked like anything else it sends.
+ */
+export function pointedOf(data: unknown, page: string): Pointed | null {
+  const d = data as { kibo?: unknown; selector?: unknown; html?: unknown; text?: unknown } | null;
+  if (d?.kibo !== "picked" || typeof d.selector !== "string" || typeof d.html !== "string" || typeof d.text !== "string") return null;
+  const selector = d.selector.trim().slice(0, 300);
+  if (!selector) return null;
+  const html = d.html.length > POINTED_HTML ? `${d.html.slice(0, POINTED_HTML)}…` : d.html;
+  return { page, selector, html, text: d.text.trim().slice(0, 200) };
+}
+
+/** What the model is told with the message, after what the user typed, about the element it is about. */
+export function pointNote(pointed: Pointed): string {
+  return [
+    `[The user pointed at an element on the page ${pointed.page}: \`${pointed.selector}\`. As the browser drew it:`,
+    "```html",
+    pointed.html,
+    "```",
+    "Their message is about this element: change it, and only what they ask, with editFile — do not write the page again. " +
+      "On a React page this is the rendered HTML: find the element in the source by its text and classes.]",
+  ].join("\n");
+}

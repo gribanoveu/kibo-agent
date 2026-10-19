@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-19 In a Prototype chat, point at an element in the Preview panel to ask for a change to it alone: it waits over the message box and goes to the model with your message
+- 2026-10-19 The Preview panel stands beside the chat as wide as the file viewer, and expands over the chat from its header
 - 2026-10-19 A Prototype chat's page can be saved as one HTML file from the Preview panel: the libraries go inside it, so it opens in any browser, from disk, with no network
 - 2026-10-19 A chat in Chat mode can be rewound to before a message, as the agent's can: the messages from there on go, the message comes back to the box, and in a Prototype chat the files its model changed since are put back
 - 2026-10-19 A Prototype chat's page can be put back to an earlier version from the Preview panel; it becomes a new version, the ones after it stay, and changes not yet presented are kept as a version first

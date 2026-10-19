@@ -25,6 +25,9 @@ export type Block =
       /** The pictures sent with it. A copy of the history's, saved with the
           chat's blocks: the transcript draws from blocks alone. */
       images?: ImagePart[];
+      /** The element of a Prototype chat's page it is about — its selector,
+          shown on the bubble; the model was sent its HTML too (`sent`). */
+      element?: string;
       /** How long the agent worked on this message, in ms — its own time,
           not the time spent waiting on an approval. Saved with the chat. */
       workedMs?: number;
@@ -199,6 +202,7 @@ export function appendUserMessage(
   now = Date.now(),
   sent?: string,
   images: ImagePart[] = [],
+  element?: string,
 ): TurnState {
   return {
     ...state,
@@ -221,6 +225,7 @@ export function appendUserMessage(
         text,
         ...(sent !== undefined && sent !== text && { sent }),
         ...(images.length > 0 && { images }),
+        ...(element && { element }),
       },
     ],
   };

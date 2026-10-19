@@ -312,6 +312,36 @@ describe("a Prototype chat's folder put back", () => {
     expect(lastSent()).toBe("and the footer");
   });
 
+  test("an element pointed at goes to the model with the message, and shows on the bubble by its selector", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = { from: 1, version: 3, before: null };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.restore(1);
+    });
+    const pointed = { page: "index.html", selector: "main > h1", html: "<h1>Coffee</h1>", text: "Coffee" };
+    await act(async () => {
+      await result.current.send("make it bigger", [], pointed);
+    });
+    // What was typed, the element, then the restore — each said once.
+    const sent = lastSent();
+    expect(sent).toStartWith("make it bigger\n\n[The user pointed at an element on the page index.html: `main > h1`.");
+    expect(sent).toContain("<h1>Coffee</h1>");
+    expect(sent.indexOf("pointed at")).toBeLessThan(sent.indexOf("restored the chat's folder"));
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({ kind: "user", text: "make it bigger", element: "main > h1" });
+
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.send("and the footer");
+    });
+    expect(lastSent()).toBe("and the footer");
+    expect(result.current.turn.blocks.at(-1)).not.toHaveProperty("element");
+  });
+
   // The turn may be writing those very files: the folder is not put back under it.
   test("nothing is restored while a turn is under way", async () => {
     results.plain_chat_send = () => new Promise(() => {});

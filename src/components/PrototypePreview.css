@@ -38,6 +38,10 @@
   font-size: var(--fs-sm);
   font-weight: 500;
 }
+/* The pointer while it is on in the page. */
+.prototype-preview-head .iconbtn.on {
+  color: var(--accent);
+}
 /* The page draws its own background; until it does, a browser's white. */
 .prototype-preview-frame {
   flex: 1;

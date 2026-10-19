@@ -292,6 +292,43 @@
   color: var(--text);
 }
 
+/* The element pointed at in a Prototype chat's preview, to go with the next
+   message: its selector on one line, cut short, with a way to drop it. */
+.plain-pointed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 0 8px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.plain-pointed-selector {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.plain-pointed-drop {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.plain-pointed-drop:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* Why a pasted or dropped picture was not taken. */
 .plain-attach-error {
   margin: 0 0 8px;

@@ -33,6 +33,7 @@ import {
   TerminalSquare,
   Trash2,
   RotateCcw,
+  MousePointerClick,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
@@ -1000,6 +1001,13 @@ function UserBubble({
     <div className="user-msg">
       <ImageThumbs images={block.images ?? []} align="end" />
       {/* A picture sent alone has no words to put in a bubble. */}
+      {/* The element of a Prototype chat's page it is about. */}
+      {block.element && (
+        <div className="bubble-element" title="The element on the page this message is about">
+          <MousePointerClick size={11} />
+          <code>{block.element}</code>
+        </div>
+      )}
       {block.text && <div className="bubble">{block.text}</div>}
       <div className="bubble-foot">
         <CopyAction text={block.text} />

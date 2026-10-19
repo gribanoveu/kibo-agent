@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, FolderOpen, Maximize2, Minimize2, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, Download, FolderOpen, Maximize2, Minimize2, MousePointerClick, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
 import { pickSavePath } from "../lib/dialog";
-import { exportPrototype, revealPrototype } from "../lib/prototype";
+import { exportPrototype, pointedOf, revealPrototype } from "../lib/prototype";
 import "./PrototypePreview.css";
 
 type Props = {
@@ -27,17 +27,32 @@ const NOW = "now";
 export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  // The pointer is on in the page: the next click there names an element.
+  const [picking, setPicking] = useState(false);
+  // What the listener below reads as it is now, not as it was when the frame was drawn.
+  const now = useRef({ picking, page: preview.page?.path, point: preview.point });
+  now.current = { picking, page: preview.page?.path, point: preview.point };
 
-  // Each drawing of the page reports its own; a frame drawn anew starts clean.
+  // Each drawing of the page reports its own; a frame drawn anew starts clean,
+  // its pointer off.
   useEffect(() => {
     setErrors([]);
+    setPicking(false);
     const heard = (e: MessageEvent) => {
-      // Only this frame's, and only what the reporter sends.
+      // Only this frame's, and only what the panel's scripts send.
       if (e.source !== frame.current?.contentWindow) return;
       const data = e.data as { kibo?: unknown; message?: unknown } | null;
-      if (data?.kibo !== "page-error" || typeof data.message !== "string") return;
-      const message = data.message;
-      setErrors((was) => (was.includes(message) ? was : [...was, message].slice(-3)));
+      if (data?.kibo === "page-error" && typeof data.message === "string") {
+        const message = data.message;
+        setErrors((was) => (was.includes(message) ? was : [...was, message].slice(-3)));
+      }
+      // An element only while the user asked for one: the page cannot put one there itself.
+      if (data?.kibo === "picked" && now.current.picking && now.current.page) {
+        const pointed = pointedOf(data, now.current.page);
+        if (pointed) now.current.point(pointed);
+        setPicking(false);
+      }
+      if (data?.kibo === "pick-cancelled") setPicking(false);
     };
     addEventListener("message", heard);
     return () => removeEventListener("message", heard);
@@ -51,6 +66,12 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
       .map((v) => ({ value: `${v.version}`, label: `Version ${v.version}`, hint: v.title })),
   ];
   const value = preview.shown === null ? NOW : `${preview.shown}`;
+
+  // On the folder as it is only: an element of an older version may be gone from it.
+  const pointer = () => {
+    frame.current?.contentWindow?.postMessage({ kibo: picking ? "pick-stop" : "pick" }, "*");
+    setPicking(!picking);
+  };
 
   // One file, the libraries in it, of what the panel shows now.
   const saveAs = async () => {
@@ -93,6 +114,17 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
           >
             <RotateCcw size={12} />
             <span className="prototype-preview-restore-label">Restore</span>
+          </button>
+        )}
+        {preview.shown === null && (
+          <button
+            type="button"
+            className={`iconbtn${picking ? " on" : ""}`}
+            title={picking ? "Stop pointing (Escape on the page)" : "Point at an element to ask for a change to it alone"}
+            aria-pressed={picking}
+            onClick={pointer}
+          >
+            <MousePointerClick size={13} />
           </button>
         )}
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>

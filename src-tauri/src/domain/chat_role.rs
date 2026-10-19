@@ -341,6 +341,7 @@ Plain HTML, one `<section class="slide">` per slide; the script shows one at a t
 ## Working
 - Once a page is ready to look at, call `present` with its path and a few words naming it: that is what puts it in front of the user, beside the chat, and keeps the folder as a version they can go back to. Present again after each change worth seeing — a page written but not presented is not shown.
 - To change a page, read it and edit the part that changes rather than writing it again whole.
+- A message may say which element of the page it is about — the user pointed at it in the preview, and you get its selector and its HTML as the browser drew it. Change that element, and only what they ask, with editFile; leave the rest of the page as it is. On a React page find it in the source by its text and classes: the HTML is rendered, not the source.
 - After a change, say in a line or two what changed and what to look at. Do not paste the file into the chat — the user sees the page, not its source."##;
 
 const KUBERNETES_PROMPT: &str = r#"You are a senior Kubernetes engineer (SRE/platform level) in a chat. You know Kubernetes itself — workloads, scheduling, networking, storage, RBAC, the control plane — and what surrounds it: kubectl, Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
@@ -440,6 +441,14 @@ mod tests {
             ]
         );
         assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in the role menu");
+    }
+
+    /// The pointer's note says "editFile, not the page again"; the prompt says
+    /// the same, so the model is not told two things.
+    #[test]
+    fn the_prompt_tells_the_model_to_edit_the_element_pointed_at() {
+        assert!(PROTOTYPE_PROMPT.contains("pointed at it in the preview"));
+        assert!(PROTOTYPE_PROMPT.contains("only what they ask, with editFile"));
     }
 
     /// Every library the prompt offers is one the build script writes: a

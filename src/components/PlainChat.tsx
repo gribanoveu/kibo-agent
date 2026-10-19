@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
@@ -8,6 +8,7 @@ import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
+import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
 import type { PlainChatState } from "../hooks/usePlainChat";
@@ -88,6 +89,9 @@ type Props = {
     onOpenVersion: (version: number) => void;
     /** A page's error to put in the message box; a new object each ask. */
     fix: { text: string } | null;
+    /** The element pointed at in the preview, sent with the next message. */
+    pointed: Pointed | null;
+    onUnpoint: () => void;
   };
 };
 
@@ -152,9 +156,15 @@ export function PlainChat({
 
   const send = () => {
     if (chat.busy || (!draft.trim() && attachments.images.length === 0)) return;
-    void chat.send(draft, attachments.take());
+    void chat.send(draft, attachments.take(), pages?.pointed ?? null);
+    pages?.onUnpoint();
     setDraft("");
   };
+  // Pointed at in the preview: the message box is where the request about it is written.
+  const pointed = pages?.pointed ?? null;
+  useEffect(() => {
+    if (pointed) input.current?.focus();
+  }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   const effort = models.effort ?? "";
   const efforts = effortOptions(effort);
@@ -343,6 +353,15 @@ export function PlainChat({
             </div>
           )}
           <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
+          {pointed && (
+            <div className="plain-pointed" title={pointed.text || pointed.selector}>
+              <MousePointerClick size={12} />
+              <code className="plain-pointed-selector">{pointed.selector}</code>
+              <button type="button" className="plain-pointed-drop" title="Don't send the element" onClick={pages?.onUnpoint}>
+                <X size={12} />
+              </button>
+            </div>
+          )}
           {attachments.error && (
             <p className="plain-attach-error" role="alert">
               {attachments.error}

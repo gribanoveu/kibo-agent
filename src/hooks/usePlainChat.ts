@@ -17,7 +17,7 @@ import {
   type TurnState,
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
-import { restoreNote, restorePrototype } from "../lib/prototype";
+import { pointNote, restoreNote, restorePrototype, type Pointed } from "../lib/prototype";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
@@ -185,15 +185,16 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   // event otherwise ends with nothing on screen to say why.
   const failed = (e: unknown) => setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
 
-  const send = async (text: string, images: ImagePart[] = []) => {
+  const send = async (text: string, images: ImagePart[] = [], pointed: Pointed | null = null) => {
     const trimmed = text.trim();
     if (busy || (!trimmed && images.length === 0)) return;
     const id = chatId ?? crypto.randomUUID();
     const before = turn;
-    // A restore since the last message: the model is told with this one, and the transcript shows what was typed.
-    const note = restoreNote(before.blocks);
-    const sent = note ? (trimmed ? `${trimmed}\n\n${note}` : note) : undefined;
-    const asked = appendUserMessage(before, trimmed, Date.now(), sent, images);
+    // The element pointed at, and a restore since the last message: the model
+    // is told with this one, and the transcript shows what was typed.
+    const notes = [pointed && pointNote(pointed), restoreNote(before.blocks)].filter((note): note is string => !!note);
+    const sent = notes.length > 0 ? [trimmed, ...notes].filter(Boolean).join("\n\n") : undefined;
+    const asked = appendUserMessage(before, trimmed, Date.now(), sent, images, pointed?.selector);
     history.current = [...history.current, { role: "user", content: sent ?? trimmed, ...(images.length > 0 && { images }) }];
     unsaved.current = true;
     setChatId(id);

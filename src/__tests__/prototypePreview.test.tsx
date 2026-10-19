@@ -33,7 +33,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { edits, pageUrl, presentedOf, restoreNote, versionsOf } = await import("../lib/prototype");
+const { edits, pageUrl, pointedOf, pointNote, presentedOf, restoreNote, versionsOf } = await import("../lib/prototype");
 const { usePrototypePreview } = await import("../hooks/usePrototypePreview");
 const { PrototypePreview } = await import("../components/PrototypePreview");
 const { Transcript } = await import("../components/ChatPanel");
@@ -74,6 +74,28 @@ describe("what was presented is the transcript's", () => {
   test("a page's address is the platform's, its path segments encoded", () => {
     expect(pageUrl("c1", null, "my page.html", false)).toBe("artifact://localhost/c1/files/my%20page.html");
     expect(pageUrl("c1", 3, "pages/index.html", true)).toBe("http://artifact.localhost/c1/versions/3/pages/index.html");
+  });
+});
+
+describe("an element pointed at", () => {
+  const picked = { kibo: "picked", selector: " main > h1 ", html: "<h1>Coffee</h1>", text: " Coffee " };
+
+  test("is taken from the pointer's message alone, checked and cut to size", () => {
+    expect(pointedOf(picked, "index.html")).toEqual({ page: "index.html", selector: "main > h1", html: "<h1>Coffee</h1>", text: "Coffee" });
+    expect(pointedOf({ ...picked, kibo: "page-error" }, "index.html")).toBeNull();
+    expect(pointedOf({ ...picked, html: 1 }, "index.html")).toBeNull();
+    expect(pointedOf({ ...picked, selector: "  " }, "index.html")).toBeNull();
+    expect(pointedOf(null, "index.html")).toBeNull();
+    const long = pointedOf({ ...picked, html: "x".repeat(900), selector: "s".repeat(400), text: "t".repeat(300) }, "a.html")!;
+    expect([long.html.length, long.html.endsWith("…"), long.selector.length, long.text.length]).toEqual([801, true, 300, 200]);
+    expect(pointedOf({ ...picked, html: "x".repeat(800) }, "a.html")!.html).toBe("x".repeat(800));
+  });
+
+  test("tells the model which element, as drawn, and to change it alone", () => {
+    const note = pointNote(pointedOf(picked, "index.html")!);
+    expect(note).toStartWith("[The user pointed at an element on the page index.html: `main > h1`.");
+    expect(note).toContain("```html\n<h1>Coffee</h1>\n```");
+    expect(note).toContain("with editFile — do not write the page again");
   });
 });
 
@@ -269,6 +291,57 @@ describe("the panel", () => {
     expect(screen.getByTitle("Back beside the chat").getAttribute("aria-pressed")).toBe("true");
   });
 
+  test("points at an element only when asked, on the folder as it is, and hands it over", () => {
+    const preview = panel([presented("p1", 1), presented("p2", 2)]);
+    const pointed: unknown[] = [];
+    const shown = { ...preview.current, point: (p: unknown) => pointed.push(p) };
+    const { container, rerender } = render(<PrototypePreview preview={shown} chatId="c1" onNotify={() => {}} />);
+    const page = container.querySelector("iframe")!.contentWindow!;
+    const asked: unknown[] = [];
+    page.postMessage = ((data: unknown) => asked.push(data)) as typeof page.postMessage;
+    const say = (data: unknown) => act(() => window.dispatchEvent(new MessageEvent("message", { data, source: page })));
+    const pick = { kibo: "picked", selector: "main > h1", html: "<h1>Hi</h1>", text: "Hi" };
+
+    // Not asked: the page cannot put an element in the message box by itself.
+    say(pick);
+    expect(pointed).toEqual([]);
+
+    fireEvent.click(screen.getByTitle("Point at an element to ask for a change to it alone"));
+    expect(asked).toEqual([{ kibo: "pick" }]);
+    expect(screen.getByTitle("Stop pointing (Escape on the page)").getAttribute("aria-pressed")).toBe("true");
+    // Another window's word is not the page's.
+    act(() => window.dispatchEvent(new MessageEvent("message", { data: pick, source: window })));
+    expect(pointed).toEqual([]);
+    say(pick);
+    expect(pointed).toEqual([{ page: "index.html", selector: "main > h1", html: "<h1>Hi</h1>", text: "Hi" }]);
+    // One pick per ask.
+    say(pick);
+    expect(pointed.length).toBe(1);
+
+    // Asked again and stopped from the panel, or from the page.
+    fireEvent.click(screen.getByTitle("Point at an element to ask for a change to it alone"));
+    fireEvent.click(screen.getByTitle("Stop pointing (Escape on the page)"));
+    expect(asked.at(-1)).toEqual({ kibo: "pick-stop" });
+    fireEvent.click(screen.getByTitle("Point at an element to ask for a change to it alone"));
+    say({ kibo: "pick-cancelled" });
+    expect(screen.getByTitle("Point at an element to ask for a change to it alone").getAttribute("aria-pressed")).toBe("false");
+
+    // A kept version is not pointed at: the folder may no longer have its elements.
+    act(() => preview.current.show(1));
+    rerender(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
+    expect(screen.queryByTitle("Point at an element to ask for a change to it alone")).toBeNull();
+  });
+
+  test("another chat drops the element pointed at", () => {
+    const { result, rerender } = renderHook(({ chatId }) => usePrototypePreview(chatId, [presented("p1", 1)], false), {
+      initialProps: { chatId: "c1" },
+    });
+    act(() => result.current.point({ page: "index.html", selector: "h1", html: "<h1/>", text: "" }));
+    expect(result.current.pointed?.selector).toBe("h1");
+    rerender({ chatId: "c2" });
+    expect(result.current.pointed).toBeNull();
+  });
+
   test("shows the chat's folder when asked", () => {
     const preview = panel([presented("p1", 1)]);
     render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
@@ -298,5 +371,12 @@ describe("a presented page in the transcript", () => {
     expect(screen.getByText("version 2 · index.html")).not.toBeNull();
     fireEvent.click(screen.getByText("Open"));
     expect(opened).toEqual([2]);
+  });
+  test("a message about an element shows its selector above the words typed, not the HTML sent", () => {
+    const user: Block = { kind: "user", id: "u1", text: "make it bigger", sent: "make it bigger\n\n[… <h1>Coffee</h1> …]", element: "main > h1" };
+    const turn = { ...emptyTurn(), status: "done" as const, blocks: [user] };
+    const { container } = render(<Transcript turn={turn} onDecide={() => {}} />);
+    expect(container.querySelector(".bubble-element code")?.textContent).toBe("main > h1");
+    expect(container.querySelector(".bubble")?.textContent).toBe("make it bigger");
   });
 });

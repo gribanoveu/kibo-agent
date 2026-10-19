@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Block } from "../lib/chatTurnReducer";
-import { edits, pageUrl, versionsOf, type Presented } from "../lib/prototype";
+import { edits, pageUrl, versionsOf, type Pointed, type Presented } from "../lib/prototype";
 
 /**
  * The Preview panel beside a Prototype chat (docs/31-prototype-role.md, P-5):
@@ -22,6 +22,8 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
   const [refreshed, setRefreshed] = useState(0);
   // Over the chat's place too, as wide as the window allows.
   const [expanded, setExpanded] = useState(false);
+  // The element the user pointed at, waiting over the message box to be sent with the next message.
+  const [pointed, setPointed] = useState<Pointed | null>(null);
   // A page's error the user handed to the composer; a new object each ask.
   const [fix, setFix] = useState<{ text: string } | null>(null);
 
@@ -36,6 +38,7 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
       setOpen(false);
       setShown(null);
       setExpanded(false);
+      setPointed(null);
     } else if (running && versions.length > before.count) {
       setOpen(true);
       setShown(null);
@@ -74,6 +77,9 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
       setExpanded(false);
     },
     toggleExpanded: () => setExpanded((was) => !was),
+    pointed,
+    /** The element picked on the page, for the next message; `null` drops it. */
+    point: setPointed,
     refresh: () => setRefreshed((n) => n + 1),
     fix,
     askFix: (text: string) => setFix({ text }),

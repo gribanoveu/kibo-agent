@@ -649,6 +649,8 @@ export default function App() {
                   onToggle: prototypePreview.toggle,
                   onOpenVersion: prototypePreview.show,
                   fix: prototypePreview.fix,
+                  pointed: prototypePreview.pointed,
+                  onUnpoint: () => prototypePreview.point(null),
                 }
               : undefined
           }
