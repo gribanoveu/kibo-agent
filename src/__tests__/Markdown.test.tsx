@@ -2,14 +2,14 @@ import { describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 
 mock.module("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
-// Here it is the call and its answer that matter, not what Pele draws.
-const drawn: string[] = [];
+// Mermaid needs a browser's text layout to draw; here it is the call and its answer that matter.
+const drawn: Array<[source: string, dark: boolean]> = [];
 let drawing: (source: string) => Promise<string> = async () => '<svg data-drawn="yes"></svg>';
-const { themed } = await import("../lib/mermaid");
+const { sized } = await import("../lib/mermaid");
 mock.module("../lib/mermaid", () => ({
-  themed,
-  renderMermaid: (source: string) => {
-    drawn.push(source);
+  sized,
+  renderMermaid: (source: string, dark: boolean) => {
+    drawn.push([source, dark]);
     return drawing(source);
   },
 }));
@@ -210,15 +210,14 @@ describe("a mermaid block", () => {
     expect(queryByTitle("Show code")).toBeNull();
   });
 
-  test("is drawn again when the theme changes, to take its colours", async () => {
+  test("is drawn in the side the window shows, and again when it changes", async () => {
     drawing = async () => "<svg></svg>";
-    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.scheme = "dark";
     drawn.length = 0;
     render(<Markdown text={fence} streaming={false} />);
-    await waitFor(() => expect(drawn).toHaveLength(1));
-    // Both dark: the scheme stays, the colours do not.
-    document.documentElement.dataset.theme = "one-dark";
-    await waitFor(() => expect(drawn).toHaveLength(2));
+    await waitFor(() => expect(drawn.at(-1)?.[1]).toBe(true));
+    document.documentElement.dataset.scheme = "light";
+    await waitFor(() => expect(drawn.at(-1)?.[1]).toBe(false));
   });
 
   test("other languages are never drawn", async () => {
@@ -229,25 +228,17 @@ describe("a mermaid block", () => {
   });
 });
 
-describe("a drawn diagram's colours", () => {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" style="--_bg:var(--pele-bg,#fff);color:var(--_fg)"><g/></svg>';
-
-  test("are the theme's, written on the SVG an image of it has alone", () => {
-    const out = themed(svg, [
-      ["bg", "#232326"],
-      ["font", '"SF Pro Text", sans-serif'],
-    ]);
-    const root = new DOMParser().parseFromString(out, "image/svg+xml").documentElement;
-    const style = root.getAttribute("style") ?? "";
-    expect(style).toStartWith('--pele-bg:#232326;--pele-font:"SF Pro Text", sans-serif;');
-    expect(style).toContain("--_bg:var(--pele-bg,#fff)");
+describe("a drawn diagram's size", () => {
+  test("is the size it was laid out at, so an image of it can be zoomed from there", () => {
+    const out = sized('<svg xmlns="http://www.w3.org/2000/svg" width="100%" style="max-width: 412.5px; background: none" viewBox="-8 -8 412.5 120.2"><g/></svg>');
+    expect(out).toContain('width="413"');
+    expect(out).toContain('height="121"');
+    expect(out).not.toContain("max-width");
+    expect(out).toContain("background: none");
   });
 
-  test("one the theme leaves empty keeps Pele's own", () => {
-    expect(themed(svg, [["bg", ""]])).not.toContain("--pele-bg:");
-  });
-
-  test("what is not an SVG is left as it came", () => {
-    expect(themed("<html/>", [["bg", "#000"]])).toBe("<html/>");
+  test("an SVG without a usable viewBox is left as it came", () => {
+    const bare = '<svg xmlns="http://www.w3.org/2000/svg" width="100%"><g/></svg>';
+    expect(sized(bare)).toBe(bare);
   });
 });
