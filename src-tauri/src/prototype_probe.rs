@@ -25,7 +25,7 @@ pub fn start(app: &tauri::App) {
         Ok(folder) => folder,
         Err(e) => return eprintln!("[probe] no folder: {e}"),
     };
-    for name in ["index.html", "checks.js"] {
+    for name in ["index.html", "deck.html", "checks.js"] {
         if let Err(e) = std::fs::copy(dir.join(name), folder.join(name)) {
             return eprintln!("[probe] {name} not copied: {e}");
         }

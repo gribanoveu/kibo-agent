@@ -1,39 +1,53 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <script type="importmap">
-      {
-        "imports": {
-          "react": "artifact://localhost/lib/react.js",
-          "react-dom/client": "artifact://localhost/lib/react-dom-client.js",
-          "react/jsx-runtime": "artifact://localhost/lib/react-jsx-runtime.js"
-        }
-      }
-    </script>
-    <script src="artifact://localhost/lib/babel.min.js"></script>
-  </head>
-  <body>
-    <div id="root">not rendered</div>
-    <!-- What a model writes: JSX, hooks, an import map. -->
-    <script type="text/babel" data-type="module" data-presets="react">
-      import { useState, useEffect } from "react";
-      import { createRoot } from "react-dom/client";
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page</title>
+<script type="importmap">
+{"imports": {
+  "react": "/lib/react.js",
+  "react-dom/client": "/lib/react-dom-client.js",
+  "react/jsx-runtime": "/lib/react-jsx-runtime.js",
+  "lucide-react": "/lib/lucide-react.js"
+}}
+</script>
+<script src="/lib/tailwind.js"></script>
+<script src="/lib/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import { useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Coffee } from "lucide-react";
 
-      function App() {
-        const [n, setN] = useState(0);
-        useEffect(() => setN(1), []);
-        return <h1 id="hello">React works, effect ran {n} time</h1>;
-      }
-      createRoot(document.getElementById("root")).render(<App />);
-    </script>
-    <script type="module">
-      import { run } from "./checks.js";
-      setTimeout(async () => {
-        const rendered = document.getElementById("hello")?.textContent ?? null;
-        parent.postMessage({ kind: "render", rendered }, "*");
-        await run("with CSP");
-      }, 1500);
-    </script>
-  </body>
+function App() {
+  const [cups, setCups] = useState(0);
+  return (
+    <main className="grid min-h-screen place-items-center bg-stone-50">
+      <button className="flex items-center gap-2 rounded-lg bg-stone-900 px-4 py-2 text-white" onClick={() => setCups(cups + 1)}>
+        <Coffee size={18} /> {cups}
+      </button>
+    </main>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
+</script>
+<script type="module">
+  // Probe only, after the template: what the page drew, then what it can reach.
+  import { run } from "./checks.js";
+  setTimeout(async () => {
+    const button = document.querySelector("button");
+    parent.postMessage({
+      kind: "render",
+      rendered: button?.textContent ?? null,
+      tailwind: button ? getComputedStyle(button).backgroundColor : null,
+      lucide: !!document.querySelector("svg.lucide"),
+    }, "*");
+    await run("react template");
+  }, 2000);
+</script>
+</body>
 </html>

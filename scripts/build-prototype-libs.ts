@@ -2,7 +2,11 @@
 // (docs/31-prototype-role.md, decision 2). React 19 ships CommonJS only, so it
 // is bundled here once, into `react-all.js`, and each module a page names in
 // its import map is a small file re-exporting from it — one React instance
-// for every import, as hooks require.
+// for every import, as hooks require. lucide-react is bundled with `react`
+// left as an import, so its icons use that same instance. Babel and Tailwind
+// are browser builds already, copied as they come.
+//
+// For the model's pages only — never imported by the app itself (AGENTS.md).
 //
 //   bun scripts/build-prototype-libs.ts [out dir]   (default: src-tauri/prototype-libs)
 
@@ -55,5 +59,21 @@ for (const [file, [spec, name]] of Object.entries(modules)) {
   );
 }
 
+const lucideEntry = join(import.meta.dir, ".prototype-libs-lucide.js");
+writeFileSync(lucideEntry, `export * from "lucide-react";\n`);
+const lucide = await Bun.build({
+  entrypoints: [lucideEntry],
+  format: "esm",
+  minify: true,
+  target: "browser",
+  external: ["react", "react/jsx-runtime"],
+}).finally(() => Bun.file(lucideEntry).delete());
+if (!lucide.success || lucide.outputs.length !== 1) {
+  console.error(lucide.logs, lucide.outputs.map((o) => o.path));
+  process.exit(1);
+}
+await Bun.write(join(out, "lucide-react.js"), lucide.outputs[0]);
+
 copyFileSync(require.resolve("@babel/standalone/babel.min.js"), join(out, "babel.min.js"));
+copyFileSync(require.resolve("@tailwindcss/browser"), join(out, "tailwind.js"));
 console.log(`prototype libs → ${out}`);

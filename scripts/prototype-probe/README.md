@@ -1,6 +1,9 @@
 # Prototype preview probe (P-0)
 
-What a page in the Preview panel's iframe can reach — `docs/31-prototype-role.md`, P-0.
+What a page in the Preview panel's iframe can reach, and whether the role's templates
+work there — `docs/31-prototype-role.md`, P-0 and P-3. `index.html` and `deck.html` are
+the two templates of the role's prompt (`PROTOTYPE_PROMPT` in `domain/chat_role.rs`),
+each with a probe script added before `</body>`; change them with the prompt.
 The page is served by the app's own `artifact://`, with its real headers, from a chat
 folder of its own (`p0-probe`); its checks go to the window (`parent.js`) and back to
 Rust on a Tauri event, into `report.jsonl` here. Run it again after upgrading `tauri`
@@ -24,7 +27,8 @@ the running app by single-instance. (The binary is wherever Cargo puts this proj
 target.) Six seconds after the window opens a red-framed iframe appears in its corner;
 after 15 s `report.jsonl` ends with the parent's `alive`. Close the window then.
 
-What to look for: the page rendered; no `__TAURI_INTERNALS__` in the frame; every IPC
+What to look for: the React page rendered, with Tailwind's colour on its button and a
+lucide icon; the deck moved to its second slide; no `__TAURI_INTERNALS__` in the frame; every IPC
 attempt refused; `parent.*` and `top.location` refused; `violations` listing each
-request out; and a `violation` from the parent for `frame-src` with only one `load` —
-the frame did not leave for `example.com`.
+request out; and a `violation` from the parent for `frame-src` on `example.com` — the frame did
+not leave (it loads a second time, blank: that is the refused navigation).
