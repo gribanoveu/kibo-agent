@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { gitWorktreeCheck, gitWorktreeRemove, type WorktreeCheck, type WorktreeRemoved } from "../lib/chat";
+import { gitWorktreeCheck, gitWorktreeRemove, type WorktreeCheck, type WorktreeRemoved } from "../lib/git";
 
 type Deps = {
   notify: (message: string) => void;

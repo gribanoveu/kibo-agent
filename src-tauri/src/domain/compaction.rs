@@ -381,7 +381,7 @@ pub fn with_file_lists(summary: &str, folded: &[LlmMessage]) -> String {
                     deleted.remove(&path);
                     modified.insert(path);
                 }
-                ToolName::DeleteFile => {
+                ToolName::Delete => {
                     modified.remove(&path);
                     deleted.insert(path);
                 }
@@ -1021,7 +1021,7 @@ mod tests {
             ran("2", "readFile", r#"{"path":"src/a.rs"}"#, "fn a() {}"),
             ran("3", "editFile", r#"{"path":"src/a.rs","edits":[]}"#, "{\"path\":\"src/a.rs\"}"),
             ran("4", "writeFile", r#"{"path":"src/new.rs","content":""}"#, "ok"),
-            ran("5", "deleteFile", r#"{"path":"old.txt"}"#, "ok"),
+            ran("5", "delete", r#"{"path":"old.txt"}"#, "ok"),
             ran("6", "grep", r#"{"pattern":"x","path":"src"}"#, "nothing"),
             ran("7", "readFile", r#"{"paths":["src/c.rs","src/a.rs"]}"#, "==> src/c.rs"),
         ]);
@@ -1042,7 +1042,7 @@ mod tests {
         let history = folded(&[
             ran("1", "editFile", r#"{"path":"a.rs"}"#, "Error: the anchor was not found"),
             ran("2", "writeFile", r#"{"path":"b.rs"}"#, "Denied by the user: not that one"),
-            ran("3", "deleteFile", r#"{"path":"c.rs"}"#, "Not run: the user stopped the turn before this call."),
+            ran("3", "delete", r#"{"path":"c.rs"}"#, "Not run: the user stopped the turn before this call."),
             ran("4", "readFile", r#"{"path":"d.rs"}"#, "Error: no such file"),
         ]);
 
@@ -1068,9 +1068,9 @@ mod tests {
         let history = folded(&[
             ran("1", "readFile", r#"{"path":"a.rs"}"#, "x"),
             ran("2", "writeFile", r#"{"path":"b.rs"}"#, "ok"),
-            ran("3", "deleteFile", r#"{"path":"a.rs"}"#, "ok"),
-            ran("4", "deleteFile", r#"{"path":"b.rs"}"#, "ok"),
-            ran("5", "deleteFile", r#"{"path":"c.rs"}"#, "ok"),
+            ran("3", "delete", r#"{"path":"a.rs"}"#, "ok"),
+            ran("4", "delete", r#"{"path":"b.rs"}"#, "ok"),
+            ran("5", "delete", r#"{"path":"c.rs"}"#, "ok"),
             ran("6", "move", r#"{"path":"d.rs","newPath":"c.rs"}"#, "ok"),
         ]);
 
@@ -1087,9 +1087,9 @@ mod tests {
     fn the_lists_of_an_earlier_summary_carry_into_the_next() {
         let first = with_file_lists("First.", &folded(&[
             ran("1", "editFile", r#"{"path":"kept.rs"}"#, "ok"),
-            ran("2", "deleteFile", r#"{"path":"back.rs"}"#, "ok"),
+            ran("2", "delete", r#"{"path":"back.rs"}"#, "ok"),
             ran("3", "readFile", r#"{"path":"seen.rs"}"#, "x"),
-            ran("5", "deleteFile", r#"{"path":"gone.rs"}"#, "ok"),
+            ran("5", "delete", r#"{"path":"gone.rs"}"#, "ok"),
         ]));
         let mut second = vec![summary_message(&first)];
         second.extend(folded(&[ran("4", "writeFile", r#"{"path":"back.rs"}"#, "ok")]));

@@ -18,7 +18,7 @@ const FILE: &str = "hooks.json";
 pub const TEMPLATE: &str = "{\n  \"hooks\": {}\n}\n";
 
 pub fn path() -> Result<PathBuf, HooksConfigError> {
-    Ok(app_dir::dir().map_err(HooksConfigError::Read)?.join(FILE))
+    Ok(app_dir::dir().map_err(|e| HooksConfigError::Read(e.into()))?.join(FILE))
 }
 
 /// The file's text, or the template while there is none.

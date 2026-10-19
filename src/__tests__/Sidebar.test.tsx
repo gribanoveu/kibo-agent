@@ -5,7 +5,8 @@ mock.module("@tauri-apps/plugin-opener", () => ({ openUrl: async (url: string) =
 mock.module("@tauri-apps/api/app", () => ({ getVersion: async () => "9.9.9-1" }));
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Sidebar } from "../components/Sidebar";
-import type { ChatSummary } from "../lib/chat";
+import { PAGES, pagesShown } from "../components/pages";
+import type { ChatSummary } from "../lib/savedChats";
 import { IS_MAC } from "../lib/shortcuts";
 
 const chats: ChatSummary[] = [
@@ -21,6 +22,7 @@ const sidebar = (
     <Sidebar
       mode="agent"
       onMode={() => {}}
+      pages={PAGES}
       page={null}
       onPage={() => {}}
       chats={chats}
@@ -112,7 +114,7 @@ describe("the account menu", () => {
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
     expect(screen.getByText("Show or hide the sidebar")).toBeTruthy();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -138,11 +140,12 @@ describe("about", () => {
 });
 
 describe("pages", () => {
-  const views = (page: "catalog" | null, on: { mode?: (m: string) => void; page?: (p: string) => void } = {}) =>
+  const views = (page: "catalog" | null, on: { mode?: (m: string) => void; page?: (p: string) => void } = {}, board = false) =>
     render(
       <Sidebar
         mode="agent"
         onMode={on.mode ?? (() => {})}
+        pages={pagesShown((feature) => board && feature === "board")}
         page={page}
         onPage={on.page ?? (() => {})}
         chats={chats}
@@ -166,6 +169,11 @@ describe("pages", () => {
     unmount();
     views("catalog");
     expect(selected()).toEqual(["Catalog"]);
+  });
+
+  test("a feature's page is listed only while the feature is on", () => {
+    views(null, {}, true);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Agent", "Chat", "Catalog", "Board"]);
   });
 
   test("open by id, and a mode is still picked from one", () => {

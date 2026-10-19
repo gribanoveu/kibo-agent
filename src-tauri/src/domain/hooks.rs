@@ -11,9 +11,6 @@
 //!
 //! **Tool names are this app's** (`runCommand`, `editFile`), not Claude
 //! Code's (`Bash`, `Edit`): a matcher written for those matches nothing here.
-//! One name stands for two tools: a matcher for `runCommand` also meets
-//! `runInTerminal`, which runs the same kind of line in the user's shell —
-//! a guard on commands must not be walked around by typing instead.
 
 use std::collections::BTreeMap;
 
@@ -116,22 +113,10 @@ pub fn matching<'a>(config: &'a HooksConfig, event: HookEvent, tool: Option<&str
     let Some(groups) = config.hooks.get(event.name()) else { return Vec::new() };
     groups
         .iter()
-        .filter(|group| event == HookEvent::Stop || tool_names(tool.unwrap_or_default()).iter().any(|name| matches(&group.matcher, name)))
+        .filter(|group| event == HookEvent::Stop || matches(&group.matcher, tool.unwrap_or_default()))
         .flat_map(|group| &group.hooks)
         .filter(|hook| hook.kind == "command" && !hook.command.trim().is_empty())
         .collect()
-}
-
-/// What a matcher is tried against for `tool`: its own name, and for a line
-/// typed into the terminal, the command tool's too. The hook is still told
-/// the real name, and `tool_input.command` has the same shape in both.
-fn tool_names(tool: &str) -> Vec<&str> {
-    use crate::domain::tools::ToolName;
-    if tool == ToolName::RunInTerminal.wire_name() {
-        vec![tool, ToolName::RunCommand.wire_name()]
-    } else {
-        vec![tool]
-    }
 }
 
 fn matches(matcher: &str, tool: &str) -> bool {
@@ -351,21 +336,6 @@ mod tests {
         assert_eq!(commands(&config, HookEvent::PreToolUse, Some("runCommand")), ["all", "star"], "not a prefix match");
         assert_eq!(commands(&config, HookEvent::PreToolUse, Some("mcp__gh__issue")), ["mcp", "all", "star"]);
         assert!(commands(&config, HookEvent::PostToolUse, Some("editFile")).is_empty(), "another event");
-    }
-
-    /// A guard on commands also guards the line typed into the terminal —
-    /// once per group, even when both names match — and not the other way.
-    #[test]
-    fn a_command_hook_meets_a_line_for_the_terminal() {
-        let config = config(json!({"hooks": {"PreToolUse": [
-            {"matcher": "runCommand", "hooks": [{"type": "command", "command": "guard"}]},
-            {"matcher": "runCommand|runInTerminal", "hooks": [{"type": "command", "command": "both"}]},
-            {"matcher": "runInTerminal", "hooks": [{"type": "command", "command": "terminal"}]},
-            {"matcher": "editFile", "hooks": [{"type": "command", "command": "edits"}]},
-        ]}}));
-        assert_eq!(commands(&config, HookEvent::PreToolUse, Some("runInTerminal")), ["guard", "both", "terminal"]);
-        assert_eq!(commands(&config, HookEvent::PreToolUse, Some("runCommand")), ["guard", "both"]);
-        assert_eq!(commands(&config, HookEvent::PreToolUse, Some("readTerminal")), Vec::<String>::new());
     }
 
     #[test]

@@ -92,7 +92,7 @@ fn record<'a>(installed: &'a [Installed], kind: ItemKind, id: &str) -> Option<&'
 
 /// Where `relative` (from [`catalog::target`]) is on this machine.
 fn place_of(relative: &std::path::Path) -> Result<PathBuf, CatalogError> {
-    app_dir::dir().map(|dir| dir.join(relative)).map_err(CatalogError::Disk)
+    app_dir::dir().map(|dir| dir.join(relative)).map_err(|e| CatalogError::Disk(e.into()))
 }
 
 /// Where a server and hooks go, as the row says it.

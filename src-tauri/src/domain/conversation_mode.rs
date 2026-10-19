@@ -75,6 +75,9 @@ fn base_tools() -> HashSet<ToolName> {
         // agent a search (`llm_chat::tool_definitions_for`).
         ToolName::WebSearch,
         ToolName::WebFetch,
+        // The same through DeepSeek, while the user has that feature on.
+        ToolName::DeepseekSearch,
+        ToolName::DeepseekFetch,
     ]
     .into_iter()
     .collect()
@@ -100,14 +103,10 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
             tools.extend([
                 ToolName::WriteFile,
                 ToolName::EditFile,
-                ToolName::DeleteFile,
-                ToolName::CreateDirectory,
-                ToolName::DeleteDirectory,
+                ToolName::Delete,
                 ToolName::Move,
                 ToolName::Todo,
                 ToolName::RunCommand,
-                // The same line, typed where the user can see it run.
-                ToolName::RunInTerminal,
                 ToolName::StopProcess,
                 ToolName::WritePlan,
                 // Agent only: nothing says a foreign tool changes nothing.
@@ -116,19 +115,22 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::ToolSearch,
                 ToolName::Explore,
                 ToolName::Remember,
+                // While the user has the feature on (`domain::features`).
+                ToolName::Board,
             ]);
         }
         // `writePlan` is chat state, not the working tree: writing the plan
         // is the one thing Plan mode is for. Agent has it too, so a plan
         // that meets reality can be corrected where the user reads it.
         ConversationMode::Plan => {
-            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember]);
+            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember, ToolName::Board]);
         }
         // Research handed off reads the same files, only somewhere else.
         // `remember` writes the agent's memory, not the tree: "remember
-        // that" is something the user says in any mode they talk in.
+        // that" is something the user says in any mode they talk in — and
+        // "remind me", which is the board's.
         ConversationMode::Ask => {
-            tools.extend([ToolName::Explore, ToolName::Remember]);
+            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
@@ -195,7 +197,6 @@ mod tests {
     fn the_terminal_is_read_in_every_mode_and_typed_into_in_agent_alone() {
         for mode in picked() {
             assert!(offers(*mode, ToolName::ReadTerminal), "{mode:?}");
-            assert_eq!(offers(*mode, ToolName::RunInTerminal), *mode == ConversationMode::Agent, "{mode:?}");
         }
     }
 
@@ -265,7 +266,7 @@ mod tests {
         for tool in [ToolName::ReadFile, ToolName::Grep, ToolName::SemanticSearch, ToolName::GitDiff, ToolName::RunCommand, ToolName::ReportFinding] {
             assert!(review.contains(&tool), "{tool:?}");
         }
-        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::CreateDirectory, ToolName::DeleteDirectory, ToolName::Move];
+        let writes = [ToolName::WriteFile, ToolName::EditFile, ToolName::Delete, ToolName::Move];
         assert!(writes.iter().all(|tool| !review.contains(tool)));
         assert!(!review.contains(&ToolName::WritePlan) && !review.contains(&ToolName::Todo));
     }

@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod architecture;
 pub mod commands;
 pub mod domain;
 pub mod infra;
@@ -164,16 +166,6 @@ pub fn run() {
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
-        // The MCP servers, kept running between turns.
-        .manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(std::sync::Arc::new(
-            |config, cwd, cancelled| {
-                Ok(match config.url {
-                    Some(_) => std::sync::Arc::new(infra::mcp_http::start(config, cancelled)?)
-                        as std::sync::Arc<dyn domain::mcp::McpClient>,
-                    None => std::sync::Arc::new(infra::mcp_stdio::start(config, cwd, cancelled)?),
-                })
-            },
-        ))))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -184,9 +176,25 @@ pub fn run() {
             app.manage(std::sync::Arc::new(infra::background::Processes::new(
                 commands::processes::process_event_sink(app.handle()),
             )));
+            // The MCP servers, kept running between turns. Here because their
+            // starts and ends go out through the app.
+            app.manage(std::sync::Arc::new(services::mcp_servers::McpServers::new(
+                std::sync::Arc::new(|config, cwd, cancelled| {
+                    Ok(match config.url {
+                        Some(_) => std::sync::Arc::new(infra::mcp_http::start(config, cancelled)?)
+                            as std::sync::Arc<dyn domain::mcp::McpClient>,
+                        None => std::sync::Arc::new(infra::mcp_stdio::start(config, cwd, cancelled)?),
+                    })
+                }),
+                commands::mcp::mcp_event_sink(app.handle()),
+            )));
             // Every `explore` run, for the Agents tab; the record outlives the run.
             app.manage(std::sync::Arc::new(domain::agents::Agents::new(
                 commands::agents::agent_event_sink(app.handle()),
+            )));
+            // The Assistant's board, for its `board` tool and the Board page.
+            app.manage(std::sync::Arc::new(infra::board_store::Board::in_app_dir(
+                commands::board::board_event_sink(app.handle()),
             )));
             // The user's own shells, in the Terminal tab.
             app.manage(std::sync::Arc::new(infra::terminal::Terminals::new(
@@ -238,6 +246,7 @@ pub fn run() {
             commands::images::image_prepare,
             commands::images::image_prepare_file,
             commands::chat::workspace_recent,
+            commands::chat::workspace_forget,
             commands::chat::workspace_index_status,
             commands::chat::chat_start,
             commands::chat::chat_resume,
@@ -306,6 +315,7 @@ pub fn run() {
             commands::settings::kube_runbooks,
             commands::settings::llm_models_list,
             commands::settings::llm_models_probe,
+            commands::settings::provider_balance,
             commands::skills::skills_list,
             commands::catalog::catalog_list,
             commands::catalog::catalog_install,
@@ -331,6 +341,11 @@ pub fn run() {
             commands::processes::processes_running,
             commands::processes::process_stop,
             commands::agents::agents_list,
+            commands::board::board_list,
+            commands::board::board_change,
+            commands::features::features_list,
+            commands::features::features_set,
+            commands::features::features_delete_data,
             commands::agents::agent_stop,
             commands::terminal::terminal_open,
             commands::terminal::terminal_list,

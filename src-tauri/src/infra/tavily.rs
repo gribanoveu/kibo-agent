@@ -9,6 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::domain::settings::CredentialsError;
 use crate::domain::web_search::{TimeRange, WebHit, WebQuery, WebSearchError, WebSearchFn, WebUsage};
 use crate::infra::http_agent::{self, TlsError};
 
@@ -29,19 +30,24 @@ pub fn searcher(key: SecretString) -> Result<WebSearchFn, TlsError> {
     Ok(Arc::new(move |query: &WebQuery| search(&agent, &key, query)))
 }
 
-/// The search with the saved key; `None` while there is none.
-pub fn saved() -> Option<WebSearchFn> {
-    searcher(crate::infra::llm_credentials_store::get_api_key(KEY_ID)?).ok()
+/// The search with the saved key; `None` while there is none, an error when
+/// the saved keys cannot be read. The client itself cannot fail to build —
+/// `build_agent` fails only on a pinned certificate, and this one has none.
+pub fn saved() -> Result<Option<WebSearchFn>, CredentialsError> {
+    Ok(crate::infra::llm_credentials_store::get_api_key(KEY_ID)?.and_then(|key| searcher(key).ok()))
 }
 
-pub fn has_saved_key() -> bool {
+pub fn has_saved_key() -> Result<bool, CredentialsError> {
     crate::infra::llm_credentials_store::has_api_key(KEY_ID)
 }
 
 /// What the saved key has spent this billing cycle; `None` while there is no key.
 pub fn saved_usage() -> Option<Result<WebUsage, WebSearchError>> {
-    let key = crate::infra::llm_credentials_store::get_api_key(KEY_ID)?;
-    Some(usage(&key))
+    match crate::infra::llm_credentials_store::get_api_key(KEY_ID) {
+        Ok(Some(key)) => Some(usage(&key)),
+        Ok(None) => None,
+        Err(e) => Some(Err(WebSearchError::Unavailable(e.to_string()))),
+    }
 }
 
 fn usage(key: &SecretString) -> Result<WebUsage, WebSearchError> {

@@ -193,7 +193,7 @@ export function McpServerForm({ name, text, error, onSave, onClose, onEditJson }
 }
 
 /** What a matcher can name here — this app's tools, not Claude Code's. */
-const TOOL_NAMES = "runCommand, editFile, writeFile, deleteFile, move, readFile, grep, listFiles";
+const TOOL_NAMES = "runCommand, editFile, writeFile, delete, move, readFile, grep, listFiles";
 
 /** `index` is the hook's row in the Hooks tab, `null` for a new one. */
 export function HookForm({ index, text, error, onSave, onClose, onEditJson }: Common & { index: number | null }) {

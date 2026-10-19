@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
-import type { LlmSettings, ProviderConfig } from "../lib/chat";
+import type { LlmSettings, ProviderConfig } from "../lib/settings";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no
@@ -43,6 +43,16 @@ const field = (label: string) => {
 };
 
 describe("editing a provider", () => {
+  /// Keys that cannot be read show as none on every provider; this line is
+  /// how the user learns that is not because none was saved.
+  test("says why no key shows when the saved keys cannot be read", () => {
+    form({ keyError: "llm_credentials.enc does not open with this machine's key — save the API keys again" });
+    expect(screen.getByText(/does not open with this machine's key/)).toBeTruthy();
+    cleanup();
+    form();
+    expect(screen.queryByText(/does not open/)).toBeNull();
+  });
+
   test("opens on the active one, with its values", () => {
     form();
 
@@ -255,6 +265,44 @@ describe("with nothing configured", () => {
   });
 });
 
+describe("the known providers", () => {
+  const add = () => fireEvent.click(screen.getByText("Add"));
+  const search = (text: string) =>
+    fireEvent.change(screen.getByPlaceholderText(/^Search \d+ providers$/), { target: { value: text } });
+  const protocol = () => screen.getByRole("radiogroup", { name: "Protocol" }).querySelector("[aria-checked=true]")?.textContent;
+
+  test("are offered only for a new provider", () => {
+    form();
+    expect(screen.queryByRole("radiogroup", { name: "Known provider" })).toBeNull();
+    add();
+    expect(screen.getByRole("radiogroup", { name: "Known provider" })).toBeTruthy();
+  });
+
+  test("a pick fills the name, protocol and base URL", () => {
+    form();
+    add();
+    search("deepseek");
+    fireEvent.click(screen.getByRole("radio", { name: /^DeepSeek/ }));
+
+    expect(field("Name").value).toBe("deepseek");
+    expect(field("Base URL").value).toBe("https://api.deepseek.com");
+    expect(protocol()).toBe("OpenAI-compatible");
+
+    search("anthropic");
+    fireEvent.click(screen.getByRole("radio", { name: /^Anthropic api\.anthropic/ }));
+    expect(protocol()).toBe("Anthropic");
+  });
+
+  /// Saving under a taken name replaces that provider.
+  test("a name already saved gets a number instead", () => {
+    form();
+    add();
+    search("openai");
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
+    expect(field("Name").value).toBe("openai-2");
+  });
+});
+
 describe("saving", () => {
   /// Every other box in this app sends on Enter. One that quietly does nothing
   /// looks exactly like one that saved — which is how a typed key goes missing.
@@ -263,7 +311,7 @@ describe("saving", () => {
 
     fireEvent.change(field("API key"), { target: { value: "sk-typed" } });
     await act(async () => {
-      fireEvent.keyDown(field("API key"), { key: "Enter" });
+      fireEvent.keyDown(field("API key"), { code: "Enter", key: "Enter" });
     });
 
     expect(saved).toHaveLength(1);
@@ -386,7 +434,7 @@ describe("the model list", () => {
 
     fireEvent.change(search, { target: { value: "sonnet 4" } });
     expect(screen.queryByText("model-3")).toBeNull();
-    fireEvent.keyDown(search, { key: "Enter" });
+    fireEvent.keyDown(search, { code: "Enter", key: "Enter" });
     expect(saved).toHaveLength(0);
 
     await saveNow();

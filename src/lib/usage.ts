@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { inTauri } from "./chat";
+import { inTauri } from "./backend";
 
 /** A counter the backend keeps per local day — `domain::metrics::Metric`. */
 export type Metric =

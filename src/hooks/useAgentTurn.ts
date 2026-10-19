@@ -1,43 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { writtenChecklist, writtenPlan } from "../lib/plan";
+import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom } from "../lib/rewind";
+import { useTurnChannel } from "./useTurnChannel";
+import { alwaysAllow, branchSummary, cancelChat, cancelSteer, compactHistory, contextUsage, type ContextUsage, type FileRewind, type LlmMessage, resumeChat, reviewStart, rewindApply, rewindPreview, startChat, steer as steerCommand, type Task, type ToolCallDecision } from "../lib/chat";
+import type { ImagePart } from "../lib/images";
+import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
+import { generateChatTitle, loadChat, logNextPrompt, nextPromptSent, saveChat } from "../lib/savedChats";
 import {
-  answerMcpQuestion,
-  cancelChat,
-  cancelSteer,
-  type McpAnswer,
-  compactHistory,
-  contextUsage,
-  loadChat,
-  logNextPrompt,
-  nextPromptSent,
-  onTurnEvent,
-  resumeChat,
-  saveChat,
-  generateChatTitle,
-  startChat,
-  steer as steerCommand,
-  alwaysAllow,
-  reviewStart,
-  branchSummary,
-  rewindApply,
-  rewindPreview,
-  type ContextUsage,
-  type FileRewind,
-  type LlmMessage,
-  type Task,
-  type ToolCallDecision,
-  type ImagePart,
-} from "../lib/chat";
-import {
-  acceptEvent,
   acceptOutcome,
   appendNotice,
   appendUserMessage,
   clearApproval,
-  compactionEnded,
-  compactionStarted,
   endTurn,
   emptyTurn,
   restoredTurn,
@@ -111,7 +85,6 @@ export function useAgentTurn({
   // at. A counter rather than the text alone, so the same text twice still
   // lands.
   const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
-  const subscribed = useRef<(() => void) | null>(null);
   const compacting = useRef(false);
   const [queued, setQueued] = useState<Queued[]>([]);
   const queueSeq = useRef(0);
@@ -130,20 +103,8 @@ export function useAgentTurn({
   const journaled = useRef<Promise<string | null> | null>(null);
   const giveBackRef = useRef(onGiveBack);
   giveBackRef.current = onGiveBack;
-  const modelRef = useRef(model);
-  modelRef.current = model;
-
-  useEffect(() => () => subscribed.current?.(), []);
-
-  const listen = useCallback(async (id: string) => {
-    subscribed.current?.();
-    const off = await onTurnEvent(id, (event) => {
-      // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
-      const now = Date.now();
-      setTurn((state) => acceptEvent(state, event, now, modelRef.current));
-    });
-    subscribed.current = off;
-  }, []);
+  const channel = useTurnChannel(setTurn, model);
+  const listen = channel.listen;
 
   const finish = useCallback((outcome: Awaited<ReturnType<typeof startChat>>) => {
     setTurn((state) => acceptOutcome(state, outcome));
@@ -152,8 +113,7 @@ export function useAgentTurn({
       // The turn's own history, calls and results included: the next
       // message is sent with what the model read, not only what it answered.
       history.current = outcome.value.history;
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
     }
   }, [keepTodos]);
 
@@ -239,15 +199,7 @@ export function useAgentTurn({
     // is being made, which only it knows. Its end is what the call returns —
     // so a start arriving after that is stale, not a second pass.
     const id = `compact-${++turnId.current}`;
-    let ended = false;
-    const off = await onTurnEvent(id, (event) => {
-      if (event.type === "historyCompacting" && !ended) setTurn(compactionStarted);
-    });
-    const end = (result: { folded: number } | null) => {
-      ended = true;
-      off();
-      setTurn((state) => compactionEnded(state, result));
-    };
+    const end = await channel.watchCompaction(id);
     try {
       const shorter = await compactHistory(history.current, force, planRef.current, id);
       end(shorter && { folded: shorter.folded });
@@ -278,9 +230,13 @@ export function useAgentTurn({
    * Sends what the user typed. While a turn is running the same text steers it.
    * `sent`, when given, is what the model gets instead — a `/` command's prompt,
    * with `text` (`/init`) what the transcript shows.
+   *
+   * A new request drops what the last answer left open on the checklist —
+   * unless `keepChecklist`: the plan handed over from Plan mode is the work
+   * this message asks for.
    */
   const send = useCallback(
-    async (text: string, sent?: string, images: ImagePart[] = []) => {
+    async (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) => {
       const trimmed = text.trim();
       const content = sent?.trim() || trimmed;
       // A picture alone is a message: "what is this?" can go unsaid.
@@ -303,6 +259,8 @@ export function useAgentTurn({
       // history it hands back, folded or not, is what the next message sends.
       history.current = [...history.current, { role: "user", content, ...(images.length > 0 && { images }) }];
 
+      if (!keepChecklist) keepTodos(dropOpen(todos.current));
+
       const id = `turn-${++turnId.current}`;
       lastTurn.current = { id, user: trimmed };
       try {
@@ -315,7 +273,7 @@ export function useAgentTurn({
         setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
       }
     },
-    [turn.status, turn.blocks.length, listen, finish, makeRoom],
+    [turn.status, turn.blocks.length, listen, finish, makeRoom, keepTodos],
   );
 
   /**
@@ -334,6 +292,7 @@ export function useAgentTurn({
     unsaved.current = true;
     turnStart.current = turn.blocks.length;
     setTurn((state) => appendUserMessage(state, "/review", Date.now()));
+    keepTodos(dropOpen(todos.current));
 
     const id = `turn-${++turnId.current}`;
     lastTurn.current = { id, user: "/review" };
@@ -349,7 +308,7 @@ export function useAgentTurn({
       history.current = [...history.current, { role: "user", content: "/review" }, { role: "assistant", content: `[The review failed: ${e}]` }];
       setTurn((state) => appendNotice(endTurn(state), `The review failed: ${e}`));
     }
-  }, [turn.status, turn.blocks.length, listen, finish, makeRoom]);
+  }, [turn.status, turn.blocks.length, listen, finish, makeRoom, keepTodos]);
 
   /** Takes a message out of the queue and hands it back to the composer. */
   const unqueue = useCallback(
@@ -454,8 +413,7 @@ export function useAgentTurn({
     journaled.current = null;
     try {
       const record = await loadChat(id);
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       history.current = record.messages;
       keepTodos(record.todos);
       keepPlan(record.plan ?? null);
@@ -477,8 +435,7 @@ export function useAgentTurn({
   const reset = useCallback(() => {
     if (busy) return false;
     journaled.current = null;
-    subscribed.current?.();
-    subscribed.current = null;
+    channel.stop();
     history.current = [];
     keepTodos([]);
     keepPlan(null);
@@ -521,8 +478,7 @@ export function useAgentTurn({
         ? { blocks: turn.blocks, history: history.current, text: null }
         : branchAt(turn.blocks, history.current, bubbleId);
       if (!cut || (whole && cut.blocks.length === 0)) return;
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       journaled.current = null;
       branchedFrom.current = chatId;
       history.current = cut.history;
@@ -601,8 +557,7 @@ export function useAgentTurn({
         setError(String(e));
         return null;
       }
-      subscribed.current?.();
-      subscribed.current = null;
+      channel.stop();
       history.current = summary ? [...cut.history, summary] : cut.history;
       keepTodos([]);
       keepPlan(writtenPlan(cut.blocks));

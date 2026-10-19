@@ -15,11 +15,12 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::command_exec::{ShellKind, ShellOption};
 use crate::domain::kube::{KubeContexts, KubePin};
+use crate::domain::provider_balance::ProviderBalance;
 use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
-use crate::services::{kube_changes, kubeconfigs, llm_session};
+use crate::services::{kube_changes, kubeconfigs, llm_session, web_search};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,20 +41,35 @@ pub struct LlmSettingsView {
     turn_limits: TurnLimits,
     /// Where the key the API keys are sealed under is kept.
     key_store: KeyStore,
+    /// Why the saved API keys cannot be read, when they cannot — every
+    /// provider then shows no key, and this says it is not that none was saved.
+    key_error: Option<String>,
 }
 
+/// Off the main thread: whether each provider has a key is asked of the key
+/// store, which may be the system keychain.
 #[tauri::command]
-pub fn llm_settings_get() -> Result<LlmSettingsView, String> {
+pub async fn llm_settings_get() -> Result<LlmSettingsView, String> {
+    super::blocking(llm_settings_view).await
+}
+
+fn llm_settings_view() -> Result<LlmSettingsView, String> {
     let settings = settings_store::load().map_err(|e| e.to_string())?.llm;
+    let mut key_error = None;
+    let providers = settings
+        .providers
+        .into_iter()
+        .map(|config| ProviderView {
+            has_api_key: llm_credentials_store::has_api_key(&config.id).unwrap_or_else(|e| {
+                key_error.get_or_insert(e.to_string());
+                false
+            }),
+            config,
+        })
+        .collect();
     Ok(LlmSettingsView {
-        providers: settings
-            .providers
-            .into_iter()
-            .map(|config| ProviderView {
-                has_api_key: llm_credentials_store::has_api_key(&config.id),
-                config,
-            })
-            .collect(),
+        providers,
+        key_error,
         active_provider_id: settings.active_provider_id,
         debug_logging: settings.debug_logging,
         reply_language: settings.reply_language,
@@ -93,28 +109,27 @@ pub fn llm_provider_remove(id: String) -> Result<(), String> {
 /// Seals the key under the app master key. There is no command that reads one
 /// back, which is the point.
 #[tauri::command]
-pub fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
-    if key.trim().is_empty() {
-        return llm_credentials_store::delete_api_key(&id);
-    }
-    llm_credentials_store::save_api_key(&id, key.trim())
+pub async fn llm_api_key_save(id: String, key: String) -> Result<(), String> {
+    super::blocking(move || save_api_key(&id, &key)).await
 }
 
-/// Which search `webSearch` asks in `place`: the one chosen in Settings → Web
-/// search, or, never chosen, what [`AppSettings::web_search_in`] says.
-///
-/// [`AppSettings::web_search_in`]: crate::domain::settings::AppSettings::web_search_in
+fn save_api_key(id: &str, key: &str) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return llm_credentials_store::delete_api_key(id);
+    }
+    llm_credentials_store::save_api_key(id, key.trim())
+}
+
+/// Which search `webSearch` asks in `place` (`services::web_search::backend`).
 #[tauri::command]
-pub fn web_search_backend_get(place: WebSearchPlace) -> WebSearchBackend {
-    // An unreadable file is the default's to answer, as for every setting read here.
-    settings_store::load().unwrap_or_default().web_search_in(place, crate::infra::tavily::has_saved_key())
+pub async fn web_search_backend_get(place: WebSearchPlace) -> Result<WebSearchBackend, String> {
+    // Whether a Tavily key is saved may be asked of the key store.
+    super::blocking(move || web_search::backend(place)).await
 }
 
 #[tauri::command]
 pub fn web_search_backend_set(place: WebSearchPlace, backend: WebSearchBackend) -> Result<(), String> {
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.set_web_search(place, backend);
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.set_web_search(place, backend)).map_err(|e| e.to_string())
 }
 
 /// The shells there are to pick from — none off Windows — and the one in use.
@@ -135,81 +150,34 @@ pub fn shell_choices_get() -> ShellChoices {
 /// From the next command and the next terminal tab on.
 #[tauri::command]
 pub fn shell_set(kind: ShellKind) -> Result<(), String> {
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.shell = Some(kind);
-    settings_store::save(&settings).map_err(|e| e.to_string())
+    settings_store::update(|s| s.shell = Some(kind)).map_err(|e| e.to_string())
 }
 
 /// Where the user's SearXNG answers, as saved or the default.
 #[tauri::command]
 pub fn web_search_searxng_url_get() -> String {
-    settings_store::load()
-        .ok()
-        .and_then(|settings| settings.searxng_url)
-        .unwrap_or_else(|| crate::domain::settings::DEFAULT_SEARXNG_URL.to_string())
+    web_search::searxng_url()
 }
 
-/// Saves the SearXNG address, as a base its `/search` is joined to: an
-/// http(s) address, and a path that ends with `/` — `http://host/searx` would
-/// otherwise lose its last segment to the join.
+/// Saves the SearXNG address, as the base its `/search` is joined to.
 #[tauri::command]
 pub fn web_search_searxng_url_set(url: String) -> Result<String, String> {
-    let base = searxng_base(&url)?;
-    let mut settings = settings_store::load().map_err(|e| e.to_string())?;
-    settings.searxng_url = Some(base.to_string());
-    settings_store::save(&settings).map_err(|e| e.to_string())?;
+    let base = crate::domain::web_search::searxng_base(&url).map_err(|e| e.to_string())?;
+    settings_store::update(|s| s.searxng_url = Some(base.to_string())).map_err(|e| e.to_string())?;
     Ok(base.to_string())
-}
-
-pub(crate) fn searxng_base(text: &str) -> Result<url::Url, String> {
-    let mut base = url::Url::parse(text.trim()).map_err(|e| format!("not an address: {e}"))?;
-    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
-        return Err("SearXNG's address starts with http:// or https://".to_string());
-    }
-    if !base.path().ends_with('/') {
-        let path = format!("{}/", base.path());
-        base.set_path(&path);
-    }
-    base.set_query(None);
-    base.set_fragment(None);
-    Ok(base)
-}
-
-/// Whether `place` is given the web tools: a search chosen there, and
-/// Tavily's with a key.
-pub(crate) fn web_search_on(place: WebSearchPlace) -> bool {
-    web_search_backend_get(place).is_on(crate::infra::tavily::has_saved_key())
-}
-
-/// What `place` reaches the web with, as Settings → Web search says; `None`
-/// while it is off there, or Tavily's has no key.
-pub(crate) fn web_for(
-    place: WebSearchPlace,
-    embeddings: &Arc<dyn crate::domain::embeddings::EmbeddingProvider>,
-) -> Option<crate::domain::web_search::Web> {
-    use crate::infra::{open_web, tavily};
-    let search = match web_search_backend_get(place) {
-        WebSearchBackend::Off => return None,
-        WebSearchBackend::Searxng => {
-            let base = searxng_base(&web_search_searxng_url_get()).ok()?;
-            open_web::searxng(base, Arc::clone(embeddings)).ok()?
-        }
-        WebSearchBackend::Tavily => tavily::saved()?,
-    };
-    open_web::web(search, Arc::clone(embeddings)).ok()
 }
 
 /// Whether a key for the chat's web search is saved — all the window learns
 /// of it (`docs/24-web-search.md`).
 #[tauri::command]
-pub fn web_search_key_status() -> bool {
-    crate::infra::tavily::has_saved_key()
+pub async fn web_search_key_status() -> Result<bool, String> {
+    super::blocking(crate::infra::tavily::has_saved_key).await
 }
 
 /// Seals the Tavily key beside the providers'; an empty one deletes it.
 #[tauri::command]
-pub fn web_search_key_save(key: String) -> Result<(), String> {
-    llm_api_key_save(crate::infra::tavily::KEY_ID.to_string(), key)
+pub async fn web_search_key_save(key: String) -> Result<(), String> {
+    super::blocking(move || save_api_key(crate::infra::tavily::KEY_ID, &key)).await
 }
 
 /// What the saved key has spent, asked of Tavily; `None` without a key. A
@@ -394,10 +362,48 @@ pub async fn llm_models_probe(provider: ProviderConfig, api_key: Option<String>)
     .map_err(|e| format!("the request thread failed: {e}"))?
 }
 
+/// What is left on `id`'s account; `null` while the feature is off or the
+/// provider does not say. A live call, read again after each answer.
+#[tauri::command]
+pub async fn provider_balance(id: String) -> Result<Option<ProviderBalance>, String> {
+    super::blocking(move || crate::services::provider_balance::balance(&id)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::with_app_dir;
+
+    /// Saved keys that do not open: a blob sealed under no key of this machine.
+    fn break_the_keys() {
+        let dir = crate::infra::app_dir::ensure().unwrap();
+        crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
+    }
+
+    /// Every provider shows no key then, and Settings says it is not that none
+    /// was saved.
+    #[test]
+    fn settings_say_why_no_key_shows() {
+        with_app_dir("settings-broken-keys", || {
+            llm_provider_save(ProviderConfig {
+                id: "gateway".into(),
+                base_url: "https://llm.example/v1".into(),
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(wait(llm_settings_get()).unwrap().key_error, None);
+
+            break_the_keys();
+            let view = wait(llm_settings_get()).unwrap();
+            assert!(!view.providers[0].has_api_key);
+            assert!(view.key_error.is_some_and(|why| why.contains("does not open")));
+        });
+    }
+
+    /// A command run to its end, as the window awaits it.
+    fn wait<F: std::future::Future>(command: F) -> F::Output {
+        tauri::async_runtime::block_on(command)
+    }
 
     #[test]
     fn a_searxng_address_is_saved_as_a_base_and_read_back() {
@@ -405,7 +411,7 @@ mod tests {
             assert_eq!(web_search_searxng_url_get(), "http://localhost:8080/");
             assert_eq!(web_search_searxng_url_set(" http://searx.lan:8888/searx?q=x#top ".into()).unwrap(), "http://searx.lan:8888/searx/");
             assert_eq!(web_search_searxng_url_get(), "http://searx.lan:8888/searx/");
-            assert_eq!(searxng_base("http://localhost:8080").unwrap().join("search").unwrap().as_str(), "http://localhost:8080/search");
+            assert_eq!(crate::domain::web_search::searxng_base("http://localhost:8080").unwrap().join("search").unwrap().as_str(), "http://localhost:8080/search");
             for bad in ["localhost:8080", "ftp://searx.lan/", "not a url", "file:///etc/"] {
                 assert!(web_search_searxng_url_set(bad.into()).is_err(), "{bad}");
             }
@@ -418,20 +424,20 @@ mod tests {
     #[test]
     fn a_saved_search_key_turns_the_chats_search_on_and_an_empty_one_off() {
         with_app_dir("web-search-key", || {
-            llm_api_key_save("openai".into(), "sk-provider".into()).unwrap();
-            assert!(!web_search_key_status());
-            assert!(crate::infra::tavily::saved().is_none());
+            wait(llm_api_key_save("openai".into(), "sk-provider".into())).unwrap();
+            assert!(!wait(web_search_key_status()).unwrap());
+            assert!(crate::infra::tavily::saved().unwrap().is_none());
 
-            web_search_key_save("  tvly-key  ".into()).unwrap();
-            assert!(web_search_key_status());
-            assert!(crate::infra::tavily::saved().is_some());
-            let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap();
+            wait(web_search_key_save("  tvly-key  ".into())).unwrap();
+            assert!(wait(web_search_key_status()).unwrap());
+            assert!(crate::infra::tavily::saved().unwrap().is_some());
+            let stored = llm_credentials_store::get_api_key(crate::infra::tavily::KEY_ID).unwrap().unwrap();
             assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "tvly-key");
 
-            web_search_key_save(" ".into()).unwrap();
-            assert!(!web_search_key_status());
-            assert!(crate::infra::tavily::saved().is_none());
-            assert!(llm_credentials_store::has_api_key("openai"));
+            wait(web_search_key_save(" ".into())).unwrap();
+            assert!(!wait(web_search_key_status()).unwrap());
+            assert!(crate::infra::tavily::saved().unwrap().is_none());
+            assert!(llm_credentials_store::has_api_key("openai").unwrap());
         });
     }
 
@@ -451,16 +457,16 @@ mod tests {
     fn a_saved_key_is_reported_as_stored() {
         with_app_dir("cmd-settings-key", || {
             llm_provider_save(provider("gateway")).unwrap();
-            llm_api_key_save("gateway".to_string(), "sk-live".to_string()).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
             llm_active_provider_set(Some("gateway".to_string())).unwrap();
 
-            let view = llm_settings_get().unwrap();
+            let view = wait(llm_settings_get()).unwrap();
             assert_eq!(view.active_provider_id.as_deref(), Some("gateway"));
             assert_eq!(view.providers.len(), 1);
             assert!(view.providers[0].has_api_key, "the key did not survive");
 
             // And it is the key itself that survived, not merely a flag.
-            let stored = llm_credentials_store::get_api_key("gateway").expect("stored");
+            let stored = llm_credentials_store::get_api_key("gateway").unwrap().expect("stored");
             assert_eq!(secrecy::ExposeSecret::expose_secret(&stored), "sk-live");
         });
     }
@@ -480,7 +486,7 @@ mod tests {
             let parsed: ProviderConfig = serde_json::from_value(wire).expect("accepted");
 
             llm_provider_save(parsed).unwrap();
-            assert_eq!(llm_settings_get().unwrap().providers.len(), 1);
+            assert_eq!(wait(llm_settings_get()).unwrap().providers.len(), 1);
         });
     }
 
@@ -490,10 +496,10 @@ mod tests {
     fn an_emptied_key_box_removes_the_key() {
         with_app_dir("cmd-settings-clear", || {
             llm_provider_save(provider("gateway")).unwrap();
-            llm_api_key_save("gateway".to_string(), "sk-live".to_string()).unwrap();
-            llm_api_key_save("gateway".to_string(), "  ".to_string()).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
+            wait(llm_api_key_save("gateway".to_string(), "  ".to_string())).unwrap();
 
-            assert!(!llm_settings_get().unwrap().providers[0].has_api_key);
+            assert!(!wait(llm_settings_get()).unwrap().providers[0].has_api_key);
         });
     }
 
@@ -505,7 +511,7 @@ mod tests {
             assert!(llm_provider_save(with(Some(-0.1), None)).is_err());
             assert!(llm_provider_save(with(None, Some(1.5))).is_err());
             llm_provider_save(with(Some(2.0), Some(0.0))).unwrap();
-            let saved = &llm_settings_get().unwrap().providers[0].config;
+            let saved = &wait(llm_settings_get()).unwrap().providers[0].config;
             assert_eq!((saved.temperature, saved.top_p), (Some(2.0), Some(0.0)));
         });
     }
@@ -518,7 +524,7 @@ mod tests {
             let err = llm_provider_save(with("not a certificate")).expect_err("refused");
             assert!(err.contains("certificate"), "{err}");
             llm_provider_save(with("  \n")).unwrap();
-            assert_eq!(llm_settings_get().unwrap().providers[0].config.trusted_cert_pem, None);
+            assert_eq!(wait(llm_settings_get()).unwrap().providers[0].config.trusted_cert_pem, None);
         });
     }
 

@@ -4,7 +4,7 @@
 
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{ToolDeps, ToolError, ToolResult, WebSearchArgs};
-use crate::domain::web_search::WebQuery;
+use crate::domain::web_search::{Web, WebQuery};
 
 use super::semantic_search::shorten;
 
@@ -18,19 +18,23 @@ const CONTENT_CHARS: usize = 2_000;
 pub const MAX_QUERY_CHARS: usize = 400;
 
 pub fn web_search(args: &WebSearchArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
-    let search = &deps.web.as_ref().ok_or(ToolError::NoWebSearch)?.search;
+    search(deps.web.as_ref().ok_or(ToolError::NoWebSearch)?, "webSearch", MAX_QUERY_CHARS, args)
+}
+
+/// The checking and the size, on whichever web `tool` reaches.
+pub(super) fn search(web: &Web, tool: &str, max_query_chars: usize, args: &WebSearchArgs) -> Result<ToolResult, ToolError> {
     let query = args.query.trim();
-    let invalid = |reason: String| ToolError::InvalidArguments { tool: "webSearch".into(), reason };
+    let invalid = |reason: String| ToolError::InvalidArguments { tool: tool.into(), reason };
     if query.is_empty() {
         return Err(invalid("`query` is empty — say what to search for".into()));
     }
-    if query.chars().count() > MAX_QUERY_CHARS {
+    if query.chars().count() > max_query_chars {
         return Err(invalid(format!(
-            "`query` is longer than {MAX_QUERY_CHARS} characters — search with the words that matter, not a pasted text"
+            "`query` is longer than {max_query_chars} characters — search with the words that matter, not a pasted text"
         )));
     }
     let max_results = args.max_results.unwrap_or(DEFAULT_RESULTS).clamp(1, MAX_RESULTS);
-    let hits = search(&WebQuery { query, max_results, time_range: args.time_range })?;
+    let hits = (web.search)(&WebQuery { query, max_results, time_range: args.time_range })?;
     Ok(ToolResult::WebResults {
         hits: hits
             .into_iter()

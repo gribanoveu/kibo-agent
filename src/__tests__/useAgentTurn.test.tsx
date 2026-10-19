@@ -497,6 +497,49 @@ describe("branching", () => {
     expect(saved()[0].args.plan).toBe("# Plan");
   });
 
+  /// What an answer left open is dropped by the next request, and the model is
+  /// sent the list as it stands — except the plan handed over from Plan mode.
+  test("a new message drops what the last answer left open", async () => {
+    results.chat_start = (args: Record<string, unknown>) => ({
+      status: "done",
+      value: {
+        text: "ok",
+        truncated: false,
+        todos: [
+          { id: "t1", title: "read", status: "completed" },
+          { id: "t2", title: "fix", status: "inProgress" },
+          { id: "t3", title: "test", status: "pending" },
+        ],
+        history: args.messages,
+      },
+    });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await act(async () => {
+      await result.current.send("something else");
+    });
+    const sent = calls.filter((call) => call.command === "chat_start")[1]?.args.todos as { status: string }[];
+    expect(sent.map((task) => task.status)).toEqual(["completed", "cancelled", "cancelled"]);
+  });
+
+  test("the plan handed over keeps its checklist", async () => {
+    results.chat_start = (args: Record<string, unknown>) => ({
+      status: "done",
+      value: { text: "ok", truncated: false, todos: [{ id: "t1", title: "fix", status: "inProgress" }], history: args.messages },
+    });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("plan it");
+    });
+    await act(async () => {
+      await result.current.send("Implement the plan above.", undefined, [], true);
+    });
+    const sent = calls.filter((call) => call.command === "chat_start")[1]?.args.todos as { status: string }[];
+    expect(sent.map((task) => task.status)).toEqual(["inProgress"]);
+  });
+
   test("a fork keeps the checklist", async () => {
     results.chat_start = (args: Record<string, unknown>) => ({
       status: "done",

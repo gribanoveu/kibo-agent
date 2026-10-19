@@ -15,7 +15,7 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const changes = useKubeChanges();
-  const { dir, runbooks } = useKubeRunbooks();
+  const { dir, runbooks, error: runbooksError } = useKubeRunbooks();
   const [view, setView] = useState<View>("clusters");
   // The runbook opened for reading, one at a time.
   const [reading, setReading] = useState<string | null>(null);
@@ -152,6 +152,7 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
             when it sees its sign. Add your own as Markdown files in {dir || "~/.kibo/runbooks/kubernetes"} — a line
             starting with “Sign:” says when to read it, and a file named like a built-in one replaces it.
           </p>
+          {runbooksError && <p className="modal-note settings-hint settings-error">{runbooksError}</p>}
           <ul className="kube-list">
             {runbooks.map((runbook) => (
               <li key={runbook.name} className="kube-runbook">

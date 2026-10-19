@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
-import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/chat";
-import { certificateCount, EFFORTS, filterModels, pemFromBytes } from "../lib/providerForm";
+import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
+import { CATALOG, type CatalogEntry, certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
 import "./ProviderSettings.css";
+import "./Segmented.css";
+import { matches } from "../lib/shortcuts";
 
 // The provider form. Segmented controls rather than the app's dropdown,
 // because a popup menu is clipped by the modal's own overflow — the same
@@ -210,11 +212,30 @@ export function ProviderSettings({
         // implicit submission — which a webview can decline, and which is
         // indistinguishable from a settings panel that does not save.
         onKeyDown={(e) => {
-          if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+          if (!matches(e, "accept") || !(e.target instanceof HTMLInputElement)) return;
           e.preventDefault();
           save();
         }}
       >
+        {editing === null && (
+          <section className="provider-card">
+            <h4 className="provider-card-title">
+              Known providers
+              <span className="provider-count">{CATALOG.length}</span>
+            </h4>
+            <Catalog
+              baseUrl={draft.baseUrl.trim()}
+              onPick={(entry) =>
+                edit({
+                  id: freeName(entry.id, providers.map((p) => p.id)),
+                  kind: entry.kind,
+                  baseUrl: entry.baseUrl,
+                })
+              }
+            />
+          </section>
+        )}
+
         <section className="provider-card">
           <h4 className="provider-card-title">Connection</h4>
           <div className="modal-field">
@@ -278,6 +299,7 @@ export function ProviderSettings({
               }}
             />
           </div>
+          {settings?.keyError && <p className="modal-note provider-error">{settings.keyError}</p>}
           <KeyStorage store={settings?.keyStore ?? "file"} busy={busy} onMove={onKeyStore} />
         </section>
 
@@ -513,7 +535,7 @@ function ModelList({
             onChange={(e) => setQuery(e.target.value)}
             // Enter picks the first match rather than saving the form.
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
+              if (!matches(e, "accept")) return;
               e.preventDefault();
               e.stopPropagation();
               const first = shown[0] ?? typed;
@@ -528,6 +550,68 @@ function ModelList({
         {shown.map((model) => row(model))}
         {typed && !models.includes(typed) && row(typed, `Use “${typed}”`)}
         {typed && !shown.length && <p className="model-empty">No model matches.</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The known providers, searched by name. Picking one fills the name, protocol
+ * and base URL, all still editable — a URL with `${…}` in it wants the user's
+ * own account or host put there.
+ */
+function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: CatalogEntry) => void }) {
+  const [query, setQuery] = useState("");
+  // Several providers share a URL (a plan and its API), so the row picked is
+  // remembered; it stays marked only while the URL is still its own.
+  const [picked, setPicked] = useState<string | null>(null);
+  const shown = filterBy(CATALOG, query, (entry) => `${entry.name} ${entry.id}`);
+  const pick = (entry: CatalogEntry) => {
+    setPicked(entry.id);
+    onPick(entry);
+  };
+
+  return (
+    <div className="model-picker">
+      <label className="model-search">
+        <Search size={12} />
+        <input
+          type="search"
+          value={query}
+          placeholder={`Search ${CATALOG.length} providers`}
+          onChange={(e) => setQuery(e.target.value)}
+          // Enter picks the first match rather than saving the form.
+          onKeyDown={(e) => {
+            if (!matches(e, "accept")) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (shown[0]) pick(shown[0]);
+          }}
+        />
+      </label>
+      <div className="model-list" role="radiogroup" aria-label="Known provider">
+        {shown.map((entry) => {
+          const active = entry.id === picked && entry.baseUrl === baseUrl;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              className={`model-row${active ? " active" : ""}`}
+              onClick={() => pick(entry)}
+            >
+              {active ? (
+                <CircleDot className="model-radio" size={15} aria-hidden />
+              ) : (
+                <Circle className="model-radio" size={15} aria-hidden />
+              )}
+              <span className="model-name">{entry.name}</span>
+              <span className="model-hint">{entry.baseUrl.replace(/^https:\/\//, "")}</span>
+            </button>
+          );
+        })}
+        {!shown.length && <p className="model-empty">No provider matches.</p>}
       </div>
     </div>
   );

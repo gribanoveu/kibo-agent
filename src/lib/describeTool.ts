@@ -1,5 +1,6 @@
 import type { Block } from "./chatTurnReducer";
-import { processStatus, tokensSpent, type AgentTokens, type ProcessState } from "./chat";
+import { type AgentTokens, tokensSpent } from "./agents";
+import { type ProcessState, processStatus } from "./processes";
 
 // One tool call, as a row in the transcript: what it did, to what, and the
 // body you get when you expand it.
@@ -40,6 +41,8 @@ export const LABELS: Record<string, string> = {
   writeFile: "Write",
   editFile: "Edit",
   createDirectory: "Mkdir",
+  delete: "Delete",
+  // Names older chats saved, drawn as they were.
   deleteFile: "Delete",
   deleteDirectory: "Delete",
   move: "Move",
@@ -78,6 +81,9 @@ export const LABELS: Record<string, string> = {
   kubeDelete: "Delete object",
   webSearch: "Web",
   webFetch: "Page",
+  deepseekSearch: "DeepSeek web",
+  deepseekFetch: "DeepSeek page",
+  board: "Board",
   toolSearch: "Find tools",
 };
 
@@ -174,6 +180,11 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     };
   }
 
+  // A folder's `delete` has no diff: drawn as `deleteDirectory` was.
+  if (block.name === "delete" && block.result !== undefined && result.diff === undefined) {
+    return { name, arg: str(args.path) ?? "", detail: "" };
+  }
+
   switch (block.name) {
     case "readFile": {
       // Several files: named in the row, each under its own header when opened.
@@ -249,7 +260,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     }
 
     // The pages as the model got them: title, address, the passages.
-    case "webSearch": {
+    case "webSearch":
+    case "deepseekSearch": {
       const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
       return {
         name,
@@ -260,7 +272,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     }
 
     // The page as the model got it: where it ended up, and its text.
-    case "webFetch": {
+    case "webFetch":
+    case "deepseekFetch": {
       const page = asObject(result.page);
       const cut = page.truncated === true;
       return {
@@ -268,6 +281,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.url) ?? "",
         meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
         detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
+      };
+    }
+
+    // The card the call was about; the board itself is on its page.
+    case "board": {
+      const cards = Array.isArray(result.cards) ? result.cards.length : undefined;
+      const op = str(args.op);
+      return {
+        name,
+        arg: op === "add" ? (str(args.title) ?? "") : op === "move" ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}` : "list",
+        meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
+        detail: str(args.note) ?? "",
       };
     }
 
@@ -292,6 +317,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    case "delete":
     case "writeFile":
     case "editFile":
     case "deleteFile": {
@@ -336,6 +362,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // `createDirectory` is no longer offered (`writeFile` makes the folders a
+    // file needs); kept so older chats still read.
     case "createDirectory":
     case "deleteDirectory":
       return { name, arg: str(args.path) ?? "", detail: "" };
@@ -466,7 +494,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
-    // Typed, not run to the end: the terminal is where it goes on.
+    // Typed, not run to the end: the terminal is where it goes on. No longer
+    // offered; kept so older chats still read.
     case "runInTerminal": {
       const id = num(asObject(result.terminal).id);
       return { name, arg: str(args.command) ?? "", meta: id === undefined ? undefined : `terminal #${id}`, detail: "" };
@@ -616,6 +645,8 @@ const ACTIVE_VERBS: Record<string, string> = {
   Search: "Searching the code for",
   Web: "Searching the web for",
   Page: "Reading",
+  "DeepSeek web": "Searching the web with DeepSeek for",
+  "DeepSeek page": "Reading with DeepSeek",
   "Find tools": "Finding tools for",
   List: "Listing",
   Write: "Writing",
@@ -650,6 +681,8 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Search: (n) => `searched the code${n > 1 ? ` ${n} times` : ""}`,
   Web: (n) => `searched the web${n > 1 ? ` ${n} times` : ""}`,
   Page: (n) => `read ${n === 1 ? "a page" : `${n} pages`}`,
+  "DeepSeek web": (n) => `searched the web with DeepSeek${n > 1 ? ` ${n} times` : ""}`,
+  "DeepSeek page": (n) => `read ${n === 1 ? "a page" : `${n} pages`} with DeepSeek`,
   List: (n) => `listed ${n === 1 ? "a folder" : `${n} folders`}`,
   Write: (n) => `wrote ${n === 1 ? "a file" : `${n} files`}`,
   Edit: (n) => `edited ${n === 1 ? "a file" : `${n} files`}`,

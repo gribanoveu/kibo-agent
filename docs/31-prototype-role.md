@@ -64,11 +64,11 @@ API-тестировщик ([28-api-tester-role.md](28-api-tester-role.md)): **�
 ### 1. Окружение — папка на чат, файловые инструменты как есть
 
 `<app dir>/prototypes/<chat id>/files/` — рабочая папка, рядом
-`versions/` со снимками (решение 5). Для роли `Prototype` `plain_chat` строит
-`ToolScope` над `files/` и передаёт его в `Place::Chat` (новое поле
+`versions/` со снимками (решение 5). Для роли `Prototype` `turn_setup::run_in_chat`
+строит `ToolScope` над `files/` и передаёт его в `Place::Chat` (поле
 `scope: Option<&ToolScope>`, `None` у остальных ролей). Тогда `writeFile`, `editFile`,
-`readFile`, `listFiles`, `deleteFile`, `createDirectory` работают без изменений, а
-граница пути проверяется там же, где у агента.
+`readFile`, `listFiles`, `delete` работают без изменений, а граница пути проверяется
+там же, где у агента.
 
 - **Подтверждения не нужно.** Папка принадлежит чату, вне её инструменты не достают, и
   записанное нигде не исполняется, кроме изолированного превью (решение 4).
@@ -248,7 +248,7 @@ IPC приложения.
 
 | Инструмент | Есть | Изменение |
 |---|---|---|
-| `writeFile`, `editFile`, `readFile`, `listFiles`, `deleteFile`, `createDirectory` | да | Предлагаются в Chat у роли с папкой |
+| `writeFile`, `editFile`, `readFile`, `listFiles`, `delete` | да | Предлагаются в Chat у роли с папкой |
 | `present` | нет | Новый, решение 5 |
 | `webSearch`, `webFetch` | да | Как у Assistant: найти факты для контента; странице сеть по-прежнему недоступна |
 
@@ -273,6 +273,10 @@ IPC приложения.
   «до/после» для отката пишутся сами, это проверено тестом.
   Мутаций 15, все пойманы: роль и правило подтверждений, папка в `Place::Chat`, граница
   пути до карточки (у чата и у агента), проверка id, удаление.
+  После слияния с `main` (2026-10-19): папка и правило подтверждений собираются в
+  `turn_setup::run_in_chat` (`ChatTurnInput.chat_id`), удаление — `plain_chat::delete_chat`,
+  ошибки — `domain::prototype::PrototypeError`; инструменты — `delete` вместо
+  `deleteFile` и `createDirectory`. Мутаций ещё 4 по перенесённому, все пойманы.
 - **P-2 — протокол `artifact://`. Сделано 2026-10-13.** `infra/prototype_protocol.rs`:
   `/lib/…`, `/<chat>/files/…`, `/<chat>/versions/<n>/…`; сегменты декодируются, а
   границу держит одна проверка — канонический путь внутри канонического корня (`..` в

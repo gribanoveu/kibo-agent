@@ -314,6 +314,22 @@ describe("what each call shows", () => {
     expect(page(false).meta).toBeUndefined();
   });
 
+  test("DeepSeek's search and page read are shown as the web's, under their own names", () => {
+    const search = tool({
+      name: "deepseekSearch",
+      arguments: '{"query":"v4 site:github.com"}',
+      result: { result: "webResults", hits: [{ title: "V4", url: "https://github.com/deepseek-ai", content: "Released." }] },
+    });
+    expect(describeTool(search)).toMatchObject({
+      name: "DeepSeek web",
+      arg: "v4 site:github.com",
+      meta: "1 page",
+      detail: "[1] V4\nhttps://github.com/deepseek-ai\nReleased.",
+    });
+    const reading = tool({ name: "deepseekFetch", arguments: '{"url":"https://github.com/deepseek-ai"}', result: undefined });
+    expect(describeActive(reading)).toBe("Reading with DeepSeek https://github.com/deepseek-ai");
+  });
+
   test("a tool search shows its query and the tools it declared, by server", () => {
     const running = tool({ name: "toolSearch", arguments: '{"query":"create issue"}', result: undefined });
     expect(describeTool(running)).toMatchObject({ name: "Find tools", arg: "create issue", meta: undefined });
@@ -460,6 +476,16 @@ describe("what each call shows", () => {
       }),
     );
     expect(shown).toMatchObject({ arg: "a.rs", meta: "1+ hunks", detail: "3-4  abc1234  2026-09-01  Ann  fix" });
+  });
+
+  test("a delete draws a file as its diff and a folder as its path", () => {
+    const file = describeTool(
+      tool({ name: "delete", arguments: '{"path":"a.rs"}', result: { path: "a.rs", diff: { linesAdded: 0, linesRemoved: 2, unifiedDiff: "-a\n-b\n" } } }),
+    );
+    expect(file).toMatchObject({ name: "Delete", arg: "a.rs", meta: "+0 -2", diff: true });
+    const folder = describeTool(tool({ name: "delete", arguments: '{"path":"build","recursive":true}', result: { path: "build", files: 4, listed: [] } }));
+    expect(folder).toMatchObject({ name: "Delete", arg: "build", detail: "" });
+    expect(folder.diff).toBeUndefined();
   });
 
   test("a folder made or removed shows its path and nothing to open", () => {

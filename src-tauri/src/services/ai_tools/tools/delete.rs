@@ -1,6 +1,6 @@
-//! `deleteFile` — removal of one file.
+//! `delete` — removal of a file, or of a folder (`delete_directory`).
 //!
-//! Guarded the same way a wholesale replacement is, and for the same reason:
+//! A file is guarded the same way a wholesale replacement is, and for the same reason:
 //! deleting a file the agent never read destroys work nobody looked at. The
 //! whole-file requirement applies here too — a partial read is no basis for
 //! removing the parts that were never seen.
@@ -8,19 +8,16 @@
 use crate::domain::llm::LlmToolDefinition;
 use std::fs;
 
-use crate::domain::tools::{
-    DeleteFileArgs, ReadFiles, ToolError, ToolResult, ToolScope, WriteBlocked,
-};
+use crate::domain::tools::{DeleteArgs, ReadFiles, ToolError, ToolResult, ToolScope, WriteBlocked};
 use crate::services::text_diff;
 
 use super::super::resolve::{relative_to_root, resolve_existing};
 
-pub fn delete_file(
-    scope: &ToolScope,
-    args: &DeleteFileArgs,
-    reads: &mut ReadFiles,
-) -> Result<ToolResult, ToolError> {
+pub fn delete(scope: &ToolScope, args: &DeleteArgs, reads: &mut ReadFiles) -> Result<ToolResult, ToolError> {
     let path = resolve_existing(scope, &args.path)?;
+    if path.is_dir() {
+        return super::delete_directory::delete_directory(scope, args);
+    }
     if !path.is_file() {
         return Err(ToolError::NotAFile(args.path.clone()));
     }
@@ -46,18 +43,25 @@ pub fn delete_file(
     })
 }
 
-/// What the model is told `deleteFile` is for.
+/// What the model is told `delete` is for.
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
-        name: "deleteFile".to_string(),
-        description: "Delete one file. Refused unless this turn has read the file whole — deleting what you have not seen is how work disappears unnoticed. Returns the diff of what was removed, so the content is still in the transcript if it turns out to have been needed."
+        name: "delete".to_string(),
+        description: "Delete a file, or a directory. A file is refused unless this turn has read it whole — deleting what you have not seen is how work disappears unnoticed — and the result carries the diff of what was removed. A directory with contents is refused without `recursive`, so a path broader than you meant costs one refusal instead of a tree."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "File path relative to the workspace root."
+                    "description": "Path relative to the workspace root. The workspace root itself cannot be deleted."
+                },
+                "recursive": {
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "description": "For a directory, default false. True deletes it and everything under it. Prefer listing it first."
                 }
             },
             "required": [
@@ -105,7 +109,7 @@ mod tests {
         write(&root, "a.txt", "one\ntwo\n");
         agent_reads(&scope, &mut reads, "a.txt", None);
 
-        let result = delete_file(&scope, &DeleteFileArgs { path: "a.txt".into() }, &mut reads)
+        let result = delete(&scope, &DeleteArgs { path: "a.txt".into(), recursive: None }, &mut reads)
             .expect("deletes");
 
         assert!(!root.join("a.txt").exists());
@@ -122,7 +126,7 @@ mod tests {
         let (scope, root, mut reads) = fixture("rm-unread");
         write(&root, "a.txt", "precious\n");
 
-        let err = delete_file(&scope, &DeleteFileArgs { path: "a.txt".into() }, &mut reads)
+        let err = delete(&scope, &DeleteArgs { path: "a.txt".into(), recursive: None }, &mut reads)
             .expect_err("never read");
 
         assert!(matches!(err, ToolError::DeleteNotReadInFull(_)));
@@ -140,7 +144,7 @@ mod tests {
         agent_reads(&scope, &mut reads, "big.txt", Some((1, 10)));
 
         assert!(matches!(
-            delete_file(&scope, &DeleteFileArgs { path: "big.txt".into() }, &mut reads),
+            delete(&scope, &DeleteArgs { path: "big.txt".into(), recursive: None }, &mut reads),
             Err(ToolError::DeleteNotReadInFull(_))
         ));
         assert!(root.join("big.txt").exists(), "left in place");
@@ -154,27 +158,29 @@ mod tests {
         write(&root, "a.txt", "edited by a human\n");
 
         assert!(matches!(
-            delete_file(&scope, &DeleteFileArgs { path: "a.txt".into() }, &mut reads),
+            delete(&scope, &DeleteArgs { path: "a.txt".into(), recursive: None }, &mut reads),
             Err(ToolError::FileChangedSinceRead(_))
         ));
         assert!(root.join("a.txt").exists(), "left in place");
     }
 
+    /// A directory needs no read: it goes the directory's way.
     #[test]
-    fn deleting_a_directory_is_not_this_tools_job() {
+    fn a_directory_is_deleted_as_one() {
         let (scope, root, mut reads) = fixture("rm-dir");
         std::fs::create_dir(root.join("sub")).expect("creatable");
         assert!(matches!(
-            delete_file(&scope, &DeleteFileArgs { path: "sub".into() }, &mut reads),
-            Err(ToolError::NotAFile(_))
+            delete(&scope, &DeleteArgs { path: "sub".into(), recursive: None }, &mut reads),
+            Ok(ToolResult::DirectoryDeleted { .. })
         ));
+        assert!(!root.join("sub").exists());
     }
 
     #[test]
     fn a_path_leaving_the_root_is_refused() {
         let (scope, _, mut reads) = fixture("rm-escape");
         assert!(matches!(
-            delete_file(&scope, &DeleteFileArgs { path: "../a.txt".into() }, &mut reads),
+            delete(&scope, &DeleteArgs { path: "../a.txt".into(), recursive: None }, &mut reads),
             Err(ToolError::PathEscape(_))
         ));
     }
@@ -182,7 +188,7 @@ mod tests {
     #[test]
     fn the_call_wire_shape_is_stable_and_counts_as_risky() {
         let call: ToolCall =
-            serde_json::from_str(r#"{"tool": "deleteFile", "args": {"path": "a.txt"}}"#)
+            serde_json::from_str(r#"{"tool": "delete", "args": {"path": "a.txt"}}"#)
                 .expect("parses");
         assert!(call.is_risky());
 

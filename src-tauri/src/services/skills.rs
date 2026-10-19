@@ -152,9 +152,7 @@ pub fn set_source_enabled(id: &str, enabled: bool) -> Result<(), SkillError> {
         return Err(SkillError::Io(format!("no skills folder called {id:?}")));
     }
     let io = |e: crate::domain::settings::SettingsError| SkillError::Io(e.to_string());
-    let mut settings = settings_store::load().map_err(io)?;
-    settings.skill_sources.set_enabled(id, enabled);
-    settings_store::save(&settings).map_err(io)
+    settings_store::update(|s| s.skill_sources.set_enabled(id, enabled)).map_err(io)
 }
 
 /// By name, for every folder and repository at once. Unlike the catalog, this
@@ -162,9 +160,7 @@ pub fn set_source_enabled(id: &str, enabled: bool) -> Result<(), SkillError> {
 /// the user's whole configuration with the defaults.
 pub fn set_enabled(name: &str, enabled: bool) -> Result<(), SkillError> {
     let io = |e: crate::domain::settings::SettingsError| SkillError::Io(e.to_string());
-    let mut settings = settings_store::load().map_err(io)?;
-    settings.skills.set_enabled(name, enabled);
-    settings_store::save(&settings).map_err(io)
+    settings_store::update(|s| s.skills.set_enabled(name, enabled)).map_err(io)
 }
 
 #[cfg(test)]

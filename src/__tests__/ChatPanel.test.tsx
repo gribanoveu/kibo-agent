@@ -28,39 +28,44 @@ const panel = (
     />,
   );
 
-describe("the task in progress", () => {
+describe("the checklist while the agent works", () => {
   const task = (id: string, title: string, status: "pending" | "inProgress" | "completed") => ({ id, title, status });
-
-  test("sits under the header with how far the list is, and opens the plan", () => {
-    let opened = 0;
+  const list = [task("1", "read", "completed"), task("2", "fix the parser", "inProgress"), task("3", "test", "pending")];
+  const withList = (over: Partial<TurnState>) =>
     render(
       <ChatPanel
         workspace="/tmp/project"
-        turn={state([])}
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }], over)}
         onDecide={() => {}}
         onOpenRepo={() => {}}
-        onOpenPlan={() => opened++}
-        checklist={[task("1", "read", "completed"), task("2", "fix the parser", "inProgress"), task("3", "test", "pending")]}
+        checklist={list}
       />,
     );
-    const strip = screen.getByTitle("Show the plan");
-    expect(strip.textContent).toContain("fix the parser");
-    expect(strip.textContent).toContain("1/3");
-    fireEvent.click(strip);
-    expect(opened).toBe(1);
+
+  test("sits above the clock, the task under way marked current", () => {
+    withList({ status: "running", runningSince: Date.now() });
+    const ticker = screen.getByRole("list", { name: "Checklist" });
+    expect(ticker.querySelectorAll("li")).toHaveLength(3);
+    expect(ticker.querySelector("[aria-current]")?.textContent).toBe("fix the parser");
+    expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("is not there while nothing is in progress", () => {
+  test("is not there once nothing on it is open", () => {
     render(
       <ChatPanel
         workspace="/tmp/project"
-        turn={state([])}
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() })}
         onDecide={() => {}}
         onOpenRepo={() => {}}
-        checklist={[task("1", "read", "completed"), task("2", "test", "pending")]}
+        checklist={[task("1", "read", "completed"), { id: "2", title: "fix", status: "cancelled" as const }]}
       />,
     );
-    expect(screen.queryByTitle("Show the plan")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();
+  });
+
+  test("is gone once the turn ends", () => {
+    withList({ status: "done" });
+    expect(screen.queryByRole("list", { name: "Checklist" })).toBeNull();
   });
 });
 
@@ -274,6 +279,14 @@ describe("the approval card", () => {
     expect(screen.queryByText("update")).toBeNull();
   });
 
+  /// A card without its diff says so: otherwise it reads as a call that
+  /// changes nothing, and is approved as one.
+  test("says why a call's preview is missing", async () => {
+    render(<Transcript turn={state([approval])} onDecide={() => {}} preview={() => Promise.reject("the file is gone")} />);
+    await settle();
+    expect(screen.getByText("Preview unavailable: the file is gone")).toBeTruthy();
+  });
+
   test("always allow names the tool it should stop asking about", async () => {
     const decided: { always: string[] }[] = [];
     panel(state([approval]), (_decisions, always) => decided.push({ always }));
@@ -424,33 +437,6 @@ describe("the header", () => {
     expect(screen.getByRole("button", { name: "Chats" })).toBeTruthy();
   });
 
-  test("shows and hides the side panel, and says which it would do", () => {
-    let toggled = 0;
-    const { rerender } = render(
-      <ChatPanel
-        workspace="/tmp/project"
-        turn={state([])}
-        onDecide={() => {}}
-        onOpenRepo={() => {}}
-        onToggleAside={() => toggled++}
-      />,
-    );
-    fireEvent.click(screen.getByTitle(/^Show changes/));
-    expect(toggled).toBe(1);
-
-    rerender(
-      <ChatPanel
-        workspace="/tmp/project"
-        turn={state([])}
-        onDecide={() => {}}
-        onOpenRepo={() => {}}
-        asideOpen
-        onToggleAside={() => toggled++}
-      />,
-    );
-    expect(screen.getByTitle(/^Hide changes/).getAttribute("aria-pressed")).toBe("true");
-  });
-
   test("the … menu opens a side panel by name", () => {
     const opened: string[] = [];
     render(
@@ -463,6 +449,7 @@ describe("the header", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitem", { name: "Terminal" }));
 
     expect(opened).toEqual(["terminal"]);
@@ -489,6 +476,28 @@ describe("the header", () => {
 
     fireEvent.click(screen.getByTitle("More"));
     expect(screen.queryByRole("menuitem", { name: "Terminal" })).toBeNull();
+  });
+
+  test("Overview has its own header button right of Terminal's, and stays in the … menu", () => {
+    let toggled = 0;
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenPanel={() => {}}
+        onToggleTerminal={() => {}}
+        onToggleOverview={() => toggled++}
+      />,
+    );
+    const button = screen.getByTitle(/^Show overview/);
+    expect(button.previousElementSibling?.getAttribute("title")).toMatch(/^Show terminal/);
+    fireEvent.click(button);
+    expect(toggled).toBe(1);
+
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: "Overview" })).toBeTruthy();
   });
 
   test("the … menu offers the export, and closes once it is picked", () => {
@@ -522,7 +531,7 @@ describe("the header", () => {
       />,
     );
     fireEvent.click(screen.getByTitle("More"));
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     unmount();
 
@@ -932,5 +941,29 @@ describe("a message with pictures", () => {
   test("a message without pictures shows none", () => {
     panel(state([{ kind: "user", id: "u0", text: "hi" }]));
     expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+});
+
+describe("a call with no body of its own", () => {
+  test("unfolds to its argument in full, which the row cuts off", () => {
+    const fact = "The user wants every reply in Russian, and the tests run on bun, not vitest";
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "m1",
+          round: 1,
+          name: "remember",
+          arguments: JSON.stringify({ fact }),
+          status: "done",
+          result: {},
+          output: "",
+        } as Block,
+      ]),
+    );
+    const row = container.querySelector(".tool-item button.tool") as HTMLButtonElement;
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+    expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
   });
 });

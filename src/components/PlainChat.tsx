@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
+import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
 import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
-import type { ChatRoleId } from "../lib/chat";
+import type { ChatRoleId } from "../lib/plainChat";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
 import type { PlainChatState } from "../hooks/usePlainChat";
@@ -284,6 +285,9 @@ export function PlainChat({
               onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
             />
           )}
+          <span className="plain-tab-end">
+            <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
+          </span>
         </div>
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
           {attachments.dragging && (
@@ -306,7 +310,7 @@ export function PlainChat({
             onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (matches(e, "send") && !e.nativeEvent.isComposing) {
+              if (matches(e, "send")) {
                 e.preventDefault();
                 send();
               }

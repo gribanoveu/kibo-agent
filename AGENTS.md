@@ -51,13 +51,31 @@ src-tauri/src/
 └── infra/                    # git2 / filesystem / network — concrete implementations of domain traits
 ```
 
-Dependency direction points inward: `commands → services → domain`, and `infra` implements traits that `domain`/`services` define — never the reverse. Don't reach for `git2` or `tauri::` types from inside `domain/` or `services/`.
+Dependency direction points inward: `commands → services → domain`, and `infra` implements traits that `domain`/`services` define — never the reverse. Don't reach for `git2` or `tauri::` types from inside `domain/` or `services/`. `src/architecture.rs` checks this, with each standing exception listed beside its rule and why:
 
-**Reporting outward crosses a port, never an `AppHandle`.** A service that needs to tell the UI something takes a sink — `Arc<dyn Fn(Event) + Send + Sync>`, with the event type in `domain/` — and the command layer is the only place that turns those into Tauri events. The one that exists here today is `domain::turn::ChatEventSink`, adapted in `commands/chat_events.rs`; `domain::command_exec::CommandSink` is the same shape one layer down. The index layer's is `domain::workspace_index::IndexEventSink` (one `IndexEvent` enum: sync started, keywords ready, embedding progress, sync finished, failed), taken by `services::index_sync::RepoIndexer::sync` and `services::workspace_index::WorkspaceIndex::open`, adapted in `commands/workspace_events.rs`. The background processes' is `domain::background::ProcessEventSink` (one `ProcessChanged { id }` signal), taken by `infra::background::Processes::new`, adapted in `commands/processes.rs`. The helper agents' is `domain::agents::AgentEventSink` (one `AgentChanged { id }` signal), taken by `domain::agents::Agents::new`, adapted in `commands/agents.rs`. When a service reports more than one kind of thing, use one enum rather than several callbacks. `tauri::async_runtime` used purely as a thread pool (`spawn_blocking`) is fine in `services/` — that's a runtime, not the UI.
+- The agent's tools (`services/ai_tools/tools/*`) are I/O adapters (`docs/03-architecture.md` §3.5): they use `std::fs` and `git2` directly, as `resolve.rs` explains for the filesystem.
+- A command may call `infra` itself when it is one call with no rule in it — reading a store for the window, saving what the form sent. Anything that decides, or puts several calls together, is a service: a turn is assembled in `services::turn_setup`, a web search in `services::web_search`, not in `commands/`.
+- `domain::background` names `std::process::Child`: a timed-out command's child crosses from services into infra through the processes' trait object, and an opaque handle would need a downcast that can fail.
+
+**Reporting outward crosses a port, never an `AppHandle`.** A service that needs to tell the UI something takes a sink — `Arc<dyn Fn(Event) + Send + Sync>`, with the event type in `domain/` — and the command layer is the only place that turns those into Tauri events. The one that exists here today is `domain::turn::ChatEventSink`, adapted in `commands/chat_events.rs`; `domain::command_exec::CommandSink` is the same shape one layer down. The index layer's is `domain::workspace_index::IndexEventSink` (one `IndexEvent` enum: sync started, keywords ready, embedding progress, sync finished, failed), taken by `services::index_sync::RepoIndexer::sync` and `services::workspace_index::WorkspaceIndex::open`, adapted in `commands/workspace_events.rs`. The background processes' is `domain::background::ProcessEventSink` (one `ProcessChanged { id }` signal), taken by `infra::background::Processes::new`, adapted in `commands/processes.rs`. The helper agents' is `domain::agents::AgentEventSink` (one `AgentChanged { id }` signal), taken by `domain::agents::Agents::new`, adapted in `commands/agents.rs`. The board's is `domain::board::BoardEventSink` (one `BoardChanged` signal), taken by `infra::board_store::Board::new`, adapted in `commands/board.rs`; the terminals' is `domain::terminal::TerminalEventSink` (one `TerminalChanged { id }` signal), taken by `infra::terminal::Terminals::new`, adapted in `commands/terminal.rs`; the MCP servers' is `domain::mcp::McpEventSink` (one `McpChanged` signal), taken by `services::mcp_servers::McpServers::new`, adapted in `commands/mcp.rs`. When a service reports more than one kind of thing, use one enum rather than several callbacks. `tauri::async_runtime` used purely as a thread pool (`spawn_blocking`) is fine in `services/` — that's a runtime, not the UI.
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
-The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, the approval gate) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool is a variant in the two enums, a module under `services/ai_tools/tools/`, and a branch in the `match` — if a fifth place needs editing, that contract is broken.
+The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, the approval gate) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool touches more places than one would like, so each is held by the compiler or a test, and the few held by neither only change how a call looks:
+
+| Place | Held by |
+|---|---|
+| `ToolName` variant and its row in `ToolName::ALL` (`domain/tools.rs`) | test `all_is_complete` (the count) |
+| `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees` on `ToolName` | compiler — exhaustive `match`, no wildcard |
+| `ToolCall` / `ToolResult` variants, a module under `services/ai_tools/tools/`, its arm in `dispatch`, its text in `model_text.rs` | compiler |
+| its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
+| its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |
+| its redaction in `domain/tool_call_log.rs` | test `every_tool_is_redacted` |
+| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed, and nothing mutating outside Agent (test) |
+| `ACCOUNTED` in `src/lib/rewind.ts` | test `every_tools_rewind_flag_matches_the_window` against `rewind_sees` |
+| its label and summary in `src/lib/describeTool.ts`, its icon in `ChatPanel.tsx` | nobody — without them the call shows its raw name and the default icon |
+
+A sixth kind of place, or a list here that neither the compiler nor a test holds, is the contract breaking. A tool the user turns on from the Catalog belongs to a feature: a row in `domain/features.rs`, and `feature: "<id>"` on its page in `components/pages.tsx` (`docs/33-features.md`); the filters and the Catalog read the manifest.
 
 ## Errors
 
@@ -68,21 +86,22 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 ## IPC conventions
 
 - Every `#[tauri::command]` gets a matching typed wrapper in `src/lib/` — components/hooks call the wrapper, never `invoke()` directly.
-- New commands must be registered in `generate_handler![]` in `lib.rs` (`main.rs` only calls `run()`), and any new plugin/API surface needs a corresponding entry in `src-tauri/capabilities/*.json` — a command that "does nothing" at runtime usually means a missing capability entry, not a missing registration.
-- Long-running git operations (clone, fetch) run as `async` commands or via `spawn_blocking`, not on the IPC event loop.
+- New commands must be registered in `generate_handler![]` in `lib.rs` (`main.rs` only calls `run()`). That list is also the app's command manifest: `build.rs` reads it, declares every command to Tauri, and generates `permissions/main-window.toml`, which `capabilities/default.json` gives the main window — so a new command works there with nothing more. Any other window gets only what its capability names: the Markdown viewer (`capabilities/viewer.json`) has its own `allow-viewer-*`. A command for another window is an `allow-<command-with-dashes>` entry in that window's capability; a new plugin/API surface needs its entry in `capabilities/*.json` too. A command that "does nothing" at runtime usually means a missing capability entry, not a missing registration — `architecture.rs` (`a_viewer_window_may_call_only_its_own_commands`) checks the resolved access per window.
+- A synchronous `#[tauri::command]` runs on the main thread, so a command that touches SQLite, git, the keychain, the user's files, a process or the network is `async` and does its work through `commands::blocking` (`spawn_blocking` underneath) — otherwise the window freezes while it runs. Plain `fn` is for in-memory state (`chat_cancel`, `workspace_current`) and for reading or writing the app's own small settings file. `architecture.rs` (`a_command_that_waits_on_io_is_async`) holds the list of what counts as slow; a new slow module goes there.
 
 ### Keeping the frontend current
 
 The frontend does not poll the backend for state. When backend state changes, the backend says so on a Tauri event, and the frontend reads again — a timer that re-asks is a bug, not a fallback.
 
-- **Tauri's events are the bus.** There is no app-wide bus or dispatcher on top of them: a named channel per source, with one enum per channel (the sink rule above), is what a generic bus would reduce to, minus the types. Today's channels: `chat:turn-event` (`commands/chat_events.rs`), `workspace-index:event` (`commands/workspace_events.rs`), `workspace-git:changed` (`commands/git.rs`), `processes:changed` (`commands/processes.rs`), `agents:changed` (`commands/agents.rs`), `terminals:changed` (`commands/terminal.rs`). The name is a `pub const` beside the emitter, and a test pins it — the frontend's copy in `src/lib/` is a string.
+- **Tauri's events are the bus.** There is no app-wide bus or dispatcher on top of them: a named channel per source, with one enum per channel (the sink rule above), is what a generic bus would reduce to, minus the types. Today's channels: `chat:turn-event` (`commands/chat_events.rs`), `workspace-index:event` (`commands/workspace_events.rs`), `workspace-git:changed` (`commands/git.rs`), `processes:changed` (`commands/processes.rs`), `agents:changed` (`commands/agents.rs`), `terminals:changed` (`commands/terminal.rs`), `board:changed` (`commands/board.rs`), `features:changed` (`commands/features.rs`), `mcp:changed` (`commands/mcp.rs`). The name is a `pub const` beside the emitter, and a test pins it — the frontend's copy in `src/lib/` is a string.
 - **An event names what it is about** — the folder (`root`, the string `workspace_open` returned) or the turn (`turnId`). Events outlive their subject: a sync of the folder just left still reports, and a listener that does not check would apply it to the next one.
 - **An event is a signal to re-read, not the new state**, unless the payload is the data itself (a streamed delta). The listener calls the command it already has. This keeps one source of truth, and a lost or coalesced event costs nothing: the next one re-reads everything.
+  - The one channel that carries state is `workspace-index:event`: a sync's progress is a stream, like a reply's deltas. It holds only because of the order `useIndexStatus` keeps — the snapshot (`workspace_index_status`) is read once the listener is attached, and never overrides what an event said. Read before, a sync ending in between is said by neither, and the badge stays on "Indexing…". A new channel that carries state keeps the same order, or re-reads.
 - **A byte stream goes down a `tauri::ipc::Channel`, not an event.** A terminal's output is the data itself and only the tab drawing that terminal wants it, so `terminal_attach` takes a `Channel` and sends raw bytes (they arrive as an `ArrayBuffer`); the tab detaches it on cleanup. `terminals:changed` still says the list changed.
 - **Reuse a signal before adding one.** A change to the working tree already arrives as the index's `syncStarted`; `.git` is the one part that watcher leaves out, which is why `workspace-git:changed` exists. A new channel is for a change no existing one reports.
-- **Listen only while it matters.** A hook subscribes while its pane is on screen and unsubscribes on cleanup (`useStaging` is the pattern), reading once when it starts listening — what changed while it was hidden is not replayed.
+- **Listen only while it matters.** A hook subscribes while its pane is on screen and unsubscribes on cleanup, reading once when it starts listening — what changed while it was hidden is not replayed. `useLiveRead(read, listen, initial, on)` is that shape for a list the backend owns; a view of the open folder listens with `onFolderChanged(root, …)`, which joins the index's `syncStarted` and `workspace-git:changed`.
 - **A source that changes fast is throttled where it changes**, not in the listener. A background process writing a line per millisecond is signalled at most once per 100 ms tick (`infra/background.rs`, `watch`), so the IPC channel never carries a burst the frontend then has to debounce.
-- Wrappers in `src/lib/` own the channel: `onIndexEvent`, `onGitChanged`, `onProcessChanged`, `onAgentChanged`, `onTurnEvent` — components and hooks never call `listen()` directly, as with `invoke()`.
+- Wrappers in `src/lib/` own the channel: `onIndexEvent`, `onGitChanged`, `onProcessChanged`, `onAgentChanged`, `onTurnEvent`, `onBoardChanged`, `onFeaturesChanged`, `onTerminalChanged`, `onMcpChanged`, `onFolderChanged` — components and hooks never call `listen()` directly, as with `invoke()`.
 
 A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 
@@ -91,12 +110,14 @@ A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 - Prefer `git2` over shelling out to `git` for programmatic operations (diff, blame, branch listing); shell out only for actions you don't want to reimplement, isolated to one module.
 - Validate/canonicalize any path coming from the frontend against the opened repo root before touching it.
 - Use `std::path::Path`/`PathBuf` throughout — no manual path string concatenation (the app targets macOS/Windows/Linux).
+- Settings change through `settings_store::update(|s| …)`, which holds a lock from the read to the write; `save` exists only for tests. A `load` then `save` from two threads loses one of the changes.
 
 ## Style
 
 - Prefer immutable data and explicit, exhaustive error handling (`match` over ignoring `Err`).
 - Keep abstractions proportionate to actual need — don't add a layer, trait, or generic parameter for a hypothetical future case.
 - Match existing patterns in the file/module you're editing before introducing a new one.
+- A `ponytail:` comment marks a deliberate shortcut and names its ceiling and the way past it (a poll where no event exists yet, one lock for a whole file). It is not a bug to fix in passing: change it when the ceiling is actually hit, and move or update the comment with it.
 
 ### UI
 

@@ -17,7 +17,7 @@ use std::time::SystemTime;
 
 use ignore::{WalkBuilder, WalkState};
 
-use crate::domain::tools::canonicalize_plain;
+use crate::infra::paths::canonicalize_plain;
 
 #[derive(Debug, Clone)]
 pub struct ScannedFile {

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import type { McpView } from "../lib/chat";
+import type { McpView } from "../lib/mcp";
 
 // The MCP file is the user's: the tab re-reads it, a switch is settled by
 // what was saved, and a config that does not parse leaves the file alone and
@@ -46,6 +46,14 @@ mock.module("@tauri-apps/api/core", () => ({
     return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
+}));
+
+const listeners = new Set<() => void>();
+mock.module("@tauri-apps/api/event", () => ({
+  listen: (channel: string, handler: () => void) => {
+    if (channel === "mcp:changed") listeners.add(handler);
+    return Promise.resolve(() => listeners.delete(handler));
+  },
 }));
 
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
@@ -136,6 +144,19 @@ describe("useMcp", () => {
     rerender({ status: "idle" });
     await settle();
     expect(calls.filter((c) => c === "mcp_config_get")).toHaveLength(3);
+  });
+
+  test("a server that starts while shown is read again, and not once hidden", async () => {
+    const { result, rerender } = renderHook(({ visible }) => useMcp(visible), { initialProps: { visible: true } });
+    await settle();
+    disk.servers[1] = { ...disk.servers[1], state: { state: "starting" } };
+    act(() => listeners.forEach((changed) => changed()));
+    await settle();
+    expect(result.current.view?.servers[1].state).toEqual({ state: "starting" });
+
+    rerender({ visible: false });
+    await settle();
+    expect(listeners.size).toBe(0);
   });
 
   test("a refused save says why and reports it was not stored", async () => {

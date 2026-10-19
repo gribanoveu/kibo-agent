@@ -219,6 +219,9 @@ pub struct AppSettings {
     /// Catalogs read besides the app's own (`domain::catalog::DEFAULT_SOURCE`),
     /// by base address — `docs/32-catalog.md`.
     pub catalog_sources: Vec<String>,
+    /// Features turned on or off from the Catalog, by id; one not here is
+    /// its default — `domain::features`, `docs/33-features.md`.
+    pub features: std::collections::BTreeMap<String, bool>,
 }
 
 /// Where the web tools are offered: each has its own search, or none — Tavily
@@ -462,10 +465,57 @@ impl OptOut {
     }
 }
 
+/// Why there is no app directory to keep things in (`~/.kibo`).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AppDirError {
+    #[error("no home directory")]
+    NoHome,
+    /// A test that forgot to install a throwaway one: never the real home.
+    #[error("no app directory is installed for this test")]
+    NotInstalled,
+}
+
+/// For the many callers that still report errors as strings (`docs/34`, #7).
+impl From<AppDirError> for String {
+    fn from(error: AppDirError) -> Self {
+        error.to_string()
+    }
+}
+
+/// Why `recent.json`, the folders opened lately, could not be written. Only
+/// the list misses the change: the folder opened stays open.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0}")]
+pub struct RecentFoldersError(pub String);
+
+/// Why the saved API keys cannot be read. Not "no key": that one is
+/// `Ok(None)`, and reading this as it sent providers a request without a key
+/// that came back 401 with nothing to say why.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CredentialsError {
+    #[error(transparent)]
+    AppDir(#[from] AppDirError),
+    #[error("could not read {path}: {reason}")]
+    Read { path: String, reason: String },
+    #[error("the key the API keys are sealed under is out of reach: {0}")]
+    MasterKey(String),
+    /// Sealed under another machine's key, or another install's.
+    #[error("{0} does not open with this machine's key — save the API keys again")]
+    Foreign(String),
+    #[error("{0} is damaged — save the API keys again")]
+    Damaged(String),
+}
+
+impl From<CredentialsError> for String {
+    fn from(error: CredentialsError) -> Self {
+        error.to_string()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SettingsError {
-    #[error("{0}")]
-    AppDir(String),
+    #[error(transparent)]
+    AppDir(#[from] AppDirError),
     #[error("failed to read settings: {0}")]
     Read(#[source] std::io::Error),
     #[error("failed to write settings: {0}")]

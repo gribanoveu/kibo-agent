@@ -9,7 +9,6 @@
 //! The shells are in `infra::terminal`; decisions in `docs/15-terminal.md`.
 
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -90,12 +89,6 @@ pub enum TerminalError {
     Resize { id: u32, reason: String },
     #[error("the user has no terminal open — the Terminal tab opens one")]
     NoneOpen,
-    /// Typing would land in whatever holds the terminal — a `vim`, a REPL,
-    /// a password prompt — not in the shell.
-    #[error("terminal #{0} is running something in the foreground; wait for it to finish, or use runCommand")]
-    Busy(u32),
-    #[error("one line only: a line break in the command would run the rest as it is typed. Join the commands with && or ;")]
-    MultiLine,
 }
 
 /// What a terminal shows, as text: its last lines, history included,
@@ -142,11 +135,6 @@ pub trait UserTerminals: Send + Sync {
 
     /// The last `lines` lines of terminal `id`, or of the newest one.
     fn screen(&self, id: Option<u32>, lines: usize) -> Result<TerminalScreen, TerminalError>;
-
-    /// Types `command` and Enter into terminal `id`, or into the newest one
-    /// still running — or into a new one in `cwd` when none is. Refused when
-    /// something other than the shell holds the terminal.
-    fn run(&self, id: Option<u32>, command: &str, cwd: &Path) -> Result<TerminalInfo, TerminalError>;
 }
 
 /// The last [`MAX_SCROLLBACK_BYTES`] a terminal wrote. Bytes, not text: a

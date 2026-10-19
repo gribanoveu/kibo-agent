@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FolderTab, folderOptions } from "../components/FolderTab";
-import type { ChangeTotals, RecentFolder } from "../lib/chat";
+import type { RecentFolder } from "../lib/chat";
+import type { ChangeTotals } from "../lib/git";
 import { fromSnapshot, type IndexState } from "../lib/indexStatus";
 
 // The strip on the composer's top edge: which folder the next message is
@@ -133,6 +134,29 @@ describe("the folder menu", () => {
       ["atlas", "/work/atlas", false],
       ["main-0925-2214", "worktree of kibo", false],
     ]);
+  });
+
+  test("drops a folder from the list, without opening it", () => {
+    const forgotten: string[] = [];
+    const opened: string[] = [];
+    render(
+      <FolderTab
+        path="/work/kibo"
+        recent={[folder("/work/kibo"), folder("/work/atlas")]}
+        onOpenFolder={(path) => opened.push(path)}
+        onPickFolder={() => {}}
+        onForgetFolder={(path) => forgotten.push(path)}
+        onOpenChanges={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    const buttons = screen.getAllByTitle("Remove from the list — the folder itself is left as it is");
+    expect(buttons).toHaveLength(2);
+
+    fireEvent.click(buttons[1]);
+    expect(forgotten).toEqual(["/work/atlas"]);
+    expect(opened).toEqual([]);
+    expect(screen.queryByRole("option")).toBeNull();
   });
 
   test("draws the nested rows as such", () => {

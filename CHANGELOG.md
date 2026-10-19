@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- 2026-10-16 Overview and Terminal open without a heading and close button of their own: their buttons in the chat header, ⌘1 and ⌃` show and hide them
+- 2026-10-16 MCP servers' status in Overview and the MCP pane changes as they start, fail or stop, without reopening the pane
+- 2026-10-16 Add the Overview pane, from the button right of Terminal's or ⌘1: the context window, the MCP servers that are on, the processes and helper agents running in the background, and the branch with its lines changed
+- 2026-10-16 Changes no longer has its own button in the chat header; it opens from the … menu, ⌘2 or the +/− count by the branch; the other panes' keys move one up
+- 2026-10-16 Add Provider balance to the Catalog's features: turned on, the message box shows what is left on a DeepSeek account and reads it again after each answer
+- 2026-10-16 Add DeepSeek search to the Catalog's features: turned on, the agent and the Assistant get deepseekSearch and deepseekFetch, DeepSeek's own web search and page reader, paid from the DeepSeek account in Settings → Models
+- 2026-10-16 Add Provider balance to the Catalog's features: turned on, the strip above the message box shows what is left on a DeepSeek account and reads it again after each answer
+- 2026-10-16 A new message drops the checklist items the agent's last answer left open, so the next task doesn't queue behind a stale one; a plan handed over from Plan mode keeps its checklist
+- 2026-10-16 The branch in the chat header changes as soon as the agent switches it, not when its turn ends
+- 2026-10-16 The agent's checklist shows above "Working…" while it works, three tasks at a time, scrolling to keep the current one in the middle — no more strip under the header
+- 2026-10-16 A new provider can be picked from a list of 210 known ones (from models.dev, the list OpenCode uses), which fills its name, protocol and base URL
+- 2026-10-16 A project in the folder menu can be dropped from the list, its worktrees with it — the folders themselves and their chats stay where they are
+- 2026-10-15 The index badge no longer stays on "Indexing…" after a folder's first sync ends while the window is still starting up
+- 2026-10-15 When saved API keys cannot be read — the machine's key out of reach, a damaged file — Settings and the chat say so, instead of showing "no key" and failing with the provider's 401; saving the key again fixes it
+- 2026-10-15 Web search that is on but cannot start — a SearXNG address that is not one, unreadable keys — stops the turn with the reason and where to fix it, instead of the model quietly answering that it cannot search
+- 2026-10-15 A Markdown file opened in its own viewer window can only read that file and its text size: the app's other commands — writing files, the terminal, starting a turn — are refused there
+- 2026-10-15 A setting changed while the agent is working — a toggle in Settings while a turn pins its model — is no longer lost or refused, and two saves at once no longer fail with "could not replace"
+- 2026-10-15 The window no longer stalls while the chat list, a long chat, the tool log, Usage or the provider settings load, or while the context meter asks a provider without a pinned model for its models
+- 2026-10-15 Typing in Japanese, Chinese or Korean: Enter that picks a word no longer sends the message or takes what is in a field, anywhere in the app; ⌘/Ctrl+Enter no longer sends in the agent's box either
+- 2026-10-15 An approval card whose preview could not be worked out says why, instead of showing the call without its diff
+- 2026-10-14 Every tool call in the chat opens: a saved memory, a folder made or a file moved shows what it was about in full, and Memory, Search, Plan, Explore and Board calls have their own icons
+- 2026-10-14 Your messages in the chat keep the line breaks you typed, and a long link wraps instead of running past the edge of the window
+- 2026-10-14 The Catalog lists the app's own features beside what it installs: turn the Board on there — it is off until you do — and the model gets its tool in the Assistant chat and in Agent, Plan and Ask, and its page appears in the sidebar; turned off, both go and the cards stay until you delete them
+- 2026-10-13 Ask the Assistant to remind you of something and it puts a card on the new Board page in the sidebar: To do, Doing and Done, moved by the model or by you, removed from any column; Done keeps the last five and older ones go to an archive under the columns. Chats are told today's date and weekday
+
 ## v0.9.0 — 2026-10-13
 
 - 2026-10-13 An entry installed from the Catalog updates from its panel when the catalog has a newer version: a dialog shows each file's diff against what is there now, warns when that writes over a change made here, and a server keeps its tokens

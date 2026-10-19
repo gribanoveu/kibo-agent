@@ -37,3 +37,18 @@ export function writtenChecklist(blocks: Block[]): Task[] | null {
   }
   return null;
 }
+
+const open = (task: Task) => task.status === "pending" || task.status === "inProgress";
+
+/** Whether anything on the list is still to be done. */
+export const hasOpen = (tasks: Task[]) => tasks.some(open);
+
+/**
+ * The list a new request starts from: what the last answer left open is
+ * dropped, not deleted — the model is shown the list as it stands, and the
+ * ids stay taken, so a stale `t3` cannot retarget a new task. The same list
+ * when nothing is open.
+ */
+export function dropOpen(tasks: Task[]): Task[] {
+  return hasOpen(tasks) ? tasks.map((task) => (open(task) ? { ...task, status: "cancelled" } : task)) : tasks;
+}

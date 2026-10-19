@@ -35,11 +35,6 @@ export function togglePane(docks: Docks, pane: AsideTab, dock: "right" | "bottom
   return openPane(docks, pane, dock);
 }
 
-export const toggleChanges = (docks: Docks) => togglePane(docks, "changes", "right");
-
-export const changesShown = (docks: Docks) =>
-  docks.bottom === "changes" || (docks.top === "changes" && !docks.topHidden);
-
 /** The header's Terminal button: Terminal only ever sits in the bottom dock. */
 export const toggleTerminal = (docks: Docks) => togglePane(docks, "terminal", "bottom");
 

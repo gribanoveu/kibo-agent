@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
-import type { FileStatus, FileTarget, TreeEntry } from "../lib/chat";
+import type { FileStatus, TreeEntry } from "../lib/fileTree";
+import type { FileTarget } from "../lib/git";
 import type { Block } from "../lib/chatTurnReducer";
 import { touchedFiles, type Touch, type TouchedFile } from "../lib/touchedFiles";
 import { useFileTree } from "../hooks/useFileTree";

@@ -375,3 +375,6 @@ pre.catalog-server-entry {
   margin-left: 6px;
   color: var(--text-faint);
 }
+.catalog-card-ico.feature {
+  color: var(--amber);
+}

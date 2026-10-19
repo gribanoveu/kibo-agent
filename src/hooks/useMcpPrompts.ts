@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { mcpPrompts, startMcpPrompts, type McpPromptItem } from "../lib/chat";
+import { type McpPromptItem, mcpPrompts, startMcpPrompts } from "../lib/mcp";
 
 /** How long a start may take before the menu says it is waiting: servers already running answer at once, and the line would flash. */
 const SAY_STARTING_AFTER_MS = 150;

@@ -3,6 +3,7 @@ import {
   BookText,
   ClipboardList,
   FolderClosed,
+  Info,
   Plug,
   Sparkles,
   SquareTerminal,
@@ -12,10 +13,17 @@ import {
 import { ChangesPanel } from "./ChangesPanel";
 import { FilesPanel } from "./FilesPanel";
 import { ItemList } from "./ItemList";
+import { OverviewPanel, type OverviewProps } from "./OverviewPanel";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
-import type { FileTarget, HooksView, McpServerItem, McpServerState, McpToolInfo, McpView, RuleListItem, SkillListItem, SkillsView, Task } from "../lib/chat";
+import { useAgents } from "../hooks/useAgents";
+import { useProcesses } from "../hooks/useProcesses";
+import type { Task } from "../lib/chat";
+import type { HooksView } from "../lib/agentHooks";
+import type { FileTarget } from "../lib/git";
+import type { McpServerItem, McpServerState, McpToolInfo, McpView } from "../lib/mcp";
+import type { RuleListItem, SkillListItem, SkillsView } from "../lib/skills";
 import type { AsideTab, PanelItem } from "../types";
 import type { Block } from "../lib/chatTurnReducer";
 import type { AgentFocus } from "../lib/describeTool";
@@ -53,6 +61,8 @@ export type PaneContext = {
   onOpenFile: (target: FileTarget, pin?: boolean) => void;
   mcp: McpListProps;
   hooks: HooksListProps;
+  /** What Overview shows besides the MCP servers, which it reads from here too, and what it reads itself. */
+  overview: Omit<OverviewProps, "servers" | "processes" | "agents">;
   plan: {
     plan: string | null;
     checklist: Task[];
@@ -70,6 +80,8 @@ export type PaneDef = {
   label: string;
   icon: typeof FileDiff;
   dock: Dock;
+  /** Drawn without the dock's heading and close button: its own button in the chat header names it and closes it. */
+  headless?: boolean;
   Component: (ctx: PaneContext) => ReactNode;
 };
 
@@ -389,6 +401,15 @@ function RulesPane({ active, workspace }: PaneContext) {
   return <RulesList rules={rules.rules} error={rules.error} onToggle={rules.setEnabled} />;
 }
 
+// ─── Overview ──────────────────────────────────────────────────────────────
+
+/** Reads the processes and helper agents itself, as Terminal does, while it is on screen. */
+function OverviewPane({ active, mcp, overview }: PaneContext) {
+  const { processes } = useProcesses(active);
+  const { agents } = useAgents(active);
+  return <OverviewPanel servers={mcp.view?.servers ?? []} processes={processes} agents={agents} {...overview} />;
+}
+
 // ─── Files ─────────────────────────────────────────────────────────────────
 
 // Filled by its own command wrapper once that command exists.
@@ -407,6 +428,7 @@ function FilesPane({ active, workspace, ide, chatBlocks, openFile, onOpenFile }:
 const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 
 export const PANES: PaneDef[] = [
+  { id: "overview", label: "Overview", icon: Info, dock: "right", headless: true, Component: OverviewPane },
   { id: "changes", label: "Changes", icon: FileDiff, dock: "right", Component: ({ active, workspace, onNotify, commitDraft, openFile, onOpenFile }) => <ChangesPanel active={active} workspace={workspace} onNotify={onNotify} openFile={openFile} onOpenFile={onOpenFile} {...commitDraft} /> },
   { id: "plan", label: "Plan", icon: ClipboardList, dock: "right", Component: ({ plan }) => <PlanPanel {...plan} /> },
   { id: "files", label: "Files", icon: FolderClosed, dock: "right", Component: FilesPane },
@@ -414,7 +436,7 @@ export const PANES: PaneDef[] = [
   { id: "skills", label: "Skills", icon: Sparkles, dock: "right", Component: SkillsPane },
   { id: "mcp", label: "MCP", icon: Plug, dock: "right", Component: ({ mcp }) => <McpList {...mcp} /> },
   { id: "hooks", label: "Hooks", icon: Webhook, dock: "right", Component: ({ hooks }) => <HooksList {...hooks} /> },
-  { id: "terminal", label: "Terminal", icon: SquareTerminal, dock: "bottom", Component: (ctx) => (
+  { id: "terminal", label: "Terminal", icon: SquareTerminal, dock: "bottom", headless: true, Component: (ctx) => (
       <Suspense fallback={null}>
         <TerminalPanel {...ctx} />
       </Suspense>

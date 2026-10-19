@@ -44,6 +44,19 @@ pub struct ChatTurn<'a> {
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
+    /// The board the Assistant's `board` keeps cards on.
+    pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// DeepSeek's search and page reader, while that feature is on.
+    pub deepseek: Option<Web>,
+    /// The features the user has on.
+    pub features: crate::domain::features::Features,
+}
+
+/// Deletes any chat, the agent's or Chat mode's: its row, and with it a
+/// Prototype chat's folder — any other chat has none.
+pub fn delete_chat(id: &str) -> Result<(), crate::domain::prototype::PrototypeError> {
+    crate::infra::chat_store::delete(id)?;
+    crate::infra::prototype_store::remove(id)
 }
 
 /// A fresh turn on `messages`, the whole conversation so far.
@@ -126,6 +139,9 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         review: None,
         agents: None,
         questions: None,
+        board: chat.board.clone(),
+        deepseek: chat.deepseek.clone(),
+        features: chat.features.clone(),
     };
     run(&turn)
 }
@@ -157,16 +173,14 @@ mod tests {
         fn chat_stream(
             &self,
             request: ChatRequest,
-            on_delta: &dyn Fn(&str),
-            _: &dyn Fn(&str),
-            _: &dyn Fn(&str, &str, &str),
+            on_event: &dyn Fn(crate::domain::llm::StreamEvent),
             _: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             self.asked.lock().unwrap().push(request);
             let reply = self.replies.lock().unwrap().pop_front().expect("a reply left in the script");
             let (head, tail) = reply.text.split_at(reply.text.len() / 2);
-            on_delta(head);
-            on_delta(tail);
+            on_event(crate::domain::llm::StreamEvent::Text(head));
+            on_event(crate::domain::llm::StreamEvent::Text(tail));
             Ok(reply)
         }
 
@@ -197,6 +211,8 @@ mod tests {
         scope: Option<ToolScope>,
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
+        board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
+        features: crate::domain::features::Features,
     }
 
     fn chat(replies: Vec<ChatStreamResult>, language: Option<&'static str>) -> Chat {
@@ -220,6 +236,8 @@ mod tests {
             scope: None,
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
+            board: None,
+            features: Default::default(),
         }
     }
 
@@ -242,6 +260,9 @@ mod tests {
                 events: &events,
                 cancelled: &stop,
                 log_call: &log,
+                board: self.board.clone(),
+                deepseek: None,
+                features: self.features.clone(),
             })
         }
 
@@ -266,6 +287,43 @@ mod tests {
         history.iter().rev().find(|m| m.role == LlmRole::Tool).and_then(|m| m.content.clone()).unwrap_or_default()
     }
 
+    /// "Remind me to…" in the Assistant: the card is on the board, with no
+    /// card asking first, and the model reads the board back.
+    #[test]
+    fn the_assistant_puts_a_reminder_on_the_board_without_asking() {
+        let path = crate::testing::temp_dir("plain-chat-board").join("board.json");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(path), Arc::new(|_| {})));
+        let mut chat = chat(
+            vec![calls("board", r#"{"op":"add","title":"Заявка на память в wlbuh"}"#), said("Записал на доску.")],
+            None,
+        );
+        chat.board = Some(board.clone());
+        chat.features = crate::domain::features::Features::from_settings(&[("board".to_string(), true)].into());
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни создать заявку на память в wlbuh")]));
+
+        let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(offered, ["board"]);
+        assert_eq!(done.result.text, "Записал на доску.");
+        let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
+        assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
+        assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+    }
+
+    /// The board turned off since: a call from memory is refused before it
+    /// runs, and the model is told where the user turns it back on.
+    #[test]
+    fn a_board_call_while_the_feature_is_off_is_refused_and_says_where_to_turn_it_on() {
+        let path = crate::testing::temp_dir("plain-chat-board-off").join("board.json");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(path.clone()), Arc::new(|_| {})));
+        let mut chat = chat(vec![calls("board", r#"{"op":"add","title":"x"}"#), said("Доска выключена.")], None);
+        chat.board = Some(board);
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни")]));
+
+        let result = tool_result(&done.history);
+        assert!(result.contains("turned off") && result.contains("Catalog"), "{result}");
+        assert!(!path.exists(), "nothing was written");
+    }
+
     /// The meter is the estimate of what a turn sends: the role's prompt, its
     /// tools and the conversation, no more and no less.
     #[test]
@@ -275,7 +333,7 @@ mod tests {
         for (&role, web) in ChatRole::ALL.iter().flat_map(|role| [(role, false), (role, true)]) {
             chat.web = web.then(|| Web::search_only(web_search(Vec::new()).0));
             let sent = chat.run(role, false, |c| in_place(c, |turn| llm_chat::estimate_request(turn, &history)));
-            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language, chat.web.is_some());
+            let frame = crate::services::context_compaction::chat_request_frame(role, &chat.kube, &chat.runbooks, chat.session.reply_language, chat.web.is_some(), &chat.features);
             let usage = crate::services::context_compaction::usage(&chat.session, frame, &history);
             assert_eq!(usage.total, sent, "{role:?}");
         }
@@ -292,8 +350,9 @@ mod tests {
         assert_eq!(messages[0], LlmMessage::system(ChatRole::Assistant.prompt()));
         assert_eq!(messages[1], LlmMessage::system(crate::domain::prompt::NO_WEB_SEARCH));
         assert_eq!(messages[2], LlmMessage::system("Reply in Russian. Think in English."));
-        assert_eq!(messages[3], LlmMessage::user("hi"));
-        assert!(asked[0].tools.is_empty());
+        assert_eq!(messages[3], LlmMessage::system(format!("Today is {}.", llm_chat::today())));
+        assert_eq!(messages[4], LlmMessage::user("hi"));
+        assert!(asked[0].tools.is_empty(), "the board is off until the user turns it on");
         assert_eq!(done.history.last(), Some(&LlmMessage::assistant("hello")), "the answer closes the history");
 
         let deltas: Vec<String> = chat
@@ -448,7 +507,7 @@ mod tests {
         let chat = chat(vec![said("ok")], None);
         chat.start(ChatRole::Tester, vec![LlmMessage::user("hi")]);
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["deleteFile", "todo"]);
+        assert_eq!(offered, ["delete", "todo"]);
     }
 
     /// A tool that changes nothing runs without a card, and the turn goes on.
@@ -478,7 +537,7 @@ mod tests {
     /// A tool that asks pauses the turn with nothing run; the answer resumes it.
     #[test]
     fn a_risky_tool_waits_for_the_card_and_runs_on_approval() {
-        let chat = chat(vec![calls("deleteFile", r#"{"path":"a.txt"}"#), said("could not")], None);
+        let chat = chat(vec![calls("delete", r#"{"path":"a.txt"}"#), said("could not")], None);
         let paused = match chat.start(ChatRole::Tester, vec![LlmMessage::user("delete it")]) {
             ChatStreamOutcome::PendingApproval(paused) => paused,
             other => panic!("expected a card: {other:?}"),
@@ -495,7 +554,7 @@ mod tests {
 
     #[test]
     fn a_denied_call_tells_the_model_the_users_reason() {
-        let chat = chat(vec![calls("deleteFile", r#"{"path":"a.txt"}"#), said("ok, kept")], None);
+        let chat = chat(vec![calls("delete", r#"{"path":"a.txt"}"#), said("ok, kept")], None);
         let ChatStreamOutcome::PendingApproval(paused) = chat.start(ChatRole::Tester, vec![LlmMessage::user("x")]) else {
             panic!("expected a card");
         };
@@ -786,7 +845,7 @@ mod tests {
     #[test]
     fn a_doomed_write_in_a_chats_folder_is_refused_before_any_card() {
         let escape = r#"{"path":"../outside.txt"}"#;
-        let (mut chat, _) = prototype(vec![calls("deleteFile", escape), said("cannot")], "prototype-doomed");
+        let (mut chat, _) = prototype(vec![calls("delete", escape), said("cannot")], "prototype-doomed");
         chat.approval = ApprovalPolicy::default();
         let done = done(chat.start(ChatRole::Tester, vec![LlmMessage::user("delete it")]));
         assert!(tool_result(&done.history).contains("escapes tool root"), "{:?}", done.history);
@@ -800,7 +859,23 @@ mod tests {
         chat.start(ChatRole::Prototype, vec![LlmMessage::user("hi")]);
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
         // Web search is off in this chat.
-        assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "createDirectory", "deleteFile"]);
+        assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "delete"]);
+    }
+
+    /// A Prototype chat's folder does not outlive the chat.
+    #[test]
+    fn deleting_a_chat_takes_its_folder_with_it() {
+        crate::testing::with_app_dir("chat-delete-folder", || {
+            let id = "5f0c2d1e-9a7b-4c3d-8e6f-1a2b3c4d5e6f";
+            crate::infra::chat_store::save_plain(id, ChatRole::Prototype, None, &[LlmMessage::user("a page")], &serde_json::json!([]))
+                .unwrap();
+            let folder = crate::infra::prototype_store::files_dir(id).unwrap();
+            std::fs::write(folder.join("index.html"), "<p>hi</p>").unwrap();
+
+            delete_chat(id).unwrap();
+            assert!(!folder.parent().unwrap().exists());
+            assert!(crate::infra::chat_store::load(id).is_err(), "the row goes too");
+        });
     }
 
     /// Stopped before the first round: nothing asked, nothing run.

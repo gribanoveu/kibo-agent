@@ -22,9 +22,25 @@ pub mod mcp;
 pub mod hooks;
 pub mod processes;
 pub mod agents;
+pub mod board;
+pub mod features;
 pub mod terminal;
 pub mod git;
 pub mod files;
 pub mod images;
 pub mod rewind;
 pub mod viewer;
+
+/// Runs `work` off the main thread, where a synchronous command runs: for one
+/// that touches SQLite, git, the keychain, the user's files or the network
+/// (AGENTS.md, IPC conventions).
+pub(crate) async fn blocking<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, String>
+where
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("the command's thread failed: {e}"))?
+        .map_err(|e| e.to_string())
+}

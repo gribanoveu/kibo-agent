@@ -1,0 +1,21 @@
+.provider-balance {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.provider-balance-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.provider-balance.unknown {
+  color: var(--text-faint);
+}
+.provider-balance.spent {
+  color: var(--red);
+}

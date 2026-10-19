@@ -1,6 +1,6 @@
 import { Dropdown } from "./Dropdown";
 import { shortcutText } from "../lib/shortcuts";
-import type { ChatSummary } from "../lib/chat";
+import type { ChatSummary } from "../lib/savedChats";
 import "./ChatSwitcher.css";
 
 // A chat's id is never empty: the row for a new chat is told apart by it, and

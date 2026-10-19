@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { gitBranches, gitCheckout, gitWorktreeAdd, type BranchRef, type ImagePart } from "../lib/chat";
+import { type BranchRef, gitBranches, gitCheckout, gitWorktreeAdd } from "../lib/git";
+import type { ImagePart } from "../lib/images";
 
 /** A switch refused because it would overwrite these files; held until the user decides. */
 export type BranchConflict = { branch: string; paths: string[] };

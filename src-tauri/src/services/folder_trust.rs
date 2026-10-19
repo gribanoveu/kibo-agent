@@ -34,9 +34,7 @@ pub fn view(workspace: &Path) -> FolderTrustView {
 
 /// Fails on settings it cannot read rather than overwrite them.
 pub fn set(workspace: &Path, trusted: bool) -> Result<(), SettingsError> {
-    let mut settings = settings_store::load()?;
-    settings.folder_trust.set(&skills_store::project_root(workspace), trusted);
-    settings_store::save(&settings)
+    settings_store::update(|s| s.folder_trust.set(&skills_store::project_root(workspace), trusted))
 }
 
 /// The open folder when its own skills and commands may be read, `None` when

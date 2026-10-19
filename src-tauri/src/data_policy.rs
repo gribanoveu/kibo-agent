@@ -24,6 +24,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/kube_client.rs",
     "src/infra/tavily.rs",
     "src/infra/open_web.rs",
+    "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
 ];
 
@@ -49,11 +50,11 @@ const JS_DENIED: &[&str] = &[
     "@tauri-apps/plugin-http", "@tauri-apps/plugin-websocket", "@tauri-apps/plugin-upload",
 ];
 
-fn crate_dir() -> PathBuf {
+pub(crate) fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn files(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
+pub(crate) fn files(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {

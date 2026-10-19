@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { appVersion, openExternal } from "../lib/window";
 import {
   AppWindow,
   Archive,
@@ -18,17 +19,15 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { getVersion } from "@tauri-apps/api/app";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
 import { GettingStarted } from "./GettingStarted";
-import { PAGES, type PageId } from "./pages";
+import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { comboKeys, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
-import type { ChatSummary } from "../lib/chat";
+import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
+import type { ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
@@ -68,6 +67,8 @@ const EMPTY: Record<Filter, string> = {
 type Props = {
   mode: AppMode;
   onMode: (mode: AppMode) => void;
+  /** The pages to list under the modes — those of features that are off left out (`pagesShown`). */
+  pages: readonly (typeof PAGES)[number][];
   /** The page open in place of the chat (pages.tsx); no mode is lit then. */
   page: PageId | null;
   onPage: (page: PageId) => void;
@@ -87,6 +88,7 @@ type Props = {
 export function Sidebar({
   mode,
   onMode,
+  pages,
   page,
   onPage,
   chats,
@@ -108,7 +110,7 @@ export function Sidebar({
   const [aboutOpen, setAboutOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
-    if (aboutOpen && version === null) void getVersion().then(setVersion, () => setVersion("unknown"));
+    if (aboutOpen && version === null) void appVersion().then(setVersion, () => setVersion("unknown"));
   }, [aboutOpen, version]);
   const listed = chats.filter((chat) => filter === "all" || chat.archived === (filter === "archived"));
   const userWrap = useRef<HTMLDivElement>(null);
@@ -118,7 +120,7 @@ export function Sidebar({
     const onDown = (e: PointerEvent) => {
       if (!userWrap.current?.contains(e.target as Node)) setMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => matches(e, "close") && setMenuOpen(false);
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -152,7 +154,7 @@ export function Sidebar({
               </button>
             );
           })}
-          {PAGES.map(({ id, label, title, icon: Icon }) => (
+          {pages.map(({ id, label, title, icon: Icon }) => (
             <button
               key={id}
               type="button"
@@ -274,7 +276,7 @@ export function Sidebar({
         open={aboutOpen}
         onClose={() => setAboutOpen(false)}
         footer={
-          <button type="button" className="btn btn-primary" title={RELEASES} onClick={() => void openUrl(RELEASES)}>
+          <button type="button" className="btn btn-primary" title={RELEASES} onClick={() => void openExternal(RELEASES)}>
             Download page
           </button>
         }

@@ -159,6 +159,16 @@
   text-overflow: ellipsis;
 }
 
+/* The balance, at the strip's right end. */
+.plain-tab-end {
+  margin-left: auto;
+  min-width: 0;
+  display: flex;
+}
+.plain-tab-end:empty {
+  display: none;
+}
+
 /* Laid out as the agent's box: the text, then a bar of chips with send at its end. */
 .plain-composer {
   flex: none;

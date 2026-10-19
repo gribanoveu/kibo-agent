@@ -1,7 +1,9 @@
-import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2 } from "lucide-react";
+import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { Dropdown } from "./Dropdown";
 import { IndexBadge } from "./IndexBadge";
-import type { BranchRef, ChangeTotals, RecentFolder } from "../lib/chat";
+import type { RecentFolder } from "../lib/chat";
+import type { BranchRef, ChangeTotals } from "../lib/git";
 import type { IndexState } from "../lib/indexStatus";
 import "./FolderTab.css";
 
@@ -39,6 +41,8 @@ type Props = {
   onPickFolder: () => void;
   /** Offered on each worktree in the folder menu, except the open one. */
   onRemoveWorktree?: (path: string) => void;
+  /** Offered on every folder in the menu: the entry goes, nothing else. */
+  onForgetFolder?: (path: string) => void;
   /** The main working tree, when the folder is a git worktree of it. */
   worktreeOf?: string | null;
   /** The git branch checked out in the folder; `null` outside a repository. */
@@ -59,6 +63,8 @@ type Props = {
     base?: string | null;
     onWorktree: (on: boolean) => void;
   };
+  /** At the strip's right end — the provider's balance. */
+  end?: ReactNode;
 };
 
 /** Where the next message will be worked on: the folder, its branch, its
@@ -70,12 +76,14 @@ export function FolderTab({
   onOpenFolder,
   onPickFolder,
   onRemoveWorktree,
+  onForgetFolder,
   branch = null,
   worktreeOf = null,
   index = null,
   changes = null,
   onOpenChanges,
   branchPicker,
+  end,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
   return (
@@ -105,24 +113,35 @@ export function FolderTab({
         }
         value={path ?? ""}
         options={[
-          ...folderOptions(recent).map(({ worktree, ...row }) =>
-            worktree && onRemoveWorktree
-              ? {
-                  ...row,
-                  action: {
-                    icon: <Trash2 size={13} />,
-                    // The open one runs processes and terminals, watched
-                    // and indexed; they stop only when another folder opens.
-                    title:
-                      row.value === path
-                        ? "This worktree is open — switch to another folder to remove it"
-                        : "Remove this worktree…",
-                    unavailable: row.value === path,
-                    onRun: () => onRemoveWorktree(row.value),
-                  },
-                }
-              : row,
-          ),
+          ...folderOptions(recent).map(({ worktree, ...row }) => {
+            if (worktree && onRemoveWorktree) {
+              return {
+                ...row,
+                action: {
+                  icon: <Trash2 size={13} />,
+                  // The open one runs processes and terminals, watched
+                  // and indexed; they stop only when another folder opens.
+                  title:
+                    row.value === path
+                      ? "This worktree is open — switch to another folder to remove it"
+                      : "Remove this worktree…",
+                  unavailable: row.value === path,
+                  onRun: () => onRemoveWorktree(row.value),
+                },
+              };
+            }
+            if (!onForgetFolder) return row;
+            // The folder itself is left alone, so the open one is offered
+            // too: the entry goes, and the next launch opens another.
+            return {
+              ...row,
+              action: {
+                icon: <X size={13} />,
+                title: "Remove from the list — the folder itself is left as it is",
+                onRun: () => onForgetFolder(row.value),
+              },
+            };
+          }),
           { value: PICK, label: "Open folder…" },
         ]}
         onPick={(value) => (value === PICK ? onPickFolder() : value !== path && onOpenFolder(value))}
@@ -179,6 +198,7 @@ export function FolderTab({
           <span className="del">−{changes.del}</span>
         </button>
       )}
+      {end && <span className="folder-tab-end">{end}</span>}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { useState } from "react";
-import type { CheckoutOutcome } from "../lib/chat";
+import type { CheckoutOutcome } from "../lib/git";
 
 // A chat not yet started picks its branch. The app switches only when git
 // can do it without overwriting anything; otherwise it says which files are

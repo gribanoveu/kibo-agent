@@ -3,7 +3,9 @@
 //! Every call routes through [`execute_tool`], which is why permission
 //! checking, logging and redaction each have exactly one site rather than one
 //! per tool. Adding a tool is a variant in `ToolCall`, a variant in
-//! `ToolResult`, a module here, an arm below, and a row in [`DEFINITIONS`].
+//! `ToolResult`, a module here, an arm below, and a row in [`DEFINITIONS`] —
+//! plus the places outside this module AGENTS.md lists, each held by the
+//! compiler or a test.
 //!
 //! A tool's schema lives in its own module, beside the code that runs it. The
 //! pair being one file is the point: a field added to an args struct without a
@@ -21,9 +23,10 @@ use crate::domain::tools::{
     ReadFiles, Task, ToolCall, ToolDeps, ToolError, ToolName, ToolResult, ToolScope,
 };
 
-pub mod create_directory;
+pub mod board;
+pub mod deepseek;
+pub mod delete;
 pub mod delete_directory;
-pub mod delete_file;
 pub mod edit_file;
 pub mod explore;
 pub mod git;
@@ -67,9 +70,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::GitLog, git::log_definition),
     (ToolName::WriteFile, write_file::definition),
     (ToolName::EditFile, edit_file::definition),
-    (ToolName::CreateDirectory, create_directory::definition),
-    (ToolName::DeleteFile, delete_file::definition),
-    (ToolName::DeleteDirectory, delete_directory::definition),
+    (ToolName::Delete, delete::definition),
     (ToolName::Move, move_path::definition),
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
@@ -81,7 +82,6 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::ReadOutput, process::read_definition),
     (ToolName::StopProcess, process::stop_definition),
     (ToolName::ReadTerminal, terminal::read_definition),
-    (ToolName::RunInTerminal, terminal::run_definition),
     (ToolName::KubeList, cluster::list_definition),
     (ToolName::KubeGet, cluster::get_definition),
     (ToolName::KubeEvents, cluster::events_definition),
@@ -101,17 +101,16 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KubeDelete, cluster::delete_definition),
     (ToolName::WebSearch, web_search::definition),
     (ToolName::WebFetch, web_fetch::definition),
+    (ToolName::DeepseekSearch, deepseek::search_definition),
+    (ToolName::DeepseekFetch, deepseek::fetch_definition),
+    (ToolName::Board, board::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
-/// What the model is offered for a turn.
-///
-/// No filtering argument: this build has one axis of control, the approval
-/// gate, and it acts on a call rather than on what may be described. Alfa
-/// Atlas filters here by a project allowlist and a conversation mode; the
-/// first is not ported (`docs/07-upstream-findings.md`, B-2), the second
-/// arrives with conversation modes at stage 4 — and it will be a filter on
-/// this list, not a second list.
+/// Every tool the model can be offered. No filtering argument: what a turn
+/// actually offers — by mode or role, web search and features — is a filter
+/// on this list (`llm_chat::tool_definitions_for`, `tool_definitions_for_role`),
+/// not a second list.
 pub fn tool_definitions() -> Vec<LlmToolDefinition> {
     DEFINITIONS.iter().map(|(_, build)| build()).collect()
 }
@@ -143,9 +142,7 @@ pub fn dispatch(
         ToolCall::ListFiles(args) => list_files::list_files(folder()?, args),
         ToolCall::WriteFile(args) => write_file::write_file(folder()?, args, reads),
         ToolCall::EditFile(args) => edit_file::edit_file(folder()?, args, reads),
-        ToolCall::CreateDirectory(args) => create_directory::create_directory(folder()?, args),
-        ToolCall::DeleteFile(args) => delete_file::delete_file(folder()?, args, reads),
-        ToolCall::DeleteDirectory(args) => delete_directory::delete_directory(folder()?, args),
+        ToolCall::Delete(args) => delete::delete(folder()?, args, reads),
         ToolCall::Move(args) => move_path::move_path(folder()?, args, reads),
         ToolCall::Todo(args) => todo::todo(todos, args),
         ToolCall::GitStatus => git::git_status(folder()?),
@@ -162,10 +159,12 @@ pub fn dispatch(
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
-        ToolCall::RunInTerminal(args) => terminal::run_in_terminal(folder()?, args, deps),
         ToolCall::Mcp(args) => mcp::mcp(args, deps),
         ToolCall::WebSearch(args) => web_search::web_search(args, deps),
         ToolCall::WebFetch(args) => web_fetch::web_fetch(args, deps),
+        ToolCall::DeepseekSearch(args) => deepseek::deepseek_search(args, deps),
+        ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
+        ToolCall::Board(args) => board::board(args, deps),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
@@ -193,10 +192,10 @@ mod definition_tests {
     use crate::domain::llm::LlmToolCall;
     use crate::domain::tools::WebSearchArgs;
     use crate::domain::tools::{
-        DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
+        DeleteArgs, EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GitLogArgs,
         GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoArgs, WritePlanArgs, TodoUpdateStatus,
         WriteFileArgs,
-        CreateDirectoryArgs, ProcessArgs, ReadOutputArgs, ReadTerminalArgs, RunInTerminalArgs,
+        ProcessArgs, ReadOutputArgs, ReadTerminalArgs,
         KubeDiagnoseArgs, KubeWaitRolloutArgs, KubeProbeArgs, KubeRunbookArgs, KubeEventsArgs, KubeApplyArgs, KubeDeleteArgs, KubeRolloutRestartArgs, KubeRolloutUndoArgs, KubeScaleArgs, KubeSuspendArgs, KubeUndoArgs, KubeFieldHistoryArgs, KubeGetArgs, KubeListArgs, KubeLogsArgs, KubeTopArgs,
     };
     use crate::services::ai_tools::parse::parse_tool_call;
@@ -293,17 +292,9 @@ mod definition_tests {
                     }],
                 })],
             ),
-            ToolName::CreateDirectory => (
-                r#"{"path":"src"}"#,
-                vec![ToolCall::CreateDirectory(CreateDirectoryArgs { path: path() })],
-            ),
-            ToolName::DeleteFile => (
-                r#"{"path":"a.rs"}"#,
-                vec![ToolCall::DeleteFile(DeleteFileArgs { path: path() })],
-            ),
-            ToolName::DeleteDirectory => (
-                r#"{"path":"src"}"#,
-                vec![ToolCall::DeleteDirectory(DeleteDirectoryArgs {
+            ToolName::Delete => (
+                r#"{"path":"src","recursive":true}"#,
+                vec![ToolCall::Delete(DeleteArgs {
                     path: path(),
                     recursive: Some(true),
                 })],
@@ -415,10 +406,6 @@ mod definition_tests {
             ToolName::ReadTerminal => (
                 r#"{"id":"2","lines":40}"#,
                 vec![ToolCall::ReadTerminal(ReadTerminalArgs { id: Some(2), lines: Some(40) })],
-            ),
-            ToolName::RunInTerminal => (
-                r#"{"command":"npm run dev"}"#,
-                vec![ToolCall::RunInTerminal(RunInTerminalArgs { command: "npm run dev".into(), id: None })],
             ),
             ToolName::KubeList => (
                 r#"{"kind":"pods"}"#,
@@ -536,6 +523,30 @@ mod definition_tests {
                 vec![ToolCall::WebFetch(crate::domain::tools::WebFetchArgs {
                     url: "https://tokio.rs".into(),
                     query: Some("release".into()),
+                })],
+            ),
+            ToolName::DeepseekSearch => (
+                r#"{"query":"v4 site:github.com"}"#,
+                vec![ToolCall::DeepseekSearch(crate::domain::tools::DeepseekSearchArgs {
+                    query: "v4 site:github.com".into(),
+                    max_results: Some(3),
+                })],
+            ),
+            ToolName::DeepseekFetch => (
+                r#"{"url":"https://tokio.rs"}"#,
+                vec![ToolCall::DeepseekFetch(crate::domain::tools::WebFetchArgs {
+                    url: "https://tokio.rs".into(),
+                    query: Some("release".into()),
+                })],
+            ),
+            ToolName::Board => (
+                r#"{"op":"list"}"#,
+                vec![ToolCall::Board(crate::domain::tools::BoardArgs {
+                    op: crate::domain::tools::BoardOp::Move,
+                    title: Some("file the request".into()),
+                    note: Some("wlbuh".into()),
+                    id: Some("c1".into()),
+                    column: Some(crate::domain::board::Column::Done),
                 })],
             ),
             ToolName::ToolSearch => (

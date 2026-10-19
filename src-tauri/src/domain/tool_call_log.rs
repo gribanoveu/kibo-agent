@@ -255,9 +255,7 @@ mod tests {
                 })),
                 ToolResult::FileEdited { path: path(), diff: diff(), repeated_headings: vec![LEAK.into()] },
             ),
-            ToolName::DeleteFile => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
-            ToolName::CreateDirectory => (None, ToolResult::DirectoryCreated { path: path() }),
-            ToolName::DeleteDirectory => (None, ToolResult::DirectoryDeleted { path: path(), files: 0, listed: vec![] }),
+            ToolName::Delete => (None, ToolResult::FileDeleted { path: path(), diff: diff() }),
             ToolName::Move => (None, ToolResult::Moved { from: path(), to: path(), files: None }),
             ToolName::Todo => (None, ToolResult::Todo { tasks: vec![] }),
             ToolName::GitStatus => (
@@ -328,7 +326,7 @@ mod tests {
             | ToolName::KubeDelete => (None, ToolResult::Kube { text: LEAK.into(), summary: "3 pods".into() }),
             // The query stays: what left the machine is what the log is for.
             // A page's words are the pages' authors', not the user's record.
-            ToolName::WebSearch => (
+            ToolName::WebSearch | ToolName::DeepseekSearch => (
                 None,
                 ToolResult::WebResults {
                     hits: vec![crate::domain::web_search::WebHit {
@@ -339,8 +337,8 @@ mod tests {
                 },
             ),
             // The address stays, as a search's do; the page's words go.
-            ToolName::WebFetch => (
-                Some(ToolCall::WebFetch(crate::domain::tools::WebFetchArgs { url: "https://tokio.rs".into(), query: None })),
+            ToolName::WebFetch | ToolName::DeepseekFetch => (
+                Some(ToolCall::DeepseekFetch(crate::domain::tools::WebFetchArgs { url: "https://tokio.rs".into(), query: None })),
                 ToolResult::WebPage {
                     page: crate::domain::web_search::WebPage {
                         title: "Tokio".into(),
@@ -387,20 +385,11 @@ mod tests {
                     cut: 0,
                 }),
             ),
-            // The command line stays in the log, as runCommand's does.
-            ToolName::RunInTerminal => (
-                Some(ToolCall::RunInTerminal(crate::domain::tools::RunInTerminalArgs { command: "npm run dev".into(), id: None })),
-                ToolResult::TerminalTyped {
-                    terminal: crate::domain::terminal::TerminalInfo {
-                        id: 1,
-                        shell: "zsh".into(),
-                        state: crate::domain::terminal::TerminalState::Running,
-                    },
-                    command: "npm run dev".into(),
-                },
-            ),
             // What was searched and found stays: names of tools and what
             // their servers say they do, nobody's content.
+            // Like the checklist: a card's words are what the user asked
+            // to keep, not file content.
+            ToolName::Board => (None, ToolResult::Board { cards: vec![] }),
             ToolName::ToolSearch => (
                 None,
                 ToolResult::ToolsFound {

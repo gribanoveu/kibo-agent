@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { Settings } from "../components/Settings";
-import type { SkillsView } from "../lib/chat";
+import type { SkillsView } from "../lib/skills";
 import { DEFAULT_ALERTS, type AlertPrefs } from "../lib/attention";
 
 // The dialog's own rules: one section at a time, and the request log — which

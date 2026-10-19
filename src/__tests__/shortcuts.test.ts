@@ -36,12 +36,26 @@ describe("a shortcut", () => {
     expect(comboKeys(SHORTCUTS.newChat.combos[0], true)).toEqual(["⌘", "N"]);
     expect(comboKeys(SHORTCUTS.newChat.combos[0], false)).toEqual(["Ctrl", "N"]);
     expect(comboKeys(SHORTCUTS.nextFile.combos[0], true)).toEqual(["⌥", "↓"]);
-    expect(shortcutText("changes", true)).toBe("⌘1");
+    expect(shortcutText("overview", true)).toBe("⌘1");
     expect(shortcutText("terminal", false)).toBe("Ctrl+`");
   });
 
-  test("no two do the same thing with one key", () => {
-    const seen = Object.values(SHORTCUTS).flatMap((s) => s.combos.map((c) => JSON.stringify(c)));
+  /// Keypad Enter sends like Enter; nothing at all matches while an input
+  /// method composes — its Enter picks a word, and WebKit reports it as Enter.
+  test("keypad Enter counts, and nothing counts mid-composition", () => {
+    const key = (code: string, extra: object = {}) =>
+      ({ code, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...extra });
+    expect(matches(key("NumpadEnter"), "send")).toBe(true);
+    expect(matches(key("Enter", { isComposing: true }), "send")).toBe(false);
+    expect(matches(key("Enter", { nativeEvent: { isComposing: true } }), "accept")).toBe(false);
+    expect(matches(key("Escape", { isComposing: true }), "close")).toBe(false);
+  });
+
+  /// Within a group, which is where the dialog lists them: Enter sends the
+  /// message in the chat and takes what was typed in a field elsewhere, and
+  /// the dialog says both, each under its own heading.
+  test("no two do the same thing with one key in one place", () => {
+    const seen = Object.values(SHORTCUTS).flatMap((s) => s.combos.map((c) => `${s.group} ${JSON.stringify(c)}`));
     expect(new Set(seen).size).toBe(seen.length);
   });
 });
@@ -57,9 +71,9 @@ describe("a pane's shortcut", () => {
 });
 
 describe("the pane keys", () => {
-  test("go Changes, Plan, Files, Rules, Skills, MCP, Hooks", () => {
-    const keys = ["changes", "plan", "files", "rules", "skills", "mcp", "hooks"] as const;
-    expect(keys.map((id) => shortcutText(id, true))).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7"]);
+  test("go Overview, Changes, Plan, Files, Rules, Skills, MCP, Hooks", () => {
+    const keys = ["overview", "changes", "plan", "files", "rules", "skills", "mcp", "hooks"] as const;
+    expect(keys.map((id) => shortcutText(id, true))).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7", "⌘8"]);
   });
 });
 

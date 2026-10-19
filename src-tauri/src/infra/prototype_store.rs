@@ -6,36 +6,41 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::prototype::PrototypeError;
 use crate::infra::app_dir;
 
 const DIR: &str = "prototypes";
 const FILES: &str = "files";
 
 /// The chat's working folder, made if missing.
-pub fn files_dir(chat_id: &str) -> Result<PathBuf, String> {
-    files_dir_in(&app_dir::ensure()?, chat_id)
+pub fn files_dir(chat_id: &str) -> Result<PathBuf, PrototypeError> {
+    files_dir_in(&app_dir::ensure().map_err(PrototypeError::AppDir)?, chat_id)
 }
 
 /// Removes the chat's folder with everything in it. A chat that never had
 /// one — any but a Prototype chat — has nothing to remove.
-pub fn remove(chat_id: &str) -> Result<(), String> {
+pub fn remove(chat_id: &str) -> Result<(), PrototypeError> {
     remove_in(&app_dir::dir()?, chat_id)
 }
 
-fn files_dir_in(base: &Path, chat_id: &str) -> Result<PathBuf, String> {
-    let dir = chat_dir(base, chat_id).ok_or_else(|| format!("not a chat id: {chat_id:?}"))?.join(FILES);
-    fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+fn files_dir_in(base: &Path, chat_id: &str) -> Result<PathBuf, PrototypeError> {
+    let dir = chat_dir(base, chat_id).ok_or_else(|| PrototypeError::NotAChatId(chat_id.to_string()))?.join(FILES);
+    fs::create_dir_all(&dir).map_err(|source| io(&dir, source))?;
     Ok(dir)
 }
 
-fn remove_in(base: &Path, chat_id: &str) -> Result<(), String> {
+fn remove_in(base: &Path, chat_id: &str) -> Result<(), PrototypeError> {
     // An id no folder could have been made for has none.
     let Some(dir) = chat_dir(base, chat_id) else { return Ok(()) };
     match fs::remove_dir_all(&dir) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("could not remove {}: {e}", dir.display())),
+        Err(source) => Err(io(&dir, source)),
     }
+}
+
+fn io(path: &Path, source: std::io::Error) -> PrototypeError {
+    PrototypeError::Io { path: path.display().to_string(), source }
 }
 
 /// The id comes from the window and becomes a path: one segment of plain

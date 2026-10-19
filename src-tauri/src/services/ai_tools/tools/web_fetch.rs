@@ -5,20 +5,25 @@
 
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{ToolDeps, ToolError, ToolResult, WebFetchArgs};
-use crate::domain::web_search::{was_given, PageQuery};
+use crate::domain::llm::LlmMessage;
+use crate::domain::web_search::{was_given, PageQuery, Web};
 
 /// About 3 000 tokens: a guide's section, a release's notes, an issue's thread.
 pub const MAX_PAGE_CHARS: usize = 12_000;
 const MAX_URL_CHARS: usize = 2_000;
 
 pub fn web_fetch(args: &WebFetchArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
-    let web = deps.web.as_ref().ok_or(ToolError::NoWebSearch)?;
+    fetch(deps.web.as_ref().ok_or(ToolError::NoWebSearch)?, "webFetch", args, deps.history)
+}
+
+/// The checking, on whichever web `tool` reaches — the address rule above all.
+pub(super) fn fetch(web: &Web, tool: &str, args: &WebFetchArgs, history: &[LlmMessage]) -> Result<ToolResult, ToolError> {
     let url = args.url.trim();
-    let invalid = |reason: String| ToolError::InvalidArguments { tool: "webFetch".into(), reason };
+    let invalid = |reason: String| ToolError::InvalidArguments { tool: tool.into(), reason };
     if url.is_empty() || url.chars().count() > MAX_URL_CHARS {
         return Err(invalid(format!("`url` must be a web address of at most {MAX_URL_CHARS} characters")));
     }
-    if !was_given(url, deps.history) {
+    if !was_given(url, history) {
         return Err(invalid(format!(
             "{url} is not in this conversation — open only an address from webSearch's results, a page read before, \
 or the user's own message; search for the page first"

@@ -119,7 +119,9 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            ChatRole::Assistant => &[ToolName::WebSearch, ToolName::WebFetch],
+            ChatRole::Assistant => {
+                &[ToolName::WebSearch, ToolName::WebFetch, ToolName::DeepseekSearch, ToolName::DeepseekFetch, ToolName::Board]
+            }
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
                 ToolName::KubeList,
@@ -151,15 +153,14 @@ impl ChatRole {
                 ToolName::ListFiles,
                 ToolName::WriteFile,
                 ToolName::EditFile,
-                ToolName::DeleteFile,
-                ToolName::CreateDirectory,
+                ToolName::Delete,
                 // Facts for the page's text; the page itself reaches no network.
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ],
-            // `todo` runs, `deleteFile` asks first — and then finds no folder.
+            // `todo` runs, `delete` asks first — and then finds no folder.
             #[cfg(test)]
-            ChatRole::Tester => &[ToolName::Todo, ToolName::DeleteFile],
+            ChatRole::Tester => &[ToolName::Todo, ToolName::Delete],
         }
     }
 }
@@ -233,7 +234,7 @@ fn pinned_note(target: &KubeTarget) -> String {
 /// them (`docs/31-prototype-role.md`, P-3).
 const PROTOTYPE_PROMPT: &str = r#"You build prototypes in a chat: a web page, a small app, an HTML slide deck, an interactive diagram — whatever the user wants to see working rather than read about.
 
-You work in a folder of this chat's own. Your file tools — readFile, listFiles, writeFile, editFile, deleteFile, createDirectory — reach it and nothing else, and paths are relative to it. Nothing there is the user's project: write freely.
+You work in a folder of this chat's own. Your file tools — readFile, listFiles, writeFile, editFile, delete — reach it and nothing else, and paths are relative to it. Nothing there is the user's project: write freely.
 
 - Make a page one self-contained file, `index.html` unless the user names another: styles in a `<style>`, scripts inline.
 - The page cannot reach the network. No CDN scripts, web fonts or images from other sites: use system fonts, inline SVG, CSS gradients or emoji.
@@ -277,13 +278,16 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 mod tests {
     use super::*;
 
-    /// The assistant talks and searches the web. The Kubernetes role's tools
+    /// The assistant talks, searches the web and keeps the board. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
     #[test]
     fn the_roles_tools_are_the_clusters_and_its_changes_are_named() {
-        assert_eq!(ChatRole::Assistant.tools(), &[ToolName::WebSearch, ToolName::WebFetch]);
+        assert_eq!(
+            ChatRole::Assistant.tools(),
+            &[ToolName::WebSearch, ToolName::WebFetch, ToolName::DeepseekSearch, ToolName::DeepseekFetch, ToolName::Board]
+        );
         let tools = ChatRole::Kubernetes.tools();
         assert_eq!(tools.len(), 19);
         assert!(
@@ -327,8 +331,7 @@ mod tests {
                 ToolName::ListFiles,
                 ToolName::WriteFile,
                 ToolName::EditFile,
-                ToolName::DeleteFile,
-                ToolName::CreateDirectory,
+                ToolName::Delete,
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ]
@@ -350,7 +353,7 @@ mod tests {
     fn the_prototype_role_writes_its_folder_without_asking_and_no_other_role_does() {
         let base = ApprovalPolicy::default();
         let prototype = ChatRole::Prototype.approval(&base);
-        for tool in [ToolName::WriteFile, ToolName::EditFile, ToolName::DeleteFile, ToolName::CreateDirectory] {
+        for tool in [ToolName::WriteFile, ToolName::EditFile, ToolName::Delete] {
             assert!(!prototype.requires_approval(tool, true), "{tool:?}");
         }
         assert!(prototype.requires_approval(ToolName::RunCommand, true), "only its own tools");

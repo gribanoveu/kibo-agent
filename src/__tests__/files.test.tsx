@@ -96,6 +96,17 @@ describe("touchedFiles", () => {
     const files = touchedFiles([call("deleteFile", { path: "gone.ts" }, { path: "gone.ts", ...diff(0, 12) })], null);
     expect(files).toEqual([{ path: "gone.ts", touches: ["deleted"], add: 0, del: 12 }]);
   });
+
+  test("a file deleted is listed, a folder deleted is not", () => {
+    const files = touchedFiles(
+      [
+        call("delete", { path: "gone.ts" }, { path: "gone.ts", ...diff(0, 3) }),
+        call("delete", { path: "build", recursive: true }, { path: "build", files: 4, listed: [] }),
+      ],
+      null,
+    );
+    expect(files).toEqual([{ path: "gone.ts", touches: ["deleted"], add: 0, del: 3 }]);
+  });
 });
 
 describe("FilesPanel", () => {

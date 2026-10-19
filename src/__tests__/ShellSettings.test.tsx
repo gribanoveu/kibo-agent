@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { ShellChoices } from "../lib/chat";
+import type { ShellChoices } from "../lib/settings";
 
 // Settings → Agent → Shell: Windows lists what is installed and saves a pick; elsewhere there
 // is nothing to pick and nothing is drawn.

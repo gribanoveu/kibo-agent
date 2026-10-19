@@ -330,22 +330,36 @@ pub fn git_blame(scope: &ToolScope, args: &GitBlameArgs) -> Result<ToolResult, T
 
     let mut options = BlameOptions::new();
     options.min_line(start as usize).max_line(end as usize);
-    let blame = repo
-        .blame_file(Path::new(&repo_rel), Some(&mut options))
-        .map_err(|e| blame_error(&args.path, e))?;
+    // (commit, first line, line count, author) for each run of lines.
+    let runs: Vec<(git2::Oid, u32, u32, String)> = match repo.blame_file(Path::new(&repo_rel), Some(&mut options)) {
+        Ok(blame) => blame
+            .iter()
+            .map(|hunk| {
+                let author = hunk.final_signature().and_then(|s| s.name().ok().map(String::from)).unwrap_or_default();
+                (hunk.final_commit_id(), hunk.final_start_line() as u32, hunk.lines_in_hunk() as u32, author)
+            })
+            .collect(),
+        // A commit by an author with no name or email: libgit2 cannot blame
+        // past it (`infra::git_cli`), `git` can.
+        Err(e) if e.message().contains("empty name or email") => {
+            let workdir = repo.workdir().ok_or_else(|| ToolError::Git("a bare repository has no files to blame".into()))?;
+            crate::infra::git_cli::blame(workdir, &repo_rel, start, end)
+                .map_err(|why| ToolError::Git(format!("{} — and git could not blame it either: {why}", e.message())))?
+                .into_iter()
+                .filter_map(|h| Some((git2::Oid::from_str(&h.commit).ok()?, h.start_line, h.line_count, h.author)))
+                .collect()
+        }
+        Err(e) => return Err(blame_error(&args.path, e)),
+    };
 
     let mut hunks = Vec::new();
-    for hunk in blame.iter() {
-        let commit = repo.find_commit(hunk.final_commit_id()).ok();
-        let author = hunk
-            .final_signature()
-            .and_then(|s| s.name().ok().map(String::from))
-            .unwrap_or_else(|| "unknown".to_string());
+    for (id, start_line, line_count, author) in runs {
+        let commit = repo.find_commit(id).ok();
         hunks.push(BlameHunk {
-            start_line: hunk.final_start_line() as u32,
-            line_count: hunk.lines_in_hunk() as u32,
-            commit: short(&hunk.final_commit_id().to_string()),
-            author,
+            start_line,
+            line_count,
+            commit: short(&id.to_string()),
+            author: if author.is_empty() { "unknown".to_string() } else { author },
             date: commit
                 .as_ref()
                 .map(|c| format_time(c.time().seconds()))
@@ -460,7 +474,7 @@ fn scope_prefix(scope: &ToolScope, repo: &Repository) -> Result<String, ToolErro
         .workdir()
         .ok_or_else(|| ToolError::Git("a bare repository has no working tree".into()))?;
     // Plain, as the scope's root is: on Windows `canonicalize` adds `\\?\`.
-    let workdir = crate::domain::tools::canonicalize_plain(workdir).map_err(ToolError::Io)?;
+    let workdir = crate::infra::paths::canonicalize_plain(workdir).map_err(ToolError::Io)?;
     match scope.root().strip_prefix(&workdir) {
         Ok(rel) if rel.as_os_str().is_empty() => Ok(String::new()),
         Ok(rel) => Ok(format!("{}/", rel.to_string_lossy().replace('\\', "/"))),
@@ -1264,5 +1278,35 @@ mod tests {
         };
         assert_eq!(parsed.start_line, Some(3));
         assert!(!blame.is_risky());
+    }
+
+    /// A commit whose author has no email (`A <>`), as some importers and old
+    /// tools wrote them. git2 will not make such a signature, so the commit
+    /// is written as raw bytes.
+    fn commit_with_empty_email(repo: &Repository, message: &str) {
+        stage_all(repo);
+        let tree = repo.index().expect("index").write_tree().expect("tree");
+        let parent = repo.head().ok().and_then(|h| h.target()).map(|p| format!("parent {p}\n")).unwrap_or_default();
+        let raw = format!("tree {tree}\n{parent}author Imported <> 1700000000 +0000\ncommitter Imported <> 1700000000 +0000\n\n{message}\n");
+        let id = repo.odb().expect("odb").write(git2::ObjectType::Commit, raw.as_bytes()).expect("written");
+        repo.set_head_detached(id).expect("head moved");
+    }
+
+    #[test]
+    fn a_commit_with_an_empty_email_is_blamed_and_logged() {
+        let (scope, root, repo) = repo_fixture("git-empty-email");
+        write(&root, "tracked.txt", "one\ntwo\nthree\n");
+        commit_with_empty_email(&repo, "imported change");
+        // Not committed: blamed as of HEAD, as git2 does, not as the tree is now.
+        write(&root, "tracked.txt", "one\ntwo\nthree, edited\n");
+
+        let blamed = git_blame(&scope, &GitBlameArgs { path: "tracked.txt".into(), start_line: None, end_line: None });
+        let Ok(ToolResult::GitBlame { hunks, .. }) = blamed else { panic!("{blamed:?}") };
+        let imported = hunks.iter().find(|h| h.start_line == 3).expect("line three's hunk");
+        assert_eq!((imported.author.as_str(), imported.summary.as_str()), ("Imported", "imported change"));
+
+        let logged = git_log(&scope, &GitLogArgs { path: None, limit: None, query: None });
+        let Ok(ToolResult::GitLog { commits, .. }) = logged else { panic!("{logged:?}") };
+        assert_eq!(commits[0].author, "Imported");
     }
 }

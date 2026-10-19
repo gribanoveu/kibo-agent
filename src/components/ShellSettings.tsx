@@ -1,5 +1,6 @@
 import { useShellChoice } from "../hooks/useShellChoice";
-import type { ShellKind } from "../lib/chat";
+import type { ShellKind } from "../lib/settings";
+import "./Segmented.css";
 
 const LABELS: Record<ShellKind, string> = {
   cmd: "cmd",

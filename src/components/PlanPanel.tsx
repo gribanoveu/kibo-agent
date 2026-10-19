@@ -3,6 +3,7 @@ import { ChevronRight, Circle, CircleCheck, CircleDot, CircleX, Pencil } from "l
 import type { Task } from "../lib/chat";
 import { Markdown } from "./Markdown";
 import "./PlanPanel.css";
+import { matches } from "../lib/shortcuts";
 
 type Props = {
   plan: string | null;
@@ -131,7 +132,7 @@ export function PlanPanel({ plan, checklist, onEdit, onImplement, locked }: Prop
             readOnly={locked}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={save}
-            onKeyDown={(e) => e.key === "Escape" && finish()}
+            onKeyDown={(e) => matches(e, "close") && finish()}
           />
         ) : plan ? (
           <div className="plan-doc">

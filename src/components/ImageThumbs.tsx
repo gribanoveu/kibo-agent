@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { imageUrl, type ImagePart } from "../lib/chat";
+import { type ImagePart, imageUrl } from "../lib/images";
 import { Modal } from "./Modal";
 import "./ImageThumbs.css";
 

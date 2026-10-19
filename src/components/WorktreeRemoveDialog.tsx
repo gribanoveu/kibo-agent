@@ -1,5 +1,5 @@
 import { Modal } from "./Modal";
-import type { WorktreeCheck } from "../lib/chat";
+import type { WorktreeCheck } from "../lib/git";
 import "./WorktreeRemoveDialog.css";
 
 type Props = {

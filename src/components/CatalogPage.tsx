@@ -1,4 +1,5 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type ComponentType, type KeyboardEvent } from "react";
+import { DeepSeekIcon } from "./DeepSeekIcon";
 import {
   ArrowRight,
   BookOpen,
@@ -8,7 +9,9 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Puzzle,
   Sparkles,
+  SquareKanban,
   SquareSlash,
   Webhook,
   X,
@@ -19,6 +22,8 @@ import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
 import { Page, PagePanel } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
+import { useFeatures } from "../hooks/useFeatures";
+import type { FeatureView } from "../lib/features";
 import type { CatalogEntry, CatalogKind, CatalogSource } from "../lib/catalog";
 import type { PageContext } from "./pages";
 import "./CatalogPage.css";
@@ -33,8 +38,24 @@ const KINDS: { kind: CatalogKind; label: string; one: string; icon: LucideIcon }
 ];
 const kindOf = (kind: CatalogKind) => KINDS.find((k) => k.kind === kind) ?? KINDS[0];
 
-type Tab = CatalogKind | "all";
-const TABS: { value: Tab; label: string }[] = [{ value: "all", label: "All" }, ...KINDS.map(({ kind, label }) => ({ value: kind, label }))];
+type Tab = CatalogKind | "all" | "features";
+const TABS: { value: Tab; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "features", label: "Features" },
+  ...KINDS.map(({ kind, label }) => ({ value: kind, label })),
+];
+
+/** A feature's icon, by its id; one without its own gets the generic piece. */
+const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
+  board: SquareKanban,
+  "provider-balance": DeepSeekIcon,
+  "deepseek-search": DeepSeekIcon,
+};
+const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
+const featureMatches = (feature: FeatureView, query: string) => {
+  const q = query.trim().toLowerCase();
+  return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
+};
 
 /** How many cards a kind shows under All before "Show all": two rows of three, three of two. */
 const PREVIEW = 6;
@@ -271,6 +292,149 @@ function Details({
   );
 }
 
+/** A feature of the app's own (docs/33-features.md): a card like an entry's, turned on rather than installed. */
+function FeatureCard({ feature, selected, onOpen, onTurnOn }: { feature: FeatureView; selected: boolean; onOpen: () => void; onTurnOn: () => void }) {
+  const Icon = featureIcon(feature.id);
+  const open = (e: KeyboardEvent) => {
+    if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      onOpen();
+    }
+  };
+  return (
+    <article
+      className={`catalog-card${selected ? " selected" : ""}`}
+      role="button"
+      tabIndex={0}
+      aria-label={feature.name}
+      aria-pressed={selected}
+      onClick={onOpen}
+      onKeyDown={open}
+    >
+      <div className="catalog-card-ico feature">
+        <Icon size={16} />
+      </div>
+      <div className="catalog-card-body">
+        <h3>{feature.name}</h3>
+        <p title={feature.description}>{feature.description}</p>
+        <div className="catalog-card-meta">Built into the app</div>
+      </div>
+      {feature.on ? (
+        <span className="catalog-card-state installed" title="On" aria-label="On">
+          <Check size={14} />
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="catalog-card-add"
+          title="Turn on"
+          aria-label={`Turn on ${feature.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTurnOn();
+          }}
+        >
+          <Plus size={14} />
+        </button>
+      )}
+    </article>
+  );
+}
+
+/** What turning a feature on gives the model and the window, and where its data is. */
+function FeatureDetails({
+  feature,
+  error,
+  onSet,
+  onDeleteData,
+  onClose,
+}: {
+  feature: FeatureView;
+  error: string | null;
+  onSet: (on: boolean) => void;
+  onDeleteData: () => void;
+  onClose: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <PagePanel icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
+      <h3 className="catalog-detail-name">{feature.name}</h3>
+      <p className="catalog-detail-desc">{feature.description}</p>
+
+      <div className="catalog-detail-actions">
+        <button type="button" className={`btn ${feature.on ? "btn-ghost" : "btn-primary"}`} onClick={() => onSet(!feature.on)}>
+          {feature.on ? "Turn off" : "Turn on"}
+        </button>
+        {!feature.on && feature.hasData && (
+          <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
+            Delete data
+          </button>
+        )}
+        {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
+      </div>
+      {error && <div className="catalog-detail-error">{error}</div>}
+      {feature.tools.length > 0 && (
+        <p className="catalog-detail-note">
+          {feature.on
+            ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
+            : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
+        </p>
+      )}
+
+      <dl className="catalog-detail-facts">
+        <dt>Source</dt>
+        <dd>Built into the app</dd>
+        {feature.places.length > 0 && (
+          <>
+            <dt>Where</dt>
+            <dd>{feature.places.join(", ")}</dd>
+          </>
+        )}
+        {feature.data && (
+          <>
+            <dt>Keeps</dt>
+            <dd className="mono">{feature.data}</dd>
+          </>
+        )}
+      </dl>
+
+      {feature.tools.map((tool) => (
+        <div key={tool.name}>
+          <h4 className="catalog-detail-file">{tool.name}</h4>
+          <div className="catalog-detail-text">{tool.description}</div>
+        </div>
+      ))}
+
+      <Modal
+        title={`Delete ${feature.name}'s data?`}
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setConfirming(false);
+                onDeleteData();
+              }}
+            >
+              Delete
+            </button>
+          </>
+        }
+      >
+        <p className="catalog-detail-confirm">
+          <b>{feature.data}</b> is deleted, and everything in it with it. This cannot be undone.
+        </p>
+      </Modal>
+    </PagePanel>
+  );
+}
+
 /** A field for each `${NAME}` a server needs; the value goes only into mcp.json. */
 function SecretFields({ names, values, onChange, target }: { names: string[]; values: Record<string, string>; onChange: (values: Record<string, string>) => void; target: string | null }) {
   if (names.length === 0) return null;
@@ -463,17 +627,31 @@ function SourceLine({ source }: { source: CatalogSource }) {
 }
 
 /** Skills, commands, runbooks, MCP servers and hooks published to the
-    catalogs (docs/32-catalog.md), and installing them. */
+    catalogs (docs/32-catalog.md), and installing them — and the app's own
+    features (docs/33-features.md), turned on here. */
 export function CatalogPage({ sideHandle }: PageContext) {
   const { sources, loading, error, refresh, busy, failed, install, remove, update } = useCatalog();
+  const features = useFeatures();
   const [tab, setTab] = useState<Tab>("all");
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<EntryKey | null>(null);
+  const [open, setOpenEntry] = useState<EntryKey | null>(null);
+  const [openFeature, setOpenFeatureId] = useState<string | null>(null);
+  // One panel at a time: an entry's or a feature's.
+  const setOpen = (key: EntryKey | null) => {
+    setOpenEntry(key);
+    setOpenFeatureId(null);
+  };
+  const setOpenFeature = (id: string | null) => {
+    setOpenFeatureId(id);
+    setOpenEntry(null);
+  };
   const [asking, setAsking] = useState<EntryKey | null>(null);
   const [updating, setUpdating] = useState<EntryKey | null>(null);
 
   const entries: Entry[] = (sources ?? []).flatMap((source) => source.items.map((item) => ({ item, source: source.url })));
   const found = entries.filter((entry) => matches(entry, query));
+  const featuresFound = tab === "all" || tab === "features" ? features.features.filter((f) => featureMatches(f, query)) : [];
+  const shownFeature = features.features.find((f) => f.id === openFeature) ?? null;
   const sections = KINDS.filter(({ kind }) => tab === "all" || tab === kind)
     .map((k) => ({ ...k, entries: found.filter(({ item }) => item.kind === k.kind) }))
     .filter(({ entries }) => entries.length > 0);
@@ -513,17 +691,28 @@ export function CatalogPage({ sideHandle }: PageContext) {
         </>
       }
       panel={
-        shown && (
-          <Details
-            key={`${shown.source}/${shown.item.kind}/${shown.item.id}`}
-            entry={shown}
-            busy={busy}
-            error={failed && sameEntry(failed.entry, open) ? failed.error : null}
-            onInstall={onInstall}
-            onRemove={(key) => void remove(key)}
-            onUpdate={setUpdating}
-            onClose={() => setOpen(null)}
+        shownFeature ? (
+          <FeatureDetails
+            key={shownFeature.id}
+            feature={shownFeature}
+            error={features.error}
+            onSet={(on) => void features.set(shownFeature.id, on)}
+            onDeleteData={() => void features.deleteData(shownFeature.id)}
+            onClose={() => setOpenFeature(null)}
           />
+        ) : (
+          shown && (
+            <Details
+              key={`${shown.source}/${shown.item.kind}/${shown.item.id}`}
+              entry={shown}
+              busy={busy}
+              error={failed && sameEntry(failed.entry, open) ? failed.error : null}
+              onInstall={onInstall}
+              onRemove={(key) => void remove(key)}
+              onUpdate={setUpdating}
+              onClose={() => setOpen(null)}
+            />
+          )
         )
       }
     >
@@ -534,6 +723,24 @@ export function CatalogPage({ sideHandle }: PageContext) {
         ? !error && <div className="catalog-empty">Reading the catalog…</div>
         : sources.map((source) => <SourceLine key={source.url} source={source} />)}
 
+      {featuresFound.length > 0 && (
+        <section className="catalog-section" aria-label="Features">
+          <div className="catalog-section-head">
+            <h2>Features</h2>
+          </div>
+          <div className="catalog-grid">
+            {featuresFound.map((feature) => (
+              <FeatureCard
+                key={feature.id}
+                feature={feature}
+                selected={feature.id === openFeature}
+                onOpen={() => setOpenFeature(feature.id)}
+                onTurnOn={() => void features.set(feature.id, true)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
       {sections.map(({ kind, label, icon, entries }) => {
         const cut = tab === "all" && entries.length > PREVIEW;
         return (
@@ -584,7 +791,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
           }}
         />
       )}
-      {sources !== null && entries.length > 0 && sections.length === 0 && (
+      {sources !== null && entries.length > 0 && sections.length === 0 && featuresFound.length === 0 && (
         <div className="catalog-empty">{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</div>
       )}
     </Page>

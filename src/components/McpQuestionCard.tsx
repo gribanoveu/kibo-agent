@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternal } from "../lib/window";
 import { MessageCircleQuestion } from "lucide-react";
 import { Dropdown } from "./Dropdown";
-import type { McpAnswer, McpField } from "../lib/chat";
+import type { McpAnswer, McpField } from "../lib/mcp";
 import type { Block } from "../lib/chatTurnReducer";
 import "./McpQuestionCard.css";
 
@@ -104,7 +104,7 @@ export function McpQuestionCard({
             className="btn primary"
             disabled={!open}
             onClick={() => {
-              void openUrl(question.url).catch(() => {});
+              void openExternal(question.url).catch(() => {});
               answer({ action: "accept" });
             }}
           >
