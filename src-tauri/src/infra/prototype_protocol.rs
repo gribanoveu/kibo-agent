@@ -25,10 +25,12 @@ pub const SCHEME: &str = "artifact";
 
 /// Its own scheme's files and inline code — Babel compiles the page's JSX into
 /// an inline module, which needs no `eval` (checked by the probe) — and no
-/// request out: no `fetch`, no image or font from another host.
+/// request out: no `fetch`, no image or font from another host, no form sent
+/// anywhere — `form-action` and `base-uri` are two that `default-src` does not
+/// cover. A navigation away is the window's to stop: its `frame-src`.
 /// `http://artifact.localhost` is the scheme's address on Windows.
-pub const CSP: &str =
-    "default-src artifact: http://artifact.localhost 'unsafe-inline' data: blob:; connect-src 'none'";
+pub const CSP: &str = "default-src artifact: http://artifact.localhost 'unsafe-inline' data: blob:; connect-src 'none'; \
+     form-action 'none'; base-uri 'none'";
 
 /// Where the protocol reads from; a root that is `None` serves nothing.
 pub struct Roots {
@@ -102,7 +104,13 @@ fn with_panel_scripts(page: Vec<u8>) -> Vec<u8> {
 /// `page` with `snippet` first in its head (see [`with_panel_scripts`]).
 pub(crate) fn in_head(page: &str, snippet: &str) -> String {
     let lower = page.to_ascii_lowercase();
-    let tag_end = |tag: &str| lower.find(tag).and_then(|at| lower[at..].find('>').map(|end| at + end + 1));
+    // The tag itself, not one that starts like it: `<head` is also how `<header` begins.
+    let tag_end = |tag: &str| {
+        lower
+            .match_indices(tag)
+            .find(|(at, _)| lower.as_bytes().get(at + tag.len()).is_some_and(|b| *b == b'>' || b.is_ascii_whitespace()))
+            .and_then(|(at, _)| lower[at..].find('>').map(|end| at + end + 1))
+    };
     let at = tag_end("<head").or_else(|| tag_end("<!doctype")).unwrap_or(0);
     let mut out = String::with_capacity(page.len() + snippet.len());
     out.push_str(&page[..at]);
@@ -253,6 +261,12 @@ mod tests {
         );
         assert_eq!(put("<!DOCTYPE html>\n<p>no head</p>"), format!("<!DOCTYPE html>{PANEL_SCRIPTS}\n<p>no head</p>"));
         assert_eq!(put("<p>bare</p>"), format!("{PANEL_SCRIPTS}<p>bare</p>"));
+        // A `<header>` is not the head: a page with no head gets them after its doctype.
+        assert_eq!(
+            put("<!doctype html><body><header class=\"top\">t</header></body>"),
+            format!("<!doctype html>{PANEL_SCRIPTS}<body><header class=\"top\">t</header></body>")
+        );
+        assert_eq!(put("<header>t</header><head>"), format!("<header>t</header><head>{PANEL_SCRIPTS}"));
         // Only to the frame's own window, and only from it.
         assert!(PANEL_SCRIPTS.contains("parent.postMessage") && !PANEL_SCRIPTS.contains("top."));
         assert!(PANEL_SCRIPTS.contains("e.source!==parent"), "the pointer answers the panel alone");
@@ -279,6 +293,8 @@ mod tests {
             assert_eq!(response.headers()["Cache-Control"], "no-store", "{path}");
         }
         assert!(CSP.contains("connect-src 'none'"));
+        // Neither falls back to `default-src`: without them a form posts anywhere.
+        assert!(CSP.contains("form-action 'none'") && CSP.contains("base-uri 'none'"));
         // Babel needs none, and a page that may `eval` may build code from anything it reads.
         assert!(!CSP.contains("'unsafe-eval'"));
     }

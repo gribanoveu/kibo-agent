@@ -405,7 +405,7 @@ export type FileRewind = {
 };
 
 /** What putting `changes` back would do, file by file. Touches nothing. */
-export async function rewindPreview(changes: FileChange[], chatId: string | null = null): Promise<FileRewind[]> {
+export async function rewindPreview(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
   requireBackend();
   return invoke<FileRewind[]>("rewind_preview", { changes, chatId });
 }
@@ -422,9 +422,9 @@ export async function branchSummary(messages: LlmMessage[]): Promise<LlmMessage 
 
 /**
  * Puts them back, each file checked again right before it is written: in the
- * open folder, or in the Prototype chat `chatId`'s own.
+ * agent's open folder, or — `chatId` given — in that Chat-mode chat's own.
  */
-export async function rewindApply(changes: FileChange[], chatId: string | null = null): Promise<FileRewind[]> {
+export async function rewindApply(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
   requireBackend();
   return invoke<FileRewind[]>("rewind_apply", { changes, chatId });
 }

@@ -11,11 +11,7 @@ use super::blocking;
 /// (`services::prototype_versions`).
 #[tauri::command]
 pub async fn prototype_restore(chat_id: String, version: u32) -> Result<crate::domain::prototype::Restored, String> {
-    blocking(move || {
-        let files = prototype_store::files_dir(&chat_id)?;
-        crate::services::prototype_versions::restore(&files, version)
-    })
-    .await
+    blocking(move || crate::services::prototype_versions::restore_chat(&chat_id, version)).await
 }
 
 /// Shows a Prototype chat's working folder in Finder or Explorer.

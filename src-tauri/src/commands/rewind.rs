@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::domain::prototype::PrototypeError;
 use crate::domain::rewind::{FileChange, FileRewind};
 use crate::domain::tools::ToolScope;
 use crate::infra::prototype_store;
@@ -47,7 +48,13 @@ pub async fn rewind_apply(
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<FileRewind>, String> {
     let scope = scope(&state, chat_id.as_deref())?;
-    blocking(move || Ok::<_, String>(rewind::apply(&scope, &changes))).await
+    blocking(move || apply(chat_id.as_deref(), &scope, &changes)).await
+}
+
+/// The rewind itself; a chat's folder is held against its turns and restores meanwhile.
+fn apply(chat_id: Option<&str>, scope: &ToolScope, changes: &[FileChange]) -> Result<Vec<FileRewind>, PrototypeError> {
+    let _claim = chat_id.map(crate::services::prototype_versions::claim).transpose()?;
+    Ok(rewind::apply(scope, changes))
 }
 
 #[cfg(test)]
@@ -69,6 +76,27 @@ mod prototype_tests {
             assert!(!asked.get());
             assert_eq!(root(None, || Ok(PathBuf::from("/open/folder"))).unwrap(), PathBuf::from("/open/folder"));
             assert!(root(Some("../x"), || Ok(PathBuf::new())).is_err());
+        });
+    }
+
+    /// A chat's rewind waits for no turn: while one holds the folder it is
+    /// refused, the files as they are; the agent's needs no hold.
+    #[test]
+    fn a_chats_rewind_is_refused_while_its_folder_is_held() {
+        crate::testing::with_app_dir("rewind-held", || {
+            let id = "8c0e2a4c-6e8a-4c0e-b2d4-6f8a0c2e4a6c";
+            let files = prototype_store::files_dir(id).unwrap();
+            let scope = ToolScope::new(&files).unwrap();
+            let change = FileChange {
+                path: "index.html".into(),
+                before: crate::domain::rewind::FileState::Absent,
+                after: crate::domain::rewind::FileState::Absent,
+            };
+            let turn = crate::services::prototype_versions::claim(id).unwrap();
+            assert!(matches!(apply(Some(id), &scope, &[change.clone()]), Err(PrototypeError::Busy)));
+            assert!(apply(None, &scope, &[change.clone()]).is_ok());
+            drop(turn);
+            assert!(apply(Some(id), &scope, &[change]).is_ok());
         });
     }
 }

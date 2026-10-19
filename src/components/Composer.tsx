@@ -10,6 +10,7 @@ import type { ImagePart } from "../lib/images";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
+import { useArrival } from "../hooks/useArrival";
 import { ImageThumbs } from "./ImageThumbs";
 import "./Composer.css";
 
@@ -147,23 +148,21 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   };
 
-  useEffect(() => {
-    if (!draft) return;
+  useArrival(draft, (draft) => {
     setText(draft.text);
     area.current?.focus();
     requestAnimationFrame(grow);
-  }, [draft]);
+  });
 
   useEffect(() => {
     if (focus) area.current?.focus();
   }, [focus]);
 
-  useEffect(() => {
-    if (!quote) return;
+  useArrival(quote, (quote) => {
     setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${quote.text}` : quote.text));
     area.current?.focus();
     requestAnimationFrame(grow);
-  }, [quote]);
+  });
 
   const effort = models.effort ?? "";
   const efforts = effortOptions(effort);

@@ -34,6 +34,10 @@ pub enum PrototypeError {
     /// "Save as" named a page that is not in the folder or the version.
     #[error("there is no page {0} to save")]
     NoPage(String),
+    /// A turn or a restore already works in the chat's folder: one at a time,
+    /// or a restore swaps the folder out from under a write.
+    #[error("the chat's folder is in use — wait for the turn or the restore under way to finish")]
+    Busy,
 }
 
 /// What restoring a version did (P-6): the version put back, the new one the

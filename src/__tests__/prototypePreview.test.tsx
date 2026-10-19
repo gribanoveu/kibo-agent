@@ -65,6 +65,15 @@ describe("what was presented is the transcript's", () => {
     expect(versionsOf(blocks).map((v) => v.version)).toEqual([1, 2]);
   });
 
+  /// The backend answers an unchanged folder with the version it already is.
+  test("a page presented again unchanged is one version, named as it was last", () => {
+    const blocks: Block[] = [presented("a", 1), presented("b", 2), presented("c", 2, "index.html", "Coffee shop, final")];
+    expect(versionsOf(blocks)).toEqual([
+      { version: 1, path: "index.html", title: "Coffee shop" },
+      { version: 2, path: "index.html", title: "Coffee shop, final" },
+    ]);
+  });
+
   test("only finished changes to the folder count as edits", () => {
     expect(
       edits([edit("a"), tool("b", "writeFile"), tool("c", "delete"), tool("d", "readFile"), edit("e"), tool("f", "editFile", { status: "running" })]),

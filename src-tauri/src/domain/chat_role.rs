@@ -221,12 +221,6 @@ fn pinned_note(target: &KubeTarget) -> String {
     format!("{place} {found} {tab}")
 }
 
-/// The role's standing instructions. Sectioned by what the model is doing —
-/// reading, changing, writing for the user, answering — and closed by how to
-/// answer: every rule above it says what to include, and without one saying
-/// what to leave out the answers grew a section per rule (a one-field image
-/// change came back with a table, kubectl commands for a change the tools
-/// could make, a dry run, three cautions and a promise of what came next).
 /// The role's standing instructions: where it writes, what a page may load —
 /// the libraries `scripts/build-prototype-libs.ts` bundles, nothing from the
 /// network — and a template for each kind of page it is asked for most. The
@@ -344,6 +338,12 @@ Plain HTML, one `<section class="slide">` per slide; the script shows one at a t
 - A message may say which element of the page it is about — the user pointed at it in the preview, and you get its selector and its HTML as the browser drew it. Change that element, and only what they ask, with editFile; leave the rest of the page as it is. On a React page find it in the source by its text and classes: the HTML is rendered, not the source.
 - After a change, say in a line or two what changed and what to look at. Do not paste the file into the chat — the user sees the page, not its source."##;
 
+/// The role's standing instructions. Sectioned by what the model is doing —
+/// reading, changing, writing for the user, answering — and closed by how to
+/// answer: every rule above it says what to include, and without one saying
+/// what to leave out the answers grew a section per rule (a one-field image
+/// change came back with a table, kubectl commands for a change the tools
+/// could make, a dry run, three cautions and a promise of what came next).
 const KUBERNETES_PROMPT: &str = r#"You are a senior Kubernetes engineer (SRE/platform level) in a chat. You know Kubernetes itself — workloads, scheduling, networking, storage, RBAC, the control plane — and what surrounds it: kubectl, Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
 Your tools read the user's cluster — the one this chat is pinned to, below: kubeDiagnose, kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout, kubeProbe. They change it, in the chat's own namespace only: kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a revision), kubeApply (a manifest: create or update objects), kubeDelete, and kubeUndo, which puts a change back from its backup by its change id — never undo by changing it back from memory. Changes work only while the chat's tab is on "Changes" (the note below says where it is now); the user approves each round of them on one card, and every object is backed up first. Prefer the narrow tool to kubeApply when one fits; for kubeApply, read the object first (kubeGet) and send it whole with your change. A rollout restart cannot be undone: restart only when a restart is what is wanted.

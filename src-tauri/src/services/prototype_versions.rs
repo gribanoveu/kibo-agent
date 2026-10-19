@@ -4,14 +4,48 @@
 //! stay, so going back can be undone by going forward. A folder changed since
 //! its last version is kept first, so a restore loses nothing.
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::domain::prototype::{PrototypeError, Restored};
 use crate::infra::prototype_store;
 
+/// The chats whose folder a turn, a restore or a rewind is working in now.
+static IN_USE: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// The chat's folder held for one piece of work, until dropped.
+pub struct Claim(String);
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if let Ok(mut in_use) = IN_USE.lock() {
+            in_use.remove(&self.0);
+        }
+    }
+}
+
+/// Holds the chat's folder for a turn, a restore or a rewind; `Busy` while
+/// another holds it. Refused rather than waited for: a turn runs for minutes,
+/// and the window already keeps the user from asking for both at once — this
+/// is for when it does not.
+pub fn claim(chat_id: &str) -> Result<Claim, PrototypeError> {
+    let mut in_use = IN_USE.lock().map_err(|_| PrototypeError::Busy)?;
+    if !in_use.insert(chat_id.to_string()) {
+        return Err(PrototypeError::Busy);
+    }
+    Ok(Claim(chat_id.to_string()))
+}
+
+/// [`restore`] of the chat `chat_id`'s folder, held against its turns.
+pub fn restore_chat(chat_id: &str, n: u32) -> Result<Restored, PrototypeError> {
+    let _claim = claim(chat_id)?;
+    restore(&prototype_store::files_dir(chat_id)?, n)
+}
+
 pub fn restore(files: &Path, n: u32) -> Result<Restored, PrototypeError> {
     // Asked first: a version that is not there must not cost a snapshot.
-    prototype_store::same_as_version(files, n)?;
+    prototype_store::version_dir(files, n)?;
     let before = match prototype_store::latest(files)? {
         Some(latest) if prototype_store::same_as_version(files, latest)? => None,
         _ => Some(prototype_store::snapshot(files)?),
@@ -78,6 +112,29 @@ mod tests {
         assert_eq!(restored, Restored { from: 1, version: 3, before: Some(2) });
         assert_eq!(fs::read_to_string(versions.join("2").join("index.html")).unwrap(), "edited, not presented");
         assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "one");
+    }
+
+    /// While a turn holds the folder, a restore is refused and touches nothing;
+    /// once the turn lets go, it goes ahead.
+    #[test]
+    fn a_restore_waits_for_no_turn_and_touches_nothing_while_one_runs() {
+        crate::testing::with_app_dir("restore-claimed", || {
+            let id = "2e4a6c8e-0b1d-4f3a-9c5e-7a9b1d3f5a7c";
+            let files = prototype_store::files_dir(id).unwrap();
+            fs::write(files.join("index.html"), "one").unwrap();
+            prototype_store::snapshot(&files).unwrap();
+            fs::write(files.join("index.html"), "the turn is writing").unwrap();
+
+            let turn = claim(id).unwrap();
+            assert!(matches!(claim(id), Err(PrototypeError::Busy)), "one at a time");
+            assert!(matches!(restore_chat(id, 1), Err(PrototypeError::Busy)));
+            assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "the turn is writing");
+            assert!(claim("another-chat").is_ok(), "another chat's folder is its own");
+
+            drop(turn);
+            assert_eq!(restore_chat(id, 1).unwrap().from, 1);
+            assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "one");
+        });
     }
 
     /// A version that is not there changes nothing and keeps nothing.

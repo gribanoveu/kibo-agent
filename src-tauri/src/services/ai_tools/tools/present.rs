@@ -25,7 +25,7 @@ pub fn present(scope: &ToolScope, args: &PresentArgs) -> Result<ToolResult, Tool
         return Err(invalid(format!("the title is over {MAX_TITLE_CHARS} characters — a few words name the page")));
     }
     let path = relative_to_root(scope, &page)?;
-    let version = prototype_store::snapshot(scope.root())?;
+    let version = prototype_store::kept(scope.root())?;
     Ok(ToolResult::Presented { path, title: title.to_string(), version })
 }
 
@@ -77,8 +77,13 @@ mod tests {
         let shown = present(&scope, &args("index.html", "  Coffee shop  ")).unwrap();
         assert_eq!(shown, ToolResult::Presented { path: "index.html".into(), title: "Coffee shop".into(), version: 1 });
         assert!(files.parent().unwrap().join("versions").join("1").join("index.html").is_file());
-        let again = present(&scope, &args("./index.html", "Coffee shop")).unwrap();
+        fs::write(files.join("index.html"), "<h1>hello</h1>").unwrap();
+        let changed = present(&scope, &args("./index.html", "Coffee shop")).unwrap();
+        assert!(matches!(changed, ToolResult::Presented { version: 2, .. }), "{changed:?}");
+        // Presented again with nothing changed: the version it already is, not a copy of it.
+        let again = present(&scope, &args("index.html", "Coffee shop")).unwrap();
         assert!(matches!(again, ToolResult::Presented { version: 2, .. }), "{again:?}");
+        assert!(!files.parent().unwrap().join("versions").join("3").exists());
     }
 
     /// What could only be a mistake is refused with what to do instead, and

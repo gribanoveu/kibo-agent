@@ -15,9 +15,11 @@ use base64::Engine as _;
 use crate::domain::prototype::PrototypeError;
 use crate::infra::prototype_protocol::{self, Roots};
 
-/// The preview's rules, carried into the file: what the page did in the
-/// panel is what it does in a browser — nothing it loads or sends leaves it.
-const CSP: &str = "default-src 'unsafe-inline' data: blob:; connect-src 'none'";
+/// The preview's rules, carried into the file: nothing the page loads, fetches
+/// or posts leaves it — `form-action` and `base-uri` are two that `default-src`
+/// does not cover. What no CSP can stop in a file of its own is the page
+/// navigating itself away; in the panel the window's `frame-src` stops that.
+const CSP: &str = "default-src 'unsafe-inline' data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'";
 
 /// How a shim names `react-all.js`, as built by `scripts/build-prototype-libs.ts`.
 const REACT_ALL: &str = "\"./react-all.js\"";
@@ -177,6 +179,7 @@ mod tests {
         // The preview's rules, first in the head.
         assert!(out.contains(&format!("<head><meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\"><meta charset")));
         assert!(!CSP.contains("artifact") && CSP.contains("connect-src 'none'"));
+        assert!(CSP.contains("form-action 'none'") && CSP.contains("base-uri 'none'"));
     }
 
     #[test]

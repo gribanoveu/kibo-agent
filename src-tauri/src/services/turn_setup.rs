@@ -35,7 +35,7 @@ use crate::infra::prototype_store;
 use crate::services::llm_chat::{Place, Turn, TurnError};
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
-use crate::services::{features, kubeconfigs, llm_session, plain_chat, project_rules, skills, web_search};
+use crate::services::{features, kubeconfigs, llm_session, plain_chat, project_rules, prototype_versions, skills, web_search};
 
 /// Why a turn did not start, or how it failed. Each reads as it did when the
 /// command layer flattened them one by one.
@@ -185,9 +185,13 @@ pub fn run_in_chat(
     run: impl FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError>,
 ) -> Result<ChatStreamOutcome, TurnSetupError> {
     // The chat's own folder, for a role that works in one; made on its first turn.
-    let scope = match chat.role.workspace() {
-        true => Some(ToolScope::new(&prototype_store::files_dir(&chat.chat_id)?)?),
-        false => None,
+    // Held for the turn, so a restore cannot swap the folder out under a write.
+    let (scope, _claim) = match chat.role.workspace() {
+        true => {
+            let claim = prototype_versions::claim(&chat.chat_id)?;
+            (Some(ToolScope::new(&prototype_store::files_dir(&chat.chat_id)?)?), Some(claim))
+        }
+        false => (None, None),
     };
     // A role with a folder writes in it without a card (`ChatRole::approval`).
     let approval = chat.role.approval(&chat.approval);
@@ -362,7 +366,9 @@ mod tests {
                 let mut seen = None;
                 run_in_chat(chat, |turn| {
                     let asks = turn.approval.requires_approval(ToolName::WriteFile, true);
-                    seen = Some((turn.scope.map(|scope| scope.root().to_path_buf()), asks));
+                    // The folder is held while the turn runs: a restore now would be refused.
+                    let held = prototype_versions::claim(id).is_err();
+                    seen = Some((turn.scope.map(|scope| scope.root().to_path_buf()), asks, held));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -373,11 +379,13 @@ mod tests {
                 .unwrap();
                 seen.expect("run was called")
             };
-            let (folder, asks) = handed(ChatRole::Prototype);
+            let (folder, asks, held) = handed(ChatRole::Prototype);
             let folder = folder.expect("a folder");
             assert!(folder.is_dir() && folder.ends_with(std::path::Path::new("prototypes").join(id).join("files")), "{folder:?}");
             assert!(!asks);
-            assert_eq!(handed(ChatRole::Assistant), (None, true));
+            assert!(held, "the turn holds its folder");
+            assert!(prototype_versions::claim(id).is_ok(), "and lets go of it when it ends");
+            assert_eq!(handed(ChatRole::Assistant), (None, true, false));
         });
     }
 

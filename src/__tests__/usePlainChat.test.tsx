@@ -426,14 +426,21 @@ describe("rewinding a chat", () => {
     expect(called("plain_chat_save").at(-1)?.args.messages).toEqual([]);
   });
 
-  test("a chat in another role has no folder to name", async () => {
+  /// Without a chat named, the backend rewinds the agent's open folder — the
+  /// user's project. A chat in Chat mode names itself whatever its role, so
+  /// recorded changes can only land in its own folder, where a role without
+  /// one finds nothing to put back.
+  test("a chat in another role still names its own folder, never the agent's", async () => {
     const result = await opened("assistant");
     const bubble = result.current.turn.blocks.find((b) => b.kind === "user")!;
+    results.rewind_preview = [];
+    await result.current.previewRewind(bubble.id);
+    expect(called("rewind_preview")[0]?.args.chatId).toBe("saved");
     results.rewind_apply = [];
     await act(async () => {
       await result.current.rewind(bubble.id);
     });
-    expect(called("rewind_apply")[0]?.args.chatId).toBeNull();
+    expect(called("rewind_apply")[0]?.args.chatId).toBe("saved");
   });
 
   test("nothing is rewound while a turn is under way, and files that could not be reached leave the chat as it was", async () => {

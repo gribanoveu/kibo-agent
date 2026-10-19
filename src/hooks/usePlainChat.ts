@@ -267,17 +267,14 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     () => (turn.status === "done" || turn.status === "cancelled" ? new Set(branchPoints(turn.blocks, history.current).keys()) : null),
     [turn.status, turn.blocks],
   );
-  // The folder a rewind puts back: a Prototype chat's own; any other role's
-  // calls changed no files a rewind could reach.
-  const folder = role === "prototype" ? chatId : null;
   // What the message box is handed — a rewound message to change and send again.
   const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
 
   /** What rewinding to before `bubbleId` would do to files, as the agent's `previewRewind`. */
   const previewRewind = async (bubbleId: string) => {
-    if (!branchable?.has(bubbleId)) return null;
+    if (!branchable?.has(bubbleId) || chatId === null) return null;
     const { changes, unrecorded } = changesFrom(turn.blocks, bubbleId);
-    return { files: changes.length ? await rewindPreview(changes, folder) : [], unrecorded };
+    return { files: changes.length ? await rewindPreview(changes, chatId) : [], unrecorded };
   };
 
   /**
@@ -290,7 +287,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
    * made them. `null` when nothing was done.
    */
   const rewind = async (bubbleId: string, summarize = false): Promise<FileRewind[] | null> => {
-    if (turn.status !== "done" && turn.status !== "cancelled") return null;
+    if ((turn.status !== "done" && turn.status !== "cancelled") || chatId === null) return null;
     const cut = branchAt(turn.blocks, history.current, bubbleId);
     if (!cut) return null;
     let summary: LlmMessage | null = null;
@@ -308,7 +305,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     const { changes } = changesFrom(turn.blocks, bubbleId);
     let files: FileRewind[] = [];
     try {
-      if (changes.length) files = await rewindApply(changes, folder);
+      // Always the chat's own folder, never the agent's open one: a chat
+      // whose role has none finds nothing there to put back.
+      if (changes.length) files = await rewindApply(changes, chatId);
     } catch (e) {
       setError(String(e));
       return null;

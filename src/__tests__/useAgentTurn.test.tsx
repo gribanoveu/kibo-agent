@@ -1068,7 +1068,7 @@ describe("rewinding", () => {
       preview = await result.current.previewRewind("user:1");
     });
     // The open folder: no chat named.
-    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange], chatId: null });
+    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
     expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
   });
 
@@ -1084,7 +1084,7 @@ describe("rewinding", () => {
       await result.current.rewind("user:0");
     });
 
-    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange], chatId: null });
+    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange] });
     expect(result.current.chatId).toBe("kept");
     expect(result.current.draft?.text).toBe("first");
     expect(result.current.turn.blocks).toMatchObject([

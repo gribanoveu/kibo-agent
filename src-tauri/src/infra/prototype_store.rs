@@ -12,6 +12,8 @@ use crate::infra::app_dir;
 const DIR: &str = "prototypes";
 const FILES: &str = "files";
 const VERSIONS: &str = "versions";
+/// The working folder while a restore swaps it out.
+const OLD: &str = ".files.old";
 
 /// The most one version may hold. Pages are kilobytes; a folder past this
 /// has something in it the page does not need.
@@ -55,6 +57,15 @@ pub fn snapshot(files: &Path) -> Result<u32, PrototypeError> {
     }
 }
 
+/// The working folder `files` as a version: the latest one when it holds just
+/// what the folder does — a page presented again unchanged — else a new one.
+pub fn kept(files: &Path) -> Result<u32, PrototypeError> {
+    match latest(files)? {
+        Some(n) if same_as_version(files, n)? => Ok(n),
+        _ => snapshot(files),
+    }
+}
+
 /// The highest version kept of the chat's working folder `files`; `None` before the first.
 pub fn latest(files: &Path) -> Result<Option<u32>, PrototypeError> {
     let versions = versions_of(files)?;
@@ -78,9 +89,11 @@ pub fn replace_with_version(files: &Path, n: u32) -> Result<(), PrototypeError> 
     let version = version_dir(files, n)?;
     let chat = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?;
     let staging = chat.join(".files.partial");
-    let old = chat.join(".files.old");
-    // Left by a restore that died part-way.
+    let old = chat.join(OLD);
+    // Left by a restore that died part-way: the copy goes, and the folder it
+    // swapped out is put back before what is left of it is taken for a leftover.
     let _ = fs::remove_dir_all(&staging);
+    recover(chat)?;
     let _ = fs::remove_dir_all(&old);
     if let Err(e) = copy_tree(&version, &staging, &mut 0) {
         let _ = fs::remove_dir_all(&staging);
@@ -101,7 +114,8 @@ fn versions_of(files: &Path) -> Result<PathBuf, PrototypeError> {
     Ok(chat.join(VERSIONS))
 }
 
-fn version_dir(files: &Path, n: u32) -> Result<PathBuf, PrototypeError> {
+/// Version `n` of the working folder `files`, or why there is none.
+pub(crate) fn version_dir(files: &Path, n: u32) -> Result<PathBuf, PrototypeError> {
     let version = versions_of(files)?.join(n.to_string());
     if version.is_dir() { Ok(version) } else { Err(PrototypeError::NoVersion(n)) }
 }
@@ -160,9 +174,23 @@ fn copy_tree(from: &Path, to: &Path, bytes: &mut u64) -> Result<(), PrototypeErr
 }
 
 fn files_dir_in(base: &Path, chat_id: &str) -> Result<PathBuf, PrototypeError> {
-    let dir = chat_dir(base, chat_id).ok_or_else(|| PrototypeError::NotAChatId(chat_id.to_string()))?.join(FILES);
+    let chat = chat_dir(base, chat_id).ok_or_else(|| PrototypeError::NotAChatId(chat_id.to_string()))?;
+    recover(&chat)?;
+    let dir = chat.join(FILES);
     fs::create_dir_all(&dir).map_err(|source| io(&dir, source))?;
     Ok(dir)
+}
+
+/// A restore that died between its two renames leaves the working folder as
+/// `.files.old` and no `files/`. It is put back before anything makes an empty
+/// `files/` in its place — after which the next restore would delete it as a
+/// leftover, and the chat's unpresented work with it.
+fn recover(chat: &Path) -> Result<(), PrototypeError> {
+    let (files, old) = (chat.join(FILES), chat.join(OLD));
+    if !files.exists() && old.is_dir() {
+        fs::rename(&old, &files).map_err(|source| io(&files, source))?;
+    }
+    Ok(())
 }
 
 fn remove_in(base: &Path, chat_id: &str) -> Result<(), PrototypeError> {
@@ -306,6 +334,30 @@ mod tests {
         let one = base.join("prototypes").join(ID).join("versions").join("1");
         assert!(one.join("index.html").is_file());
         assert!(!one.join("link.txt").exists() && !one.join("up").exists());
+    }
+
+    /// A restore that died between its two renames left the working folder as
+    /// `.files.old`: it comes back as the folder — on the next turn's way in,
+    /// or at the next restore — and is never deleted as a leftover.
+    #[test]
+    fn a_folder_swapped_out_by_a_dead_restore_comes_back() {
+        let base = temp_dir("prototype-recover");
+        let files = files_dir_in(&base, ID).unwrap();
+        fs::write(files.join("index.html"), "one").unwrap();
+        snapshot(&files).unwrap();
+        fs::write(files.join("index.html"), "unpresented").unwrap();
+        let old = files.parent().unwrap().join(OLD);
+        // The swap's first rename, and nothing after it.
+        fs::rename(&files, &old).unwrap();
+
+        assert_eq!(files_dir_in(&base, ID).unwrap(), files);
+        assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "unpresented");
+        assert!(!old.exists());
+
+        fs::rename(&files, &old).unwrap();
+        replace_with_version(&files, 1).unwrap();
+        assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "one");
+        assert!(!old.exists());
     }
 
     /// Only a Prototype chat's working folder has a `versions/` to keep one in.

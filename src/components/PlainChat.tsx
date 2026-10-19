@@ -15,6 +15,7 @@ import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import { useArrival } from "../hooks/useArrival";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
 import { rememberNamespace } from "../lib/kube";
@@ -133,19 +134,15 @@ export function PlainChat({
 
   useEffect(() => input.current?.focus(), [focus]);
   // A rewound message comes back to be changed and sent again, in place of what was there.
-  const rewound = chat.draft;
-  useEffect(() => {
-    if (!rewound) return;
+  useArrival(chat.draft, (rewound) => {
     setDraft(rewound.text);
     input.current?.focus();
-  }, [rewound]);
+  });
   // "Fix" under the preview: the error joins what is being written, not replaces it.
-  const fix = pages?.fix;
-  useEffect(() => {
-    if (!fix) return;
+  useArrival(pages?.fix ?? null, (fix) => {
     setDraft((was) => (was.trim() ? `${was.trimEnd()}\n${fix.text}` : fix.text));
     input.current?.focus();
-  }, [fix]);
+  });
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();

@@ -28,7 +28,11 @@ export function versionsOf(blocks: Block[]): Presented[] {
   const versions: Presented[] = [];
   for (const block of blocks) {
     const presented = presentedOf(block);
-    if (presented) versions.push(presented);
+    // Presented again unchanged, a page is the version it already was: one
+    // entry, named as it was last.
+    const again = presented ? versions.findIndex((v) => v.version === presented.version) : -1;
+    if (presented && again >= 0) versions[again] = presented;
+    else if (presented) versions.push(presented);
     if (block.kind !== "restored") continue;
     const from = versions.find((v) => v.version === block.from);
     const path = from?.path ?? versions[versions.length - 1]?.path ?? "index.html";
