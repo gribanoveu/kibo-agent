@@ -191,6 +191,10 @@ export function useAgentTurn({
    * or how much is decided here.
    */
   const makeRoom = useCallback(async (force: boolean) => {
+    // Not under a turn, running or paused for approval: the history here
+    // lacks what the turn has done so far, and the one it hands back at its
+    // end replaces whatever was folded meanwhile.
+    if (turn.status === "running" || turn.status === "awaitingApproval") return false;
     // One pass at a time: a second would summarize the history the first is
     // about to replace.
     if (compacting.current) return false;
@@ -218,7 +222,7 @@ export function useAgentTurn({
     } finally {
       compacting.current = false;
     }
-  }, [refreshContext]);
+  }, [turn.status, refreshContext]);
 
   /** Holds `text` until the running turn ends, to be sent as the next message. */
   const queue = useCallback((text: string) => {
