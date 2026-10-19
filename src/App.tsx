@@ -335,7 +335,9 @@ export default function App() {
   };
 
   // The window the meter is drawn against, and the provider a turn talks to.
+  const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   const compactNow = async () => {
+    if (busy) return toast.show("Not while a turn is running");
     if (!(await agent.compact(true))) {
       toast.show(agent.error ?? "Nothing worth folding away yet");
     }
@@ -343,7 +345,6 @@ export default function App() {
 
   // What `/name` in the composer runs: the app's own, then the user's files
   // in `.kibo/commands`. The composer takes whatever is in the list.
-  const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   const builtIn = builtInCommands(
     { busy, started: agent.turn.blocks.length > 0, folder: !!workspace.path, agentMode: conversation.value === "agent" },
     {
@@ -501,7 +502,7 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
-      running: agent.turn.status === "running",
+      running: busy,
       onCompact: () => void compactNow(),
       onOpenProcess: openProcess,
       onOpenAgent: openAgent,
