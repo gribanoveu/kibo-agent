@@ -202,6 +202,27 @@ describe("making room before a turn", () => {
     expect(result.current.turn.blocks).toEqual([]);
   });
 
+  /// A turn paused for approval hands back its own history when it ends: a
+  /// fold made meanwhile would be thrown away, so none is made.
+  test("not while a turn waits for approval", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: { history: [], round: 1, budgetUsed: 1, eventSeq: 3, calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }], todos: [], reads: {} },
+    };
+    results.chat_compact = { history: [{ role: "user", content: "summary" }], folded: 3 };
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("write it");
+    });
+
+    let folded: boolean | undefined;
+    await act(async () => {
+      folded = await result.current.compact(true);
+    });
+    expect(folded).toBe(false);
+    expect(calls.filter((call) => call.command === "chat_compact")).toEqual([]);
+  });
+
   /// Asked for outright, with nothing worth folding: the answer is no, and
   /// the caller is the one that says so.
   test("asking for one that cannot help reports back", async () => {
