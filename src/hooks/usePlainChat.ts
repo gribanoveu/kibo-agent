@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ContextUsage, LlmMessage, Outcome, PendingToolCall, ToolCallDecision } from "../lib/chat";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { branchAt, branchPoints } from "../lib/branch";
+import { branchSummary, rewindApply, rewindPreview, type ContextUsage, type FileRewind, type LlmMessage, type Outcome, type PendingToolCall, type ToolCallDecision } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { type ChatRoleId, type ChatRoleView, plainChatAlwaysAllow, plainChatCancel, plainChatCompact, plainChatContextUsage, plainChatList, plainChatPreview, plainChatResume, plainChatRoles, plainChatSave, plainChatSend } from "../lib/plainChat";
 import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
@@ -17,6 +18,7 @@ import {
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
 import { restoreNote, restorePrototype } from "../lib/prototype";
+import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
 
@@ -258,6 +260,71 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     }
   };
 
+  // Bubbles a rewind can start at; `null` while a turn is under way. A chat
+  // has no branches of its own — this is the rewind's, as the agent's is.
+  const branchable = useMemo(
+    () => (turn.status === "done" || turn.status === "cancelled" ? new Set(branchPoints(turn.blocks, history.current).keys()) : null),
+    [turn.status, turn.blocks],
+  );
+  // The folder a rewind puts back: a Prototype chat's own; any other role's
+  // calls changed no files a rewind could reach.
+  const folder = role === "prototype" ? chatId : null;
+  // What the message box is handed — a rewound message to change and send again.
+  const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
+
+  /** What rewinding to before `bubbleId` would do to files, as the agent's `previewRewind`. */
+  const previewRewind = async (bubbleId: string) => {
+    if (!branchable?.has(bubbleId)) return null;
+    const { changes, unrecorded } = changesFrom(turn.blocks, bubbleId);
+    return { files: changes.length ? await rewindPreview(changes, folder) : [], unrecorded };
+  };
+
+  /**
+   * Takes the chat back to just before `bubbleId`, as the agent's `rewind`
+   * does (docs/31-prototype-role.md, P-7): the folder's files put back where
+   * nobody changed them since, the messages from there on gone, and that one
+   * handed back to the message box. Files first — a rewind that could not
+   * reach them leaves the conversation as it was. The versions on disk stay:
+   * they are history, and only leave the panel's list with the messages that
+   * made them. `null` when nothing was done.
+   */
+  const rewind = async (bubbleId: string, summarize = false): Promise<FileRewind[] | null> => {
+    if (turn.status !== "done" && turn.status !== "cancelled") return null;
+    const cut = branchAt(turn.blocks, history.current, bubbleId);
+    if (!cut) return null;
+    let summary: LlmMessage | null = null;
+    if (summarize) {
+      const before = history.current;
+      try {
+        summary = await branchSummary(before.slice(cut.history.length));
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+      // The chat moved on while the summary was written: the cut is stale.
+      if (history.current !== before) return null;
+    }
+    const { changes } = changesFrom(turn.blocks, bubbleId);
+    let files: FileRewind[] = [];
+    try {
+      if (changes.length) files = await rewindApply(changes, folder);
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+    channel.stop();
+    history.current = summary ? [...cut.history, summary] : cut.history;
+    const next = appendNotice(restoredTurn(cut.blocks), rewoundNotice(files, summary !== null));
+    setTurn(next);
+    setError(null);
+    setDraft((last) => ({ text: cut.text, seq: (last?.seq ?? 0) + 1 }));
+    if (chatId !== null) {
+      await plainChatSave(chatId, role, kube, history.current, next.blocks).catch((e) => setError(String(e)));
+      void refresh();
+    }
+    return files;
+  };
+
   /**
    * Puts a Prototype chat's folder back to `version` (docs/31-prototype-role.md,
    * P-6), says so in the transcript — where the model's next message learns it
@@ -326,6 +393,10 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     open,
     newChat,
     restore,
+    branchable,
+    previewRewind,
+    rewind,
+    draft,
     remove,
     archive,
   };

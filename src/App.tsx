@@ -406,7 +406,12 @@ export default function App() {
   // The provider turns go to now: its own switch in Settings → Models.
   const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
-  const rewinding = useRewind({ preview: agent.previewRewind, rewind: agent.rewind, notify: toast.show });
+  // One dialog for either chat: the one on screen is the one being rewound.
+  const rewinding = useRewind(
+    agentMode
+      ? { preview: agent.previewRewind, rewind: agent.rewind, notify: toast.show }
+      : { preview: plain.previewRewind, rewind: plain.rewind, notify: toast.show },
+  );
 
   // Asking before the first message rather than refusing it — and then sending
   // it: the composer has already cleared the box, so anything not sent here is
@@ -634,6 +639,7 @@ export default function App() {
           onCompact={async () => {
             if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
           }}
+          onRewind={rewinding.ask}
           pages={
             plain.role === "prototype"
               ? {

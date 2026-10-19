@@ -1046,7 +1046,8 @@ describe("rewinding", () => {
     await act(async () => {
       preview = await result.current.previewRewind("user:1");
     });
-    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
+    // The open folder: no chat named.
+    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange], chatId: null });
     expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
   });
 
@@ -1062,7 +1063,7 @@ describe("rewinding", () => {
       await result.current.rewind("user:0");
     });
 
-    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange] });
+    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange], chatId: null });
     expect(result.current.chatId).toBe("kept");
     expect(result.current.draft?.text).toBe("first");
     expect(result.current.turn.blocks).toMatchObject([
@@ -1126,7 +1127,7 @@ describe("rewinding", () => {
   });
 
   test("the transcript says how the files went", async () => {
-    const { rewoundNotice } = await import("../hooks/useAgentTurn");
+    const { rewoundNotice } = await import("../lib/rewind");
     const file = (skip: string | null) => ({ path: "a", action: "modified", expected: stored("1"), target: stored("0"), skip }) as never;
     expect(rewoundNotice([])).toBe("Rewound to before this message — no files to put back");
     expect(rewoundNotice([file(null), file(null)])).toBe("Rewound to before this message — 2 files put back");

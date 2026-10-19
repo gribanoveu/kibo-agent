@@ -92,6 +92,36 @@ mod tests {
         assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "edited");
     }
 
+    /// A rewind of the chat to before a message puts its folder back as the
+    /// agent's rewind puts a repository back — and leaves the versions, which
+    /// are history, as they are.
+    #[test]
+    fn a_rewind_puts_the_folder_back_and_leaves_the_versions() {
+        crate::testing::with_app_dir("rewind-prototype", || {
+            use crate::domain::rewind::{FileChange, FileState};
+            use crate::infra::file_history;
+            let (files, versions) = chat("rewind-prototype-chat");
+            fs::write(files.join("index.html"), "before the message").unwrap();
+            let before = file_history::keep(b"before the message").unwrap();
+            fs::write(files.join("index.html"), "after it").unwrap();
+            let after = file_history::keep(b"after it").unwrap();
+            fs::write(files.join("new.css"), "a{}").unwrap();
+            let css = file_history::keep(b"a{}").unwrap();
+            prototype_store::snapshot(&files).unwrap();
+
+            let changes = vec![
+                FileChange { path: "index.html".into(), before: FileState::Stored { hash: before }, after: FileState::Stored { hash: after } },
+                FileChange { path: "new.css".into(), before: FileState::Absent, after: FileState::Stored { hash: css } },
+            ];
+            let done = crate::services::rewind::apply(&ToolScope::new(&files).unwrap(), &changes);
+            assert!(done.iter().all(|file| file.skip.is_none()), "{done:?}");
+            assert_eq!(fs::read_to_string(files.join("index.html")).unwrap(), "before the message");
+            assert!(!files.join("new.css").exists());
+            assert_eq!(fs::read_to_string(versions.join("1").join("index.html")).unwrap(), "after it");
+            assert!(versions.join("1").join("new.css").is_file());
+        });
+    }
+
     /// The model's reading of the page is out of date once it is restored:
     /// an edit made from it is refused, as an edit of a file the user changed is.
     #[test]

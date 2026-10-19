@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
-import { changesFrom } from "../lib/rewind";
+import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useTurnChannel } from "./useTurnChannel";
 import { alwaysAllow, branchSummary, cancelChat, cancelSteer, compactHistory, contextUsage, type ContextUsage, type FileRewind, type LlmMessage, resumeChat, reviewStart, rewindApply, rewindPreview, startChat, steer as steerCommand, type Task, type ToolCallDecision } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
@@ -619,16 +619,3 @@ export function useAgentTurn({
   };
 }
 
-/** What the transcript says where a rewind cut it. */
-export function rewoundNotice(files: FileRewind[], summarized = false): string {
-  const back = files.filter((file) => file.skip === null).length;
-  const left = files.length - back;
-  const plural = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
-  const said =
-    files.length === 0
-      ? "Rewound to before this message — no files to put back"
-      : left === 0
-        ? `Rewound to before this message — ${plural(back)} put back`
-        : `Rewound to before this message — ${plural(back)} put back, ${plural(left)} left as ${left === 1 ? "it is" : "they are"}`;
-  return summarized ? `${said}; the agent keeps a summary of what was tried` : said;
-}

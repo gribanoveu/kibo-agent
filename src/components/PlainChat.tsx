@@ -77,6 +77,8 @@ type Props = {
   onSetUpKube: () => void;
   /** "Compact now" on the context meter. */
   onCompact: () => void;
+  /** Asks to take the chat back to before a bubble — the dialog says what that does first. */
+  onRewind?: (bubbleId: string) => void;
   /** A Prototype chat's Preview panel, beside the chat: absent for another role. */
   pages?: {
     /** Something was presented, so there is a page to show. */
@@ -108,6 +110,7 @@ export function PlainChat({
   kube,
   onSetUpKube,
   onCompact,
+  onRewind,
   pages,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -125,6 +128,13 @@ export function PlainChat({
   const greeting = useMemo(() => pickSuggestions(greetingsAt(new Date().getHours()), 1)[0], [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
+  // A rewound message comes back to be changed and sent again, in place of what was there.
+  const rewound = chat.draft;
+  useEffect(() => {
+    if (!rewound) return;
+    setDraft(rewound.text);
+    input.current?.focus();
+  }, [rewound]);
   // "Fix" under the preview: the error joins what is being written, not replaces it.
   const fix = pages?.fix;
   useEffect(() => {
@@ -187,6 +197,8 @@ export function PlainChat({
                 onDecide={chat.decide}
                 speaker={roleName}
                 preview={chat.preview}
+                branchable={chat.branchable}
+                onRewind={onRewind}
                 onOpenVersion={pages?.onOpenVersion}
               />
               {chat.error && <div className="plain-error">{chat.error}</div>}
