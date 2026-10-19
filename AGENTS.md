@@ -71,7 +71,7 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 | its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
 | its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |
 | its redaction in `domain/tool_call_log.rs` | test `every_tool_is_redacted` |
-| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed, and nothing mutating outside Agent (test) |
+| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed. Plan, Ask and a helper get nothing mutating (test); a Chat role's changes reach only its own place — the Kubernetes role's pinned namespace, the Prototype role's folder — and its tests name them |
 | `ACCOUNTED` in `src/lib/rewind.ts` | test `every_tools_rewind_flag_matches_the_window` against `rewind_sees` |
 | its label and summary in `src/lib/describeTool.ts`, its icon in `ChatPanel.tsx` | nobody — without them the call shows its raw name and the default icon |
 
