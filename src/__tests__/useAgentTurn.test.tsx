@@ -236,7 +236,7 @@ describe("making room before a turn", () => {
 
     expect(folded).toBe(false);
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
-      { command: "chat_compact", args: { messages: [], force: true, plan: null, turnId: expect.stringMatching(/^compact-/) } },
+      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/) } },
     ]);
   });
 });
@@ -258,7 +258,7 @@ describe("the context estimate", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await waitFor(() => expect(result.current.context?.total).toBe(4_000));
-    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [], plan: null } });
+    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [] } });
   });
 
   /// It is an estimate over the history, so it has to be asked again once the
@@ -277,7 +277,7 @@ describe("the context estimate", () => {
 
     expect(calls).toContainEqual({
       command: "chat_context_usage",
-      args: { messages: [{ role: "user", content: "summary" }], plan: null },
+      args: { messages: [{ role: "user", content: "summary" }] },
     });
   });
 });

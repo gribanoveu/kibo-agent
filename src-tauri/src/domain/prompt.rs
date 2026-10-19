@@ -197,8 +197,6 @@ pub struct TurnContext<'a> {
     pub skills: &'a [Skill],
     /// The open folder's `AGENTS.md` and the like, as switched on.
     pub rules: &'a [RuleFile],
-    /// The conversation's plan as the user last left it — possibly edited.
-    pub plan: Option<&'a str>,
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
     /// The language the user asked replies in; `None` asks nothing.
@@ -373,21 +371,6 @@ pub fn mcp_block(servers: &[ServerNote]) -> Option<String> {
     Some(text)
 }
 
-/// The plan, or nothing when there is none.
-///
-/// Its own message, after the project's instructions: it changes when the
-/// model rewrites it or the user edits it, not from round to round. Said to
-/// be the current version, edits included, because the model's own
-/// `writePlan` call further up the history is not — and when the two
-/// disagree, the user's edit has to win.
-pub fn plan_block(plan: Option<&str>) -> Option<String> {
-    let plan = plan.map(str::trim).filter(|p| !p.is_empty())?;
-    Some(format!(
-        "## Plan\n\nThe plan for this conversation, as it stands now. The user may have edited it since it was \
-         written; where it differs from an earlier version in the conversation, this one is right.\n\n{plan}"
-    ))
-}
-
 /// The user's language setting, after the project's rules so that it wins
 /// over a rule written in another language.
 ///
@@ -479,9 +462,6 @@ pub fn system_messages(ctx: &TurnContext) -> Vec<LlmMessage> {
     if let Some(servers) = mcp_block(ctx.mcp_servers) {
         messages.push(LlmMessage::system(servers));
     }
-    if let Some(plan) = plan_block(ctx.plan) {
-        messages.push(LlmMessage::system(plan));
-    }
     if let Some(language) = ctx.language {
         messages.push(LlmMessage::system(language_block(language)));
     }
@@ -514,7 +494,6 @@ mod tests {
             today: "17 September 2026",
             skills: &[],
             rules: &[],
-            plan: None,
             worktree_of: None,
             language: None,
             mcp_servers: &[],
@@ -554,32 +533,6 @@ mod tests {
         assert!(block.contains("### db — 1 tool found with toolSearch\n\nRead only."), "{block}");
         assert!(block.contains("call `toolSearch` with what you need"), "{block}");
         assert_eq!(mcp_block(&[]), None);
-    }
-
-    #[test]
-    fn the_plan_comes_last_before_the_turn_and_says_it_is_current() {
-        let workspace = PathBuf::from("/tmp/p");
-        let rules = [RuleFile::new("AGENTS.md", "Run cargo test.")];
-        let messages = system_messages(&TurnContext {
-            rules: &rules,
-            plan: Some("# Fix the parser\n\n1. read it"),
-            ..ctx(&workspace)
-        });
-
-        assert_eq!(messages.len(), 5);
-        let text = messages[3].content.as_deref().unwrap();
-        assert!(text.starts_with("## Plan"), "{text}");
-        assert!(text.ends_with("# Fix the parser\n\n1. read it"));
-        assert!(text.contains("this one is right"));
-        assert_eq!(messages[4], LlmMessage::system(context_block(&ctx(&workspace))));
-    }
-
-    /// A blank document is no plan; a "Plan" heading over nothing invites
-    /// the model to follow one that does not exist.
-    #[test]
-    fn no_plan_or_a_blank_one_no_message() {
-        assert_eq!(plan_block(None), None);
-        assert_eq!(plan_block(Some("  \n ")), None);
     }
 
     #[test]

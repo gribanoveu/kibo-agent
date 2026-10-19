@@ -205,8 +205,8 @@ pub struct Turn<'a> {
     /// has installed.
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
     /// The chat's plan as the window holds it — the user's edits included.
-    /// Read at the start of the turn: a `writePlan` in this turn reaches the
-    /// model through its own call in the history until the next one.
+    /// Read at the start of the turn; it reaches the model through the
+    /// history ([`restore_plan`]), never the prompt.
     pub plan: Option<&'a str>,
     /// The main working tree, when the open folder is a worktree of it —
     /// said in the prompt, so the model keeps out of the user's checkout.
@@ -385,12 +385,8 @@ struct State {
     budget_used: u32,
     todos: Vec<Task>,
     reads: ReadFiles,
-    /// What `writePlan` last wrote in this turn; `None` until it does. The
-    /// prompt keeps the plan the turn started with — a prompt that changed
-    /// with every `writePlan` would cost a prompt cache the whole history
-    /// each time, and DeepSeek caches from the first token. The new one is in
-    /// its call's arguments, which clearing never touches; a fold that takes
-    /// the call away puts it under the summary ([`keep_plan_through_fold`]).
+    /// What `writePlan` last wrote in this turn; `None` until it does, and
+    /// the window's plan ([`Turn::plan`]) is the current one until then.
     written_plan: Option<String>,
 }
 
@@ -637,7 +633,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
     clear_stale_results(turn, state, &mut pass.seen_results);
     let usage = request_usage(turn, &state.history);
     if compaction::should_compact(usage.total, usage.limit) {
-        let ahead = Folding { todos: &state.todos, written_plan: state.written_plan.as_deref(), tail_percent: KEEP_TAIL_PERCENT };
+        let ahead = Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(turn.plan), tail_percent: KEEP_TAIL_PERCENT };
         match fold(turn, &events, round, &mut state.history, ahead, &mut pass.seen_results) {
             Ok(_) => {}
             // A pass that could not help leaves the history as it was:
@@ -646,6 +642,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
             Err(_) => {}
         }
     }
+    restore_plan(&mut state.history, state.written_plan.as_deref().or(turn.plan));
     restore_checklist(&mut state.history, &state.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
     events.emit(round, Some(format!("estimate:{round}")), ChatEventPayload::ContextEstimate(request_usage(turn, &state.history)));
@@ -655,7 +652,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         &events,
         round,
         &mut state.history,
-        Folding { todos: &state.todos, written_plan: state.written_plan.as_deref(), tail_percent: RETRY_KEEP_TAIL_PERCENT },
+        Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(turn.plan), tail_percent: RETRY_KEEP_TAIL_PERCENT },
         &mut pass.seen_results,
     )? {
         Some(result) => result,
@@ -1418,7 +1415,7 @@ fn ask_the_model(
 #[derive(Clone, Copy)]
 struct Folding<'a> {
     todos: &'a [Task],
-    written_plan: Option<&'a str>,
+    plan: Option<&'a str>,
     tail_percent: u64,
 }
 
@@ -1444,30 +1441,10 @@ fn fold(
     // must come back in full, not as "already above".
     seen_results.clear();
     // The summary may have folded the last list, and the last plan, away.
-    keep_plan_through_fold(history, folding.written_plan);
+    restore_plan(history, folding.plan);
     restore_checklist(history, folding.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
     Ok(true)
-}
-
-/// Puts the plan this turn wrote under the summary, when the fold took its
-/// `writePlan` call away: the prompt still shows the plan the turn started
-/// with, and the call was the only place the new one was. Onto the summary
-/// rather than as a message of its own — the fold has just rewritten the
-/// history, so the cache is lost either way, and a second user message in a
-/// row is one more thing a provider may refuse.
-fn keep_plan_through_fold(history: &mut [LlmMessage], written_plan: Option<&str>) {
-    let Some(plan) = written_plan else { return };
-    let still_there = history.iter().flat_map(|m| &m.tool_calls).any(|call| call.name == ToolName::WritePlan.wire_name());
-    if still_there {
-        return;
-    }
-    let summary = history
-        .iter_mut()
-        .find(|m| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.starts_with(compaction::SUMMARY_PREFIX)));
-    if let Some(content) = summary.and_then(|m| m.content.as_mut()) {
-        content.push_str(&format!("\n\n## The plan, as last written with writePlan\n\n{plan}"));
-    }
 }
 
 /// What this mode advertises. Leaving a tool out of the request is the half
@@ -1571,7 +1548,6 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         today,
         skills: turn.skills,
         rules: turn.rules,
-        plan: turn.plan,
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
@@ -1606,17 +1582,65 @@ fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compacti
 /// time, and OpenAI's cache — which reuses whole earlier requests — kept
 /// nothing past the system prompt: 6k of a 40k history (`agent_bench`, GPT via
 /// OpenRouter). Codex does the same with its plan tool, and never re-sends it.
-///
-/// Onto the last tool result when that is where the history ends — it has not
-/// been sent yet — and otherwise as a message of its own: a user's message is
-/// left as they wrote it, since a branched chat finds it by its text.
 fn restore_checklist(history: &mut Vec<LlmMessage>, todos: &[Task]) {
     if todos.is_empty() || history_shows(history, todos) {
         return;
     }
-    let note = format!("[The checklist as it stands]\n{}", for_model(&ToolResult::Todo { tasks: todos.to_vec() }));
+    append_note(history, format!("{CHECKLIST_NOTE}\n{}", for_model(&ToolResult::Todo { tasks: todos.to_vec() })));
+}
+
+const CHECKLIST_NOTE: &str = "[The checklist as it stands]";
+const PLAN_NOTE: &str = "[The plan as it stands]";
+
+/// Puts the plan into the history when the history no longer shows it as it
+/// stands — the user edited it in the Plan tab, a summary folded the last
+/// `writePlan` away, or the chat was handed over with a plan and no call —
+/// and otherwise leaves the history alone.
+///
+/// The history rather than the prompt, for the reason the checklist is
+/// there ([`restore_checklist`]): a plan in the system prefix changed it on
+/// every `writePlan` and every edit, and the whole conversation after it was
+/// a cache miss again — at DeepSeek's prices, fifty times what a hit costs.
+fn restore_plan(history: &mut Vec<LlmMessage>, plan: Option<&str>) {
+    let Some(plan) = plan.map(str::trim).filter(|p| !p.is_empty()) else { return };
+    if latest_plan_is(history, plan) {
+        return;
+    }
+    append_note(
+        history,
+        format!(
+            "{PLAN_NOTE} The user may have edited it since it was written; where it differs from an earlier \
+             version in the conversation, this one is right.\n<plan>\n{plan}\n</plan>"
+        ),
+    );
+}
+
+/// Whether the latest plan in the history — a `writePlan` call's content, or
+/// one put back by [`restore_plan`] — is `plan`. The latest, not any: the
+/// user's edit overrules the call it was made to.
+fn latest_plan_is(history: &[LlmMessage], plan: &str) -> bool {
+    for message in history.iter().rev() {
+        let written = message.tool_calls.iter().rev().filter(|c| c.name == ToolName::WritePlan.wire_name()).find_map(|call| {
+            serde_json::from_str::<crate::domain::tools::WritePlanArgs>(&call.arguments).ok()
+        });
+        if let Some(written) = written {
+            return written.content.trim() == plan;
+        }
+        if let Some(at) = message.content.as_deref().and_then(|c| c.rfind(PLAN_NOTE).map(|at| &c[at..])) {
+            return at.contains(&format!("<plan>\n{plan}\n</plan>"));
+        }
+    }
+    false
+}
+
+/// Onto the last tool result when that is where the history ends — it has
+/// not been sent yet — or onto the plan's note just added, which the
+/// checklist's follows; otherwise a message of its own. A user's message is
+/// left as they wrote it, since a branched chat finds it by its text.
+fn append_note(history: &mut Vec<LlmMessage>, note: String) {
+    let is_note = |m: &LlmMessage| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.starts_with(PLAN_NOTE));
     match history.last_mut() {
-        Some(last) if last.role == LlmRole::Tool => {
+        Some(last) if last.role == LlmRole::Tool || is_note(last) => {
             let content = last.content.get_or_insert_with(String::new);
             content.push_str("\n\n");
             content.push_str(&note);
@@ -3116,32 +3140,89 @@ mod tests {
         history
     }
 
-    /// Folded away with its call, the plan comes back under the summary; a
-    /// call still in the tail needs no copy, and a turn that wrote none adds
-    /// nothing.
+    fn mentions_plan(message: &LlmMessage) -> bool {
+        message.content.as_deref().is_some_and(|c| c.contains(PLAN_NOTE))
+    }
+
+    /// The plan goes into the history only when the latest one there — a
+    /// `writePlan` call or a note — is not it, and once: the second pass over
+    /// the same history adds nothing.
     #[test]
-    fn a_fold_that_took_the_plan_away_puts_it_under_the_summary() {
-        let summary_of = |history: &[LlmMessage]| history[0].content.clone().unwrap();
-        let bare = summary_of(&summarized(vec![]));
+    fn a_plan_the_history_does_not_show_goes_into_it_once() {
+        let written = |content: &str| LlmMessage {
+            tool_calls: vec![wants("p", "writePlan", &serde_json::json!({ "content": content }).to_string())],
+            ..LlmMessage::assistant("")
+        };
 
         let mut folded = summarized(vec![LlmMessage::user("go on")]);
-        keep_plan_through_fold(&mut folded, Some("# Notes\n\nL13"));
-        assert!(summary_of(&folded).ends_with("## The plan, as last written with writePlan\n\n# Notes\n\nL13"), "{}", summary_of(&folded));
+        restore_plan(&mut folded, Some("# Notes\n\nL13\n"));
+        assert_eq!(folded.len(), 3, "a message of its own after the user's");
+        assert!(folded[2].content.as_deref().unwrap().ends_with("<plan>\n# Notes\n\nL13\n</plan>"), "{:?}", folded[2]);
+        let before = folded.clone();
+        restore_plan(&mut folded, Some("# Notes\n\nL13"));
+        assert_eq!(folded, before, "a plan already shown is not shown twice");
 
-        let call = LlmMessage { tool_calls: vec![wants("p", "writePlan", r#"{"content":"x"}"#)], ..LlmMessage::assistant("") };
-        let mut kept = summarized(vec![call, LlmMessage::tool_result("p", "ok")]);
-        keep_plan_through_fold(&mut kept, Some("# Notes"));
-        assert_eq!(summary_of(&kept), bare);
+        let mut kept = vec![LlmMessage::user("go"), written("# Notes\n"), LlmMessage::tool_result("p", "ok")];
+        let before = kept.clone();
+        restore_plan(&mut kept, Some("# Notes"));
+        assert_eq!(kept, before, "the call shows it");
 
-        let mut none = summarized(vec![LlmMessage::user("go on")]);
-        keep_plan_through_fold(&mut none, None);
-        assert_eq!(summary_of(&none), bare);
+        let mut edited = kept.clone();
+        restore_plan(&mut edited, Some("# Notes, edited"));
+        let last = edited.last().unwrap();
+        assert_eq!((last.role, edited.len()), (LlmRole::Tool, 3), "onto the unsent result");
+        assert!(last.content.as_deref().unwrap().starts_with("ok\n\n[The plan as it stands]"), "{last:?}");
+
+        // A note from an earlier edit is overruled by a later call.
+        let mut rewritten = edited.clone();
+        rewritten.extend([written("# Other"), LlmMessage::tool_result("q", "ok")]);
+        restore_plan(&mut rewritten, Some("# Notes, edited"));
+        assert!(mentions_plan(rewritten.last().unwrap()), "the later call no longer showed the plan");
+
+        // The latest counts, not any: a plan the user went back to after a
+        // later call, a note overruled by a later one, the last of two calls.
+        let mut reverted = vec![LlmMessage::user("go"), written("# A"), LlmMessage::tool_result("p", "ok"), written("# B"), LlmMessage::tool_result("q", "ok")];
+        restore_plan(&mut reverted, Some("# A"));
+        assert!(mentions_plan(reverted.last().unwrap()), "an earlier call showed it, the later one did not");
+        let mut noted = vec![LlmMessage::user("go")];
+        restore_plan(&mut noted, Some("# A"));
+        restore_plan(&mut noted, Some("# B"));
+        assert!(noted[1].content.as_deref().unwrap().ends_with("<plan>\n# B\n</plan>"), "{:?}", noted[1]);
+        let twice = LlmMessage {
+            tool_calls: vec![
+                wants("p", "writePlan", r##"{"content":"# A"}"##),
+                wants("q", "writePlan", r##"{"content":"# B"}"##),
+            ],
+            ..LlmMessage::assistant("")
+        };
+        let mut both = vec![LlmMessage::user("go"), twice, LlmMessage::tool_result("p", "ok"), LlmMessage::tool_result("q", "ok")];
+        let before = both.clone();
+        restore_plan(&mut both, Some("# B"));
+        assert_eq!(both, before, "the second call of a round is the plan");
+
+        for nothing in [None, Some("  \n ")] {
+            let mut none = summarized(vec![LlmMessage::user("go on")]);
+            restore_plan(&mut none, nothing);
+            assert_eq!(none.len(), 2, "a blank plan is no plan");
+        }
+    }
+
+    /// The plan and the checklist put back together share one message
+    /// rather than leaving two of theirs in a row after the user's.
+    #[test]
+    fn the_plan_and_the_checklist_share_a_note() {
+        use crate::domain::tools::TodoStatus::InProgress;
+        let mut history = vec![LlmMessage::user("go")];
+        restore_plan(&mut history, Some("# Plan"));
+        restore_checklist(&mut history, &[task("t1", "look", InProgress)]);
+        assert_eq!(history.len(), 2);
+        assert!(mentions_plan(&history[1]) && mentions_checklist(&history[1]), "{:?}", history[1]);
     }
 
     /// The whole way round: a plan written, a fold that takes its call
-    /// away, and the retry that follows reads the plan under the summary.
+    /// away, and the retry that follows reads the plan after the summary.
     #[test]
-    fn a_plan_folded_away_with_its_call_comes_back_under_the_summary() {
+    fn a_plan_folded_away_with_its_call_comes_back_after_the_summary() {
         let mut h = harness(
             "chat-plan-folded",
             vec![
@@ -3160,9 +3241,9 @@ mod tests {
 
         let requests = h.provider.requests();
         let retry = conversation_of(requests.last().unwrap());
-        let summary = retry[0].content.as_deref().unwrap();
-        assert!(summary.contains("## The plan, as last written with writePlan"), "{}", &summary[..summary.len().min(300)]);
-        assert!(summary.contains("EmployeeController: L13-L40"));
+        let noted: Vec<&LlmMessage> = retry.iter().filter(|m| mentions_plan(m)).collect();
+        assert_eq!(noted.len(), 1, "{retry:?}");
+        assert!(noted[0].content.as_deref().unwrap().contains("<plan>\n# Notes\n\nEmployeeController: L13-L40\n</plan>"));
         assert!(!retry.iter().flat_map(|m| &m.tool_calls).any(|c| c.name == "writePlan"), "the call was not folded — this proves nothing");
     }
 
@@ -5069,6 +5150,30 @@ mod tests {
         });
     }
 
+    /// A plan written in the turn is the current one from then on: the plan
+    /// the window held when the turn began is not put back after the call.
+    #[test]
+    fn a_plan_written_in_the_turn_is_not_overruled_by_the_one_it_began_with() {
+        let mut h = harness(
+            "turn-plan-rewritten",
+            vec![
+                asks(vec![wants("p", "writePlan", r##"{"content":"# New"}"##)]),
+                asks(vec![wants("l", "listFiles", "{}")]),
+                text("done"),
+            ],
+        );
+        h.plan = Some("# Old".into());
+
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+
+        let last = h.provider.requests().last().unwrap().clone();
+        let noted: Vec<&LlmMessage> = conversation_of(&last).iter().filter(|m| mentions_plan(m)).collect();
+        assert_eq!(noted.len(), 1, "only the plan the turn began with, before the call: {noted:?}");
+        assert!(noted[0].content.as_deref().unwrap().contains("<plan>\n# Old\n</plan>"));
+    }
+
+    /// The plan as the window holds it reaches every request through the
+    /// history, never the prompt: an edit to it leaves the cached prefix alone.
     #[test]
     fn every_request_carries_the_plan_as_the_window_holds_it() {
         let mut h = harness("turn-plan", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done")]);
@@ -5076,12 +5181,13 @@ mod tests {
 
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
 
-        for request in h.provider.requests() {
-            assert!(
-                request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("1. edited by the user"))),
-                "a request went out without the plan"
-            );
+        let requests = h.provider.requests();
+        for request in &requests {
+            let carries = |m: &LlmMessage| m.content.as_deref().is_some_and(|c| c.contains("1. edited by the user"));
+            assert_eq!(conversation_of(request).iter().filter(|m| carries(m)).count(), 1, "a request went out without the plan, or with two");
+            assert!(!request.messages.iter().any(|m| m.role == LlmRole::System && carries(m)), "the plan is in the prompt");
         }
+        assert!(requests[1].messages.starts_with(&requests[0].messages), "a request is a prefix of the next");
     }
 
     #[test]

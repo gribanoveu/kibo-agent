@@ -205,15 +205,13 @@ export async function startChat(
  */
 export async function compactHistory(
   messages: LlmMessage[],
-  force = false,
-  plan: string | null = null,
+  force: boolean,
   turnId: string,
 ): Promise<{ history: LlmMessage[]; folded: number } | null> {
   if (!inTauri()) return null;
   return invoke<{ history: LlmMessage[]; folded: number } | null>("chat_compact", {
     messages,
     force,
-    plan,
     turnId,
   });
 }
@@ -293,7 +291,7 @@ export async function setRememberScope(remember: RememberScope): Promise<void> {
  * than counting characters here.
  */
 export type ContextUsage = {
-  /** The system prompt but the skills list: the mode, the project's rules, the plan. */
+  /** The system prompt but the skills list: the mode, the project's rules. */
   instructions: number;
   /** The skills list, and every skill loaded since. */
   skills: number;
@@ -309,9 +307,9 @@ export type ContextUsage = {
   compactsAt: number | null;
 };
 
-export async function contextUsage(messages: LlmMessage[], plan: string | null): Promise<ContextUsage> {
+export async function contextUsage(messages: LlmMessage[]): Promise<ContextUsage> {
   requireBackend();
-  return invoke<ContextUsage>("chat_context_usage", { messages, plan });
+  return invoke<ContextUsage>("chat_context_usage", { messages });
 }
 
 /** What the agent is allowed to be. Mirrors `domain::conversation_mode`. */

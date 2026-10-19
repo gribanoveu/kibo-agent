@@ -169,7 +169,7 @@ export function useAgentTurn({
   }, [turn.status, turn.blocks, chatId, onSaved, keepPlan]);
 
   const refreshContext = useCallback(() => {
-    contextUsage(history.current, planRef.current)
+    contextUsage(history.current)
       .then(setContext)
       // A meter that cannot be drawn is not worth an error banner over the
       // conversation it is measuring.
@@ -205,7 +205,7 @@ export function useAgentTurn({
     const id = `compact-${++turnId.current}`;
     const end = await channel.watchCompaction(id);
     try {
-      const shorter = await compactHistory(history.current, force, planRef.current, id);
+      const shorter = await compactHistory(history.current, force, id);
       end(shorter && { folded: shorter.folded });
       if (!shorter) return false;
       history.current = shorter.history;
