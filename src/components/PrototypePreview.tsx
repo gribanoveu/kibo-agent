@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, FolderOpen, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, FolderOpen, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
 import { revealPrototype } from "../lib/prototype";
@@ -9,6 +9,8 @@ type Props = {
   preview: Preview;
   chatId: string;
   onNotify: (message: string) => void;
+  /** Puts the folder back to the version shown; absent while a turn is under way. */
+  onRestore?: (version: number) => void;
 };
 
 /** The working folder as it is now, in the picker beside the versions. */
@@ -21,7 +23,7 @@ const NOW = "now";
  * What goes wrong on the page arrives as a message (`prototype_protocol`'s
  * reporter) and is listed under it, to hand to the model.
  */
-export function PrototypePreview({ preview, chatId, onNotify }: Props) {
+export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [errors, setErrors] = useState<string[]>([]);
 
@@ -66,6 +68,18 @@ export function PrototypePreview({ preview, chatId, onNotify }: Props) {
           below
           right
         />
+        {preview.shown !== null && (
+          <button
+            type="button"
+            className="prototype-preview-restore"
+            title={onRestore ? "Make the folder this version again — kept as a new version, nothing is lost" : "Wait for the turn to finish"}
+            disabled={!onRestore}
+            onClick={() => preview.shown !== null && onRestore?.(preview.shown)}
+          >
+            <RotateCcw size={12} />
+            Restore
+          </button>
+        )}
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>
           <RotateCw size={13} />
         </button>

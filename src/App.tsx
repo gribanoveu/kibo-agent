@@ -667,7 +667,22 @@ export default function App() {
   ) : null;
   const topPane =
     previewShown && plain.chatId !== null ? (
-      <PrototypePreview key="preview" preview={prototypePreview} chatId={plain.chatId} onNotify={toast.show} />
+      <PrototypePreview
+        key="preview"
+        preview={prototypePreview}
+        chatId={plain.chatId}
+        onNotify={toast.show}
+        onRestore={
+          plain.busy
+            ? undefined
+            : async (version) => {
+                if (!(await plain.restore(version))) return;
+                // The folder as it now is — the version brought back.
+                prototypePreview.show(null);
+                prototypePreview.refresh();
+              }
+        }
+      />
     ) : (
       <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
     );

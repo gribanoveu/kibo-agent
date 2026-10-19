@@ -55,6 +55,78 @@ pub fn snapshot(files: &Path) -> Result<u32, PrototypeError> {
     }
 }
 
+/// The highest version kept of the chat's working folder `files`; `None` before the first.
+pub fn latest(files: &Path) -> Result<Option<u32>, PrototypeError> {
+    let versions = versions_of(files)?;
+    if !versions.is_dir() {
+        return Ok(None);
+    }
+    Ok(Some(highest(&versions)?).filter(|&n| n > 0))
+}
+
+/// Whether the working folder holds exactly what version `n` does — the same
+/// files with the same bytes, links left out on both sides as a version leaves them.
+pub fn same_as_version(files: &Path, n: u32) -> Result<bool, PrototypeError> {
+    let version = version_dir(files, n)?;
+    Ok(tree(files)? == tree(&version)?)
+}
+
+/// Makes the working folder what version `n` holds: its files back, and
+/// whatever the folder gained since gone. Copied aside and swapped in, so a
+/// copy that fails leaves the folder as it was.
+pub fn replace_with_version(files: &Path, n: u32) -> Result<(), PrototypeError> {
+    let version = version_dir(files, n)?;
+    let chat = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?;
+    let staging = chat.join(".files.partial");
+    let old = chat.join(".files.old");
+    // Left by a restore that died part-way.
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&old);
+    if let Err(e) = copy_tree(&version, &staging, &mut 0) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    fs::rename(files, &old).map_err(|source| io(files, source))?;
+    if let Err(source) = fs::rename(&staging, files) {
+        // Put back what was there rather than leave no folder.
+        let _ = fs::rename(&old, files);
+        return Err(io(files, source));
+    }
+    let _ = fs::remove_dir_all(&old);
+    Ok(())
+}
+
+fn versions_of(files: &Path) -> Result<PathBuf, PrototypeError> {
+    let chat = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?;
+    Ok(chat.join(VERSIONS))
+}
+
+fn version_dir(files: &Path, n: u32) -> Result<PathBuf, PrototypeError> {
+    let version = versions_of(files)?.join(n.to_string());
+    if version.is_dir() { Ok(version) } else { Err(PrototypeError::NoVersion(n)) }
+}
+
+/// A folder's files by their path inside it, with their bytes.
+fn tree(dir: &Path) -> Result<std::collections::BTreeMap<PathBuf, Vec<u8>>, PrototypeError> {
+    fn walk(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) -> Result<(), PrototypeError> {
+        for entry in fs::read_dir(dir).map_err(|source| io(dir, source))? {
+            let entry = entry.map_err(|source| io(dir, source))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|source| io(&path, source))?;
+            if kind.is_dir() {
+                walk(root, &path, out)?;
+            } else if kind.is_file() {
+                let bytes = fs::read(&path).map_err(|source| io(&path, source))?;
+                out.insert(path.strip_prefix(root).unwrap_or(&path).to_path_buf(), bytes);
+            }
+        }
+        Ok(())
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out)?;
+    Ok(out)
+}
+
 /// The chat folder `files` is the working folder of, if it is one.
 fn chat_of(files: &Path) -> Option<&Path> {
     let chat = files.parent()?;

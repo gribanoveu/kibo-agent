@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-19 A Prototype chat's page can be put back to an earlier version from the Preview panel; it becomes a new version, the ones after it stay, and changes not yet presented are kept as a version first
 - 2026-10-19 Add the Prototype role in Chat: the model builds a page — a React site, an HTML slide deck — in the chat's own folder and shows it in a Preview panel beside the chat; each page it presents is kept as a version to open again from its card
 - 2026-10-16 Overview and Terminal open without a heading and close button of their own: their buttons in the chat header, ⌘1 and ⌃` show and hide them
 - 2026-10-16 MCP servers' status in Overview and the MCP pane changes as they start, fail or stop, without reopening the pane

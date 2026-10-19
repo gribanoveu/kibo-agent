@@ -38,7 +38,7 @@ import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
 import { findingOf } from "../lib/finding";
 import { presentedOf } from "../lib/prototype";
-import { PresentedCard } from "./PresentedCard";
+import { PresentedCard, RestoredCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
@@ -1078,6 +1078,8 @@ function renderBlock(
           {block.text}
         </p>
       );
+    case "restored":
+      return <RestoredCard key={block.id} from={block.from} version={block.version} before={block.before} onOpen={onOpenVersion} />;
     case "processEnded":
       return <ProcessEndedCard key={block.id} process={block.process} onOpen={onOpenProcess} />;
     case "compaction":

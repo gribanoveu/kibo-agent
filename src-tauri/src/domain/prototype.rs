@@ -1,6 +1,7 @@
-//! A Prototype chat's folder (`docs/31-prototype-role.md`): what can go wrong
-//! with it.
+//! A Prototype chat's folder (`docs/31-prototype-role.md`): what a restore
+//! did, and what can go wrong with it.
 
+use serde::Serialize;
 use thiserror::Error;
 
 use super::chat_record::ChatError;
@@ -28,4 +29,17 @@ pub enum PrototypeError {
     /// Worded for the model: what to do about it.
     #[error("the folder is over {} MB, the most a version keeps — delete what the page does not use, or keep large files out of it", limit / (1024 * 1024))]
     TooBig { limit: u64 },
+    #[error("there is no version {0} of this chat's folder")]
+    NoVersion(u32),
+}
+
+/// What restoring a version did (P-6): the version put back, the new one the
+/// folder is kept as now, and — when the folder had changed since its last
+/// version — the version it was kept as first, so nothing is lost.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restored {
+    pub from: u32,
+    pub version: u32,
+    pub before: Option<u32>,
 }

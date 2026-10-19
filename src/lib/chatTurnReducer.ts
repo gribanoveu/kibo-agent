@@ -38,6 +38,9 @@ export type Block =
   | { kind: "compaction"; id: string; status: "running" | "done" | "failed"; folded?: number }
   /** A background process ended — what the model was told at its round, drawn as a card. */
   | { kind: "processEnded"; id: string; process: ProcessInfo }
+  /** A Prototype chat's folder put back to version `from`, now kept as `version`;
+      `before` is the version the folder was kept as first, when it had changed. */
+  | { kind: "restored"; id: string; from: number; version: number; before: number | null }
   | {
       kind: "tool";
       id: string;
@@ -228,6 +231,14 @@ export function appendNotice(state: TurnState, text: string): TurnState {
   return {
     ...state,
     blocks: [...state.blocks, { kind: "notice", id: `notice:${state.blocks.length}`, text }],
+  };
+}
+
+/** A restore of a Prototype chat's folder, said where it happened. */
+export function appendRestored(state: TurnState, restored: { from: number; version: number; before: number | null }): TurnState {
+  return {
+    ...state,
+    blocks: [...state.blocks, { kind: "restored", id: `restored:${state.blocks.length}`, ...restored }],
   };
 }
 

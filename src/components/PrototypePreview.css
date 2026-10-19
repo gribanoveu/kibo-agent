@@ -37,6 +37,28 @@
   border: 0;
   background: var(--bg-page);
 }
+.prototype-preview-restore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.prototype-preview-restore:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.prototype-preview-restore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .prototype-preview-errors {
   flex: none;
   max-height: 30%;

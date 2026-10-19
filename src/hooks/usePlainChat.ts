@@ -6,6 +6,7 @@ import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchi
 import {
   acceptOutcome,
   appendNotice,
+  appendRestored,
   appendUserMessage,
   clearApproval,
   emptyTurn,
@@ -15,6 +16,7 @@ import {
   type TurnState,
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
+import { restoreNote, restorePrototype } from "../lib/prototype";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
 
@@ -186,8 +188,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     if (busy || (!trimmed && images.length === 0)) return;
     const id = chatId ?? crypto.randomUUID();
     const before = turn;
-    const asked = appendUserMessage(before, trimmed, Date.now(), undefined, images);
-    history.current = [...history.current, { role: "user", content: trimmed, ...(images.length > 0 && { images }) }];
+    // A restore since the last message: the model is told with this one, and the transcript shows what was typed.
+    const note = restoreNote(before.blocks);
+    const sent = note ? (trimmed ? `${trimmed}\n\n${note}` : note) : undefined;
+    const asked = appendUserMessage(before, trimmed, Date.now(), sent, images);
+    history.current = [...history.current, { role: "user", content: sent ?? trimmed, ...(images.length > 0 && { images }) }];
     unsaved.current = true;
     setChatId(id);
     setError(null);
@@ -253,6 +258,25 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     }
   };
 
+  /**
+   * Puts a Prototype chat's folder back to `version` (docs/31-prototype-role.md,
+   * P-6), says so in the transcript — where the model's next message learns it
+   * too — and saves. `false` while a turn is under way, or when it failed.
+   */
+  const restore = async (version: number) => {
+    if (busy || chatId === null) return false;
+    try {
+      const restored = await restorePrototype(chatId, version);
+      const next = appendRestored(turn, restored);
+      setTurn(next);
+      await plainChatSave(chatId, role, kube, history.current, next.blocks);
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    }
+  };
+
   /** `false` for the open chat while a turn is under way: its next save would write it back. */
   const remove = async (id: string) => {
     if (id === chatId && !newChat()) return false;
@@ -301,6 +325,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     compact: () => (busy ? Promise.resolve(false) : makeRoom(true)),
     open,
     newChat,
+    restore,
     remove,
     archive,
   };

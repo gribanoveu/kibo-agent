@@ -17,7 +17,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { edits, pageUrl, presentedOf, versionsOf } = await import("../lib/prototype");
+const { edits, pageUrl, presentedOf, restoreNote, versionsOf } = await import("../lib/prototype");
 const { usePrototypePreview } = await import("../hooks/usePrototypePreview");
 const { PrototypePreview } = await import("../components/PrototypePreview");
 const { Transcript } = await import("../components/ChatPanel");
@@ -58,6 +58,28 @@ describe("what was presented is the transcript's", () => {
   test("a page's address is the platform's, its path segments encoded", () => {
     expect(pageUrl("c1", null, "my page.html", false)).toBe("artifact://localhost/c1/files/my%20page.html");
     expect(pageUrl("c1", 3, "pages/index.html", true)).toBe("http://artifact.localhost/c1/versions/3/pages/index.html");
+  });
+});
+
+describe("a restore is a version too", () => {
+  const restored = (id: string, from: number, version: number, before: number | null): Block => ({ kind: "restored", id, from, version, before });
+  const user = (id: string): Block => ({ kind: "user", id, text: "hi" });
+
+  test("the version put back is listed with the page it was, and the folder before it when it was kept", () => {
+    const blocks: Block[] = [presented("p1", 1, "index.html"), presented("p2", 2, "deck.html", "Deck"), restored("r1", 1, 4, 3)];
+    expect(versionsOf(blocks).slice(2)).toEqual([
+      { version: 3, path: "deck.html", title: "Before restoring version 1" },
+      { version: 4, path: "index.html", title: "Version 1, restored" },
+    ]);
+    expect(versionsOf([presented("p1", 1), restored("r1", 1, 2, null)]).map((v) => v.version)).toEqual([1, 2]);
+  });
+
+  test("the model is told of a restore since the user's last message, and of the last one only", () => {
+    expect(restoreNote([user("u1"), presented("p1", 1)])).toBeNull();
+    expect(restoreNote([user("u1"), restored("r1", 1, 3, null), user("u2")])).toBeNull();
+    const note = restoreNote([user("u1"), restored("r1", 1, 3, null), restored("r2", 2, 4, null)]);
+    expect(note).toContain("version 2 (now kept as version 4)");
+    expect(note).toContain("read them before you edit them");
   });
 });
 
@@ -144,11 +166,37 @@ describe("the panel", () => {
     expect(asked).toEqual(["The page shows an error: x is not defined. Fix it."]);
   });
 
+  test("restores the version it shows, and offers nothing to restore on the folder as it is", () => {
+    const preview = panel([presented("p1", 1), presented("p2", 2)]);
+    const asked: number[] = [];
+    const { rerender } = render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} onRestore={(v) => asked.push(v)} />);
+    expect(screen.queryByText("Restore")).toBeNull();
+    act(() => preview.current.show(1));
+    rerender(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} onRestore={(v) => asked.push(v)} />);
+    fireEvent.click(screen.getByText("Restore"));
+    expect(asked).toEqual([1]);
+    // While a turn runs there is no restore to offer.
+    rerender(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
+    expect((screen.getByText("Restore").closest("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
   test("shows the chat's folder when asked", () => {
     const preview = panel([presented("p1", 1)]);
     render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
     fireEvent.click(screen.getByTitle("Show the chat's folder"));
     expect(revealed).toEqual(["c1"]);
+  });
+});
+
+describe("a restore in the transcript", () => {
+  test("says which version came back and what it is now, and opens it", () => {
+    const opened: number[] = [];
+    const turn = { ...emptyTurn(), status: "done" as const, blocks: [presented("p1", 1), { kind: "restored", id: "r1", from: 1, version: 3, before: 2 } as Block] };
+    render(<Transcript turn={turn} onDecide={() => {}} onOpenVersion={(v) => opened.push(v)} />);
+    expect(screen.getByText("Restored version 1")).not.toBeNull();
+    expect(screen.getByText("now version 3 · the folder before it kept as version 2")).not.toBeNull();
+    fireEvent.click(screen.getAllByText("Open")[1]);
+    expect(opened).toEqual([3]);
   });
 });
 

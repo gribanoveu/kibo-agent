@@ -275,3 +275,75 @@ describe("the cluster a chat works with", () => {
     expect(called("plain_chat_preview")[0]?.args).toEqual({ kube: { kubeconfig: "prod", context: null, namespace: null }, calls });
   });
 });
+
+describe("a Prototype chat's folder put back", () => {
+  const done = { status: "done", value: { text: "ok", history: [], todos: [] } };
+  const lastSent = () => (called("plain_chat_send").at(-1)?.args.messages as { content: string }[]).at(-1)?.content;
+
+  test("a restore is said in the transcript, saved, and told to the model once, with the next message", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = { from: 1, version: 3, before: 2 };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+
+    let restored = false;
+    await act(async () => {
+      restored = await result.current.restore(1);
+    });
+    expect(restored).toBe(true);
+    expect(called("prototype_restore")[0]?.args).toMatchObject({ version: 1, chatId: result.current.chatId });
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({ kind: "restored", from: 1, version: 3, before: 2 });
+    expect((called("plain_chat_save").at(-1)?.args.blocks as { kind: string }[]).at(-1)?.kind).toBe("restored");
+
+    await act(async () => {
+      await result.current.send("make the header blue");
+    });
+    expect(lastSent()).toStartWith("make the header blue\n\n[The user restored the chat's folder to version 1 (now kept as version 3)");
+    const bubbles = result.current.turn.blocks.filter((b) => b.kind === "user") as { text: string }[];
+    expect(bubbles.at(-1)?.text).toBe("make the header blue");
+
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.send("and the footer");
+    });
+    expect(lastSent()).toBe("and the footer");
+  });
+
+  // The turn may be writing those very files: the folder is not put back under it.
+  test("nothing is restored while a turn is under way", async () => {
+    results.plain_chat_send = () => new Promise(() => {});
+    results.prototype_restore = { from: 1, version: 3, before: null };
+    const { result } = renderHook(() => usePlainChat());
+    act(() => {
+      void result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    let restored = true;
+    await act(async () => {
+      restored = await result.current.restore(1);
+    });
+    expect(restored).toBe(false);
+    expect(called("prototype_restore")).toEqual([]);
+  });
+
+  test("a restore that failed says why and adds nothing", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = new Error("there is no version 9 of this chat's folder");
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const before = result.current.turn.blocks.length;
+    let restored = true;
+    await act(async () => {
+      restored = await result.current.restore(9);
+    });
+    expect(restored).toBe(false);
+    expect(result.current.turn.blocks.length).toBe(before);
+    expect(result.current.error).toContain("no version 9");
+  });
+});

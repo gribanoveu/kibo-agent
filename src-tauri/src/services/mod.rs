@@ -3,6 +3,7 @@ pub mod text_diff;
 pub mod llm_session;
 pub mod llm_chat;
 pub mod plain_chat;
+pub mod prototype_versions;
 pub mod features;
 pub mod kubeconfigs;
 pub mod kube_changes;
