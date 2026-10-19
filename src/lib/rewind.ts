@@ -30,6 +30,8 @@ const ACCOUNTED = new Set([
   "toolSearch",
   // The app's own board, not the folder.
   "board",
+  // A version kept beside a Prototype chat's folder: history, which stays.
+  "present",
   "skill",
   "writePlan",
   "readOutput",

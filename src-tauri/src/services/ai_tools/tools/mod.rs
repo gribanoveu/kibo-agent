@@ -24,6 +24,7 @@ use crate::domain::tools::{
 };
 
 pub mod board;
+pub mod present;
 pub mod deepseek;
 pub mod delete;
 pub mod delete_directory;
@@ -104,6 +105,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekSearch, deepseek::search_definition),
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
+    (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
@@ -165,6 +167,7 @@ pub fn dispatch(
         ToolCall::DeepseekSearch(args) => deepseek::deepseek_search(args, deps),
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
+        ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
@@ -547,6 +550,13 @@ mod definition_tests {
                     note: Some("wlbuh".into()),
                     id: Some("c1".into()),
                     column: Some(crate::domain::board::Column::Done),
+                })],
+            ),
+            ToolName::Present => (
+                r#"{"path":"index.html","title":"Coffee shop"}"#,
+                vec![ToolCall::Present(crate::domain::tools::PresentArgs {
+                    path: "index.html".into(),
+                    title: "Coffee shop".into(),
                 })],
             ),
             ToolName::ToolSearch => (

@@ -127,6 +127,9 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::WebPage { page } => web_page(page),
         ToolResult::ToolsFound { tools } => found_tools(tools),
         ToolResult::Board { cards } => board(cards),
+        ToolResult::Presented { path, title, version } => {
+            format!("Presented {path} as \"{title}\", version {version}. The user sees it beside the chat; say in a line or two what to look at.")
+        }
     }
 }
 

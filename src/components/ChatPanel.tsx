@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  AppWindow,
   ArrowUpRight,
   Brain,
   Loader2,
@@ -80,6 +81,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Plan: ScrollText,
   Explore: Telescope,
   Board: SquareKanban,
+  Prototype: AppWindow,
 };
 
 

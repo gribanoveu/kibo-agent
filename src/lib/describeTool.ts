@@ -84,6 +84,7 @@ export const LABELS: Record<string, string> = {
   deepseekSearch: "DeepSeek web",
   deepseekFetch: "DeepSeek page",
   board: "Board",
+  present: "Prototype",
   toolSearch: "Find tools",
 };
 
@@ -293,6 +294,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: op === "add" ? (str(args.title) ?? "") : op === "move" ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}` : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
         detail: str(args.note) ?? "",
+      };
+    }
+
+    // A page put in front of the user: its name, and the version kept.
+    case "present": {
+      const version = num(result.version);
+      return {
+        name,
+        arg: str(result.title) ?? str(args.title) ?? "",
+        meta: version === undefined ? undefined : `version ${version}`,
+        detail: str(result.path) ?? str(args.path) ?? "",
       };
     }
 

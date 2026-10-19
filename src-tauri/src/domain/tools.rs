@@ -91,6 +91,9 @@ pub enum ToolName {
     /// The Assistant's board: cards kept for later, which the user sees on
     /// the Board page (`domain::board`).
     Board,
+    /// The Prototype role's page shown to the user, its folder kept as a
+    /// version (`docs/31-prototype-role.md`, P-4).
+    Present,
     /// Finds the MCP tools left out of the request (`Exposure::Deferred`)
     /// and declares them from the next round on.
     ToolSearch,
@@ -153,6 +156,7 @@ impl ToolName {
         ToolName::DeepseekSearch,
         ToolName::DeepseekFetch,
         ToolName::Board,
+        ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
     ];
@@ -205,6 +209,7 @@ impl ToolName {
             ToolName::DeepseekSearch => "deepseekSearch",
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
+            ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
@@ -291,6 +296,8 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             | ToolName::Board
+            // A copy of the chat's folder beside it; nothing there changes.
+            | ToolName::Present
             | ToolName::ToolSearch => false,
         }
     }
@@ -323,6 +330,8 @@ impl ToolName {
             | ToolName::DeepseekFetch
             | ToolName::ToolSearch
             | ToolName::Board
+            // A version kept beside the folder: history, which a rewind leaves.
+            | ToolName::Present
             | ToolName::Skill
             | ToolName::WritePlan
             | ToolName::ReadOutput
@@ -381,7 +390,9 @@ impl ToolName {
             // A scan of the connected servers' tool lists, in memory.
             | ToolName::ToolSearch
             // A small file in the app directory, read and written.
-            | ToolName::Board => 1,
+            | ToolName::Board
+            // A copy of a folder of a few pages.
+            | ToolName::Present => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.
@@ -592,7 +603,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            46,
+            47,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1212,6 +1223,8 @@ pub enum ToolError {
     Kube(#[from] crate::domain::kube::KubeError),
     #[error(transparent)]
     Board(#[from] crate::domain::board::BoardError),
+    #[error(transparent)]
+    Prototype(#[from] crate::domain::prototype::PrototypeError),
     /// A tool of a feature the user has off — called from memory of a turn
     /// when it was on.
     #[error("the tool `{tool}` belongs to {feature}, which is turned off — tell the user they can turn it on on the Catalog page")]
@@ -1283,6 +1296,7 @@ pub enum ToolCall {
     DeepseekSearch(DeepseekSearchArgs),
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
+    Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
 }
@@ -1334,6 +1348,7 @@ impl ToolCall {
             ToolCall::DeepseekSearch(_) => ToolName::DeepseekSearch,
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
+            ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
@@ -1591,6 +1606,8 @@ pub enum ToolResult {
     ToolsFound { tools: Vec<FoundTool> },
     /// `board`: the whole board after the call.
     Board { cards: Vec<crate::domain::board::Card> },
+    /// `present`: the page shown, and the version its folder was kept as.
+    Presented { path: String, title: String, version: u32 },
 }
 
 /// One MCP tool `toolSearch` found: the name it is called by now, its
@@ -1924,6 +1941,15 @@ pub struct ExploreArgs {
 #[serde(rename_all = "camelCase")]
 pub struct RememberArgs {
     pub fact: String,
+}
+
+/// `present` arguments: the page, by its path in the chat's folder, and what
+/// to call it on its card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentArgs {
+    pub path: String,
+    pub title: String,
 }
 
 /// `writePlan` arguments: the whole plan.

@@ -11,6 +11,11 @@ use crate::infra::app_dir;
 
 const DIR: &str = "prototypes";
 const FILES: &str = "files";
+const VERSIONS: &str = "versions";
+
+/// The most one version may hold. Pages are kilobytes; a folder past this
+/// has something in it the page does not need.
+pub const MAX_VERSION_BYTES: u64 = 5 * 1024 * 1024;
 
 /// The chat's working folder, made if missing.
 pub fn files_dir(chat_id: &str) -> Result<PathBuf, PrototypeError> {
@@ -21,6 +26,65 @@ pub fn files_dir(chat_id: &str) -> Result<PathBuf, PrototypeError> {
 /// one — any but a Prototype chat — has nothing to remove.
 pub fn remove(chat_id: &str) -> Result<(), PrototypeError> {
     remove_in(&app_dir::dir()?, chat_id)
+}
+
+/// Keeps the chat's working folder `files` as its next version —
+/// `versions/<n>` beside it — and returns `n`, one past the highest there is.
+/// Copied whole, so an old version shows with its own styles and pictures;
+/// links are left out, so a version holds the chat's own files and nothing
+/// they point at. Written aside and renamed into place: a version is all
+/// there or not there.
+pub fn snapshot(files: &Path) -> Result<u32, PrototypeError> {
+    let chat = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?;
+    let versions = chat.join(VERSIONS);
+    fs::create_dir_all(&versions).map_err(|source| io(&versions, source))?;
+    let n = highest(&versions)? + 1;
+    let staging = versions.join(format!(".{n}.partial"));
+    // Left by a copy that died part-way.
+    let _ = fs::remove_dir_all(&staging);
+    let kept = copy_tree(files, &staging, &mut 0).and_then(|()| {
+        let version = versions.join(n.to_string());
+        fs::rename(&staging, &version).map_err(|source| io(&version, source))
+    });
+    match kept {
+        Ok(()) => Ok(n),
+        Err(e) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(e)
+        }
+    }
+}
+
+/// The chat folder `files` is the working folder of, if it is one.
+fn chat_of(files: &Path) -> Option<&Path> {
+    let chat = files.parent()?;
+    (files.file_name()? == FILES && chat.parent()?.file_name()? == DIR).then_some(chat)
+}
+
+fn highest(versions: &Path) -> Result<u32, PrototypeError> {
+    let entries = fs::read_dir(versions).map_err(|source| io(versions, source))?;
+    Ok(entries.flatten().filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()).max().unwrap_or(0))
+}
+
+fn copy_tree(from: &Path, to: &Path, bytes: &mut u64) -> Result<(), PrototypeError> {
+    fs::create_dir_all(to).map_err(|source| io(to, source))?;
+    for entry in fs::read_dir(from).map_err(|source| io(from, source))? {
+        let entry = entry.map_err(|source| io(from, source))?;
+        let path = entry.path();
+        // Not followed: a link is neither.
+        let kind = entry.file_type().map_err(|source| io(&path, source))?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_tree(&path, &target, bytes)?;
+        } else if kind.is_file() {
+            *bytes += entry.metadata().map_err(|source| io(&path, source))?.len();
+            if *bytes > MAX_VERSION_BYTES {
+                return Err(PrototypeError::TooBig { limit: MAX_VERSION_BYTES });
+            }
+            fs::copy(&path, &target).map_err(|source| io(&target, source))?;
+        }
+    }
+    Ok(())
 }
 
 fn files_dir_in(base: &Path, chat_id: &str) -> Result<PathBuf, PrototypeError> {
@@ -95,6 +159,91 @@ mod tests {
         remove_in(base.as_path(), ID).unwrap();
         assert!(!base.as_path().join("prototypes").join(ID).exists());
         assert!(other.is_dir(), "another chat's folder stays");
+    }
+
+    fn versions(base: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(base.join("prototypes").join(ID).join("versions"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Each version is the whole folder as it was, numbered on from the last;
+    /// the working folder goes on changing without touching it.
+    #[test]
+    fn a_version_keeps_the_whole_folder_as_it_was() {
+        let base = temp_dir("prototype-snapshot");
+        let files = files_dir_in(&base, ID).unwrap();
+        fs::create_dir_all(files.join("assets")).unwrap();
+        fs::write(files.join("index.html"), "one").unwrap();
+        fs::write(files.join("assets").join("style.css"), "a{}").unwrap();
+
+        assert_eq!(snapshot(&files).unwrap(), 1);
+        fs::write(files.join("index.html"), "two").unwrap();
+        assert_eq!(snapshot(&files).unwrap(), 2);
+
+        let kept = base.join("prototypes").join(ID).join("versions");
+        assert_eq!(fs::read_to_string(kept.join("1").join("index.html")).unwrap(), "one");
+        assert_eq!(fs::read_to_string(kept.join("1").join("assets").join("style.css")).unwrap(), "a{}");
+        assert_eq!(fs::read_to_string(kept.join("2").join("index.html")).unwrap(), "two");
+        assert_eq!(versions(&base), ["1", "2"]);
+    }
+
+    /// One past the highest, whatever is missing below it — and a copy that
+    /// died part-way is neither counted nor left.
+    #[test]
+    fn the_next_version_is_one_past_the_highest() {
+        let base = temp_dir("prototype-numbering");
+        let files = files_dir_in(&base, ID).unwrap();
+        fs::write(files.join("index.html"), "x").unwrap();
+        let kept = base.join("prototypes").join(ID).join("versions");
+        for n in ["1", "7", "notes", ".8.partial"] {
+            fs::create_dir_all(kept.join(n)).unwrap();
+        }
+        fs::write(kept.join(".8.partial").join("stale.html"), "from a copy that died").unwrap();
+        assert_eq!(snapshot(&files).unwrap(), 8);
+        assert_eq!(versions(&base), ["1", "7", "8", "notes"]);
+        assert!(!kept.join("8").join("stale.html").exists(), "nothing of the dead copy in the version");
+    }
+
+    /// Too big is refused with why, and leaves nothing behind.
+    #[test]
+    fn a_folder_over_the_limit_is_not_kept() {
+        let base = temp_dir("prototype-too-big");
+        let files = files_dir_in(&base, ID).unwrap();
+        fs::write(files.join("index.html"), "x").unwrap();
+        fs::write(files.join("video.bin"), vec![0u8; MAX_VERSION_BYTES as usize]).unwrap();
+        let refused = snapshot(&files).unwrap_err().to_string();
+        assert!(refused.contains("over 5 MB"), "{refused}");
+        assert!(versions(&base).is_empty());
+    }
+
+    /// A link in the folder is not followed into the version.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_folder_is_left_out_of_the_version() {
+        let base = temp_dir("prototype-link");
+        let files = files_dir_in(&base, ID).unwrap();
+        fs::write(files.join("index.html"), "x").unwrap();
+        fs::write(base.join("secret.txt"), "key").unwrap();
+        std::os::unix::fs::symlink(base.join("secret.txt"), files.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(&base, files.join("up")).unwrap();
+        snapshot(&files).unwrap();
+        let one = base.join("prototypes").join(ID).join("versions").join("1");
+        assert!(one.join("index.html").is_file());
+        assert!(!one.join("link.txt").exists() && !one.join("up").exists());
+    }
+
+    /// Only a Prototype chat's working folder has a `versions/` to keep one in.
+    #[test]
+    fn a_folder_that_is_not_a_chats_is_refused() {
+        let base = temp_dir("prototype-not-chat");
+        for folder in [base.clone(), base.join("files"), base.join("prototypes").join(ID)] {
+            fs::create_dir_all(&folder).unwrap();
+            assert!(matches!(snapshot(&folder), Err(PrototypeError::NotAChatFolder(_))), "{folder:?}");
+        }
     }
 
     /// Every chat is deleted through here, and most never had a folder.

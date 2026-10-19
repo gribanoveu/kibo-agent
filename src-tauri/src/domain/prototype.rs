@@ -21,4 +21,11 @@ pub enum PrototypeError {
     Io { path: String, source: std::io::Error },
     #[error(transparent)]
     Chat(#[from] ChatError),
+    /// `present` outside a Prototype chat's working folder: there is no
+    /// `versions/` beside it to keep one in.
+    #[error("present works in a Prototype chat's folder only, and {0} is not one")]
+    NotAChatFolder(String),
+    /// Worded for the model: what to do about it.
+    #[error("the folder is over {} MB, the most a version keeps — delete what the page does not use, or keep large files out of it", limit / (1024 * 1024))]
+    TooBig { limit: u64 },
 }

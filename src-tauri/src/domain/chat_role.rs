@@ -154,6 +154,8 @@ impl ChatRole {
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::Delete,
+                // The page put in front of the user, its folder kept as a version.
+                ToolName::Present,
                 // Facts for the page's text; the page itself reaches no network.
                 ToolName::WebSearch,
                 ToolName::WebFetch,
@@ -342,6 +344,7 @@ Plain HTML, one `<section class="slide">` per slide; the script shows one at a t
 ```
 
 ## Working
+- Once a page is ready to look at, call `present` with its path and a few words naming it: that is what puts it in front of the user, beside the chat, and keeps the folder as a version they can go back to. Present again after each change worth seeing — a page written but not presented is not shown.
 - To change a page, read it and edit the part that changes rather than writing it again whole.
 - After a change, say in a line or two what changed and what to look at. Do not paste the file into the chat — the user sees the page, not its source."##;
 
@@ -436,6 +439,7 @@ mod tests {
                 ToolName::WriteFile,
                 ToolName::EditFile,
                 ToolName::Delete,
+                ToolName::Present,
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ]

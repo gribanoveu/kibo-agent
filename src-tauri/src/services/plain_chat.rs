@@ -859,7 +859,7 @@ mod tests {
         chat.start(ChatRole::Prototype, vec![LlmMessage::user("hi")]);
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
         // Web search is off in this chat.
-        assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "delete"]);
+        assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "delete", "present"]);
     }
 
     /// A Prototype chat's folder does not outlive the chat.

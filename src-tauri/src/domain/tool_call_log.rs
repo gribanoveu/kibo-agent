@@ -390,6 +390,11 @@ mod tests {
             // Like the checklist: a card's words are what the user asked
             // to keep, not file content.
             ToolName::Board => (None, ToolResult::Board { cards: vec![] }),
+            // A path and the page's name for its card: what the log is for.
+            ToolName::Present => (
+                Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),
+                ToolResult::Presented { path: "index.html".into(), title: "Coffee shop".into(), version: 2 },
+            ),
             ToolName::ToolSearch => (
                 None,
                 ToolResult::ToolsFound {
