@@ -1,0 +1,90 @@
+/* The right dock's place beside a Prototype chat: the panel's own styles, not
+   the agent's aside ones (AGENTS.md, UI). */
+.prototype-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border-radius: var(--radius-panel);
+  animation: prototype-preview-in 0.18s ease-out;
+}
+.prototype-preview-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.prototype-preview-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+/* The page draws its own background; until it does, a browser's white. */
+.prototype-preview-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-page);
+}
+.prototype-preview-errors {
+  flex: none;
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--border-soft);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prototype-preview-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--red);
+  font-size: var(--fs-xs);
+}
+.prototype-preview-error-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.prototype-preview-fix {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.prototype-preview-fix:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+@keyframes prototype-preview-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

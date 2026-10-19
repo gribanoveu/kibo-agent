@@ -160,6 +160,26 @@
 }
 
 /* The balance, at the strip's right end. */
+.plain-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.plain-preview-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.plain-preview-toggle.on {
+  color: var(--accent);
+}
 .plain-tab-end {
   margin-left: auto;
   min-width: 0;

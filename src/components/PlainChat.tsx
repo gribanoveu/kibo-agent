@@ -77,6 +77,16 @@ type Props = {
   onSetUpKube: () => void;
   /** "Compact now" on the context meter. */
   onCompact: () => void;
+  /** A Prototype chat's Preview panel, beside the chat: absent for another role. */
+  pages?: {
+    /** Something was presented, so there is a page to show. */
+    available: boolean;
+    open: boolean;
+    onToggle: () => void;
+    onOpenVersion: (version: number) => void;
+    /** A page's error to put in the message box; a new object each ask. */
+    fix: { text: string } | null;
+  };
 };
 
 // Not a kubeconfig's name: the menu's last row, which opens Settings instead.
@@ -98,6 +108,7 @@ export function PlainChat({
   kube,
   onSetUpKube,
   onCompact,
+  pages,
 }: Props) {
   const [draft, setDraft] = useState("");
   const attachments = useAttachments(imagesEnabled);
@@ -114,6 +125,13 @@ export function PlainChat({
   const greeting = useMemo(() => pickSuggestions(greetingsAt(new Date().getHours()), 1)[0], [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
+  // "Fix" under the preview: the error joins what is being written, not replaces it.
+  const fix = pages?.fix;
+  useEffect(() => {
+    if (!fix) return;
+    setDraft((was) => (was.trim() ? `${was.trimEnd()}\n${fix.text}` : fix.text));
+    input.current?.focus();
+  }, [fix]);
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
@@ -164,7 +182,13 @@ export function PlainChat({
             </div>
           ) : (
             <div ref={contentRef}>
-              <Transcript turn={chat.turn} onDecide={chat.decide} speaker={roleName} preview={chat.preview} />
+              <Transcript
+                turn={chat.turn}
+                onDecide={chat.decide}
+                speaker={roleName}
+                preview={chat.preview}
+                onOpenVersion={pages?.onOpenVersion}
+              />
               {chat.error && <div className="plain-error">{chat.error}</div>}
             </div>
           )}
@@ -284,6 +308,17 @@ export function PlainChat({
               ]}
               onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
             />
+          )}
+          {pages?.available && (
+            <button
+              type="button"
+              className={`plain-preview-toggle${pages.open ? " on" : ""}`}
+              title={pages.open ? "Hide the preview" : "Show the preview"}
+              onClick={pages.onToggle}
+            >
+              <AppWindow size={13} />
+              <span>Preview</span>
+            </button>
           )}
           <span className="plain-tab-end">
             <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />

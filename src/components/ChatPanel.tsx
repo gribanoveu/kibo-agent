@@ -37,6 +37,8 @@ import {
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
 import { findingOf } from "../lib/finding";
+import { presentedOf } from "../lib/prototype";
+import { PresentedCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
@@ -570,7 +572,7 @@ function fold(blocks: Block[]): (Block | Run)[] {
   const out: (Block | Run)[] = [];
   for (const block of blocks) {
     const last = out[out.length - 1];
-    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block)) {
+    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || presentedOf(block)) {
       out.push(block);
     } else if (last?.kind === "run") {
       last.blocks.push(block);
@@ -712,6 +714,8 @@ type TranscriptProps = Pick<
   speaker?: string;
   /** What a card's calls would do; the agent's folder preview when absent. */
   preview?: PreviewCalls;
+  /** Opens the Preview panel on a version a `present` card kept; a Prototype chat's. */
+  onOpenVersion?: (version: number) => void;
 };
 
 type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
@@ -737,6 +741,7 @@ export function Transcript({
   onFix,
   onAnswerQuestion,
   checklist = [],
+  onOpenVersion,
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -767,7 +772,7 @@ export function Transcript({
               renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
                 live: turn.status === "running",
                 onAnswer: onAnswerQuestion,
-              })
+              }, onOpenVersion)
             ),
           )}
           {workedFooter(
@@ -1046,6 +1051,7 @@ function renderBlock(
   onOpenAgent?: OpenAgent,
   preview?: PreviewCalls,
   questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
+  onOpenVersion?: (version: number) => void,
 ) {
   switch (block.kind) {
     case "user":
@@ -1103,6 +1109,9 @@ function renderBlock(
       // A review's finding is the work's result, not a step of it.
       const finding = findingOf(block);
       if (finding) return <FindingCard key={block.id} finding={finding} onOpenFile={onOpenFile} onFix={onFix} />;
+      // So is a page put in front of the user.
+      const presented = presentedOf(block);
+      if (presented) return <PresentedCard key={block.id} page={presented} onOpen={onOpenVersion} />;
       return (
         <div className="tools" key={block.id}>
           <ToolRow block={block} onOpenProcess={onOpenProcess} onOpenAgent={onOpenAgent} />

@@ -246,7 +246,6 @@ mod tests {
             "name": "Kubernetes",
             "description": ChatRole::Kubernetes.description(),
         }, {
-            // A debug build's: the menu lists it from P-5 (`ChatRole::ALL`).
             "id": "prototype",
             "name": "Prototype",
             "description": ChatRole::Prototype.description(),

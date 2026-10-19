@@ -222,6 +222,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::viewer::viewer_file,
+            commands::prototype::prototype_reveal,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
             commands::chat::workspace_open,

@@ -6,6 +6,7 @@ import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
 import { FolderTab } from "./components/FolderTab";
 import { AsidePanel } from "./components/AsidePanel";
+import { PrototypePreview } from "./components/PrototypePreview";
 import { FileViewer } from "./components/FileViewer";
 import { PANES, type Dock, type PaneContext } from "./components/panes";
 import { Modal } from "./components/Modal";
@@ -23,6 +24,7 @@ import { Titlebar } from "./components/Titlebar";
 import { shortcutText } from "./lib/shortcuts";
 import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
+import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useLlmSettings } from "./hooks/useLlmSettings";
@@ -125,6 +127,7 @@ export default function App() {
   // The model turns run on, for saying a cache miss came with a switch.
   const model = llm.models.current?.label;
   const plain = usePlainChat(kube.active?.name ?? null, model);
+  const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
   const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
@@ -199,7 +202,9 @@ export default function App() {
   // What the column shows: what was opened, while it fits — beside an Agent
   // chat, or beside a page that keeps it.
   const docked = onPage ? onPage.dock : agentMode;
-  const topHidden = asideHidden || !dockFits || !docked;
+  // Chat mode's column holds one thing: a Prototype chat's preview, while it is open and fits.
+  const previewShown = !agentMode && !onPage && dockFits && prototypePreview.open && plain.chatId !== null;
+  const topHidden = previewShown ? false : asideHidden || !dockFits || !docked;
   const bottomShown = dockFits && docked ? bottomTab : null;
   // In the IDE layout the bottom dock sits under the file, not in the column.
   const dockShown = !topHidden || (bottomShown !== null && !ide);
@@ -629,6 +634,17 @@ export default function App() {
           onCompact={async () => {
             if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
           }}
+          pages={
+            plain.role === "prototype"
+              ? {
+                  available: prototypePreview.available,
+                  open: previewShown,
+                  onToggle: prototypePreview.toggle,
+                  onOpenVersion: prototypePreview.show,
+                  fix: prototypePreview.fix,
+                }
+              : undefined
+          }
         />
       )}
     </main>
@@ -649,9 +665,12 @@ export default function App() {
       edits={viewer.edits}
     />
   ) : null;
-  const topPane = (
-    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
-  );
+  const topPane =
+    previewShown && plain.chatId !== null ? (
+      <PrototypePreview key="preview" preview={prototypePreview} chatId={plain.chatId} onNotify={toast.show} />
+    ) : (
+      <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
+    );
   const bottomPane = bottomShown && (
     <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
   );

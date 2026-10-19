@@ -34,13 +34,8 @@ pub enum ChatRole {
 }
 
 impl ChatRole {
-    /// What the role menu lists. Prototype only in a debug build until its
-    /// pages can be seen (`docs/31-prototype-role.md`, P-5): a role that writes
-    /// files nobody can open is not one to offer.
-    #[cfg(debug_assertions)]
+    /// What the role menu lists.
     pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes, ChatRole::Prototype];
-    #[cfg(not(debug_assertions))]
-    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -444,7 +439,7 @@ mod tests {
                 ToolName::WebFetch,
             ]
         );
-        assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in a debug build");
+        assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in the role menu");
     }
 
     /// Every library the prompt offers is one the build script writes: a
