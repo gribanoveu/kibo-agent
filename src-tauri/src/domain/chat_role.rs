@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::kube::{Access, KubeSetup, KubeTarget, Reach};
-use super::tools::ToolName;
+use super::tools::{ApprovalPolicy, ToolName};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,9 @@ pub enum ChatRole {
     Assistant,
     /// A Kubernetes engineer: clusters, manifests, Helm, debugging workloads.
     Kubernetes,
+    /// Builds pages — a site, a React app, an HTML deck — in a folder of the
+    /// chat's own (`docs/31-prototype-role.md`).
+    Prototype,
     /// The loop's own check of a role with tools, before any real role has
     /// one: a harmless tool that runs, and one that asks first.
     #[cfg(test)]
@@ -31,12 +34,14 @@ pub enum ChatRole {
 }
 
 impl ChatRole {
-    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes];
+    /// What the role menu lists.
+    pub const ALL: &'static [ChatRole] = &[ChatRole::Assistant, ChatRole::Kubernetes, ChatRole::Prototype];
 
     pub fn name(self) -> &'static str {
         match self {
             ChatRole::Assistant => "Assistant",
             ChatRole::Kubernetes => "Kubernetes",
+            ChatRole::Prototype => "Prototype",
             #[cfg(test)]
             ChatRole::Tester => "Tester",
         }
@@ -47,6 +52,7 @@ impl ChatRole {
         match self {
             ChatRole::Assistant => "Answers in text and searches the web; no files or commands",
             ChatRole::Kubernetes => "A Kubernetes expert: clusters, manifests, Helm, failing pods",
+            ChatRole::Prototype => "Builds pages — a site, a React app, an HTML deck — in a folder of its own",
             #[cfg(test)]
             ChatRole::Tester => "Tests the tool loop",
         }
@@ -61,6 +67,7 @@ impl ChatRole {
                  depends on code or output you have not been shown, ask for it rather than guessing."
             }
             ChatRole::Kubernetes => KUBERNETES_PROMPT,
+            ChatRole::Prototype => PROTOTYPE_PROMPT,
             #[cfg(test)]
             ChatRole::Tester => "You test the tool loop.",
         }
@@ -71,7 +78,7 @@ impl ChatRole {
     /// same every turn until the setup changes, so a provider's prompt cache keeps it.
     pub fn setup_note(self, kube: &KubeSetup) -> Option<String> {
         match self {
-            ChatRole::Assistant => None,
+            ChatRole::Assistant | ChatRole::Prototype => None,
             #[cfg(test)]
             ChatRole::Tester => None,
             ChatRole::Kubernetes => Some(match kube {
@@ -134,6 +141,20 @@ impl ChatRole {
                 ToolName::WebSearch,
                 ToolName::WebFetch,
             ],
+            // Its own folder and nothing else; no command runs, so nothing it
+            // writes runs but in the preview's sandbox.
+            ChatRole::Prototype => &[
+                ToolName::ReadFile,
+                ToolName::ListFiles,
+                ToolName::WriteFile,
+                ToolName::EditFile,
+                ToolName::Delete,
+                // The page put in front of the user, its folder kept as a version.
+                ToolName::Present,
+                // Facts for the page's text; the page itself reaches no network.
+                ToolName::WebSearch,
+                ToolName::WebFetch,
+            ],
             // `todo` runs, `delete` asks first — and then finds no folder.
             #[cfg(test)]
             ChatRole::Tester => &[ToolName::Todo, ToolName::Delete],
@@ -141,6 +162,26 @@ impl ChatRole {
     }
 }
 
+
+impl ChatRole {
+    /// Whether the role works in a folder of the chat's own — the command
+    /// layer makes one per chat, and its file tools reach it and nothing else.
+    pub fn workspace(self) -> bool {
+        matches!(self, ChatRole::Prototype)
+    }
+
+    /// The approval the role's turns run under. A role with a folder writes in
+    /// it without a card: the folder is the chat's alone, the tools reach
+    /// nothing outside it, and nothing written there runs but in the preview's
+    /// sandbox. A card for every edit of a page would be a card per message.
+    pub fn approval(self, base: &ApprovalPolicy) -> ApprovalPolicy {
+        let mut policy = base.clone();
+        if self.workspace() {
+            policy.always_allowed.extend(self.tools().iter().copied());
+        }
+        policy
+    }
+}
 
 /// Where the chat works, in the form the model's commands should take, and
 /// what the cluster said. The same words every turn while nothing changes, so a
@@ -179,6 +220,123 @@ fn pinned_note(target: &KubeTarget) -> String {
     };
     format!("{place} {found} {tab}")
 }
+
+/// The role's standing instructions: where it writes, what a page may load —
+/// the libraries `scripts/build-prototype-libs.ts` bundles, nothing from the
+/// network — and a template for each kind of page it is asked for most. The
+/// paths are from the scheme's root, `/lib/…`, so one page works under either
+/// address the preview has (`artifact://localhost`, `http://artifact.localhost`).
+const PROTOTYPE_PROMPT: &str = r##"You build prototypes in a chat: a web page, a small app, an HTML slide deck, an interactive diagram — whatever the user wants to see working rather than read about.
+
+You work in a folder of this chat's own. Your file tools — readFile, listFiles, writeFile, editFile, delete — reach it and nothing else, and paths are relative to it. Nothing there is the user's project: write freely.
+
+## The page
+- One self-contained file, `index.html` unless the user names another: styles and scripts inline.
+- The page cannot reach the network: no CDN, no web fonts, no images from other sites. Use system fonts, inline SVG, CSS gradients, emoji or `data:` URLs. Charts are SVG you draw.
+- The app serves these libraries, and only these, at `/lib/`:
+  - React 19 — `/lib/react.js`, `/lib/react-dom-client.js`, `/lib/react-jsx-runtime.js`, named in an import map;
+  - JSX through Babel — `/lib/babel.min.js`, with components in `<script type="text/babel" data-type="module" data-presets="react">`;
+  - Tailwind — `/lib/tailwind.js`: utility classes work as written, with no build step;
+  - lucide icons — `/lib/lucide-react.js`, as `import { Coffee } from "lucide-react"`.
+  Nothing else can be imported. Plain HTML, CSS and JavaScript need none of them.
+
+## A React page
+Start from this, keeping the head as it is:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page</title>
+<script type="importmap">
+{"imports": {
+  "react": "/lib/react.js",
+  "react-dom/client": "/lib/react-dom-client.js",
+  "react/jsx-runtime": "/lib/react-jsx-runtime.js",
+  "lucide-react": "/lib/lucide-react.js"
+}}
+</script>
+<script src="/lib/tailwind.js"></script>
+<script src="/lib/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import { useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Coffee } from "lucide-react";
+
+function App() {
+  const [cups, setCups] = useState(0);
+  return (
+    <main className="grid min-h-screen place-items-center bg-stone-50">
+      <button className="flex items-center gap-2 rounded-lg bg-stone-900 px-4 py-2 text-white" onClick={() => setCups(cups + 1)}>
+        <Coffee size={18} /> {cups}
+      </button>
+    </main>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
+```
+
+## A slide deck
+Plain HTML, one `<section class="slide">` per slide; the script shows one at a time. Arrows, Space, Page Up/Down and a click move; Home and End jump; F is full screen.
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deck</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; }
+  .slide { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center; box-sizing: border-box; padding: 6vmin 8vmin; background: #fff; color: #1c1917; font: 3.2vmin/1.45 system-ui, sans-serif; }
+  .slide.active { display: flex; }
+  .slide h1 { margin: 0 0 3vmin; font-size: 7vmin; line-height: 1.1; }
+  .slide h2 { margin: 0 0 2.5vmin; font-size: 5vmin; }
+  .counter { position: fixed; right: 2vmin; bottom: 1.5vmin; color: #a8a29e; font: 1.8vmin system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<section class="slide"><h1>Title</h1><p>What this deck is about</p></section>
+<section class="slide"><h2>One point per slide</h2><ul><li>Short lines</li><li>Few of them</li></ul></section>
+<div class="counter"></div>
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  const counter = document.querySelector(".counter");
+  let at = 0;
+  const show = (n) => {
+    at = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((slide, i) => slide.classList.toggle("active", i === at));
+    counter.textContent = `${at + 1} / ${slides.length}`;
+  };
+  addEventListener("keydown", (e) => {
+    if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) show(at + 1);
+    else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) show(at - 1);
+    else if (e.key === "Home") show(0);
+    else if (e.key === "End") show(slides.length - 1);
+    else if (e.key === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    else return;
+    e.preventDefault();
+  });
+  addEventListener("click", (e) => show(at + (e.clientX > innerWidth / 2 ? 1 : -1)));
+  show(0);
+</script>
+</body>
+</html>
+```
+
+## Working
+- Once a page is ready to look at, call `present` with its path and a few words naming it: that is what puts it in front of the user, beside the chat, and keeps the folder as a version they can go back to. Present again after each change worth seeing — a page written but not presented is not shown.
+- To change a page, read it and edit the part that changes rather than writing it again whole.
+- A message may say which element of the page it is about — the user pointed at it in the preview, and you get its selector and its HTML as the browser drew it. Change that element, and only what they ask, with editFile; leave the rest of the page as it is. On a React page find it in the source by its text and classes: the HTML is rendered, not the source.
+- After a change, say in a line or two what changed and what to look at. Do not paste the file into the chat — the user sees the page, not its source."##;
 
 /// The role's standing instructions. Sectioned by what the model is doing —
 /// reading, changing, writing for the user, answering — and closed by how to
@@ -260,7 +418,83 @@ mod tests {
     fn the_wire_name_is_the_one_the_window_sends() {
         assert_eq!(serde_json::to_string(&ChatRole::Assistant).unwrap(), "\"assistant\"");
         assert_eq!(serde_json::to_string(&ChatRole::Kubernetes).unwrap(), "\"kubernetes\"");
+        assert_eq!(serde_json::to_string(&ChatRole::Prototype).unwrap(), "\"prototype\"");
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
+    }
+
+    /// The prototype role's tools are its folder's and the web's: no command,
+    /// no cluster, no MCP — so nothing it writes runs on the machine.
+    #[test]
+    fn the_prototype_role_reaches_its_folder_and_the_web_and_runs_nothing() {
+        let tools = ChatRole::Prototype.tools();
+        assert_eq!(
+            tools,
+            &[
+                ToolName::ReadFile,
+                ToolName::ListFiles,
+                ToolName::WriteFile,
+                ToolName::EditFile,
+                ToolName::Delete,
+                ToolName::Present,
+                ToolName::WebSearch,
+                ToolName::WebFetch,
+            ]
+        );
+        assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in the role menu");
+    }
+
+    /// The pointer's note says "editFile, not the page again"; the prompt says
+    /// the same, so the model is not told two things.
+    #[test]
+    fn the_prompt_tells_the_model_to_edit_the_element_pointed_at() {
+        assert!(PROTOTYPE_PROMPT.contains("pointed at it in the preview"));
+        assert!(PROTOTYPE_PROMPT.contains("only what they ask, with editFile"));
+    }
+
+    /// Every library the prompt offers is one the build script writes: a
+    /// page told to import a file that is not there is a blank page.
+    #[test]
+    fn the_libraries_the_prompt_names_are_the_ones_the_app_bundles() {
+        let script = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/build-prototype-libs.ts"),
+        )
+        .unwrap();
+        let named: Vec<&str> = PROTOTYPE_PROMPT
+            .split("/lib/")
+            .skip(1)
+            .map(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-')).next().unwrap_or(""))
+            // `/lib/` alone is the folder, named in the text.
+            .filter(|file| !file.is_empty())
+            .collect();
+        assert!(named.len() >= 6, "{named:?}");
+        for file in named {
+            assert!(script.contains(&format!("\"{file}\"")), "the prompt names /lib/{file}, which the build script does not write");
+        }
+    }
+
+    /// The folder is the prototype role's alone; the others have none.
+    #[test]
+    fn only_the_prototype_role_works_in_a_folder() {
+        for &role in ChatRole::ALL {
+            assert_eq!(role.workspace(), role == ChatRole::Prototype, "{role:?}");
+        }
+    }
+
+    /// In its own folder the role writes without a card; every other role's
+    /// approval is the user's as it was — a change to a cluster still asks.
+    #[test]
+    fn the_prototype_role_writes_its_folder_without_asking_and_no_other_role_does() {
+        let base = ApprovalPolicy::default();
+        let prototype = ChatRole::Prototype.approval(&base);
+        for tool in [ToolName::WriteFile, ToolName::EditFile, ToolName::Delete] {
+            assert!(!prototype.requires_approval(tool, true), "{tool:?}");
+        }
+        assert!(prototype.requires_approval(ToolName::RunCommand, true), "only its own tools");
+        for role in [ChatRole::Assistant, ChatRole::Kubernetes] {
+            let policy = role.approval(&base);
+            assert!(policy.requires_approval(ToolName::KubeApply, true), "{role:?}");
+            assert!(policy.requires_approval(ToolName::WriteFile, true), "{role:?}");
+        }
     }
 
     use crate::domain::settings::Kubeconfig;

@@ -8,6 +8,8 @@ mod data_policy;
 #[cfg(test)]
 mod testing;
 pub mod services;
+#[cfg(debug_assertions)]
+mod prototype_probe;
 mod sync;
 #[cfg(target_os = "macos")]
 mod window_frame;
@@ -84,7 +86,7 @@ fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = commands::prototype::register(tauri::Builder::default());
     // First, as the plugin requires: plugins start in the order they were
     // added, and a second launch must be turned away before anything else
     // comes up — the index, the MCP servers.
@@ -214,10 +216,15 @@ pub fn run() {
             let cwd = std::env::current_dir().unwrap_or_default();
             files.extend(commands::viewer::markdown_args(std::env::args_os(), &cwd));
             open_launch(app.handle(), files);
+            #[cfg(debug_assertions)]
+            prototype_probe::start(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::viewer::viewer_file,
+            commands::prototype::prototype_reveal,
+            commands::prototype::prototype_restore,
+            commands::prototype::prototype_export,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
             commands::chat::workspace_open,

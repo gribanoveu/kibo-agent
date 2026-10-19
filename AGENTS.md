@@ -15,6 +15,8 @@ Frontend: React 19 + TypeScript, Vite build, plain CSS files per component (no C
 
 `App.tsx` is the composition root: it calls most of those hooks and passes their results down as props. That is where cross-cutting state actually lives — adding a hook that more than one panel needs usually means editing it, and the file grows with every one. Before adding state there, check whether the hook can own it privately, or whether an existing hook already exposes it. React Context is not used at all; keep it that way unless a subtree genuinely needs it.
 
+**Libraries for model-built pages are not the app's.** The Prototype role (`docs/31-prototype-role.md`) builds pages that run in a sandboxed preview, and they get libraries of their own: `@babel/standalone`, Tailwind's browser build, React bundled as ESM for an import map — built by `scripts/build-prototype-libs.ts` and served on `artifact://`. They are there for the model's pages only. Never import them from `src/` or use them in the app's own UI: the app stays plain CSS per component with the tokens, and its React is its own bundle. A dependency added for prototypes goes in `devDependencies` and is reached only through that script.
+
 Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provider calls, tauri::async_runtime::spawn_blocking to run them off the async runtime. Streaming deltas and other progress reach the frontend as tauri::Emitter events, emitted in commands/ only — services report through sinks (see Architecture).
 
 ## Setup & commands
@@ -69,7 +71,7 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 | its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
 | its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |
 | its redaction in `domain/tool_call_log.rs` | test `every_tool_is_redacted` |
-| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed, and nothing mutating outside Agent (test) |
+| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed. Plan, Ask and a helper get nothing mutating (test); a Chat role's changes reach only its own place — the Kubernetes role's pinned namespace, the Prototype role's folder — and its tests name them |
 | `ACCOUNTED` in `src/lib/rewind.ts` | test `every_tools_rewind_flag_matches_the_window` against `rewind_sees` |
 | its label and summary in `src/lib/describeTool.ts`, its icon in `ChatPanel.tsx` | nobody — without them the call shows its raw name and the default icon |
 

@@ -25,6 +25,9 @@ export type Block =
       /** The pictures sent with it. A copy of the history's, saved with the
           chat's blocks: the transcript draws from blocks alone. */
       images?: ImagePart[];
+      /** The element of a Prototype chat's page it is about — its selector,
+          shown on the bubble; the model was sent its HTML too (`sent`). */
+      element?: string;
       /** How long the agent worked on this message, in ms — its own time,
           not the time spent waiting on an approval. Saved with the chat. */
       workedMs?: number;
@@ -38,6 +41,9 @@ export type Block =
   | { kind: "compaction"; id: string; status: "running" | "done" | "failed"; folded?: number }
   /** A background process ended — what the model was told at its round, drawn as a card. */
   | { kind: "processEnded"; id: string; process: ProcessInfo }
+  /** A Prototype chat's folder put back to version `from`, now kept as `version`;
+      `before` is the version the folder was kept as first, when it had changed. */
+  | { kind: "restored"; id: string; from: number; version: number; before: number | null }
   | {
       kind: "tool";
       id: string;
@@ -196,6 +202,7 @@ export function appendUserMessage(
   now = Date.now(),
   sent?: string,
   images: ImagePart[] = [],
+  element?: string,
 ): TurnState {
   return {
     ...state,
@@ -218,6 +225,7 @@ export function appendUserMessage(
         text,
         ...(sent !== undefined && sent !== text && { sent }),
         ...(images.length > 0 && { images }),
+        ...(element && { element }),
       },
     ],
   };
@@ -228,6 +236,14 @@ export function appendNotice(state: TurnState, text: string): TurnState {
   return {
     ...state,
     blocks: [...state.blocks, { kind: "notice", id: `notice:${state.blocks.length}`, text }],
+  };
+}
+
+/** A restore of a Prototype chat's folder, said where it happened. */
+export function appendRestored(state: TurnState, restored: { from: number; version: number; before: number | null }): TurnState {
+  return {
+    ...state,
+    blocks: [...state.blocks, { kind: "restored", id: `restored:${state.blocks.length}`, ...restored }],
   };
 }
 

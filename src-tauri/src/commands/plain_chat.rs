@@ -52,14 +52,16 @@ pub fn plain_chat_roles() -> Vec<RoleView> {
     ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
 }
 
-/// A turn in `role` on `messages`, the whole conversation so far. Its text and
-/// calls arrive on `chat:turn-event` under `turn_id` as they happen; this
-/// resolves with how it ended — done, stopped, or paused on the approval card.
+/// A turn of the chat `chat_id` in `role` on `messages`, the whole conversation
+/// so far. Its text and calls arrive on `chat:turn-event` under `turn_id` as
+/// they happen; this resolves with how it ended — done, stopped, or paused on
+/// the approval card.
 #[tauri::command]
 pub async fn plain_chat_send<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
@@ -67,7 +69,7 @@ pub async fn plain_chat_send<R: Runtime>(
     let state = state.inner().clone();
     state.cancel.store(false, Ordering::SeqCst);
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
+    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
 /// Continues a turn paused on the approval card, with the user's answers. The
@@ -78,13 +80,14 @@ pub async fn plain_chat_resume<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<PlainChatState>>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_turn(app, state, turn_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
+    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
 }
 
 /// "Always allow this tool", from a chat's approval card — for Chat mode's
@@ -100,6 +103,7 @@ async fn run_turn<R, F>(
     app: AppHandle<R>,
     state: Arc<PlainChatState>,
     turn_id: String,
+    chat_id: String,
     role: ChatRole,
     kube: Option<KubePin>,
     run: F,
@@ -115,7 +119,7 @@ where
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let cancelled = || state.cancel.load(Ordering::SeqCst);
-        let chat = ChatTurnInput { role, kube, clusters, board, embeddings, approval, events: &events, cancelled: &cancelled };
+        let chat = ChatTurnInput { chat_id, role, kube, clusters, board, embeddings, approval, events: &events, cancelled: &cancelled };
         turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())
     })
     .await
@@ -241,6 +245,10 @@ mod tests {
             "id": "kubernetes",
             "name": "Kubernetes",
             "description": ChatRole::Kubernetes.description(),
+        }, {
+            "id": "prototype",
+            "name": "Prototype",
+            "description": ChatRole::Prototype.description(),
         }]));
     }
 }

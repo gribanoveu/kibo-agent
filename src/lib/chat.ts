@@ -205,15 +205,13 @@ export async function startChat(
  */
 export async function compactHistory(
   messages: LlmMessage[],
-  force = false,
-  plan: string | null = null,
+  force: boolean,
   turnId: string,
 ): Promise<{ history: LlmMessage[]; folded: number } | null> {
   if (!inTauri()) return null;
   return invoke<{ history: LlmMessage[]; folded: number } | null>("chat_compact", {
     messages,
     force,
-    plan,
     turnId,
   });
 }
@@ -293,7 +291,7 @@ export async function setRememberScope(remember: RememberScope): Promise<void> {
  * than counting characters here.
  */
 export type ContextUsage = {
-  /** The system prompt but the skills list: the mode, the project's rules, the plan. */
+  /** The system prompt but the skills list: the mode, the project's rules. */
   instructions: number;
   /** The skills list, and every skill loaded since. */
   skills: number;
@@ -309,9 +307,9 @@ export type ContextUsage = {
   compactsAt: number | null;
 };
 
-export async function contextUsage(messages: LlmMessage[], plan: string | null): Promise<ContextUsage> {
+export async function contextUsage(messages: LlmMessage[]): Promise<ContextUsage> {
   requireBackend();
-  return invoke<ContextUsage>("chat_context_usage", { messages, plan });
+  return invoke<ContextUsage>("chat_context_usage", { messages });
 }
 
 /** What the agent is allowed to be. Mirrors `domain::conversation_mode`. */
@@ -407,9 +405,9 @@ export type FileRewind = {
 };
 
 /** What putting `changes` back would do, file by file. Touches nothing. */
-export async function rewindPreview(changes: FileChange[]): Promise<FileRewind[]> {
+export async function rewindPreview(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
   requireBackend();
-  return invoke<FileRewind[]>("rewind_preview", { changes });
+  return invoke<FileRewind[]>("rewind_preview", { changes, chatId });
 }
 
 /**
@@ -422,8 +420,11 @@ export async function branchSummary(messages: LlmMessage[]): Promise<LlmMessage 
   return invoke<LlmMessage | null>("chat_branch_summary", { messages });
 }
 
-/** Puts them back, each file checked again right before it is written. */
-export async function rewindApply(changes: FileChange[]): Promise<FileRewind[]> {
+/**
+ * Puts them back, each file checked again right before it is written: in the
+ * agent's open folder, or — `chatId` given — in that Chat-mode chat's own.
+ */
+export async function rewindApply(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
   requireBackend();
-  return invoke<FileRewind[]>("rewind_apply", { changes });
+  return invoke<FileRewind[]>("rewind_apply", { changes, chatId });
 }

@@ -31,10 +31,11 @@ use crate::domain::turn::{ChatEventSink, ChatStreamOutcome, SteeringNote};
 use crate::domain::web_search::WebSetupError;
 use crate::infra::kube_changes::ChangeStore;
 use crate::infra::kube_client::{ClusterApi, Clusters};
+use crate::infra::prototype_store;
 use crate::services::llm_chat::{Place, Turn, TurnError};
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
-use crate::services::{features, kubeconfigs, llm_session, plain_chat, project_rules, skills, web_search};
+use crate::services::{features, kubeconfigs, llm_session, plain_chat, project_rules, prototype_versions, skills, web_search};
 
 /// Why a turn did not start, or how it failed. Each reads as it did when the
 /// command layer flattened them one by one.
@@ -55,6 +56,9 @@ pub enum TurnSetupError {
     Settings(#[from] SettingsError),
     #[error(transparent)]
     Turn(#[from] TurnError),
+    /// A Prototype chat's folder could not be made.
+    #[error(transparent)]
+    ChatFolder(#[from] crate::domain::prototype::PrototypeError),
 }
 
 /// What a turn in a folder gets from the running app — each `None` where the
@@ -162,6 +166,8 @@ pub fn run_in_folder(
 /// What a chat turn is: its role and cluster from the window, the rest from
 /// the app.
 pub struct ChatTurnInput<'a> {
+    /// The chat the turn is of: a role that works in a folder finds its folder by it.
+    pub chat_id: String,
     pub role: ChatRole,
     pub kube: Option<KubePin>,
     pub clusters: Arc<Clusters>,
@@ -178,6 +184,17 @@ pub fn run_in_chat(
     chat: ChatTurnInput,
     run: impl FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError>,
 ) -> Result<ChatStreamOutcome, TurnSetupError> {
+    // The chat's own folder, for a role that works in one; made on its first turn.
+    // Held for the turn, so a restore cannot swap the folder out under a write.
+    let (scope, _claim) = match chat.role.workspace() {
+        true => {
+            let claim = prototype_versions::claim(&chat.chat_id)?;
+            (Some(ToolScope::new(&prototype_store::files_dir(&chat.chat_id)?)?), Some(claim))
+        }
+        false => (None, None),
+    };
+    // A role with a folder writes in it without a card (`ChatRole::approval`).
+    let approval = chat.role.approval(&chat.approval);
     let session = llm_session::resolve(None)?;
     // Asked every turn: a cluster that stopped answering, or a login that
     // expired, is what the model most needs to know. The client is kept,
@@ -204,9 +221,10 @@ pub fn run_in_chat(
         kube: &kube,
         runbooks: &runbooks,
         web: web.as_ref(),
+        scope: scope.as_ref(),
         cluster: api.as_ref().map(|api| api as &dyn KubeApi),
         changes: Some(&ChangeStore),
-        approval: &chat.approval,
+        approval: &approval,
         events: chat.events,
         cancelled: chat.cancelled,
         log_call: &log_call,
@@ -277,6 +295,7 @@ mod tests {
             let has_board = |on: bool| {
                 crate::infra::settings_store::update(|s| s.features.insert("board".into(), on)).unwrap();
                 let chat = ChatTurnInput {
+                    chat_id: "board-chat".into(),
                     role: ChatRole::Assistant,
                     kube: None,
                     clusters: Arc::new(Clusters::default()),
@@ -301,6 +320,72 @@ mod tests {
             };
             assert!(!has_board(false));
             assert!(has_board(true));
+        });
+    }
+
+    /// A Prototype chat's turn is handed its own folder — made on the spot —
+    /// and writes there without a card; another role gets no folder and
+    /// asks as it did.
+    #[test]
+    fn a_prototype_chat_turn_gets_its_folder_and_writes_without_a_card() {
+        crate::testing::with_app_dir("turn-setup-prototype", || {
+            let mut settings = crate::infra::settings_store::load().unwrap();
+            settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
+                id: "local".into(),
+                base_url: "https://local.example/v1".into(),
+                model: Some("qwen".into()),
+                ..Default::default()
+            }];
+            crate::infra::settings_store::save(&settings).unwrap();
+            crate::infra::llm_credentials_store::save_api_key("local", "sk").unwrap();
+
+            struct NoModel;
+            impl EmbeddingProvider for NoModel {
+                fn embed(&self, _: &[&str]) -> Result<Vec<crate::domain::embeddings::Embedding>, crate::domain::embeddings::EmbeddingError> {
+                    Err(crate::domain::embeddings::EmbeddingError::Invalid("no model in this test".into()))
+                }
+                fn dimensions(&self) -> usize {
+                    2
+                }
+            }
+            let events: ChatEventSink = Arc::new(|_| {});
+            let no = || false;
+            let id = "7a1c3e5f-2b4d-4f6a-8c0e-9d1b3f5a7c9e";
+            let handed = |role: ChatRole| {
+                let chat = ChatTurnInput {
+                    chat_id: id.into(),
+                    role,
+                    kube: None,
+                    clusters: Arc::new(Clusters::default()),
+                    board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
+                    embeddings: Arc::new(NoModel),
+                    approval: ApprovalPolicy::default(),
+                    events: &events,
+                    cancelled: &no,
+                };
+                let mut seen = None;
+                run_in_chat(chat, |turn| {
+                    let asks = turn.approval.requires_approval(ToolName::WriteFile, true);
+                    // The folder is held while the turn runs: a restore now would be refused.
+                    let held = prototype_versions::claim(id).is_err();
+                    seen = Some((turn.scope.map(|scope| scope.root().to_path_buf()), asks, held));
+                    Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
+                        result: Default::default(),
+                        todos: Vec::new(),
+                        history: Vec::new(),
+                        limit_reached: None,
+                    }))
+                })
+                .unwrap();
+                seen.expect("run was called")
+            };
+            let (folder, asks, held) = handed(ChatRole::Prototype);
+            let folder = folder.expect("a folder");
+            assert!(folder.is_dir() && folder.ends_with(std::path::Path::new("prototypes").join(id).join("files")), "{folder:?}");
+            assert!(!asks);
+            assert!(held, "the turn holds its folder");
+            assert!(prototype_versions::claim(id).is_ok(), "and lets go of it when it ends");
+            assert_eq!(handed(ChatRole::Assistant), (None, true, false));
         });
     }
 

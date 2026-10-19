@@ -72,6 +72,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "deepseekSearch" => ToolCall::DeepseekSearch(args(call)?),
         "deepseekFetch" => ToolCall::DeepseekFetch(args(call)?),
         "board" => ToolCall::Board(args(call)?),
+        "present" => ToolCall::Present(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to
         // get wrong. Whatever it sent alongside is ignored rather than refused.
@@ -120,11 +121,18 @@ pub fn preflight_tool_call(
         return Err(ToolError::NotOfferedInMode(tool));
     }
 
+    preflight_paths(scope, reads, &parsed)
+}
+
+/// The folder's half of the gate, for a folder the agent's or a chat's own:
+/// every path the call writes resolves under `scope`, and a file it replaces
+/// was read as it now stands.
+pub fn preflight_paths(scope: &ToolScope, reads: &ReadFiles, parsed: &ToolCall) -> Result<(), ToolError> {
     // Containment, checked here as well as inside each tool. The duplication is
     // the point: this runs before approval, the tool's own check runs before
     // the disk.
     let command_cwd: [&str; 1];
-    let paths: &[&str] = match &parsed {
+    let paths: &[&str] = match parsed {
         ToolCall::WriteFile(a) => &[&a.path],
         ToolCall::EditFile(a) => &[&a.path],
         ToolCall::Delete(a) => &[&a.path],
@@ -147,7 +155,7 @@ pub fn preflight_tool_call(
     // "You have not read this file" is knowable without touching the disk and
     // without asking anyone, so asking would be pure ceremony.
     let deleting = matches!(parsed, ToolCall::Delete(_));
-    if let Some((path, whole)) = match &parsed {
+    if let Some((path, whole)) = match parsed {
         ToolCall::WriteFile(a) => Some((a.path.as_str(), true)),
         // A directory has no text to have read: `read_to_string` below fails
         // on it, and the check is skipped.

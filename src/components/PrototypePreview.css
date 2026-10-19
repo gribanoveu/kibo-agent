@@ -1,0 +1,145 @@
+/* The file viewer's place beside a Prototype chat, and its width: as wide as
+   it was dragged, giving up width before the chat goes under its minimum
+   (FileViewer.css). The panel's own styles all the same (AGENTS.md, UI). */
+.prototype-preview {
+  flex: 0 5 var(--viewer-width, 560px);
+  /* PANEL_LIMITS.viewer in usePanelSizes.ts. */
+  min-width: 440px;
+  min-height: 0;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border-radius: var(--radius-panel);
+  animation: prototype-preview-in 0.18s ease-out;
+}
+.prototype-preview-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ide-middle > .prototype-preview {
+  flex: 1;
+}
+.prototype-preview-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+/* The pointer while it is on in the page. */
+.prototype-preview-head .iconbtn.on {
+  color: var(--accent);
+}
+/* The page draws its own background; until it does, a browser's white. */
+.prototype-preview-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-page);
+}
+.prototype-preview-restore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.prototype-preview-restore:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.prototype-preview-restore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.prototype-preview-errors {
+  flex: none;
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--border-soft);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prototype-preview-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--red);
+  font-size: var(--fs-xs);
+}
+.prototype-preview-error-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.prototype-preview-fix {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.prototype-preview-fix:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* Expanded, the page takes the chat's place too; the chat stays mounted
+   under it, its draft with it, as under a page (pages.css). */
+.window.preview-expanded .main,
+.window.preview-expanded .main + .panel-resize-handle,
+/* In the IDE layout the chat's handle is before it; elsewhere that place is
+   the sidebar's. */
+.window.ide.preview-expanded .panel-resize-handle:has(+ .main) {
+  display: none;
+}
+.window.preview-expanded .prototype-preview {
+  flex: 1;
+}
+/* Narrow, the controls keep their place and the words give way: the
+   heading's name first, then Restore's — its icon and hint stay. */
+@container (max-width: 520px) {
+  .prototype-preview-title-text,
+  .prototype-preview-restore-label {
+    display: none;
+  }
+}
+@keyframes prototype-preview-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

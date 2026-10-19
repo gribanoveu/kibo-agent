@@ -1,5 +1,5 @@
 import type { Block } from "./chatTurnReducer";
-import type { FileChange } from "./chat";
+import type { FileChange, FileRewind } from "./chat";
 
 // Tools whose effect on files is recorded, or that have none. Anything else
 // that ran — a command, the terminal, an MCP server's tool — may have written
@@ -30,6 +30,8 @@ const ACCOUNTED = new Set([
   "toolSearch",
   // The app's own board, not the folder.
   "board",
+  // A version kept beside a Prototype chat's folder: history, which stays.
+  "present",
   "skill",
   "writePlan",
   "readOutput",
@@ -55,4 +57,18 @@ export function changesFrom(blocks: Block[], bubbleId: string): { changes: FileC
     if (block.status === "done" && !ACCOUNTED.has(block.name)) unrecorded++;
   }
   return { changes, unrecorded };
+}
+
+/** What the transcript says where a rewind cut it. */
+export function rewoundNotice(files: FileRewind[], summarized = false): string {
+  const back = files.filter((file) => file.skip === null).length;
+  const left = files.length - back;
+  const plural = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+  const said =
+    files.length === 0
+      ? "Rewound to before this message — no files to put back"
+      : left === 0
+        ? `Rewound to before this message — ${plural(back)} put back`
+        : `Rewound to before this message — ${plural(back)} put back, ${plural(left)} left as ${left === 1 ? "it is" : "they are"}`;
+  return summarized ? `${said}; the agent keeps a summary of what was tried` : said;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  AppWindow,
   ArrowUpRight,
   Brain,
   Loader2,
@@ -32,10 +33,13 @@ import {
   TerminalSquare,
   Trash2,
   RotateCcw,
+  MousePointerClick,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
 import { findingOf } from "../lib/finding";
+import { presentedOf } from "../lib/prototype";
+import { PresentedCard, RestoredCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { DiffView } from "./DiffView";
@@ -80,6 +84,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Plan: ScrollText,
   Explore: Telescope,
   Board: SquareKanban,
+  Prototype: AppWindow,
 };
 
 
@@ -568,7 +573,7 @@ function fold(blocks: Block[]): (Block | Run)[] {
   const out: (Block | Run)[] = [];
   for (const block of blocks) {
     const last = out[out.length - 1];
-    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block)) {
+    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || presentedOf(block)) {
       out.push(block);
     } else if (last?.kind === "run") {
       last.blocks.push(block);
@@ -710,6 +715,8 @@ type TranscriptProps = Pick<
   speaker?: string;
   /** What a card's calls would do; the agent's folder preview when absent. */
   preview?: PreviewCalls;
+  /** Opens the Preview panel on a version a `present` card kept; a Prototype chat's. */
+  onOpenVersion?: (version: number) => void;
 };
 
 type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
@@ -735,6 +742,7 @@ export function Transcript({
   onFix,
   onAnswerQuestion,
   checklist = [],
+  onOpenVersion,
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // The one answer still arriving: the last block of a running turn.
@@ -765,7 +773,7 @@ export function Transcript({
               renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
                 live: turn.status === "running",
                 onAnswer: onAnswerQuestion,
-              })
+              }, onOpenVersion)
             ),
           )}
           {workedFooter(
@@ -993,6 +1001,13 @@ function UserBubble({
     <div className="user-msg">
       <ImageThumbs images={block.images ?? []} align="end" />
       {/* A picture sent alone has no words to put in a bubble. */}
+      {/* The element of a Prototype chat's page it is about. */}
+      {block.element && (
+        <div className="bubble-element" title="The element on the page this message is about">
+          <MousePointerClick size={11} />
+          <code>{block.element}</code>
+        </div>
+      )}
       {block.text && <div className="bubble">{block.text}</div>}
       <div className="bubble-foot">
         <CopyAction text={block.text} />
@@ -1044,6 +1059,7 @@ function renderBlock(
   onOpenAgent?: OpenAgent,
   preview?: PreviewCalls,
   questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
+  onOpenVersion?: (version: number) => void,
 ) {
   switch (block.kind) {
     case "user":
@@ -1070,6 +1086,8 @@ function renderBlock(
           {block.text}
         </p>
       );
+    case "restored":
+      return <RestoredCard key={block.id} from={block.from} version={block.version} before={block.before} onOpen={onOpenVersion} />;
     case "processEnded":
       return <ProcessEndedCard key={block.id} process={block.process} onOpen={onOpenProcess} />;
     case "compaction":
@@ -1101,6 +1119,9 @@ function renderBlock(
       // A review's finding is the work's result, not a step of it.
       const finding = findingOf(block);
       if (finding) return <FindingCard key={block.id} finding={finding} onOpenFile={onOpenFile} onFix={onFix} />;
+      // So is a page put in front of the user.
+      const presented = presentedOf(block);
+      if (presented) return <PresentedCard key={block.id} page={presented} onOpen={onOpenVersion} />;
       return (
         <div className="tools" key={block.id}>
           <ToolRow block={block} onOpenProcess={onOpenProcess} onOpenAgent={onOpenAgent} />

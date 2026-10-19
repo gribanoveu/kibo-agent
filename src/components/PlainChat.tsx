@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Brain, FileCog, Layers, Lock, MessagesSquare, PencilLine, SendHorizontal, Server, ShipWheel, Square, type LucideIcon } from "lucide-react";
+import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
@@ -8,12 +8,14 @@ import logo from "../assets/kibo-chat-pixel.png";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
+import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import { useArrival } from "../hooks/useArrival";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
 import { rememberNamespace } from "../lib/kube";
@@ -26,6 +28,7 @@ const WRITES_ON = "changes";
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
+  prototype: AppWindow,
 };
 
 /** What the empty chat says the role can do — longer than its menu hint, and plain about the limits. */
@@ -33,6 +36,8 @@ const ROLE_WELCOME: Record<ChatRoleId, string> = {
   assistant: "The model answers in text here: it does not read your files, run commands or change anything.",
   kubernetes:
     "The model reads the cluster picked below: pods, events, logs. With Changes on it can change it too, asking you first.",
+  prototype:
+    "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
 };
 
 // A thought cloud: overlapping circles, then the bubbles trailing to the head.
@@ -74,6 +79,21 @@ type Props = {
   onSetUpKube: () => void;
   /** "Compact now" on the context meter. */
   onCompact: () => void;
+  /** Asks to take the chat back to before a bubble — the dialog says what that does first. */
+  onRewind?: (bubbleId: string) => void;
+  /** A Prototype chat's Preview panel, beside the chat: absent for another role. */
+  pages?: {
+    /** Something was presented, so there is a page to show. */
+    available: boolean;
+    open: boolean;
+    onToggle: () => void;
+    onOpenVersion: (version: number) => void;
+    /** A page's error to put in the message box; a new object each ask. */
+    fix: { text: string } | null;
+    /** The element pointed at in the preview, sent with the next message. */
+    pointed: Pointed | null;
+    onUnpoint: () => void;
+  };
 };
 
 // Not a kubeconfig's name: the menu's last row, which opens Settings instead.
@@ -95,6 +115,8 @@ export function PlainChat({
   kube,
   onSetUpKube,
   onCompact,
+  onRewind,
+  pages,
 }: Props) {
   const [draft, setDraft] = useState("");
   const attachments = useAttachments(imagesEnabled);
@@ -111,6 +133,16 @@ export function PlainChat({
   const greeting = useMemo(() => pickSuggestions(greetingsAt(new Date().getHours()), 1)[0], [chat.chatId, empty]);
 
   useEffect(() => input.current?.focus(), [focus]);
+  // A rewound message comes back to be changed and sent again, in place of what was there.
+  useArrival(chat.draft, (rewound) => {
+    setDraft(rewound.text);
+    input.current?.focus();
+  });
+  // "Fix" under the preview: the error joins what is being written, not replaces it.
+  useArrival(pages?.fix ?? null, (fix) => {
+    setDraft((was) => (was.trim() ? `${was.trimEnd()}\n${fix.text}` : fix.text));
+    input.current?.focus();
+  });
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
@@ -121,9 +153,15 @@ export function PlainChat({
 
   const send = () => {
     if (chat.busy || (!draft.trim() && attachments.images.length === 0)) return;
-    void chat.send(draft, attachments.take());
+    void chat.send(draft, attachments.take(), pages?.pointed ?? null);
+    pages?.onUnpoint();
     setDraft("");
   };
+  // Pointed at in the preview: the message box is where the request about it is written.
+  const pointed = pages?.pointed ?? null;
+  useEffect(() => {
+    if (pointed) input.current?.focus();
+  }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   const effort = models.effort ?? "";
   const efforts = effortOptions(effort);
@@ -161,7 +199,15 @@ export function PlainChat({
             </div>
           ) : (
             <div ref={contentRef}>
-              <Transcript turn={chat.turn} onDecide={chat.decide} speaker={roleName} preview={chat.preview} />
+              <Transcript
+                turn={chat.turn}
+                onDecide={chat.decide}
+                speaker={roleName}
+                preview={chat.preview}
+                branchable={chat.branchable}
+                onRewind={onRewind}
+                onOpenVersion={pages?.onOpenVersion}
+              />
               {chat.error && <div className="plain-error">{chat.error}</div>}
             </div>
           )}
@@ -282,6 +328,17 @@ export function PlainChat({
               onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
             />
           )}
+          {pages?.available && (
+            <button
+              type="button"
+              className={`plain-preview-toggle${pages.open ? " on" : ""}`}
+              title={pages.open ? "Hide the preview" : "Show the preview"}
+              onClick={pages.onToggle}
+            >
+              <AppWindow size={13} />
+              <span>Preview</span>
+            </button>
+          )}
           <span className="plain-tab-end">
             <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
           </span>
@@ -293,6 +350,15 @@ export function PlainChat({
             </div>
           )}
           <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
+          {pointed && (
+            <div className="plain-pointed" title={pointed.text || pointed.selector}>
+              <MousePointerClick size={12} />
+              <code className="plain-pointed-selector">{pointed.selector}</code>
+              <button type="button" className="plain-pointed-drop" title="Don't send the element" onClick={pages?.onUnpoint}>
+                <X size={12} />
+              </button>
+            </div>
+          )}
           {attachments.error && (
             <p className="plain-attach-error" role="alert">
               {attachments.error}

@@ -207,7 +207,6 @@ mod tests {
                 today: "26 September 2026",
                 skills,
                 rules,
-                plan: None,
                 worktree_of: None,
                 language: None,
                 mcp_servers: mcp.notes(),

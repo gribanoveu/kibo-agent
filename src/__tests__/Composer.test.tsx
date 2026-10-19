@@ -199,7 +199,8 @@ describe("text handed to the box", () => {
 
   /// A branch gives its message back; the same text twice is two branches.
   test("replaces what was typed, each time it is handed", () => {
-    const { rerender } = render(withDraft({ text: "try this", seq: 1 }));
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft({ text: "try this", seq: 1 }));
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
     expect(box.value).toBe("try this");
 
@@ -208,9 +209,22 @@ describe("text handed to the box", () => {
     expect(box.value).toBe("try this");
   });
 
+  /// The box is drawn anew when the mode changes; what it was handed before
+  /// was already used, and the user may have sent or cleared it since.
+  test("a box drawn anew does not take what was handed to the one before it", () => {
+    const draft = { text: "try this", seq: 1 };
+    const quote = { text: "1 failed", seq: 1 };
+    const first = render(withDraft(null));
+    first.rerender(withDraft(draft, quote));
+    first.unmount();
+    render(withDraft(draft, quote));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
   /// A terminal selection is added to the message, not put in its place.
   test("a quote goes after what was typed, each time it is handed", () => {
-    const { rerender } = render(withDraft(null, { text: "```\n1 failed\n```", seq: 1 }));
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "```\n1 failed\n```", seq: 1 }));
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
     expect(box.value).toBe("```\n1 failed\n```");
 

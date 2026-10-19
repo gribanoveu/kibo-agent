@@ -96,5 +96,5 @@ pub async fn chat_set_archived(id: String, archived: bool) -> Result<(), String>
 
 #[tauri::command]
 pub async fn chat_delete(id: String) -> Result<(), String> {
-    blocking(move || chat_store::delete(&id)).await
+    blocking(move || crate::services::plain_chat::delete_chat(&id)).await
 }

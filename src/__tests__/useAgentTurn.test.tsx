@@ -236,7 +236,7 @@ describe("making room before a turn", () => {
 
     expect(folded).toBe(false);
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
-      { command: "chat_compact", args: { messages: [], force: true, plan: null, turnId: expect.stringMatching(/^compact-/) } },
+      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/) } },
     ]);
   });
 });
@@ -258,7 +258,7 @@ describe("the context estimate", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await waitFor(() => expect(result.current.context?.total).toBe(4_000));
-    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [], plan: null } });
+    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [] } });
   });
 
   /// It is an estimate over the history, so it has to be asked again once the
@@ -277,7 +277,7 @@ describe("the context estimate", () => {
 
     expect(calls).toContainEqual({
       command: "chat_context_usage",
-      args: { messages: [{ role: "user", content: "summary" }], plan: null },
+      args: { messages: [{ role: "user", content: "summary" }] },
     });
   });
 });
@@ -1067,6 +1067,7 @@ describe("rewinding", () => {
     await act(async () => {
       preview = await result.current.previewRewind("user:1");
     });
+    // The open folder: no chat named.
     expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
     expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
   });
@@ -1147,7 +1148,7 @@ describe("rewinding", () => {
   });
 
   test("the transcript says how the files went", async () => {
-    const { rewoundNotice } = await import("../hooks/useAgentTurn");
+    const { rewoundNotice } = await import("../lib/rewind");
     const file = (skip: string | null) => ({ path: "a", action: "modified", expected: stored("1"), target: stored("0"), skip }) as never;
     expect(rewoundNotice([])).toBe("Rewound to before this message — no files to put back");
     expect(rewoundNotice([file(null), file(null)])).toBe("Rewound to before this message — 2 files put back");

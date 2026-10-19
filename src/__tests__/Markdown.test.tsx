@@ -47,6 +47,20 @@ describe("Markdown", () => {
     expect(container.textContent).not.toContain("**");
   });
 
+  // The window lets `artifact:` frames in for the Prototype preview
+  // (docs/31-prototype-role.md). A frame the model writes into an answer would
+  // be one without the preview's sandbox, so none of its HTML may become one.
+  test("a frame, object or embed the model writes is not drawn", () => {
+    const { container } = render(
+      <Markdown
+        text={'Look:\n\n<iframe src="artifact://localhost/abc/files/index.html"></iframe>\n\n<object data="artifact://localhost/x"></object><embed src="artifact://localhost/y">'}
+        streaming={false}
+      />,
+    );
+    expect(container.querySelector("iframe, object, embed, frame")).toBeNull();
+    expect(container.innerHTML).not.toContain("artifact:");
+  });
+
   test("a fenced block has numbered lines and is coloured once closed", async () => {
     const { container } = render(<Markdown text={"```rust\nfn main() {\n}\n```"} streaming={false} />);
     const gutters = [...container.querySelectorAll(".md-code-gutter")].map((g) => g.textContent);

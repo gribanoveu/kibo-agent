@@ -654,6 +654,23 @@ button.turn-processes:hover {
 .msg:has(~ .tool-run) > .bubble-foot {
   display: none;
 }
+/* Above a message about an element of the preview's page: its selector. */
+.bubble-element {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.bubble-element code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
 .user-msg:hover .bubble-foot,
 .msg:hover > .bubble-foot,
 .bubble-foot:focus-within {

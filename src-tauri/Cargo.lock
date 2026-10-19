@@ -2782,6 +2782,7 @@ dependencies = [
  "kube",
  "libc",
  "notify",
+ "percent-encoding",
  "png 0.18.1",
  "portable-pty",
  "pulldown-cmark",

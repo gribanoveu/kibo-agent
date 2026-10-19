@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deck</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; }
+  .slide { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center; box-sizing: border-box; padding: 6vmin 8vmin; background: #fff; color: #1c1917; font: 3.2vmin/1.45 system-ui, sans-serif; }
+  .slide.active { display: flex; }
+  .slide h1 { margin: 0 0 3vmin; font-size: 7vmin; line-height: 1.1; }
+  .slide h2 { margin: 0 0 2.5vmin; font-size: 5vmin; }
+  .counter { position: fixed; right: 2vmin; bottom: 1.5vmin; color: #a8a29e; font: 1.8vmin system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<section class="slide"><h1>Title</h1><p>What this deck is about</p></section>
+<section class="slide"><h2>One point per slide</h2><ul><li>Short lines</li><li>Few of them</li></ul></section>
+<div class="counter"></div>
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  const counter = document.querySelector(".counter");
+  let at = 0;
+  const show = (n) => {
+    at = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((slide, i) => slide.classList.toggle("active", i === at));
+    counter.textContent = `${at + 1} / ${slides.length}`;
+  };
+  addEventListener("keydown", (e) => {
+    if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) show(at + 1);
+    else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) show(at - 1);
+    else if (e.key === "Home") show(0);
+    else if (e.key === "End") show(slides.length - 1);
+    else if (e.key === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    else return;
+    e.preventDefault();
+  });
+  addEventListener("click", (e) => show(at + (e.clientX > innerWidth / 2 ? 1 : -1)));
+  show(0);
+</script>
+<script>
+  // Probe only, after the template: the deck's own state, and one key press.
+  setTimeout(() => {
+    const before = document.querySelector(".slide.active")?.textContent;
+    dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    parent.postMessage({
+      kind: "deck",
+      slides: document.querySelectorAll(".slide").length,
+      before,
+      after: document.querySelector(".slide.active")?.textContent,
+      counter: document.querySelector(".counter")?.textContent,
+    }, "*");
+  }, 1000);
+</script>
+</body>
+</html>

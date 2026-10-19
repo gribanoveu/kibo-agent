@@ -246,15 +246,17 @@ mod tests {
     }
 
     /// Every tool but a review's own — a finding needs a review to be about —
-    /// and the Kubernetes role's cluster tools: the agent has no cluster
-    /// pinned to it. The role's web tools it shares.
+    /// the Kubernetes role's cluster tools — the agent has no cluster pinned
+    /// to it — and the Prototype role's `present`, which keeps a version of a
+    /// chat's folder the agent does not have. The roles' web tools it shares.
     #[test]
     fn agent_mode_offers_every_tool_there_is() {
         let agent = tools(ConversationMode::Agent);
         let cluster: Vec<ToolName> =
             crate::domain::chat_role::ChatRole::Kubernetes.tools().iter().copied().filter(|tool| !tool.is_web()).collect();
-        assert_eq!(agent.len(), ToolName::ALL.len() - 1 - cluster.len());
+        assert_eq!(agent.len(), ToolName::ALL.len() - 2 - cluster.len());
         assert!(!agent.contains(&ToolName::ReportFinding));
+        assert!(!agent.contains(&ToolName::Present));
         assert!(cluster.iter().all(|tool| !agent.contains(tool)));
     }
 

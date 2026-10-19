@@ -235,6 +235,9 @@
      (App.css); what floats — a sheet, a menu, the composer — is rounded, and
      controls a little. The chat's own rendering keeps its literal radii. */
   --radius-panel: 0;
+  /* Under a page in the Prototype preview: white, as a browser's canvas is, in
+     every theme — a page that sets no background is drawn as it would be there. */
+  --bg-page: #ffffff;
   --radius: 10px;
   --radius-md: 8px;
   --radius-sm: 6px;

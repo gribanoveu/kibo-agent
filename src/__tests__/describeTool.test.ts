@@ -18,6 +18,19 @@ const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, {
 });
 
 describe("what each call shows", () => {
+  test("a presented page shows its name and the version kept, and its title while it runs", () => {
+    const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
+    expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });
+    const done = describeTool(
+      tool({
+        name: "present",
+        arguments: '{"path":"./index.html","title":"  Coffee shop  "}',
+        result: { result: "presented", path: "index.html", title: "Coffee shop", version: 3 },
+      }),
+    );
+    expect(done).toMatchObject({ name: "Prototype", arg: "Coffee shop", meta: "version 3", detail: "index.html" });
+  });
+
   test("a read of several files names them and opens on each under its header", () => {
     const running = describeTool(tool({ arguments: '{"paths":["a.rs","b.rs"]}', status: "running" }));
     expect(running).toMatchObject({ name: "Read", arg: "a.rs, b.rs", meta: "2 files" });

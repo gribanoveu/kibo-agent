@@ -61,12 +61,12 @@ fn cell(value: &Value) -> String {
 pub fn tidy(object: &mut Value) {
     let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) else { return };
     for noise in ["managedFields", "uid", "resourceVersion", "generation", "selfLink"] {
-        metadata.remove(noise);
+        metadata.shift_remove(noise);
     }
     if let Some(annotations) = metadata.get_mut("annotations").and_then(Value::as_object_mut) {
-        annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
+        annotations.shift_remove("kubectl.kubernetes.io/last-applied-configuration");
         if annotations.is_empty() {
-            metadata.remove("annotations");
+            metadata.shift_remove("annotations");
         }
     }
 }
@@ -94,7 +94,7 @@ pub fn redact(kind: &str, object: &mut Value) {
             }
         }
         if let Some(annotations) = object.pointer_mut("/metadata/annotations").and_then(Value::as_object_mut) {
-            annotations.remove("kubectl.kubernetes.io/last-applied-configuration");
+            annotations.shift_remove("kubectl.kubernetes.io/last-applied-configuration");
         }
     }
     // A ConfigMap is not meant for secrets and carries them anyway — a
@@ -460,8 +460,8 @@ pub fn table(kind: &str, items: &[Value], all_namespaces: bool, fields: &[FieldP
 pub fn object_yaml(mut object: Value, sections: &[String]) -> String {
     tidy(&mut object);
     if let Value::Object(map) = &mut object {
-        map.remove("apiVersion");
-        map.remove("kind");
+        map.shift_remove("apiVersion");
+        map.shift_remove("kind");
         if !sections.is_empty() {
             map.retain(|key, _| sections.iter().any(|s| s == key));
         }

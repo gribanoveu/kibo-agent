@@ -32,7 +32,7 @@
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self' data:",
         "object-src": "'none'",
-        "frame-src": "'none'",
+        "frame-src": "artifact: http://artifact.localhost",
         "base-uri": "'self'",
         "form-action": "'none'"
       }
@@ -50,7 +50,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/potion-multilingual-128M-int8-ru-en"
+      "models/potion-multilingual-128M-int8-ru-en",
+      "prototype-libs/"
     ],
     "macOS": {
       "signingIdentity": "-"

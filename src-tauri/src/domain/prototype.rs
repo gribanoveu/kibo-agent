@@ -1,0 +1,52 @@
+//! A Prototype chat's folder (`docs/31-prototype-role.md`): what a restore
+//! did, and what can go wrong with it.
+
+use serde::Serialize;
+use thiserror::Error;
+
+use super::chat_record::ChatError;
+use super::settings::AppDirError;
+
+#[derive(Debug, Error)]
+pub enum PrototypeError {
+    /// The id came from the window and is not one plain path segment, so no
+    /// folder is made for it.
+    #[error("not a chat id: {0:?}")]
+    NotAChatId(String),
+    /// The app directory itself could not be made.
+    #[error("{0}")]
+    AppDir(String),
+    #[error(transparent)]
+    NoAppDir(#[from] AppDirError),
+    #[error("{path}: {source}")]
+    Io { path: String, source: std::io::Error },
+    #[error(transparent)]
+    Chat(#[from] ChatError),
+    /// `present` outside a Prototype chat's working folder: there is no
+    /// `versions/` beside it to keep one in.
+    #[error("present works in a Prototype chat's folder only, and {0} is not one")]
+    NotAChatFolder(String),
+    /// Worded for the model: what to do about it.
+    #[error("the folder is over {} MB, the most a version keeps — delete what the page does not use, or keep large files out of it", limit / (1024 * 1024))]
+    TooBig { limit: u64 },
+    #[error("there is no version {0} of this chat's folder")]
+    NoVersion(u32),
+    /// "Save as" named a page that is not in the folder or the version.
+    #[error("there is no page {0} to save")]
+    NoPage(String),
+    /// A turn or a restore already works in the chat's folder: one at a time,
+    /// or a restore swaps the folder out from under a write.
+    #[error("the chat's folder is in use — wait for the turn or the restore under way to finish")]
+    Busy,
+}
+
+/// What restoring a version did (P-6): the version put back, the new one the
+/// folder is kept as now, and — when the folder had changed since its last
+/// version — the version it was kept as first, so nothing is lost.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restored {
+    pub from: u32,
+    pub version: u32,
+    pub before: Option<u32>,
+}

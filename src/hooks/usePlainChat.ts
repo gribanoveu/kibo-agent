@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ContextUsage, LlmMessage, Outcome, PendingToolCall, ToolCallDecision } from "../lib/chat";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { branchAt, branchPoints } from "../lib/branch";
+import { branchSummary, rewindApply, rewindPreview, type ContextUsage, type FileRewind, type LlmMessage, type Outcome, type PendingToolCall, type ToolCallDecision } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { type ChatRoleId, type ChatRoleView, plainChatAlwaysAllow, plainChatCancel, plainChatCompact, plainChatContextUsage, plainChatList, plainChatPreview, plainChatResume, plainChatRoles, plainChatSave, plainChatSend } from "../lib/plainChat";
 import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
 import {
   acceptOutcome,
   appendNotice,
+  appendRestored,
   appendUserMessage,
   clearApproval,
   emptyTurn,
@@ -15,6 +17,8 @@ import {
   type TurnState,
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
+import { pointNote, restoreNote, restorePrototype, type Pointed } from "../lib/prototype";
+import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
 
@@ -181,13 +185,17 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   // event otherwise ends with nothing on screen to say why.
   const failed = (e: unknown) => setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
 
-  const send = async (text: string, images: ImagePart[] = []) => {
+  const send = async (text: string, images: ImagePart[] = [], pointed: Pointed | null = null) => {
     const trimmed = text.trim();
     if (busy || (!trimmed && images.length === 0)) return;
     const id = chatId ?? crypto.randomUUID();
     const before = turn;
-    const asked = appendUserMessage(before, trimmed, Date.now(), undefined, images);
-    history.current = [...history.current, { role: "user", content: trimmed, ...(images.length > 0 && { images }) }];
+    // The element pointed at, and a restore since the last message: the model
+    // is told with this one, and the transcript shows what was typed.
+    const notes = [pointed && pointNote(pointed), restoreNote(before.blocks)].filter((note): note is string => !!note);
+    const sent = notes.length > 0 ? [trimmed, ...notes].filter(Boolean).join("\n\n") : undefined;
+    const asked = appendUserMessage(before, trimmed, Date.now(), sent, images, pointed?.selector);
+    history.current = [...history.current, { role: "user", content: sent ?? trimmed, ...(images.length > 0 && { images }) }];
     unsaved.current = true;
     setChatId(id);
     setError(null);
@@ -203,7 +211,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       void refresh();
       // Beside the turn; a chat the model could not name keeps its first message as its name.
       if (chatId === null) generateChatTitle(id).then(refresh, () => {});
-      finish(await plainChatSend(turnId.current, role, kube, history.current));
+      finish(await plainChatSend(turnId.current, id, role, kube, history.current));
     } catch (e) {
       failed(e);
     }
@@ -212,11 +220,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   /** Answers the approval card. `always` stops those tools asking in Chat mode first. */
   const decide = async (decisions: ToolCallDecision[], always: string[] = []) => {
     const checkpoint = turn.checkpoint;
-    if (!checkpoint) return;
+    if (!checkpoint || chatId === null) return;
     setTurn((state) => clearApproval(state));
     try {
       for (const tool of always) await plainChatAlwaysAllow(tool);
-      finish(await plainChatResume(turnId.current, role, kube, checkpoint, decisions));
+      finish(await plainChatResume(turnId.current, chatId, role, kube, checkpoint, decisions));
     } catch (e) {
       failed(e);
     }
@@ -248,6 +256,89 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       return true;
     } catch (e) {
       end(null);
+      setError(String(e));
+      return false;
+    }
+  };
+
+  // Bubbles a rewind can start at; `null` while a turn is under way. A chat
+  // has no branches of its own — this is the rewind's, as the agent's is.
+  const branchable = useMemo(
+    () => (turn.status === "done" || turn.status === "cancelled" ? new Set(branchPoints(turn.blocks, history.current).keys()) : null),
+    [turn.status, turn.blocks],
+  );
+  // What the message box is handed — a rewound message to change and send again.
+  const [draft, setDraft] = useState<{ text: string; seq: number } | null>(null);
+
+  /** What rewinding to before `bubbleId` would do to files, as the agent's `previewRewind`. */
+  const previewRewind = async (bubbleId: string) => {
+    if (!branchable?.has(bubbleId) || chatId === null) return null;
+    const { changes, unrecorded } = changesFrom(turn.blocks, bubbleId);
+    return { files: changes.length ? await rewindPreview(changes, chatId) : [], unrecorded };
+  };
+
+  /**
+   * Takes the chat back to just before `bubbleId`, as the agent's `rewind`
+   * does (docs/31-prototype-role.md, P-7): the folder's files put back where
+   * nobody changed them since, the messages from there on gone, and that one
+   * handed back to the message box. Files first — a rewind that could not
+   * reach them leaves the conversation as it was. The versions on disk stay:
+   * they are history, and only leave the panel's list with the messages that
+   * made them. `null` when nothing was done.
+   */
+  const rewind = async (bubbleId: string, summarize = false): Promise<FileRewind[] | null> => {
+    if ((turn.status !== "done" && turn.status !== "cancelled") || chatId === null) return null;
+    const cut = branchAt(turn.blocks, history.current, bubbleId);
+    if (!cut) return null;
+    let summary: LlmMessage | null = null;
+    if (summarize) {
+      const before = history.current;
+      try {
+        summary = await branchSummary(before.slice(cut.history.length));
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+      // The chat moved on while the summary was written: the cut is stale.
+      if (history.current !== before) return null;
+    }
+    const { changes } = changesFrom(turn.blocks, bubbleId);
+    let files: FileRewind[] = [];
+    try {
+      // Always the chat's own folder, never the agent's open one: a chat
+      // whose role has none finds nothing there to put back.
+      if (changes.length) files = await rewindApply(changes, chatId);
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+    channel.stop();
+    history.current = summary ? [...cut.history, summary] : cut.history;
+    const next = appendNotice(restoredTurn(cut.blocks), rewoundNotice(files, summary !== null));
+    setTurn(next);
+    setError(null);
+    setDraft((last) => ({ text: cut.text, seq: (last?.seq ?? 0) + 1 }));
+    if (chatId !== null) {
+      await plainChatSave(chatId, role, kube, history.current, next.blocks).catch((e) => setError(String(e)));
+      void refresh();
+    }
+    return files;
+  };
+
+  /**
+   * Puts a Prototype chat's folder back to `version` (docs/31-prototype-role.md,
+   * P-6), says so in the transcript — where the model's next message learns it
+   * too — and saves. `false` while a turn is under way, or when it failed.
+   */
+  const restore = async (version: number) => {
+    if (busy || chatId === null) return false;
+    try {
+      const restored = await restorePrototype(chatId, version);
+      const next = appendRestored(turn, restored);
+      setTurn(next);
+      await plainChatSave(chatId, role, kube, history.current, next.blocks);
+      return true;
+    } catch (e) {
       setError(String(e));
       return false;
     }
@@ -301,6 +392,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     compact: () => (busy ? Promise.resolve(false) : makeRoom(true)),
     open,
     newChat,
+    restore,
+    branchable,
+    previewRewind,
+    rewind,
+    draft,
     remove,
     archive,
   };

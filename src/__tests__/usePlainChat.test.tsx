@@ -116,6 +116,9 @@ describe("a turn in a role", () => {
     expect(resumed?.checkpoint).toEqual(card.value);
     expect(resumed?.decisions).toEqual(decision);
     expect(resumed?.role).toBe("assistant");
+    // The chat it is a turn of: a role with a folder finds its folder by it.
+    expect(resumed?.chatId).toBe(called("plain_chat_save")[0]?.args.id);
+    expect(called("plain_chat_send")[0]?.args.chatId).toBe(called("plain_chat_save")[0]?.args.id);
     // Saved at rest with what the model read, and the blocks as drawn.
     await waitFor(() => expect(called("plain_chat_save").length).toBe(2));
     const last = called("plain_chat_save")[1].args;
@@ -270,5 +273,198 @@ describe("the cluster a chat works with", () => {
       await result.current.preview(calls);
     });
     expect(called("plain_chat_preview")[0]?.args).toEqual({ kube: { kubeconfig: "prod", context: null, namespace: null }, calls });
+  });
+});
+
+describe("a Prototype chat's folder put back", () => {
+  const done = { status: "done", value: { text: "ok", history: [], todos: [] } };
+  const lastSent = () => (called("plain_chat_send").at(-1)?.args.messages as { content: string }[]).at(-1)?.content;
+
+  test("a restore is said in the transcript, saved, and told to the model once, with the next message", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = { from: 1, version: 3, before: 2 };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+
+    let restored = false;
+    await act(async () => {
+      restored = await result.current.restore(1);
+    });
+    expect(restored).toBe(true);
+    expect(called("prototype_restore")[0]?.args).toMatchObject({ version: 1, chatId: result.current.chatId });
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({ kind: "restored", from: 1, version: 3, before: 2 });
+    expect((called("plain_chat_save").at(-1)?.args.blocks as { kind: string }[]).at(-1)?.kind).toBe("restored");
+
+    await act(async () => {
+      await result.current.send("make the header blue");
+    });
+    expect(lastSent()).toStartWith("make the header blue\n\n[The user restored the chat's folder to version 1 (now kept as version 3)");
+    const bubbles = result.current.turn.blocks.filter((b) => b.kind === "user") as { text: string }[];
+    expect(bubbles.at(-1)?.text).toBe("make the header blue");
+
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.send("and the footer");
+    });
+    expect(lastSent()).toBe("and the footer");
+  });
+
+  test("an element pointed at goes to the model with the message, and shows on the bubble by its selector", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = { from: 1, version: 3, before: null };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.restore(1);
+    });
+    const pointed = { page: "index.html", selector: "main > h1", html: "<h1>Coffee</h1>", text: "Coffee" };
+    await act(async () => {
+      await result.current.send("make it bigger", [], pointed);
+    });
+    // What was typed, the element, then the restore — each said once.
+    const sent = lastSent();
+    expect(sent).toStartWith("make it bigger\n\n[The user pointed at an element on the page index.html: `main > h1`.");
+    expect(sent).toContain("<h1>Coffee</h1>");
+    expect(sent.indexOf("pointed at")).toBeLessThan(sent.indexOf("restored the chat's folder"));
+    expect(result.current.turn.blocks.at(-1)).toMatchObject({ kind: "user", text: "make it bigger", element: "main > h1" });
+
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await act(async () => {
+      await result.current.send("and the footer");
+    });
+    expect(lastSent()).toBe("and the footer");
+    expect(result.current.turn.blocks.at(-1)).not.toHaveProperty("element");
+  });
+
+  // The turn may be writing those very files: the folder is not put back under it.
+  test("nothing is restored while a turn is under way", async () => {
+    results.plain_chat_send = () => new Promise(() => {});
+    results.prototype_restore = { from: 1, version: 3, before: null };
+    const { result } = renderHook(() => usePlainChat());
+    act(() => {
+      void result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    let restored = true;
+    await act(async () => {
+      restored = await result.current.restore(1);
+    });
+    expect(restored).toBe(false);
+    expect(called("prototype_restore")).toEqual([]);
+  });
+
+  test("a restore that failed says why and adds nothing", async () => {
+    results.plain_chat_send = done;
+    results.prototype_restore = new Error("there is no version 9 of this chat's folder");
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const before = result.current.turn.blocks.length;
+    let restored = true;
+    await act(async () => {
+      restored = await result.current.restore(9);
+    });
+    expect(restored).toBe(false);
+    expect(result.current.turn.blocks.length).toBe(before);
+    expect(result.current.error).toContain("no version 9");
+  });
+});
+
+describe("rewinding a chat", () => {
+  // A saved chat in which the model wrote a page: its call recorded the change.
+  const change = { path: "index.html", before: { kind: "absent" }, after: { kind: "stored", hash: "h1" } };
+
+  const opened = async (role: "prototype" | "assistant") => {
+    results.chat_load = {
+      id: "saved",
+      role,
+      kube: null,
+      messages: [
+        { role: "user", content: "a page" },
+        { role: "assistant", content: "made it" },
+      ],
+      blocks: [
+        { kind: "user", id: "user:0", text: "a page" },
+        { kind: "tool", id: "c1", round: 1, name: "writeFile", arguments: "{}", status: "done", output: "", changes: [change] },
+        { kind: "message", id: "m1", round: 1, text: "made it" },
+      ],
+    };
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.open("saved");
+    });
+    await waitFor(() => expect(result.current.chatId).toBe("saved"));
+    return result;
+  };
+
+  test("a Prototype chat puts its own folder back, cuts the chat before the message and hands it back", async () => {
+    const result = await opened("prototype");
+    const bubble = result.current.turn.blocks.find((b) => b.kind === "user")!;
+    expect(result.current.branchable?.has(bubble.id)).toBe(true);
+
+    results.rewind_preview = [{ path: "index.html", action: "created", expected: change.after, skip: null }];
+    const preview = await result.current.previewRewind(bubble.id);
+    expect(preview?.files).toHaveLength(1);
+    expect(called("rewind_preview")[0]?.args).toEqual({ changes: [change], chatId: result.current.chatId });
+
+    results.rewind_apply = [{ path: "index.html", action: "created", expected: change.after, skip: null }];
+    await act(async () => {
+      await result.current.rewind(bubble.id);
+    });
+    expect(called("rewind_apply")[0]?.args).toEqual({ changes: [change], chatId: result.current.chatId });
+    expect(result.current.turn.blocks.map((b) => b.kind)).toEqual(["notice"]);
+    expect((result.current.turn.blocks[0] as { text: string }).text).toBe("Rewound to before this message — 1 file put back");
+    expect(result.current.draft?.text).toBe("a page");
+    expect(called("plain_chat_save").at(-1)?.args.messages).toEqual([]);
+  });
+
+  /// Without a chat named, the backend rewinds the agent's open folder — the
+  /// user's project. A chat in Chat mode names itself whatever its role, so
+  /// recorded changes can only land in its own folder, where a role without
+  /// one finds nothing to put back.
+  test("a chat in another role still names its own folder, never the agent's", async () => {
+    const result = await opened("assistant");
+    const bubble = result.current.turn.blocks.find((b) => b.kind === "user")!;
+    results.rewind_preview = [];
+    await result.current.previewRewind(bubble.id);
+    expect(called("rewind_preview")[0]?.args.chatId).toBe("saved");
+    results.rewind_apply = [];
+    await act(async () => {
+      await result.current.rewind(bubble.id);
+    });
+    expect(called("rewind_apply")[0]?.args.chatId).toBe("saved");
+  });
+
+  test("nothing is rewound while a turn is under way, and files that could not be reached leave the chat as it was", async () => {
+    const result = await opened("prototype");
+    const bubble = result.current.turn.blocks.find((b) => b.kind === "user")!;
+    results.rewind_apply = new Error("the folder is gone");
+    await act(async () => {
+      expect(await result.current.rewind(bubble.id)).toBeNull();
+    });
+    expect(result.current.turn.blocks.some((b) => b.kind === "user")).toBe(true);
+    expect(result.current.error).toContain("the folder is gone");
+
+    // A turn under way: nothing reaches the folder, though the files could be put back now.
+    results.rewind_apply = [];
+    const applied = called("rewind_apply").length;
+    results.plain_chat_send = () => new Promise(() => {});
+    act(() => {
+      void result.current.send("more");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    expect(result.current.branchable).toBeNull();
+    await act(async () => {
+      expect(await result.current.rewind(bubble.id)).toBeNull();
+    });
+    expect(called("rewind_apply").length).toBe(applied);
   });
 });

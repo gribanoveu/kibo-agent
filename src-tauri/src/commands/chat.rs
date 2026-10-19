@@ -391,12 +391,11 @@ pub struct CompactedHistory {
 pub async fn chat_compact(
     messages: Vec<LlmMessage>,
     force: bool,
-    plan: Option<String>,
     turn_id: String,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
-    let frame = next_request_frame(&app, &state, plan.as_deref());
+    let frame = next_request_frame(&app, &state);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
     // IPC loop freezes every other command for its duration.
@@ -449,14 +448,13 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>) -> Result<Option<Llm
 #[tauri::command]
 pub async fn chat_context_usage(
     messages: Vec<LlmMessage>,
-    plan: Option<String>,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
     let state = Arc::clone(&state);
     super::blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, plan.as_deref()), &messages))
+        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state), &messages))
     })
     .await
 }
@@ -466,7 +464,7 @@ pub async fn chat_context_usage(
 /// MCP servers only as they run now, since none is started to be measured,
 /// and the shell by name, since probing it runs it. Without an open folder,
 /// the prompt a turn there would have.
-fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: Option<&str>) -> RequestFrame {
+fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> RequestFrame {
     let workspace = state.workspace().ok();
     let root = workspace.as_deref();
     let mode = state.mode();
@@ -487,7 +485,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, plan: 
             today: &today,
             skills: &skills,
             rules: &rules,
-            plan,
             worktree_of: worktree_of.as_deref(),
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),

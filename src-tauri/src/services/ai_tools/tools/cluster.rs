@@ -666,11 +666,11 @@ fn found(cluster: &PinnedCluster, kind: &KubeKind, name: &str) -> Result<Value, 
 /// what the server writes itself — its ids, counters, timestamps and status.
 fn declared(mut object: Value) -> Value {
     if let Some(top) = object.as_object_mut() {
-        top.remove("status");
+        top.shift_remove("status");
     }
     if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
         for written in ["uid", "resourceVersion", "generation", "creationTimestamp", "managedFields", "selfLink", "deletionTimestamp", "deletionGracePeriodSeconds"] {
-            metadata.remove(written);
+            metadata.shift_remove(written);
         }
     }
     object
@@ -951,7 +951,7 @@ fn plan_rollout_undo(cluster: &PinnedCluster, args: &KubeRolloutUndoArgs) -> Res
     let mut wanted = set.pointer("/spec/template").cloned().unwrap_or(Value::Null);
     // The ReplicaSet's own mark on its pods, not part of the Deployment's template.
     if let Some(labels) = wanted.pointer_mut("/metadata/labels").and_then(Value::as_object_mut) {
-        labels.remove("pod-template-hash");
+        labels.shift_remove("pod-template-hash");
     }
     let from = current.map_or("?".to_string(), |n| n.to_string());
     plan_template(cluster, kind, &args.name, object, &wanted, format!("revision {from} → {to}"))
@@ -1739,7 +1739,7 @@ mod tests {
         }
         for (key, value) in patch {
             if value.is_null() {
-                object.as_object_mut().unwrap().remove(key);
+                object.as_object_mut().unwrap().shift_remove(key);
             } else {
                 merge(&mut object[key], value);
             }
@@ -2305,7 +2305,7 @@ mod tests {
         let last = last_patch(&fake);
         assert_eq!(
             last,
-            "patch deployments orders api {\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"image\":\"api:2\",\"name\":\"api\"}],\"nodeSelector\":null}}}}"
+            "patch deployments orders api {\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"api\",\"image\":\"api:2\"}],\"nodeSelector\":null}}}}"
         );
         assert_eq!(recorded.audits.lock().unwrap()[0].tool, "kubeRolloutUndo");
 
@@ -2351,7 +2351,7 @@ mod tests {
         kube_undo(writing(&rolled, &recorded), &undo_of(&made.id)).unwrap();
         assert_eq!(
             last_patch(&rolled),
-            "patch deployments orders api {\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"image\":\"api:3\",\"name\":\"api\"}],\"nodeSelector\":{\"gpu\":\"yes\"}}}}}"
+            "patch deployments orders api {\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"api\",\"image\":\"api:3\"}],\"nodeSelector\":{\"gpu\":\"yes\"}}}}}"
         );
     }
 
