@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-19 A Mermaid diagram in the chat appears at once and takes the colours of whichever theme is chosen, not just light or dark: it is drawn by Pele, a fraction of Mermaid's size
+
 ## v0.10.0 — 2026-10-19
 
 - 2026-10-16 Compact now waits for the turn to end, including one paused for approval, instead of folding history the turn then writes over
