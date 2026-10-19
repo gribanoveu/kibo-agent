@@ -23,12 +23,12 @@ use crate::infra::prototype_store;
 
 pub const SCHEME: &str = "artifact";
 
-/// Its own scheme's files and inline code — Babel compiles the page's JSX in
-/// place, hence `'unsafe-eval'` — and no request out: no `fetch`, no image or
-/// font from another host. `http://artifact.localhost` is the scheme's
-/// address on Windows.
+/// Its own scheme's files and inline code — Babel compiles the page's JSX into
+/// an inline module, which needs no `eval` (checked by the probe) — and no
+/// request out: no `fetch`, no image or font from another host.
+/// `http://artifact.localhost` is the scheme's address on Windows.
 pub const CSP: &str =
-    "default-src artifact: http://artifact.localhost 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'none'";
+    "default-src artifact: http://artifact.localhost 'unsafe-inline' data: blob:; connect-src 'none'";
 
 /// Where the protocol reads from; a root that is `None` serves nothing.
 pub struct Roots {
@@ -38,14 +38,17 @@ pub struct Roots {
     pub libs: Option<PathBuf>,
 }
 
-/// The bundled libraries: in the app's resources, or — a build that has not
-/// copied them there, as `tauri dev` may not — beside the sources, where
-/// `scripts/build-prototype-libs.ts` writes them.
-pub fn libs_dir(resource_dir: Option<&Path>) -> PathBuf {
-    resource_dir
-        .map(|dir| dir.join(LIBS))
+/// The bundled libraries, in the app's resources. A debug build that has not
+/// copied them there, as `tauri dev` may not, reads them beside the sources,
+/// where `scripts/build-prototype-libs.ts` writes them; a release build never
+/// looks there — that path is the build machine's.
+pub fn libs_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    let bundled = resource_dir.map(|dir| dir.join(LIBS));
+    #[cfg(debug_assertions)]
+    let bundled = bundled
         .filter(|dir| dir.join("react.js").is_file())
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join(LIBS))
+        .or_else(|| Some(Path::new(env!("CARGO_MANIFEST_DIR")).join(LIBS)));
+    bundled
 }
 
 const LIBS: &str = "prototype-libs";
@@ -191,6 +194,8 @@ mod tests {
             assert_eq!(response.headers()["Cache-Control"], "no-store", "{path}");
         }
         assert!(CSP.contains("connect-src 'none'"));
+        // Babel needs none, and a page that may `eval` may build code from anything it reads.
+        assert!(!CSP.contains("'unsafe-eval'"));
     }
 
     /// The ways out of a root, each a 404 — and so is a root that is fine but
@@ -235,6 +240,19 @@ mod tests {
         std::os::unix::fs::symlink(&base, files.join("up")).unwrap();
         assert_eq!(respond(&roots, &format!("/{ID}/files/link.txt")).status().as_u16(), 404);
         assert_eq!(respond(&roots, &format!("/{ID}/files/up/secret.txt")).status().as_u16(), 404);
+    }
+
+    /// The bundled copy when there is one; a debug build falls back to the
+    /// sources' copy.
+    #[test]
+    fn the_libraries_are_the_bundled_ones_and_a_debug_build_falls_back_to_the_sources() {
+        let resources = temp_dir("protocol-libs");
+        fs::create_dir_all(resources.join(LIBS)).unwrap();
+        fs::write(resources.join(LIBS).join("react.js"), "").unwrap();
+        assert_eq!(libs_dir(Some(&resources)), Some(resources.join(LIBS)));
+        let sources = Some(Path::new(env!("CARGO_MANIFEST_DIR")).join(LIBS));
+        assert_eq!(libs_dir(Some(&temp_dir("protocol-no-libs"))), sources);
+        assert_eq!(libs_dir(None), sources);
     }
 
     #[test]

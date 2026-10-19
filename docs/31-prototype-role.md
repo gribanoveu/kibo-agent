@@ -110,8 +110,10 @@ API-тестировщик ([28-api-tester-role.md](28-api-tester-role.md)): **�
 папки только `.gitkeep`: ресурс бандла должен существовать уже для `cargo check`.
 
 CSP страницы превью (заголовок ответа протокола, решение 4):
-`default-src artifact: 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'none'`.
-`'unsafe-eval'` нужен Babel, и он безопасен только потому, что страница изолирована.
+`default-src artifact: http://artifact.localhost 'unsafe-inline' data: blob:; connect-src 'none'`.
+`'unsafe-eval'` нет: Babel собирает JSX во встроенный модуль без `eval` — проба на
+сборке это показала (2026-10-19), тест держит. Перепроверить, когда в бандл придёт
+Tailwind (P-3).
 `connect-src 'none'` — страница ничего не отправляет наружу: ни `fetch`, ни картинки с
 чужого хоста. Следствие: картинки в прототипе — SVG, градиенты, эмодзи или `data:`, не
 Unsplash. Это осознанно: модель пишет страницу по тексту чата, и сеть превратила бы

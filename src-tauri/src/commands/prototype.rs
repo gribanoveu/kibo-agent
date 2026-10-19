@@ -13,7 +13,7 @@ pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         tauri::async_runtime::spawn_blocking(move || {
             let roots = prototype_protocol::Roots {
                 app_dir: app_dir::dir().ok(),
-                libs: Some(prototype_protocol::libs_dir(app.path().resource_dir().ok().as_deref())),
+                libs: prototype_protocol::libs_dir(app.path().resource_dir().ok().as_deref()),
             };
             responder.respond(prototype_protocol::respond(&roots, &path));
         });
