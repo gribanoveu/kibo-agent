@@ -20,6 +20,8 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
   const [shown, setShown] = useState<number | null>(null);
   // "Refresh", for a page that does something on load.
   const [refreshed, setRefreshed] = useState(0);
+  // Over the chat's place too, as wide as the window allows.
+  const [expanded, setExpanded] = useState(false);
   // A page's error the user handed to the composer; a new object each ask.
   const [fix, setFix] = useState<{ text: string } | null>(null);
 
@@ -33,6 +35,7 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
     if (before.chatId !== chatId) {
       setOpen(false);
       setShown(null);
+      setExpanded(false);
     } else if (running && versions.length > before.count) {
       setOpen(true);
       setShown(null);
@@ -49,6 +52,8 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
   return {
     available: blocks !== null && versions.length > 0,
     open: open && url !== null,
+    /** Taking the chat's place as well; the chat stays mounted under it. */
+    expanded: open && url !== null && expanded,
     versions,
     shown,
     /** The page shown: its path and title. */
@@ -60,8 +65,15 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
       setShown(version);
       setOpen(true);
     },
-    close: () => setOpen(false),
-    toggle: () => setOpen((was) => !was),
+    close: () => {
+      setOpen(false);
+      setExpanded(false);
+    },
+    toggle: () => {
+      setOpen((was) => !was);
+      setExpanded(false);
+    },
+    toggleExpanded: () => setExpanded((was) => !was),
     refresh: () => setRefreshed((n) => n + 1),
     fix,
     askFix: (text: string) => setFix({ text }),

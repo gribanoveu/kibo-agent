@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, FolderOpen, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, Download, FolderOpen, Maximize2, Minimize2, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
 import { pickSavePath } from "../lib/dialog";
@@ -71,7 +71,7 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
       <div className="prototype-preview-head">
         <h2 className="prototype-preview-title">
           <AppWindow size={14} />
-          Preview
+          <span className="prototype-preview-title-text">Preview</span>
         </h2>
         <Dropdown
           title="Which version the panel shows"
@@ -92,7 +92,7 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
             onClick={() => preview.shown !== null && onRestore?.(preview.shown)}
           >
             <RotateCcw size={12} />
-            Restore
+            <span className="prototype-preview-restore-label">Restore</span>
           </button>
         )}
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>
@@ -108,6 +108,15 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
           onClick={() => revealPrototype(chatId).catch((e) => onNotify(String(e)))}
         >
           <FolderOpen size={13} />
+        </button>
+        <button
+          type="button"
+          className="iconbtn"
+          title={preview.expanded ? "Back beside the chat" : "Expand over the chat"}
+          aria-pressed={preview.expanded}
+          onClick={preview.toggleExpanded}
+        >
+          {preview.expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
         <button type="button" className="iconbtn" title="Close the preview" onClick={preview.close}>
           <X size={14} />

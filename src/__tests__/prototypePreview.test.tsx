@@ -139,6 +139,26 @@ describe("the panel follows the turn", () => {
     expect(result.current.key).not.toBe(kept);
   });
 
+  test("expands over the chat until it is closed, toggled shut or another chat opens", () => {
+    const { result, rerender } = renderHook(({ chatId }) => usePrototypePreview(chatId, [presented("p1", 1)], false), {
+      initialProps: { chatId: "c1" },
+    });
+    act(() => result.current.show(null));
+    act(() => result.current.toggleExpanded());
+    expect(result.current.expanded).toBe(true);
+    act(() => result.current.close());
+    act(() => result.current.show(null));
+    expect(result.current.expanded).toBe(false);
+    act(() => result.current.toggleExpanded());
+    act(() => result.current.toggle());
+    act(() => result.current.toggle());
+    expect(result.current.expanded).toBe(false);
+    act(() => result.current.toggleExpanded());
+    rerender({ chatId: "c2" });
+    act(() => result.current.show(null));
+    expect(result.current.expanded).toBe(false);
+  });
+
   test("another chat closes it; a chat in another role has no panel", () => {
     const { result, rerender } = hook({ chatId: "c1", blocks: [presented("p1", 1)], running: false });
     act(() => result.current.show(null));
@@ -228,6 +248,25 @@ describe("the panel", () => {
     await act(async () => fireEvent.click(screen.getByTitle("Save as one HTML file, for any browser")));
     expect(exported).toEqual([{ chatId: "c1", version: null, page: "index.html", path: "/tmp/now.html" }]);
     savePath = null;
+  });
+
+  test("with no page left to show — a rewind took them all — it is not expanded", () => {
+    const { result, rerender } = renderHook(({ blocks }) => usePrototypePreview("c1", blocks, false), {
+      initialProps: { blocks: [presented("p1", 1)] as Block[] },
+    });
+    act(() => result.current.show(null));
+    act(() => result.current.toggleExpanded());
+    expect(result.current.expanded).toBe(true);
+    rerender({ blocks: [] });
+    expect(result.current.expanded).toBe(false);
+  });
+
+  test("its expand button says which way it goes", () => {
+    const preview = panel([presented("p1", 1)]);
+    const { rerender } = render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
+    fireEvent.click(screen.getByTitle("Expand over the chat"));
+    rerender(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
+    expect(screen.getByTitle("Back beside the chat").getAttribute("aria-pressed")).toBe("true");
   });
 
   test("shows the chat's folder when asked", () => {

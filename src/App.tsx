@@ -196,15 +196,16 @@ export default function App() {
   // falls back to its rail first, then the column right of the viewer hides.
   // Neither is stored — wider again, both come back as they were left.
   const frame = nativeFrame || windowsFrame ? 0 : 2;
-  // Chat mode has no folder to show: the viewer and the panes beside the chat stay out of it.
-  const viewerOpen = agentMode && !onPage && viewer.active !== null;
+  // Chat mode has no folder to show: the panes beside the chat stay out of
+  // it, and the viewer's place holds a Prototype chat's preview — a page
+  // wants the width of a file, not of a side panel.
+  const previewShown = !agentMode && !onPage && prototypePreview.open && plain.chatId !== null;
+  const viewerOpen = (agentMode && !onPage && viewer.active !== null) || previewShown;
   const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
   // What the column shows: what was opened, while it fits — beside an Agent
   // chat, or beside a page that keeps it.
   const docked = onPage ? onPage.dock : agentMode;
-  // Chat mode's column holds one thing: a Prototype chat's preview, while it is open and fits.
-  const previewShown = !agentMode && !onPage && dockFits && prototypePreview.open && plain.chatId !== null;
-  const topHidden = previewShown ? false : asideHidden || !dockFits || !docked;
+  const topHidden = asideHidden || !dockFits || !docked;
   const bottomShown = dockFits && docked ? bottomTab : null;
   // In the IDE layout the bottom dock sits under the file, not in the column.
   const dockShown = !topHidden || (bottomShown !== null && !ide);
@@ -670,34 +671,33 @@ export default function App() {
       compact={ide}
       edits={viewer.edits}
     />
+  ) : previewShown && plain.chatId !== null ? (
+    <PrototypePreview
+      key="viewer"
+      preview={prototypePreview}
+      chatId={plain.chatId}
+      onNotify={toast.show}
+      onRestore={
+        plain.busy
+          ? undefined
+          : async (version) => {
+              if (!(await plain.restore(version))) return;
+              // The folder as it now is — the version brought back.
+              prototypePreview.show(null);
+              prototypePreview.refresh();
+            }
+      }
+    />
   ) : null;
-  const topPane =
-    previewShown && plain.chatId !== null ? (
-      <PrototypePreview
-        key="preview"
-        preview={prototypePreview}
-        chatId={plain.chatId}
-        onNotify={toast.show}
-        onRestore={
-          plain.busy
-            ? undefined
-            : async (version) => {
-                if (!(await plain.restore(version))) return;
-                // The folder as it now is — the version brought back.
-                prototypePreview.show(null);
-                prototypePreview.refresh();
-              }
-        }
-      />
-    ) : (
-      <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
-    );
+  const topPane = (
+    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
+  );
   const bottomPane = bottomShown && (
     <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
   );
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,

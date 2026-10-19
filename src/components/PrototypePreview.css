@@ -1,8 +1,12 @@
-/* The right dock's place beside a Prototype chat: the panel's own styles, not
-   the agent's aside ones (AGENTS.md, UI). */
+/* The file viewer's place beside a Prototype chat, and its width: as wide as
+   it was dragged, giving up width before the chat goes under its minimum
+   (FileViewer.css). The panel's own styles all the same (AGENTS.md, UI). */
 .prototype-preview {
-  flex: 1;
+  flex: 0 5 var(--viewer-width, 560px);
+  /* PANEL_LIMITS.viewer in usePanelSizes.ts. */
+  min-width: 440px;
   min-height: 0;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -18,9 +22,14 @@
   padding: 6px 8px 6px 12px;
   border-bottom: 1px solid var(--border-soft);
 }
+.ide-middle > .prototype-preview {
+  flex: 1;
+}
 .prototype-preview-title {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   margin: 0;
   display: flex;
   align-items: center;
@@ -99,6 +108,26 @@
 .prototype-preview-fix:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+/* Expanded, the page takes the chat's place too; the chat stays mounted
+   under it, its draft with it, as under a page (pages.css). */
+.window.preview-expanded .main,
+.window.preview-expanded .main + .panel-resize-handle,
+/* In the IDE layout the chat's handle is before it; elsewhere that place is
+   the sidebar's. */
+.window.ide.preview-expanded .panel-resize-handle:has(+ .main) {
+  display: none;
+}
+.window.preview-expanded .prototype-preview {
+  flex: 1;
+}
+/* Narrow, the controls keep their place and the words give way: the
+   heading's name first, then Restore's — its icon and hint stay. */
+@container (max-width: 520px) {
+  .prototype-preview-title-text,
+  .prototype-preview-restore-label {
+    display: none;
+  }
 }
 @keyframes prototype-preview-in {
   from {
