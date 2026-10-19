@@ -6,10 +6,26 @@ import { emptyTurn, type Block } from "../lib/chatTurnReducer";
 // presented is read off the transcript, and the panel follows the turn.
 
 const revealed: string[] = [];
+const exported: unknown[] = [];
+let exportFails = false;
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: { chatId: string }) => {
     if (command === "prototype_reveal") revealed.push(args.chatId);
+    if (command === "prototype_export") {
+      if (exportFails) return Promise.reject("no space left");
+      exported.push(args);
+    }
     return Promise.resolve(null);
+  },
+}));
+// The save dialog answers with this; `null` is a cancel.
+let savePath: string | null = null;
+const saveAsked: unknown[] = [];
+mock.module("@tauri-apps/plugin-dialog", () => ({
+  open: () => Promise.resolve(null),
+  save: (options: unknown) => {
+    saveAsked.push(options);
+    return Promise.resolve(savePath);
   },
 }));
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
@@ -178,6 +194,40 @@ describe("the panel", () => {
     // While a turn runs there is no restore to offer.
     rerender(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
     expect((screen.getByText("Restore").closest("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("saves the page it shows as one file, where the user picked, and says so", async () => {
+    const preview = panel([presented("p1", 1), presented("p2", 2, "deck.html", "Deck")]);
+    act(() => preview.current.show(2));
+    const told: string[] = [];
+    render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={(m) => told.push(m)} />);
+    const save = screen.getByTitle("Save as one HTML file, for any browser");
+
+    // A cancel saves nothing.
+    await act(async () => fireEvent.click(save));
+    expect(saveAsked).toEqual([{ defaultPath: "Deck.html", filters: [{ name: "HTML", extensions: ["html"] }] }]);
+    expect(exported).toEqual([]);
+
+    savePath = "/Users/me/Desktop/deck.html";
+    await act(async () => fireEvent.click(save));
+    expect(exported).toEqual([{ chatId: "c1", version: 2, page: "deck.html", path: "/Users/me/Desktop/deck.html" }]);
+    expect(told).toEqual(["Saved to deck.html"]);
+
+    exportFails = true;
+    await act(async () => fireEvent.click(save));
+    expect(told).toEqual(["Saved to deck.html", "no space left"]);
+    exportFails = false;
+    savePath = null;
+  });
+
+  test("saves the folder as it is when that is what it shows", async () => {
+    const preview = panel([presented("p1", 1, "index.html", "Coffee")]);
+    render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={() => {}} />);
+    savePath = "/tmp/now.html";
+    exported.length = 0;
+    await act(async () => fireEvent.click(screen.getByTitle("Save as one HTML file, for any browser")));
+    expect(exported).toEqual([{ chatId: "c1", version: null, page: "index.html", path: "/tmp/now.html" }]);
+    savePath = null;
   });
 
   test("shows the chat's folder when asked", () => {

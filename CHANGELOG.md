@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-19 A Prototype chat's page can be saved as one HTML file from the Preview panel: the libraries go inside it, so it opens in any browser, from disk, with no network
 - 2026-10-19 A chat in Chat mode can be rewound to before a message, as the agent's can: the messages from there on go, the message comes back to the box, and in a Prototype chat the files its model changed since are put back
 - 2026-10-19 A Prototype chat's page can be put back to an earlier version from the Preview panel; it becomes a new version, the ones after it stay, and changes not yet presented are kept as a version first
 - 2026-10-19 Add the Prototype role in Chat: the model builds a page — a React site, an HTML slide deck — in the chat's own folder and shows it in a Preview panel beside the chat; each page it presents is kept as a version to open again from its card

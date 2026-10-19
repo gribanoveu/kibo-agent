@@ -1,9 +1,9 @@
 //! The preview's protocol, `artifact://`, handed to the builder; what it
 //! serves and with what rules is `infra::prototype_protocol`'s.
 
-use tauri::{Builder, Manager, Runtime};
+use tauri::{AppHandle, Builder, Manager, Runtime};
 
-use crate::infra::{app_dir, prototype_protocol, prototype_store};
+use crate::infra::{app_dir, prototype_export, prototype_protocol, prototype_store};
 
 use super::blocking;
 
@@ -28,17 +28,36 @@ pub async fn prototype_reveal(chat_id: String) -> Result<(), String> {
     .await
 }
 
+/// Saves the page the panel shows — of the working folder, or of `version` —
+/// as one HTML file at `path`, from the system's save dialog
+/// (`infra::prototype_export`).
+#[tauri::command]
+pub async fn prototype_export(
+    app: AppHandle,
+    chat_id: String,
+    version: Option<u32>,
+    page: String,
+    path: String,
+) -> Result<(), String> {
+    let roots = roots(&app);
+    blocking(move || prototype_export::export(&roots, &chat_id, version, &page, std::path::Path::new(&path))).await
+}
+
+/// Where the protocol and "Save as" read from.
+fn roots<R: Runtime>(app: &AppHandle<R>) -> prototype_protocol::Roots {
+    prototype_protocol::Roots {
+        app_dir: app_dir::dir().ok(),
+        libs: prototype_protocol::libs_dir(app.path().resource_dir().ok().as_deref()),
+    }
+}
+
 pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     builder.register_asynchronous_uri_scheme_protocol(prototype_protocol::SCHEME, |ctx, request, responder| {
         let app = ctx.app_handle().clone();
         let path = request.uri().path().to_string();
         // Off the webview's thread: a library is megabytes.
         tauri::async_runtime::spawn_blocking(move || {
-            let roots = prototype_protocol::Roots {
-                app_dir: app_dir::dir().ok(),
-                libs: prototype_protocol::libs_dir(app.path().resource_dir().ok().as_deref()),
-            };
-            responder.respond(prototype_protocol::respond(&roots, &path));
+            responder.respond(prototype_protocol::respond(&roots(&app), &path));
         });
     })
 }

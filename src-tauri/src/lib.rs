@@ -224,6 +224,7 @@ pub fn run() {
             commands::viewer::viewer_file,
             commands::prototype::prototype_reveal,
             commands::prototype::prototype_restore,
+            commands::prototype::prototype_export,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
             commands::chat::workspace_open,

@@ -76,20 +76,29 @@ const REPORTER: &str = r#"<script>(()=>{const say=(m)=>parent.postMessage({kibo:
 /// fail: after `<head>`, or else after the doctype — never in front of it,
 /// which would put the page in quirks mode.
 fn with_reporter(page: Vec<u8>) -> Vec<u8> {
-    let text = String::from_utf8_lossy(&page);
-    let lower = text.to_ascii_lowercase();
+    in_head(&String::from_utf8_lossy(&page), REPORTER).into_bytes()
+}
+
+/// `page` with `snippet` first in its head (see [`with_reporter`]).
+pub(crate) fn in_head(page: &str, snippet: &str) -> String {
+    let lower = page.to_ascii_lowercase();
     let tag_end = |tag: &str| lower.find(tag).and_then(|at| lower[at..].find('>').map(|end| at + end + 1));
     let at = tag_end("<head").or_else(|| tag_end("<!doctype")).unwrap_or(0);
-    let mut served = String::with_capacity(text.len() + REPORTER.len());
-    served.push_str(&text[..at]);
-    served.push_str(REPORTER);
-    served.push_str(&text[at..]);
-    served.into_bytes()
+    let mut out = String::with_capacity(page.len() + snippet.len());
+    out.push_str(&page[..at]);
+    out.push_str(snippet);
+    out.push_str(&page[at..]);
+    out
 }
 
 /// The file `path` names, if it is one under its root.
-fn resolve(roots: &Roots, path: &str) -> Option<PathBuf> {
-    let segments = segments(path)?;
+pub(crate) fn resolve(roots: &Roots, path: &str) -> Option<PathBuf> {
+    file(roots, &segments(path)?)
+}
+
+/// The file the decoded `segments` of a path name, if it is one under its
+/// root: `["lib", name…]` or `[chat id, "files" | "versions", n, name…]`.
+pub(crate) fn file(roots: &Roots, segments: &[String]) -> Option<PathBuf> {
     let (first, rest) = segments.split_first()?;
     let (root, rest) = if first == "lib" {
         (roots.libs.clone()?, rest)

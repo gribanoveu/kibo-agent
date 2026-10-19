@@ -23,6 +23,7 @@ pub mod file_history;
 pub mod repository_identity;
 pub mod chat_store;
 pub mod prototype_store;
+pub mod prototype_export;
 pub mod prototype_protocol;
 pub mod next_prompt_log;
 pub mod file_watcher;

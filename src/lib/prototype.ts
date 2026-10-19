@@ -85,3 +85,13 @@ export async function revealPrototype(chatId: string): Promise<void> {
   requireBackend();
   return invoke<void>("prototype_reveal", { chatId });
 }
+
+/**
+ * Saves `page` — of the working folder (`version` null) or of a version — as
+ * one HTML file at `path`, the libraries inside it: it opens in any browser,
+ * from disk, with no network.
+ */
+export async function exportPrototype(chatId: string, version: number | null, page: string, path: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("prototype_export", { chatId, version, page, path });
+}

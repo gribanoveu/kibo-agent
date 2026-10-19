@@ -31,6 +31,9 @@ pub enum PrototypeError {
     TooBig { limit: u64 },
     #[error("there is no version {0} of this chat's folder")]
     NoVersion(u32),
+    /// "Save as" named a page that is not in the folder or the version.
+    #[error("there is no page {0} to save")]
+    NoPage(String),
 }
 
 /// What restoring a version did (P-6): the version put back, the new one the

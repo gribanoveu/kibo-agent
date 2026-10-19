@@ -51,6 +51,8 @@ export function usePrototypePreview(chatId: string | null, blocks: Block[] | nul
     open: open && url !== null,
     versions,
     shown,
+    /** The page shown: its path and title. */
+    page,
     url,
     key,
     /** Opens the panel on a version, or on the working folder with `null`. */

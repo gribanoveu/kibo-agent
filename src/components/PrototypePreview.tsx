@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, FolderOpen, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, Download, FolderOpen, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
-import { revealPrototype } from "../lib/prototype";
+import { pickSavePath } from "../lib/dialog";
+import { exportPrototype, revealPrototype } from "../lib/prototype";
 import "./PrototypePreview.css";
 
 type Props = {
@@ -51,6 +52,20 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
   ];
   const value = preview.shown === null ? NOW : `${preview.shown}`;
 
+  // One file, the libraries in it, of what the panel shows now.
+  const saveAs = async () => {
+    const page = preview.page;
+    if (!page) return;
+    const path = await pickSavePath(page.title, "html");
+    if (!path) return;
+    try {
+      await exportPrototype(chatId, preview.shown, page.path, path);
+      onNotify(`Saved to ${path.split(/[\\/]/).pop()}`);
+    } catch (e) {
+      onNotify(String(e));
+    }
+  };
+
   return (
     <aside className="prototype-preview">
       <div className="prototype-preview-head">
@@ -82,6 +97,9 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
         )}
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>
           <RotateCw size={13} />
+        </button>
+        <button type="button" className="iconbtn" title="Save as one HTML file, for any browser" onClick={saveAs}>
+          <Download size={13} />
         </button>
         <button
           type="button"
