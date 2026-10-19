@@ -2,7 +2,7 @@
   "name": "kibo-agent",
   "private": true,
   "license": "GPL-3.0-only",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "scripts": {
     "dev": "bun scripts/build-prototype-libs.ts && vite",
@@ -38,8 +38,8 @@
     "hast-util-to-jsx-runtime": "^2.3.6",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.45.0",
-    "mermaid": "^12.1.0",
     "parse5": "^7.3.0",
+    "pele": "^1.6.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "shiki": "^4.4.3",

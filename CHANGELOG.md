@@ -8,12 +8,15 @@
 - 2026-10-19 A chat in Chat mode can be rewound to before a message, as the agent's can: the messages from there on go, the message comes back to the box, and in a Prototype chat the files its model changed since are put back
 - 2026-10-19 A Prototype chat's page can be put back to an earlier version from the Preview panel; it becomes a new version, the ones after it stay, and changes not yet presented are kept as a version first
 - 2026-10-19 Add the Prototype role in Chat: the model builds a page — a React site, an HTML slide deck — in the chat's own folder and shows it in a Preview panel beside the chat; each page it presents is kept as a version to open again from its card
+- 2026-10-19 A Mermaid diagram in the chat appears at once and takes the colours of whichever theme is chosen, not just light or dark: it is drawn by Pele, a fraction of Mermaid's size
+
+## v0.10.0 — 2026-10-19
+
 - 2026-10-16 Compact now waits for the turn to end, including one paused for approval, instead of folding history the turn then writes over
 - 2026-10-16 Overview and Terminal open without a heading and close button of their own: their buttons in the chat header, ⌘1 and ⌃` show and hide them
 - 2026-10-16 MCP servers' status in Overview and the MCP pane changes as they start, fail or stop, without reopening the pane
 - 2026-10-16 Add the Overview pane, from the button right of Terminal's or ⌘1: the context window, the MCP servers that are on, the processes and helper agents running in the background, and the branch with its lines changed
 - 2026-10-16 Changes no longer has its own button in the chat header; it opens from the … menu, ⌘2 or the +/− count by the branch; the other panes' keys move one up
-- 2026-10-16 Add Provider balance to the Catalog's features: turned on, the message box shows what is left on a DeepSeek account and reads it again after each answer
 - 2026-10-16 Add DeepSeek search to the Catalog's features: turned on, the agent and the Assistant get deepseekSearch and deepseekFetch, DeepSeek's own web search and page reader, paid from the DeepSeek account in Settings → Models
 - 2026-10-16 Add Provider balance to the Catalog's features: turned on, the strip above the message box shows what is left on a DeepSeek account and reads it again after each answer
 - 2026-10-16 A new message drops the checklist items the agent's last answer left open, so the next task doesn't queue behind a stale one; a plan handed over from Plan mode keeps its checklist

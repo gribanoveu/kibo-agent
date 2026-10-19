@@ -36,33 +36,33 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** Light or dark, as `useTheme` last wrote it to <html>: a diagram is drawn again when it changes. */
-function useScheme(): string | undefined {
-  const [scheme, setScheme] = useState(() => document.documentElement.dataset.scheme);
+/** The theme `useTheme` last wrote to <html>: a diagram takes its colours, and is drawn again when it changes. */
+function useThemeName(): string | undefined {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
   useEffect(() => {
     const root = document.documentElement;
-    const watch = new MutationObserver(() => setScheme(root.dataset.scheme));
-    watch.observe(root, { attributes: true, attributeFilter: ["data-scheme"] });
+    const watch = new MutationObserver(() => setTheme(root.dataset.theme));
+    watch.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     return () => watch.disconnect();
   }, []);
-  return scheme;
+  return theme;
 }
 
 /** `source` drawn as a diagram once it is whole; a `null` source draws nothing. */
 function useDiagram(source: string | null): { svg: string | null; error: string | null } {
-  const scheme = useScheme();
+  const theme = useThemeName();
   const [drawn, setDrawn] = useState<{ svg: string | null; error: string | null }>({ svg: null, error: null });
   useEffect(() => {
     if (source === null) return;
     let live = true;
-    renderMermaid(source, scheme === "dark").then(
+    renderMermaid(source).then(
       (svg) => live && setDrawn({ svg, error: null }),
       (e: unknown) => live && setDrawn({ svg: null, error: e instanceof Error ? e.message : String(e) }),
     );
     return () => {
       live = false;
     };
-  }, [source, scheme]);
+  }, [source, theme]);
   return source === null ? { svg: null, error: null } : drawn;
 }
 
