@@ -213,7 +213,7 @@ describe("the panel", () => {
     const frame = container.querySelector("iframe")!;
     expect(frame.getAttribute("src")).toBe("artifact://localhost/c1/files/index.html");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-modals allow-forms");
-    expect(frame.getAttribute("allow")).toBe("fullscreen");
+    expect(frame.getAttribute("allow")).toBe("fullscreen *");
   });
 
   test("lists the page's own errors, ignores anyone else's, and hands one to the composer", () => {

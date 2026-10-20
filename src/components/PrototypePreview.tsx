@@ -162,7 +162,10 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
           title="Preview of the page"
           src={preview.url}
           sandbox="allow-scripts allow-modals allow-forms"
-          allow="fullscreen"
+          // `*`, not the default `src`: without allow-same-origin the page's
+          // origin is opaque, and WebKit matches it against `src` literally —
+          // `requestFullscreen` was refused "by permissions policy".
+          allow="fullscreen *"
         />
       )}
       {errors.length > 0 && (
