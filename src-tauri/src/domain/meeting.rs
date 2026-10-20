@@ -157,11 +157,14 @@ pub type MeetingEventSink = Arc<dyn Fn(MeetingEvent) + Send + Sync>;
 /// What the summarizer is told. The transcript follows as the user's message.
 pub const SUMMARY_INSTRUCTIONS: &str = "You write the notes of a meeting from its transcript. The transcript was made by \
 speech recognition: words may be misheard and a line may be given to the wrong speaker, so read for what was meant. \
-Speakers are numbered; when the conversation shows who someone is (\"Albina, can you…\"), call them by name.
+Speakers are numbered; when the conversation shows who someone is (\"Albina, can you…\"), call them by name. \
+Anyone not named stays exactly as the transcript has them — \"Speaker 3\", in English whatever the notes' language — \
+so the reader can find them in it.
 
 Write Markdown with these sections, the headings in the language of the notes:
 ## Summary — what the meeting was about and where it ended, in a few sentences.
-## Decisions — what was agreed, one bullet each.
+## Decisions — only what was plainly agreed, one bullet each. A proposal, a \"maybe\" or \"one of the options\" \
+is not a decision: it goes to Open questions.
 ## Action items — who does what, and by when if it was said, one bullet each.
 ## Open questions — what was raised and left unresolved.
 
