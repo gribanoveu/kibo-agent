@@ -6,8 +6,12 @@
 //!
 //! ```text
 //! meeting-sidecar <audio> --models <dir> [--asr punct|plain] [--embedding wespeaker|campplus]
-//!                 [--speakers N] [--threshold F] [--threads N]
+//!                 [--speakers N] [--threshold F] [--threads N] [--clustering sherpa|spectral]
 //! ```
+//!
+//! `--clustering spectral` replaces sherpa's diarization with windows over the
+//! recognized words, one speaker embedding each, and spectral clustering whose
+//! speaker count is the largest eigengap — no threshold to pick.
 //!
 //! `--speakers` is there to measure, not to use: given a count, sherpa's
 //! clustering merged voices and left clusters empty on both real recordings.
@@ -24,9 +28,11 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use serde_json::{json, Value};
+use nalgebra::{DMatrix, SymmetricEigen};
 use sherpa_onnx::{
     LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeakerDiarization,
-    OfflineSpeakerDiarizationConfig, OfflineSpeakerDiarizationSegment,
+    OfflineSpeakerDiarizationConfig, OfflineSpeakerDiarizationSegment, SpeakerEmbeddingExtractor,
+    SpeakerEmbeddingExtractorConfig,
 };
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as AudioError;
@@ -57,6 +63,7 @@ struct Args {
     speakers: i32,
     threshold: f32,
     threads: i32,
+    clustering: String,
 }
 
 fn main() -> ExitCode {
@@ -81,13 +88,20 @@ fn run() -> Result<(), String> {
     let decoded = started.elapsed().as_secs_f32();
     emit(progress("decode", 1, 1));
 
-    emit(progress("diarize", 0, 1));
-    let segments = diarize(&args, &samples)?;
-    let diarized = started.elapsed().as_secs_f32();
-    emit(progress("diarize", 1, 1));
-
+    let at = Instant::now();
     let recognizer = recognizer(&args)?;
     let words = transcribe(&recognizer, &samples);
+    let asr_seconds = at.elapsed().as_secs_f32();
+
+    emit(progress("diarize", 0, 1));
+    let at = Instant::now();
+    let segments = match args.clustering.as_str() {
+        "sherpa" => diarize(&args, &samples)?,
+        "spectral" => spectral_segments(&args, &samples, &words)?,
+        other => return Err(format!("--clustering: no such method {other}")),
+    };
+    let diarize_seconds = at.elapsed().as_secs_f32();
+    emit(progress("diarize", 1, 1));
     let utterances: Vec<Value> = utterances(&words, &segments)
         .iter()
         .map(|u| {
@@ -107,8 +121,8 @@ fn run() -> Result<(), String> {
             "segments": segments.len(),
             "words": words.len(),
             "decode_seconds": round(decoded),
-            "diarize_seconds": round(diarized - decoded),
-            "asr_seconds": round(total - diarized),
+            "diarize_seconds": round(diarize_seconds),
+            "asr_seconds": round(asr_seconds),
             "rtf": (total / audio_seconds * 1000.0).round() / 1000.0,
         },
     }));
@@ -117,17 +131,21 @@ fn run() -> Result<(), String> {
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     let usage = "usage: meeting-sidecar <audio> --models <dir> [--asr punct|plain] \
-                 [--embedding wespeaker|campplus] [--speakers N] [--threshold F] [--threads N]";
+                 [--embedding wespeaker|campplus] [--speakers N] [--threshold F] [--threads N] \
+                 [--clustering sherpa|spectral]";
     let audio = it.next().ok_or(usage)?;
     let mut args = Args {
         audio: PathBuf::from(audio),
         models: PathBuf::new(),
         asr: "punct".into(),
-        embedding: "wespeaker".into(),
+        // Spectral clustering on campplus found the 5 people of a real call and gave the
+        // same WDER on two resamplings of it (16 %); sherpa's own swung from 10 % to 39 %.
+        embedding: "campplus".into(),
         speakers: -1,
-        // wespeaker at 0.6 found the 4 people of a real call; sherpa's 0.5 split them more.
+        // For `--clustering sherpa` with wespeaker: 0.6 was best on the real call.
         threshold: 0.6,
         threads: 4,
+        clustering: "spectral".into(),
     };
     while let Some(flag) = it.next() {
         let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -139,6 +157,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--speakers" => args.speakers = value.parse().map_err(|_| number())?,
             "--threshold" => args.threshold = value.parse().map_err(|_| number())?,
             "--threads" => args.threads = value.parse().map_err(|_| number())?,
+            "--clustering" => args.clustering = value,
             _ => return Err(format!("unknown flag {flag}\n{usage}")),
         }
     }
@@ -217,17 +236,185 @@ fn diarize(args: &Args, samples: &[f32]) -> Result<Vec<OfflineSpeakerDiarization
     let mut config = OfflineSpeakerDiarizationConfig::default();
     config.segmentation.pyannote.model = Some(model(&args.models.join("sherpa-onnx-pyannote-segmentation-3-0"), "model")?);
     config.segmentation.num_threads = args.threads;
-    config.embedding.model = Some(match args.embedding.as_str() {
-        "wespeaker" => file(&args.models, "wespeaker_en_voxceleb_resnet34_LM.onnx")?,
-        "campplus" => file(&args.models, "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx")?,
-        other => return Err(format!("--embedding: no such model {other}")),
-    });
+    config.embedding.model = Some(embedding_model(args)?);
     config.embedding.num_threads = args.threads;
     config.clustering.num_clusters = args.speakers;
     config.clustering.threshold = args.threshold;
     let diarizer = OfflineSpeakerDiarization::create(&config).ok_or("the diarization models did not load")?;
     let result = diarizer.process(samples).ok_or("diarization failed")?;
     Ok(result.sort_by_start_time())
+}
+
+fn embedding_model(args: &Args) -> Result<String, String> {
+    match args.embedding.as_str() {
+        "wespeaker" => file(&args.models, "wespeaker_en_voxceleb_resnet34_LM.onnx"),
+        "campplus" => file(&args.models, "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"),
+        other => Err(format!("--embedding: no such model {other}")),
+    }
+}
+
+/// One speaker embedding per window of this long, every [`EMBED_HOP_SECONDS`],
+/// over where the words are; shorter speech gets one window of its own length.
+const EMBED_WINDOW_SECONDS: f32 = 1.5;
+const EMBED_HOP_SECONDS: f32 = 0.75;
+/// The eigengap is looked for among this many speakers at most.
+const MAX_SPEAKERS: usize = 10;
+
+/// Segments for [`utterances`] made without sherpa's clustering: windows over
+/// speech, each labeled by [`spectral`].
+fn spectral_segments(args: &Args, samples: &[f32], words: &[Word]) -> Result<Vec<OfflineSpeakerDiarizationSegment>, String> {
+    let config = SpeakerEmbeddingExtractorConfig {
+        model: Some(embedding_model(args)?),
+        num_threads: args.threads,
+        ..Default::default()
+    };
+    let extractor = SpeakerEmbeddingExtractor::create(&config).ok_or("the speaker model did not load")?;
+    let mut windows = Vec::new();
+    let mut embeddings = Vec::new();
+    for (start, end) in windows_over(words) {
+        let from = (start * SAMPLE_RATE as f32) as usize;
+        let to = ((end * SAMPLE_RATE as f32) as usize).min(samples.len());
+        let Some(stream) = extractor.create_stream() else { continue };
+        stream.accept_waveform(SAMPLE_RATE as i32, &samples[from.min(to)..to]);
+        stream.input_finished();
+        if !extractor.is_ready(&stream) {
+            continue;
+        }
+        if let Some(e) = extractor.compute(&stream) {
+            windows.push((start, end));
+            embeddings.push(e);
+        }
+    }
+    let labels = spectral(&embeddings);
+    Ok(windows
+        .into_iter()
+        .zip(labels)
+        .map(|((start, end), speaker)| OfflineSpeakerDiarizationSegment { start, end, speaker: speaker as i32, confidence: 0.0 })
+        .collect())
+}
+
+/// Speech is where words are, pauses under half a second closed; each stretch
+/// is cut into overlapping windows.
+fn windows_over(words: &[Word]) -> Vec<(f32, f32)> {
+    let mut stretches: Vec<(f32, f32)> = Vec::new();
+    for w in words {
+        match stretches.last_mut() {
+            Some(last) if w.start - last.1 < 0.5 => last.1 = last.1.max(w.end),
+            _ => stretches.push((w.start, w.end)),
+        }
+    }
+    let mut out = Vec::new();
+    for (start, end) in stretches {
+        let mut at = start;
+        loop {
+            let to = (at + EMBED_WINDOW_SECONDS).min(end);
+            out.push((at, to));
+            if to >= end {
+                break;
+            }
+            at += EMBED_HOP_SECONDS;
+        }
+    }
+    out
+}
+
+/// Spectral clustering of embeddings: cosine affinity, each row pruned to its
+/// `p` nearest, the speaker count the largest gap among the Laplacian's
+/// smallest eigenvalues, k-means on that many eigenvectors. `p` is the one that
+/// makes the gap clearest (NME-SC, Park et al. 2019).
+// ponytail: dense eigen-decomposition, O(n³) — ~4000 windows an hour is seconds; Lanczos if longer.
+fn spectral(embeddings: &[Vec<f32>]) -> Vec<usize> {
+    let n = embeddings.len();
+    if n < 3 {
+        return vec![0; n];
+    }
+    let unit: Vec<Vec<f64>> = embeddings
+        .iter()
+        .map(|e| {
+            let norm = e.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt().max(1e-9);
+            e.iter().map(|x| *x as f64 / norm).collect()
+        })
+        .collect();
+    let cosine = DMatrix::from_fn(n, n, |i, j| unit[i].iter().zip(&unit[j]).map(|(a, b)| a * b).sum::<f64>());
+    let max_k = MAX_SPEAKERS.min(n - 1);
+    let mut best: Option<(f64, usize, DMatrix<f64>)> = None;
+    for frac in [0.02, 0.04, 0.06, 0.08, 0.1, 0.15, 0.2, 0.25] {
+        let p = ((n as f64 * frac).round() as usize).clamp(2, n - 1);
+        let mut pruned = DMatrix::<f64>::zeros(n, n);
+        for i in 0..n {
+            let mut row: Vec<(usize, f64)> = (0..n).map(|j| (j, cosine[(i, j)])).collect();
+            row.sort_by(|a, b| b.1.total_cmp(&a.1));
+            for &(j, _) in row.iter().take(p) {
+                pruned[(i, j)] = 1.0;
+            }
+        }
+        let affinity = (&pruned + pruned.transpose()) * 0.5;
+        let degree = DMatrix::from_diagonal(&affinity.column_sum());
+        let eigen: SymmetricEigen<f64, nalgebra::Dyn> = SymmetricEigen::new(degree - &affinity);
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &b| eigen.eigenvalues[a].total_cmp(&eigen.eigenvalues[b]));
+        let values: Vec<f64> = order.iter().map(|&i| eigen.eigenvalues[i]).collect();
+        let (k, gap) = (1..=max_k).map(|k| (k, values[k] - values[k - 1])).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((1, 0.0));
+        let ratio = (p as f64 / n as f64) / (gap / values[n - 1].max(1e-9) + 1e-10);
+        if best.as_ref().is_none_or(|(r, _, _)| ratio < *r) {
+            let vectors = DMatrix::from_fn(n, k, |i, c| eigen.eigenvectors[(i, order[c])]);
+            best = Some((ratio, k, vectors));
+        }
+    }
+    let Some((_, k, vectors)) = best else { return vec![0; n] };
+    first_seen_order(&kmeans(&vectors, k))
+}
+
+/// K-means on the rows, started from the farthest-apart rows: the same input
+/// gives the same labels.
+fn kmeans(rows: &DMatrix<f64>, k: usize) -> Vec<usize> {
+    let n = rows.nrows();
+    let dist = |i: usize, c: &[f64]| (0..rows.ncols()).map(|d| (rows[(i, d)] - c[d]).powi(2)).sum::<f64>();
+    let row = |i: usize| (0..rows.ncols()).map(|d| rows[(i, d)]).collect::<Vec<f64>>();
+    let mut centers = vec![row(0)];
+    while centers.len() < k {
+        let far = (0..n)
+            .max_by(|&a, &b| {
+                let da = centers.iter().map(|c| dist(a, c)).fold(f64::MAX, f64::min);
+                let db = centers.iter().map(|c| dist(b, c)).fold(f64::MAX, f64::min);
+                da.total_cmp(&db)
+            })
+            .unwrap_or(0);
+        centers.push(row(far));
+    }
+    let mut labels = vec![0; n];
+    for _ in 0..50 {
+        let next: Vec<usize> = (0..n)
+            .map(|i| (0..k).min_by(|&a, &b| dist(i, &centers[a]).total_cmp(&dist(i, &centers[b]))).unwrap_or(0))
+            .collect();
+        let settled = next == labels;
+        labels = next;
+        for (c, center) in centers.iter_mut().enumerate() {
+            let members: Vec<usize> = (0..n).filter(|&i| labels[i] == c).collect();
+            if !members.is_empty() {
+                *center = (0..rows.ncols()).map(|d| members.iter().map(|&i| rows[(i, d)]).sum::<f64>() / members.len() as f64).collect();
+            }
+        }
+        if settled {
+            break;
+        }
+    }
+    labels
+}
+
+/// Labels renumbered by first appearance, so speaker 0 is whoever spoke first.
+fn first_seen_order(labels: &[usize]) -> Vec<usize> {
+    let mut seen: Vec<usize> = Vec::new();
+    labels
+        .iter()
+        .map(|l| match seen.iter().position(|s| s == l) {
+            Some(i) => i,
+            None => {
+                seen.push(*l);
+                seen.len() - 1
+            }
+        })
+        .collect()
 }
 
 fn recognizer(args: &Args) -> Result<OfflineRecognizer, String> {
@@ -403,6 +590,27 @@ mod tests {
 
     fn tokens(t: &[&str]) -> Vec<String> {
         t.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn spectral_finds_three_speakers_without_being_told() {
+        // Three directions in 8 dimensions, ten noisy windows each, interleaved.
+        let mut embeddings = Vec::new();
+        for i in 0..30 {
+            let mut e = vec![0.0f32; 8];
+            e[i % 3] = 1.0;
+            e[3 + i % 5] = 0.15;
+            embeddings.push(e);
+        }
+        let labels = spectral(&embeddings);
+        assert_eq!(labels.iter().max(), Some(&2));
+        assert!((0..30).all(|i| labels[i] == labels[i % 3]), "{labels:?}");
+    }
+
+    #[test]
+    fn speech_stretches_are_cut_into_overlapping_windows() {
+        let words = [word(0.0, 1.0, "а"), word(1.2, 3.0, "б"), word(10.0, 10.4, "в")];
+        assert_eq!(windows_over(&words), [(0.0, 1.5), (0.75, 2.25), (1.5, 3.0), (10.0, 10.4)]);
     }
 
     #[test]
