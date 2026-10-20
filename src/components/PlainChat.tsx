@@ -93,6 +93,8 @@ type Props = {
     /** The element pointed at in the preview, sent with the next message. */
     pointed: Pointed | null;
     onUnpoint: () => void;
+    /** Opens the panel on its pictures: some are being attached to a message. */
+    onShowAssets: () => void;
   };
 };
 
@@ -119,7 +121,9 @@ export function PlainChat({
   pages,
 }: Props) {
   const [draft, setDraft] = useState("");
-  const attachments = useAttachments(imagesEnabled);
+  // A Prototype chat keeps pictures in its folder for any model: one that
+  // cannot see them still names them on the page.
+  const attachments = useAttachments(imagesEnabled || chat.role === "prototype");
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
@@ -153,7 +157,9 @@ export function PlainChat({
 
   const send = () => {
     if (chat.busy || (!draft.trim() && attachments.images.length === 0)) return;
-    void chat.send(draft, attachments.take(), pages?.pointed ?? null);
+    const attached = attachments.takeNamed();
+    if (attached.length > 0) pages?.onShowAssets();
+    void chat.send(draft, attached, pages?.pointed ?? null, imagesEnabled);
     pages?.onUnpoint();
     setDraft("");
   };

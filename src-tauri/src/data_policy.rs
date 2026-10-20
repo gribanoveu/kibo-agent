@@ -158,23 +158,27 @@ fn the_window_may_reach_nothing_but_the_app() {
 /// looked for a host. `'wasm-unsafe-eval'` reaches nothing: it lets the app's
 /// own WebAssembly compile — Graphviz, which PlantUML diagrams are laid out
 /// with. `artifact:` is the Preview panel's frame, served by the app from the
-/// chat's folder (`infra::prototype_protocol`) — not the network, and only a
-/// frame: the window runs no script and loads nothing else from it.
+/// chat's folder (`infra::prototype_protocol`) — not the network — and the
+/// pictures in its `assets/`, drawn in the panel's drawer: a frame and an
+/// image, which run nothing in the window. No script, style or connection.
 fn csp_allows(directive: &str, source: &str) -> bool {
     [
         "'self'", "'none'", "'unsafe-inline'", "'wasm-unsafe-eval'", "data:", "asset:", "ipc:",
         "http://ipc.localhost", "http://asset.localhost",
     ]
     .contains(&source)
-        || (directive == "frame-src" && ["artifact:", "http://artifact.localhost"].contains(&source))
+        || (["frame-src", "img-src"].contains(&directive) && ["artifact:", "http://artifact.localhost"].contains(&source))
 }
 
-/// The preview's scheme is a frame's source and nothing else's: a script or a
-/// connection from it would be the model's page reaching into the window.
+/// The preview's scheme is a frame's source and an image's, nothing else's: a
+/// script, a style or a connection from it would be the model's page reaching
+/// into the window.
 #[test]
-fn the_preview_is_allowed_as_a_frame_only() {
-    assert!(csp_allows("frame-src", "artifact:") && csp_allows("frame-src", "http://artifact.localhost"));
-    for directive in ["default-src", "script-src", "connect-src", "img-src", "style-src"] {
+fn the_preview_is_allowed_as_a_frame_and_an_image_only() {
+    for directive in ["frame-src", "img-src"] {
+        assert!(csp_allows(directive, "artifact:") && csp_allows(directive, "http://artifact.localhost"), "{directive}");
+    }
+    for directive in ["default-src", "script-src", "connect-src", "style-src"] {
         assert!(!csp_allows(directive, "artifact:"), "{directive}");
         assert!(!csp_allows(directive, "http://artifact.localhost"), "{directive}");
     }

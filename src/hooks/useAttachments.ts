@@ -8,6 +8,9 @@ export const MAX_IMAGES = 10;
 /** Something to attach: a name to blame it by, and how to get it sanitized. */
 type Source = { name: string; prepare: () => Promise<ImagePart> };
 
+/** A picture held, with the name of the file it came from — a Prototype chat keeps it by that name. */
+export type Attached = { image: ImagePart; name: string };
+
 /**
  * The pictures attached to the message being written, each sanitized by the
  * backend as it arrives — what the box shows is what the model gets.
@@ -25,10 +28,10 @@ export function useAttachments(enabled: boolean) {
   const [dragging, setDragging] = useState(false);
   // The list as of now, for the checks between awaits: state seen from inside
   // `add` is the render's, not what an earlier picture of the same paste added.
-  const held = useRef<ImagePart[]>([]);
-  const hold = (next: ImagePart[]) => {
+  const held = useRef<Attached[]>([]);
+  const hold = (next: Attached[]) => {
     held.current = next;
-    setImages(next);
+    setImages(next.map((one) => one.image));
   };
 
   const add = async (sources: Source[]) => {
@@ -49,7 +52,7 @@ export function useAttachments(enabled: boolean) {
           setError(`Up to ${MAX_IMAGES} images in one message.`);
           break;
         }
-        hold([...held.current, part]);
+        hold([...held.current, { image: part, name: source.name }]);
       } catch (e) {
         setError(`${source.name}: ${e}`);
       }
@@ -90,15 +93,16 @@ export function useAttachments(enabled: boolean) {
     setError(null);
   };
 
-  /** Empties the box, giving back what it held — for the message being sent. */
-  const take = () => {
+  /** Empties the box, giving back what it held, with their names — for the message being sent. */
+  const takeNamed = () => {
     const taken = held.current;
     hold([]);
     setError(null);
     return taken;
   };
+  const take = () => takeNamed().map((one) => one.image);
 
-  return { images, error, dragging, paste, remove, take };
+  return { images, error, dragging, paste, remove, take, takeNamed };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

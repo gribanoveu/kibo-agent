@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { emptyTurn, type Block } from "../lib/chatTurnReducer";
 
 // A Prototype chat's Preview panel (docs/31-prototype-role.md, P-5): what was
@@ -8,8 +8,18 @@ import { emptyTurn, type Block } from "../lib/chatTurnReducer";
 const revealed: string[] = [];
 const exported: unknown[] = [];
 let exportFails = false;
+// What `prototype_assets` answers, and the calls that change the folder's pictures.
+let listed: unknown = null;
+const assetCalls: { command: string; args: unknown }[] = [];
+const picture = { mediaType: "image/png", data: "PNG", width: 2, height: 2 };
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: { chatId: string }) => {
+    if (command === "prototype_assets") {
+      assetCalls.push({ command, args });
+      return Promise.resolve(listed);
+    }
+    if (command === "image_prepare_file") return Promise.resolve(picture);
+    if (command === "prototype_asset_add" || command === "prototype_asset_remove") assetCalls.push({ command, args });
     if (command === "prototype_reveal") revealed.push(args.chatId);
     if (command === "prototype_export") {
       if (exportFails) return Promise.reject("no space left");
@@ -18,11 +28,12 @@ mock.module("@tauri-apps/api/core", () => ({
     return Promise.resolve(null);
   },
 }));
-// The save dialog answers with this; `null` is a cancel.
+// The save dialog answers with this; `null` is a cancel. The file picker with `picked`.
 let savePath: string | null = null;
+let picked: string[] | null = null;
 const saveAsked: unknown[] = [];
 mock.module("@tauri-apps/plugin-dialog", () => ({
-  open: () => Promise.resolve(null),
+  open: () => Promise.resolve(picked),
   save: (options: unknown) => {
     saveAsked.push(options);
     return Promise.resolve(savePath);
@@ -33,7 +44,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { edits, pageUrl, pointedOf, pointNote, presentedOf, restoreNote, versionsOf } = await import("../lib/prototype");
+const { assetsNote, edits, pageUrl, pointedOf, pointNote, presentedOf, restoreNote, sizeLabel, versionsOf } = await import("../lib/prototype");
 const { usePrototypePreview } = await import("../hooks/usePrototypePreview");
 const { PrototypePreview } = await import("../components/PrototypePreview");
 const { Transcript } = await import("../components/ChatPanel");
@@ -387,5 +398,76 @@ describe("a presented page in the transcript", () => {
     const { container } = render(<Transcript turn={turn} onDecide={() => {}} />);
     expect(container.querySelector(".bubble-element code")?.textContent).toBe("main > h1");
     expect(container.querySelector(".bubble")?.textContent).toBe("make it bigger");
+  });
+});
+
+describe("the user's pictures", () => {
+  const logo = { name: "logo.png", bytes: 3, width: 512, height: 128 };
+  const note = { name: "notes.txt", bytes: 2048, width: null, height: null };
+  const folder = { assets: [logo, note], folderBytes: 1536, limitBytes: 5 * 1024 * 1024 };
+
+  test("the model is told their paths and sizes; sizes read as kilobytes or megabytes", () => {
+    expect(assetsNote([])).toBeNull();
+    expect(assetsNote([logo])).toBe("[Attached picture, now in your folder: `assets/logo.png` (512×128).]");
+    expect(assetsNote([logo, note])).toBe("[Attached pictures, now in your folder: `assets/logo.png` (512×128), `assets/notes.txt`.]");
+    expect([0, 10, 1536, 5 * 1024 * 1024, 1.25 * 1024 * 1024].map(sizeLabel)).toEqual(["0 KB", "1 KB", "2 KB", "5 MB", "1.3 MB"]);
+  });
+
+  test("open the panel before there is a page, on its drawer; another chat closes the drawer", async () => {
+    listed = folder;
+    const { result, rerender } = renderHook((p: { chatId: string }) => usePrototypePreview(p.chatId, [], false), { initialProps: { chatId: "c1" } });
+    await waitFor(() => expect(result.current.assets).toEqual(folder));
+    expect(result.current.available).toBe(true);
+    expect(result.current.open).toBe(false);
+    act(() => result.current.showAssets());
+    expect(result.current.open && result.current.assetsOpen).toBe(true);
+    expect(result.current.url).toBeNull();
+    rerender({ chatId: "c2" });
+    expect(result.current.assetsOpen || result.current.open).toBe(false);
+    listed = null;
+  });
+
+  test("a chat with no folder of pictures, or in another role, asks for none", async () => {
+    assetCalls.length = 0;
+    listed = { assets: [], folderBytes: 0, limitBytes: 1 };
+    const none = renderHook(() => usePrototypePreview("c1", null, false));
+    const fresh = renderHook(() => usePrototypePreview(null, [], false));
+    await waitFor(() => expect(none.result.current.assets).toBeNull());
+    expect(fresh.result.current.available).toBe(false);
+    expect(assetCalls).toEqual([]);
+    listed = null;
+  });
+
+  test("the drawer is closed until asked; open, it shows them and adds, names and deletes", async () => {
+    listed = folder;
+    const { result } = renderHook(() => usePrototypePreview("c1", [presented("p1", 1)], false));
+    await waitFor(() => expect(result.current.assets).toEqual(folder));
+    const asked: string[] = [];
+    const draw = () => <PrototypePreview preview={{ ...result.current, askFix: (text: string) => asked.push(text) }} chatId="c1" onNotify={() => {}} />;
+    const { container, rerender } = render(draw());
+    expect(container.querySelector(".prototype-assets-grid")).toBeNull();
+    expect(screen.getByText("2 · 2 KB of 5 MB")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("Assets"));
+    rerender(draw());
+    const images = [...container.querySelectorAll(".prototype-assets-thumb img")].map((img) => img.getAttribute("src"));
+    expect(images).toEqual(["artifact://localhost/c1/files/assets/logo.png?3"]);
+    expect(screen.getByText("512×128")).not.toBeNull();
+    expect(screen.getByText("2 KB"), "a file not a picture by its size").not.toBeNull();
+
+    fireEvent.click(screen.getAllByTitle("Put its name in the message")[0]);
+    expect(asked).toEqual(["`assets/logo.png`"]);
+
+    assetCalls.length = 0;
+    await act(async () => fireEvent.click(screen.getAllByTitle(/^Delete from the folder/)[0]));
+    expect(assetCalls[0]).toEqual({ command: "prototype_asset_remove", args: { chatId: "c1", name: "logo.png" } });
+
+    assetCalls.length = 0;
+    picked = ["/Users/me/Our Logo.png"];
+    await act(async () => fireEvent.click(screen.getByTitle("Add pictures to the chat's folder")));
+    await waitFor(() => expect(assetCalls.some((c) => c.command === "prototype_asset_add")).toBe(true));
+    expect(assetCalls.find((c) => c.command === "prototype_asset_add")?.args).toEqual({ chatId: "c1", name: "Our Logo.png", image: picture });
+    picked = null;
+    listed = null;
   });
 });

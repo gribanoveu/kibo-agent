@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { branchAt, branchPoints } from "../lib/branch";
 import { branchSummary, rewindApply, rewindPreview, type ContextUsage, type FileRewind, type LlmMessage, type Outcome, type PendingToolCall, type ToolCallDecision } from "../lib/chat";
-import type { ImagePart } from "../lib/images";
+import type { Attached } from "./useAttachments";
 import { type ChatRoleId, type ChatRoleView, plainChatAlwaysAllow, plainChatCancel, plainChatCompact, plainChatContextUsage, plainChatList, plainChatPreview, plainChatResume, plainChatRoles, plainChatSave, plainChatSend } from "../lib/plainChat";
 import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
 import {
@@ -17,7 +17,7 @@ import {
   type TurnState,
 } from "../lib/chatTurnReducer";
 import type { KubePin } from "../lib/kube";
-import { pointNote, restoreNote, restorePrototype, type Pointed } from "../lib/prototype";
+import { addPrototypeAsset, assetsNote, pointNote, restoreNote, restorePrototype, type Asset, type Pointed } from "../lib/prototype";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
@@ -185,17 +185,36 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   // event otherwise ends with nothing on screen to say why.
   const failed = (e: unknown) => setTurn((state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
 
-  const send = async (text: string, images: ImagePart[] = [], pointed: Pointed | null = null) => {
+  /**
+   * Sends a message. `sees` is whether the model is set to see pictures: in a
+   * Prototype chat the pictures go into its folder's `assets/` first, named
+   * by their files, and the model is told where — sent to it as pictures
+   * only when it can see them.
+   */
+  const send = async (text: string, attached: Attached[] = [], pointed: Pointed | null = null, sees = true) => {
     const trimmed = text.trim();
+    const images = attached.map((one) => one.image);
     if (busy || (!trimmed && images.length === 0)) return;
     const id = chatId ?? crypto.randomUUID();
     const before = turn;
-    // The element pointed at, and a restore since the last message: the model
-    // is told with this one, and the transcript shows what was typed.
-    const notes = [pointed && pointNote(pointed), restoreNote(before.blocks)].filter((note): note is string => !!note);
+    // Before the chat has its id: the Preview panel reads the folder when it does.
+    const kept: Asset[] = [];
+    if (role === "prototype") {
+      try {
+        for (const one of attached) kept.push(await addPrototypeAsset(id, one.name, one.image));
+      } catch (e) {
+        setError(`The pictures could not be put in the chat's folder: ${e}`);
+        return;
+      }
+    }
+    // The element pointed at, a restore since the last message and the
+    // pictures kept: the model is told with this one, and the transcript
+    // shows what was typed.
+    const notes = [pointed && pointNote(pointed), restoreNote(before.blocks), assetsNote(kept)].filter((note): note is string => !!note);
     const sent = notes.length > 0 ? [trimmed, ...notes].filter(Boolean).join("\n\n") : undefined;
     const asked = appendUserMessage(before, trimmed, Date.now(), sent, images, pointed?.selector);
-    history.current = [...history.current, { role: "user", content: sent ?? trimmed, ...(images.length > 0 && { images }) }];
+    const seen = role === "prototype" && !sees ? [] : images;
+    history.current = [...history.current, { role: "user", content: sent ?? trimmed, ...(seen.length > 0 && { images: seen }) }];
     unsaved.current = true;
     setChatId(id);
     setError(null);

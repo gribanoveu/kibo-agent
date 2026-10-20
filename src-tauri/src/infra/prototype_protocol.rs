@@ -160,7 +160,7 @@ fn segments(path: &str) -> Option<Vec<String>> {
         .collect()
 }
 
-fn mime(file: &Path) -> &'static str {
+pub(crate) fn mime(file: &Path) -> &'static str {
     match file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("html" | "htm") => "text/html; charset=utf-8",
         Some("js" | "mjs") => "text/javascript; charset=utf-8",

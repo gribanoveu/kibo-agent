@@ -18,6 +18,16 @@ export async function pickFolder(): Promise<string | null> {
 }
 
 /**
+ * The platform's file picker for pictures, several at once. Empty when the
+ * user cancelled — and outside the app.
+ */
+export async function pickImages(): Promise<string[]> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return [];
+  const chosen = await open({ multiple: true, title: "Add pictures", filters: [{ name: "Pictures", extensions: ["png", "jpg", "jpeg"] }] });
+  return Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
+}
+
+/**
  * The platform's save dialog, for a file leaving the app.
  *
  * `null` when the user cancelled — and outside the app, where there is no

@@ -39,6 +39,28 @@ pub async fn prototype_export(
     blocking(move || prototype_export::export(&roots, &chat_id, version, &page, std::path::Path::new(&path))).await
 }
 
+/// The pictures in a Prototype chat's `assets/`, for the Preview panel's drawer.
+#[tauri::command]
+pub async fn prototype_assets(chat_id: String) -> Result<crate::domain::prototype::Assets, String> {
+    blocking(move || crate::services::prototype_assets::list(&chat_id)).await
+}
+
+/// Puts an attached picture into the chat's `assets/`, named after `name`.
+#[tauri::command]
+pub async fn prototype_asset_add(
+    chat_id: String,
+    name: String,
+    image: crate::domain::image::ImagePart,
+) -> Result<crate::domain::prototype::Asset, String> {
+    blocking(move || crate::services::prototype_assets::add(&chat_id, &name, &image)).await
+}
+
+/// Deletes the picture `name` from the chat's `assets/`.
+#[tauri::command]
+pub async fn prototype_asset_remove(chat_id: String, name: String) -> Result<(), String> {
+    blocking(move || crate::services::prototype_assets::remove(&chat_id, &name)).await
+}
+
 /// Where the protocol and "Save as" read from.
 fn roots<R: Runtime>(app: &AppHandle<R>) -> prototype_protocol::Roots {
     prototype_protocol::Roots {

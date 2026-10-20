@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::prototype::PrototypeError;
+use crate::domain::prototype::{self, Asset, Assets, PrototypeError, ASSETS};
 use crate::infra::app_dir;
 
 const DIR: &str = "prototypes";
@@ -22,6 +22,12 @@ pub const MAX_VERSION_BYTES: u64 = 5 * 1024 * 1024;
 /// The chat's working folder, made if missing.
 pub fn files_dir(chat_id: &str) -> Result<PathBuf, PrototypeError> {
     files_dir_in(&app_dir::ensure().map_err(PrototypeError::AppDir)?, chat_id)
+}
+
+/// The chat's working folder if it has one: a read makes nothing.
+pub fn existing_files_dir(chat_id: &str) -> Result<Option<PathBuf>, PrototypeError> {
+    let chat = chat_dir(&app_dir::dir()?, chat_id).ok_or_else(|| PrototypeError::NotAChatId(chat_id.to_string()))?;
+    Ok(Some(chat.join(FILES)).filter(|files| files.is_dir()))
 }
 
 /// Removes the chat's folder with everything in it. A chat that never had
@@ -207,6 +213,67 @@ fn io(path: &Path, source: std::io::Error) -> PrototypeError {
     PrototypeError::Io { path: path.display().to_string(), source }
 }
 
+/// The pictures in the working folder's `assets/`, by name, and how full
+/// the folder is. Links are left out, as a version leaves them.
+pub fn assets(files: &Path) -> Result<Assets, PrototypeError> {
+    let dir = files.join(ASSETS);
+    let mut assets = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(&dir).map_err(|source| io(&dir, source))? {
+            let entry = entry.map_err(|source| io(&dir, source))?;
+            let kind = entry.file_type().map_err(|source| io(&entry.path(), source))?;
+            if kind.is_file() {
+                let bytes = entry.metadata().map_err(|source| io(&entry.path(), source))?.len();
+                assets.push(asset(&entry.path(), entry.file_name().to_string_lossy().into_owned(), bytes));
+            }
+        }
+    }
+    assets.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Assets { assets, folder_bytes: size(files)?, limit_bytes: MAX_VERSION_BYTES })
+}
+
+/// Writes a picture into `assets/` under a name of its own made from `hint`
+/// ([`prototype::asset_name`]) — never over a file already there.
+pub fn add_asset(files: &Path, hint: &str, extension: &str, bytes: &[u8]) -> Result<Asset, PrototypeError> {
+    let dir = files.join(ASSETS);
+    fs::create_dir_all(&dir).map_err(|source| io(&dir, source))?;
+    let name = prototype::asset_name(hint, extension, |name| dir.join(name).exists());
+    let path = dir.join(&name);
+    fs::write(&path, bytes).map_err(|source| io(&path, source))?;
+    Ok(asset(&path, name, bytes.len() as u64))
+}
+
+/// Deletes the picture `name` from `assets/`. The name comes from the window:
+/// one plain file name, of a file that is there, or nothing is touched.
+pub fn remove_asset(files: &Path, name: &str) -> Result<(), PrototypeError> {
+    let plain = matches!(Path::new(name).components().collect::<Vec<_>>()[..], [std::path::Component::Normal(one)] if one == name);
+    let path = files.join(ASSETS).join(name);
+    if !(plain && path.is_file()) {
+        return Err(PrototypeError::NotAnAsset(name.to_string()));
+    }
+    fs::remove_file(&path).map_err(|source| io(&path, source))
+}
+
+fn asset(path: &Path, name: String, bytes: u64) -> Asset {
+    let (width, height) = image::image_dimensions(path).map_or((None, None), |(w, h)| (Some(w), Some(h)));
+    Asset { name, bytes, width, height }
+}
+
+/// The bytes of the files under `dir` — what a version of it would copy.
+fn size(dir: &Path) -> Result<u64, PrototypeError> {
+    let mut total = 0;
+    for entry in fs::read_dir(dir).map_err(|source| io(dir, source))? {
+        let entry = entry.map_err(|source| io(dir, source))?;
+        let kind = entry.file_type().map_err(|source| io(&entry.path(), source))?;
+        if kind.is_dir() {
+            total += size(&entry.path())?;
+        } else if kind.is_file() {
+            total += entry.metadata().map_err(|source| io(&entry.path(), source))?.len();
+        }
+    }
+    Ok(total)
+}
+
 /// The id comes from the window and becomes a path: one segment of plain
 /// characters — what `crypto.randomUUID` makes — or no folder at all. `base`
 /// is the app directory; the protocol asks here too, so the rule is one.
@@ -381,4 +448,51 @@ mod tests {
         assert!(kept.is_dir());
         assert!(base.as_path().exists());
     }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(width, height).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    /// Added under names of their own, listed by name with their sizes, the
+    /// folder's total counting the page too.
+    #[test]
+    fn pictures_go_into_assets_under_names_of_their_own() {
+        let files = files_dir_in(temp_dir("prototype-assets").as_path(), ID).unwrap();
+        assert_eq!(assets(&files).unwrap(), Assets { assets: vec![], folder_bytes: 0, limit_bytes: MAX_VERSION_BYTES });
+
+        fs::write(files.join("index.html"), "<p>hi</p>").unwrap();
+        let logo = add_asset(&files, "/Users/me/Our Logo.png", "png", &png(4, 3)).unwrap();
+        let again = add_asset(&files, "Our Logo.png", "png", &png(2, 2)).unwrap();
+        assert_eq!((logo.name.as_str(), again.name.as_str()), ("our-logo.png", "our-logo-2.png"), "never over one already there");
+        assert_eq!((logo.width, logo.height), (Some(4), Some(3)));
+        fs::write(files.join("assets").join("a-note.txt"), "x").unwrap();
+        fs::create_dir_all(files.join("assets").join("a-folder")).unwrap();
+
+        let listed = assets(&files).unwrap();
+        let names: Vec<&str> = listed.assets.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["a-note.txt", "our-logo-2.png", "our-logo.png"]);
+        assert_eq!((listed.assets[0].width, &listed.assets[2]), (None, &logo), "a file not a picture has no size in pixels");
+        let total: u64 = listed.assets.iter().map(|a| a.bytes).sum::<u64>() + "<p>hi</p>".len() as u64;
+        assert_eq!(listed.folder_bytes, total);
+    }
+
+    /// Only a plain name of a file in `assets/` is deleted: nothing a name
+    /// could climb out with, no folder, nothing that is not there.
+    #[test]
+    fn a_picture_is_removed_by_its_plain_name_only() {
+        let files = files_dir_in(temp_dir("prototype-assets-remove").as_path(), ID).unwrap();
+        let logo = add_asset(&files, "logo.png", "png", &png(1, 1)).unwrap();
+        fs::write(files.join("index.html"), "<p>hi</p>").unwrap();
+        fs::create_dir_all(files.join("assets").join("sub")).unwrap();
+
+        for bad in ["../index.html", "sub", "sub/../logo.png", "", "missing.png", "/etc/hosts"] {
+            assert!(matches!(remove_asset(&files, bad), Err(PrototypeError::NotAnAsset(_))), "{bad}");
+        }
+        assert!(files.join("index.html").is_file());
+        remove_asset(&files, &logo.name).unwrap();
+        assert!(!files.join("assets").join(&logo.name).exists());
+    }
+
 }
