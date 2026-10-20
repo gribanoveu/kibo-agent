@@ -16,6 +16,10 @@ mkdirSync(out, { recursive: true });
 const gigaam =
   "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/resolve/a6039be7cee829a9044a69ac0ebaf1c191217c97";
 const voices = "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf";
+// The voice model's licence, Apache 2.0 — its ModelScope card
+// (iic/speech_campplus_sv_zh_en_16k-common_advanced) and the 3D-Speaker repo;
+// the Hugging Face copy above carries none. Apache asks for it beside the weights.
+const threeDSpeaker = "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4";
 
 const files: [name: string, url: string, sha256: string][] = [
   ["encoder.int8.onnx", `${gigaam}/encoder.int8.onnx`, "369f35a71bf288d3b8e0391fabd8dba5f2314088d440bca474056b7b4b6e66bf"],
@@ -28,6 +32,7 @@ const files: [name: string, url: string, sha256: string][] = [
     `${voices}/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`,
     "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
   ],
+  ["campplus-LICENSE", `${threeDSpeaker}/LICENSE`, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"],
 ];
 
 async function sha256(path: string): Promise<string> {
