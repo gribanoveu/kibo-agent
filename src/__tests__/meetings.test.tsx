@@ -98,6 +98,7 @@ beforeEach(() => {
 
 describe("the meetings page", () => {
   test("lists the meetings; one opens to its notes over its transcript", async () => {
+    stored[0].utterances.push({ speaker: 1, start: 70, end: 72, text: "И напишу клиентам." });
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
@@ -105,7 +106,9 @@ describe("the meetings page", () => {
     const notes = within(screen.getByRole("region", { name: "Notes" }));
     expect(notes.getByText("Release on Friday.")).toBeTruthy();
     const transcript = within(screen.getByRole("region", { name: "Transcript" }));
-    expect(transcript.getAllByText("Speaker 2").length).toBe(2); // its chip and its line
+    expect(screen.queryByText("Import recording")).toBeNull();
+    expect(transcript.getAllByText("Speaker 2").length).toBe(2); // its chip and its one turn of two lines
+    expect(transcript.getByText("И напишу клиентам.")).toBeTruthy();
     expect(transcript.getByText("1:05")).toBeTruthy();
     expect(transcript.getByText("Я подготовлю релиз.")).toBeTruthy();
 
@@ -121,6 +124,28 @@ describe("the meetings page", () => {
     expect(day(new Date(2026, 9, 19, 23, 55).toISOString(), now)).toBe("Yesterday");
     expect(day(new Date(2026, 9, 17, 12).toISOString(), now)).not.toMatch(/2026/);
     expect(day(new Date(2025, 9, 17, 12).toISOString(), now)).toMatch(/2025/);
+  });
+
+  test("a turn plays the recording from where it starts; a meeting without one says so", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    const audio = document.querySelector("audio")!;
+    expect(audio.getAttribute("src")).toBe("meeting://localhost/m1");
+    let played = 0;
+    audio.play = () => {
+      played++;
+      return Promise.resolve();
+    };
+    fireEvent.click(screen.getByLabelText("Play from 1:05"));
+    expect(audio.currentTime).toBe(65);
+    expect(played).toBe(1);
+    expect((screen.getByLabelText("Position") as HTMLInputElement).value).toBe("65");
+
+    fireEvent.error(audio);
+    expect(screen.getByText("No recording kept for this meeting")).toBeTruthy();
+    expect((screen.getByLabelText("Play from 1:05") as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("a meeting is listed by the title its notes gave it", async () => {
@@ -164,7 +189,7 @@ describe("the meetings page", () => {
     await act(async () => finishProcess({ id: "m2" }));
     await settle();
     expect(screen.getByRole("heading", { name: "Greetings" })).toBeTruthy();
-    expect(screen.getByText(/standup\.m4a ·/)).toBeTruthy();
+    expect(screen.getByTitle("Imported from").textContent).toBe("standup.m4a");
     expect(screen.queryByRole("status")).toBeNull();
     expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Write again")).toBeTruthy();
   });

@@ -87,7 +87,7 @@ fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = commands::prototype::register(tauri::Builder::default());
+    let builder = commands::meeting::register(commands::prototype::register(tauri::Builder::default()));
     // First, as the plugin requires: plugins start in the order they were
     // added, and a second launch must be turned away before anything else
     // comes up — the index, the MCP servers.

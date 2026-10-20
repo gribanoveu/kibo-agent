@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { AudioLines, ChevronLeft, Clock, Copy, Plus, RefreshCw, Square, Trash2, Users } from "lucide-react";
+import { AudioLines, Calendar, ChevronLeft, Clock, Copy, FileAudio, MessageSquareText, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -8,7 +8,8 @@ import { useMeetings, type Job } from "../hooks/useMeetings";
 import { useCopied } from "../hooks/useCopied";
 import { useFeatures } from "../hooks/useFeatures";
 import { useVoices } from "../hooks/useVoices";
-import { meetingTitle, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
+import { usePlayer, type Player } from "../hooks/usePlayer";
+import { audioUrl, meetingTitle, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
@@ -52,6 +53,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   const [deleting, setDeleting] = useState<MeetingInfo | null>(null);
   const remembering = useFeatures().isOn("voice-memory");
   const [voicesOpen, setVoicesOpen] = useState(false);
+  const player = usePlayer(openId && audioUrl(openId));
 
   const bar = (
     <div className="meetings-bar">
@@ -61,10 +63,13 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           All meetings
         </button>
       )}
-      <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.add()}>
-        <Plus size={14} />
-        Import recording
-      </button>
+      {!openId && (
+        <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.add()}>
+          <Plus size={14} />
+          Import recording
+        </button>
+      )}
+      {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
       {job && <JobStatus job={job} onStop={meetings.stop} />}
       {remembering && (
         <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
@@ -79,6 +84,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
 
   return (
     <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
+      {openId && <audio {...player.audio} />}
       {meetings.error && <p className="meetings-error">{meetings.error}</p>}
       {openId === null ? (
         <MeetingList list={meetings.list} onOpen={meetings.open} onDelete={setDeleting} busy={job !== null} />
@@ -91,6 +97,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
             busy={job !== null}
             onSummarize={() => void meetings.summarize(meeting.id)}
             onRename={(speaker, name) => void meetings.rename(speaker, name)}
+            player={player}
           />
         )
       )}
@@ -119,6 +126,31 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         <p className="meetings-confirm">Its transcript, notes and the app's copy of the recording go. The file it was imported from stays where it is.</p>
       </Modal>
     </Page>
+  );
+}
+
+/** The open meeting's recording: play or pause, where it is, and a scale to move along. */
+function PlayerBar({ player, seconds }: { player: Player; seconds: number }) {
+  if (player.missing) return <span className="meetings-player-missing">No recording kept for this meeting</span>;
+  const length = player.duration || seconds;
+  return (
+    <div className="meetings-player" aria-label="Recording">
+      <button type="button" className="meetings-player-play" aria-label={player.playing ? "Pause" : "Play"} onClick={player.toggle}>
+        {player.playing ? <Pause size={14} /> : <Play size={14} />}
+      </button>
+      <span className="meetings-player-time">{clock(player.time)}</span>
+      <input
+        type="range"
+        aria-label="Position"
+        min={0}
+        max={length}
+        step={0.1}
+        value={Math.min(player.time, length)}
+        style={{ "--fill": `${length ? (100 * player.time) / length : 0}%` } as React.CSSProperties}
+        onChange={(e) => player.seek(Number(e.currentTarget.value))}
+      />
+      <span className="meetings-player-time">{clock(length)}</span>
+    </div>
   );
 }
 
@@ -216,6 +248,7 @@ function MeetingView({
   busy,
   onSummarize,
   onRename,
+  player,
 }: {
   meeting: Meeting;
   draft: string | null;
@@ -223,21 +256,40 @@ function MeetingView({
   busy: boolean;
   onSummarize: () => void;
   onRename: (speaker: number, name: string) => void;
+  player: Player;
 }) {
   const { copied, copy } = useCopied();
   const notes = writing ? withoutTitle(draft ?? "") : meeting.summary;
+  const speakers = Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
   return (
     <article className="meeting" aria-label={meetingTitle(meeting)}>
       <header className="meeting-head">
         <h2>{meetingTitle(meeting)}</h2>
-        <span className="meetings-row-meta">
-          {meeting.title && `${meeting.name} · `}
-          {when(meeting.created)} · {clock(meeting.seconds)}
-        </span>
+        <div className="meeting-facts">
+          <span title="Recognized">
+            <Calendar size={13} />
+            {when(meeting.created)}
+          </span>
+          <span title="Duration">
+            <Clock size={13} />
+            {clock(meeting.seconds)}
+          </span>
+          <span title="Speakers">
+            <Users size={13} />
+            {speakers} {speakers === 1 ? "speaker" : "speakers"}
+          </span>
+          {meeting.title && (
+            <span title="Imported from">
+              <FileAudio size={13} />
+              {meeting.name}
+            </span>
+          )}
+        </div>
       </header>
 
-      <section className="meeting-notes" aria-label="Notes">
-        <div className="meeting-section-head">
+      <section className="meeting-card" aria-label="Notes">
+        <div className="meeting-card-head">
+          <Sparkles size={14} className="meeting-card-icon" />
           <h3>Notes</h3>
           {notes && !writing && (
             <button type="button" className="btn btn-ghost" onClick={() => copy(notes)}>
@@ -250,27 +302,71 @@ function MeetingView({
             {meeting.summary ? "Write again" : "Write notes"}
           </button>
         </div>
-        {notes ? (
-          <Markdown text={notes} streaming={writing} />
-        ) : (
-          <p className="meetings-empty">{writing ? "Writing…" : "No notes yet — the model may have failed or been stopped."}</p>
-        )}
+        <div className="meeting-notes">
+          {notes ? (
+            <Markdown text={notes} streaming={writing} />
+          ) : (
+            <p className="meetings-empty">{writing ? "Writing…" : "No notes yet — the model may have failed or been stopped."}</p>
+          )}
+        </div>
       </section>
 
-      <section className="meeting-transcript" aria-label="Transcript">
-        <h3>Transcript</h3>
+      <section className="meeting-card" aria-label="Transcript">
+        <div className="meeting-card-head">
+          <MessageSquareText size={14} className="meeting-card-icon" />
+          <h3>Transcript</h3>
+        </div>
         <Speakers meeting={meeting} onRename={onRename} />
-        {meeting.utterances.map((u, i) => (
-          <p key={i} className="meeting-line">
-            <span className="meeting-time">{clock(u.start)}</span>
-            <span className={`meeting-speaker speaker-${u.speaker % 4}`}>{speakerName(meeting, u.speaker)}</span>
-            <span className="meeting-text">{u.text}</span>
-          </p>
-        ))}
+        <div className="meeting-transcript">
+          {turns(meeting).map((turn, i, all) => {
+            // The turn the player is in, once it has started.
+            const now = player.time > 0 && player.time >= turn.start && player.time < (all[i + 1]?.start ?? Infinity);
+            return (
+              <div key={turn.start} className={`meeting-turn${now ? " now" : ""}`}>
+                <button
+                  type="button"
+                  className={`meeting-avatar speaker-${turn.speaker % 6}`}
+                  aria-label={`Play from ${clock(turn.start)}`}
+                  title={`Play from ${clock(turn.start)}`}
+                  disabled={player.missing}
+                  onClick={() => (now && player.playing ? player.toggle() : player.playFrom(turn.start))}
+                >
+                  <span className="meeting-avatar-letter">{initial(meeting, turn.speaker)}</span>
+                  {now && player.playing ? <Pause size={12} className="meeting-avatar-icon" /> : <Play size={12} className="meeting-avatar-icon" />}
+                </button>
+                <div className="meeting-turn-body">
+                  <div className="meeting-turn-head">
+                    <span className={`meeting-speaker speaker-${turn.speaker % 6}`}>{speakerName(meeting, turn.speaker)}</span>
+                    <span className="meeting-time">{clock(turn.start)}</span>
+                  </div>
+                  {turn.texts.map((text, i) => (
+                    <p key={i} className="meeting-text">
+                      {text}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
     </article>
   );
 }
+
+/** The transcript as turns: one speaker's utterances in a row are one turn. */
+function turns(meeting: Meeting): { speaker: number; start: number; texts: string[] }[] {
+  const out: { speaker: number; start: number; texts: string[] }[] = [];
+  for (const u of meeting.utterances) {
+    const last = out[out.length - 1];
+    if (last?.speaker === u.speaker) last.texts.push(u.text);
+    else out.push({ speaker: u.speaker, start: u.start, texts: [u.text] });
+  }
+  return out;
+}
+
+/** A named speaker's first letter, an unnamed one's number. */
+const initial = (meeting: Meeting, speaker: number) => meeting.names?.[speaker]?.trim().charAt(0).toUpperCase() || String(speaker + 1);
 
 /** Who spoke, each renamed in place: the name goes into the transcript and the
     notes. Two given one name are one person the recognition split in two. */
@@ -278,7 +374,7 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
   const [editing, setEditing] = useState<number | null>(null);
   const count = Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
   return (
-    <div className="meeting-speakers" aria-label="Speakers">
+    <div className="meeting-speakers" aria-label="Speakers" title="Click a name to rename the speaker">
       {Array.from({ length: count }, (_, speaker) =>
         editing === speaker ? (
           <input
@@ -303,7 +399,7 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
           <button
             key={speaker}
             type="button"
-            className={`meeting-speaker-chip speaker-${speaker % 4}${meeting.guessed?.includes(speaker) ? " guessed" : ""}`}
+            className={`meeting-speaker-chip speaker-${speaker % 6}${meeting.guessed?.includes(speaker) ? " guessed" : ""}`}
             title={meeting.guessed?.includes(speaker) ? "Recognized by voice — click to keep or correct" : "Rename"}
             onClick={() => setEditing(speaker)}
           >

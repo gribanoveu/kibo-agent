@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
 
 use crate::domain::meeting::{Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
 use crate::domain::voices::VoiceInfo;
-use crate::infra::{meeting_store, speech};
+use crate::infra::{meeting_audio, meeting_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
 
 use super::blocking;
@@ -77,6 +77,16 @@ pub async fn meeting_summarize<R: Runtime>(app: AppHandle<R>, notes: State<'_, A
 #[tauri::command]
 pub fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) {
     notes.stop();
+}
+
+/// `meeting://<id>`: the meeting's recording for the page's player.
+pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
+    builder.register_asynchronous_uri_scheme_protocol(meeting_audio::SCHEME, |_ctx, request, responder| {
+        let path = request.uri().path().to_string();
+        let range = request.headers().get("range").and_then(|v| v.to_str().ok()).map(str::to_string);
+        // Off the webview's thread: a range is a read from disk.
+        tauri::async_runtime::spawn_blocking(move || responder.respond(meeting_audio::respond(&path, range.as_deref())));
+    })
 }
 
 #[cfg(test)]

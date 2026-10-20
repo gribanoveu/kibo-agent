@@ -31,6 +31,7 @@
         "img-src": "'self' data: asset: http://asset.localhost artifact: http://artifact.localhost",
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self' data:",
+        "media-src": "meeting: http://meeting.localhost",
         "object-src": "'none'",
         "frame-src": "artifact: http://artifact.localhost",
         "base-uri": "'self'",

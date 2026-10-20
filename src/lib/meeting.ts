@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri } from "./backend";
+import { windowsFrame } from "./window";
 
 /** Meeting notes (`domain::meeting`, docs/36): a call's recording made into a
     transcript with speakers and times, and that into the model's notes. */
@@ -41,6 +42,11 @@ export const meetingTitle = (m: { name: string; title?: string }) => m.title ?? 
 /** Notes as they stream, without the `# title` line the model starts them with
     (`domain::meeting::split_title` takes it off the saved ones). */
 export const withoutTitle = (notes: string) => notes.replace(/^\s*#(?!#)[^\n]*(\n|$)/, "").trimStart();
+
+/** Where the page's player reads meeting `id`'s recording (`infra::meeting_audio`).
+    Windows serves an app's scheme as `http://<scheme>.localhost`. */
+export const audioUrl = (id: string, windows = windowsFrame) =>
+  `${windows ? "http://meeting.localhost" : "meeting://localhost"}/${encodeURIComponent(id)}`;
 
 export type MeetingInfo = {
   id: string;

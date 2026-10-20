@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-20 Play an open meeting's recording from the bar on top, or from any speaker's turn by its round mark, to hear who it is before naming them (experimental build)
+- 2026-10-20 An open meeting shows its title, date, length and speakers on top, the notes and the transcript in cards under it, and the transcript as speaker turns with a coloured mark for each (experimental build)
 - 2026-10-20 Meetings are listed by day, each by a short title the model gives it with the notes, with the time it was recognized, its length and speakers; "Add recording" is now "Import recording" (experimental build)
 - 2026-10-20 A meeting keeps its own copy of the recording (16 kHz mono WAV, about 115 MB an hour), so the original file can be moved or deleted after it is added; deleting the meeting deletes the copy (experimental build)
 - 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request (experimental build)
