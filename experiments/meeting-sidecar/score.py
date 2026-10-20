@@ -13,7 +13,9 @@ most shared time. WER: words of the whole recording in time order, lower case,
 `ё` as `е`, punctuation and hyphens dropped.
 
 Both are relative to a reference made by correcting one hypothesis: its
-boundaries came from that run, so that run is favoured on DER.
+boundaries came from that run, so that run is favoured on DER — and speech that
+run missed but a person wrote down has wrong times, so DER over-counts false
+alarm for a run that finds it. WDER, over aligned words, needs no times.
 """
 
 import json
@@ -38,8 +40,19 @@ def reference(path):
 
 
 def hypothesis(path):
+    """Utterances as lines; one that lists its words' spans is speech only there,
+    with pauses under 0.5 s closed — what diarization's `min_duration_off` does."""
     result = json.loads(open(path, encoding="utf-8").read().splitlines()[-1])
-    return [(str(u["speaker"]), u["start"], u["end"], u["text"]) for u in result["utterances"]]
+    out = []
+    for u in result["utterances"]:
+        spans = []
+        for s, e in u.get("words") or [(u["start"], u["end"])]:
+            if spans and s - spans[-1][1] < 0.5:
+                spans[-1][1] = e
+            else:
+                spans.append([s, e])
+        out += [(str(u["speaker"]), s, e, u["text"] if i == 0 else "") for i, (s, e) in enumerate(spans)]
+    return out
 
 
 def frames(lines, n):
@@ -71,21 +84,61 @@ def der(ref, hyp):
     return 100 * (miss + fa + conf) / speech, 100 * miss / speech, 100 * fa / speech, 100 * conf / speech
 
 
+def spoken(lines):
+    """(word, speaker) of the whole recording in time order."""
+    out = []
+    for who, _, _, text in sorted(lines, key=lambda x: x[1]):
+        text = text.lower().replace("ё", "е").replace("-", " ")
+        out += [(w, who) for w in re.findall(r"\w+", text)]
+    return out
+
+
 def words(lines):
-    text = " ".join(t for _, _, _, t in sorted(lines, key=lambda x: x[1]))
-    text = text.lower().replace("ё", "е")
-    return re.findall(r"[\w]+", text.replace("-", " "))
+    return [w for w, _ in spoken(lines)]
+
+
+def align(a, b):
+    """Edit-distance alignment: the distance and the (i, j) pairs matched or substituted."""
+    d = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) + 1):
+        d[i][0] = i
+    for j in range(len(b) + 1):
+        d[0][j] = j
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+    pairs, i, j = [], len(a), len(b)
+    while i and j:
+        if d[i][j] == d[i - 1][j - 1] + (a[i - 1] != b[j - 1]):
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif d[i][j] == d[i - 1][j] + 1:
+            i -= 1
+        else:
+            j -= 1
+    return d[-1][-1], pairs[::-1]
 
 
 def wer(ref, hyp):
     a, b = words(ref), words(hyp)
-    prev = list(range(len(b) + 1))
-    for i, x in enumerate(a, 1):
-        cur = [i]
-        for j, y in enumerate(b, 1):
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x != y)))
-        prev = cur
-    return 100 * prev[-1] / len(a), len(a)
+    return 100 * align(a, b)[0] / len(a), len(a)
+
+
+def wder(ref, hyp):
+    """Word diarization error: of the words both sides have, the share given to
+    the wrong speaker under the best one-to-one map. Needs no reference times —
+    the measure for a reference whose text was fixed but not its boundaries."""
+    a, b = spoken(ref), spoken(hyp)
+    pairs = [(a[i][1], b[j][1]) for i, j in align([w for w, _ in a], [w for w, _ in b])[1] if a[i][1] != "?"]
+    counts = {}
+    for p in pairs:
+        counts[p] = counts.get(p, 0) + 1
+    mapping, used = {}, set()
+    for (r, h), _ in sorted(counts.items(), key=lambda kv: -kv[1]):
+        if h not in mapping and r not in used:
+            mapping[h] = r
+            used.add(r)
+    return 100 * sum(1 for r, h in pairs if mapping.get(h) != r) / len(pairs)
 
 
 def check():
@@ -95,6 +148,8 @@ def check():
     assert round(der(ref, [("0", 0.0, 1.0, "")])[1]) == 50  # B's second is missed
     assert wer(ref, [("0", 0.0, 2.0, "привет мир елка")])[0] == 0
     assert round(wer(ref, [("0", 0.0, 2.0, "привет")])[0]) == 67
+    assert wder(ref, [("7", 0.0, 1.0, "привет мир"), ("3", 1.0, 2.0, "елка")]) == 0
+    assert round(wder(ref, [("7", 0.0, 2.0, "привет мир елка")])) == 33  # "елка" is B's
 
 
 if __name__ == "__main__":
@@ -106,4 +161,5 @@ if __name__ == "__main__":
         hyp = hypothesis(path)
         d, miss, fa, conf = der(ref, hyp)
         w, n = wer(ref, hyp)
-        print(f"{path.rsplit('/', 1)[-1]:<34} DER {d:5.1f}% (miss {miss:4.1f}, FA {fa:4.1f}, conf {conf:4.1f})  WER {w:5.1f}% of {n} words")
+        print(f"{path.rsplit('/', 1)[-1]:<34} WER {w:5.1f}% of {n} words  WDER {wder(ref, hyp):5.1f}%  "
+              f"DER {d:5.1f}% (miss {miss:4.1f}, FA {fa:4.1f}, conf {conf:4.1f})")

@@ -36,12 +36,18 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
 const SAMPLE_RATE: u32 = 16_000;
-/// Longest piece GigaAM is given at once. A turn longer than this is cut into
-/// equal pieces, which can split a word at the seam.
-// ponytail: equal cuts, VAD pauses inside the turn if seams cost WER on the bench.
-const MAX_PIECE_SECONDS: f32 = 20.0;
-/// Same speaker again after a pause shorter than this: one turn, not two.
-const JOIN_GAP_SECONDS: f32 = 0.5;
+/// The whole recording goes through GigaAM in windows this long, each starting
+/// [`OVERLAP_SECONDS`] before the last one ends. Cutting it by diarization turns
+/// instead tripled WER: short pieces lose context and the turn edges clip words.
+const WINDOW_SECONDS: f32 = 24.0;
+/// A word in the overlap belongs to the window it is further inside of: the cut
+/// is the overlap's middle, so each side has 2 s of context past it.
+const OVERLAP_SECONDS: f32 = 4.0;
+/// How long a token lasts when the model gives only where it starts: one GigaAM
+/// frame is 40 ms, a token rarely less than two.
+const TOKEN_SECONDS: f32 = 0.08;
+/// The same speaker again after a pause shorter than this is one utterance.
+const JOIN_GAP_SECONDS: f32 = 1.5;
 
 struct Args {
     audio: PathBuf,
@@ -80,19 +86,15 @@ fn run() -> Result<(), String> {
     let diarized = started.elapsed().as_secs_f32();
     emit(progress("diarize", 1, 1));
 
-    let turns = turns(&segments);
     let recognizer = recognizer(&args)?;
-    let mut utterances = Vec::with_capacity(turns.len());
-    for (i, turn) in turns.iter().enumerate() {
-        emit(progress("asr", i, turns.len()));
-        let text = recognize(&recognizer, &samples, turn.start, turn.end);
-        if !text.is_empty() {
-            utterances.push(json!({
-                "speaker": turn.speaker, "start": round(turn.start), "end": round(turn.end), "text": text,
-            }));
-        }
-    }
-    emit(progress("asr", turns.len(), turns.len()));
+    let words = transcribe(&recognizer, &samples);
+    let utterances: Vec<Value> = utterances(&words, &segments)
+        .iter()
+        .map(|u| {
+            let spans: Vec<[f32; 2]> = u.words.iter().map(|w| [round(w.start), round(w.end)]).collect();
+            json!({ "speaker": u.speaker, "start": round(u.start), "end": round(u.end), "text": u.text, "words": spans })
+        })
+        .collect();
     let total = started.elapsed().as_secs_f32();
 
     let speakers = segments.iter().map(|s| s.speaker).max().map_or(0, |m| m + 1);
@@ -103,7 +105,7 @@ fn run() -> Result<(), String> {
             "audio_seconds": round(audio_seconds),
             "speakers": speakers,
             "segments": segments.len(),
-            "turns": turns.len(),
+            "words": words.len(),
             "decode_seconds": round(decoded),
             "diarize_seconds": round(diarized - decoded),
             "asr_seconds": round(total - diarized),
@@ -244,46 +246,106 @@ fn recognizer(args: &Args) -> Result<OfflineRecognizer, String> {
     OfflineRecognizer::create(&config).ok_or_else(|| "the speech model did not load".into())
 }
 
-/// The text of `[start, end)`, cut into pieces GigaAM takes whole.
-fn recognize(recognizer: &OfflineRecognizer, samples: &[f32], start: f32, end: f32) -> String {
-    let pieces = ((end - start) / MAX_PIECE_SECONDS).ceil().max(1.0) as usize;
-    let step = (end - start) / pieces as f32;
-    (0..pieces)
-        .filter_map(|i| {
-            let from = ((start + step * i as f32) * SAMPLE_RATE as f32) as usize;
-            let to = (((start + step * (i + 1) as f32) * SAMPLE_RATE as f32) as usize).min(samples.len());
-            let stream = recognizer.create_stream();
-            stream.accept_waveform(SAMPLE_RATE as i32, samples.get(from..to)?);
-            recognizer.decode(&stream);
-            stream.get_result().map(|r| r.text.trim().to_string())
-        })
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+#[derive(Debug, Clone, PartialEq)]
+struct Word {
+    start: f32,
+    end: f32,
+    text: String,
+}
+
+/// Every word of the recording, in order, with where it is.
+fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32]) -> Vec<Word> {
+    let window = (WINDOW_SECONDS * SAMPLE_RATE as f32) as usize;
+    let hop = ((WINDOW_SECONDS - OVERLAP_SECONDS) * SAMPLE_RATE as f32) as usize;
+    let windows = if samples.len() <= window { 1 } else { (samples.len() - window).div_ceil(hop) + 1 };
+    let mut words = Vec::new();
+    let mut kept_from = f32::NEG_INFINITY;
+    for i in 0..windows {
+        emit(progress("asr", i, windows));
+        let from = i * hop;
+        let to = (from + window).min(samples.len());
+        let offset = from as f32 / SAMPLE_RATE as f32;
+        let cut = if i + 1 == windows { f32::INFINITY } else { offset + WINDOW_SECONDS - OVERLAP_SECONDS / 2.0 };
+        let stream = recognizer.create_stream();
+        stream.accept_waveform(SAMPLE_RATE as i32, &samples[from..to]);
+        recognizer.decode(&stream);
+        let Some(result) = stream.get_result() else { continue };
+        let found = match &result.timestamps {
+            Some(times) => words_of(&result.tokens, times, result.durations.as_deref(), offset),
+            // No timestamps: the window is one "word", its speaker the window's.
+            None => vec![Word { start: offset, end: to as f32 / SAMPLE_RATE as f32, text: result.text.trim().into() }],
+        };
+        words.extend(found.into_iter().filter(|w| w.start >= kept_from && w.start < cut && !w.text.is_empty()));
+        kept_from = cut;
+    }
+    emit(progress("asr", windows, windows));
+    words
+}
+
+/// SentencePiece tokens joined into words: `▁` starts one — on the token, or
+/// as a token of its own before it — and a token of only punctuation stays
+/// with the word before it.
+fn words_of(tokens: &[String], times: &[f32], durations: Option<&[f32]>, offset: f32) -> Vec<Word> {
+    let mut words: Vec<Word> = Vec::new();
+    let mut mark = false;
+    for (i, (token, &at)) in tokens.iter().zip(times).enumerate() {
+        let starts = mark || token.starts_with('▁') || token.starts_with(' ');
+        let piece = token.trim_start_matches(['▁', ' ']);
+        if piece.is_empty() {
+            mark = true;
+            continue;
+        }
+        mark = false;
+        let end = offset + at + durations.and_then(|d| d.get(i)).copied().filter(|d| *d > 0.0).unwrap_or(TOKEN_SECONDS);
+        let punctuation = !piece.chars().any(char::is_alphanumeric);
+        match words.last_mut() {
+            Some(last) if !starts || punctuation => {
+                last.text.push_str(piece);
+                last.end = end;
+            }
+            _ => words.push(Word { start: offset + at, end, text: piece.to_string() }),
+        }
+    }
+    words
 }
 
 #[derive(Debug, PartialEq)]
-struct Turn {
+struct Utterance {
     speaker: i32,
     start: f32,
     end: f32,
+    text: String,
+    /// Where speech actually is: the pauses inside an utterance are not speech.
+    words: Vec<Word>,
 }
 
-/// Diarization segments joined into turns: the same speaker after a short
-/// pause is one turn. Overlapping speech stays two turns over the same audio,
-/// each recognized — the louder voice wins both.
-// ponytail: overlap transcribed twice; split by energy or drop the shorter if summaries suffer.
-fn turns(segments: &[OfflineSpeakerDiarizationSegment]) -> Vec<Turn> {
-    let mut turns: Vec<Turn> = Vec::new();
-    for s in segments {
-        match turns.last_mut() {
-            Some(last) if last.speaker == s.speaker && s.start - last.end < JOIN_GAP_SECONDS => {
-                last.end = last.end.max(s.end)
+/// Each word goes to the speaker whose segment it overlaps most — or, outside
+/// every segment, the nearest one; consecutive words of one speaker, with no
+/// long pause between, are one utterance.
+fn utterances(words: &[Word], segments: &[OfflineSpeakerDiarizationSegment]) -> Vec<Utterance> {
+    let mut out: Vec<Utterance> = Vec::new();
+    for w in words {
+        let speaker = speaker_of(w, segments);
+        match out.last_mut() {
+            Some(last) if last.speaker == speaker && w.start - last.end < JOIN_GAP_SECONDS => {
+                last.text.push(' ');
+                last.text.push_str(&w.text);
+                last.end = w.end;
+                last.words.push(w.clone());
             }
-            _ => turns.push(Turn { speaker: s.speaker, start: s.start, end: s.end }),
+            _ => out.push(Utterance { speaker, start: w.start, end: w.end, text: w.text.clone(), words: vec![w.clone()] }),
         }
     }
-    turns
+    out
+}
+
+fn speaker_of(w: &Word, segments: &[OfflineSpeakerDiarizationSegment]) -> i32 {
+    let overlap = |s: &OfflineSpeakerDiarizationSegment| w.end.min(s.end) - w.start.max(s.start);
+    let distance = |s: &OfflineSpeakerDiarizationSegment| (s.start - w.end).max(w.start - s.end).max(0.0);
+    segments
+        .iter()
+        .max_by(|a, b| overlap(a).total_cmp(&overlap(b)).then(distance(b).total_cmp(&distance(a))))
+        .map_or(0, |s| s.speaker)
 }
 
 /// The one `.onnx` in `dir` named `<prefix>…`, int8 when there is a choice.
@@ -335,22 +397,56 @@ mod tests {
         OfflineSpeakerDiarizationSegment { start, end, speaker, confidence: 0.0 }
     }
 
-    #[test]
-    fn a_short_pause_joins_one_speakers_segments() {
-        let got = turns(&[seg(0, 0.0, 2.0), seg(0, 2.3, 4.0), seg(1, 4.1, 5.0), seg(0, 5.0, 6.0), seg(0, 7.0, 8.0)]);
-        assert_eq!(
-            got,
-            [
-                Turn { speaker: 0, start: 0.0, end: 4.0 },
-                Turn { speaker: 1, start: 4.1, end: 5.0 },
-                Turn { speaker: 0, start: 5.0, end: 6.0 },
-                Turn { speaker: 0, start: 7.0, end: 8.0 },
-            ]
-        );
+    fn word(start: f32, end: f32, text: &str) -> Word {
+        Word { start, end, text: text.into() }
+    }
+
+    fn tokens(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
-    fn a_contained_segment_does_not_shorten_the_turn() {
-        assert_eq!(turns(&[seg(0, 0.0, 5.0), seg(0, 1.0, 2.0)]), [Turn { speaker: 0, start: 0.0, end: 5.0 }]);
+    fn tokens_join_into_words_at_the_word_mark() {
+        let got = words_of(&tokens(&["▁При", "вет", ",", "▁мир", "▁..."]), &[0.0, 0.2, 0.4, 1.0, 1.4], None, 10.0);
+        assert_eq!(got, [word(10.0, 10.48, "Привет,"), word(11.0, 11.48, "мир...")]);
+    }
+
+    #[test]
+    fn a_word_mark_of_its_own_starts_the_next_word() {
+        let times = [0.0, 0.25, 0.25, 0.5, 1.0, 1.0];
+        let got = words_of(&tokens(&["▁У", "▁", "лу", "ком", "▁", "дуб"]), &times, Some(&[0.25; 6]), 0.0);
+        assert_eq!(got, [word(0.0, 0.25, "У"), word(0.25, 0.75, "луком"), word(1.0, 1.25, "дуб")]);
+    }
+
+    #[test]
+    fn a_tokens_duration_is_its_end_when_the_model_gives_one() {
+        let got = words_of(&tokens(&["▁да"]), &[1.0], Some(&[0.3]), 0.0);
+        assert_eq!(got, [word(1.0, 1.3, "да")]);
+    }
+
+    #[test]
+    fn a_word_goes_to_the_speaker_it_overlaps_most() {
+        let segments = [seg(0, 0.0, 1.2), seg(1, 1.0, 3.0)];
+        assert_eq!(speaker_of(&word(0.9, 1.5, "x"), &segments), 1);
+        assert_eq!(speaker_of(&word(0.1, 1.1, "x"), &segments), 0);
+    }
+
+    #[test]
+    fn a_word_outside_every_segment_goes_to_the_nearest() {
+        let segments = [seg(0, 0.0, 1.0), seg(1, 5.0, 6.0)];
+        assert_eq!(speaker_of(&word(4.0, 4.5, "x"), &segments), 1);
+        assert_eq!(speaker_of(&word(1.2, 1.5, "x"), &segments), 0);
+        assert_eq!(speaker_of(&word(1.2, 1.5, "x"), &[]), 0);
+    }
+
+    #[test]
+    fn one_speakers_words_join_until_a_long_pause_or_another_speaker() {
+        let segments = [seg(0, 0.0, 10.0), seg(1, 10.0, 12.0)];
+        let words = [word(0.0, 0.5, "а"), word(1.0, 1.5, "б"), word(5.0, 5.5, "в"), word(10.5, 11.0, "г")];
+        let got: Vec<_> = utterances(&words, &segments).into_iter().map(|u| (u.speaker, u.start, u.end, u.text, u.words.len())).collect();
+        assert_eq!(
+            got,
+            [(0, 0.0, 1.5, "а б".to_string(), 2), (0, 5.0, 5.5, "в".to_string(), 1), (1, 10.5, 11.0, "г".to_string(), 1)]
+        );
     }
 }
