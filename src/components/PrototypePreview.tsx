@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, FolderOpen, Maximize2, Minimize2, MousePointerClick, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, Download, FolderOpen, Images, Maximize2, Minimize2, MousePointerClick, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
+import { PrototypeAssets } from "./PrototypeAssets";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
 import { pickSavePath } from "../lib/dialog";
 import { exportPrototype, pointedOf, revealPrototype } from "../lib/prototype";
@@ -127,6 +128,16 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
             <MousePointerClick size={13} />
           </button>
         )}
+        <button
+          type="button"
+          className={`iconbtn prototype-preview-assets${preview.assetsOpen ? " on" : ""}`}
+          title={preview.assetsOpen ? "Hide the pictures" : "Show the pictures in the chat's folder"}
+          aria-pressed={preview.assetsOpen}
+          onClick={preview.toggleAssets}
+        >
+          <Images size={13} />
+          {(preview.assets?.assets.length ?? 0) > 0 && <span>{preview.assets?.assets.length}</span>}
+        </button>
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>
           <RotateCw size={13} />
         </button>
@@ -154,6 +165,7 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
           <X size={14} />
         </button>
       </div>
+      {!preview.url && <p className="prototype-preview-empty">No page yet — ask for one, and it is drawn here.</p>}
       {preview.url && (
         <iframe
           key={preview.key}
@@ -186,6 +198,7 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
           ))}
         </div>
       )}
+      <PrototypeAssets preview={preview} chatId={chatId} onNotify={onNotify} />
     </aside>
   );
 }

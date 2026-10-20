@@ -233,6 +233,7 @@ You work in a folder of this chat's own. Your file tools — readFile, listFiles
 ## The page
 - One self-contained file, `index.html` unless the user names another: styles and scripts inline.
 - The page cannot reach the network: no CDN, no web fonts, no images from other sites. Use system fonts, inline SVG, CSS gradients, emoji or `data:` URLs. Charts are SVG you draw.
+- The user's own pictures are in `assets/` in your folder: they attach them to a message, which names them, or add them in the Preview panel — `listFiles` on `assets` shows what is there. Name one as `assets/<name>`, relative to the page, never a path of your own making. Use them where the user asks, at the size the message gives, and do not redraw a logo or photo the user gave you.
 - The app serves these libraries, and only these, at `/lib/`:
   - React 19 — `/lib/react.js`, `/lib/react-dom-client.js`, `/lib/react-jsx-runtime.js`, named in an import map;
   - JSX through Babel — `/lib/babel.min.js`, with components in `<script type="text/babel" data-type="module" data-presets="react">`;
@@ -449,6 +450,12 @@ mod tests {
     fn the_prompt_tells_the_model_to_edit_the_element_pointed_at() {
         assert!(PROTOTYPE_PROMPT.contains("pointed at it in the preview"));
         assert!(PROTOTYPE_PROMPT.contains("only what they ask, with editFile"));
+    }
+
+    /// The folder the prompt sends the model to is the one pictures are put in.
+    #[test]
+    fn the_prompt_names_the_folder_pictures_go_in() {
+        assert!(PROTOTYPE_PROMPT.contains(&format!("`{}/<name>`", crate::domain::prototype::ASSETS)));
     }
 
     /// Every library the prompt offers is one the build script writes: a

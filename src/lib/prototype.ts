@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { requireBackend } from "./backend";
 import type { Block } from "./chatTurnReducer";
+import type { ImagePart } from "./images";
 import { windowsFrame } from "./window";
 
 // A Prototype chat's pages (docs/31-prototype-role.md). What was presented is
@@ -129,4 +130,45 @@ export function pointNote(pointed: Pointed): string {
     "Their message is about this element: change it, and only what they ask, with editFile — do not write the page again. " +
       "On a React page this is the rendered HTML: find the element in the source by its text and classes.]",
   ].join("\n");
+}
+
+/** A file in the chat's `assets/`: mirrors `domain::prototype::Asset`. */
+export type Asset = { name: string; bytes: number; width: number | null; height: number | null };
+
+/** What `assets/` holds, and how full the folder is: mirrors `domain::prototype::Assets`. */
+export type Assets = { assets: Asset[]; folderBytes: number; limitBytes: number };
+
+export async function prototypeAssets(chatId: string): Promise<Assets> {
+  requireBackend();
+  return invoke<Assets>("prototype_assets", { chatId });
+}
+
+/** Puts a sanitized picture into the chat's `assets/`, named after `name`; the name it got comes back. */
+export async function addPrototypeAsset(chatId: string, name: string, image: ImagePart): Promise<Asset> {
+  requireBackend();
+  return invoke<Asset>("prototype_asset_add", { chatId, name, image });
+}
+
+export async function removePrototypeAsset(chatId: string, name: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("prototype_asset_remove", { chatId, name });
+}
+
+/** Where the drawer shows a picture from: the working folder, as a page names it. */
+export const assetUrl = (chatId: string, name: string, windows = windowsFrame) => pageUrl(chatId, null, `assets/${name}`, windows);
+
+/** A picture as a message names it to the model: its path and, when known, its size. */
+export const assetLine = (asset: Asset) =>
+  `\`assets/${asset.name}\`${asset.width !== null && asset.height !== null ? ` (${asset.width}×${asset.height})` : ""}`;
+
+/** What the model is told with the message about the pictures attached to it, now in its folder. */
+export function assetsNote(assets: Asset[]): string | null {
+  if (assets.length === 0) return null;
+  return `[Attached ${assets.length === 1 ? "picture, now in your folder" : "pictures, now in your folder"}: ${assets.map(assetLine).join(", ")}.]`;
+}
+
+/** A size as the drawer says it: kilobytes under a megabyte, else megabytes to one decimal. */
+export function sizeLabel(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(bytes > 0 ? 1 : 0, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
 }

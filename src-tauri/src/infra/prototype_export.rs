@@ -5,14 +5,15 @@
 //! every `/lib/…` the page names becomes a `data:` URL of that library. The
 //! React modules are shims over one `react-all.js` they import relatively,
 //! which a `data:` URL cannot do: they import it by a bare name instead, and
-//! the page's import map gets that name — one copy, one React.
+//! the page's import map gets that name — one copy, one React. The user's
+//! pictures the page names as `assets/<name>` become `data:` URLs too.
 
 use std::fs;
 use std::path::Path;
 
 use base64::Engine as _;
 
-use crate::domain::prototype::PrototypeError;
+use crate::domain::prototype::{PrototypeError, ASSETS};
 use crate::infra::prototype_protocol::{self, Roots};
 
 /// The preview's rules, carried into the file: nothing the page loads, fetches
@@ -40,7 +41,16 @@ pub fn export(roots: &Roots, chat_id: &str, version: Option<u32>, page: &str, de
         .and_then(|file| fs::read(file).ok())
         .ok_or_else(|| PrototypeError::NoPage(page.to_string()))?;
     let lib = |name: &str| prototype_protocol::resolve(roots, &format!("/lib/{name}")).and_then(|file| fs::read(file).ok());
-    let out = inline(&String::from_utf8_lossy(&html), lib);
+    // Beside the page, as the preview resolves `assets/…` — through the same
+    // check, so a link out of the folder is not followed into the file.
+    let beside = &segments[..segments.len() - 1];
+    let asset = |name: &str| {
+        let path: Vec<String> = beside.iter().cloned().chain([ASSETS.to_string(), name.to_string()]).collect();
+        let file = prototype_protocol::file(roots, &path)?;
+        let bytes = fs::read(&file).ok()?;
+        Some(format!("data:{};base64,{}", prototype_protocol::mime(&file), base64::engine::general_purpose::STANDARD.encode(bytes)))
+    };
+    let out = with_assets(&inline(&String::from_utf8_lossy(&html), lib), asset);
     fs::write(dest, out).map_err(|source| PrototypeError::Io { path: dest.display().to_string(), source })
 }
 
@@ -73,6 +83,40 @@ fn inline(page: &str, lib: impl Fn(&str) -> Option<Vec<u8>>) -> String {
         }
     }
     prototype_protocol::in_head(&out, &format!(r#"<meta http-equiv="Content-Security-Policy" content="{CSP}">"#))
+}
+
+/// The page with every `assets/<name>` it names — or `./assets/<name>`,
+/// after a quote, a parenthesis or a backtick, as `src`, `url()` and JSX
+/// write it — in place as the `data:` URL `asset` gives; what it has none
+/// for is left as written.
+fn with_assets(page: &str, asset: impl Fn(&str) -> Option<String>) -> String {
+    const PREFIX: &str = "assets/";
+    let opens = |c: Option<char>| matches!(c, Some('"' | '\'' | '(' | '`'));
+    let mut out = String::with_capacity(page.len());
+    let mut rest = page;
+    while let Some(at) = rest.find(PREFIX) {
+        let before = &rest[..at];
+        let start = if before.ends_with("./") && opens(before[..before.len() - 2].chars().last()) {
+            Some(at - 2)
+        } else {
+            opens(before.chars().last()).then_some(at)
+        };
+        let name_at = at + PREFIX.len();
+        let name_end = rest[name_at..].find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))).map_or(rest.len(), |n| name_at + n);
+        match start.and_then(|start| asset(&rest[name_at..name_end]).map(|url| (start, url))) {
+            Some((start, url)) => {
+                out.push_str(&rest[..start]);
+                out.push_str(&url);
+                rest = &rest[name_end..];
+            }
+            None => {
+                out.push_str(&rest[..name_at]);
+                rest = &rest[name_at..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A React shim importing `react-all.js` by its bare name; anything else as it is.
@@ -199,6 +243,29 @@ mod tests {
         fs::write(base.join("prototypes").join(ID).join("files").join("index.html"), page).unwrap();
         let out = exported(&roots, &base, None, "index.html").unwrap();
         assert_eq!(out, format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">{page}"));
+    }
+
+    /// The pictures a page names beside it go into the file; one it names
+    /// that is not there, or a path that only looks like one, stays as written.
+    #[test]
+    fn the_pictures_a_page_names_are_in_the_file() {
+        let (roots, base) = roots("export-assets");
+        let files = base.join("prototypes").join(ID).join("files");
+        fs::create_dir_all(files.join("assets")).unwrap();
+        fs::write(files.join("assets").join("logo.png"), b"PNG").unwrap();
+        fs::write(files.join("assets").join("team.jpg"), b"JPG").unwrap();
+        fs::write(base.join("secret.png"), b"SECRET").unwrap();
+        let page = r#"<img src="assets/logo.png"><img src='./assets/team.jpg'><div style="background:url(assets/logo.png)"></div><img src={`assets/logo.png`}><img src="assets/missing.png"><img src="img/assets/logo.png"><p>assets/logo.png</p><img src="assets/../../../../secret.png"><img src="x./assets/logo.png">"#;
+        fs::write(files.join("index.html"), page).unwrap();
+
+        let out = exported(&roots, &base, None, "index.html").unwrap();
+        let png = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b"PNG"));
+        let jpg = format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(b"JPG"));
+        let body = &out[out.find("\">").unwrap() + 2..];
+        assert_eq!(
+            body,
+            format!(r#"<img src="{png}"><img src='{jpg}'><div style="background:url({png})"></div><img src={{`{png}`}}><img src="assets/missing.png"><img src="img/assets/logo.png"><p>assets/logo.png</p><img src="assets/../../../../secret.png"><img src="x./assets/logo.png">"#)
+        );
     }
 
     #[test]

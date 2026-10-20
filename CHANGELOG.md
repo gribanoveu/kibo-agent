@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-20 In a Prototype chat, attach your own pictures or add them in the Assets drawer under the preview: they are kept in the chat's folder, the model puts them on the page by name, and "Save as" carries them inside the file
 - 2026-10-20 A page in the Preview panel can go full screen in the app on macOS, as a presentation does on F
 - 2026-10-19 In a Prototype chat, point at an element in the Preview panel to ask for a change to it alone: it waits over the message box and goes to the model with your message
 - 2026-10-19 The Preview panel stands beside the chat as wide as the file viewer, and expands over the chat from its header

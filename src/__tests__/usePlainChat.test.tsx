@@ -172,10 +172,47 @@ describe("room in the window", () => {
     const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
     const { result } = renderHook(() => usePlainChat());
     await act(async () => {
-      await result.current.send("", [picture]);
+      await result.current.send("", [{ image: picture, name: "p.png" }]);
     });
     expect(called("plain_chat_send")[0]?.args.messages).toEqual([{ role: "user", content: "", images: [picture] }]);
     expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "", images: [picture] });
+    expect(called("prototype_asset_add"), "only a Prototype chat keeps them").toEqual([]);
+  });
+
+  /// A Prototype chat puts its pictures into the folder first, under their
+  /// files' names, and tells the model where; a model that cannot see them
+  /// is told only that.
+  test("in a Prototype chat pictures go into assets/ and the message says where", async () => {
+    results.plain_chat_send = done;
+    results.prototype_asset_add = (args: { name: string }) => ({ name: args.name.replace("Our Logo.png", "our-logo.png"), bytes: 3, width: 2, height: 2 });
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    for (const sees of [true, false]) {
+      calls.length = 0;
+      const { result } = renderHook(() => usePlainChat());
+      act(() => void result.current.setRole("prototype"));
+      await act(async () => {
+        await result.current.send("put it in the header", [{ image: picture, name: "Our Logo.png" }], null, sees);
+      });
+      const added = called("prototype_asset_add");
+      expect(added.map((c) => c.args)).toEqual([{ chatId: result.current.chatId, name: "Our Logo.png", image: picture }]);
+      const [message] = called("plain_chat_send")[0]?.args.messages as { content: string; images?: unknown }[];
+      expect(message.content).toBe("put it in the header\n\n[Attached picture, now in your folder: `assets/our-logo.png` (2×2).]");
+      expect(message.images).toEqual(sees ? [picture] : undefined);
+      expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "put it in the header", images: [picture] });
+    }
+  });
+
+  test("a picture the folder refuses stops the message, saying why", async () => {
+    results.prototype_asset_add = new Error("that is not a PNG or JPEG picture");
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    const { result } = renderHook(() => usePlainChat());
+    act(() => void result.current.setRole("prototype"));
+    await act(async () => {
+      await result.current.send("hi", [{ image: picture, name: "x.png" }]);
+    });
+    expect(called("plain_chat_send")).toEqual([]);
+    expect(result.current.error).toContain("not a PNG or JPEG");
+    expect(result.current.turn.blocks).toEqual([]);
   });
 
   test("Compact now asks outright, and says when nothing was folded", async () => {

@@ -652,6 +652,7 @@ export default function App() {
                   fix: prototypePreview.fix,
                   pointed: prototypePreview.pointed,
                   onUnpoint: () => prototypePreview.point(null),
+                  onShowAssets: prototypePreview.showAssets,
                 }
               : undefined
           }
