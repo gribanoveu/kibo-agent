@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
-use crate::domain::meeting::{self, Meeting, MeetingError, MeetingEvent, MeetingEventSink};
+use crate::domain::meeting::{self, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
 use crate::infra::meeting_process::{self, Running};
 use crate::infra::{meeting_store, speech};
 use crate::services::llm_session::{self, LlmSession};
@@ -58,34 +58,77 @@ impl MeetingNotes {
         if utterances.is_empty() {
             return Err(MeetingError::NoSpeech);
         }
-        let mut meeting = Meeting { id: id.clone(), name, created: chrono::Utc::now().to_rfc3339(), seconds, utterances, summary: None };
+        let meeting = Meeting {
+            id: id.clone(),
+            name,
+            created: chrono::Utc::now().to_rfc3339(),
+            seconds,
+            utterances,
+            summary: None,
+            names: Default::default(),
+        };
         meeting_store::save(&meeting)?;
         sink(MeetingEvent::Transcribed { id: id.clone() });
-        self.summarize_into(&mut meeting, sink)?;
+        self.summarize_into(&meeting, sink)?;
         Ok(id)
     }
 
     /// The summary of meeting `id` written again.
     pub fn summarize(&self, id: &str, sink: &MeetingEventSink) -> Result<(), MeetingError> {
         let _job = self.begin()?;
-        self.summarize_into(&mut meeting_store::get(id)?, sink)
+        self.summarize_into(&meeting_store::get(id)?, sink)
     }
 
-    fn summarize_into(&self, meeting: &mut Meeting, sink: &MeetingEventSink) -> Result<(), MeetingError> {
+    fn summarize_into(&self, meeting: &Meeting, sink: &MeetingEventSink) -> Result<(), MeetingError> {
         let session = llm_session::resolve(None).map_err(|e| MeetingError::Summary(e.to_string()))?;
         let summary = write_summary(&session, meeting, sink, &|| self.stopped.load(Ordering::SeqCst))?;
-        meeting.summary = Some(summary);
-        meeting_store::save(meeting)
+        // Read again: a speaker renamed while the notes were written keeps the name.
+        // ponytail: read, change, write without a lock; one per meeting if two writers ever race.
+        let mut now = meeting_store::get(&meeting.id)?;
+        now.summary = Some(meeting::renamed_since(&summary, meeting, &now));
+        meeting_store::save(&now)
     }
 }
 
-/// The notes of `meeting`, streamed to `sink` as they are written. A stopped
-/// or empty answer is no summary: the one saved before stays.
+/// Speaker `speaker` of meeting `id` called `name` — blank for its number again.
+pub fn rename_speaker(id: &str, speaker: usize, name: &str) -> Result<Meeting, MeetingError> {
+    let mut meeting = meeting_store::get(id)?;
+    meeting.rename(speaker, name)?;
+    meeting_store::save(&meeting)?;
+    Ok(meeting)
+}
+
+/// The notes of `meeting`, streamed to `sink` as they are written. A meeting
+/// too long for one request is read in parts: notes of each, then the notes of
+/// the whole from those. A stopped or empty answer is no summary.
 fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &MeetingEventSink, cancelled: &dyn Fn() -> bool) -> Result<String, MeetingError> {
-    let transcript = meeting::render_transcript(&meeting.utterances);
-    meeting::fits(&transcript, session.context_limit)?;
+    let lines = meeting::render_transcript(meeting);
+    let transcript = lines.concat();
+    let input = if meeting::fits(&transcript, session.context_limit).is_ok() {
+        transcript
+    } else {
+        let parts = meeting::parts(&lines, meeting::budget(session.context_limit));
+        let mut notes = Vec::with_capacity(parts.len());
+        for (i, part) in parts.iter().enumerate() {
+            sink(MeetingEvent::Progress { id: meeting.id.clone(), name: meeting.name.clone(), stage: Stage::Notes, done: i, total: parts.len() });
+            let request = ChatRequest {
+                messages: vec![LlmMessage::system(meeting::PART_INSTRUCTIONS), LlmMessage::user(part.clone())],
+                tools: Vec::new(),
+                model: session.model.clone(),
+            };
+            let response = session.provider.chat(request).map_err(|e| MeetingError::Summary(e.to_string()))?;
+            if cancelled() {
+                return Err(MeetingError::Cancelled);
+            }
+            notes.push(format!("### Part {} of {}\n\n{}", i + 1, parts.len(), response.content.unwrap_or_default().trim()));
+        }
+        // Every part read: what follows is the notes of the whole.
+        sink(MeetingEvent::Progress { id: meeting.id.clone(), name: meeting.name.clone(), stage: Stage::Notes, done: parts.len(), total: parts.len() });
+        format!("{}\n\n{}", meeting::PARTS_PREFACE, notes.join("\n\n"))
+    };
+    meeting::fits(&input, session.context_limit)?;
     let request = ChatRequest {
-        messages: vec![LlmMessage::system(meeting::summary_instructions(session.reply_language)), LlmMessage::user(transcript)],
+        messages: vec![LlmMessage::system(meeting::summary_instructions(session.reply_language)), LlmMessage::user(input)],
         tools: Vec::new(),
         model: session.model.clone(),
     };
@@ -116,8 +159,11 @@ mod tests {
     }
 
     impl LlmProvider for Notes {
-        fn chat(&self, _: ChatRequest) -> Result<ChatResponse, LlmError> {
-            unreachable!("the summary streams")
+        /// A part's notes: which part it was, by its first line's time.
+        fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+            let part = request.messages[1].content.clone().unwrap_or_default();
+            self.asked.lock().unwrap().push(request);
+            Ok(ChatResponse { content: Some(format!("notes from {}", &part[..7])), tool_calls: Vec::new(), usage: None })
         }
 
         fn chat_stream(&self, request: ChatRequest, on_event: &dyn Fn(StreamEvent), _: &dyn Fn() -> bool) -> Result<ChatStreamResult, LlmError> {
@@ -153,6 +199,7 @@ mod tests {
             seconds: 5.0,
             utterances: vec![Utterance { speaker: 0, start: 1.0, end: 2.0, text: "Решили выпустить в пятницу.".into() }],
             summary: None,
+            names: Default::default(),
         }
     }
 
@@ -183,15 +230,58 @@ mod tests {
     }
 
     #[test]
+    fn a_meeting_too_long_for_one_request_is_read_in_parts_then_as_a_whole() {
+        let mut long = meeting();
+        long.utterances = (0..12).map(|i| Utterance { speaker: 0, start: 60.0 * i as f32, end: 1.0, text: "Решили выпустить в пятницу.".into() }).collect();
+        let (reading, provider) = session(vec!["## Итоги"], Some(150));
+        let (sink, events) = recorder();
+        assert_eq!(write_summary(&reading, &long, &sink, &|| false).unwrap(), "## Итоги");
+
+        let asked = provider.asked.lock().unwrap();
+        let parts = asked.len() - 1;
+        assert!(parts >= 2, "{parts}");
+        assert!(asked[..parts].iter().all(|r| r.messages[0] == LlmMessage::system(meeting::PART_INSTRUCTIONS)));
+        let whole = asked[parts].messages[1].content.clone().unwrap();
+        assert!(whole.starts_with(meeting::PARTS_PREFACE), "{whole}");
+        assert!(whole.contains(&format!("### Part 1 of {parts}\n\nnotes from [00:00]")), "{whole}");
+        assert!(whole.contains(&format!("### Part {parts} of {parts}")), "{whole}");
+        drop(asked);
+
+        // A stop between parts asks for no more of them.
+        let (stopped, provider) = session(vec!["x"], Some(150));
+        let (quiet, _) = recorder();
+        assert_eq!(write_summary(&stopped, &long, &quiet, &|| true), Err(MeetingError::Cancelled));
+        assert_eq!(provider.asked.lock().unwrap().len(), 1);
+
+        let progress: Vec<_> = events.lock().unwrap().iter().filter_map(|e| match e {
+            MeetingEvent::Progress { stage: Stage::Notes, done, total, .. } => Some((*done, *total)),
+            _ => None,
+        }).collect();
+        assert_eq!(progress, (0..=parts).map(|i| (i, parts)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_renamed_speaker_is_saved_with_the_meeting() {
+        crate::testing::with_app_dir("meeting-rename", || {
+            meeting_store::save(&Meeting { id: "ab".into(), summary: Some("Speaker 1 decides.".into()), ..meeting() }).unwrap();
+            let renamed = rename_speaker("ab", 0, "Оксана").unwrap();
+            assert_eq!(meeting_store::get("ab").unwrap(), renamed);
+            assert_eq!(renamed.summary.as_deref(), Some("Оксана decides."));
+            assert_eq!(rename_speaker("ab", 5, "x"), Err(MeetingError::NoSpeaker(6)));
+        });
+    }
+
+    #[test]
     fn a_stopped_empty_or_too_long_summary_is_not_one() {
         let (sink, _) = recorder();
         let (stopped, _) = session(vec!["## Ре"], None);
         assert_eq!(write_summary(&stopped, &meeting(), &sink, &|| true), Err(MeetingError::Cancelled));
         let (empty, _) = session(vec!["  \n"], None);
         assert!(matches!(write_summary(&empty, &meeting(), &sink, &|| false), Err(MeetingError::Summary(_))));
+        // A window too small even for the parts' notes.
         let (small, provider) = session(vec!["x"], Some(10));
         assert!(matches!(write_summary(&small, &meeting(), &sink, &|| false), Err(MeetingError::TooLong { .. })));
-        assert!(provider.asked.lock().unwrap().is_empty(), "too long is known before asking");
+        assert!(provider.asked.lock().unwrap().iter().all(|r| r.messages[0] == LlmMessage::system(meeting::PART_INSTRUCTIONS)));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::domain::meeting::{Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
 use crate::infra::{meeting_store, speech};
-use crate::services::meeting_notes::MeetingNotes;
+use crate::services::meeting_notes::{self, MeetingNotes};
 
 use super::blocking;
 
@@ -30,6 +30,12 @@ pub async fn meeting_list() -> Result<Vec<MeetingInfo>, String> {
 #[tauri::command]
 pub async fn meeting_get(id: String) -> Result<Meeting, String> {
     blocking(move || meeting_store::get(&id)).await
+}
+
+/// The meeting after speaker `speaker` (from 0) is called `name`; blank gives back its number.
+#[tauri::command]
+pub async fn meeting_rename_speaker(id: String, speaker: usize, name: String) -> Result<Meeting, String> {
+    blocking(move || meeting_notes::rename_speaker(&id, speaker, &name)).await
 }
 
 #[tauri::command]

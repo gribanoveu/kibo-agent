@@ -6,6 +6,7 @@
 //! models and the process they run in are `infra::speech` and
 //! `meeting_sidecar`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use nalgebra::{DMatrix, SymmetricEigen};
@@ -61,6 +62,8 @@ pub enum Stage {
     Decode,
     Speech,
     Speakers,
+    /// The notes of a long meeting's parts, before the notes of the whole.
+    Notes,
 }
 
 /// What the recognition process writes to stdout, one JSON object a line.
@@ -94,11 +97,15 @@ pub enum MeetingError {
     NotFound(String),
     #[error("meeting notes: {0}")]
     Store(String),
-    // ponytail: one request for the whole transcript; summarize it in pieces when a call outgrows the model.
-    #[error("the transcript is about {tokens} tokens, more than the model's window takes ({limit}) — pick a model with a larger one")]
+    /// Even the notes of a long meeting's parts do not fit one request.
+    #[error("the meeting is about {tokens} tokens even in notes, more than the model's window takes ({limit}) — pick a model with a larger one")]
     TooLong { tokens: usize, limit: usize },
     #[error("the summary failed: {0}")]
     Summary(String),
+    #[error("there is no speaker {0} in this meeting")]
+    NoSpeaker(usize),
+    #[error("a name is at most {0} characters")]
+    NameTooLong(usize),
 }
 
 /// A recording made into notes. The sound itself is not kept.
@@ -114,6 +121,10 @@ pub struct Meeting {
     pub utterances: Vec<Utterance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// What the user called a speaker, by number. Two speakers given one name
+    /// are one person the clustering split.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<usize, String>,
 }
 
 /// A row of the list: the meeting without its text.
@@ -128,14 +139,51 @@ pub struct MeetingInfo {
     pub summarized: bool,
 }
 
+/// A speaker's name, past which it is not one.
+pub const MAX_NAME_CHARS: usize = 60;
+
 impl Meeting {
+    pub fn speakers(&self) -> usize {
+        self.utterances.iter().map(|u| u.speaker + 1).max().unwrap_or(0)
+    }
+
+    /// The user's name for `speaker`, or `Speaker N` from 1 — as the transcript
+    /// the model reads has it, and so as the notes name whoever is not named.
+    pub fn speaker_name(&self, speaker: usize) -> String {
+        self.names.get(&speaker).cloned().unwrap_or_else(|| format!("Speaker {}", speaker + 1))
+    }
+
+    /// `speaker` called `name`, or back to its number when `name` is blank.
+    /// The notes follow: what they called the speaker becomes the new name,
+    /// with no new request to the model.
+    pub fn rename(&mut self, speaker: usize, name: &str) -> Result<(), MeetingError> {
+        if speaker >= self.speakers() {
+            return Err(MeetingError::NoSpeaker(speaker + 1));
+        }
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.chars().count() > MAX_NAME_CHARS {
+            return Err(MeetingError::NameTooLong(MAX_NAME_CHARS));
+        }
+        let before = self.speaker_name(speaker);
+        if name.is_empty() {
+            self.names.remove(&speaker);
+        } else {
+            self.names.insert(speaker, name);
+        }
+        let after = self.speaker_name(speaker);
+        if let Some(summary) = &mut self.summary {
+            *summary = replace_word(summary, &before, &after);
+        }
+        Ok(())
+    }
+
     pub fn info(&self) -> MeetingInfo {
         MeetingInfo {
             id: self.id.clone(),
             name: self.name.clone(),
             created: self.created.clone(),
             seconds: self.seconds,
-            speakers: self.utterances.iter().map(|u| u.speaker + 1).max().unwrap_or(0),
+            speakers: self.speakers(),
             summarized: self.summary.is_some(),
         }
     }
@@ -179,9 +227,34 @@ pub fn summary_instructions(reply_language: Option<&str>) -> String {
     }
 }
 
-/// One line per utterance, `[mm:ss] Speaker N: text`, speakers from 1.
-pub fn render_transcript(utterances: &[Utterance]) -> String {
-    utterances.iter().map(|u| format!("[{}] Speaker {}: {}\n", clock(u.start), u.speaker + 1, u.text)).collect()
+/// One line per utterance, `[mm:ss] Name: text` — `Speaker N` for whoever has no name.
+pub fn render_transcript(meeting: &Meeting) -> Vec<String> {
+    meeting.utterances.iter().map(|u| format!("[{}] {}: {}\n", clock(u.start), meeting.speaker_name(u.speaker), u.text)).collect()
+}
+
+/// `notes` written while the speakers were named as in `written`, with each
+/// renamed since called as in `now`.
+pub fn renamed_since(notes: &str, written: &Meeting, now: &Meeting) -> String {
+    (0..now.speakers()).fold(notes.to_string(), |notes, speaker| {
+        let (was, is) = (written.speaker_name(speaker), now.speaker_name(speaker));
+        if was == is { notes } else { replace_word(&notes, &was, &is) }
+    })
+}
+
+/// `from` as a whole word in `text` — `Speaker 1` is not inside `Speaker 12`.
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(from) {
+        let end = at + from.len();
+        out.push_str(&rest[..at]);
+        let whole = !word(rest[..at].chars().next_back()) && !word(rest[end..].chars().next());
+        out.push_str(if whole { to } else { from });
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn clock(seconds: f32) -> String {
@@ -192,18 +265,57 @@ fn clock(seconds: f32) -> String {
     }
 }
 
-/// The share of the window the transcript may take; the rest is the notes.
-const TRANSCRIPT_PERCENT: u64 = 75;
+/// The share of the window a request's input may take; the rest is the notes.
+const INPUT_PERCENT: u64 = 75;
 
-/// `transcript` fits the model's window, or how far it does not.
-pub fn fits(transcript: &str, context_limit: Option<u32>) -> Result<(), MeetingError> {
-    let tokens = compaction::estimate_text_tokens(transcript);
-    let limit = compaction::share_of_window(context_limit, TRANSCRIPT_PERCENT);
+/// How many tokens of transcript one request may carry.
+pub fn budget(context_limit: Option<u32>) -> usize {
+    compaction::share_of_window(context_limit, INPUT_PERCENT)
+}
+
+/// `text` fits one request, or how far it does not.
+pub fn fits(text: &str, context_limit: Option<u32>) -> Result<(), MeetingError> {
+    let tokens = compaction::estimate_text_tokens(text);
+    let limit = budget(context_limit);
     if tokens > limit {
         return Err(MeetingError::TooLong { tokens, limit });
     }
     Ok(())
 }
+
+/// The transcript's lines in parts of at most `budget` tokens, in order. A
+/// line longer than that is a part of its own: it cannot be cut, only tried.
+pub fn parts(lines: &[String], budget: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut tokens = 0;
+    for line in lines {
+        let cost = compaction::estimate_text_tokens(line);
+        match out.last_mut() {
+            Some(part) if tokens + cost <= budget => {
+                part.push_str(line);
+                tokens += cost;
+            }
+            _ => {
+                out.push(line.clone());
+                tokens = cost;
+            }
+        }
+    }
+    out
+}
+
+/// What the model is told for one part of a meeting too long to read at once.
+pub const PART_INSTRUCTIONS: &str = "You take notes on one part of a long meeting's transcript; the notes of every part \
+are put together into the meeting's notes afterwards, from yours alone. The transcript was made by speech recognition: \
+words may be misheard and a line may be given to the wrong speaker, so read for what was meant.
+
+Keep everything that reader needs, as bullets: what was discussed, what was agreed, who takes on what and by when, \
+what was raised and left open. Name people as the transcript does and give the time of each point. Do not invent \
+names, dates or numbers. Reply with the notes only.";
+
+/// What comes before the parts' notes when they stand in for the transcript.
+pub const PARTS_PREFACE: &str = "The meeting was too long to read at once. Instead of its transcript, here are notes \
+of its parts, in order, taken from it. A point raised in one part may be settled in a later one.";
 
 /// SentencePiece tokens joined into words: `▁` starts one — on the token, or
 /// as a token of its own before it — and a token of only punctuation stays
@@ -513,10 +625,67 @@ mod tests {
         Utterance { speaker, start, end: start + 1.0, text: text.into() }
     }
 
+    fn meeting_of(utterances: Vec<Utterance>) -> Meeting {
+        Meeting {
+            id: "m".into(),
+            name: "call.wav".into(),
+            created: "2026-10-20T10:00:00Z".into(),
+            seconds: 60.0,
+            utterances,
+            summary: None,
+            names: BTreeMap::new(),
+        }
+    }
+
     #[test]
-    fn the_transcript_is_a_line_per_utterance_with_its_time_and_speaker_from_one() {
-        let got = render_transcript(&[said(0, 5.4, "Привет."), said(1, 65.0, "Да."), said(0, 3725.0, "Итак.")]);
-        assert_eq!(got, "[00:05] Speaker 1: Привет.\n[01:05] Speaker 2: Да.\n[1:02:05] Speaker 1: Итак.\n");
+    fn the_transcript_is_a_line_per_utterance_with_its_time_and_speaker() {
+        let mut meeting = meeting_of(vec![said(0, 5.4, "Привет."), said(1, 65.0, "Да."), said(0, 3725.0, "Итак.")]);
+        assert_eq!(
+            render_transcript(&meeting).concat(),
+            "[00:05] Speaker 1: Привет.\n[01:05] Speaker 2: Да.\n[1:02:05] Speaker 1: Итак.\n"
+        );
+        meeting.rename(1, "Альбина").unwrap();
+        assert_eq!(render_transcript(&meeting)[1], "[01:05] Альбина: Да.\n");
+    }
+
+    #[test]
+    fn a_rename_reaches_the_notes_and_a_blank_name_takes_it_back() {
+        let mut meeting = meeting_of(vec![said(0, 0.0, "а"), said(11, 1.0, "б")]);
+        meeting.summary = Some("- Speaker 1 sends it; Speaker 12 checks. Speaker 1's draft.".into());
+        meeting.rename(0, "  Женя   К. ").unwrap();
+        assert_eq!(meeting.speaker_name(0), "Женя К.");
+        assert_eq!(meeting.summary.as_deref(), Some("- Женя К. sends it; Speaker 12 checks. Женя К.'s draft."));
+        meeting.rename(0, "Евгений").unwrap();
+        assert_eq!(meeting.summary.as_deref(), Some("- Евгений sends it; Speaker 12 checks. Евгений's draft."));
+        meeting.rename(0, " ").unwrap();
+        assert_eq!(meeting.names, BTreeMap::new());
+        assert_eq!(meeting.summary.as_deref(), Some("- Speaker 1 sends it; Speaker 12 checks. Speaker 1's draft."));
+    }
+
+    #[test]
+    fn notes_written_before_a_rename_take_the_new_name() {
+        let written = meeting_of(vec![said(0, 0.0, "а"), said(1, 1.0, "б")]);
+        let mut now = written.clone();
+        now.rename(1, "Илья").unwrap();
+        assert_eq!(renamed_since("Speaker 1 asks Speaker 2.", &written, &now), "Speaker 1 asks Илья.");
+        assert_eq!(renamed_since("Speaker 2.", &written, &written), "Speaker 2.");
+    }
+
+    #[test]
+    fn only_a_speaker_of_the_meeting_is_renamed_and_only_to_a_short_name() {
+        let mut meeting = meeting_of(vec![said(0, 0.0, "а"), said(1, 1.0, "б")]);
+        assert_eq!(meeting.rename(2, "Илья"), Err(MeetingError::NoSpeaker(3)));
+        assert_eq!(meeting.rename(1, &"я".repeat(61)), Err(MeetingError::NameTooLong(60)));
+        assert!(meeting.rename(1, &"я".repeat(60)).is_ok());
+    }
+
+    #[test]
+    fn a_long_transcript_is_cut_between_lines_into_parts_that_fit() {
+        // Four characters a token: each line is 2 tokens, one is 5.
+        let lines: Vec<String> = ["aaaaaaa\n", "bbbbbbb\n", "ccccccc\n", &"d".repeat(19), "e\n"].map(String::from).to_vec();
+        assert_eq!(parts(&lines, 4), ["aaaaaaa\nbbbbbbb\n", "ccccccc\n", &"d".repeat(19), "e\n"]);
+        assert_eq!(parts(&lines, 100).len(), 1);
+        assert!(parts(&[], 4).is_empty());
     }
 
     #[test]
@@ -527,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn a_transcript_past_its_share_of_the_window_is_too_long() {
+    fn a_text_past_its_share_of_the_window_is_too_long() {
         // 75 % of 1000 tokens, at four characters a token.
         assert_eq!(fits(&"a".repeat(3000), Some(1000)), Ok(()));
         assert_eq!(fits(&"a".repeat(3004), Some(1000)), Err(MeetingError::TooLong { tokens: 751, limit: 750 }));
@@ -535,14 +704,7 @@ mod tests {
 
     #[test]
     fn a_meetings_row_counts_its_speakers_and_says_if_it_has_notes() {
-        let meeting = Meeting {
-            id: "m".into(),
-            name: "call.wav".into(),
-            created: "2026-10-20T10:00:00Z".into(),
-            seconds: 60.0,
-            utterances: vec![said(0, 0.0, "а"), said(2, 1.0, "б")],
-            summary: None,
-        };
+        let meeting = meeting_of(vec![said(0, 0.0, "а"), said(2, 1.0, "б")]);
         let info = meeting.info();
         assert_eq!((info.speakers, info.summarized), (3, false));
         assert_eq!(Meeting { summary: Some("x".into()), utterances: vec![], ..meeting }.info().speakers, 0);
