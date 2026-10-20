@@ -73,7 +73,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { MeetingsPage, clock } = await import("../components/MeetingsPage");
+const { MeetingsPage, clock, day } = await import("../components/MeetingsPage");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const emit = (payload: MeetingEvent) => act(() => listeners.forEach((l) => l({ payload })));
 
@@ -111,7 +111,16 @@ describe("the meetings page", () => {
 
     fireEvent.click(screen.getByText("All meetings"));
     await settle();
-    expect(screen.getByText(/2 speakers/)).toBeTruthy();
+    expect(screen.getByTitle("Speakers").textContent).toBe("2");
+    expect(screen.getByTitle("Duration").textContent).toBe("12:34");
+  });
+
+  test("a day's meetings are under its heading", () => {
+    const now = new Date(2026, 9, 20, 18, 0);
+    expect(day(new Date(2026, 9, 20, 0, 5).toISOString(), now)).toBe("Today");
+    expect(day(new Date(2026, 9, 19, 23, 55).toISOString(), now)).toBe("Yesterday");
+    expect(day(new Date(2026, 9, 17, 12).toISOString(), now)).not.toMatch(/2026/);
+    expect(day(new Date(2025, 9, 17, 12).toISOString(), now)).toMatch(/2025/);
   });
 
   test("a meeting is listed by the title its notes gave it", async () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { ChevronLeft, Copy, Plus, RefreshCw, Square, Trash2, Users } from "lucide-react";
+import { AudioLines, ChevronLeft, Clock, Copy, Plus, RefreshCw, Square, Trash2, Users } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -26,6 +26,19 @@ export function clock(seconds: number): string {
   const ss = String(s % 60).padStart(2, "0");
   return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 }
+
+/** The list's heading for the day `created` falls on: Today, Yesterday, or the date. */
+export function day(created: string, now = new Date()): string {
+  const date = new Date(created);
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const ago = Math.round((midnight(now) - midnight(date)) / 86_400_000);
+  if (ago === 0) return "Today";
+  if (ago === 1) return "Yesterday";
+  const year = date.getFullYear() === now.getFullYear() ? undefined : "numeric";
+  return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "long", year });
+}
+
+const time = (created: string) => new Date(created).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
 const when = (created: string) =>
   new Date(created).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -148,23 +161,51 @@ function MeetingList({
       </p>
     );
   }
+  // Newest first already: a day's rows are together.
+  const days: [string, MeetingInfo[]][] = [];
+  for (const m of list) {
+    const label = day(m.created);
+    const last = days[days.length - 1];
+    if (last?.[0] === label) last[1].push(m);
+    else days.push([label, [m]]);
+  }
   return (
-    <ul className="meetings-list">
-      {list.map((m) => (
-        <li key={m.id} className="meetings-row">
-          <button type="button" className="meetings-row-open" onClick={() => onOpen(m.id)}>
-            <span className="meetings-row-name">{meetingTitle(m)}</span>
-            <span className="meetings-row-meta">
-              {when(m.created)} · {clock(m.seconds)} · {m.speakers} {m.speakers === 1 ? "speaker" : "speakers"}
-              {!m.summarized && " · no notes"}
-            </span>
-          </button>
-          <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
-            <Trash2 size={14} />
-          </button>
-        </li>
+    <div className="meetings-days">
+      {days.map(([label, rows]) => (
+        <section key={label} className="meetings-day" aria-label={label}>
+          <h3 className="meetings-day-head">{label}</h3>
+          <ul className="meetings-list">
+            {rows.map((m) => (
+              <li key={m.id} className="meetings-row">
+                <button type="button" className="meetings-row-open" onClick={() => onOpen(m.id)}>
+                  <span className="meetings-row-icon" aria-hidden>
+                    <AudioLines size={16} />
+                  </span>
+                  <span className="meetings-row-body">
+                    <span className="meetings-row-name">{meetingTitle(m)}</span>
+                    <span className="meetings-row-meta">
+                      <span>{time(m.created)}</span>
+                      <span title="Duration">
+                        <Clock size={11} />
+                        {clock(m.seconds)}
+                      </span>
+                      <span title="Speakers">
+                        <Users size={11} />
+                        {m.speakers}
+                      </span>
+                    </span>
+                  </span>
+                  {!m.summarized && <span className="meetings-row-badge">No notes</span>}
+                </button>
+                <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       ))}
-    </ul>
+    </div>
   );
 }
 

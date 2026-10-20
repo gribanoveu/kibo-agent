@@ -32,65 +32,126 @@
   font-size: var(--fs-md);
 }
 
+.meetings-days {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 16px;
+  max-width: 820px;
+}
+.meetings-day-head {
+  margin: 0 0 6px 4px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .meetings-list {
   list-style: none;
-  margin: 16px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 .meetings-row {
   display: flex;
   align-items: center;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   background: var(--bg-panel);
+  transition: background 0.12s;
+}
+.meetings-row:hover {
+  background: var(--bg-hover);
 }
 .meetings-row-open {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
   border: none;
   background: none;
   text-align: left;
   font-family: inherit;
   cursor: pointer;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
 }
-.meetings-row-open:hover {
-  background: var(--bg-hover);
+.meetings-row-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.meetings-row-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.meetings-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .meetings-row-name {
   font-size: var(--fs-md);
+  font-weight: 500;
   color: var(--text);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .meetings-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   font-size: var(--fs-sm);
   color: var(--text-faint);
+}
+.meetings-row-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.meetings-row-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-active);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
 }
 .meetings-row-delete {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  margin-right: 6px;
+  margin-right: 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
   cursor: pointer;
+  opacity: 0;
+}
+.meetings-row:hover .meetings-row-delete,
+.meetings-row:focus-within .meetings-row-delete {
+  opacity: 1;
 }
 .meetings-row-delete:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--bg-active);
+  color: var(--red);
 }
 .meetings-row-delete:disabled {
-  opacity: 0.45;
+  opacity: 0;
   cursor: default;
 }
 
