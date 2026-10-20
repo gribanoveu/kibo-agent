@@ -1,0 +1,15 @@
+[package]
+name = "meeting-sidecar"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "MN-0 (docs/36-meeting-notes-research.md): a recording in, speakers and text out, as a separate process"
+
+# Not part of the app's build: its own lockfile and nothing in src-tauri depends on it.
+[workspace]
+
+[dependencies]
+sherpa-onnx = "1.13.8"
+symphonia = { version = "0.6.1", features = ["all"] }
+rubato = "5.0.1"
+serde_json = "1"
