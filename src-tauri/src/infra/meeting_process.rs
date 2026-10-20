@@ -66,7 +66,8 @@ pub fn recognize(
     let Some(mut child) = child else { return Err(MeetingError::Cancelled) };
     let status = child.wait().map_err(|e| MeetingError::Recognition(e.to_string()))?;
     match (result, error) {
-        (Some(result), _) if status.success() => Ok(result),
+        // A result is whole once written, even if the process fails on its way out.
+        (Some(result), _) => Ok(result),
         (_, Some(message)) => Err(MeetingError::Recognition(message)),
         _ => Err(MeetingError::Recognition(format!("the recognition process ended without a result ({status})"))),
     }

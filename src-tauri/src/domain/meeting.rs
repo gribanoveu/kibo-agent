@@ -386,8 +386,9 @@ fn first_seen_order(labels: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-/// Each word goes to the speaker whose segment it overlaps most — or, outside
-/// every segment, the nearest one; consecutive words of one speaker, with no
+/// Each word goes to the speaker whose segment it overlaps most — outside
+/// every segment the overlap is minus the gap, so that is the nearest one;
+/// consecutive words of one speaker, with no
 /// long pause between, are one utterance.
 pub fn utterances(words: &[Word], segments: &[Segment]) -> Vec<Utterance> {
     let mut out: Vec<Utterance> = Vec::new();
@@ -407,11 +408,7 @@ pub fn utterances(words: &[Word], segments: &[Segment]) -> Vec<Utterance> {
 
 fn speaker_of(w: &Word, segments: &[Segment]) -> usize {
     let overlap = |s: &Segment| w.end.min(s.end) - w.start.max(s.start);
-    let distance = |s: &Segment| (s.start - w.end).max(w.start - s.end).max(0.0);
-    segments
-        .iter()
-        .max_by(|a, b| overlap(a).total_cmp(&overlap(b)).then(distance(b).total_cmp(&distance(a))))
-        .map_or(0, |s| s.speaker)
+    segments.iter().max_by(|a, b| overlap(a).total_cmp(&overlap(b))).map_or(0, |s| s.speaker)
 }
 
 #[cfg(test)]
