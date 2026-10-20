@@ -1,15 +1,16 @@
 import { useState } from "react";
+import { matches } from "../lib/shortcuts";
 import { ChevronLeft, Copy, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
 import { Page } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { useMeetings, type Job } from "../hooks/useMeetings";
 import { useCopied } from "../hooks/useCopied";
-import type { Meeting, MeetingInfo } from "../lib/meeting";
+import { speakerName, type Meeting, type MeetingInfo, type Stage } from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
-const STAGES: Record<NonNullable<Job["stage"]>, string> = {
+const STAGES: Record<Stage, string> = {
   decode: "Reading the recording",
   speech: "Recognizing speech",
   speakers: "Telling the voices apart",
@@ -64,6 +65,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
             writing={job?.id === meeting.id && job.stage === "notes"}
             busy={job !== null}
             onSummarize={() => void meetings.summarize(meeting.id)}
+            onRename={(speaker, name) => void meetings.rename(speaker, name)}
           />
         )
       )}
@@ -96,7 +98,13 @@ export function MeetingsPage({ sideHandle }: PageContext) {
 }
 
 function JobStatus({ job, onStop }: { job: Job; onStop: () => void }) {
-  const share = job.stage === "speech" && job.total ? ` ${Math.round((100 * (job.done ?? 0)) / job.total)}%` : "";
+  const { stage, done = 0, total = 0 } = job;
+  const share =
+    stage === "speech" && total
+      ? ` ${Math.round((100 * done) / total)}%`
+      : stage === "notes" && done < total
+        ? ` part ${done + 1} of ${total}`
+        : "";
   return (
     <span className="meetings-job" role="status">
       <span className="meetings-job-text">
@@ -154,12 +162,14 @@ function MeetingView({
   writing,
   busy,
   onSummarize,
+  onRename,
 }: {
   meeting: Meeting;
   draft: string | null;
   writing: boolean;
   busy: boolean;
   onSummarize: () => void;
+  onRename: (speaker: number, name: string) => void;
 }) {
   const { copied, copy } = useCopied();
   const notes = writing ? (draft ?? "") : meeting.summary;
@@ -195,14 +205,58 @@ function MeetingView({
 
       <section className="meeting-transcript" aria-label="Transcript">
         <h3>Transcript</h3>
+        <Speakers meeting={meeting} onRename={onRename} />
         {meeting.utterances.map((u, i) => (
           <p key={i} className="meeting-line">
             <span className="meeting-time">{clock(u.start)}</span>
-            <span className={`meeting-speaker speaker-${u.speaker % 4}`}>Speaker {u.speaker + 1}</span>
+            <span className={`meeting-speaker speaker-${u.speaker % 4}`}>{speakerName(meeting, u.speaker)}</span>
             <span className="meeting-text">{u.text}</span>
           </p>
         ))}
       </section>
     </article>
+  );
+}
+
+/** Who spoke, each renamed in place: the name goes into the transcript and the
+    notes. Two given one name are one person the recognition split in two. */
+function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker: number, name: string) => void }) {
+  const [editing, setEditing] = useState<number | null>(null);
+  const count = Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
+  return (
+    <div className="meeting-speakers" aria-label="Speakers">
+      {Array.from({ length: count }, (_, speaker) =>
+        editing === speaker ? (
+          <input
+            key={speaker}
+            className="meeting-speaker-input"
+            aria-label={`Name of speaker ${speaker + 1}`}
+            placeholder={`Speaker ${speaker + 1}`}
+            defaultValue={meeting.names?.[speaker] ?? ""}
+            maxLength={60}
+            autoFocus
+            onKeyDown={(e) => {
+              if (matches(e.nativeEvent, "accept")) {
+                onRename(speaker, e.currentTarget.value);
+                setEditing(null);
+              } else if (matches(e.nativeEvent, "close")) {
+                setEditing(null);
+              }
+            }}
+            onBlur={() => setEditing(null)}
+          />
+        ) : (
+          <button
+            key={speaker}
+            type="button"
+            className={`meeting-speaker-chip speaker-${speaker % 4}`}
+            title="Rename"
+            onClick={() => setEditing(speaker)}
+          >
+            {speakerName(meeting, speaker)}
+          </button>
+        ),
+      )}
+    </div>
   );
 }

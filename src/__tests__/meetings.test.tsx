@@ -28,6 +28,14 @@ mock.module("@tauri-apps/api/core", () => ({
       stored = stored.filter((m) => m.id !== args!.id);
       return Promise.resolve(null);
     }
+    if (command === "meeting_rename_speaker") {
+      const m = stored.find((x) => x.id === args!.id)!;
+      const name = String(args!.name).trim();
+      m.names = { ...m.names };
+      if (name) m.names[String(args!.speaker)] = name;
+      else delete m.names[String(args!.speaker)];
+      return Promise.resolve(structuredClone(m));
+    }
     if (command === "meeting_process") {
       return new Promise((resolve, reject) => {
         finishProcess = ({ id, error }) => (error ? reject(error) : resolve(id));
@@ -86,7 +94,7 @@ describe("the meetings page", () => {
     const notes = within(screen.getByRole("region", { name: "Notes" }));
     expect(notes.getByText("Release on Friday.")).toBeTruthy();
     const transcript = within(screen.getByRole("region", { name: "Transcript" }));
-    expect(transcript.getByText("Speaker 2")).toBeTruthy();
+    expect(transcript.getAllByText("Speaker 2").length).toBe(2); // its chip and its line
     expect(transcript.getByText("1:05")).toBeTruthy();
     expect(transcript.getByText("Я подготовлю релиз.")).toBeTruthy();
 
@@ -153,6 +161,43 @@ describe("the meetings page", () => {
     await settle();
     expect(calls.some((c) => c.command === "meeting_delete" && c.args?.id === "m1")).toBe(true);
     expect(screen.getByText(/No meetings yet/)).toBeTruthy();
+  });
+
+  test("a speaker renamed in place is called so in the transcript; Escape keeps the name", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    const speakers = within(screen.getByLabelText("Speakers"));
+    fireEvent.click(speakers.getByText("Speaker 2"));
+    const field = screen.getByLabelText("Name of speaker 2");
+    fireEvent.change(field, { target: { value: "Илья" } });
+    fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_rename_speaker", args: { id: "m1", speaker: 1, name: "Илья" } });
+    const transcript = within(screen.getByRole("region", { name: "Transcript" }));
+    expect(transcript.getAllByText("Илья").length).toBe(2);
+    expect(transcript.queryByText("Speaker 2")).toBeNull();
+
+    const before = calls.length;
+    fireEvent.click(speakers.getByText("Speaker 1"));
+    fireEvent.change(screen.getByLabelText("Name of speaker 1"), { target: { value: "x" } });
+    fireEvent.keyDown(screen.getByLabelText("Name of speaker 1"), { key: "Escape", code: "Escape" });
+    await settle();
+    expect(calls.length).toBe(before);
+    expect(speakers.getByText("Speaker 1")).toBeTruthy();
+  });
+
+  test("a long meeting's notes say which part is being read", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Add recording"));
+    await settle();
+    await emit({ kind: "progress", id: "m3", name: "long.m4a", stage: "notes", done: 1, total: 4 });
+    expect(screen.getByRole("status").textContent).toContain("Writing the notes… part 2 of 4");
+    await emit({ kind: "progress", id: "m3", name: "long.m4a", stage: "notes", done: 4, total: 4 });
+    expect(screen.getByRole("status").textContent).not.toContain("part");
+    await act(async () => finishProcess({ id: "m3" }));
   });
 
   test("times read as minutes, and hours past an hour", () => {

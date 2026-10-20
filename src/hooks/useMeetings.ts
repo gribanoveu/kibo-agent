@@ -5,6 +5,7 @@ import {
   meetingGet,
   meetingList,
   meetingProcess,
+  meetingRenameSpeaker,
   meetingStop,
   meetingSummarize,
   onMeetingEvent,
@@ -19,7 +20,7 @@ export type Job = {
   /** Known once the backend names it — at once for notes, on the first progress for a recording. */
   id?: string;
   name?: string;
-  stage?: Stage | "notes";
+  stage?: Stage;
   done?: number;
   total?: number;
 };
@@ -106,6 +107,17 @@ export function useMeetings() {
     void meetingStop();
   };
 
+  const rename = async (speaker: number, name: string) => {
+    const id = openRef.current;
+    if (id === null) return;
+    try {
+      const renamed = await meetingRenameSpeaker(id, speaker, name);
+      if (openRef.current === id) setMeeting(renamed);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const remove = async (id: string) => {
     try {
       await meetingDelete(id);
@@ -127,6 +139,7 @@ export function useMeetings() {
     add,
     summarize,
     stop,
+    rename,
     remove,
   };
 }

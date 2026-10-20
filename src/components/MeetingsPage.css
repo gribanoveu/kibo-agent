@@ -155,6 +155,35 @@
   color: var(--text);
   overflow-wrap: anywhere;
 }
+/* Who spoke, renamed in place. */
+.meeting-speakers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.meeting-speaker-chip,
+.meeting-speaker-input {
+  padding: 3px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.meeting-speaker-chip {
+  cursor: pointer;
+}
+.meeting-speaker-chip:hover {
+  background: var(--bg-hover);
+}
+.meeting-speaker-input {
+  color: var(--text);
+  outline: none;
+  border-color: var(--accent);
+  width: 14em;
+}
 /* Speakers told apart by colour; past four the colours repeat, the numbers do not. */
 .speaker-0 {
   color: var(--accent);

@@ -21,7 +21,12 @@ export type Meeting = {
   seconds: number;
   utterances: Utterance[];
   summary?: string;
+  /** What the user called a speaker, by number from 0. */
+  names?: Record<string, string>;
 };
+
+/** The user's name for a speaker, or `Speaker N` from 1 — as the notes call whoever is not named. */
+export const speakerName = (meeting: Meeting, speaker: number) => meeting.names?.[speaker] ?? `Speaker ${speaker + 1}`;
 
 export type MeetingInfo = {
   id: string;
@@ -32,7 +37,8 @@ export type MeetingInfo = {
   summarized: boolean;
 };
 
-export type Stage = "decode" | "speech" | "speakers";
+/** `notes`: a long meeting's parts read one by one, then the whole written. */
+export type Stage = "decode" | "speech" | "speakers" | "notes";
 
 export type MeetingEvent =
   | { kind: "progress"; id: string; name: string; stage: Stage; done: number; total: number }
@@ -71,6 +77,12 @@ export async function meetingDelete(id: string): Promise<void> {
 export async function meetingProcess(path: string): Promise<string> {
   requireBackend();
   return invoke<string>("meeting_process", { path });
+}
+
+/** The meeting after speaker `speaker` is called `name`; blank gives back its number. The notes follow. */
+export async function meetingRenameSpeaker(id: string, speaker: number, name: string): Promise<Meeting> {
+  requireBackend();
+  return invoke<Meeting>("meeting_rename_speaker", { id, speaker, name });
 }
 
 /** The notes written again. */
