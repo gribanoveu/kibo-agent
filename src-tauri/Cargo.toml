@@ -89,6 +89,14 @@ dom_smoothie = "0.18.2"
 url = "2.5.8"
 dom_query = "0.28"
 percent-encoding = "2.3"
+# Meeting notes (`docs/36-meeting-notes-research.md`): GigaAM v3 and the speaker
+# model run through sherpa-onnx, in a second process of this exe
+# (`meeting_sidecar`) — a native crash there costs one recording, not the window.
+# The crate's build.rs downloads sherpa's prebuilt static library.
+sherpa-onnx = "1.13.8"
+symphonia = { version = "0.6.1", features = ["all"] }
+# The eigen-decomposition of spectral clustering (`domain::meeting::spectral`).
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

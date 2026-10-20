@@ -3,6 +3,7 @@ mod architecture;
 pub mod commands;
 pub mod domain;
 pub mod infra;
+pub mod meeting_sidecar;
 #[cfg(test)]
 mod data_policy;
 #[cfg(test)]
