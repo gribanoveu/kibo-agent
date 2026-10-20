@@ -184,6 +184,32 @@
   border-color: var(--accent);
   width: 14em;
 }
+/* A name the voice memory gave: kept or corrected with a click. */
+.meeting-speaker-chip.guessed {
+  border-style: dashed;
+}
+.meetings-voices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.meetings-voice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 4px 8px;
+}
+.meetings-voice .meetings-row-name {
+  flex: 1;
+  min-width: 0;
+}
+.meetings-voices-toggle[aria-pressed="true"] {
+  background: var(--bg-active);
+  color: var(--text);
+}
 /* Speakers told apart by colour; past four the colours repeat, the numbers do not. */
 .speaker-0 {
   color: var(--accent);

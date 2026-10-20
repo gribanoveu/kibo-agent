@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { ChevronLeft, Copy, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
-import { Page } from "./Page";
+import { ChevronLeft, Copy, Plus, RefreshCw, Square, Trash2, Users } from "lucide-react";
+import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { useMeetings, type Job } from "../hooks/useMeetings";
 import { useCopied } from "../hooks/useCopied";
-import { speakerName, type Meeting, type MeetingInfo, type Stage } from "../lib/meeting";
+import { useFeatures } from "../hooks/useFeatures";
+import { useVoices } from "../hooks/useVoices";
+import { speakerName, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
@@ -35,6 +37,8 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   const meetings = useMeetings();
   const { job, meeting, openId } = meetings;
   const [deleting, setDeleting] = useState<MeetingInfo | null>(null);
+  const remembering = useFeatures().isOn("voice-memory");
+  const [voicesOpen, setVoicesOpen] = useState(false);
 
   const bar = (
     <div className="meetings-bar">
@@ -49,11 +53,19 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         Add recording
       </button>
       {job && <JobStatus job={job} onStop={meetings.stop} />}
+      {remembering && (
+        <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
+          <Users size={14} />
+          Voices
+        </button>
+      )}
     </div>
   );
 
+  const panel = remembering && voicesOpen && <VoicesPanel changed={meeting ?? job} onClose={() => setVoicesOpen(false)} />;
+
   return (
-    <Page title="Meetings" bar={bar} sideHandle={sideHandle}>
+    <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
       {meetings.error && <p className="meetings-error">{meetings.error}</p>}
       {openId === null ? (
         <MeetingList list={meetings.list} onOpen={meetings.open} onDelete={setDeleting} busy={job !== null} />
@@ -249,8 +261,8 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
           <button
             key={speaker}
             type="button"
-            className={`meeting-speaker-chip speaker-${speaker % 4}`}
-            title="Rename"
+            className={`meeting-speaker-chip speaker-${speaker % 4}${meeting.guessed?.includes(speaker) ? " guessed" : ""}`}
+            title={meeting.guessed?.includes(speaker) ? "Recognized by voice — click to keep or correct" : "Rename"}
             onClick={() => setEditing(speaker)}
           >
             {speakerName(meeting, speaker)}
@@ -258,5 +270,60 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
         ),
       )}
     </div>
+  );
+}
+
+/** The voice memory's voices, each one forgotten on request — its every sample
+    goes; the names already given in meetings stay as text. */
+function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => void }) {
+  const { voices, error, remove } = useVoices(changed);
+  const [forgetting, setForgetting] = useState<VoiceInfo | null>(null);
+  return (
+    <PagePanel icon={Users} title="Voices" label="Voices" onClose={onClose}>
+      {error && <p className="meetings-error">{error}</p>}
+      {voices.length === 0 ? (
+        <p className="meetings-empty">
+          No voices yet. Name a speaker who talked for 30 seconds or more, and the next meeting knows them by voice.
+        </p>
+      ) : (
+        <ul className="meetings-voices">
+          {voices.map((v) => (
+            <li key={v.id} className="meetings-voice">
+              <span className="meetings-row-name">{v.name}</span>
+              <span className="meetings-row-meta">
+                {v.meetings} {v.meetings === 1 ? "meeting" : "meetings"}
+              </span>
+              <button type="button" className="meetings-row-delete" title="Forget" aria-label={`Forget ${v.name}`} onClick={() => setForgetting(v)}>
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Modal
+        title={`Forget ${forgetting?.name ?? ""}'s voice?`}
+        open={forgetting !== null}
+        onClose={() => setForgetting(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setForgetting(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (forgetting) void remove(forgetting.id);
+                setForgetting(null);
+              }}
+            >
+              Forget
+            </button>
+          </>
+        }
+      >
+        <p className="meetings-confirm">Every sample of it goes. The name stays where you gave it, as text.</p>
+      </Modal>
+    </PagePanel>
   );
 }

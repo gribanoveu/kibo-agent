@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Meeting, MeetingEvent } from "../lib/meeting";
 
 // The Meetings page (docs/36): a recording in, its notes and transcript out.
@@ -9,6 +9,8 @@ import type { Meeting, MeetingEvent } from "../lib/meeting";
 let stored: Meeting[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let finishProcess: (result: { id?: string; error?: string }) => void = () => {};
+let voiceMemoryOn = false;
+let voices: { id: string; name: string; meetings: number }[] = [];
 
 const info = (m: Meeting) => ({
   id: m.id,
@@ -22,6 +24,12 @@ const info = (m: Meeting) => ({
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
+    if (command === "features_list") return Promise.resolve(voiceMemoryOn ? [{ id: "voice-memory", on: true }] : []);
+    if (command === "meeting_voices") return Promise.resolve(structuredClone(voices));
+    if (command === "meeting_voice_delete") {
+      voices = voices.filter((v) => v.id !== args!.id);
+      return Promise.resolve(structuredClone(voices));
+    }
     if (command === "meeting_list") return Promise.resolve(stored.map(info));
     if (command === "meeting_get") return Promise.resolve(structuredClone(stored.find((m) => m.id === args!.id)));
     if (command === "meeting_delete") {
@@ -83,6 +91,8 @@ const call: Meeting = {
 beforeEach(() => {
   calls = [];
   stored = [structuredClone(call)];
+  voiceMemoryOn = false;
+  voices = [];
 });
 
 describe("the meetings page", () => {
@@ -198,6 +208,41 @@ describe("the meetings page", () => {
     await emit({ kind: "progress", id: "m3", name: "long.m4a", stage: "notes", done: 4, total: 4 });
     expect(screen.getByRole("status").textContent).not.toContain("part");
     await act(async () => finishProcess({ id: "m3" }));
+  });
+
+  test("voices are listed only while the voice memory is on, and one is forgotten once confirmed", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(screen.queryByText("Voices")).toBeNull();
+    cleanup();
+
+    voiceMemoryOn = true;
+    voices = [{ id: "v1", name: "Альбина", meetings: 2 }];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Voices"));
+    await settle();
+    const panel = within(screen.getByRole("complementary", { name: "Voices" }));
+    expect(panel.getByText("Альбина")).toBeTruthy();
+    expect(panel.getByText("2 meetings")).toBeTruthy();
+    fireEvent.click(panel.getByLabelText("Forget Альбина"));
+    expect(calls.some((c) => c.command === "meeting_voice_delete")).toBe(false);
+    fireEvent.click(within(screen.getByRole("dialog")).getByText("Forget"));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_voice_delete", args: { id: "v1" } });
+    expect(panel.getByText(/No voices yet/)).toBeTruthy();
+  });
+
+  test("a name the voice memory gave says so on its speaker", async () => {
+    stored[0].names = { "1": "Илья" };
+    stored[0].guessed = [1];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    const speakers = within(screen.getByLabelText("Speakers"));
+    expect(speakers.getByText("Илья").getAttribute("title")).toContain("Recognized by voice");
+    expect(speakers.getByText("Speaker 1").getAttribute("title")).toBe("Rename");
   });
 
   test("times read as minutes, and hours past an hour", () => {

@@ -23,7 +23,12 @@ export type Meeting = {
   summary?: string;
   /** What the user called a speaker, by number from 0. */
   names?: Record<string, string>;
+  /** The speakers whose name the voice memory gave, not the user. */
+  guessed?: number[];
 };
+
+/** A voice the voice memory knows (`domain::voices`), and in how many meetings it was named. */
+export type VoiceInfo = { id: string; name: string; meetings: number };
 
 /** The user's name for a speaker, or `Speaker N` from 1 — as the notes call whoever is not named. */
 export const speakerName = (meeting: Meeting, speaker: number) => meeting.names?.[speaker] ?? `Speaker ${speaker + 1}`;
@@ -95,4 +100,16 @@ export async function meetingSummarize(id: string): Promise<void> {
 export async function meetingStop(): Promise<void> {
   if (!inTauri()) return;
   return invoke("meeting_stop");
+}
+
+/** The voices the voice memory knows, by name. */
+export async function meetingVoices(): Promise<VoiceInfo[]> {
+  if (!inTauri()) return [];
+  return invoke<VoiceInfo[]>("meeting_voices");
+}
+
+/** The voice forgotten with every sample of it; the list after. */
+export async function meetingVoiceDelete(id: string): Promise<VoiceInfo[]> {
+  requireBackend();
+  return invoke<VoiceInfo[]>("meeting_voice_delete", { id });
 }
