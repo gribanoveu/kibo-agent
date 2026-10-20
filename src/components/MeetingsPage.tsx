@@ -283,7 +283,7 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
       {error && <p className="meetings-error">{error}</p>}
       {voices.length === 0 ? (
         <p className="meetings-empty">
-          No voices yet. Name a speaker who said 20 seconds and 20 words or more in a meeting, and the next one knows them by voice.
+          No voices yet. Name a speaker who said 20 seconds and 20 words or more in a meeting, in phrases rather than single words, and the next one knows them by voice.
         </p>
       ) : (
         <ul className="meetings-voices">

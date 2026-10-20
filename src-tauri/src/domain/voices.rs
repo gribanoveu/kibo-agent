@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 /// and 20 s, 36 and 42.
 pub const MIN_SPEECH_SECONDS: f32 = 20.0;
 pub const MIN_WORDS: usize = 20;
+/// Words count toward [`MIN_WORDS`] only in an utterance this long: word ends
+/// and "um" come one to an utterance, and on an hour's call they add up.
+pub const MIN_PHRASE_WORDS: usize = 3;
 
-/// How much a speaker said in a meeting.
+/// How much a speaker said in a meeting, all their utterances together.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Speech {
     pub seconds: f32,
+    /// Only those of utterances of [`MIN_PHRASE_WORDS`] or more.
     pub words: usize,
 }
 /// One person across two meetings was 0.78 alike, different people 0.52 at

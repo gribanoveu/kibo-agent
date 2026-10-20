@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::compaction;
-use super::voices::Speech;
+use super::voices::{Speech, MIN_PHRASE_WORDS};
 
 /// The first argument that makes the app's exe the recognition process.
 pub const SIDECAR_FLAG: &str = "--meeting-sidecar";
@@ -168,7 +168,10 @@ impl Meeting {
         let mut out = vec![Speech { seconds: 0.0, words: 0 }; self.speakers()];
         for u in &self.utterances {
             out[u.speaker].seconds += (u.end - u.start).max(0.0);
-            out[u.speaker].words += u.text.split_whitespace().count();
+            let words = u.text.split_whitespace().count();
+            if words >= MIN_PHRASE_WORDS {
+                out[u.speaker].words += words;
+            }
         }
         out
     }
@@ -410,7 +413,7 @@ pub fn windows_over(words: &[Word]) -> Vec<(f32, f32)> {
 /// `p` nearest, the speaker count the largest gap among the Laplacian's
 /// smallest eigenvalues, k-means on that many eigenvectors. `p` is the one that
 /// makes the gap clearest (NME-SC, Park et al. 2019). Labels by first appearance.
-// ponytail: dense eigen-decomposition, O(n³) — ~4000 windows an hour is seconds; Lanczos if longer.
+// ponytail: dense eigen-decomposition, O(n³) — 66 min, ~3200 windows: 203 s on an M4, 40 % of the run; Lanczos or fewer windows if calls get longer.
 pub fn spectral(embeddings: &[Vec<f32>]) -> Vec<usize> {
     let n = embeddings.len();
     if n < 3 {
@@ -744,7 +747,10 @@ mod tests {
         assert_eq!(meeting.guessed, [1]);
         meeting.rename(1, "Илья").unwrap();
         assert!(meeting.guessed.is_empty());
-        assert_eq!(meeting.speech(), [Speech { seconds: 2.0, words: 2 }, Speech { seconds: 1.0, words: 1 }]);
+        assert_eq!(meeting.speech(), [Speech { seconds: 2.0, words: 0 }, Speech { seconds: 1.0, words: 0 }], "one word at a time is no phrase");
+        meeting.utterances.push(said(1, 3.0, "я подготовлю релиз"));
+        meeting.utterances.push(said(1, 4.0, "ну да"));
+        assert_eq!(meeting.speech()[1], Speech { seconds: 3.0, words: 3 });
     }
 
     #[test]
