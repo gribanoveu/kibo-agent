@@ -14,7 +14,7 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use crate::domain::meeting::{self, MeetingError, Segment, Stage, Utterance, Word};
+use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Stage, Word};
 
 const SAMPLE_RATE: u32 = 16_000;
 /// The whole recording goes through GigaAM in windows this long, each starting
@@ -43,8 +43,8 @@ pub fn has_models(dir: &Path) -> bool {
     MODEL_FILES.iter().all(|f| dir.join(f).is_file())
 }
 
-/// Every utterance of `audio`, speakers numbered by who spoke first.
-pub fn recognize(audio: &Path, models: &Path, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<(Vec<Utterance>, f32), MeetingError> {
+/// Every utterance of `audio`, speakers numbered by who spoke first, and their voices.
+pub fn recognize(audio: &Path, models: &Path, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
     if !has_models(models) {
         return Err(MeetingError::ModelsMissing);
     }
@@ -57,9 +57,9 @@ pub fn recognize(audio: &Path, models: &Path, progress: &mut dyn FnMut(Stage, us
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
     progress(Stage::Speakers, 0, 1);
-    let segments = speakers(models, threads, &samples, &words)?;
+    let (segments, voices) = speakers(models, threads, &samples, &words)?;
     progress(Stage::Speakers, 1, 1);
-    Ok((meeting::utterances(&words, &segments), samples.len() as f32 / SAMPLE_RATE as f32))
+    Ok(Recognized { utterances: meeting::utterances(&words, &segments), seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
 
 /// The whole file as mono f32 at its own rate.
@@ -171,8 +171,9 @@ fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32], progress: &mut dy
     words
 }
 
-/// Windows over the words, one voice embedding each, labeled by spectral clustering.
-fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Result<Vec<Segment>, MeetingError> {
+/// Windows over the words, one voice embedding each, labeled by spectral
+/// clustering; and each label's mean voice.
+fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Result<(Vec<Segment>, Vec<Vec<f32>>), MeetingError> {
     let config = SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() };
     let extractor = SpeakerEmbeddingExtractor::create(&config).ok_or(MeetingError::ModelFailed("voice"))?;
     let mut windows = Vec::new();
@@ -192,5 +193,6 @@ fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Res
         }
     }
     let labels = meeting::spectral(&embeddings);
-    Ok(windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect())
+    let voices = meeting::centroids(&embeddings, &labels);
+    Ok((windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect(), voices))
 }

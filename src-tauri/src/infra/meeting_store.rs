@@ -81,6 +81,7 @@ mod tests {
             utterances: vec![Utterance { speaker: 1, start: 0.0, end: 1.0, text: "да".into() }],
             summary: None,
             names: Default::default(),
+            guessed: Vec::new(),
         }
     }
 

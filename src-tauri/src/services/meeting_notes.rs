@@ -9,7 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
 use crate::domain::meeting::{self, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
 use crate::infra::meeting_process::{self, Running};
-use crate::infra::{meeting_store, speech};
+use crate::domain::features::Feature;
+use crate::domain::voices::VoiceInfo;
+use crate::infra::{meeting_store, speech, voices_store};
+use crate::services::features;
 use crate::services::llm_session::{self, LlmSession};
 
 #[derive(Default)]
@@ -52,21 +55,30 @@ impl MeetingNotes {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let (utterances, seconds) = meeting_process::recognize(&self.running, exe, audio, models, &mut |stage, done, total| {
+        let recognized = meeting_process::recognize(&self.running, exe, audio, models, &mut |stage, done, total| {
             sink(MeetingEvent::Progress { id: id.clone(), name: name.clone(), stage, done, total })
         })?;
-        if utterances.is_empty() {
+        if recognized.utterances.is_empty() {
             return Err(MeetingError::NoSpeech);
         }
-        let meeting = Meeting {
+        let mut meeting = Meeting {
             id: id.clone(),
             name,
             created: chrono::Utc::now().to_rfc3339(),
-            seconds,
-            utterances,
+            seconds: recognized.seconds,
+            utterances: recognized.utterances,
             summary: None,
             names: Default::default(),
+            guessed: Vec::new(),
         };
+        if remembering() {
+            let speech = meeting.speech();
+            let known = voices_store::update(true, |book| {
+                book.hear(&id, &recognized.voices, &speech);
+                book.recognize(&id)
+            })?;
+            meeting.guess(known.unwrap_or_default());
+        }
         meeting_store::save(&meeting)?;
         sink(MeetingEvent::Transcribed { id: id.clone() });
         self.summarize_into(&meeting, sink)?;
@@ -91,11 +103,41 @@ impl MeetingNotes {
 }
 
 /// Speaker `speaker` of meeting `id` called `name` — blank for its number again.
+/// The user naming a speaker is the voice memory's one lesson: while it is
+/// on, that speaker's voice is now that name's.
 pub fn rename_speaker(id: &str, speaker: usize, name: &str) -> Result<Meeting, MeetingError> {
     let mut meeting = meeting_store::get(id)?;
     meeting.rename(speaker, name)?;
     meeting_store::save(&meeting)?;
+    if remembering() {
+        let name = meeting.names.get(&speaker).cloned().unwrap_or_default();
+        voices_store::update(false, |book| book.learn(id, speaker, &name))?;
+    }
     Ok(meeting)
+}
+
+/// Meeting `id` gone, and what the voice memory heard in it — on or off.
+pub fn delete_meeting(id: &str) -> Result<(), MeetingError> {
+    meeting_store::delete(id)?;
+    voices_store::update(false, |book| book.forget_meeting(id))?;
+    Ok(())
+}
+
+pub fn voices() -> Result<Vec<VoiceInfo>, MeetingError> {
+    Ok(voices_store::read()?.list())
+}
+
+/// The person forgotten: their voice and every sample of it. The list after.
+pub fn delete_voice(id: &str) -> Result<Vec<VoiceInfo>, MeetingError> {
+    Ok(voices_store::update(false, |book| {
+        book.delete(id);
+        book.list()
+    })?
+    .unwrap_or_default())
+}
+
+fn remembering() -> bool {
+    features::enabled().is_on(Feature::VoiceMemory)
 }
 
 /// The notes of `meeting`, streamed to `sink` as they are written. A meeting
@@ -200,6 +242,7 @@ mod tests {
             utterances: vec![Utterance { speaker: 0, start: 1.0, end: 2.0, text: "Решили выпустить в пятницу.".into() }],
             summary: None,
             names: Default::default(),
+            guessed: Vec::new(),
         }
     }
 
@@ -268,6 +311,41 @@ mod tests {
             assert_eq!(meeting_store::get("ab").unwrap(), renamed);
             assert_eq!(renamed.summary.as_deref(), Some("Оксана decides."));
             assert_eq!(rename_speaker("ab", 5, "x"), Err(MeetingError::NoSpeaker(6)));
+        });
+    }
+
+    #[test]
+    fn a_name_teaches_the_voice_memory_only_while_it_is_on_and_a_deleted_meeting_is_forgotten() {
+        crate::testing::with_app_dir("meeting-voices", || {
+            let mut call = meeting();
+            call.id = "a1".into();
+            call.utterances[0].end = 61.0;
+            meeting_store::save(&call).unwrap();
+            voices_store::update(true, |b| b.hear("a1", &[vec![1.0, 0.0]], &call.speech())).unwrap();
+
+            rename_speaker("a1", 0, "Альбина").unwrap();
+            assert_eq!(voices().unwrap(), [], "off: nothing learned");
+            features::set("voice-memory", true).unwrap();
+            rename_speaker("a1", 0, "Альбина").unwrap();
+            assert_eq!(voices().unwrap().iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["Альбина"]);
+
+            delete_meeting("a1").unwrap();
+            assert_eq!(voices().unwrap(), []);
+            assert_eq!(voices_store::read().unwrap(), Default::default());
+        });
+    }
+
+    #[test]
+    fn a_deleted_voice_is_gone_from_the_list() {
+        crate::testing::with_app_dir("meeting-voice-delete", || {
+            assert_eq!(delete_voice("x").unwrap(), [], "no book is no voices");
+            voices_store::update(true, |b| {
+                b.hear("a1", &[vec![1.0, 0.0]], &[60.0]);
+                b.learn("a1", 0, "Илья");
+            })
+            .unwrap();
+            let id = voices().unwrap()[0].id.clone();
+            assert_eq!(delete_voice(&id).unwrap(), []);
         });
     }
 

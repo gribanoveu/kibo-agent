@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::domain::meeting::{Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
+use crate::domain::voices::VoiceInfo;
 use crate::infra::{meeting_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
 
@@ -40,7 +41,19 @@ pub async fn meeting_rename_speaker(id: String, speaker: usize, name: String) ->
 
 #[tauri::command]
 pub async fn meeting_delete(id: String) -> Result<(), String> {
-    blocking(move || meeting_store::delete(&id)).await
+    blocking(move || meeting_notes::delete_meeting(&id)).await
+}
+
+/// The voices the voice memory knows, by name.
+#[tauri::command]
+pub async fn meeting_voices() -> Result<Vec<VoiceInfo>, String> {
+    blocking(meeting_notes::voices).await
+}
+
+/// The voice forgotten with every sample of it; the list after.
+#[tauri::command]
+pub async fn meeting_voice_delete(id: String) -> Result<Vec<VoiceInfo>, String> {
+    blocking(move || meeting_notes::delete_voice(&id)).await
 }
 
 /// The recording at `path` recognized, saved and summarized; resolves with

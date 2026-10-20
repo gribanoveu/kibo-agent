@@ -66,12 +66,24 @@ pub enum Stage {
     Notes,
 }
 
+/// A recording recognized.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recognized {
+    pub utterances: Vec<Utterance>,
+    pub seconds: f32,
+    /// Each speaker's mean voice embedding, unit length, by number — what
+    /// `domain::voices` knows a person again by. Kept only while it is on.
+    #[serde(default)]
+    pub voices: Vec<Vec<f32>>,
+}
+
 /// What the recognition process writes to stdout, one JSON object a line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SidecarLine {
     Progress { stage: Stage, done: usize, total: usize },
-    Result { utterances: Vec<Utterance>, seconds: f32 },
+    Result(Recognized),
     Error { message: String },
 }
 
@@ -125,6 +137,9 @@ pub struct Meeting {
     /// are one person the clustering split.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<usize, String>,
+    /// The speakers whose name the voice memory gave, not the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guessed: Vec<usize>,
 }
 
 /// A row of the list: the meeting without its text.
@@ -145,6 +160,25 @@ pub const MAX_NAME_CHARS: usize = 60;
 impl Meeting {
     pub fn speakers(&self) -> usize {
         self.utterances.iter().map(|u| u.speaker + 1).max().unwrap_or(0)
+    }
+
+    /// Seconds each speaker spoke, by number.
+    pub fn speech(&self) -> Vec<f32> {
+        let mut out = vec![0.0; self.speakers()];
+        for u in &self.utterances {
+            out[u.speaker] += (u.end - u.start).max(0.0);
+        }
+        out
+    }
+
+    /// Names recognized by voice, for speakers the user has not named.
+    pub fn guess(&mut self, names: Vec<(usize, String)>) {
+        for (speaker, name) in names {
+            if !self.names.contains_key(&speaker) {
+                self.names.insert(speaker, name);
+                self.guessed.push(speaker);
+            }
+        }
     }
 
     /// The user's name for `speaker`, or `Speaker N` from 1 — as the transcript
@@ -170,6 +204,7 @@ impl Meeting {
         } else {
             self.names.insert(speaker, name);
         }
+        self.guessed.retain(|g| *g != speaker);
         let after = self.speaker_name(speaker);
         if let Some(summary) = &mut self.summary {
             *summary = replace_word(summary, &before, &after);
@@ -416,6 +451,24 @@ pub fn spectral(embeddings: &[Vec<f32>]) -> Vec<usize> {
     first_seen_order(&merge_same_voices(&unit, kmeans(&vectors, k)))
 }
 
+/// Each label's mean embedding, unit length, labels from 0 — a label with no
+/// window is all zeros.
+pub fn centroids(embeddings: &[Vec<f32>], labels: &[usize]) -> Vec<Vec<f32>> {
+    let count = labels.iter().max().map_or(0, |m| m + 1);
+    let width = embeddings.first().map_or(0, Vec::len);
+    (0..count)
+        .map(|c| {
+            let mut sum = vec![0.0f64; width];
+            for (e, _) in embeddings.iter().zip(labels).filter(|(_, l)| **l == c) {
+                let norm = e.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt().max(1e-9);
+                sum.iter_mut().zip(e).for_each(|(s, x)| *s += *x as f64 / norm);
+            }
+            let norm = sum.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-9);
+            sum.iter().map(|x| (x / norm) as f32).collect()
+        })
+        .collect()
+}
+
 /// Clusters whose mean voices are this alike are one person. The eigengap
 /// over-splits a short stretch: on 45 s of three people it found five, two of
 /// them 0.79 alike; different people of two real calls were 0.56 at most.
@@ -559,6 +612,14 @@ mod tests {
     }
 
     #[test]
+    fn a_speakers_voice_is_the_unit_mean_of_its_windows() {
+        let got = centroids(&[vec![2.0, 0.0], vec![0.0, 1.0], vec![0.0, 3.0]], &[0, 0, 2]);
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        assert_eq!(got, [vec![s, s], vec![0.0, 0.0], vec![0.0, 1.0]]);
+        assert!(centroids(&[], &[]).is_empty());
+    }
+
+    #[test]
     fn one_voice_is_one_speaker() {
         // One direction, a little noise on each window: the eigengap alone splits
         // this into several clusters, all alike.
@@ -634,6 +695,7 @@ mod tests {
             utterances,
             summary: None,
             names: BTreeMap::new(),
+            guessed: Vec::new(),
         }
     }
 
@@ -669,6 +731,18 @@ mod tests {
         now.rename(1, "Илья").unwrap();
         assert_eq!(renamed_since("Speaker 1 asks Speaker 2.", &written, &now), "Speaker 1 asks Илья.");
         assert_eq!(renamed_since("Speaker 2.", &written, &written), "Speaker 2.");
+    }
+
+    #[test]
+    fn a_guessed_name_fills_only_an_unnamed_speaker_and_a_rename_makes_it_the_users() {
+        let mut meeting = meeting_of(vec![said(0, 0.0, "а"), said(1, 1.0, "б"), said(0, 2.0, "в")]);
+        meeting.rename(0, "Оксана").unwrap();
+        meeting.guess(vec![(0, "Альбина".into()), (1, "Илья".into())]);
+        assert_eq!((meeting.speaker_name(0), meeting.speaker_name(1)), ("Оксана".into(), "Илья".into()));
+        assert_eq!(meeting.guessed, [1]);
+        meeting.rename(1, "Илья").unwrap();
+        assert!(meeting.guessed.is_empty());
+        assert_eq!(meeting.speech(), [2.0, 1.0]);
     }
 
     #[test]
@@ -720,7 +794,11 @@ mod tests {
     fn a_sidecar_line_reads_back_as_written() {
         let lines = [
             SidecarLine::Progress { stage: Stage::Speech, done: 2, total: 9 },
-            SidecarLine::Result { utterances: vec![Utterance { speaker: 1, start: 0.5, end: 1.0, text: "да".into() }], seconds: 3.0 },
+            SidecarLine::Result(Recognized {
+                utterances: vec![Utterance { speaker: 1, start: 0.5, end: 1.0, text: "да".into() }],
+                seconds: 3.0,
+                voices: vec![vec![0.6, 0.8]],
+            }),
             SidecarLine::Error { message: "x".into() },
         ];
         for line in lines {

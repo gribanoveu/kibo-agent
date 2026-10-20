@@ -55,3 +55,4 @@ pub mod paths;
 pub mod speech;
 pub mod meeting_process;
 pub mod meeting_store;
+pub mod voices_store;

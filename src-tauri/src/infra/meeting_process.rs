@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use crate::domain::meeting::{MeetingError, SidecarLine, Stage, Utterance, SIDECAR_FLAG};
+use crate::domain::meeting::{MeetingError, Recognized, SidecarLine, Stage, SIDECAR_FLAG};
 
 /// The process while one runs: one at a time, and [`Running::stop`] kills it.
 #[derive(Default)]
@@ -22,7 +22,7 @@ impl Running {
     }
 }
 
-/// Every utterance of `audio` and how long it is, recognized by `exe` — the
+/// `audio` recognized by `exe` — the
 /// app's own, or a stand-in under test.
 pub fn recognize(
     running: &Running,
@@ -30,7 +30,7 @@ pub fn recognize(
     audio: &Path,
     models: &Path,
     progress: &mut dyn FnMut(Stage, usize, usize),
-) -> Result<(Vec<Utterance>, f32), MeetingError> {
+) -> Result<Recognized, MeetingError> {
     let stdout = {
         let mut slot = running.0.lock().unwrap_or_else(|e| e.into_inner());
         if slot.is_some() {
@@ -55,7 +55,7 @@ pub fn recognize(
     for line in stdout.into_iter().flat_map(|out| BufReader::new(out).lines().map_while(Result::ok)) {
         match serde_json::from_str::<SidecarLine>(&line) {
             Ok(SidecarLine::Progress { stage, done, total }) => progress(stage, done, total),
-            Ok(SidecarLine::Result { utterances, seconds }) => result = Some((utterances, seconds)),
+            Ok(SidecarLine::Result(recognized)) => result = Some(recognized),
             Ok(SidecarLine::Error { message }) => error = Some(message),
             Err(_) => eprintln!("meeting sidecar: {line}"),
         }
@@ -76,6 +76,7 @@ pub fn recognize(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::domain::meeting::Utterance;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -90,7 +91,7 @@ mod tests {
         path
     }
 
-    fn run(running: &Running, exe: &Path) -> (Result<(Vec<Utterance>, f32), MeetingError>, Vec<(Stage, usize, usize)>) {
+    fn run(running: &Running, exe: &Path) -> (Result<Recognized, MeetingError>, Vec<(Stage, usize, usize)>) {
         let mut seen = Vec::new();
         let result = recognize(running, exe, Path::new("a.wav"), Path::new("models"), &mut |s, d, t| seen.push((s, d, t)));
         (result, seen)
@@ -106,9 +107,11 @@ echo '{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"
         );
         let running = Running::default();
         let (result, seen) = run(&running, &exe);
-        assert_eq!(result.unwrap(), (vec![Utterance { speaker: 0, start: 0.0, end: 1.0, text: "да".into() }], 3.5));
+        let recognized = result.unwrap();
+        assert_eq!(recognized.utterances, [Utterance { speaker: 0, start: 0.0, end: 1.0, text: "да".into() }]);
+        assert_eq!((recognized.seconds, recognized.voices), (3.5, vec![]), "a result without voices still reads");
         assert_eq!(seen, [(Stage::Speech, 1, 2)]);
-        assert_eq!(run(&running, &exe).0.map(|r| r.1), Ok(3.5), "the slot is free again");
+        assert_eq!(run(&running, &exe).0.map(|r| r.seconds), Ok(3.5), "the slot is free again");
     }
 
     #[test]

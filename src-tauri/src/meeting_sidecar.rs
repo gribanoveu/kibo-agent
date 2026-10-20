@@ -21,8 +21,8 @@ pub fn main(args: &[String]) -> i32 {
     };
     let mut progress = |stage, done, total| emit(&SidecarLine::Progress { stage, done, total });
     match speech::recognize(Path::new(audio), Path::new(models), &mut progress) {
-        Ok((utterances, seconds)) => {
-            emit(&SidecarLine::Result { utterances, seconds });
+        Ok(recognized) => {
+            emit(&SidecarLine::Result(recognized));
             0
         }
         Err(e) => {
