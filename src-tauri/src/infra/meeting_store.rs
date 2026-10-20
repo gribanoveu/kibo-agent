@@ -44,32 +44,19 @@ pub fn audio(id: &str) -> Result<PathBuf, MeetingError> {
 /// Newest first. A meeting that does not read is skipped, not the list.
 // ponytail: every file is read in full for its row; keep an index when there are hundreds.
 pub fn list() -> Result<Vec<MeetingInfo>, MeetingError> {
-    let dir = dir()?;
-    let entries = match fs::read_dir(&dir) {
+    let entries = match fs::read_dir(dir()?) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(store(e)),
     };
-    let paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.iter().filter(|p| p.extension().is_some_and(|x| x == "json")).for_each(|p| into_folder(&dir, p));
-    let mut rows: Vec<MeetingInfo> = paths
-        .iter()
-        .filter_map(|p| fs::read(p.with_extension("").join(MEETING)).ok())
+    let mut rows: Vec<MeetingInfo> = entries
+        .flatten()
+        .filter_map(|e| fs::read(e.path().join(MEETING)).ok())
         .filter_map(|bytes| serde_json::from_slice::<Meeting>(&bytes).ok())
         .map(|m| m.info())
         .collect();
     rows.sort_by(|a, b| b.created.cmp(&a.created));
     Ok(rows)
-}
-
-/// A meeting from before folders — `<id>.json`, no recording — moved into its own.
-// ponytail: only the experimental branch's first builds wrote these; drop with them.
-fn into_folder(dir: &Path, file: &Path) {
-    let Some(id) = file.file_stem().and_then(|s| s.to_str()) else { return };
-    let Ok(folder) = folder(dir, id) else { return };
-    if fs::create_dir_all(&folder).is_ok() {
-        let _ = fs::rename(file, folder.join(MEETING));
-    }
 }
 
 pub fn get(id: &str) -> Result<Meeting, MeetingError> {
@@ -135,16 +122,10 @@ mod tests {
     }
 
     #[test]
-    fn a_meeting_saved_before_folders_moves_into_its_own() {
-        with_app_dir("meeting-store-old", || {
-            fs::create_dir_all(dir().unwrap()).unwrap();
-            fs::write(dir().unwrap().join("ee.json"), serde_json::to_vec(&meeting("ee", "2026-10-01T10:00:00Z")).unwrap()).unwrap();
-            fs::write(dir().unwrap().join("x.y.json"), "{}").unwrap();
-            assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["ee"]);
-            assert_eq!(get("ee").unwrap(), meeting("ee", "2026-10-01T10:00:00Z"));
-            assert!(!dir().unwrap().join("ee.json").exists());
-            assert!(dir().unwrap().join("x.y.json").exists(), "not one of ours, not moved");
-        });
+    fn the_folder_is_the_one_delete_data_removes() {
+        use crate::domain::features::Feature;
+        assert_eq!(Feature::MeetingNotes.manifest().data, Some(DIR));
+        assert_eq!(Feature::VoiceMemory.manifest().data, Some(crate::infra::voices_store::FILE));
     }
 
     #[test]

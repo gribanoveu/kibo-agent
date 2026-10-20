@@ -6,11 +6,11 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::domain::features::Feature;
 use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
 use crate::domain::meeting::{self, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
-use crate::infra::meeting_process::{self, Running};
-use crate::domain::features::Feature;
 use crate::domain::voices::VoiceInfo;
+use crate::infra::meeting_process::{self, Running};
 use crate::infra::{meeting_store, speech, voices_store};
 use crate::services::features;
 use crate::services::llm_session::{self, LlmSession};
@@ -167,9 +167,10 @@ fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &MeetingEventSin
         transcript
     } else {
         let parts = meeting::parts(&lines, meeting::budget(session.context_limit));
+        let read = |done| sink(MeetingEvent::Progress { id: meeting.id.clone(), name: meeting.name.clone(), stage: Stage::Notes, done, total: parts.len() });
         let mut notes = Vec::with_capacity(parts.len());
         for (i, part) in parts.iter().enumerate() {
-            sink(MeetingEvent::Progress { id: meeting.id.clone(), name: meeting.name.clone(), stage: Stage::Notes, done: i, total: parts.len() });
+            read(i);
             let request = ChatRequest {
                 messages: vec![LlmMessage::system(meeting::PART_INSTRUCTIONS), LlmMessage::user(part.clone())],
                 tools: Vec::new(),
@@ -182,7 +183,7 @@ fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &MeetingEventSin
             notes.push(format!("### Part {} of {}\n\n{}", i + 1, parts.len(), response.content.unwrap_or_default().trim()));
         }
         // Every part read: what follows is the notes of the whole.
-        sink(MeetingEvent::Progress { id: meeting.id.clone(), name: meeting.name.clone(), stage: Stage::Notes, done: parts.len(), total: parts.len() });
+        read(parts.len());
         format!("{}\n\n{}", meeting::PARTS_PREFACE, notes.join("\n\n"))
     };
     meeting::fits(&input, session.context_limit)?;

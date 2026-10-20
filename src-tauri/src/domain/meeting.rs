@@ -122,7 +122,7 @@ pub enum MeetingError {
     NameTooLong(usize),
 }
 
-/// A recording made into notes. The sound itself is not kept.
+/// A recording made into notes. Its sound is kept beside it (`infra::meeting_store`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Meeting {
@@ -446,13 +446,7 @@ pub fn spectral(embeddings: &[Vec<f32>]) -> Vec<usize> {
     if n < 3 {
         return vec![0; n];
     }
-    let unit: Vec<Vec<f64>> = embeddings
-        .iter()
-        .map(|e| {
-            let norm = e.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt().max(1e-9);
-            e.iter().map(|x| *x as f64 / norm).collect()
-        })
-        .collect();
+    let unit: Vec<Vec<f64>> = embeddings.iter().map(|e| unit_length(e.iter().map(|x| *x as f64).collect())).collect();
     let cosine = DMatrix::from_fn(n, n, |i, j| unit[i].iter().zip(&unit[j]).map(|(a, b)| a * b).sum::<f64>());
     let max_k = MAX_SPEAKERS.min(n - 1);
     let mut best: Option<(f64, usize, DMatrix<f64>)> = None;
@@ -486,19 +480,24 @@ pub fn spectral(embeddings: &[Vec<f32>]) -> Vec<usize> {
 /// Each label's mean embedding, unit length, labels from 0 — a label with no
 /// window is all zeros.
 pub fn centroids(embeddings: &[Vec<f32>], labels: &[usize]) -> Vec<Vec<f32>> {
+    let unit: Vec<Vec<f64>> = embeddings.iter().map(|e| unit_length(e.iter().map(|x| *x as f64).collect())).collect();
     let count = labels.iter().max().map_or(0, |m| m + 1);
-    let width = embeddings.first().map_or(0, Vec::len);
-    (0..count)
-        .map(|c| {
-            let mut sum = vec![0.0f64; width];
-            for (e, _) in embeddings.iter().zip(labels).filter(|(_, l)| **l == c) {
-                let norm = e.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt().max(1e-9);
-                sum.iter_mut().zip(e).for_each(|(s, x)| *s += *x as f64 / norm);
-            }
-            let norm = sum.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-9);
-            sum.iter().map(|x| (x / norm) as f32).collect()
-        })
-        .collect()
+    (0..count).map(|c| mean_of(&unit, labels, c).into_iter().map(|x| x as f32).collect()).collect()
+}
+
+/// `v` scaled to unit length; all zeros stays so.
+fn unit_length(v: Vec<f64>) -> Vec<f64> {
+    let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-9);
+    v.into_iter().map(|x| x / norm).collect()
+}
+
+/// The unit mean of the rows labeled `label`.
+fn mean_of(unit: &[Vec<f64>], labels: &[usize], label: usize) -> Vec<f64> {
+    let mut sum = vec![0.0; unit.first().map_or(0, Vec::len)];
+    for (row, _) in unit.iter().zip(labels).filter(|(_, l)| **l == label) {
+        sum.iter_mut().zip(row).for_each(|(s, x)| *s += x);
+    }
+    unit_length(sum)
 }
 
 /// Clusters whose mean voices are this alike are one person. The eigengap
@@ -512,17 +511,7 @@ fn merge_same_voices(unit: &[Vec<f64>], mut labels: Vec<usize>) -> Vec<usize> {
         let mut ids: Vec<usize> = labels.clone();
         ids.sort_unstable();
         ids.dedup();
-        let centers: Vec<Vec<f64>> = ids
-            .iter()
-            .map(|&c| {
-                let mut v = vec![0.0; unit[0].len()];
-                for (i, _) in labels.iter().enumerate().filter(|(_, l)| **l == c) {
-                    v.iter_mut().zip(&unit[i]).for_each(|(a, b)| *a += b);
-                }
-                let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-9);
-                v.iter().map(|x| x / norm).collect()
-            })
-            .collect();
+        let centers: Vec<Vec<f64>> = ids.iter().map(|&c| mean_of(unit, &labels, c)).collect();
         let cosine = |a: usize, b: usize| centers[a].iter().zip(&centers[b]).map(|(x, y)| x * y).sum::<f64>();
         let closest = (0..ids.len())
             .flat_map(|a| (a + 1..ids.len()).map(move |b| (a, b)))
@@ -588,8 +577,7 @@ fn first_seen_order(labels: &[usize]) -> Vec<usize> {
 
 /// Each word goes to the speaker whose segment it overlaps most — outside
 /// every segment the overlap is minus the gap, so that is the nearest one;
-/// consecutive words of one speaker, with no
-/// long pause between, are one utterance.
+/// consecutive words of one speaker, with no long pause between, are one utterance.
 pub fn utterances(words: &[Word], segments: &[Segment]) -> Vec<Utterance> {
     let mut out: Vec<Utterance> = Vec::new();
     for w in words {

@@ -9,7 +9,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useFeatures } from "../hooks/useFeatures";
 import { useVoices } from "../hooks/useVoices";
 import { usePlayer, type Player } from "../hooks/usePlayer";
-import { audioUrl, meetingTitle, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
+import { audioUrl, meetingTitle, speakerCount, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
@@ -21,6 +21,9 @@ const STAGES: Record<Stage, string> = {
 };
 /** In the order they run: the progress card's segments. */
 const STEPS: Stage[] = ["decode", "speech", "speakers", "notes"];
+
+/** A speaker's colour class: six, then round again. */
+const tone = (speaker: number) => `speaker-${speaker % 6}`;
 
 /** `m:ss`, or `h:mm:ss` past an hour. */
 export function clock(seconds: number): string {
@@ -66,7 +69,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         </button>
       )}
       {!openId && (
-        <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.add()}>
+        <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.importRecording()}>
           <Plus size={14} />
           Import recording
         </button>
@@ -175,10 +178,11 @@ function share({ stage, done = 0, total = 0 }: Job): number | null {
 function JobCard({ job, title, onStop }: { job: Job; title: string; onStop: () => void }) {
   const { stage, done = 0, total = 0 } = job;
   const at = stage ? STEPS.indexOf(stage) : -1;
-  const part = share(job);
+  // Every voice embedded, the clustering runs and says nothing until done.
   const grouping = stage === "speakers" && total > 0 && done >= total;
+  const part = grouping ? null : share(job);
   const label = grouping ? "Grouping the voices" : stage ? STAGES[stage] : "Starting";
-  const detail = stage === "notes" && part !== null ? ` part ${done + 1} of ${total}` : part !== null && !grouping ? ` ${Math.round(100 * part)}%` : "";
+  const detail = part === null ? "" : stage === "notes" ? ` part ${done + 1} of ${total}` : ` ${Math.round(100 * part)}%`;
   return (
     <div className="meetings-job" role="status">
       <span className="meetings-job-icon" aria-hidden>
@@ -200,8 +204,8 @@ function JobCard({ job, title, onStop }: { job: Job; title: string; onStop: () =
           {STEPS.map((step, i) => (
             <span key={step} className="meetings-job-segment" title={STAGES[step]}>
               <span
-                className={`meetings-job-fill${i === at && (part === null || grouping) ? " busy" : ""}`}
-                style={{ width: i < at ? "100%" : i === at && part !== null && !grouping ? `${100 * part}%` : i === at ? "100%" : "0%" }}
+                className={`meetings-job-fill${i === at && part === null ? " busy" : ""}`}
+                style={{ width: `${i < at ? 100 : i === at ? 100 * (part ?? 1) : 0}%` }}
               />
             </span>
           ))}
@@ -323,7 +327,7 @@ function MeetingView({
 }) {
   const { copied, copy } = useCopied();
   const notes = writing ? withoutTitle(draft ?? "") : meeting.summary;
-  const speakers = Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
+  const speakers = speakerCount(meeting);
   return (
     <article className="meeting" aria-label={meetingTitle(meeting)}>
       <header className="meeting-head">
@@ -388,7 +392,7 @@ function MeetingView({
               <div key={turn.start} className={`meeting-turn${now ? " now" : ""}`}>
                 <button
                   type="button"
-                  className={`meeting-avatar speaker-${turn.speaker % 6}`}
+                  className={`meeting-avatar ${tone(turn.speaker)}`}
                   aria-label={`Play from ${clock(turn.start)}`}
                   title={`Play from ${clock(turn.start)}`}
                   disabled={player.missing}
@@ -399,7 +403,7 @@ function MeetingView({
                 </button>
                 <div className="meeting-turn-body">
                   <div className="meeting-turn-head">
-                    <span className={`meeting-speaker speaker-${turn.speaker % 6}`}>{speakerName(meeting, turn.speaker)}</span>
+                    <span className={`meeting-speaker ${tone(turn.speaker)}`}>{speakerName(meeting, turn.speaker)}</span>
                     <span className="meeting-time">{clock(turn.start)}</span>
                   </div>
                   {turn.texts.map((text, i) => (
@@ -435,10 +439,9 @@ const initial = (meeting: Meeting, speaker: number) => meeting.names?.[speaker]?
     notes. Two given one name are one person the recognition split in two. */
 function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker: number, name: string) => void }) {
   const [editing, setEditing] = useState<number | null>(null);
-  const count = Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
   return (
     <div className="meeting-speakers" aria-label="Speakers" title="Click a name to rename the speaker">
-      {Array.from({ length: count }, (_, speaker) =>
+      {Array.from({ length: speakerCount(meeting) }, (_, speaker) =>
         editing === speaker ? (
           <NameEditor
             key={speaker}
@@ -454,7 +457,7 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
           <button
             key={speaker}
             type="button"
-            className={`meeting-speaker-chip speaker-${speaker % 6}${meeting.guessed?.includes(speaker) ? " guessed" : ""}`}
+            className={`meeting-speaker-chip ${tone(speaker)}${meeting.guessed?.includes(speaker) ? " guessed" : ""}`}
             title={meeting.guessed?.includes(speaker) ? "Recognized by voice — click to keep or correct" : "Rename"}
             onClick={() => setEditing(speaker)}
           >

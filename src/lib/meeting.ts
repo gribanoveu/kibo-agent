@@ -36,6 +36,9 @@ export type VoiceInfo = { id: string; name: string; meetings: number };
 /** The user's name for a speaker, or `Speaker N` from 1 — as the notes call whoever is not named. */
 export const speakerName = (meeting: Meeting, speaker: number) => meeting.names?.[speaker] ?? `Speaker ${speaker + 1}`;
 
+/** How many speakers there are: numbered from 0, the highest one plus one. */
+export const speakerCount = (meeting: Meeting) => Math.max(0, ...meeting.utterances.map((u) => u.speaker + 1));
+
 /** What a meeting is called: its title, or its file's name until the notes give it one. */
 export const meetingTitle = (m: { name: string; title?: string }) => m.title ?? m.name;
 

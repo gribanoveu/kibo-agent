@@ -69,6 +69,6 @@ const RECORDINGS = ["wav", "mp3", "m4a", "mp4", "mov", "aac", "flac", "ogg", "mk
  */
 export async function pickRecording(): Promise<string | null> {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return null;
-  const chosen = await open({ multiple: false, title: "Add a recording", filters: [{ name: "Recordings", extensions: RECORDINGS }] });
+  const chosen = await open({ multiple: false, title: "Import a recording", filters: [{ name: "Recordings", extensions: RECORDINGS }] });
   return typeof chosen === "string" ? chosen : null;
 }

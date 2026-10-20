@@ -95,7 +95,7 @@ export function useMeetings() {
     }
   };
 
-  const add = async () => {
+  const importRecording = async () => {
     const path = await pickRecording();
     if (path) await run({ kind: "process" }, () => meetingProcess(path));
   };
@@ -136,7 +136,7 @@ export function useMeetings() {
     job,
     draft: draft && draft.id === openId ? draft.text : null,
     error,
-    add,
+    importRecording,
     summarize,
     stop,
     rename,
