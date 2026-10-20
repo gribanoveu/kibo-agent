@@ -7,9 +7,7 @@ name: Build and Release
 on:
   workflow_dispatch:
   push:
-    # feature/meeting-notes: the experimental build with meeting notes
-    # (docs/36), its installers as artifacts only — `release` skips it.
-    branches: [main, feature/meeting-notes]
+    branches: [main]
     tags:
       - "v*"
 
@@ -38,12 +36,12 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      # Saved from main (and the meeting-notes branch) only: a cache saved under a tag is read by nothing else.
+      # Saved from main only: a cache saved under a tag is read by nothing else.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/meeting-notes' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup NASM (needed by git2 vendored OpenSSL build)
         uses: ilammy/setup-nasm@v1
@@ -64,11 +62,10 @@ jobs:
 
       # Main's build is the next patch with the run number after it: newer than
       # the last release, and numeric after the dash because MSI takes no other.
-      # The meeting-notes build is numbered the same, to install over either.
       - name: Build Tauri app
         shell: bash
         run: |
-          if [ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_REF" = refs/heads/feature/meeting-notes ]; then
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
             v=$(bun -p "require('./src-tauri/tauri.conf.json').version")
             v="${v%.*}.$(( ${v##*.} + 1 ))-$GITHUB_RUN_NUMBER"
             bun run tauri build --config "{\"version\":\"$v\"}"
@@ -104,12 +101,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      # Saved from main (and the meeting-notes branch) only: a cache saved under a tag is read by nothing else.
+      # Saved from main only: a cache saved under a tag is read by nothing else.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/meeting-notes' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -127,11 +124,10 @@ jobs:
 
       # Main's build is the next patch with the run number after it: newer than
       # the last release, and numeric after the dash because MSI takes no other.
-      # The meeting-notes build is numbered the same, to install over either.
       - name: Build Tauri app
         shell: bash
         run: |
-          if [ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_REF" = refs/heads/feature/meeting-notes ]; then
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
             v=$(bun -p "require('./src-tauri/tauri.conf.json').version")
             v="${v%.*}.$(( ${v##*.} + 1 ))-$GITHUB_RUN_NUMBER"
             bun run tauri build --config "{\"version\":\"$v\"}"

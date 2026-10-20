@@ -2,15 +2,8 @@
 
 ## Unreleased
 
-- 2026-10-20 A speaker's name being typed has × to clear it and ✓ to save it, and is saved when you click elsewhere (experimental build)
-- 2026-10-20 A recording being processed shows as a card over the list: its stage, step of four and percentage — telling the voices apart now counts too — with Stop; each meeting says whether it has notes, only a transcript, or notes being written (experimental build)
-- 2026-10-20 Play an open meeting's recording from the bar on top, or from any speaker's turn by its round mark, to hear who it is before naming them (experimental build)
-- 2026-10-20 An open meeting shows its title, date, length and speakers on top, the notes and the transcript in cards under it, and the transcript as speaker turns with a coloured mark for each (experimental build)
-- 2026-10-20 Meetings are listed by day, each by a short title the model gives it with the notes, with the time it was recognized, its length and speakers; "Add recording" is now "Import recording" (experimental build)
-- 2026-10-20 A meeting keeps its own copy of the recording (16 kHz mono WAV, about 115 MB an hour), so the original file can be moved or deleted after it is added; deleting the meeting deletes the copy (experimental build)
-- 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request (experimental build)
-- 2026-10-20 On the Meetings page, rename a speaker above the transcript: the name goes into the transcript and the notes; a call too long for the model's window is summarized part by part (experimental build)
-- 2026-10-20 Turn on Meeting notes in the Catalog to get a Meetings page: add a call's recording and get its notes — summary, decisions, action items — with the transcript, speakers and times under them; the speech is recognized on this computer (experimental build)
+- 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request
+- 2026-10-20 Turn on Meeting notes in the Catalog to get a Meetings page: import a call's recording, sound or video, and get its notes — a title, summary, decisions, action items, open questions — written by the model from a transcript with speakers and times, recognized on this computer. Name a speaker and the transcript and notes follow; play the recording from any turn to hear who it is; a call too long for the model's window is read part by part. Each meeting keeps its own 16 kHz copy of the sound (about 115 MB an hour), and the installers are about 190 MB larger for the speech models
 - 2026-10-20 In a Prototype chat, attach your own pictures or add them in the Assets drawer under the preview: they are kept in the chat's folder, the model puts them on the page by name, and "Save as" carries them inside the file
 - 2026-10-20 A page in the Preview panel can go full screen in the app on macOS, as a presentation does on F
 - 2026-10-19 In a Prototype chat, point at an element in the Preview panel to ask for a change to it alone: it waits over the message box and goes to the model with your message
