@@ -22,13 +22,14 @@ impl Running {
     }
 }
 
-/// `audio` recognized by `exe` — the
-/// app's own, or a stand-in under test.
+/// `audio` recognized by `exe` — the app's own, or a stand-in under test —
+/// and the sound it heard written to `keep`.
 pub fn recognize(
     running: &Running,
     exe: &Path,
     audio: &Path,
     models: &Path,
+    keep: &Path,
     progress: &mut dyn FnMut(Stage, usize, usize),
 ) -> Result<Recognized, MeetingError> {
     let stdout = {
@@ -40,6 +41,7 @@ pub fn recognize(
             .arg(SIDECAR_FLAG)
             .arg(audio)
             .arg(models)
+            .arg(keep)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -85,7 +87,7 @@ mod tests {
     /// A stand-in for the exe: a shell script that checks its arguments and runs `body`.
     fn sidecar(label: &str, body: &str) -> PathBuf {
         let path = crate::testing::temp_dir(label).join("sidecar");
-        let script = format!("#!/bin/sh\n[ \"$1\" = {SIDECAR_FLAG} ] && [ \"$2\" = a.wav ] && [ \"$3\" = models ] || exit 9\n{body}\n");
+        let script = format!("#!/bin/sh\n[ \"$1\" = {SIDECAR_FLAG} ] && [ \"$2\" = a.wav ] && [ \"$3\" = models ] && [ \"$4\" = a.kept.wav ] || exit 9\n{body}\n");
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
@@ -93,7 +95,7 @@ mod tests {
 
     fn run(running: &Running, exe: &Path) -> (Result<Recognized, MeetingError>, Vec<(Stage, usize, usize)>) {
         let mut seen = Vec::new();
-        let result = recognize(running, exe, Path::new("a.wav"), Path::new("models"), &mut |s, d, t| seen.push((s, d, t)));
+        let result = recognize(running, exe, Path::new("a.wav"), Path::new("models"), Path::new("a.kept.wav"), &mut |s, d, t| seen.push((s, d, t)));
         (result, seen)
     }
 

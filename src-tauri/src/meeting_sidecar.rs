@@ -1,5 +1,5 @@
 //! The recognition process: this same exe, started by `infra::meeting_process`
-//! as `<exe> --meeting-sidecar <audio> <models>`. `main.rs` comes here before
+//! as `<exe> --meeting-sidecar <audio> <models> <keep>`. `main.rs` comes here before
 //! any window or Tauri is up.
 //!
 //! A process and not a thread: a crash in the native speech library costs one
@@ -15,12 +15,12 @@ use crate::infra::speech;
 
 /// The process's exit code.
 pub fn main(args: &[String]) -> i32 {
-    let [audio, models] = args else {
-        emit(&SidecarLine::Error { message: format!("usage: {FLAG} <audio> <models>") });
+    let [audio, models, keep] = args else {
+        emit(&SidecarLine::Error { message: format!("usage: {FLAG} <audio> <models> <keep>") });
         return 2;
     };
     let mut progress = |stage, done, total| emit(&SidecarLine::Progress { stage, done, total });
-    match speech::recognize(Path::new(audio), Path::new(models), &mut progress) {
+    match speech::recognize(Path::new(audio), Path::new(models), Path::new(keep), &mut progress) {
         Ok(recognized) => {
             emit(&SidecarLine::Result(recognized));
             0

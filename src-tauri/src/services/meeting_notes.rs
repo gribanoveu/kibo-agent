@@ -47,7 +47,10 @@ impl MeetingNotes {
     }
 
     /// `audio` recognized by `exe`, saved, then summarized; the meeting's id.
-    /// A summary that fails leaves the transcript saved, to summarize again.
+    /// The meeting keeps its own copy of the sound, so `audio` — an imported
+    /// file, or a recording to be thrown away — is not needed after. A summary
+    /// that fails leaves the meeting saved, to summarize again; a recognition
+    /// that fails leaves nothing.
     pub fn process(&self, exe: &Path, models: &Path, audio: &Path, sink: &MeetingEventSink) -> Result<String, MeetingError> {
         let _job = self.begin()?;
         if !speech::has_models(models) {
@@ -55,14 +58,29 @@ impl MeetingNotes {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let recognized = meeting_process::recognize(&self.running, exe, audio, models, &mut |stage, done, total| {
-            sink(MeetingEvent::Progress { id: id.clone(), name: name.clone(), stage, done, total })
+        let meeting = match self.transcribe(exe, models, audio, &id, name, sink) {
+            Ok(meeting) => meeting,
+            Err(e) => {
+                // The copy of the sound, written before the speech was found.
+                let _ = delete_meeting(&id);
+                return Err(e);
+            }
+        };
+        sink(MeetingEvent::Transcribed { id: id.clone() });
+        self.summarize_into(&meeting, sink)?;
+        Ok(id)
+    }
+
+    fn transcribe(&self, exe: &Path, models: &Path, audio: &Path, id: &str, name: String, sink: &MeetingEventSink) -> Result<Meeting, MeetingError> {
+        let keep = meeting_store::audio(id)?;
+        let recognized = meeting_process::recognize(&self.running, exe, audio, models, &keep, &mut |stage, done, total| {
+            sink(MeetingEvent::Progress { id: id.to_string(), name: name.clone(), stage, done, total })
         })?;
         if recognized.utterances.is_empty() {
             return Err(MeetingError::NoSpeech);
         }
         let mut meeting = Meeting {
-            id: id.clone(),
+            id: id.to_string(),
             name,
             created: chrono::Utc::now().to_rfc3339(),
             seconds: recognized.seconds,
@@ -74,15 +92,13 @@ impl MeetingNotes {
         if remembering() {
             let speech = meeting.speech();
             let known = voices_store::update(true, |book| {
-                book.hear(&id, &recognized.voices, &speech);
-                book.recognize(&id)
+                book.hear(id, &recognized.voices, &speech);
+                book.recognize(id)
             })?;
             meeting.guess(known.unwrap_or_default());
         }
         meeting_store::save(&meeting)?;
-        sink(MeetingEvent::Transcribed { id: id.clone() });
-        self.summarize_into(&meeting, sink)?;
-        Ok(id)
+        Ok(meeting)
     }
 
     /// The summary of meeting `id` written again.
@@ -116,7 +132,7 @@ pub fn rename_speaker(id: &str, speaker: usize, name: &str) -> Result<Meeting, M
     Ok(meeting)
 }
 
-/// Meeting `id` gone, and what the voice memory heard in it — on or off.
+/// Meeting `id` gone — its recording too — and what the voice memory heard in it, on or off.
 pub fn delete_meeting(id: &str) -> Result<(), MeetingError> {
     meeting_store::delete(id)?;
     voices_store::update(false, |book| book.forget_meeting(id))?;
@@ -372,6 +388,42 @@ mod tests {
         assert!(matches!(notes.begin(), Err(MeetingError::Busy)));
         drop(job);
         assert!(notes.begin().is_ok());
+    }
+
+    /// A stand-in for the exe that writes the copy of the sound it was given, then says `line`.
+    #[cfg(unix)]
+    fn sidecar(label: &str, line: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testing::temp_dir(label);
+        let exe = dir.join("sidecar");
+        std::fs::write(&exe, format!("#!/bin/sh\nmkdir -p \"$(dirname \"$4\")\" && printf RIFF > \"$4\"\necho '{line}'\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        speech::MODEL_FILES.iter().for_each(|f| std::fs::write(models.join(f), "").unwrap());
+        (exe, models)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recognized_meeting_keeps_its_sound_and_a_failed_one_leaves_nothing() {
+        crate::testing::with_app_dir("meeting-process", || {
+            let (sink, events) = recorder();
+            let (exe, models) = sidecar("meeting-process-ok", r#"{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"да"}],"seconds":1.0}"#);
+            // No model is set up here, so the notes fail — after the meeting is saved.
+            assert!(matches!(MeetingNotes::default().process(&exe, &models, Path::new("/calls/call.m4a"), &sink), Err(MeetingError::Summary(_))));
+            let [MeetingEvent::Transcribed { id }] = &events.lock().unwrap()[..] else { panic!() };
+            let saved = meeting_store::get(id).unwrap();
+            assert_eq!((saved.name.as_str(), saved.seconds), ("call.m4a", 1.0));
+            assert_eq!(std::fs::read(meeting_store::audio(id).unwrap()).unwrap(), b"RIFF");
+
+            for (label, line) in [("meeting-process-error", r#"{"type":"error","message":"no"}"#), ("meeting-process-silent", r#"{"type":"result","utterances":[],"seconds":1.0}"#)] {
+                let (exe, models) = sidecar(label, line);
+                assert!(MeetingNotes::default().process(&exe, &models, Path::new("a.wav"), &sink).is_err());
+            }
+            let left: Vec<_> = std::fs::read_dir(meeting_store::audio(id).unwrap().parent().unwrap().parent().unwrap()).unwrap().collect();
+            assert_eq!(left.len(), 1, "only the recognized one");
+        });
     }
 
     #[test]

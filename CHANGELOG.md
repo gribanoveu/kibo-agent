@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-20 A meeting keeps its own copy of the recording (16 kHz mono WAV, about 115 MB an hour), so the original file can be moved or deleted after it is added; deleting the meeting deletes the copy (experimental build)
 - 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request (experimental build)
 - 2026-10-20 On the Meetings page, rename a speaker above the transcript: the name goes into the transcript and the notes; a call too long for the model's window is summarized part by part (experimental build)
 - 2026-10-20 Turn on Meeting notes in the Catalog to get a Meetings page: add a call's recording and get its notes — summary, decisions, action items — with the transcript, speakers and times under them; the speech is recognized on this computer (experimental build)

@@ -72,7 +72,8 @@ impl Feature {
                 name: "Meeting notes",
                 description: "A Meetings page: add a call's recording and get its notes — summary, decisions, action items — \
                     written by the model from a transcript with speakers and times. The speech is recognized on this computer; \
-                    only the transcript goes to the model chosen in Settings.",
+                    only the transcript goes to the model chosen in Settings. Each meeting keeps its own copy of the sound \
+                    (16 kHz mono, about 115 MB an hour), not the file it came from.",
                 enabled_by_default: false,
                 tools: &[],
                 data: Some("meetings"),

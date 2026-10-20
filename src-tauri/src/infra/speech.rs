@@ -15,6 +15,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
 use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Stage, Word};
+use crate::infra::app_dir;
 
 const SAMPLE_RATE: u32 = 16_000;
 /// The whole recording goes through GigaAM in windows this long, each starting
@@ -43,8 +44,10 @@ pub fn has_models(dir: &Path) -> bool {
     MODEL_FILES.iter().all(|f| dir.join(f).is_file())
 }
 
-/// Every utterance of `audio`, speakers numbered by who spoke first, and their voices.
-pub fn recognize(audio: &Path, models: &Path, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
+/// Every utterance of `audio`, speakers numbered by who spoke first, and their
+/// voices. The sound the models heard is written to `keep` — the meeting's own
+/// copy, so the original file is not needed after.
+pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
     if !has_models(models) {
         return Err(MeetingError::ModelsMissing);
     }
@@ -53,6 +56,7 @@ pub fn recognize(audio: &Path, models: &Path, progress: &mut dyn FnMut(Stage, us
     let (raw, rate) = decode(audio)?;
     let samples = to_16k(&raw, rate)?;
     drop(raw);
+    app_dir::write_private(keep, &wav(&samples)?).map_err(MeetingError::Store)?;
     progress(Stage::Decode, 1, 1);
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
@@ -127,6 +131,29 @@ fn to_16k(samples: &[f32], rate: u32) -> Result<Vec<f32>, MeetingError> {
     Ok(resampler.resample(samples, true))
 }
 
+/// 16 kHz mono 16-bit PCM WAV: 32 KB a second, 115 MB an hour.
+fn wav(samples: &[f32]) -> Result<Vec<u8>, MeetingError> {
+    let data = u32::try_from(samples.len() * 2).map_err(|_| MeetingError::Unreadable("longer than a WAV file holds".into()))?;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes()); // the format chunk's size
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    out.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes()); // bytes a second
+    out.extend_from_slice(&2u16.to_le_bytes()); // bytes a frame
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits a sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    for s in samples {
+        // Past ±1 is clipped: `as` saturates.
+        out.extend_from_slice(&((s * i16::MAX as f32) as i16).to_le_bytes());
+    }
+    Ok(out)
+}
+
 fn path(dir: &Path, name: &str) -> Option<String> {
     Some(dir.join(name).to_string_lossy().into_owned())
 }
@@ -195,4 +222,25 @@ fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Res
     let labels = meeting::spectral(&embeddings);
     let voices = meeting::centroids(&embeddings, &labels);
     Ok((windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect(), voices))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_kept_copy_reads_back_as_the_sound_the_models_heard() {
+        let samples: Vec<f32> = (0..SAMPLE_RATE).map(|i| (i as f32 / 20.0).sin() * 0.5).chain([2.0, -2.0]).collect();
+        let path = crate::testing::temp_dir("speech-wav").join("audio.wav");
+        let bytes = wav(&samples).unwrap();
+        assert_eq!(bytes.len(), 44 + 2 * samples.len());
+        // What symphonia does not read and a player may: 32000 bytes a second, 2 a frame.
+        assert_eq!(bytes[28..34], [0x00, 0x7d, 0, 0, 2, 0]);
+        std::fs::write(&path, bytes).unwrap();
+
+        let (back, rate) = decode(&path).unwrap();
+        assert_eq!((rate, back.len()), (SAMPLE_RATE, samples.len()));
+        let worst = samples.iter().zip(&back).map(|(a, b)| (a.clamp(-1.0, 1.0) - b).abs()).fold(0.0, f32::max);
+        assert!(worst < 1e-3, "{worst}");
+    }
 }
