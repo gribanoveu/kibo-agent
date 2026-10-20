@@ -59,3 +59,16 @@ export async function pickFile(title: string): Promise<string | null> {
   const chosen = await open({ directory: false, multiple: false, title });
   return typeof chosen === "string" ? chosen : null;
 }
+
+/** What the recognition reads (symphonia's formats): sound, or a video's sound. */
+const RECORDINGS = ["wav", "mp3", "m4a", "mp4", "mov", "aac", "flac", "ogg", "mkv", "caf"];
+
+/**
+ * The platform's file picker for a call's recording. `null` when the user
+ * cancelled — and outside the app.
+ */
+export async function pickRecording(): Promise<string | null> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return null;
+  const chosen = await open({ multiple: false, title: "Add a recording", filters: [{ name: "Recordings", extensions: RECORDINGS }] });
+  return typeof chosen === "string" ? chosen : null;
+}
