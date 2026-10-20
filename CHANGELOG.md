@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-20 Turn on Meeting notes in the Catalog to get a Meetings page: add a call's recording and get its notes — summary, decisions, action items — with the transcript, speakers and times under them; the speech is recognized on this computer (experimental build)
 - 2026-10-20 In a Prototype chat, attach your own pictures or add them in the Assets drawer under the preview: they are kept in the chat's folder, the model puts them on the page by name, and "Save as" carries them inside the file
 - 2026-10-20 A page in the Preview panel can go full screen in the app on macOS, as a presentation does on F
 - 2026-10-19 In a Prototype chat, point at an element in the Preview panel to ask for a change to it alone: it waits over the message box and goes to the model with your message
