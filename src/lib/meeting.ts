@@ -16,7 +16,9 @@ export type Meeting = {
   id: string;
   /** The recording's file name. */
   name: string;
-  /** RFC 3339. */
+  /** A few words on what it was about, written with the notes. */
+  title?: string;
+  /** When it was recognized, RFC 3339. */
   created: string;
   seconds: number;
   utterances: Utterance[];
@@ -33,9 +35,17 @@ export type VoiceInfo = { id: string; name: string; meetings: number };
 /** The user's name for a speaker, or `Speaker N` from 1 — as the notes call whoever is not named. */
 export const speakerName = (meeting: Meeting, speaker: number) => meeting.names?.[speaker] ?? `Speaker ${speaker + 1}`;
 
+/** What a meeting is called: its title, or its file's name until the notes give it one. */
+export const meetingTitle = (m: { name: string; title?: string }) => m.title ?? m.name;
+
+/** Notes as they stream, without the `# title` line the model starts them with
+    (`domain::meeting::split_title` takes it off the saved ones). */
+export const withoutTitle = (notes: string) => notes.replace(/^\s*#(?!#)[^\n]*(\n|$)/, "").trimStart();
+
 export type MeetingInfo = {
   id: string;
   name: string;
+  title?: string;
   created: string;
   seconds: number;
   speakers: number;

@@ -88,6 +88,7 @@ impl MeetingNotes {
             summary: None,
             names: Default::default(),
             guessed: Vec::new(),
+            title: None,
         };
         if remembering() {
             let speech = meeting.speech();
@@ -113,7 +114,7 @@ impl MeetingNotes {
         // Read again: a speaker renamed while the notes were written keeps the name.
         // ponytail: read, change, write without a lock; one per meeting if two writers ever race.
         let mut now = meeting_store::get(&meeting.id)?;
-        now.summary = Some(meeting::renamed_since(&summary, meeting, &now));
+        now.take_notes(&summary, meeting);
         meeting_store::save(&now)
     }
 }
@@ -259,6 +260,7 @@ mod tests {
             summary: None,
             names: Default::default(),
             guessed: Vec::new(),
+            title: None,
         }
     }
 

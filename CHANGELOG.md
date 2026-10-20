@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-20 Meetings are listed by a short title the model gives them with the notes, with the date and time they were recognized; "Add recording" is now "Import recording" (experimental build)
 - 2026-10-20 A meeting keeps its own copy of the recording (16 kHz mono WAV, about 115 MB an hour), so the original file can be moved or deleted after it is added; deleting the meeting deletes the copy (experimental build)
 - 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request (experimental build)
 - 2026-10-20 On the Meetings page, rename a speaker above the transcript: the name goes into the transcript and the notes; a call too long for the model's window is summarized part by part (experimental build)

@@ -13,6 +13,7 @@ use nalgebra::{DMatrix, SymmetricEigen};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::chat_record;
 use super::compaction;
 use super::voices::{Speech, MIN_PHRASE_WORDS};
 
@@ -128,7 +129,10 @@ pub struct Meeting {
     pub id: String,
     /// The recording's file name.
     pub name: String,
-    /// RFC 3339.
+    /// A few words on what it was about, written with the notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// When it was recognized, RFC 3339.
     pub created: String,
     pub seconds: f32,
     pub utterances: Vec<Utterance>,
@@ -149,6 +153,8 @@ pub struct Meeting {
 pub struct MeetingInfo {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub created: String,
     pub seconds: f32,
     pub speakers: usize,
@@ -217,10 +223,20 @@ impl Meeting {
         Ok(())
     }
 
+    /// `notes` as the model wrote them while the meeting was `written`: their
+    /// title line is its title — the one it had stays when they have none —
+    /// and a speaker renamed since is called by the new name.
+    pub fn take_notes(&mut self, notes: &str, written: &Meeting) {
+        let (title, notes) = split_title(notes);
+        self.title = title.or(self.title.take());
+        self.summary = Some(renamed_since(&notes, written, self));
+    }
+
     pub fn info(&self) -> MeetingInfo {
         MeetingInfo {
             id: self.id.clone(),
             name: self.name.clone(),
+            title: self.title.clone(),
             created: self.created.clone(),
             seconds: self.seconds,
             speakers: self.speakers(),
@@ -249,7 +265,8 @@ Speakers are numbered; when the conversation shows who someone is (\"Albina, can
 Anyone not named stays exactly as the transcript has them — \"Speaker 3\", in English whatever the notes' language — \
 so the reader can find them in it.
 
-Write Markdown with these sections, the headings in the language of the notes:
+Begin with one line: `# ` and a name for the meeting by what it was about, 3 to 6 words, no quotes, no trailing period.
+Then Markdown with these sections, the headings in the language of the notes:
 ## Summary — what the meeting was about and where it ended, in a few sentences.
 ## Decisions — only what was plainly agreed, one bullet each. A proposal, a \"maybe\" or \"one of the options\" \
 is not a decision: it goes to Open questions.
@@ -265,6 +282,16 @@ pub fn summary_instructions(reply_language: Option<&str>) -> String {
         Some(language) => format!("{SUMMARY_INSTRUCTIONS}\n\nWrite the notes in {language}."),
         None => format!("{SUMMARY_INSTRUCTIONS}\n\nWrite the notes in the language the meeting was held in."),
     }
+}
+
+/// The notes' first line, `# <title>`, taken off them as the meeting's title;
+/// the notes as they are when they do not start with one.
+pub fn split_title(notes: &str) -> (Option<String>, String) {
+    let Some(rest) = notes.trim_start().strip_prefix('#').filter(|rest| !rest.starts_with('#')) else {
+        return (None, notes.to_string());
+    };
+    let (line, body) = rest.split_once('\n').unwrap_or((rest, ""));
+    (chat_record::clean_title(line), body.trim().to_string())
 }
 
 /// One line per utterance, `[mm:ss] Name: text` — `Speaker N` for whoever has no name.
@@ -701,6 +728,7 @@ mod tests {
             summary: None,
             names: BTreeMap::new(),
             guessed: Vec::new(),
+            title: None,
         }
     }
 
@@ -775,6 +803,25 @@ mod tests {
         assert!(summary_instructions(Some("Russian")).ends_with("Write the notes in Russian."));
         assert!(summary_instructions(None).ends_with("the language the meeting was held in."));
         assert!(summary_instructions(None).starts_with(SUMMARY_INSTRUCTIONS));
+    }
+
+    #[test]
+    fn notes_taken_give_the_meeting_their_title_or_leave_it_its_own() {
+        let written = meeting_of(vec![Utterance { speaker: 0, start: 0.0, end: 1.0, text: "да".into() }]);
+        let mut now = written.clone();
+        now.names.insert(0, "Оксана".into());
+        now.take_notes("# Выпуск\n\nSpeaker 1 решила.", &written);
+        assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Выпуск"), Some("Оксана решила.")));
+        assert_eq!(now.info().title.as_deref(), Some("Выпуск"), "the list has it too");
+        now.take_notes("## Итоги", &now.clone());
+        assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Выпуск"), Some("## Итоги")));
+    }
+
+    #[test]
+    fn the_title_line_is_taken_off_the_notes() {
+        assert_eq!(split_title("# Выпуск в пятницу.\n\n## Итоги\n- да"), (Some("Выпуск в пятницу".into()), "## Итоги\n- да".into()));
+        assert_eq!(split_title("## Итоги\n- да"), (None, "## Итоги\n- да".into()), "a section is not a title");
+        assert_eq!(split_title(&format!("# {}\n## Итоги", "слово ".repeat(20))), (None, "## Итоги".into()), "too long is no title, still not notes");
     }
 
     #[test]

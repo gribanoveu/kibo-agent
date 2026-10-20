@@ -8,7 +8,7 @@ import { useMeetings, type Job } from "../hooks/useMeetings";
 import { useCopied } from "../hooks/useCopied";
 import { useFeatures } from "../hooks/useFeatures";
 import { useVoices } from "../hooks/useVoices";
-import { speakerName, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
+import { meetingTitle, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
@@ -50,7 +50,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
       )}
       <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.add()}>
         <Plus size={14} />
-        Add recording
+        Import recording
       </button>
       {job && <JobStatus job={job} onStop={meetings.stop} />}
       {remembering && (
@@ -82,7 +82,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         )
       )}
       <Modal
-        title={`Delete ${deleting?.name ?? ""}?`}
+        title={`Delete ${deleting ? meetingTitle(deleting) : ""}?`}
         open={deleting !== null}
         onClose={() => setDeleting(null)}
         footer={
@@ -103,7 +103,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           </>
         }
       >
-        <p className="meetings-confirm">Its transcript and notes go. The recording itself stays where it is.</p>
+        <p className="meetings-confirm">Its transcript, notes and the app's copy of the recording go. The file it was imported from stays where it is.</p>
       </Modal>
     </Page>
   );
@@ -144,7 +144,7 @@ function MeetingList({
   if (list.length === 0) {
     return (
       <p className="meetings-empty">
-        No meetings yet. Add a call's recording — sound or video — and its notes are written here: what was decided, who does what.
+        No meetings yet. Import a call's recording — sound or video — and its notes are written here: what was decided, who does what.
       </p>
     );
   }
@@ -153,13 +153,13 @@ function MeetingList({
       {list.map((m) => (
         <li key={m.id} className="meetings-row">
           <button type="button" className="meetings-row-open" onClick={() => onOpen(m.id)}>
-            <span className="meetings-row-name">{m.name}</span>
+            <span className="meetings-row-name">{meetingTitle(m)}</span>
             <span className="meetings-row-meta">
               {when(m.created)} · {clock(m.seconds)} · {m.speakers} {m.speakers === 1 ? "speaker" : "speakers"}
               {!m.summarized && " · no notes"}
             </span>
           </button>
-          <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${m.name}`} disabled={busy} onClick={() => onDelete(m)}>
+          <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
             <Trash2 size={14} />
           </button>
         </li>
@@ -184,12 +184,13 @@ function MeetingView({
   onRename: (speaker: number, name: string) => void;
 }) {
   const { copied, copy } = useCopied();
-  const notes = writing ? (draft ?? "") : meeting.summary;
+  const notes = writing ? withoutTitle(draft ?? "") : meeting.summary;
   return (
-    <article className="meeting" aria-label={meeting.name}>
+    <article className="meeting" aria-label={meetingTitle(meeting)}>
       <header className="meeting-head">
-        <h2>{meeting.name}</h2>
+        <h2>{meetingTitle(meeting)}</h2>
         <span className="meetings-row-meta">
+          {meeting.title && `${meeting.name} · `}
           {when(meeting.created)} · {clock(meeting.seconds)}
         </span>
       </header>

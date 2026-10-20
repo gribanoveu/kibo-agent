@@ -110,6 +110,7 @@ mod tests {
             summary: None,
             names: Default::default(),
             guessed: Vec::new(),
+            title: None,
         }
     }
 

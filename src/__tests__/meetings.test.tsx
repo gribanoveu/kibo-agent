@@ -15,6 +15,7 @@ let voices: { id: string; name: string; meetings: number }[] = [];
 const info = (m: Meeting) => ({
   id: m.id,
   name: m.name,
+  title: m.title,
   created: m.created,
   seconds: m.seconds,
   speakers: new Set(m.utterances.map((u) => u.speaker)).size,
@@ -113,13 +114,23 @@ describe("the meetings page", () => {
     expect(screen.getByText(/2 speakers/)).toBeTruthy();
   });
 
+  test("a meeting is listed by the title its notes gave it", async () => {
+    stored[0].title = "Выпуск в пятницу";
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(screen.queryByText("planning.wav")).toBeNull();
+    fireEvent.click(screen.getByText("Выпуск в пятницу"));
+    await settle();
+    expect(screen.getByRole("heading", { name: "Выпуск в пятницу" })).toBeTruthy();
+  });
+
   test("a recording added shows its stage, opens on its transcript, and streams only its own notes", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    fireEvent.click(screen.getByText("Add recording"));
+    fireEvent.click(screen.getByText("Import recording"));
     await settle();
     expect(calls.at(-1)).toEqual({ command: "meeting_process", args: { path: "/calls/standup.m4a" } });
-    expect((screen.getByText("Add recording").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Import recording").closest("button") as HTMLButtonElement).disabled).toBe(true);
 
     await emit({ kind: "progress", id: "m2", name: "standup.m4a", stage: "speech", done: 1, total: 4 });
     expect(screen.getByRole("status").textContent).toContain("Recognizing speech… 25%");
@@ -131,15 +142,20 @@ describe("the meetings page", () => {
     expect(screen.getByRole("status").textContent).toContain("Writing the notes");
 
     await emit({ kind: "summaryDelta", id: "m1", text: "someone else's" });
-    await emit({ kind: "summaryDelta", id: "m2", text: "Said hello." });
+    await emit({ kind: "summaryDelta", id: "m2", text: "# Greet" });
+    expect(screen.getByRole("region", { name: "Notes" }).textContent).not.toContain("Greet");
+    await emit({ kind: "summaryDelta", id: "m2", text: "ings\n\nSaid hello." });
     // Streamed text is split into word spans: read the region's text.
     const notes = screen.getByRole("region", { name: "Notes" }).textContent;
     expect(notes).not.toContain("someone else's");
     expect(notes).toContain("Said hello.");
 
     stored[0].summary = "Said hello.";
+    stored[0].title = "Greetings";
     await act(async () => finishProcess({ id: "m2" }));
     await settle();
+    expect(screen.getByRole("heading", { name: "Greetings" })).toBeTruthy();
+    expect(screen.getByText(/standup\.m4a ·/)).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
     expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Write again")).toBeTruthy();
   });
@@ -147,7 +163,7 @@ describe("the meetings page", () => {
   test("a stop is not reported as a failure, a real failure is", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    fireEvent.click(screen.getByText("Add recording"));
+    fireEvent.click(screen.getByText("Import recording"));
     await settle();
     fireEvent.click(screen.getByText("Stop"));
     expect(calls.at(-1)?.command).toBe("meeting_stop");
@@ -155,7 +171,7 @@ describe("the meetings page", () => {
     await settle();
     expect(screen.queryByText("stopped")).toBeNull();
 
-    fireEvent.click(screen.getByText("Add recording"));
+    fireEvent.click(screen.getByText("Import recording"));
     await settle();
     await act(async () => finishProcess({ error: "this recording cannot be read: no audio track" }));
     await settle();
@@ -201,7 +217,7 @@ describe("the meetings page", () => {
   test("a long meeting's notes say which part is being read", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    fireEvent.click(screen.getByText("Add recording"));
+    fireEvent.click(screen.getByText("Import recording"));
     await settle();
     await emit({ kind: "progress", id: "m3", name: "long.m4a", stage: "notes", done: 1, total: 4 });
     expect(screen.getByRole("status").textContent).toContain("Writing the notes… part 2 of 4");
