@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-20 A speaker's name being typed has × to clear it and ✓ to save it, and is saved when you click elsewhere (experimental build)
+- 2026-10-20 A recording being processed shows as a card over the list: its stage, step of four and percentage — telling the voices apart now counts too — with Stop; each meeting says whether it has notes, only a transcript, or notes being written (experimental build)
 - 2026-10-20 Play an open meeting's recording from the bar on top, or from any speaker's turn by its round mark, to hear who it is before naming them (experimental build)
 - 2026-10-20 An open meeting shows its title, date, length and speakers on top, the notes and the transcript in cards under it, and the transcript as speaker turns with a coloured mark for each (experimental build)
 - 2026-10-20 Meetings are listed by day, each by a short title the model gives it with the notes, with the time it was recognized, its length and speakers; "Add recording" is now "Import recording" (experimental build)

@@ -73,22 +73,103 @@
   font-size: var(--fs-sm);
   color: var(--text-faint);
 }
+/* The job running now, a card over the list or the meeting. */
 .meetings-job {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
+  gap: 12px;
+  max-width: 820px;
+  margin-top: 4px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-panel-soft);
 }
-.meetings-job-text {
+.meetings-job-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.meetings-job-icon svg {
+  animation: meetings-spin 1s linear infinite;
+}
+.meetings-job-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.meetings-job-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.meetings-job-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.meetings-job-text b {
-  color: var(--text);
+  font-size: var(--fs-md);
   font-weight: 500;
+  color: var(--text);
+}
+.meetings-job-step,
+.meetings-job-stage {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.meetings-job-step {
+  flex: none;
+  color: var(--text-faint);
+}
+/* One segment a stage: the ones done full, the current one as far as it is. */
+.meetings-job-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 2px;
+}
+.meetings-job-segment {
+  height: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.meetings-job-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+/* A stage that cannot say how far it is. */
+.meetings-job-fill.busy {
+  animation: meetings-pulse 1.2s ease-in-out infinite;
+}
+@keyframes meetings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes meetings-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meetings-job-icon svg,
+  .meetings-job-fill.busy,
+  .meetings-state.writing svg {
+    animation: none;
+  }
 }
 .meetings-error {
   color: var(--red);
@@ -190,13 +271,29 @@
   align-items: center;
   gap: 4px;
 }
-.meetings-row-badge {
+/* Whether the meeting is done: notes, only a transcript, or notes on their way. */
+.meetings-state {
   flex: none;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
   border-radius: var(--radius-pill);
   background: var(--bg-active);
   font-size: var(--fs-xs);
+  font-weight: 500;
   color: var(--text-dim);
+}
+.meetings-state.done {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+}
+.meetings-state.writing {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.meetings-state.writing svg {
+  animation: meetings-spin 1s linear infinite;
 }
 .meetings-row-delete {
   display: grid;
@@ -404,8 +501,45 @@
 .meeting-speaker-input {
   color: var(--text);
   outline: none;
-  border-color: var(--accent);
-  width: 14em;
+  border: none;
+  background: none;
+  padding: 0 2px 0 4px;
+  width: 12em;
+}
+/* The name being typed, with its clear and save icons inside the pill. */
+.meeting-speaker-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+}
+.meeting-speaker-tool {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.meeting-speaker-tool:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.meeting-speaker-tool.accept {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.meeting-speaker-tool.accept:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  opacity: 0.85;
 }
 /* A name the voice memory gave: kept or corrected with a click. */
 .meeting-speaker-chip.guessed {

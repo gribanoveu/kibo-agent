@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { AudioLines, Calendar, ChevronLeft, Clock, Copy, FileAudio, MessageSquareText, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users } from "lucide-react";
+import { AudioLines, Calendar, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, LoaderCircle, MessageSquareText, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -19,6 +19,8 @@ const STAGES: Record<Stage, string> = {
   speakers: "Telling the voices apart",
   notes: "Writing the notes",
 };
+/** In the order they run: the progress card's segments. */
+const STEPS: Stage[] = ["decode", "speech", "speakers", "notes"];
 
 /** `m:ss`, or `h:mm:ss` past an hour. */
 export function clock(seconds: number): string {
@@ -70,7 +72,6 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         </button>
       )}
       {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
-      {job && <JobStatus job={job} onStop={meetings.stop} />}
       {remembering && (
         <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
           <Users size={14} />
@@ -85,9 +86,10 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   return (
     <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
       {openId && <audio {...player.audio} />}
+      {job && <JobCard job={job} title={titleOf(job, meetings.list)} onStop={meetings.stop} />}
       {meetings.error && <p className="meetings-error">{meetings.error}</p>}
       {openId === null ? (
-        <MeetingList list={meetings.list} onOpen={meetings.open} onDelete={setDeleting} busy={job !== null} />
+        <MeetingList list={meetings.list} onOpen={meetings.open} onDelete={setDeleting} job={job} />
       ) : (
         meeting && (
           <MeetingView
@@ -154,23 +156,83 @@ function PlayerBar({ player, seconds }: { player: Player; seconds: number }) {
   );
 }
 
-function JobStatus({ job, onStop }: { job: Job; onStop: () => void }) {
+/** What the job is about: the meeting's title once it is listed, else the recording's file. */
+const titleOf = (job: Job, list: MeetingInfo[]) => {
+  const listed = list.find((m) => m.id === job.id);
+  return listed ? meetingTitle(listed) : (job.name ?? "Recording");
+};
+
+/** How far one stage is, 0 to 1, or `null` when it cannot say. */
+function share({ stage, done = 0, total = 0 }: Job): number | null {
+  if (!total || stage === "decode") return null;
+  // The notes of a long meeting's parts count; the notes of the whole are one stream.
+  if (stage === "notes" && done >= total) return null;
+  return Math.min(1, done / total);
+}
+
+/** The job running now: what it works on, the stage and how far along, one
+    segment a stage, and Stop. */
+function JobCard({ job, title, onStop }: { job: Job; title: string; onStop: () => void }) {
   const { stage, done = 0, total = 0 } = job;
-  const share =
-    stage === "speech" && total
-      ? ` ${Math.round((100 * done) / total)}%`
-      : stage === "notes" && done < total
-        ? ` part ${done + 1} of ${total}`
-        : "";
+  const at = stage ? STEPS.indexOf(stage) : -1;
+  const part = share(job);
+  const grouping = stage === "speakers" && total > 0 && done >= total;
+  const label = grouping ? "Grouping the voices" : stage ? STAGES[stage] : "Starting";
+  const detail = stage === "notes" && part !== null ? ` part ${done + 1} of ${total}` : part !== null && !grouping ? ` ${Math.round(100 * part)}%` : "";
   return (
-    <span className="meetings-job" role="status">
-      <span className="meetings-job-text">
-        {job.name && <b>{job.name}</b>} {job.stage ? `${STAGES[job.stage]}…${share}` : "Starting…"}
+    <div className="meetings-job" role="status">
+      <span className="meetings-job-icon" aria-hidden>
+        <LoaderCircle size={16} />
       </span>
+      <div className="meetings-job-body">
+        <div className="meetings-job-head">
+          <span className="meetings-job-title">{title}</span>
+          {at >= 0 && (
+            <span className="meetings-job-step">
+              Step {at + 1} of {STEPS.length}
+            </span>
+          )}
+        </div>
+        <div className="meetings-job-stage">
+          {label}…{detail}
+        </div>
+        <div className="meetings-job-track">
+          {STEPS.map((step, i) => (
+            <span key={step} className="meetings-job-segment" title={STAGES[step]}>
+              <span
+                className={`meetings-job-fill${i === at && (part === null || grouping) ? " busy" : ""}`}
+                style={{ width: i < at ? "100%" : i === at && part !== null && !grouping ? `${100 * part}%` : i === at ? "100%" : "0%" }}
+              />
+            </span>
+          ))}
+        </div>
+      </div>
       <button type="button" className="btn btn-ghost" onClick={onStop}>
         <Square size={12} />
         Stop
       </button>
+    </div>
+  );
+}
+
+/** Whether a meeting is done: notes written, only its transcript, or notes being written now. */
+function MeetingState({ summarized, writing }: { summarized: boolean; writing: boolean }) {
+  if (writing)
+    return (
+      <span className="meetings-state writing">
+        <LoaderCircle size={11} />
+        Writing notes
+      </span>
+    );
+  return summarized ? (
+    <span className="meetings-state done">
+      <Sparkles size={11} />
+      Notes
+    </span>
+  ) : (
+    <span className="meetings-state">
+      <FileText size={11} />
+      Transcript only
     </span>
   );
 }
@@ -179,13 +241,14 @@ function MeetingList({
   list,
   onOpen,
   onDelete,
-  busy,
+  job,
 }: {
   list: MeetingInfo[];
   onOpen: (id: string) => void;
   onDelete: (m: MeetingInfo) => void;
-  busy: boolean;
+  job: Job | null;
 }) {
+  const busy = job !== null;
   if (list.length === 0) {
     return (
       <p className="meetings-empty">
@@ -227,7 +290,7 @@ function MeetingList({
                       </span>
                     </span>
                   </span>
-                  {!m.summarized && <span className="meetings-row-badge">No notes</span>}
+                  <MeetingState summarized={m.summarized} writing={job?.id === m.id && job.stage === "notes"} />
                 </button>
                 <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
                   <Trash2 size={14} />
@@ -377,23 +440,15 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
     <div className="meeting-speakers" aria-label="Speakers" title="Click a name to rename the speaker">
       {Array.from({ length: count }, (_, speaker) =>
         editing === speaker ? (
-          <input
+          <NameEditor
             key={speaker}
-            className="meeting-speaker-input"
-            aria-label={`Name of speaker ${speaker + 1}`}
-            placeholder={`Speaker ${speaker + 1}`}
-            defaultValue={meeting.names?.[speaker] ?? ""}
-            maxLength={60}
-            autoFocus
-            onKeyDown={(e) => {
-              if (matches(e.nativeEvent, "accept")) {
-                onRename(speaker, e.currentTarget.value);
-                setEditing(null);
-              } else if (matches(e.nativeEvent, "close")) {
-                setEditing(null);
-              }
+            speaker={speaker}
+            name={meeting.names?.[speaker] ?? ""}
+            onSave={(name) => {
+              onRename(speaker, name);
+              setEditing(null);
             }}
-            onBlur={() => setEditing(null)}
+            onClose={() => setEditing(null)}
           />
         ) : (
           <button
@@ -408,6 +463,50 @@ function Speakers({ meeting, onRename }: { meeting: Meeting; onRename: (speaker:
         ),
       )}
     </div>
+  );
+}
+
+/** A speaker's name being typed. Enter or ✓ saves it — a name the voice memory
+    guessed is kept so, unchanged; clicking away saves it only if it changed;
+    Escape leaves it as it was. × empties the field: saved empty, the speaker
+    is its number again. */
+function NameEditor({ speaker, name, onSave, onClose }: { speaker: number; name: string; onSave: (name: string) => void; onClose: () => void }) {
+  const [value, setValue] = useState(name);
+  // Enter, ✓ and Escape each end the edit, and the blur that follows must not end it again.
+  const ended = useRef(false);
+  const end = (save: boolean) => {
+    if (ended.current) return;
+    ended.current = true;
+    if (save) onSave(value);
+    else onClose();
+  };
+  // The buttons take no focus: the field keeps it, and its blur is not a click away.
+  const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+  return (
+    <span className="meeting-speaker-edit">
+      <input
+        className="meeting-speaker-input"
+        aria-label={`Name of speaker ${speaker + 1}`}
+        placeholder={`Speaker ${speaker + 1}`}
+        value={value}
+        maxLength={60}
+        autoFocus
+        onChange={(e) => setValue(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (matches(e.nativeEvent, "accept")) end(true);
+          else if (matches(e.nativeEvent, "close")) end(false);
+        }}
+        onBlur={() => end(value.trim() !== name.trim())}
+      />
+      {value && (
+        <button type="button" className="meeting-speaker-tool" aria-label="Clear" title="Clear" onMouseDown={keepFocus} onClick={() => setValue("")}>
+          <X size={12} />
+        </button>
+      )}
+      <button type="button" className="meeting-speaker-tool accept" aria-label="Save name" title="Save" onMouseDown={keepFocus} onClick={() => end(true)}>
+        <Check size={12} />
+      </button>
+    </span>
   );
 }
 

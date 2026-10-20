@@ -148,6 +148,25 @@ describe("the meetings page", () => {
     expect((screen.getByLabelText("Play from 1:05") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test("each meeting says whether it has notes; the job's stage and share are on its card", async () => {
+    stored.push({ ...structuredClone(call), id: "m0", name: "raw.wav", created: "2026-10-18T09:00:00Z", summary: undefined });
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(screen.getByText("Notes")).toBeTruthy();
+    expect(screen.getByText("Transcript only")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Import recording"));
+    await settle();
+    await emit({ kind: "progress", id: "m2", name: "standup.m4a", stage: "speakers", done: 30, total: 60 });
+    const card = screen.getByRole("status");
+    expect(card.textContent).toContain("standup.m4a");
+    expect(card.textContent).toContain("Step 3 of 4");
+    expect(card.textContent).toContain("Telling the voices apart… 50%");
+    await emit({ kind: "progress", id: "m2", name: "standup.m4a", stage: "speakers", done: 60, total: 60 });
+    expect(screen.getByRole("status").textContent).toContain("Grouping the voices…");
+    expect(screen.getByRole("status").textContent).not.toContain("%");
+  });
+
   test("a meeting is listed by the title its notes gave it", async () => {
     stored[0].title = "Выпуск в пятницу";
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
@@ -248,6 +267,35 @@ describe("the meetings page", () => {
     expect(speakers.getByText("Speaker 1")).toBeTruthy();
   });
 
+  test("a name typed is saved by clicking away or by ✓, unchanged it is not; × clears it", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    const speakers = within(screen.getByLabelText("Speakers"));
+    const renames = () => calls.filter((c) => c.command === "meeting_rename_speaker");
+
+    fireEvent.click(speakers.getByText("Speaker 1"));
+    fireEvent.blur(screen.getByLabelText("Name of speaker 1"));
+    await settle();
+    expect(renames()).toEqual([]);
+
+    fireEvent.click(speakers.getByText("Speaker 1"));
+    fireEvent.change(screen.getByLabelText("Name of speaker 1"), { target: { value: "Оксана" } });
+    fireEvent.blur(screen.getByLabelText("Name of speaker 1"));
+    await settle();
+    expect(renames().at(-1)?.args).toEqual({ id: "m1", speaker: 0, name: "Оксана" });
+
+    fireEvent.click(speakers.getByText("Оксана"));
+    fireEvent.click(screen.getByLabelText("Clear"));
+    expect((screen.getByLabelText("Name of speaker 1") as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByLabelText("Save name"));
+    await settle();
+    expect(renames().at(-1)?.args).toEqual({ id: "m1", speaker: 0, name: "" });
+    expect(renames().length).toBe(2);
+    expect(speakers.getByText("Speaker 1")).toBeTruthy();
+  });
+
   test("a long meeting's notes say which part is being read", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
@@ -293,6 +341,12 @@ describe("the meetings page", () => {
     const speakers = within(screen.getByLabelText("Speakers"));
     expect(speakers.getByText("Илья").getAttribute("title")).toContain("Recognized by voice");
     expect(speakers.getByText("Speaker 1").getAttribute("title")).toBe("Rename");
+
+    // Kept as it is with ✓: the guess becomes the user's.
+    fireEvent.click(speakers.getByText("Илья"));
+    fireEvent.click(screen.getByLabelText("Save name"));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_rename_speaker", args: { id: "m1", speaker: 1, name: "Илья" } });
   });
 
   test("times read as minutes, and hours past an hour", () => {

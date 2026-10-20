@@ -60,9 +60,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn Fn
     progress(Stage::Decode, 1, 1);
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
-    progress(Stage::Speakers, 0, 1);
-    let (segments, voices) = speakers(models, threads, &samples, &words)?;
-    progress(Stage::Speakers, 1, 1);
+    let (segments, voices) = speakers(models, threads, &samples, &words, progress)?;
     Ok(Recognized { utterances: meeting::utterances(&words, &segments), seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
 
@@ -200,12 +198,25 @@ fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32], progress: &mut dy
 
 /// Windows over the words, one voice embedding each, labeled by spectral
 /// clustering; and each label's mean voice.
-fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Result<(Vec<Segment>, Vec<Vec<f32>>), MeetingError> {
+fn speakers(
+    models: &Path,
+    threads: i32,
+    samples: &[f32],
+    words: &[Word],
+    progress: &mut dyn FnMut(Stage, usize, usize),
+) -> Result<(Vec<Segment>, Vec<Vec<f32>>), MeetingError> {
     let config = SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() };
     let extractor = SpeakerEmbeddingExtractor::create(&config).ok_or(MeetingError::ModelFailed("voice"))?;
+    let over = meeting::windows_over(words);
+    let total = over.len();
+    // An hour is thousands of windows: told a hundredth at a time, not each.
+    let step = (total / 100).max(1);
     let mut windows = Vec::new();
     let mut embeddings = Vec::new();
-    for (start, end) in meeting::windows_over(words) {
+    for (i, (start, end)) in over.into_iter().enumerate() {
+        if i % step == 0 {
+            progress(Stage::Speakers, i, total);
+        }
         let from = (start * SAMPLE_RATE as f32) as usize;
         let to = ((end * SAMPLE_RATE as f32) as usize).min(samples.len());
         let Some(stream) = extractor.create_stream() else { continue };
@@ -219,6 +230,7 @@ fn speakers(models: &Path, threads: i32, samples: &[f32], words: &[Word]) -> Res
             embeddings.push(e);
         }
     }
+    progress(Stage::Speakers, total, total);
     let labels = meeting::spectral(&embeddings);
     let voices = meeting::centroids(&embeddings, &labels);
     Ok((windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect(), voices))
