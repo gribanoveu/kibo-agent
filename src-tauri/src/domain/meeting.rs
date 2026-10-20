@@ -6,9 +6,16 @@
 //! models and the process they run in are `infra::speech` and
 //! `meeting_sidecar`.
 
+use std::sync::Arc;
+
 use nalgebra::{DMatrix, SymmetricEigen};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use super::compaction;
+
+/// The first argument that makes the app's exe the recognition process.
+pub const SIDECAR_FLAG: &str = "--meeting-sidecar";
 
 /// How long a token lasts when the model gives only where it starts: one GigaAM
 /// frame is 40 ms, a token rarely less than two.
@@ -77,8 +84,122 @@ pub enum MeetingError {
     ModelFailed(&'static str),
     #[error("recognition failed: {0}")]
     Recognition(String),
+    #[error("no speech was found in the recording")]
+    NoSpeech,
     #[error("stopped")]
     Cancelled,
+    #[error("a recording is already being processed — wait for it or stop it")]
+    Busy,
+    #[error("no meeting {0}")]
+    NotFound(String),
+    #[error("meeting notes: {0}")]
+    Store(String),
+    // ponytail: one request for the whole transcript; summarize it in pieces when a call outgrows the model.
+    #[error("the transcript is about {tokens} tokens, more than the model's window takes ({limit}) — pick a model with a larger one")]
+    TooLong { tokens: usize, limit: usize },
+    #[error("the summary failed: {0}")]
+    Summary(String),
+}
+
+/// A recording made into notes. The sound itself is not kept.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Meeting {
+    pub id: String,
+    /// The recording's file name.
+    pub name: String,
+    /// RFC 3339.
+    pub created: String,
+    pub seconds: f32,
+    pub utterances: Vec<Utterance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// A row of the list: the meeting without its text.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingInfo {
+    pub id: String,
+    pub name: String,
+    pub created: String,
+    pub seconds: f32,
+    pub speakers: usize,
+    pub summarized: bool,
+}
+
+impl Meeting {
+    pub fn info(&self) -> MeetingInfo {
+        MeetingInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            created: self.created.clone(),
+            seconds: self.seconds,
+            speakers: self.utterances.iter().map(|u| u.speaker + 1).max().unwrap_or(0),
+            summarized: self.summary.is_some(),
+        }
+    }
+}
+
+/// What processing a meeting reports, each naming the meeting it is about.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum MeetingEvent {
+    Progress { id: String, name: String, stage: Stage, done: usize, total: usize },
+    /// The transcript is saved: read the meeting again.
+    Transcribed { id: String },
+    /// A piece of the summary as the model writes it.
+    SummaryDelta { id: String, text: String },
+}
+
+pub type MeetingEventSink = Arc<dyn Fn(MeetingEvent) + Send + Sync>;
+
+/// What the summarizer is told. The transcript follows as the user's message.
+pub const SUMMARY_INSTRUCTIONS: &str = "You write the notes of a meeting from its transcript. The transcript was made by \
+speech recognition: words may be misheard and a line may be given to the wrong speaker, so read for what was meant. \
+Speakers are numbered; when the conversation shows who someone is (\"Albina, can you…\"), call them by name.
+
+Write Markdown with these sections, the headings in the language of the notes:
+## Summary — what the meeting was about and where it ended, in a few sentences.
+## Decisions — what was agreed, one bullet each.
+## Action items — who does what, and by when if it was said, one bullet each.
+## Open questions — what was raised and left unresolved.
+
+Leave out a section that has nothing in it. Do not invent names, dates or numbers that are not in the transcript. \
+Reply with the notes only.";
+
+/// What the instructions add about the language to write in.
+pub fn summary_instructions(reply_language: Option<&str>) -> String {
+    match reply_language {
+        Some(language) => format!("{SUMMARY_INSTRUCTIONS}\n\nWrite the notes in {language}."),
+        None => format!("{SUMMARY_INSTRUCTIONS}\n\nWrite the notes in the language the meeting was held in."),
+    }
+}
+
+/// One line per utterance, `[mm:ss] Speaker N: text`, speakers from 1.
+pub fn render_transcript(utterances: &[Utterance]) -> String {
+    utterances.iter().map(|u| format!("[{}] Speaker {}: {}\n", clock(u.start), u.speaker + 1, u.text)).collect()
+}
+
+fn clock(seconds: f32) -> String {
+    let s = seconds.max(0.0) as u64;
+    match s / 3600 {
+        0 => format!("{:02}:{:02}", s / 60, s % 60),
+        h => format!("{h}:{:02}:{:02}", s / 60 % 60, s % 60),
+    }
+}
+
+/// The share of the window the transcript may take; the rest is the notes.
+const TRANSCRIPT_PERCENT: u64 = 75;
+
+/// `transcript` fits the model's window, or how far it does not.
+pub fn fits(transcript: &str, context_limit: Option<u32>) -> Result<(), MeetingError> {
+    let tokens = compaction::estimate_text_tokens(transcript);
+    let limit = compaction::share_of_window(context_limit, TRANSCRIPT_PERCENT);
+    if tokens > limit {
+        return Err(MeetingError::TooLong { tokens, limit });
+    }
+    Ok(())
 }
 
 /// SentencePiece tokens joined into words: `▁` starts one — on the token, or
@@ -386,6 +507,51 @@ mod tests {
         let words = [word(0.0, 0.5, "а"), word(1.0, 1.5, "б"), word(5.0, 5.5, "в"), word(10.5, 11.0, "г")];
         let got: Vec<_> = utterances(&words, &segments).into_iter().map(|u| (u.speaker, u.start, u.end, u.text)).collect();
         assert_eq!(got, [(0, 0.0, 1.5, "а б".to_string()), (0, 5.0, 5.5, "в".to_string()), (1, 10.5, 11.0, "г".to_string())]);
+    }
+
+    fn said(speaker: usize, start: f32, text: &str) -> Utterance {
+        Utterance { speaker, start, end: start + 1.0, text: text.into() }
+    }
+
+    #[test]
+    fn the_transcript_is_a_line_per_utterance_with_its_time_and_speaker_from_one() {
+        let got = render_transcript(&[said(0, 5.4, "Привет."), said(1, 65.0, "Да."), said(0, 3725.0, "Итак.")]);
+        assert_eq!(got, "[00:05] Speaker 1: Привет.\n[01:05] Speaker 2: Да.\n[1:02:05] Speaker 1: Итак.\n");
+    }
+
+    #[test]
+    fn the_notes_are_in_the_chosen_language_or_the_meetings() {
+        assert!(summary_instructions(Some("Russian")).ends_with("Write the notes in Russian."));
+        assert!(summary_instructions(None).ends_with("the language the meeting was held in."));
+        assert!(summary_instructions(None).starts_with(SUMMARY_INSTRUCTIONS));
+    }
+
+    #[test]
+    fn a_transcript_past_its_share_of_the_window_is_too_long() {
+        // 75 % of 1000 tokens, at four characters a token.
+        assert_eq!(fits(&"a".repeat(3000), Some(1000)), Ok(()));
+        assert_eq!(fits(&"a".repeat(3004), Some(1000)), Err(MeetingError::TooLong { tokens: 751, limit: 750 }));
+    }
+
+    #[test]
+    fn a_meetings_row_counts_its_speakers_and_says_if_it_has_notes() {
+        let meeting = Meeting {
+            id: "m".into(),
+            name: "call.wav".into(),
+            created: "2026-10-20T10:00:00Z".into(),
+            seconds: 60.0,
+            utterances: vec![said(0, 0.0, "а"), said(2, 1.0, "б")],
+            summary: None,
+        };
+        let info = meeting.info();
+        assert_eq!((info.speakers, info.summarized), (3, false));
+        assert_eq!(Meeting { summary: Some("x".into()), utterances: vec![], ..meeting }.info().speakers, 0);
+    }
+
+    #[test]
+    fn an_event_names_its_kind_and_meeting() {
+        let event = MeetingEvent::SummaryDelta { id: "m".into(), text: "x".into() };
+        assert_eq!(serde_json::to_string(&event).unwrap(), r#"{"kind":"summaryDelta","id":"m","text":"x"}"#);
     }
 
     #[test]

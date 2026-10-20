@@ -23,6 +23,7 @@ pub mod hooks;
 pub mod processes;
 pub mod agents;
 pub mod board;
+pub mod meeting;
 pub mod features;
 pub mod terminal;
 pub mod git;

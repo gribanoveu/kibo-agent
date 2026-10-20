@@ -202,6 +202,7 @@ fn commands() -> Vec<Command> {
 const SLOW: &[&str] = &[
     "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
     "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",
+    "meeting_store::",
 ];
 
 /// Sync commands that reach one of [`SLOW`] today. Only shrinks.

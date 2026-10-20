@@ -9,10 +9,9 @@
 use std::io::Write;
 use std::path::Path;
 
+pub use crate::domain::meeting::SIDECAR_FLAG as FLAG;
 use crate::domain::meeting::SidecarLine;
 use crate::infra::speech;
-
-pub const FLAG: &str = "--meeting-sidecar";
 
 /// The process's exit code.
 pub fn main(args: &[String]) -> i32 {

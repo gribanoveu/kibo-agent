@@ -167,6 +167,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
+        .manage(std::sync::Arc::new(services::meeting_notes::MeetingNotes::default()))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -350,6 +351,12 @@ pub fn run() {
             commands::agents::agents_list,
             commands::board::board_list,
             commands::board::board_change,
+            commands::meeting::meeting_list,
+            commands::meeting::meeting_get,
+            commands::meeting::meeting_delete,
+            commands::meeting::meeting_process,
+            commands::meeting::meeting_summarize,
+            commands::meeting::meeting_stop,
             commands::features::features_list,
             commands::features::features_set,
             commands::features::features_delete_data,

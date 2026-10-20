@@ -54,7 +54,7 @@ pub fn set(id: &str, on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Removes the feature's file. Only while it is off: the model could be
+/// Removes the feature's file or folder. Only while it is off: the model could be
 /// writing to it.
 pub fn delete_data(id: &str) -> Result<(), String> {
     let feature = Feature::from_id(id).ok_or_else(|| format!("no feature \"{id}\""))?;
@@ -64,7 +64,8 @@ pub fn delete_data(id: &str) -> Result<(), String> {
     let Some(path) = data_path(feature, app_dir::dir().ok().as_deref()) else {
         return Ok(());
     };
-    match std::fs::remove_file(&path) {
+    let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    match removed {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("could not delete {}: {e}", path.display())),
@@ -165,6 +166,11 @@ mod tests {
             // Nothing there is nothing to delete, not a failure.
             delete_data("board").unwrap();
             assert!(set("nope", true).is_err());
+
+            std::fs::create_dir_all(dir.join("meetings")).unwrap();
+            std::fs::write(dir.join("meetings").join("a.json"), "{}").unwrap();
+            delete_data("meeting-notes").unwrap();
+            assert!(!dir.join("meetings").exists(), "a folder goes with what is in it");
         });
     }
 }
