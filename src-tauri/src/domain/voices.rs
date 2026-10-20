@@ -9,10 +9,20 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A speaker's mean voice is kept only past this much speech: a cluster of
-/// a few seconds is word ends and "um", and those look alike in every meeting
-/// (0.91 between two such, docs/36).
-pub const MIN_SPEECH_SECONDS: f32 = 30.0;
+/// A speaker's mean voice is kept only past this much speech, all their
+/// utterances together, and this many words: a cluster of word ends and "um"
+/// looks alike in every meeting (0.91 between two such, docs/36). Words tell
+/// it apart better than time — 14 s of it held 6 words; real people with 17 s
+/// and 20 s, 36 and 42.
+pub const MIN_SPEECH_SECONDS: f32 = 20.0;
+pub const MIN_WORDS: usize = 20;
+
+/// How much a speaker said in a meeting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Speech {
+    pub seconds: f32,
+    pub words: usize,
+}
 /// One person across two meetings was 0.78 alike, different people 0.52 at
 /// most (docs/36): a voice is recognized from here up.
 // ponytail: one pair of recordings set this; measure again as voices pile up.
@@ -62,11 +72,11 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 impl VoiceBook {
     /// Meeting `id`'s speakers with speech enough to learn from, kept; the
-    /// rest are not. `speech` is each speaker's seconds, `voices` their means.
-    pub fn hear(&mut self, id: &str, voices: &[Vec<f32>], speech: &[f32]) {
+    /// rest are not. `speech` is how much each speaker said, `voices` their means.
+    pub fn hear(&mut self, id: &str, voices: &[Vec<f32>], speech: &[Speech]) {
         self.forget_meeting(id);
         for (speaker, vector) in voices.iter().enumerate() {
-            if speech.get(speaker).is_some_and(|s| *s >= MIN_SPEECH_SECONDS) {
+            if speech.get(speaker).is_some_and(|s| s.seconds >= MIN_SPEECH_SECONDS && s.words >= MIN_WORDS) {
                 self.heard.push(Heard { meeting: id.to_string(), speaker, vector: vector.clone(), voice: None });
             }
         }
@@ -162,9 +172,13 @@ mod tests {
         vec![r.cos(), r.sin()]
     }
 
+    fn spoke(seconds: f32) -> Speech {
+        Speech { seconds, words: 100 }
+    }
+
     fn book_with_albina() -> VoiceBook {
         let mut book = VoiceBook::default();
-        book.hear("m1", &[at(0.0), at(90.0)], &[120.0, 40.0]);
+        book.hear("m1", &[at(0.0), at(90.0)], &[spoke(120.0), spoke(40.0)]);
         book.learn("m1", 0, "Альбина");
         book
     }
@@ -172,20 +186,20 @@ mod tests {
     #[test]
     fn a_named_voice_is_known_again_in_the_next_meeting_and_a_stranger_is_not() {
         let mut book = book_with_albina();
-        book.hear("m2", &[at(60.0), at(40.0), at(-30.0)], &[300.0, 90.0, 60.0]);
+        book.hear("m2", &[at(60.0), at(40.0), at(-30.0)], &[spoke(300.0), spoke(90.0), spoke(60.0)]);
         assert_eq!(book.recognize("m2"), [(1, "Альбина".to_string()), (2, "Альбина".to_string())]);
         assert_eq!(book.recognize("m1"), [(0, "Альбина".to_string())]);
 
         // Like both, it is the one it is more like.
         book.learn("m2", 0, "Илья");
-        book.hear("m3", &[at(35.0)], &[60.0]); // 0.82 to Альбина, 0.91 to Илья
+        book.hear("m3", &[at(35.0)], &[spoke(60.0)]); // 0.82 to Альбина, 0.91 to Илья
         assert_eq!(book.recognize("m3"), [(0, "Илья".to_string())]);
     }
 
     #[test]
-    fn a_speaker_heard_briefly_is_not_kept_nor_known() {
+    fn a_speaker_who_said_too_little_or_too_few_words_is_not_kept_nor_known() {
         let mut book = book_with_albina();
-        book.hear("m2", &[at(0.0), at(5.0)], &[29.9, 30.0]);
+        book.hear("m2", &[at(0.0), at(5.0), at(5.0)], &[spoke(19.9), spoke(20.0), Speech { seconds: 60.0, words: 19 }]);
         assert_eq!(book.heard.iter().filter(|h| h.meeting == "m2").map(|h| h.speaker).collect::<Vec<_>>(), [1]);
         assert_eq!(book.recognize("m2"), [(1, "Альбина".to_string())]);
         book.learn("m2", 0, "Илья");
@@ -195,7 +209,7 @@ mod tests {
     #[test]
     fn samples_named_alike_are_one_voice_and_a_rename_moves_one() {
         let mut book = book_with_albina();
-        book.hear("m2", &[at(10.0)], &[60.0]);
+        book.hear("m2", &[at(10.0)], &[spoke(60.0)]);
         book.learn("m2", 0, " альбина ");
         assert_eq!(book.list(), [VoiceInfo { id: book.voices[0].id.clone(), name: "Альбина".into(), meetings: 2 }]);
         book.learn("m2", 0, "Оксана");
@@ -207,7 +221,7 @@ mod tests {
     #[test]
     fn a_deleted_voice_takes_its_samples_and_a_deleted_meeting_what_was_heard_in_it() {
         let mut book = book_with_albina();
-        book.hear("m2", &[at(5.0)], &[60.0]);
+        book.hear("m2", &[at(5.0)], &[spoke(60.0)]);
         book.learn("m2", 0, "Альбина");
         book.delete(&book.voices[0].id.clone());
         assert!(book.voices.is_empty());
@@ -221,7 +235,7 @@ mod tests {
     #[test]
     fn hearing_a_meeting_again_replaces_what_was_heard_in_it() {
         let mut book = book_with_albina();
-        book.hear("m1", &[at(0.0)], &[60.0]);
+        book.hear("m1", &[at(0.0)], &[spoke(60.0)]);
         assert_eq!(book.heard.len(), 1);
         assert!(book.voices.is_empty(), "its name went with it");
     }

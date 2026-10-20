@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::compaction;
+use super::voices::Speech;
 
 /// The first argument that makes the app's exe the recognition process.
 pub const SIDECAR_FLAG: &str = "--meeting-sidecar";
@@ -162,11 +163,12 @@ impl Meeting {
         self.utterances.iter().map(|u| u.speaker + 1).max().unwrap_or(0)
     }
 
-    /// Seconds each speaker spoke, by number.
-    pub fn speech(&self) -> Vec<f32> {
-        let mut out = vec![0.0; self.speakers()];
+    /// How much each speaker said, by number.
+    pub fn speech(&self) -> Vec<Speech> {
+        let mut out = vec![Speech { seconds: 0.0, words: 0 }; self.speakers()];
         for u in &self.utterances {
-            out[u.speaker] += (u.end - u.start).max(0.0);
+            out[u.speaker].seconds += (u.end - u.start).max(0.0);
+            out[u.speaker].words += u.text.split_whitespace().count();
         }
         out
     }
@@ -742,7 +744,7 @@ mod tests {
         assert_eq!(meeting.guessed, [1]);
         meeting.rename(1, "Илья").unwrap();
         assert!(meeting.guessed.is_empty());
-        assert_eq!(meeting.speech(), [2.0, 1.0]);
+        assert_eq!(meeting.speech(), [Speech { seconds: 2.0, words: 2 }, Speech { seconds: 1.0, words: 1 }]);
     }
 
     #[test]

@@ -81,7 +81,7 @@ impl Feature {
                 id: "voice-memory",
                 name: "Voice memory",
                 description: "With Meeting notes: a speaker you name on the Meetings page is named by voice in the next meeting. \
-                    It keeps a voice print of each speaker who talked 30 seconds or more — biometric data about the people on your \
+                    It keeps a voice print of each speaker who said 20 seconds and 20 words or more in a meeting — biometric data about the people on your \
                     calls, so have their consent. Kept on this computer only; Delete data removes every print.",
                 enabled_by_default: false,
                 tools: &[],

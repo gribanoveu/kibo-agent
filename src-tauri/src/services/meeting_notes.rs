@@ -320,6 +320,7 @@ mod tests {
             let mut call = meeting();
             call.id = "a1".into();
             call.utterances[0].end = 61.0;
+            call.utterances[0].text = "слово ".repeat(20);
             meeting_store::save(&call).unwrap();
             voices_store::update(true, |b| b.hear("a1", &[vec![1.0, 0.0]], &call.speech())).unwrap();
 
@@ -340,7 +341,7 @@ mod tests {
         crate::testing::with_app_dir("meeting-voice-delete", || {
             assert_eq!(delete_voice("x").unwrap(), [], "no book is no voices");
             voices_store::update(true, |b| {
-                b.hear("a1", &[vec![1.0, 0.0]], &[60.0]);
+                b.hear("a1", &[vec![1.0, 0.0]], &[crate::domain::voices::Speech { seconds: 60.0, words: 100 }]);
                 b.learn("a1", 0, "Илья");
             })
             .unwrap();

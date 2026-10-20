@@ -61,7 +61,7 @@ mod tests {
         with_app_dir("voices-store", || {
             assert_eq!(update(false, |b| b.forget_meeting("m")).unwrap(), None);
             assert!(!path().unwrap().exists());
-            update(true, |b| b.hear("m", &[vec![1.0, 0.0]], &[60.0])).unwrap();
+            update(true, |b| b.hear("m", &[vec![1.0, 0.0]], &[crate::domain::voices::Speech { seconds: 60.0, words: 100 }])).unwrap();
             assert_eq!(read().unwrap().heard.len(), 1);
             update(false, |b| b.forget_meeting("m")).unwrap();
             assert_eq!(read().unwrap(), VoiceBook::default());
