@@ -7,6 +7,10 @@
 //!
 //! A meeting is the whole folder: whatever lists, shows or deletes one takes it
 //! all, by id.
+//!
+//! `recordings/<id>.wav` beside them are calls recorded and not yet made into
+//! meetings — the only copy of a call, so here and not in the system's temp,
+//! and inside `meetings/` so "Delete data" takes them too.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +22,7 @@ use crate::infra::app_dir;
 pub const DIR: &str = "meetings";
 const MEETING: &str = "meeting.json";
 const AUDIO: &str = "audio.wav";
+const RECORDINGS: &str = "recordings";
 
 fn store(e: impl std::fmt::Display) -> MeetingError {
     MeetingError::Store(e.to_string())
@@ -39,6 +44,14 @@ fn folder(dir: &Path, id: &str) -> Result<PathBuf, MeetingError> {
 /// `meeting.json` yet is a meeting still being recognized: not listed.
 pub fn audio(id: &str) -> Result<PathBuf, MeetingError> {
     Ok(folder(&dir()?, id)?.join(AUDIO))
+}
+
+/// Where the call recorded as `id` is kept until it is made into a meeting;
+/// its folder made.
+pub fn recording(id: &str) -> Result<PathBuf, MeetingError> {
+    let dir = dir()?.join(RECORDINGS);
+    fs::create_dir_all(&dir).map_err(store)?;
+    Ok(folder(&dir, id)?.with_extension("wav"))
 }
 
 /// Newest first. A meeting that does not read is skipped, not the list.
@@ -69,7 +82,7 @@ pub fn unfinished() -> Result<Vec<String>, MeetingError> {
     };
     Ok(entries
         .flatten()
-        .filter(|e| e.path().is_dir() && !e.path().join(MEETING).exists())
+        .filter(|e| e.file_name() != RECORDINGS && e.path().is_dir() && !e.path().join(MEETING).exists())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect())
 }
@@ -125,7 +138,9 @@ mod tests {
             fs::create_dir_all(dir().unwrap().join("cc")).unwrap();
             fs::write(dir().unwrap().join("cc").join(MEETING), "not json").unwrap();
             fs::create_dir_all(dir().unwrap().join("dd")).unwrap(); // still being recognized
-            assert_eq!(unfinished().unwrap(), ["dd"]);
+            let recorded = recording("ee").unwrap();
+            assert_eq!(recorded, dir().unwrap().join("recordings").join("ee.wav"));
+            assert_eq!(unfinished().unwrap(), ["dd"], "a recording waiting is not a meeting left half-made");
             assert_eq!(get("aa").unwrap(), meeting("aa", "2026-10-01T10:00:00Z"));
             assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["bb", "aa"]);
 
@@ -151,6 +166,7 @@ mod tests {
                 assert_eq!(get(id), Err(MeetingError::NotFound(id.into())), "{id}");
                 assert!(delete(id).is_err(), "{id}");
                 assert!(audio(id).is_err(), "{id}");
+                assert!(recording(id).is_err(), "{id}");
             }
         });
     }

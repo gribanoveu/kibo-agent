@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Merged by Tauri into the Info.plist it generates. Markdown is declared again
+  Merged by Tauri into the Info.plist it generates. The usage descriptions are
+  what macOS shows when it asks for the microphone and the system's sound.
+  Markdown is declared again
   here, as tauri.conf.json's fileAssociations has it, for the one key that
   config has no field for: CFBundleTypeIconSystemGenerated, which has macOS
   draw a .md opened with the app as a page with the app's icon on it, rather
@@ -9,6 +11,12 @@
 -->
 <plist version="1.0">
 <dict>
+  <!-- Recording a call on the Meetings page (docs/36): macOS asks with these
+       words. Without the second, the call's sound records as silence. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Kibo Agent records your side of a call on the Meetings page, between Record and Stop.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Kibo Agent records the call's sound on the Meetings page, between Record and Stop.</string>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>

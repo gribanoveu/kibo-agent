@@ -123,6 +123,15 @@ pub enum MeetingError {
     NoSpeaker(usize),
     #[error("a name is at most {0} characters")]
     NameTooLong(usize),
+    /// The microphone or the output the call plays through.
+    #[error("no {0} to record from")]
+    NoDevice(&'static str),
+    #[error("recording failed: {0}")]
+    Device(String),
+    #[error("a call is already being recorded")]
+    AlreadyRecording,
+    #[error("nothing is being recorded")]
+    NotRecording,
 }
 
 /// A recording made into notes. Its sound is kept beside it (`infra::meeting_store`).

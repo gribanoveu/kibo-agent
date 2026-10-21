@@ -15,9 +15,10 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
 use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Stage, Word};
+use crate::domain::recording;
 use crate::infra::app_dir;
 
-const SAMPLE_RATE: u32 = 16_000;
+const SAMPLE_RATE: u32 = recording::RATE;
 /// The whole recording goes through GigaAM in windows this long, each starting
 /// [`OVERLAP_SECONDS`] before the last one ends. Cutting it by speaker turns
 /// instead tripled WER: short pieces lose context and the turn edges clip words.
@@ -67,7 +68,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn Fn
 }
 
 /// The whole file as mono f32 at its own rate.
-fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
+pub(crate) fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
     let unreadable = |e: String| MeetingError::Unreadable(e);
     let file = File::open(path).map_err(|e| unreadable(format!("{}: {e}", path.display())))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -134,20 +135,12 @@ fn to_16k(samples: Vec<f32>, rate: u32) -> Result<Vec<f32>, MeetingError> {
 
 /// 16 kHz mono 16-bit PCM WAV: 32 KB a second, 115 MB an hour.
 fn wav(samples: &[f32]) -> Result<Vec<u8>, MeetingError> {
-    let data = u32::try_from(samples.len() * 2).map_err(|_| MeetingError::Unreadable("longer than a WAV file holds".into()))?;
+    let data = u32::try_from(samples.len() * 2)
+        .ok()
+        .filter(|data| *data <= recording::max_data_bytes(1))
+        .ok_or_else(|| MeetingError::Unreadable("longer than a WAV file holds".into()))?;
     let mut out = Vec::with_capacity(44 + data as usize);
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data).to_le_bytes());
-    out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&16u32.to_le_bytes()); // the format chunk's size
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    out.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes()); // bytes a second
-    out.extend_from_slice(&2u16.to_le_bytes()); // bytes a frame
-    out.extend_from_slice(&16u16.to_le_bytes()); // bits a sample
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data.to_le_bytes());
+    out.extend_from_slice(&recording::wav_header(1, data));
     for s in samples {
         // Past ±1 is clipped: `as` saturates.
         out.extend_from_slice(&((s * i16::MAX as f32) as i16).to_le_bytes());

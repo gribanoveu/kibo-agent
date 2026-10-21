@@ -56,4 +56,5 @@ pub mod speech;
 pub mod meeting_process;
 pub mod meeting_store;
 pub mod meeting_audio;
+pub mod meeting_recorder;
 pub mod voices_store;

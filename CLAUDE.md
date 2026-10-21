@@ -93,6 +93,16 @@ after touching `infra/kube_client.rs`:
 cd src-tauri && cargo test live_cluster -- --ignored --nocapture
 ```
 
+Recording a call has a live test on the real microphone and output: a few seconds with a
+voice playing (`say`), checked to be a whole stereo WAV. Run it after touching
+`infra/meeting_recorder.rs`. From a terminal macOS asks for the microphone, and the call's
+track records as silence — System Audio Recording goes to the `.app`, whose `Info.plist`
+asks for it:
+
+```bash
+cd src-tauri && cargo test record_live -- --ignored --nocapture
+```
+
 ## Mutation testing
 
 New backend code is not done when `cargo test` is green — the tests have to be shown to

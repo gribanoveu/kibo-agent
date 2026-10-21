@@ -85,6 +85,20 @@ pub async fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) -> Result<(), Str
     .await
 }
 
+/// The call recorded from now on, both devices open once this resolves; the recording's id.
+#[tauri::command]
+pub async fn meeting_record_start(notes: State<'_, Arc<MeetingNotes>>) -> Result<String, String> {
+    let notes = notes.inner().clone();
+    blocking(move || notes.record_start()).await
+}
+
+/// The recording stopped and its file whole; its id.
+#[tauri::command]
+pub async fn meeting_record_stop(notes: State<'_, Arc<MeetingNotes>>) -> Result<String, String> {
+    let notes = notes.inner().clone();
+    blocking(move || notes.record_stop()).await
+}
+
 /// The job running now, if one is — for the page opened while it runs.
 #[tauri::command]
 pub fn meeting_job(notes: State<'_, Arc<MeetingNotes>>) -> Option<JobState> {

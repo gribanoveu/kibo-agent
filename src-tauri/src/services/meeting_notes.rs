@@ -1,7 +1,8 @@
 //! Meeting notes: a recording through the recognition process into a saved
 //! transcript, and the transcript through the model into its summary
 //! (`docs/36-meeting-notes-research.md`). One job at a time — the recognition
-//! takes the cores, and the page has one Stop.
+//! takes the cores, and the page has one Stop. A call is recorded beside it,
+//! one at a time too, into a file of its own until it is made into a meeting.
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -11,6 +12,7 @@ use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
 use crate::domain::meeting::{self, JobKind, JobState, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
 use crate::domain::voices::VoiceInfo;
 use crate::infra::meeting_process::{self, Running};
+use crate::infra::meeting_recorder::Recorder;
 use crate::infra::{meeting_store, speech, voices_store};
 use crate::services::features;
 use crate::services::llm_session::{self, LlmSession};
@@ -21,6 +23,8 @@ pub struct MeetingNotes {
     job: Mutex<Option<JobState>>,
     /// The recognition process, and whether the job was stopped.
     running: Running,
+    /// The call being recorded, if one is.
+    recorder: Recorder,
 }
 
 /// The job slot, freed when the job ends however it ends — and the page told so.
@@ -71,12 +75,34 @@ impl MeetingNotes {
         self.running.stop();
     }
 
-    /// Feature `id` turned on or off. Meeting notes off stops its job: the
-    /// page and its Stop are gone, and what the job made would not be kept.
+    /// The job stopped and the recording ended, its file whole — the app is
+    /// quitting, or the feature went off.
+    pub fn stop_all(&self) {
+        self.stop();
+        let _ = self.recorder.stop();
+    }
+
+    /// Feature `id` turned on or off. Meeting notes off stops its job and its
+    /// recording: the page and its Stop are gone, and "Delete data" may follow.
     pub fn feature_set(&self, id: &str, on: bool) {
         if !on && Feature::from_id(id) == Some(Feature::MeetingNotes) {
-            self.stop();
+            self.stop_all();
         }
+    }
+
+    /// The call recorded from now on — the microphone and what the computer
+    /// plays — into `meetings/recordings/<id>.wav`; its id. Only while Meeting
+    /// notes is on.
+    pub fn record_start(&self) -> Result<String, MeetingError> {
+        still_on()?;
+        let id = uuid::Uuid::new_v4().to_string();
+        self.recorder.start(&id, &meeting_store::recording(&id)?)?;
+        Ok(id)
+    }
+
+    /// The recording stopped and its file whole; its id.
+    pub fn record_stop(&self) -> Result<String, MeetingError> {
+        self.recorder.stop()
     }
 
     /// `audio` recognized by `exe`, saved, then summarized; the meeting's id.
@@ -453,6 +479,17 @@ mod tests {
         assert_eq!(notes.current(), None);
         assert_eq!(events.lock().unwrap().last(), Some(&MeetingEvent::Ended), "the page is told it ended");
         assert!(notes.begin(JobState::new(JobKind::Process, None), &sink).is_ok());
+    }
+
+    #[test]
+    fn a_call_is_recorded_only_while_meeting_notes_is_on() {
+        crate::testing::with_app_dir("meeting-record-off", || {
+            let notes = MeetingNotes::default();
+            assert_eq!(notes.record_start(), Err(MeetingError::Off));
+            assert!(!meeting_store::audio("0").unwrap().parent().unwrap().parent().unwrap().join("recordings").exists(), "no folder made for it");
+            assert_eq!(notes.record_stop(), Err(MeetingError::NotRecording));
+            notes.stop_all(); // nothing to stop is no failure
+        });
     }
 
     #[test]

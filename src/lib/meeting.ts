@@ -140,6 +140,18 @@ export async function meetingStop(): Promise<void> {
   return invoke("meeting_stop");
 }
 
+/** The call recorded from now on — the microphone and what the computer plays; the recording's id. */
+export async function meetingRecordStart(): Promise<string> {
+  requireBackend();
+  return invoke<string>("meeting_record_start");
+}
+
+/** The recording stopped and its file whole; its id. */
+export async function meetingRecordStop(): Promise<string> {
+  requireBackend();
+  return invoke<string>("meeting_record_stop");
+}
+
 /** The voices the voice memory knows, by name. */
 export async function meetingVoices(): Promise<VoiceInfo[]> {
   if (!inTauri()) return [];
