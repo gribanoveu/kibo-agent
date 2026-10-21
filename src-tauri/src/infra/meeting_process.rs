@@ -8,7 +8,8 @@ use std::sync::Mutex;
 
 use crate::domain::meeting::{MeetingError, Recognized, SidecarLine, Stage, SIDECAR_FLAG};
 
-/// The process while one runs: one at a time, and [`Running::stop`] kills it.
+/// The process while one runs, for [`Running::stop`] to kill. One at a time is
+/// the caller's to keep (`services::meeting_notes`).
 #[derive(Default)]
 pub struct Running(Mutex<Option<Child>>);
 
@@ -34,9 +35,6 @@ pub fn recognize(
 ) -> Result<Recognized, MeetingError> {
     let stdout = {
         let mut slot = running.0.lock().unwrap_or_else(|e| e.into_inner());
-        if slot.is_some() {
-            return Err(MeetingError::Busy);
-        }
         let mut child = Command::new(exe)
             .arg(SIDECAR_FLAG)
             .arg(audio)
@@ -126,7 +124,7 @@ echo '{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"
     }
 
     #[test]
-    fn a_stop_kills_it_and_a_second_waits_for_the_first() {
+    fn a_stop_kills_it() {
         let exe = sidecar("sidecar-slow", "exec sleep 30");
         let running = Arc::new(Running::default());
         let worker = {
@@ -137,7 +135,6 @@ echo '{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"
         while running.0.lock().unwrap().is_none() {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(run(&running, Path::new("/nonexistent")).0, Err(MeetingError::Busy));
         running.stop();
         assert_eq!(worker.join().unwrap(), Err(MeetingError::Cancelled));
         assert!(started.elapsed() < Duration::from_secs(10));

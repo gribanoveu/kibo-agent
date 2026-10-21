@@ -15,7 +15,8 @@ pub const SCHEME: &str = "meeting";
 /// for the rest as it goes, and an hour's 115 MB is never read whole.
 const CHUNK: u64 = 1 << 20;
 
-/// The response to a request for `path`, with its `Range` header if it had one.
+/// The response to a request for `path`, with its `Range` header if it had one:
+/// without one, the whole file — what a media element never asks for.
 pub fn respond(path: &str, range: Option<&str>) -> Response<Vec<u8>> {
     let id = path.trim_start_matches('/');
     let Some((mut file, total)) = meeting_store::audio(id)
@@ -25,7 +26,20 @@ pub fn respond(path: &str, range: Option<&str>) -> Response<Vec<u8>> {
     else {
         return plain(404, "not found");
     };
-    let Some((start, end)) = bytes(range.unwrap_or("bytes=0-"), total) else {
+    let Some(range) = range else {
+        let mut body = Vec::new();
+        if file.read_to_end(&mut body).is_err() {
+            return plain(500, "could not read the recording");
+        }
+        return Response::builder()
+            .status(200)
+            .header("Content-Type", "audio/wav")
+            .header("Accept-Ranges", "bytes")
+            .header("Content-Length", body.len())
+            .body(body)
+            .unwrap_or_default();
+    };
+    let Some((start, end)) = bytes(range, total) else {
         return Response::builder()
             .status(416)
             .header("Content-Range", format!("bytes */{total}"))
@@ -103,7 +117,8 @@ mod tests {
             assert_eq!(part.body(), b"0123");
             assert_eq!(part.headers()["Content-Range"], "bytes 4-7/14");
             assert_eq!(part.headers()["Content-Type"], "audio/wav");
-            assert_eq!(respond("/ab", None).body(), b"RIFF0123456789");
+            let whole = respond("/ab", None);
+            assert_eq!((whole.status().as_u16(), whole.body().as_slice()), (200, b"RIFF0123456789".as_slice()), "no range is the whole file");
             assert_eq!(respond("/ab", Some("bytes=20-")).status(), 416);
             assert_eq!(respond("/cd", None).status(), 404);
             assert_eq!(respond("/../settings.json", None).status(), 404);

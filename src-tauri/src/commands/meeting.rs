@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
 
-use crate::domain::meeting::{Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
+use crate::domain::meeting::{JobState, Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
 use crate::domain::voices::VoiceInfo;
 use crate::infra::{meeting_audio, meeting_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
@@ -74,9 +74,21 @@ pub async fn meeting_summarize<R: Runtime>(app: AppHandle<R>, notes: State<'_, A
     blocking(move || notes.summarize(&id, &sink)).await
 }
 
+/// A kill and a wait for the process: off the main thread.
 #[tauri::command]
-pub fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) {
-    notes.stop();
+pub async fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) -> Result<(), String> {
+    let notes = notes.inner().clone();
+    blocking(move || {
+        notes.stop();
+        Ok::<_, String>(())
+    })
+    .await
+}
+
+/// The job running now, if one is — for the page opened while it runs.
+#[tauri::command]
+pub fn meeting_job(notes: State<'_, Arc<MeetingNotes>>) -> Option<JobState> {
+    notes.current()
 }
 
 /// `meeting://<id>`: the meeting's recording for the page's player.

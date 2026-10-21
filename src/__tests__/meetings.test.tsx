@@ -11,6 +11,7 @@ let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let finishProcess: (result: { id?: string; error?: string }) => void = () => {};
 let voiceMemoryOn = false;
 let voices: { id: string; name: string; meetings: number }[] = [];
+let running: unknown = null;
 
 const info = (m: Meeting) => ({
   id: m.id,
@@ -31,6 +32,7 @@ mock.module("@tauri-apps/api/core", () => ({
       voices = voices.filter((v) => v.id !== args!.id);
       return Promise.resolve(structuredClone(voices));
     }
+    if (command === "meeting_job") return Promise.resolve(running);
     if (command === "meeting_list") return Promise.resolve(stored.map(info));
     if (command === "meeting_get") return Promise.resolve(structuredClone(stored.find((m) => m.id === args!.id)));
     if (command === "meeting_delete") {
@@ -94,6 +96,7 @@ beforeEach(() => {
   stored = [structuredClone(call)];
   voiceMemoryOn = false;
   voices = [];
+  running = null;
 });
 
 describe("the meetings page", () => {
@@ -229,6 +232,22 @@ describe("the meetings page", () => {
     await act(async () => finishProcess({ error: "this recording cannot be read: no audio track" }));
     await settle();
     expect(screen.getByText("this recording cannot be read: no audio track")).toBeTruthy();
+  });
+
+  test("a page opened while a job runs shows it, can stop it, and lets go when it ends", async () => {
+    running = { kind: "process", id: "m2", name: "standup.m4a", stage: "speech", done: 1, total: 4 };
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(screen.getByRole("status").textContent).toContain("Recognizing speech… 25%");
+    expect((screen.getByText("Import recording").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("Stop"));
+    expect(calls.at(-1)?.command).toBe("meeting_stop");
+
+    running = null;
+    await emit({ kind: "ended" });
+    await settle();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect((screen.getByText("Import recording").closest("button") as HTMLButtonElement).disabled).toBe(false);
   });
 
   test("a meeting is deleted only after it is confirmed", async () => {

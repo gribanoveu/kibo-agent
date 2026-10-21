@@ -59,6 +59,21 @@ pub fn list() -> Result<Vec<MeetingInfo>, MeetingError> {
     Ok(rows)
 }
 
+/// The folders with a recording and no meeting: being recognized now, or
+/// left by an app that quit or crashed while it was.
+pub fn unfinished() -> Result<Vec<String>, MeetingError> {
+    let entries = match fs::read_dir(dir()?) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(store(e)),
+    };
+    Ok(entries
+        .flatten()
+        .filter(|e| e.path().is_dir() && !e.path().join(MEETING).exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect())
+}
+
 pub fn get(id: &str) -> Result<Meeting, MeetingError> {
     let bytes = match fs::read(folder(&dir()?, id)?.join(MEETING)) {
         Ok(bytes) => bytes,
@@ -110,6 +125,7 @@ mod tests {
             fs::create_dir_all(dir().unwrap().join("cc")).unwrap();
             fs::write(dir().unwrap().join("cc").join(MEETING), "not json").unwrap();
             fs::create_dir_all(dir().unwrap().join("dd")).unwrap(); // still being recognized
+            assert_eq!(unfinished().unwrap(), ["dd"]);
             assert_eq!(get("aa").unwrap(), meeting("aa", "2026-10-01T10:00:00Z"));
             assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["bb", "aa"]);
 

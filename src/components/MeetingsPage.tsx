@@ -84,7 +84,8 @@ export function MeetingsPage({ sideHandle }: PageContext) {
     </div>
   );
 
-  const panel = remembering && voicesOpen && <VoicesPanel changed={meeting ?? job} onClose={() => setVoicesOpen(false)} />;
+  // Voices change when a speaker is named (the meeting is read again) or a meeting is deleted (the list is).
+  const panel = remembering && voicesOpen && <VoicesPanel changed={meeting ?? meetings.list} onClose={() => setVoicesOpen(false)} />;
 
   return (
     <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>

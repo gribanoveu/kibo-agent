@@ -5,10 +5,11 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::domain::features::Feature;
 use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
-use crate::domain::meeting::{self, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
+use crate::domain::meeting::{self, JobKind, JobState, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
 use crate::domain::voices::VoiceInfo;
 use crate::infra::meeting_process::{self, Running};
 use crate::infra::{meeting_store, speech, voices_store};
@@ -17,27 +18,53 @@ use crate::services::llm_session::{self, LlmSession};
 
 #[derive(Default)]
 pub struct MeetingNotes {
-    busy: AtomicBool,
+    /// The job running now, as its events have told it; `None` is a free slot.
+    job: Mutex<Option<JobState>>,
     stopped: AtomicBool,
     running: Running,
 }
 
-/// The job slot, freed when the job ends however it ends.
-struct Job<'a>(&'a AtomicBool);
+/// The job slot, freed when the job ends however it ends — and the page told so.
+struct Job<'a> {
+    notes: &'a MeetingNotes,
+    sink: &'a MeetingEventSink,
+}
+
+impl Job<'_> {
+    /// `event` to the page, and into what a page opened later reads.
+    fn tell(&self, event: MeetingEvent) {
+        if let Some(job) = self.notes.slot().as_mut() {
+            job.hear(&event);
+        }
+        (self.sink)(event);
+    }
+}
 
 impl Drop for Job<'_> {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        *self.notes.slot() = None;
+        (self.sink)(MeetingEvent::Ended);
     }
 }
 
 impl MeetingNotes {
-    fn begin(&self) -> Result<Job<'_>, MeetingError> {
-        if self.busy.swap(true, Ordering::SeqCst) {
+    fn slot(&self) -> MutexGuard<'_, Option<JobState>> {
+        self.job.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn begin<'a>(&'a self, state: JobState, sink: &'a MeetingEventSink) -> Result<Job<'a>, MeetingError> {
+        let mut slot = self.slot();
+        if slot.is_some() {
             return Err(MeetingError::Busy);
         }
+        *slot = Some(state);
         self.stopped.store(false, Ordering::SeqCst);
-        Ok(Job(&self.busy))
+        Ok(Job { notes: self, sink })
+    }
+
+    /// The job running now, for a page opened while it runs.
+    pub fn current(&self) -> Option<JobState> {
+        self.slot().clone()
     }
 
     /// Stops the job running now, recognition or summary.
@@ -52,13 +79,18 @@ impl MeetingNotes {
     /// that fails leaves the meeting saved, to summarize again; a recognition
     /// that fails leaves nothing.
     pub fn process(&self, exe: &Path, models: &Path, audio: &Path, sink: &MeetingEventSink) -> Result<String, MeetingError> {
-        let _job = self.begin()?;
+        let job = self.begin(JobState::new(JobKind::Process, None), sink)?;
         if !speech::has_models(models) {
             return Err(MeetingError::ModelsMissing);
         }
+        // With the slot held no other is being recognized: a folder without its
+        // meeting is one the app quit or crashed in the middle of.
+        for left in meeting_store::unfinished()? {
+            let _ = delete_meeting(&left);
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let meeting = match self.transcribe(exe, models, audio, &id, name, sink) {
+        let meeting = match self.transcribe(exe, models, audio, &id, name, &|e| job.tell(e)) {
             Ok(meeting) => meeting,
             Err(e) => {
                 // The copy of the sound, written before the speech was found.
@@ -66,12 +98,12 @@ impl MeetingNotes {
                 return Err(e);
             }
         };
-        sink(MeetingEvent::Transcribed { id: id.clone() });
-        self.summarize_into(&meeting, sink)?;
+        job.tell(MeetingEvent::Transcribed { id: id.clone() });
+        self.summarize_into(&meeting, &|e| job.tell(e))?;
         Ok(id)
     }
 
-    fn transcribe(&self, exe: &Path, models: &Path, audio: &Path, id: &str, name: String, sink: &MeetingEventSink) -> Result<Meeting, MeetingError> {
+    fn transcribe(&self, exe: &Path, models: &Path, audio: &Path, id: &str, name: String, sink: &dyn Fn(MeetingEvent)) -> Result<Meeting, MeetingError> {
         let keep = meeting_store::audio(id)?;
         let recognized = meeting_process::recognize(&self.running, exe, audio, models, &keep, &mut |stage, done, total| {
             sink(MeetingEvent::Progress { id: id.to_string(), name: name.clone(), stage, done, total })
@@ -98,23 +130,25 @@ impl MeetingNotes {
             })?;
             meeting.guess(known.unwrap_or_default());
         }
+        still_on()?;
         meeting_store::save(&meeting)?;
         Ok(meeting)
     }
 
     /// The summary of meeting `id` written again.
     pub fn summarize(&self, id: &str, sink: &MeetingEventSink) -> Result<(), MeetingError> {
-        let _job = self.begin()?;
-        self.summarize_into(&meeting_store::get(id)?, sink)
+        let job = self.begin(JobState::new(JobKind::Summary, Some(id.to_string())), sink)?;
+        self.summarize_into(&meeting_store::get(id)?, &|e| job.tell(e))
     }
 
-    fn summarize_into(&self, meeting: &Meeting, sink: &MeetingEventSink) -> Result<(), MeetingError> {
+    fn summarize_into(&self, meeting: &Meeting, sink: &dyn Fn(MeetingEvent)) -> Result<(), MeetingError> {
         let session = llm_session::resolve(None).map_err(|e| MeetingError::Summary(e.to_string()))?;
         let summary = write_summary(&session, meeting, sink, &|| self.stopped.load(Ordering::SeqCst))?;
         // Read again: a speaker renamed while the notes were written keeps the name.
         // ponytail: read, change, write without a lock; one per meeting if two writers ever race.
         let mut now = meeting_store::get(&meeting.id)?;
         now.take_notes(&summary, meeting);
+        still_on()?;
         meeting_store::save(&now)
     }
 }
@@ -157,10 +191,15 @@ fn remembering() -> bool {
     features::enabled().is_on(Feature::VoiceMemory)
 }
 
+/// A job keeps nothing once the feature is off: its "Delete data" may have run.
+fn still_on() -> Result<(), MeetingError> {
+    if features::enabled().is_on(Feature::MeetingNotes) { Ok(()) } else { Err(MeetingError::Off) }
+}
+
 /// The notes of `meeting`, streamed to `sink` as they are written. A meeting
 /// too long for one request is read in parts: notes of each, then the notes of
 /// the whole from those. A stopped or empty answer is no summary.
-fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &MeetingEventSink, cancelled: &dyn Fn() -> bool) -> Result<String, MeetingError> {
+fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &dyn Fn(MeetingEvent), cancelled: &dyn Fn() -> bool) -> Result<String, MeetingError> {
     let lines = meeting::render_transcript(meeting);
     let transcript = lines.concat();
     let input = if meeting::fits(&transcript, session.context_limit).is_ok() {
@@ -275,7 +314,7 @@ mod tests {
     fn the_model_is_given_the_transcript_and_its_notes_stream_to_the_page() {
         let (session, provider) = session(vec!["## Решения\n", "- Выпуск в пятницу.\n"], None);
         let (sink, events) = recorder();
-        let notes = write_summary(&session, &meeting(), &sink, &|| false).unwrap();
+        let notes = write_summary(&session, &meeting(), &*sink, &|| false).unwrap();
         assert_eq!(notes, "## Решения\n- Выпуск в пятницу.");
 
         let asked = provider.asked.lock().unwrap();
@@ -297,7 +336,7 @@ mod tests {
         long.utterances = (0..12).map(|i| Utterance { speaker: 0, start: 60.0 * i as f32, end: 1.0, text: "Решили выпустить в пятницу.".into() }).collect();
         let (reading, provider) = session(vec!["## Итоги"], Some(150));
         let (sink, events) = recorder();
-        assert_eq!(write_summary(&reading, &long, &sink, &|| false).unwrap(), "## Итоги");
+        assert_eq!(write_summary(&reading, &long, &*sink, &|| false).unwrap(), "## Итоги");
 
         let asked = provider.asked.lock().unwrap();
         let parts = asked.len() - 1;
@@ -312,7 +351,7 @@ mod tests {
         // A stop between parts asks for no more of them.
         let (stopped, provider) = session(vec!["x"], Some(150));
         let (quiet, _) = recorder();
-        assert_eq!(write_summary(&stopped, &long, &quiet, &|| true), Err(MeetingError::Cancelled));
+        assert_eq!(write_summary(&stopped, &long, &*quiet, &|| true), Err(MeetingError::Cancelled));
         assert_eq!(provider.asked.lock().unwrap().len(), 1);
 
         let progress: Vec<_> = events.lock().unwrap().iter().filter_map(|e| match e {
@@ -373,24 +412,29 @@ mod tests {
     fn a_stopped_empty_or_too_long_summary_is_not_one() {
         let (sink, _) = recorder();
         let (stopped, _) = session(vec!["## Ре"], None);
-        assert_eq!(write_summary(&stopped, &meeting(), &sink, &|| true), Err(MeetingError::Cancelled));
+        assert_eq!(write_summary(&stopped, &meeting(), &*sink, &|| true), Err(MeetingError::Cancelled));
         let (empty, _) = session(vec!["  \n"], None);
-        assert!(matches!(write_summary(&empty, &meeting(), &sink, &|| false), Err(MeetingError::Summary(_))));
+        assert!(matches!(write_summary(&empty, &meeting(), &*sink, &|| false), Err(MeetingError::Summary(_))));
         // A window too small even for the parts' notes.
         let (small, provider) = session(vec!["x"], Some(10));
-        assert!(matches!(write_summary(&small, &meeting(), &sink, &|| false), Err(MeetingError::TooLong { .. })));
+        assert!(matches!(write_summary(&small, &meeting(), &*sink, &|| false), Err(MeetingError::TooLong { .. })));
         assert!(provider.asked.lock().unwrap().iter().all(|r| r.messages[0] == LlmMessage::system(meeting::PART_INSTRUCTIONS)));
     }
 
     #[test]
     fn one_job_at_a_time_and_the_slot_frees_when_it_ends() {
+        let (sink, events) = recorder();
         let notes = MeetingNotes::default();
         notes.stop();
-        let job = notes.begin().unwrap();
+        let job = notes.begin(JobState::new(JobKind::Summary, Some("m".into())), &sink).unwrap();
         assert!(!notes.stopped.load(Ordering::SeqCst), "a stop before the job is not its stop");
-        assert!(matches!(notes.begin(), Err(MeetingError::Busy)));
+        assert!(matches!(notes.begin(JobState::new(JobKind::Process, None), &sink), Err(MeetingError::Busy)));
+        job.tell(MeetingEvent::Progress { id: "m".into(), name: "call.wav".into(), stage: Stage::Notes, done: 1, total: 3 });
+        assert_eq!(notes.current().map(|j| (j.kind, j.done, j.total)), Some((JobKind::Summary, 1, 3)), "a page opened now sees it");
         drop(job);
-        assert!(notes.begin().is_ok());
+        assert_eq!(notes.current(), None);
+        assert_eq!(events.lock().unwrap().last(), Some(&MeetingEvent::Ended), "the page is told it ended");
+        assert!(notes.begin(JobState::new(JobKind::Process, None), &sink).is_ok());
     }
 
     /// A stand-in for the exe that writes the copy of the sound it was given, then says `line`.
@@ -411,11 +455,21 @@ mod tests {
     #[test]
     fn a_recognized_meeting_keeps_its_sound_and_a_failed_one_leaves_nothing() {
         crate::testing::with_app_dir("meeting-process", || {
+            features::set("meeting-notes", true).unwrap();
+            // A meeting the app quit in the middle of: its sound and no meeting.
+            let quit = meeting_store::audio("0dd").unwrap();
+            std::fs::create_dir_all(quit.parent().unwrap()).unwrap();
+            std::fs::write(&quit, "RIFF").unwrap();
             let (sink, events) = recorder();
             let (exe, models) = sidecar("meeting-process-ok", r#"{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"да"}],"seconds":1.0}"#);
             // No model is set up here, so the notes fail — after the meeting is saved.
             assert!(matches!(MeetingNotes::default().process(&exe, &models, Path::new("/calls/call.m4a"), &sink), Err(MeetingError::Summary(_))));
-            let [MeetingEvent::Transcribed { id }] = &events.lock().unwrap()[..] else { panic!() };
+            // Cloned out: the lock is let go before the next job's events.
+            let id = &match &events.lock().unwrap()[..] {
+                [MeetingEvent::Transcribed { id }, MeetingEvent::Ended] => id.clone(),
+                other => panic!("{other:?}"),
+            };
+            assert!(!quit.parent().unwrap().exists(), "the next import clears what the last one left");
             let saved = meeting_store::get(id).unwrap();
             assert_eq!((saved.name.as_str(), saved.seconds), ("call.m4a", 1.0));
             assert_eq!(std::fs::read(meeting_store::audio(id).unwrap()).unwrap(), b"RIFF");
@@ -426,6 +480,14 @@ mod tests {
             }
             let left: Vec<_> = std::fs::read_dir(meeting_store::audio(id).unwrap().parent().unwrap().parent().unwrap()).unwrap().collect();
             assert_eq!(left.len(), 1, "only the recognized one");
+
+            // Turned off mid-job: its "Delete data" may have run, so nothing is kept.
+            features::set("meeting-notes", false).unwrap();
+            let (exe, models) = sidecar("meeting-process-off", r#"{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"да"}],"seconds":1.0}"#);
+            assert_eq!(MeetingNotes::default().process(&exe, &models, Path::new("a.wav"), &sink), Err(MeetingError::Off));
+            assert_eq!(meeting_store::list().unwrap().len(), 1);
+            let left: Vec<_> = std::fs::read_dir(meeting_store::audio(id).unwrap().parent().unwrap().parent().unwrap()).unwrap().collect();
+            assert_eq!(left.len(), 1, "not even its sound");
         });
     }
 
@@ -435,6 +497,6 @@ mod tests {
         let empty = crate::testing::temp_dir("meeting-no-models");
         let got = MeetingNotes::default().process(Path::new("/nonexistent"), &empty, Path::new("a.wav"), &sink);
         assert_eq!(got, Err(MeetingError::ModelsMissing));
-        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(*events.lock().unwrap(), [MeetingEvent::Ended]);
     }
 }

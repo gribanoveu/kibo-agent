@@ -68,7 +68,20 @@ export type MeetingEvent =
   | { kind: "progress"; id: string; name: string; stage: Stage; done: number; total: number }
   /** The transcript is saved: read the meeting again. */
   | { kind: "transcribed"; id: string }
-  | { kind: "summaryDelta"; id: string; text: string };
+  | { kind: "summaryDelta"; id: string; text: string }
+  /** The job ended, however it ended: read the list and the meeting again. */
+  | { kind: "ended" };
+
+/** What runs now (`domain::meeting::JobState`): a recording being processed, or notes written again. */
+export type MeetingJob = {
+  kind: "process" | "summary";
+  /** Known once the backend names it — at once for notes, on the first progress for a recording. */
+  id?: string;
+  name?: string;
+  stage?: Stage;
+  done?: number;
+  total?: number;
+};
 
 export const MEETING_EVENT = "meeting:event";
 
@@ -113,6 +126,12 @@ export async function meetingRenameSpeaker(id: string, speaker: number, name: st
 export async function meetingSummarize(id: string): Promise<void> {
   requireBackend();
   return invoke("meeting_summarize", { id });
+}
+
+/** The job running now, if one is — for a page opened while it runs. */
+export async function meetingJob(): Promise<MeetingJob | null> {
+  if (!inTauri()) return null;
+  return invoke<MeetingJob | null>("meeting_job");
 }
 
 /** Stops what runs now, recognition or notes. */

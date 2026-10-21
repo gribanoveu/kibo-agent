@@ -360,6 +360,7 @@ pub fn run() {
             commands::meeting::meeting_process,
             commands::meeting::meeting_summarize,
             commands::meeting::meeting_stop,
+            commands::meeting::meeting_job,
             commands::features::features_list,
             commands::features::features_set,
             commands::features::features_delete_data,
@@ -405,6 +406,8 @@ pub fn run() {
                 app.state::<std::sync::Arc<services::mcp_servers::McpServers>>().stop_all();
                 app.state::<std::sync::Arc<infra::background::Processes>>().stop_all();
                 app.state::<std::sync::Arc<infra::terminal::Terminals>>().close_all();
+                // The recognition process takes no stdin to notice the app gone by.
+                app.state::<std::sync::Arc<services::meeting_notes::MeetingNotes>>().stop();
             }
         });
 }

@@ -107,6 +107,9 @@ pub enum MeetingError {
     Cancelled,
     #[error("a recording is already being processed — wait for it or stop it")]
     Busy,
+    /// Meeting notes were turned off while it ran: nothing is kept.
+    #[error("meeting notes were turned off")]
+    Off,
     #[error("no meeting {0}")]
     NotFound(String),
     #[error("meeting notes: {0}")]
@@ -195,7 +198,7 @@ impl Meeting {
     /// The user's name for `speaker`, or `Speaker N` from 1 — as the transcript
     /// the model reads has it, and so as the notes name whoever is not named.
     pub fn speaker_name(&self, speaker: usize) -> String {
-        self.names.get(&speaker).cloned().unwrap_or_else(|| format!("Speaker {}", speaker + 1))
+        name_in(&self.names, speaker)
     }
 
     /// `speaker` called `name`, or back to its number when `name` is blank.
@@ -209,16 +212,15 @@ impl Meeting {
         if name.chars().count() > MAX_NAME_CHARS {
             return Err(MeetingError::NameTooLong(MAX_NAME_CHARS));
         }
-        let before = self.speaker_name(speaker);
+        let before = self.names.clone();
         if name.is_empty() {
             self.names.remove(&speaker);
         } else {
             self.names.insert(speaker, name);
         }
         self.guessed.retain(|g| *g != speaker);
-        let after = self.speaker_name(speaker);
-        if let Some(summary) = &mut self.summary {
-            *summary = replace_word(summary, &before, &after);
+        if let Some(summary) = &self.summary {
+            self.summary = Some(renamed(summary, self.speakers(), &before, &self.names));
         }
         Ok(())
     }
@@ -254,6 +256,52 @@ pub enum MeetingEvent {
     Transcribed { id: String },
     /// A piece of the summary as the model writes it.
     SummaryDelta { id: String, text: String },
+    /// The job ended, however it ended: read the list and the meeting again.
+    Ended,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JobKind {
+    /// A recording recognized, then its notes written.
+    Process,
+    /// A meeting's notes written again.
+    Summary,
+}
+
+/// The job running now, as far as its events have told: what a page opened
+/// mid-job shows until the next event.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobState {
+    pub kind: JobKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
+    pub done: usize,
+    pub total: usize,
+}
+
+impl JobState {
+    pub fn new(kind: JobKind, id: Option<String>) -> Self {
+        let stage = (kind == JobKind::Summary).then_some(Stage::Notes);
+        JobState { kind, id, name: None, stage, done: 0, total: 0 }
+    }
+
+    /// The job as `event` leaves it — the page's `useMeetings` reads events the same way.
+    pub fn hear(&mut self, event: &MeetingEvent) {
+        match event {
+            MeetingEvent::Progress { id, name, stage, done, total } => {
+                (self.id, self.name, self.stage) = (Some(id.clone()), Some(name.clone()), Some(*stage));
+                (self.done, self.total) = (*done, *total);
+            }
+            MeetingEvent::Transcribed { .. } => (self.stage, self.done, self.total) = (Some(Stage::Notes), 0, 0),
+            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended => {}
+        }
+    }
 }
 
 pub type MeetingEventSink = Arc<dyn Fn(MeetingEvent) + Send + Sync>;
@@ -299,28 +347,50 @@ pub fn render_transcript(meeting: &Meeting) -> Vec<String> {
     meeting.utterances.iter().map(|u| format!("[{}] {}: {}\n", clock(u.start), meeting.speaker_name(u.speaker), u.text)).collect()
 }
 
+fn name_in(names: &BTreeMap<usize, String>, speaker: usize) -> String {
+    names.get(&speaker).cloned().unwrap_or_else(|| format!("Speaker {}", speaker + 1))
+}
+
 /// `notes` written while the speakers were named as in `written`, with each
 /// renamed since called as in `now`.
 pub fn renamed_since(notes: &str, written: &Meeting, now: &Meeting) -> String {
-    (0..now.speakers()).fold(notes.to_string(), |notes, speaker| {
-        let (was, is) = (written.speaker_name(speaker), now.speaker_name(speaker));
-        if was == is { notes } else { replace_word(&notes, &was, &is) }
-    })
+    renamed(notes, written.speakers().max(now.speakers()), &written.names, &now.names)
 }
 
-/// `from` as a whole word in `text` — `Speaker 1` is not inside `Speaker 12`.
-fn replace_word(text: &str, from: &str, to: &str) -> String {
+/// `notes` with each of `speakers` named as in `was` called as in `is`, all at
+/// once — a swap stays a swap. A name two speakers had changes only when both
+/// now have the same one: otherwise the notes do not say whose it was, and it stays.
+fn renamed(notes: &str, speakers: usize, was: &BTreeMap<usize, String>, is: &BTreeMap<usize, String>) -> String {
+    let pairs: Vec<(String, String)> = (0..speakers).map(|s| (name_in(was, s), name_in(is, s))).collect();
+    let changes: Vec<&(String, String)> =
+        pairs.iter().filter(|(from, to)| from != to && pairs.iter().all(|(f, t)| f != from || t == to)).collect();
+    replace_words(notes, &changes)
+}
+
+/// Each `from` as a whole word in `text` given its `to`, in one pass, the
+/// longest that fits first — `Speaker 1` is not inside `Speaker 12`.
+fn replace_words(text: &str, changes: &[&(String, String)]) -> String {
     let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(from) {
-        let end = at + from.len();
-        out.push_str(&rest[..at]);
-        let whole = !word(rest[..at].chars().next_back()) && !word(rest[end..].chars().next());
-        out.push_str(if whole { to } else { from });
-        rest = &rest[end..];
+    let mut at = 0;
+    while let Some(c) = text[at..].chars().next() {
+        let rest = &text[at..];
+        let here = changes
+            .iter()
+            .filter(|(from, _)| !from.is_empty() && rest.starts_with(from.as_str()))
+            .filter(|(from, _)| !word(text[..at].chars().next_back()) && !word(rest[from.len()..].chars().next()))
+            .max_by_key(|(from, _)| from.len());
+        match here {
+            Some((from, to)) => {
+                out.push_str(to);
+                at += from.len();
+            }
+            None => {
+                out.push(c);
+                at += c.len_utf8();
+            }
+        }
     }
-    out.push_str(rest);
     out
 }
 
@@ -752,6 +822,29 @@ mod tests {
         now.rename(1, "Илья").unwrap();
         assert_eq!(renamed_since("Speaker 1 asks Speaker 2.", &written, &now), "Speaker 1 asks Илья.");
         assert_eq!(renamed_since("Speaker 2.", &written, &written), "Speaker 2.");
+
+        // Two names swapped while the notes were written stay swapped.
+        let mut swapped = written.clone();
+        swapped.names = BTreeMap::from([(0, "Speaker 2".into()), (1, "Speaker 1".into())]);
+        assert_eq!(renamed_since("Speaker 1 asks Speaker 2.", &written, &swapped), "Speaker 2 asks Speaker 1.");
+
+        // One name the start of another: the longer is the one meant.
+        let mut before = written.clone();
+        before.names = BTreeMap::from([(0, "Анна".into()), (1, "Анна К.".into())]);
+        let mut after = written.clone();
+        after.names = BTreeMap::from([(0, "Оля".into()), (1, "Катя".into())]);
+        assert_eq!(renamed_since("Анна К. asks Анна.", &before, &after), "Катя asks Оля.");
+    }
+
+    #[test]
+    fn a_name_two_speakers_share_is_not_changed_for_one_of_them() {
+        let mut meeting = meeting_of(vec![said(0, 0.0, "а"), said(1, 1.0, "б"), said(2, 2.0, "в")]);
+        meeting.names = BTreeMap::from([(0, "Анна".into()), (2, "Анна".into())]);
+        meeting.summary = Some("Анна asks Speaker 2.".into());
+        meeting.rename(2, "Борис").unwrap();
+        assert_eq!(meeting.summary.as_deref(), Some("Анна asks Speaker 2."), "whose Анна it was, the notes do not say");
+        meeting.rename(0, "Борис").unwrap();
+        assert_eq!(meeting.summary.as_deref(), Some("Борис asks Speaker 2."), "one Анна left: hers");
     }
 
     #[test]
@@ -831,6 +924,19 @@ mod tests {
     fn an_event_names_its_kind_and_meeting() {
         let event = MeetingEvent::SummaryDelta { id: "m".into(), text: "x".into() };
         assert_eq!(serde_json::to_string(&event).unwrap(), r#"{"kind":"summaryDelta","id":"m","text":"x"}"#);
+        assert_eq!(serde_json::to_string(&MeetingEvent::Ended).unwrap(), r#"{"kind":"ended"}"#);
+    }
+
+    #[test]
+    fn a_job_is_what_its_events_said() {
+        let mut job = JobState::new(JobKind::Process, None);
+        assert_eq!(serde_json::to_string(&job).unwrap(), r#"{"kind":"process","done":0,"total":0}"#);
+        job.hear(&MeetingEvent::Progress { id: "m".into(), name: "call.wav".into(), stage: Stage::Speech, done: 2, total: 9 });
+        assert_eq!((job.id.as_deref(), job.name.as_deref(), job.stage, job.done, job.total), (Some("m"), Some("call.wav"), Some(Stage::Speech), 2, 9));
+        job.hear(&MeetingEvent::SummaryDelta { id: "m".into(), text: "x".into() });
+        job.hear(&MeetingEvent::Transcribed { id: "m".into() });
+        assert_eq!((job.stage, job.done, job.total), (Some(Stage::Notes), 0, 0));
+        assert_eq!(JobState::new(JobKind::Summary, Some("m".into())).stage, Some(Stage::Notes));
     }
 
     #[test]

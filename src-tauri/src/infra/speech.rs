@@ -54,8 +54,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn Fn
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS) as i32;
     progress(Stage::Decode, 0, 1);
     let (raw, rate) = decode(audio)?;
-    let samples = to_16k(&raw, rate)?;
-    drop(raw);
+    let samples = to_16k(raw, rate)?;
     app_dir::write_private(keep, &wav(&samples)?).map_err(MeetingError::Store)?;
     progress(Stage::Decode, 1, 1);
 
@@ -121,12 +120,13 @@ fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
     }
 }
 
-fn to_16k(samples: &[f32], rate: u32) -> Result<Vec<f32>, MeetingError> {
+/// `samples` at 16 kHz; already there, the same ones, not a copy of an hour.
+fn to_16k(samples: Vec<f32>, rate: u32) -> Result<Vec<f32>, MeetingError> {
     if rate == SAMPLE_RATE {
-        return Ok(samples.to_vec());
+        return Ok(samples);
     }
     let resampler = LinearResampler::create(rate as i32, SAMPLE_RATE as i32).ok_or(MeetingError::ModelFailed("resampler"))?;
-    Ok(resampler.resample(samples, true))
+    Ok(resampler.resample(&samples, true))
 }
 
 /// 16 kHz mono 16-bit PCM WAV: 32 KB a second, 115 MB an hour.
@@ -184,16 +184,20 @@ fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32], progress: &mut dy
         stream.accept_waveform(SAMPLE_RATE as i32, &samples[from..to]);
         recognizer.decode(&stream);
         let Some(result) = stream.get_result() else { continue };
-        let found = match &result.timestamps {
-            Some(times) => meeting::words_of(&result.tokens, times, result.durations.as_deref(), offset),
-            // No timestamps: the window is one "word", its speaker the window's.
-            None => vec![Word { start: offset, end: to as f32 / SAMPLE_RATE as f32, text: result.text.trim().into() }],
-        };
-        words.extend(found.into_iter().filter(|w| w.start >= kept_from && w.start < cut && !w.text.is_empty()));
+        let found = result.timestamps.as_ref().map(|times| meeting::words_of(&result.tokens, times, result.durations.as_deref(), offset));
+        words.extend(own_words(found, &result.text, (offset, to as f32 / SAMPLE_RATE as f32), kept_from, cut));
         kept_from = cut;
     }
     progress(Stage::Speech, windows, windows);
     words
+}
+
+/// The words of a window that are its own: starting where the last window's
+/// ended and before this one's `cut`. Without timestamps the window is one
+/// "word", its speaker the window's, from where the last one's ended.
+fn own_words(found: Option<Vec<Word>>, text: &str, (from, to): (f32, f32), kept_from: f32, cut: f32) -> Vec<Word> {
+    let found = found.unwrap_or_else(|| vec![Word { start: from.max(kept_from), end: to, text: text.trim().into() }]);
+    found.into_iter().filter(|w| w.start >= kept_from && w.start < cut && !w.text.is_empty()).collect()
 }
 
 /// Windows over the words, one voice embedding each, labeled by spectral
@@ -239,6 +243,18 @@ fn speakers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_window_keeps_its_own_words_with_or_without_timestamps() {
+        let word = |start: f32, text: &str| Word { start, end: start + 0.5, text: text.into() };
+        // The second window, 20–40 s: the first kept up to 22 s, this one to 42 s.
+        let timed = own_words(Some(vec![word(21.0, "уже"), word(30.0, "своё"), word(43.0, "дальше")]), "", (20.0, 44.0), 22.0, 42.0);
+        assert_eq!(timed, [word(30.0, "своё")]);
+        let untimed = own_words(None, " всё окно ", (20.0, 44.0), 22.0, 42.0);
+        assert_eq!(untimed, [Word { start: 22.0, end: 44.0, text: "всё окно".into() }], "not dropped for starting in the overlap");
+        assert_eq!(own_words(None, "", (20.0, 44.0), 22.0, 42.0), []);
+        assert_eq!(own_words(None, "начало", (0.0, 24.0), f32::NEG_INFINITY, 22.0)[0].start, 0.0);
+    }
 
     #[test]
     fn the_kept_copy_reads_back_as_the_sound_the_models_heard() {

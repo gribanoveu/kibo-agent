@@ -3,6 +3,7 @@ import { pickRecording } from "../lib/dialog";
 import {
   meetingDelete,
   meetingGet,
+  meetingJob,
   meetingList,
   meetingProcess,
   meetingRenameSpeaker,
@@ -11,19 +12,10 @@ import {
   onMeetingEvent,
   type Meeting,
   type MeetingInfo,
-  type Stage,
+  type MeetingJob,
 } from "../lib/meeting";
 
-/** What runs now: a recording being processed, or notes written again. */
-export type Job = {
-  kind: "process" | "summary";
-  /** Known once the backend names it — at once for notes, on the first progress for a recording. */
-  id?: string;
-  name?: string;
-  stage?: Stage;
-  done?: number;
-  total?: number;
-};
+export type Job = MeetingJob;
 
 /**
  * The Meetings page's state: the list, the meeting open, and the one job the
@@ -58,6 +50,10 @@ export function useMeetings() {
   useEffect(() => void readList(), []);
   useEffect(() => readOpen(openId), [openId]);
 
+  // How many jobs were seen to end: a snapshot asked for before the last one
+  // ended is of that job, and must not bring its card back.
+  const ends = useRef(0);
+
   useEffect(() => {
     let live = true;
     let unlisten: (() => void) | undefined;
@@ -69,10 +65,26 @@ export function useMeetings() {
         // The recording just added opens as soon as there is a transcript to read.
         if (jobRef.current?.id === event.id) setOpenId(event.id);
         setJob((now) => (now?.id === event.id ? { ...now, stage: "notes" } : now));
-      } else {
+      } else if (event.kind === "summaryDelta") {
         setDraft((now) => ({ id: event.id, text: (now?.id === event.id ? now.text : "") + event.text }));
+      } else {
+        ends.current += 1;
+        setJob(null);
+        setDraft(null);
+        void readList();
+        readOpen(openRef.current);
       }
-    }).then((off) => (live ? (unlisten = off) : off()));
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+      // A job started before the page opened — it outlives the page. Read once
+      // listening, so its end is not missed; what an event said wins.
+      const seen = ends.current;
+      meetingJob().then(
+        (running) => live && ends.current === seen && setJob((now) => now ?? running),
+        (e) => live && setError(String(e)),
+      );
+    });
     return () => {
       live = false;
       unlisten?.();
