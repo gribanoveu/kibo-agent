@@ -2,9 +2,12 @@
 //! turning one on or off. The window reads the list again on [`FEATURES_EVENT`]
 //! — the sidebar shows a feature's page only while it is on.
 
-use tauri::{AppHandle, Emitter, Runtime};
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::services::features::{self, FeatureView};
+use crate::services::meeting_notes::MeetingNotes;
 
 /// A feature was turned on or off.
 pub const FEATURES_EVENT: &str = "features:changed";
@@ -18,6 +21,9 @@ pub fn features_list() -> Vec<FeatureView> {
 #[tauri::command]
 pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
     features::set(&id, on)?;
+    // A kill and a wait for the recognition process: off the main thread.
+    let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || notes.feature_set(&id, on));
     let _ = app.emit(FEATURES_EVENT, ());
     Ok(features::list())
 }

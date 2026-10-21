@@ -89,6 +89,17 @@ dom_smoothie = "0.18.2"
 url = "2.5.8"
 dom_query = "0.28"
 percent-encoding = "2.3"
+# Meeting notes (`docs/36-meeting-notes-research.md`): GigaAM v3 and the speaker
+# model run through sherpa-onnx, in a second process of this exe
+# (`meeting_sidecar`) — a native crash there costs one recording, not the window.
+# The crate's build.rs downloads sherpa's prebuilt static library.
+sherpa-onnx = "1.13.8"
+symphonia = { version = "0.6.1", features = ["all"] }
+# The eigen-decomposition of spectral clustering (`domain::meeting::spectral`).
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+# Recording a call (`infra::meeting_recorder`): the microphone, and the output's
+# sound as loopback — a Core Audio process tap on macOS 14.6+, WASAPI on Windows.
+cpal = "0.18.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -107,6 +118,11 @@ strip = true
 # honestly instead of losing the key silently.
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# Asking for the microphone and the system's sound before a call is recorded
+# (`infra::recording_access`): AVFoundation's class methods and their
+# completion blocks. Tauri brings both already; named here to be called.
+objc2 = "0.6.4"
+block2 = "0.6.2"
 
 # `sync-secret-service`: a blocking Secret Service client over dbus, since
 # there is no free async context here. `crypto-rust` encrypts the dbus
@@ -116,6 +132,9 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# Windows' microphone switches are registry values (`infra::recording_access`);
+# 0.10 is the one portable-pty already brings.
+winreg = "0.10"
 
 # Killing a timed-out command means killing its whole process group:
 # `Child::kill()` signals the direct child only, and `sh -c '... &'` leaves the

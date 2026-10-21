@@ -3,6 +3,7 @@ mod architecture;
 pub mod commands;
 pub mod domain;
 pub mod infra;
+pub mod meeting_sidecar;
 #[cfg(test)]
 mod data_policy;
 #[cfg(test)]
@@ -86,7 +87,7 @@ fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = commands::prototype::register(tauri::Builder::default());
+    let builder = commands::meeting::register(commands::prototype::register(tauri::Builder::default()));
     // First, as the plugin requires: plugins start in the order they were
     // added, and a second launch must be turned away before anything else
     // comes up — the index, the MCP servers.
@@ -166,6 +167,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(infra::kube_client::Clusters::default()))
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
+        .manage(std::sync::Arc::new(services::meeting_notes::MeetingNotes::default()))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -349,6 +351,30 @@ pub fn run() {
             commands::agents::agents_list,
             commands::board::board_list,
             commands::board::board_change,
+            commands::meeting::meeting_list,
+            commands::meeting::meeting_get,
+            commands::meeting::meeting_delete,
+            commands::meeting::meeting_rename_speaker,
+            commands::meeting::meeting_voices,
+            commands::meeting::meeting_voice_delete,
+            commands::meeting::meeting_process,
+            commands::meeting::meeting_summarize,
+            commands::meeting::meeting_stop,
+            commands::meeting::meeting_job,
+            commands::meeting::meeting_record_start,
+            commands::meeting::meeting_record_stop,
+            commands::meeting::meeting_record_mute,
+            commands::meeting::meeting_recording,
+            commands::meeting::meeting_recordings,
+            commands::meeting::meeting_process_recording,
+            commands::meeting::meeting_recording_delete,
+            commands::meeting::meeting_recording_access,
+            commands::meeting::meeting_recording_access_request,
+            commands::meeting::meeting_recording_access_settings,
+            commands::meeting::meeting_denoise_get,
+            commands::meeting::meeting_denoise_set,
+            commands::meeting::meeting_auto_process_get,
+            commands::meeting::meeting_auto_process_set,
             commands::features::features_list,
             commands::features::features_set,
             commands::features::features_delete_data,
@@ -394,6 +420,9 @@ pub fn run() {
                 app.state::<std::sync::Arc<services::mcp_servers::McpServers>>().stop_all();
                 app.state::<std::sync::Arc<infra::background::Processes>>().stop_all();
                 app.state::<std::sync::Arc<infra::terminal::Terminals>>().close_all();
+                // The recognition process would also see its stdin close; a kill is
+                // now. A recording gets its sizes put in, or it reads as nothing.
+                app.state::<std::sync::Arc<services::meeting_notes::MeetingNotes>>().stop_all();
             }
         });
 }

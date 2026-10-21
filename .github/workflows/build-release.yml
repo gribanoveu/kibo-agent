@@ -49,6 +49,17 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      # ~250 MB from Hugging Face, kept between runs: the key changes only
+      # when the script's pinned files do.
+      - name: Meeting models cache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/models/meeting
+          key: meeting-models-${{ hashFiles('scripts/fetch-meeting-models.ts') }}
+
+      - name: Fetch meeting models
+        run: bun scripts/fetch-meeting-models.ts
+
       # Main's build is the next patch with the run number after it: newer than
       # the last release, and numeric after the dash because MSI takes no other.
       - name: Build Tauri app
@@ -99,6 +110,17 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      # ~250 MB from Hugging Face, kept between runs: the key changes only
+      # when the script's pinned files do.
+      - name: Meeting models cache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/models/meeting
+          key: meeting-models-${{ hashFiles('scripts/fetch-meeting-models.ts') }}
+
+      - name: Fetch meeting models
+        run: bun scripts/fetch-meeting-models.ts
 
       # Main's build is the next patch with the run number after it: newer than
       # the last release, and numeric after the dash because MSI takes no other.

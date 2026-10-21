@@ -161,6 +161,8 @@ fn the_window_may_reach_nothing_but_the_app() {
 /// chat's folder (`infra::prototype_protocol`) — not the network — and the
 /// pictures in its `assets/`, drawn in the panel's drawer: a frame and an
 /// image, which run nothing in the window. No script, style or connection.
+/// `meeting:` is a meeting's recording for the Meetings page's player, read
+/// from the app directory (`infra::meeting_audio`): sound, and nothing more.
 fn csp_allows(directive: &str, source: &str) -> bool {
     [
         "'self'", "'none'", "'unsafe-inline'", "'wasm-unsafe-eval'", "data:", "asset:", "ipc:",
@@ -168,6 +170,7 @@ fn csp_allows(directive: &str, source: &str) -> bool {
     ]
     .contains(&source)
         || (["frame-src", "img-src"].contains(&directive) && ["artifact:", "http://artifact.localhost"].contains(&source))
+        || (directive == "media-src" && ["meeting:", "http://meeting.localhost"].contains(&source))
 }
 
 /// The preview's scheme is a frame's source and an image's, nothing else's: a

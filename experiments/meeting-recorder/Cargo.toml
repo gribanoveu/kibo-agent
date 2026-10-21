@@ -1,0 +1,12 @@
+[package]
+name = "meeting-recorder"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike (docs/36, recording): the microphone and the system's sound at once, through cpal, each to its own 16 kHz WAV"
+
+# Not part of the app's build: its own lockfile and nothing in src-tauri depends on it.
+[workspace]
+
+[dependencies]
+cpal = "0.18.2"

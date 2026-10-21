@@ -93,6 +93,8 @@ mod tests {
             skill_sources: crate::domain::settings::OptOut { disabled: vec!["agents".to_string()] },
             rules: crate::domain::settings::OptOut { disabled: vec!["/repo/AGENTS.md".to_string()] },
             features: [("board".to_string(), true)].into(),
+            meeting_auto_process: true,
+            meeting_denoise: Some(false),
             folder_trust: {
                 let mut trust = crate::domain::settings::FolderTrust::default();
                 trust.set(std::path::Path::new("/repo"), true);

@@ -19,6 +19,8 @@ pub enum Feature {
     Board,
     ProviderBalance,
     DeepseekSearch,
+    MeetingNotes,
+    VoiceMemory,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -29,12 +31,12 @@ pub struct Manifest {
     pub description: &'static str,
     pub enabled_by_default: bool,
     pub tools: &'static [ToolName],
-    /// Its file under the app directory, which "Delete data" removes.
+    /// Its file or folder under the app directory, which "Delete data" removes.
     pub data: Option<&'static str>,
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -64,6 +66,28 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::DeepseekSearch, ToolName::DeepseekFetch],
                 data: None,
+            },
+            Feature::MeetingNotes => Manifest {
+                id: "meeting-notes",
+                name: "Meeting notes",
+                description: "A Meetings page: add a call's recording and get its notes — summary, decisions, action items — \
+                    written by the model from a transcript with speakers and times. The speech is recognized on this computer; \
+                    only the transcript goes to the model chosen in Settings. Each meeting keeps its own copy of the sound \
+                    (16 kHz mono, about 115 MB an hour), not the file it came from.",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("meetings"),
+            },
+            Feature::VoiceMemory => Manifest {
+                id: "voice-memory",
+                name: "Voice memory",
+                description: "With Meeting notes: a speaker you name on the Meetings page is named by voice in the next meeting. \
+                    It keeps a voice print of each speaker who said 20 seconds and 20 words or more in phrases in a meeting — \
+                    biometric data about the people on your calls, so have their consent. Kept on this computer only; \
+                    Delete data removes every print.",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("voices.json"),
             },
         }
     }
@@ -132,7 +156,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory"]);
     }
 
     #[test]
@@ -149,6 +173,8 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Board), "the board is off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::ProviderBalance), "a live call per answer, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::DeepseekSearch), "paid per call, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.

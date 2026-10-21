@@ -1,0 +1,207 @@
+//! Meetings on disk, a folder each — `~/.kibo/meetings/<id>/`, what the
+//! Catalog's "Delete data" for meeting notes removes:
+//!
+//! - `meeting.json` — the transcript with its times, the names, the notes;
+//! - `audio.wav` — the recording as the models heard it (16 kHz mono 16-bit),
+//!   not the file it came from.
+//!
+//! A meeting is the whole folder: whatever lists, shows or deletes one takes it
+//! all, by id.
+//!
+//! `recordings/<id>.wav` beside them are calls recorded and not yet made into
+//! meetings — the only copy of a call, so here and not in the system's temp,
+//! and inside `meetings/` so "Delete data" takes them too.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::domain::meeting::{Meeting, MeetingError, MeetingInfo};
+use crate::infra::app_dir;
+
+/// Under the app directory; the feature's `data` in `domain::features`.
+pub const DIR: &str = "meetings";
+const MEETING: &str = "meeting.json";
+const AUDIO: &str = "audio.wav";
+const RECORDINGS: &str = "recordings";
+
+fn store(e: impl std::fmt::Display) -> MeetingError {
+    MeetingError::Store(e.to_string())
+}
+
+fn dir() -> Result<PathBuf, MeetingError> {
+    Ok(app_dir::dir().map_err(store)?.join(DIR))
+}
+
+/// The id is the window's: only what [`save`] could have named — a uuid.
+fn ours(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+fn folder(dir: &Path, id: &str) -> Result<PathBuf, MeetingError> {
+    if !ours(id) {
+        return Err(MeetingError::NotFound(id.to_string()));
+    }
+    Ok(dir.join(id))
+}
+
+/// Where meeting `id`'s recording is kept. A folder with it and no
+/// `meeting.json` yet is a meeting still being recognized: not listed.
+pub fn audio(id: &str) -> Result<PathBuf, MeetingError> {
+    Ok(folder(&dir()?, id)?.join(AUDIO))
+}
+
+/// Where the call recorded as `id` is kept until it is made into a meeting;
+/// its folder made.
+pub fn recording(id: &str) -> Result<PathBuf, MeetingError> {
+    let dir = dir()?.join(RECORDINGS);
+    fs::create_dir_all(&dir).map_err(store)?;
+    Ok(folder(&dir, id)?.with_extension("wav"))
+}
+
+/// The calls recorded and not made into meetings yet: each id and its file.
+pub fn recordings() -> Result<Vec<(String, PathBuf)>, MeetingError> {
+    let entries = match fs::read_dir(dir()?.join(RECORDINGS)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(store(e)),
+    };
+    Ok(entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|path| path.extension().is_some_and(|x| x == "wav"))
+        .filter_map(|path| Some((path.file_stem()?.to_str().filter(|id| ours(id))?.to_string(), path)))
+        .collect())
+}
+
+/// The recording `id`, gone; none is no failure.
+pub fn delete_recording(id: &str) -> Result<(), MeetingError> {
+    match fs::remove_file(recording(id)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(store(e)),
+        _ => Ok(()),
+    }
+}
+
+/// Newest first. A meeting that does not read is skipped, not the list.
+// ponytail: every file is read in full for its row; keep an index when there are hundreds.
+pub fn list() -> Result<Vec<MeetingInfo>, MeetingError> {
+    let entries = match fs::read_dir(dir()?) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(store(e)),
+    };
+    let mut rows: Vec<MeetingInfo> = entries
+        .flatten()
+        .filter_map(|e| fs::read(e.path().join(MEETING)).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Meeting>(&bytes).ok())
+        .map(|m| m.info())
+        .collect();
+    rows.sort_by(|a, b| b.created.cmp(&a.created));
+    Ok(rows)
+}
+
+/// The folders with a recording and no meeting: being recognized now, or
+/// left by an app that quit or crashed while it was.
+pub fn unfinished() -> Result<Vec<String>, MeetingError> {
+    let entries = match fs::read_dir(dir()?) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(store(e)),
+    };
+    Ok(entries
+        .flatten()
+        .filter(|e| e.file_name() != RECORDINGS && e.path().is_dir() && !e.path().join(MEETING).exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect())
+}
+
+pub fn get(id: &str) -> Result<Meeting, MeetingError> {
+    let bytes = match fs::read(folder(&dir()?, id)?.join(MEETING)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(MeetingError::NotFound(id.to_string())),
+        Err(e) => return Err(store(e)),
+    };
+    serde_json::from_slice(&bytes).map_err(store)
+}
+
+pub fn save(meeting: &Meeting) -> Result<(), MeetingError> {
+    let bytes = serde_json::to_vec(meeting).map_err(store)?;
+    app_dir::write_private(&folder(&dir()?, &meeting.id)?.join(MEETING), &bytes).map_err(store)
+}
+
+/// The meeting and its recording.
+pub fn delete(id: &str) -> Result<(), MeetingError> {
+    match fs::remove_dir_all(folder(&dir()?, id)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(store(e)),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::meeting::Utterance;
+    use crate::testing::with_app_dir;
+
+    fn meeting(id: &str, created: &str) -> Meeting {
+        Meeting {
+            id: id.into(),
+            name: "call.m4a".into(),
+            created: created.into(),
+            seconds: 12.5,
+            utterances: vec![Utterance { speaker: 1, start: 0.0, end: 1.0, text: "да".into() }],
+            summary: None,
+            names: Default::default(),
+            guessed: Vec::new(),
+            title: None,
+        }
+    }
+
+    #[test]
+    fn a_saved_meeting_reads_back_and_lists_newest_first() {
+        with_app_dir("meeting-store", || {
+            assert_eq!(list().unwrap(), [], "no folder yet is no meetings");
+            save(&meeting("aa", "2026-10-01T10:00:00Z")).unwrap();
+            save(&meeting("bb", "2026-10-02T10:00:00Z")).unwrap();
+            fs::create_dir_all(dir().unwrap().join("cc")).unwrap();
+            fs::write(dir().unwrap().join("cc").join(MEETING), "not json").unwrap();
+            fs::create_dir_all(dir().unwrap().join("dd")).unwrap(); // still being recognized
+            let recorded = recording("ee").unwrap();
+            assert_eq!(recorded, dir().unwrap().join("recordings").join("ee.wav"));
+            assert_eq!(unfinished().unwrap(), ["dd"], "a recording waiting is not a meeting left half-made");
+            fs::write(&recorded, "RIFF").unwrap();
+            fs::write(recorded.with_file_name("ab.txt"), "").unwrap();
+            fs::write(recorded.with_file_name("x.y.wav"), "").unwrap();
+            assert_eq!(recordings().unwrap(), [("ee".to_string(), recorded.clone())], "only ours, by id");
+            delete_recording("ee").unwrap();
+            assert_eq!(recordings().unwrap(), []);
+            delete_recording("ee").unwrap();
+            assert_eq!(get("aa").unwrap(), meeting("aa", "2026-10-01T10:00:00Z"));
+            assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["bb", "aa"]);
+
+            fs::write(audio("aa").unwrap(), "RIFF").unwrap();
+            delete("aa").unwrap();
+            assert_eq!(get("aa"), Err(MeetingError::NotFound("aa".into())));
+            assert!(!dir().unwrap().join("aa").exists(), "the recording went with it");
+            delete("aa").unwrap();
+        });
+    }
+
+    #[test]
+    fn the_folder_is_the_one_delete_data_removes() {
+        use crate::domain::features::Feature;
+        assert_eq!(Feature::MeetingNotes.manifest().data, Some(DIR));
+        assert_eq!(Feature::VoiceMemory.manifest().data, Some(crate::infra::voices_store::FILE));
+    }
+
+    #[test]
+    fn an_id_that_is_not_one_of_ours_reaches_no_file() {
+        with_app_dir("meeting-store-ids", || {
+            for id in ["", "../settings", "a/b", "x.json"] {
+                assert_eq!(get(id), Err(MeetingError::NotFound(id.into())), "{id}");
+                assert!(delete(id).is_err(), "{id}");
+                assert!(audio(id).is_err(), "{id}");
+                assert!(recording(id).is_err(), "{id}");
+            }
+        });
+    }
+}

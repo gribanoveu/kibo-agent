@@ -10,7 +10,7 @@ use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::features::{Feature, Features};
 use crate::domain::settings::AppSettings;
-use crate::infra::{app_dir, settings_store};
+use crate::infra::{app_dir, settings_store, voices_store};
 use crate::services::ai_tools::tools::tool_definitions;
 
 /// One feature as its Catalog card shows it.
@@ -54,17 +54,23 @@ pub fn set(id: &str, on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Removes the feature's file. Only while it is off: the model could be
+/// Removes the feature's file or folder. Only while it is off: the model could be
 /// writing to it.
 pub fn delete_data(id: &str) -> Result<(), String> {
     let feature = Feature::from_id(id).ok_or_else(|| format!("no feature \"{id}\""))?;
     if enabled().is_on(feature) {
         return Err(format!("turn {} off before deleting its data", feature.manifest().name));
     }
+    // Deleting a meeting forgets its voices with Voice memory off too: the
+    // book's own lock keeps that from writing it back.
+    if feature == Feature::VoiceMemory {
+        return voices_store::delete().map_err(|e| e.to_string());
+    }
     let Some(path) = data_path(feature, app_dir::dir().ok().as_deref()) else {
         return Ok(());
     };
-    match std::fs::remove_file(&path) {
+    let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    match removed {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("could not delete {}: {e}", path.display())),
@@ -165,6 +171,21 @@ mod tests {
             // Nothing there is nothing to delete, not a failure.
             delete_data("board").unwrap();
             assert!(set("nope", true).is_err());
+
+            std::fs::create_dir_all(dir.join("meetings")).unwrap();
+            std::fs::write(dir.join("meetings").join("a.json"), "{}").unwrap();
+            delete_data("meeting-notes").unwrap();
+            assert!(!dir.join("meetings").exists(), "a folder goes with what is in it");
+
+            // Through the book's lock: not while a change to it is under way.
+            std::fs::write(dir.join("voices.json"), "{}").unwrap();
+            let held = voices_store::held();
+            let deleting = std::thread::spawn(|| delete_data("voice-memory"));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(dir.join("voices.json").exists());
+            drop(held);
+            deleting.join().unwrap().unwrap();
+            assert!(!dir.join("voices.json").exists());
         });
     }
 }

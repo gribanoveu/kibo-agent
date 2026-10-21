@@ -30,3 +30,7 @@ dist-ssr
 src-tauri/prototype-libs/*
 !src-tauri/prototype-libs/.gitkeep
 scripts/prototype-probe/report.jsonl
+# Meeting notes (docs/36): the speech models, fetched by scripts/fetch-meeting-models.ts
+# before a build; the folder itself stays, as a bundle resource must exist.
+src-tauri/models/meeting/*
+!src-tauri/models/meeting/.gitkeep

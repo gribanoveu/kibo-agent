@@ -93,6 +93,25 @@ after touching `infra/kube_client.rs`:
 cd src-tauri && cargo test live_cluster -- --ignored --nocapture
 ```
 
+Recording a call has a live test on the real microphone and output: a few seconds with a
+voice playing (`say`), checked to be a whole stereo WAV. Run it after touching
+`infra/meeting_recorder.rs`. From a terminal macOS asks for the microphone, and the call's
+track records as silence — System Audio Recording goes to the `.app`, whose `Info.plist`
+asks for it. The same filter runs `record_live_reopened`: the microphone's stream marked
+broken and opened again on the default, its track ending where the time is:
+
+```bash
+cd src-tauri && cargo test record_live -- --ignored --nocapture
+```
+
+The microphone's denoiser (`infra/speech.rs`, DPDFNet-2) has one too: noise under a tone,
+taken down by about the 12 dB limit and not further, the length kept. It needs the models
+(`bun scripts/fetch-meeting-models.ts`); run it after touching the denoiser or its chunks:
+
+```bash
+cd src-tauri && cargo test --release denoise_live -- --ignored --nocapture
+```
+
 ## Mutation testing
 
 New backend code is not done when `cargo test` is green — the tests have to be shown to
