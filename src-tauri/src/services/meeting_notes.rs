@@ -28,6 +28,17 @@ pub struct MeetingNotes {
     recorder: Recorder,
 }
 
+/// How long the recording whose file is `meta` is.
+fn length(meta: &std::fs::Metadata) -> f32 {
+    recording::seconds_of(recording::data_bytes_of(meta.len(), recording::CHANNELS) as u64)
+}
+
+/// When the recording whose file is `meta` began: its last write — the stop,
+/// or a crash — less how long it is, which keeps time through every silence.
+fn began(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
+    meta.modified().ok()?.checked_sub(std::time::Duration::from_secs_f32(length(meta)))
+}
+
 /// What a job recognizes: the file, what the meeting is called, and what it is.
 struct Audio<'a> {
     path: &'a Path,
@@ -139,9 +150,8 @@ impl MeetingNotes {
                 // ponytail: a file that is not a WAV of ours is left out, not removed; Delete data takes it.
                 meeting_recorder::repair(&path).ok()?;
                 let meta = std::fs::metadata(&path).ok()?;
-                let created = chrono::DateTime::<chrono::Utc>::from(meta.modified().ok()?).to_rfc3339();
-                let seconds = recording::seconds_of(recording::data_bytes_of(meta.len(), recording::CHANNELS) as u64);
-                Some(RecordingInfo { id, created, seconds })
+                let created = chrono::DateTime::<chrono::Utc>::from(began(&meta)?).to_rfc3339();
+                Some(RecordingInfo { id, created, seconds: length(&meta) })
             })
             .collect();
         rows.sort_by(|a, b| b.created.cmp(&a.created));
@@ -155,8 +165,8 @@ impl MeetingNotes {
             return Err(MeetingError::StillRecording);
         }
         let path = meeting_store::recording(id)?;
-        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map_err(|_| MeetingError::NotFound(id.to_string()))?;
-        let name = chrono::DateTime::<chrono::Local>::from(modified).format("Call %Y-%m-%d %H:%M").to_string();
+        let began = std::fs::metadata(&path).ok().and_then(|m| began(&m)).ok_or_else(|| MeetingError::NotFound(id.to_string()))?;
+        let name = chrono::DateTime::<chrono::Local>::from(began).format("Call %Y-%m-%d %H:%M").to_string();
         let sound = Sound::Call { denoise_mic: settings_store::load().unwrap_or_default().meeting_denoise() };
         self.process_as(exe, models, Audio { path: &path, name, sound }, sink, &|| {
             let _ = meeting_store::delete_recording(id);
@@ -656,7 +666,10 @@ mod tests {
             assert_eq!(notes.recording().map(|r| r.id), Some("cc".into()));
 
             let rows = notes.recordings().unwrap();
-            assert_eq!(rows.iter().map(|r| (r.id.as_str(), r.seconds)).collect::<Vec<_>>(), [("bb", 2.0), ("aa", 1.0)]);
+            // bb stopped last but is a second longer: it began first, and the newest begun leads.
+            assert_eq!(rows.iter().map(|r| (r.id.as_str(), r.seconds)).collect::<Vec<_>>(), [("aa", 1.0), ("bb", 2.0)]);
+            let stopped = |id: &str| chrono::DateTime::<chrono::Utc>::from(std::fs::metadata(meeting_store::recording(id).unwrap()).unwrap().modified().unwrap());
+            assert_eq!(rows[1].created, (stopped("bb") - chrono::Duration::seconds(2)).to_rfc3339(), "when it began, not when it stopped");
             assert_eq!(std::fs::read(&crashed).unwrap()[40..44], (32_000u32 * 4).to_le_bytes(), "its sizes put in");
 
             assert_eq!(notes.delete_recording("cc"), Err(MeetingError::StillRecording));
@@ -674,7 +687,11 @@ mod tests {
             let notes = MeetingNotes::default();
             let (sink, _) = recorder();
             let (failing, models) = sidecar("recording-fails", r#"{"type":"error","message":"no"}"#);
-            let kept = recorded("aa", 16_000, true);
+            use chrono::TimeZone;
+            // Two minutes, stopped at 14:30: the meeting is named by its start.
+            let kept = recorded("aa", 16_000 * 120, true);
+            let stopped = chrono::Local.with_ymd_and_hms(2026, 10, 21, 14, 30, 0).unwrap();
+            std::fs::File::options().write(true).open(&kept).unwrap().set_modified(stopped.into()).unwrap();
             assert!(notes.process_recording(&failing, &models, "aa", &sink).is_err());
             assert!(kept.exists(), "a recognition that failed leaves the call to try again");
 
@@ -684,7 +701,7 @@ mod tests {
             assert!(!kept.exists(), "the meeting is the call now");
             let meetings = meeting_store::list().unwrap();
             assert_eq!(meetings.len(), 1);
-            assert!(meetings[0].name.starts_with("Call 20"), "{}", meetings[0].name);
+            assert_eq!(meetings[0].name, "Call 2026-10-21 14:28");
             assert_eq!(notes.process_recording(&exe, &models, "aa", &sink), Err(MeetingError::NotFound("aa".into())));
         });
     }

@@ -27,7 +27,7 @@ pub struct RecordingState {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecordingInfo {
     pub id: String,
-    /// When it was stopped — its file last written — RFC 3339.
+    /// When it began — its file last written, less its length — RFC 3339.
     pub created: String,
     pub seconds: f32,
 }
