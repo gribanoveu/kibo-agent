@@ -211,6 +211,8 @@ pub struct MeetingInfo {
     pub seconds: f32,
     pub speakers: usize,
     pub summarized: bool,
+    /// Its kept recording's size on disk; 0 when it has none.
+    pub bytes: u64,
 }
 
 /// A speaker's name, past which it is not one.
@@ -292,6 +294,8 @@ impl Meeting {
             seconds: self.seconds,
             speakers: self.speakers(),
             summarized: self.summary.is_some(),
+            // The file is the store's to measure.
+            bytes: 0,
         }
     }
 }

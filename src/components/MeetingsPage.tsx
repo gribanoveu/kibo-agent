@@ -1,12 +1,13 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
-import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { Switch } from "./Switch";
 import { useMeetings, type Job } from "../hooks/useMeetings";
+import { sizeLabel } from "../lib/prototype";
 import { useCopied } from "../hooks/useCopied";
 import { useFeatures } from "../hooks/useFeatures";
 import { useVoices } from "../hooks/useVoices";
@@ -82,51 +83,47 @@ export function MeetingsPage({ sideHandle }: PageContext) {
 
   const bar = (
     <div className="meetings-head">
-    <div className="meetings-bar">
-      {openId && (
-        <button type="button" className="btn btn-ghost" onClick={() => meetings.open(null)}>
-          <ChevronLeft size={14} />
-          All meetings
-        </button>
-      )}
-      {!openId && (
-        <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.importRecording()}>
-          <Plus size={14} />
-          Import recording
-        </button>
-      )}
-      {!openId && (
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={meetings.recording !== null || meetings.switching || !access.ready}
-          title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
-          onClick={() => void meetings.record()}
-        >
-          <Mic size={14} />
-          Record
-        </button>
-      )}
-      {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
-      {remembering && (
-        <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
-          <Users size={14} />
-          Voices
-        </button>
-      )}
-    </div>
-      {!openId && (
-        <div className="meetings-options">
-          <label className="meetings-auto" title="A recording is transcribed as soon as it is stopped">
-            <Switch label="Auto-transcribe recordings" on={meetings.autoProcess} onChange={() => void meetings.toggleAutoProcess()} />
-            Auto-transcribe recordings
-          </label>
-          <label className="meetings-auto" title="Your side of a recorded call is cleaned up before it is transcribed; the recording itself stays as it was">
-            <Switch label="Reduce noise on my microphone" on={meetings.denoise} onChange={() => void meetings.toggleDenoise()} />
-            Reduce noise on my microphone
-          </label>
-        </div>
-      )}
+      <div className="meetings-bar">
+        {openId && (
+          <button type="button" className="btn btn-ghost" onClick={() => meetings.open(null)}>
+            <ChevronLeft size={14} />
+            All meetings
+          </button>
+        )}
+        {!openId && (
+          <button
+            type="button"
+            className="btn btn-primary meetings-record"
+            disabled={meetings.recording !== null || meetings.switching || !access.ready}
+            title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
+            onClick={() => void meetings.record()}
+          >
+            <Mic size={14} />
+            Record
+          </button>
+        )}
+        {!openId && (
+          <RecordingOptions
+            autoProcess={meetings.autoProcess}
+            denoise={meetings.denoise}
+            onAutoProcess={() => void meetings.toggleAutoProcess()}
+            onDenoise={() => void meetings.toggleDenoise()}
+          />
+        )}
+        {!openId && (
+          <button type="button" className="btn btn-ghost" disabled={job !== null} onClick={() => void meetings.importRecording()}>
+            <Plus size={14} />
+            Import recording
+          </button>
+        )}
+        {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
+        {remembering && (
+          <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
+            <Users size={14} />
+            Voices
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -169,6 +166,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
             onSummarize={() => void meetings.summarize(meeting.id)}
             onRename={(speaker, name) => void meetings.rename(speaker, name)}
             player={player}
+            bytes={meetings.list.find((m) => m.id === meeting.id)?.bytes ?? 0}
           />
         )
       )}
@@ -263,6 +261,63 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
       <button type="button" className="btn btn-ghost" onClick={onAllow}>
         {denied ? `Open ${SETTINGS.name}` : "Allow"}
       </button>
+    </div>
+  );
+}
+
+/** The recording's two settings, set once and left: behind a gear beside Record, not on the page. */
+function RecordingOptions({
+  autoProcess,
+  denoise,
+  onAutoProcess,
+  onDenoise,
+}: {
+  autoProcess: boolean;
+  denoise: boolean;
+  onAutoProcess: () => void;
+  onDenoise: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => matches(e, "close") && setOpen(false);
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="meetings-settings" ref={wrap}>
+      <button
+        type="button"
+        className="btn btn-ghost meetings-settings-toggle"
+        aria-label="Recording settings"
+        title="Recording settings"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Settings2 size={14} />
+      </button>
+      {open && (
+        <div className="meetings-options" role="dialog" aria-label="Recording settings">
+          <label className="meetings-auto" title="A recording is made into a meeting as soon as you press Stop">
+            <Switch label="Transcribe when a recording stops" on={autoProcess} onChange={onAutoProcess} />
+            Transcribe when a recording stops
+          </label>
+          <label className="meetings-auto" title="Background noise on your microphone is reduced before the call is transcribed; the recording itself stays as it was">
+            <Switch label="Reduce noise on my side before transcribing" on={denoise} onChange={onDenoise} />
+            Reduce noise on my side before transcribing
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -584,6 +639,7 @@ function MeetingView({
   onSummarize,
   onRename,
   player,
+  bytes,
 }: {
   meeting: Meeting;
   draft: string | null;
@@ -592,6 +648,8 @@ function MeetingView({
   onSummarize: () => void;
   onRename: (speaker: number, name: string) => void;
   player: Player;
+  /** Its kept recording's size on disk, from the list; 0 when it has none. */
+  bytes: number;
 }) {
   const { copied, copy } = useCopied();
   const notes = writing ? withoutTitle(draft ?? "") : meeting.summary;
@@ -613,6 +671,12 @@ function MeetingView({
             <Users size={13} />
             {speakers} {speakers === 1 ? "speaker" : "speakers"}
           </span>
+          {bytes > 0 && (
+            <span title="Size of the recording">
+              <HardDrive size={13} />
+              {sizeLabel(bytes)}
+            </span>
+          )}
           {meeting.title && (
             <span title="Imported from">
               <FileAudio size={13} />

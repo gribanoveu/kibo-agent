@@ -108,7 +108,6 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
             (meeting::utterances(&words, &segments_of(windows, labels)), voices)
         }
     };
-    progress(Stage::Speakers, 1, 1);
     let (utterances, voices) = meeting::by_first_word(utterances, voices);
     Ok(Recognized { utterances, seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
@@ -337,7 +336,8 @@ fn own_words(found: Option<Vec<Word>>, text: &str, (from, to): (f32, f32), kept_
 
 /// One voice embedding for each of `windows` of `samples` long enough to
 /// have one, and the windows that did; progress told as `done` of `total`
-/// from `before`.
+/// from `before`, the last of them once all are — when every window is, the
+/// page says the voices are being grouped, which tells nothing as it runs.
 fn embed(
     extractor: &SpeakerEmbeddingExtractor,
     samples: &[f32],
@@ -349,6 +349,7 @@ fn embed(
     let step = (total / 100).max(1);
     let mut kept = Vec::new();
     let mut embeddings = Vec::new();
+    let count = windows.len();
     for (i, (start, end)) in windows.into_iter().enumerate() {
         if (before + i) % step == 0 {
             progress(Stage::Speakers, before + i, total);
@@ -366,6 +367,7 @@ fn embed(
             embeddings.push(e);
         }
     }
+    progress(Stage::Speakers, before + count, total);
     (kept, embeddings)
 }
 

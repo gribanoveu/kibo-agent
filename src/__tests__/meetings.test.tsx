@@ -27,6 +27,7 @@ const info = (m: Meeting) => ({
   seconds: m.seconds,
   speakers: new Set(m.utterances.map((u) => u.speaker)).size,
   summarized: m.summary !== undefined,
+  bytes: m.id === "m1" ? 24_200_000 : 0,
 });
 
 mock.module("@tauri-apps/api/core", () => ({
@@ -162,6 +163,7 @@ describe("the meetings page", () => {
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
+    expect(screen.getByTitle("Size of the recording").textContent).toBe("23.1 MB");
     const notes = within(screen.getByRole("region", { name: "Notes" }));
     expect(notes.getByText("Release on Friday.")).toBeTruthy();
     const transcript = within(screen.getByRole("region", { name: "Transcript" }));
@@ -175,6 +177,17 @@ describe("the meetings page", () => {
     await settle();
     expect(screen.getByTitle("Speakers").textContent).toBe("2");
     expect(screen.getByTitle("Duration").textContent).toBe("12:34");
+    expect(screen.queryByTitle("Size of the recording")).toBeNull();
+  });
+
+  test("a meeting whose recording is gone shows no size", async () => {
+    stored = [{ ...structuredClone(call), id: "m9" }];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    expect(screen.getByTitle("Duration").textContent).toBe("12:34");
+    expect(screen.queryByTitle("Size of the recording")).toBeNull();
   });
 
   test("a day's meetings are under its heading", () => {
@@ -439,7 +452,9 @@ describe("the meetings page", () => {
   test("with Auto-transcribe on, a recording stopped is transcribed at once", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    const toggle = screen.getByRole("switch", { name: "Auto-transcribe recordings" });
+    expect(screen.queryByRole("switch")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Recording settings" }));
+    const toggle = screen.getByRole("switch", { name: "Transcribe when a recording stops" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(toggle);
     await settle();
@@ -456,16 +471,27 @@ describe("the meetings page", () => {
   test("noise reduction on the microphone is on until turned off, and stays as set", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    const toggle = () => screen.getByRole("switch", { name: "Reduce noise on my microphone" });
+    const toggle = () => screen.getByRole("switch", { name: "Reduce noise on my side before transcribing" });
+    const gear = () => screen.getByRole("button", { name: "Recording settings" });
+    fireEvent.click(gear());
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle());
     await settle();
     expect(denoiseOn).toBe(false);
     expect(toggle().getAttribute("aria-checked")).toBe("false");
 
+    // A click inside keeps it open; Escape and a click outside close it.
+    expect(gear().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("switch")).toBeNull();
+    fireEvent.click(gear());
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("switch")).toBeNull();
+
     cleanup();
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
+    fireEvent.click(gear());
     expect(toggle().getAttribute("aria-checked")).toBe("false");
   });
 

@@ -91,9 +91,12 @@ pub fn list() -> Result<Vec<MeetingInfo>, MeetingError> {
     };
     let mut rows: Vec<MeetingInfo> = entries
         .flatten()
-        .filter_map(|e| fs::read(e.path().join(MEETING)).ok())
-        .filter_map(|bytes| serde_json::from_slice::<Meeting>(&bytes).ok())
-        .map(|m| m.info())
+        .filter_map(|e| {
+            let folder = e.path();
+            let meeting = serde_json::from_slice::<Meeting>(&fs::read(folder.join(MEETING)).ok()?).ok()?;
+            let bytes = fs::metadata(folder.join(AUDIO)).map_or(0, |m| m.len());
+            Some(MeetingInfo { bytes, ..meeting.info() })
+        })
         .collect();
     rows.sort_by(|a, b| b.created.cmp(&a.created));
     Ok(rows)
@@ -179,6 +182,7 @@ mod tests {
             assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["bb", "aa"]);
 
             fs::write(audio("aa").unwrap(), "RIFF").unwrap();
+            assert_eq!(list().unwrap().iter().map(|m| m.bytes).collect::<Vec<_>>(), [0, 4], "its recording's size; none is 0");
             delete("aa").unwrap();
             assert_eq!(get("aa"), Err(MeetingError::NotFound("aa".into())));
             assert!(!dir().unwrap().join("aa").exists(), "the recording went with it");

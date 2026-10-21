@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-10-21 Play on the Prototype panel shows the page full screen, as a deck's F does; Escape comes back
+- 2026-10-21 An open meeting shows how much space its recording takes; the recording's two settings are behind a gear beside Record
 - 2026-10-21 A call recorded on the Meetings page tells you from the others by the side the sound came from: what you said into the microphone is one speaker, only the call's side is told apart by voice, and without headphones the call heard back through your microphone stays theirs
 - 2026-10-21 A call being recorded follows headphones plugged in or out, or another sound output picked: each side opens again on the new default within a second and goes on in the same file, the moment between silent; on Windows the page says when the microphone is off for desktop apps and opens Settings there, and a pause in the call's sound no longer shifts it against yours
 - 2026-10-21 A call recorded on the Meetings page has your microphone's noise reduced before it is transcribed — a drill or hammering next door costs fewer words; the recording itself stays as it was, and Reduce noise on my microphone turns it off

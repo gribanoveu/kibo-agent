@@ -59,6 +59,8 @@ export type MeetingInfo = {
   seconds: number;
   speakers: number;
   summarized: boolean;
+  /** Its kept recording's size on disk; 0 when it has none. */
+  bytes: number;
 };
 
 /** `notes`: a long meeting's parts read one by one, then the whole written. */
@@ -79,7 +81,7 @@ export type MeetingEvent =
 /** A call recorded and not yet made into a meeting (`domain::recording`). */
 export type RecordingInfo = {
   id: string;
-  /** When it was stopped, RFC 3339. */
+  /** When it began, RFC 3339. */
   created: string;
   seconds: number;
 };
