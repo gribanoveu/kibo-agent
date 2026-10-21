@@ -52,6 +52,8 @@ export function useMeetings() {
   const [queued, setQueued] = useState<string[]>([]);
   // Recordings stopped here: a level event about one that lands after the stop is late, not a new recording.
   const stoppedIds = useRef(new Set<string>());
+  // A Record or Stop on its way: a second click is not a second call.
+  const [switching, setSwitching] = useState(false);
   const stopping = useRef(false);
   // The job's meeting as the listener sees it, without re-subscribing per event.
   const jobRef = useRef<Job | null>(null);
@@ -95,6 +97,11 @@ export function useMeetings() {
         setJob((now) => (now?.id === event.id ? { ...now, stage: "notes" } : now));
       } else if (event.kind === "recording") {
         if (!stoppedIds.current.has(event.id)) setRecording((now) => hearLevels(now, event));
+      } else if (event.kind === "recordingEnded") {
+        stoppedIds.current.add(event.id);
+        setRecording((now) => (now?.id === event.id ? null : now));
+        setError(event.error);
+        void readList();
       } else if (event.kind === "summaryDelta") {
         setDraft((now) => ({ id: event.id, text: (now?.id === event.id ? now.text : "") + event.text }));
       } else {
@@ -172,17 +179,21 @@ export function useMeetings() {
 
   const record = async () => {
     setError(null);
+    setSwitching(true);
     try {
       const id = await meetingRecordStart();
       setRecording((now) => now ?? hearLevels(null, { id, seconds: 0, mic: 0, call: 0 }));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSwitching(false);
     }
   };
 
   const stopRecording = async () => {
     const was = recording;
     if (was) stoppedIds.current.add(was.id);
+    setSwitching(true);
     try {
       const id = await meetingRecordStop();
       stoppedIds.current.add(id);
@@ -192,6 +203,8 @@ export function useMeetings() {
     } catch (e) {
       setRecording(null);
       setError(String(e));
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -267,6 +280,7 @@ export function useMeetings() {
     summarize,
     recordings,
     recording,
+    switching,
     queued,
     autoProcess,
     denoise,

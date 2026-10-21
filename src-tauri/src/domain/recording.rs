@@ -139,18 +139,29 @@ pub fn silence_before(at: u64, last_end: Option<u64>, placed: u64) -> u64 {
     due.saturating_sub(placed)
 }
 
-/// How many frames to write now, given `mic` and `call` samples waiting. The
-/// two devices deliver at their own pace, so what both have is written and the
-/// rest waits for its other half — unless one is `max_lag` behind: a device
-/// that stopped delivering is silence, not a reason to hold the other back.
-/// `flush` (the recording stops) writes everything, the shorter padded. Where
-/// the late one's sound then goes is [`silence_before`]'s.
-pub fn frames_ready(mic: usize, call: usize, max_lag: usize, flush: bool) -> usize {
-    let (short, long) = (mic.min(call), mic.max(call));
+/// How many frames to write now, given each track's frames waiting and where
+/// its last sound ended, nanoseconds in (`None`: none yet). The two devices
+/// deliver at their own pace, so what both have is written and the rest waits
+/// for its other half — unless the shorter one's sound ended `max_lag` frames'
+/// time before the other's: a device that stopped delivering is silence, not a
+/// reason to hold the other back. One still delivering is only behind by its
+/// clock's drift, which a pad would make a hole in its speech; it is waited
+/// for. `flush` (the recording stops) writes everything, the shorter padded.
+/// Where the late one's sound then goes is [`silence_before`]'s.
+pub fn frames_ready(mic: (usize, Option<u64>), call: (usize, Option<u64>), max_lag: usize, flush: bool) -> usize {
+    let (short, long) = if mic.0 <= call.0 { (mic, call) } else { (call, mic) };
+    let lag = max_lag as u64 * 1_000_000_000 / RATE as u64;
+    let gone_quiet = match (short.1, long.1) {
+        (None, _) => true,
+        (Some(short), Some(long)) => long >= short.saturating_add(lag),
+        (Some(_), None) => false,
+    };
     if flush {
-        long
+        long.0
+    } else if gone_quiet {
+        short.0.max(long.0.saturating_sub(max_lag))
     } else {
-        short.max(long.saturating_sub(max_lag))
+        short.0
     }
 }
 
@@ -217,11 +228,18 @@ mod tests {
 
     #[test]
     fn what_both_tracks_have_is_written_and_a_silent_one_holds_nothing_back() {
-        assert_eq!(frames_ready(1000, 990, 16_000, false), 990, "the rest waits for its other half");
-        assert_eq!(frames_ready(990, 1000, 16_000, false), 990);
-        assert_eq!(frames_ready(40_000, 0, 16_000, false), 24_000, "a track a second behind is silence");
-        assert_eq!(frames_ready(0, 40_000, 16_000, false), 24_000);
-        assert_eq!(frames_ready(1000, 990, 16_000, true), 1000, "a stop writes it all");
+        const S: u64 = 1_000_000_000;
+        let (now, early) = (Some(3 * S), Some(2 * S));
+        assert_eq!(frames_ready((1000, now), (990, now), 16_000, false), 990, "the rest waits for its other half");
+        assert_eq!(frames_ready((990, now), (1000, now), 16_000, false), 990);
+        assert_eq!(frames_ready((40_000, now), (0, early), 16_000, false), 24_000, "a track whose sound ended a second before is silence");
+        assert_eq!(frames_ready((0, early), (40_000, now), 16_000, false), 24_000);
+        assert_eq!(frames_ready((40_000, now), (0, None), 16_000, false), 24_000, "so is one never heard");
+        assert_eq!(frames_ready((40_000, now), (0, Some(2 * S + 1)), 16_000, false), 0, "a moment short of a second it is waited for");
+        // Its clock slower, a second short in frames while heard to the same moment: waited for, no hole.
+        assert_eq!(frames_ready((40_000, now), (20_000, now), 16_000, false), 20_000, "drift is not silence");
+        assert_eq!(frames_ready((40_000, None), (0, now), 16_000, false), 0, "the longer unheard is no reason to pad");
+        assert_eq!(frames_ready((1000, now), (990, now), 16_000, true), 1000, "a stop writes it all");
     }
 
     #[test]

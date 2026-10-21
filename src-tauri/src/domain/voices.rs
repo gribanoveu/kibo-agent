@@ -80,7 +80,8 @@ impl VoiceBook {
     pub fn hear(&mut self, id: &str, voices: &[Vec<f32>], speech: &[Speech]) {
         self.forget_meeting(id);
         for (speaker, vector) in voices.iter().enumerate() {
-            if speech.get(speaker).is_some_and(|s| s.seconds >= MIN_SPEECH_SECONDS && s.words >= MIN_WORDS) {
+            // A speaker with no voice measured has nothing to learn from.
+            if !vector.is_empty() && speech.get(speaker).is_some_and(|s| s.seconds >= MIN_SPEECH_SECONDS && s.words >= MIN_WORDS) {
                 self.heard.push(Heard { meeting: id.to_string(), speaker, vector: vector.clone(), voice: None });
             }
         }
@@ -206,6 +207,9 @@ mod tests {
         book.hear("m2", &[at(0.0), at(5.0), at(5.0)], &[spoke(19.9), spoke(20.0), Speech { seconds: 60.0, words: 19 }]);
         assert_eq!(book.heard.iter().filter(|h| h.meeting == "m2").map(|h| h.speaker).collect::<Vec<_>>(), [1]);
         assert_eq!(book.recognize("m2"), [(1, "Альбина".to_string())]);
+        // One with speech enough but no voice measured has nothing to keep.
+        book.hear("m4", &[vec![], at(5.0)], &[spoke(60.0), spoke(60.0)]);
+        assert_eq!(book.heard.iter().filter(|h| h.meeting == "m4").map(|h| h.speaker).collect::<Vec<_>>(), [1]);
         book.learn("m2", 0, "Илья");
         assert_eq!(book.list().len(), 1, "a speaker not kept teaches nothing");
     }

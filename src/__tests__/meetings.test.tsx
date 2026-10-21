@@ -347,6 +347,42 @@ describe("the meetings page", () => {
     expect(calls.some((c) => c.command === "meeting_process_recording")).toBe(false);
   });
 
+  test("a second click on Record or Stop while the first is on its way is not a second call", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Record"));
+    fireEvent.click(screen.getByText("Record"));
+    await settle();
+    expect(calls.filter((c) => c.command === "meeting_record_start").length).toBe(1);
+
+    const stop = within(screen.getByRole("status", { name: "Recording" })).getByText("Stop");
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    await settle();
+    expect(calls.filter((c) => c.command === "meeting_record_stop").length).toBe(1);
+    expect(screen.queryByText("nothing is being recorded")).toBeNull();
+    expect((screen.getByText("Record").closest("button") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("a recording that ends by itself says why and waits in the list", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Record"));
+    await settle();
+    expect(screen.getByRole("status", { name: "Recording" })).toBeTruthy();
+
+    recordingNow = null;
+    recordings = [{ id: "r1", created: "2026-10-21T10:00:00Z", seconds: 40 }];
+    await emit({ kind: "recordingEnded", id: "r1", error: "meeting notes: No space left on device" });
+    await settle();
+    expect(screen.queryByRole("status", { name: "Recording" })).toBeNull();
+    expect(screen.getByText("meeting notes: No space left on device")).toBeTruthy();
+    expect(screen.getByText("Recorded call")).toBeTruthy();
+    // Its last level, told late, does not bring it back.
+    await emit({ kind: "recording", id: "r1", seconds: 40, mic: 0.1, call: 0.1 });
+    expect(screen.queryByRole("status", { name: "Recording" })).toBeNull();
+  });
+
   test("your microphone is muted and heard again while the call records; a page opened later knows", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();

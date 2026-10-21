@@ -99,7 +99,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         <button
           type="button"
           className="btn btn-ghost"
-          disabled={meetings.recording !== null || !access.ready}
+          disabled={meetings.recording !== null || meetings.switching || !access.ready}
           title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
           onClick={() => void meetings.record()}
         >
@@ -139,7 +139,12 @@ export function MeetingsPage({ sideHandle }: PageContext) {
       {!openId && access.access && <AccessNotes access={access.access} onAllow={(source) => void access.allow(source)} />}
       {access.error && <ErrorNote message={access.error} onClose={access.clearError} />}
       {meetings.recording && (
-        <RecorderCard recording={meetings.recording} onMute={(on) => void meetings.mute(on)} onStop={() => void meetings.stopRecording()} />
+        <RecorderCard
+          recording={meetings.recording}
+          stopping={meetings.switching}
+          onMute={(on) => void meetings.mute(on)}
+          onStop={() => void meetings.stopRecording()}
+        />
       )}
       {job && <JobCard job={job} title={titleOf(job, meetings.list)} onStop={meetings.stop} />}
       {meetings.error && <ErrorNote message={meetings.error} onClose={meetings.clearError} />}
@@ -266,7 +271,17 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
 const recordedTitle = "Recorded call";
 
 /** The call being recorded: how long, how loud each side is, your microphone's Mute, and Stop. */
-function RecorderCard({ recording, onMute, onStop }: { recording: Recording; onMute: (on: boolean) => void; onStop: () => void }) {
+function RecorderCard({
+  recording,
+  stopping,
+  onMute,
+  onStop,
+}: {
+  recording: Recording;
+  stopping: boolean;
+  onMute: (on: boolean) => void;
+  onStop: () => void;
+}) {
   return (
     <div className="meetings-recorder" role="status" aria-label="Recording">
       <span className="meetings-recorder-dot" aria-hidden />
@@ -292,7 +307,7 @@ function RecorderCard({ recording, onMute, onStop }: { recording: Recording; onM
         {recording.muted ? <MicOff size={12} /> : <Mic size={12} />}
         {recording.muted ? "Unmute" : "Mute"}
       </button>
-      <button type="button" className="btn btn-ghost" onClick={onStop}>
+      <button type="button" className="btn btn-ghost" disabled={stopping} onClick={onStop}>
         <Square size={12} />
         Stop
       </button>

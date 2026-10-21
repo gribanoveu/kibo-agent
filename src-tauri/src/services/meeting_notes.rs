@@ -100,13 +100,16 @@ impl MeetingNotes {
 
     /// The call recorded from now on — the microphone and what the computer
     /// plays — into `meetings/recordings/<id>.wav`; its id. Only while Meeting
-    /// notes is on. How long and how loud it is goes to `sink` as it records.
+    /// notes is on. How long and how loud it is goes to `sink` as it records,
+    /// and an end without a Stop.
     pub fn record_start(&self, sink: &MeetingEventSink) -> Result<String, MeetingError> {
         still_on()?;
         let id = uuid::Uuid::new_v4().to_string();
-        let (sink, named) = (sink.clone(), id.clone());
-        let levels = Box::new(move |l: recording::Levels| sink(MeetingEvent::Recording { id: named.clone(), seconds: l.seconds, mic: l.mic, call: l.call }));
-        self.recorder.start(&id, &meeting_store::recording(&id)?, levels)?;
+        let (told, named) = (sink.clone(), id.clone());
+        let levels = Box::new(move |l: recording::Levels| told(MeetingEvent::Recording { id: named.clone(), seconds: l.seconds, mic: l.mic, call: l.call }));
+        let (told, named) = (sink.clone(), id.clone());
+        let ended = Box::new(move |e: MeetingError| told(MeetingEvent::RecordingEnded { id: named, error: e.to_string() }));
+        self.recorder.start(&id, &meeting_store::recording(&id)?, levels, ended)?;
         Ok(id)
     }
 
@@ -129,10 +132,9 @@ impl MeetingNotes {
     /// crash left without its sizes gets them here: the list is where it is
     /// next seen, and it reads as nothing without them.
     pub fn recordings(&self) -> Result<Vec<RecordingInfo>, MeetingError> {
-        let recording = self.recorder.current().map(|r| r.id);
         let mut rows: Vec<RecordingInfo> = meeting_store::recordings()?
             .into_iter()
-            .filter(|(id, _)| Some(id) != recording.as_ref())
+            .filter(|(id, _)| !self.recorder.holds(id))
             .filter_map(|(id, path)| {
                 // ponytail: a file that is not a WAV of ours is left out, not removed; Delete data takes it.
                 meeting_recorder::repair(&path).ok()?;
@@ -149,7 +151,7 @@ impl MeetingNotes {
     /// The call recorded as `id` made into a meeting, like an imported file;
     /// the recording goes once the meeting is saved — they are one call.
     pub fn process_recording(&self, exe: &Path, models: &Path, id: &str, sink: &MeetingEventSink) -> Result<String, MeetingError> {
-        if self.recorder.current().is_some_and(|r| r.id == id) {
+        if self.recorder.holds(id) {
             return Err(MeetingError::StillRecording);
         }
         let path = meeting_store::recording(id)?;
@@ -163,7 +165,7 @@ impl MeetingNotes {
 
     /// The recording `id` thrown away — not the one being recorded.
     pub fn delete_recording(&self, id: &str) -> Result<(), MeetingError> {
-        if self.recorder.current().is_some_and(|r| r.id == id) {
+        if self.recorder.holds(id) {
             return Err(MeetingError::StillRecording);
         }
         meeting_store::delete_recording(id)

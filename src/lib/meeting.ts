@@ -72,7 +72,9 @@ export type MeetingEvent =
   /** The job ended, however it ended: read the list and the meeting again. */
   | { kind: "ended" }
   /** A call being recorded: how long by now, how loud each side, 0 to 1 — at most ten a second. */
-  | { kind: "recording"; id: string; seconds: number; mic: number; call: number };
+  | { kind: "recording"; id: string; seconds: number; mic: number; call: number }
+  /** The call stopped being recorded without a Stop, and why; its file waits in the list. */
+  | { kind: "recordingEnded"; id: string; error: string };
 
 /** A call recorded and not yet made into a meeting (`domain::recording`). */
 export type RecordingInfo = {

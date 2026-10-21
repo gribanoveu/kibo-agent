@@ -170,6 +170,8 @@ pub enum MeetingError {
     NotRecording,
     #[error("this call is still being recorded — stop it first")]
     StillRecording,
+    #[error("the recording stopped: one file holds no more")]
+    RecordingFull,
 }
 
 /// A recording made into notes. Its sound is kept beside it (`infra::meeting_store`).
@@ -308,6 +310,9 @@ pub enum MeetingEvent {
     /// A call being recorded: how long by now and how loud each side is — at
     /// most ten a second.
     Recording { id: String, seconds: f32, mic: f32, call: f32 },
+    /// The call stopped being recorded without a Stop, and why: its file is
+    /// kept as far as it was written.
+    RecordingEnded { id: String, error: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -349,7 +354,7 @@ impl JobState {
                 (self.done, self.total) = (*done, *total);
             }
             MeetingEvent::Transcribed { .. } => (self.stage, self.done, self.total) = (Some(Stage::Notes), 0, 0),
-            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended | MeetingEvent::Recording { .. } => {}
+            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended | MeetingEvent::Recording { .. } | MeetingEvent::RecordingEnded { .. } => {}
         }
     }
 }
@@ -738,7 +743,8 @@ pub fn by_first_word(mut utterances: Vec<Utterance>, voices: Vec<Vec<f32>>) -> (
         from[n] = o;
     }
     utterances.iter_mut().zip(&new).for_each(|(u, &n)| u.speaker = n);
-    let voices = from.iter().filter_map(|&o| voices.get(o).cloned()).collect();
+    // A speaker with no voice keeps an empty one: the rest stay on their own speakers.
+    let voices = if voices.is_empty() { voices } else { from.iter().map(|&o| voices.get(o).cloned().unwrap_or_default()).collect() };
     (utterances, voices)
 }
 
@@ -823,6 +829,9 @@ mod tests {
         assert_eq!(voices, [vec![0.0], vec![3.0], vec![2.0]], "each voice follows its speaker");
         let (_, none) = by_first_word(vec![said(0, 0.0)], Vec::new());
         assert_eq!(none, Vec::<Vec<f32>>::new(), "no voices stays none");
+        // Speaker 1 spoke first but has no voice — on a call, the other side's words all too short for one.
+        let (_, voices) = by_first_word(vec![said(1, 0.0), said(0, 2.0)], vec![vec![0.5]]);
+        assert_eq!(voices, [vec![], vec![0.5]], "yours stays yours, not moved onto them");
     }
 
     #[test]
