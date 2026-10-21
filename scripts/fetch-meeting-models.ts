@@ -1,6 +1,7 @@
 // The models of meeting notes (docs/36-meeting-notes-research.md), bundled
-// with the app: GigaAM v3 with punctuation, as sherpa-onnx exported it, and
-// campplus for telling voices apart. Pinned to a commit and checked by hash;
+// with the app: GigaAM v3 with punctuation, as sherpa-onnx exported it,
+// campplus for telling voices apart, and DPDFNet-2 for taking the noise out of
+// a recorded call's microphone. Pinned to a commit and checked by hash;
 // a file already here with the right hash is not fetched again.
 //
 //   bun scripts/fetch-meeting-models.ts [out dir]   (default: src-tauri/models/meeting)
@@ -20,6 +21,10 @@ const voices = "https://huggingface.co/csukuangfj/speaker-embedding-models/resol
 // (iic/speech_campplus_sv_zh_en_16k-common_advanced) and the 3D-Speaker repo;
 // the Hugging Face copy above carries none. Apache asks for it beside the weights.
 const threeDSpeaker = "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4";
+// sherpa-onnx's export of DPDFNet-2 (16 kHz). A release asset, not a commit:
+// the hash is what holds it. Apache 2.0, as Ceva's repository says.
+const denoiser = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models";
+const dpdfnet = "https://raw.githubusercontent.com/ceva-ip/DPDFNet/9bd9844a227bb6aa57e55588d8d0e961fcff1c46";
 
 const files: [name: string, url: string, sha256: string][] = [
   ["encoder.int8.onnx", `${gigaam}/encoder.int8.onnx`, "369f35a71bf288d3b8e0391fabd8dba5f2314088d440bca474056b7b4b6e66bf"],
@@ -33,6 +38,8 @@ const files: [name: string, url: string, sha256: string][] = [
     "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
   ],
   ["campplus-LICENSE", `${threeDSpeaker}/LICENSE`, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"],
+  ["dpdfnet2.onnx", `${denoiser}/dpdfnet2.onnx`, "ce35d6025fc71df0ef10d1540e1b7916837bbfe5f6896deb744508d2cad487a9"],
+  ["DPDFNet-LICENSE", `${dpdfnet}/LICENSE`, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"],
 ];
 
 async function sha256(path: string): Promise<string> {
@@ -48,7 +55,9 @@ for (const [name, url, hash] of files) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
   const partial = `${path}.partial`;
-  await Bun.write(partial, response);
+  // Read whole, not streamed: Bun 1.3.9 hangs writing a response's stream once a
+  // large file was read the way `sha256` reads it — the body never comes.
+  await Bun.write(partial, await response.arrayBuffer());
   const got = await sha256(partial);
   if (got !== hash) throw new Error(`${name}: sha256 ${got}, expected ${hash}`);
   renameSync(partial, path);

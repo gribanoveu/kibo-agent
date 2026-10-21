@@ -225,6 +225,16 @@ pub struct AppSettings {
     /// A call recorded on the Meetings page is transcribed as soon as it is
     /// stopped; off, it waits in the list for Transcribe (`docs/36`).
     pub meeting_auto_process: bool,
+    /// A recorded call's microphone is denoised when it is transcribed;
+    /// `None` is on — see [`AppSettings::meeting_denoise`].
+    pub meeting_denoise: Option<bool>,
+}
+
+impl AppSettings {
+    /// Whether a recorded call's microphone is denoised: on unless turned off.
+    pub fn meeting_denoise(&self) -> bool {
+        self.meeting_denoise.unwrap_or(true)
+    }
 }
 
 /// Where the web tools are offered: each has its own search, or none — Tavily

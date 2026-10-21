@@ -4,6 +4,8 @@ import {
   hearLevels,
   meetingAutoProcessGet,
   meetingAutoProcessSet,
+  meetingDenoiseGet,
+  meetingDenoiseSet,
   meetingDelete,
   meetingGet,
   meetingJob,
@@ -45,6 +47,7 @@ export function useMeetings() {
   const [recordings, setRecordings] = useState<RecordingInfo[]>([]);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [autoProcess, setAutoProcess] = useState(false);
+  const [denoise, setDenoise] = useState(true);
   // Recordings to transcribe once the job running now ends, in order.
   const [queued, setQueued] = useState<string[]>([]);
   // Recordings stopped here: a level event about one that lands after the stop is late, not a new recording.
@@ -72,6 +75,7 @@ export function useMeetings() {
 
   useEffect(() => void readList(), []);
   useEffect(() => void meetingAutoProcessGet().then(setAutoProcess, (e) => setError(String(e))), []);
+  useEffect(() => void meetingDenoiseGet().then(setDenoise, (e) => setError(String(e))), []);
   useEffect(() => readOpen(openId), [openId]);
 
   // How many jobs were seen to end: a snapshot asked for before the last one
@@ -210,16 +214,19 @@ export function useMeetings() {
     }
   };
 
-  const toggleAutoProcess = async () => {
-    const next = !autoProcess;
-    setAutoProcess(next);
+  const toggleAutoProcess = () => flip(autoProcess, setAutoProcess, meetingAutoProcessSet);
+  const toggleDenoise = () => flip(denoise, setDenoise, meetingDenoiseSet);
+
+  // A switch shown flipped at once, put back if saving it fails.
+  async function flip(now: boolean, show: (on: boolean) => void, save: (on: boolean) => Promise<void>) {
+    show(!now);
     try {
-      await meetingAutoProcessSet(next);
+      await save(!now);
     } catch (e) {
-      setAutoProcess(!next);
+      show(now);
       setError(String(e));
     }
-  };
+  }
 
   const stop = () => {
     stopping.current = true;
@@ -261,12 +268,14 @@ export function useMeetings() {
     recording,
     queued,
     autoProcess,
+    denoise,
     record,
     stopRecording,
     mute,
     transcribe,
     removeRecording,
     toggleAutoProcess,
+    toggleDenoise,
     stop,
     rename,
     remove,

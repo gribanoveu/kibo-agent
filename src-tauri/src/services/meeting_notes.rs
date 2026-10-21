@@ -14,7 +14,7 @@ use crate::domain::recording::{self, RecordingInfo, RecordingState};
 use crate::domain::voices::VoiceInfo;
 use crate::infra::meeting_process::{self, Running};
 use crate::infra::meeting_recorder::{self, Recorder};
-use crate::infra::{meeting_store, speech, voices_store};
+use crate::infra::{meeting_store, settings_store, speech, voices_store};
 use crate::services::features;
 use crate::services::llm_session::{self, LlmSession};
 
@@ -26,6 +26,14 @@ pub struct MeetingNotes {
     running: Running,
     /// The call being recorded, if one is.
     recorder: Recorder,
+}
+
+/// What a job recognizes: the file, what the meeting is called, and whether
+/// its first channel is this app's recording of the microphone, to denoise.
+struct Audio<'a> {
+    path: &'a Path,
+    name: String,
+    denoise_mic: bool,
 }
 
 /// The job slot, freed when the job ends however it ends — and the page told so.
@@ -148,7 +156,8 @@ impl MeetingNotes {
         let path = meeting_store::recording(id)?;
         let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map_err(|_| MeetingError::NotFound(id.to_string()))?;
         let name = chrono::DateTime::<chrono::Local>::from(modified).format("Call %Y-%m-%d %H:%M").to_string();
-        self.process_as(exe, models, &path, name, sink, &|| {
+        let denoise_mic = settings_store::load().unwrap_or_default().meeting_denoise();
+        self.process_as(exe, models, Audio { path: &path, name, denoise_mic }, sink, &|| {
             let _ = meeting_store::delete_recording(id);
         })
     }
@@ -168,12 +177,13 @@ impl MeetingNotes {
     /// that fails leaves nothing.
     pub fn process(&self, exe: &Path, models: &Path, audio: &Path, sink: &MeetingEventSink) -> Result<String, MeetingError> {
         let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
-        self.process_as(exe, models, audio, name, sink, &|| {})
+        // An import has no microphone of its own to denoise: whatever it holds is its sound.
+        self.process_as(exe, models, Audio { path: audio, name, denoise_mic: false }, sink, &|| {})
     }
 
-    /// [`process`](Self::process) with the meeting called `name`, and `saved`
-    /// called once it is saved — before its notes, which may fail.
-    fn process_as(&self, exe: &Path, models: &Path, audio: &Path, name: String, sink: &MeetingEventSink, saved: &dyn Fn()) -> Result<String, MeetingError> {
+    /// [`process`](Self::process) of `audio`, and `saved` called once the
+    /// meeting is saved — before its notes, which may fail.
+    fn process_as(&self, exe: &Path, models: &Path, audio: Audio, sink: &MeetingEventSink, saved: &dyn Fn()) -> Result<String, MeetingError> {
         let job = self.begin(JobState::new(JobKind::Process, None), sink)?;
         if !speech::has_models(models) {
             return Err(MeetingError::ModelsMissing);
@@ -184,7 +194,7 @@ impl MeetingNotes {
             let _ = delete_meeting(&left);
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let meeting = match self.transcribe(exe, models, audio, &id, name, &|e| job.tell(e)) {
+        let meeting = match self.transcribe(exe, models, audio, &id, &|e| job.tell(e)) {
             Ok(meeting) => meeting,
             Err(e) => {
                 // The copy of the sound, written before the speech was found.
@@ -198,9 +208,10 @@ impl MeetingNotes {
         Ok(id)
     }
 
-    fn transcribe(&self, exe: &Path, models: &Path, audio: &Path, id: &str, name: String, sink: &dyn Fn(MeetingEvent)) -> Result<Meeting, MeetingError> {
+    fn transcribe(&self, exe: &Path, models: &Path, audio: Audio, id: &str, sink: &dyn Fn(MeetingEvent)) -> Result<Meeting, MeetingError> {
         let keep = meeting_store::audio(id)?;
-        let recognized = meeting_process::recognize(&self.running, exe, audio, models, &keep, &mut |stage, done, total| {
+        let Audio { path, name, denoise_mic } = audio;
+        let recognized = meeting_process::recognize(&self.running, exe, path, models, &keep, denoise_mic, &mut |stage, done, total| {
             sink(MeetingEvent::Progress { id: id.to_string(), name: name.clone(), stage, done, total })
         })?;
         if recognized.utterances.is_empty() {
@@ -674,6 +685,47 @@ mod tests {
             assert_eq!(meetings.len(), 1);
             assert!(meetings[0].name.starts_with("Call 20"), "{}", meetings[0].name);
             assert_eq!(notes.process_recording(&exe, &models, "aa", &sink), Err(MeetingError::NotFound("aa".into())));
+        });
+    }
+
+    /// A stand-in for the exe that says whether it was asked to denoise, as the
+    /// meeting's one word.
+    #[cfg(unix)]
+    fn telling_sidecar(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let said = |word: &str| format!(r#"{{"type":"result","utterances":[{{"speaker":0,"start":0.0,"end":1.0,"text":"{word}"}}],"seconds":1.0}}"#);
+        let (exe, models) = sidecar(label, "");
+        let script = std::fs::read_to_string(&exe).unwrap().replace(
+            "echo ''\n",
+            &format!("if [ \"$5\" = {} ]; then echo '{}'; else echo '{}'; fi\n", meeting::DENOISE_MIC_FLAG, said("denoised"), said("as-is")),
+        );
+        std::fs::write(&exe, script).unwrap();
+        (exe, models)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recordings_microphone_is_denoised_unless_turned_off_and_an_import_never() {
+        crate::testing::with_app_dir("meeting-denoise", || {
+            features::set("meeting-notes", true).unwrap();
+            let (exe, models) = telling_sidecar("denoise-telling");
+            let (sink, _) = recorder();
+            let notes = MeetingNotes::default();
+            let heard = || meeting_store::get(&meeting_store::list().unwrap()[0].id).unwrap().utterances[0].text.clone();
+
+            recorded("aa", 16_000, true);
+            let _ = notes.process_recording(&exe, &models, "aa", &sink);
+            assert_eq!(heard(), "denoised", "on by default");
+            delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
+
+            settings_store::update(|s| s.meeting_denoise = Some(false)).unwrap();
+            recorded("bb", 16_000, true);
+            let _ = notes.process_recording(&exe, &models, "bb", &sink);
+            assert_eq!(heard(), "as-is", "turned off");
+            delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
+
+            settings_store::update(|s| s.meeting_denoise = Some(true)).unwrap();
+            let _ = notes.process(&exe, &models, Path::new("/calls/call.m4a"), &sink);
+            assert_eq!(heard(), "as-is", "an import has no microphone of ours");
         });
     }
 

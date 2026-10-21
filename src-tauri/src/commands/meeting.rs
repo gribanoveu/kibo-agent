@@ -150,6 +150,17 @@ pub fn meeting_recording_access_settings(source: Source) -> Result<(), String> {
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Whether a recorded call's microphone is denoised when it is transcribed.
+#[tauri::command]
+pub fn meeting_denoise_get() -> bool {
+    settings_store::load().unwrap_or_default().meeting_denoise()
+}
+
+#[tauri::command]
+pub fn meeting_denoise_set(on: bool) -> Result<(), String> {
+    settings_store::update(|s| s.meeting_denoise = Some(on)).map_err(|e| e.to_string())
+}
+
 /// Whether a recording stopped is transcribed at once.
 #[tauri::command]
 pub fn meeting_auto_process_get() -> bool {

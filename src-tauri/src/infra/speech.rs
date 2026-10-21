@@ -6,7 +6,13 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use sherpa_onnx::{LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+use sherpa_onnx::{
+    LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeechDenoiser, OfflineSpeechDenoiserConfig, SpeakerEmbeddingExtractor,
+    SpeakerEmbeddingExtractorConfig,
+};
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as AudioError;
 use symphonia::core::formats::probe::Hint;
@@ -28,10 +34,18 @@ const WINDOW_SECONDS: f32 = 24.0;
 const OVERLAP_SECONDS: f32 = 4.0;
 /// More is slower on an M4: the rest are efficiency cores (docs/36).
 const MAX_THREADS: usize = 4;
+/// How far DPDFNet may take the noise down. Unlimited, its artifacts cost
+/// GigaAM more words than the noise did: on loud renovation noise 37 % WER
+/// against 23 % untouched; limited, 18 % — and on a quiet call no change (docs/36).
+const DENOISE_LIMIT_DB: f32 = 12.0;
+/// The microphone is denoised in pieces this long, on every thread at once,
+/// each started [`DENOISE_PREROLL_SECONDS`] early so it begins warm.
+const DENOISE_CHUNK_SECONDS: usize = 60;
+const DENOISE_PREROLL_SECONDS: usize = 1;
 
-/// GigaAM v3 with punctuation, then the voice model — the files
+/// GigaAM v3 with punctuation, the voice model, the denoiser — the files
 /// `scripts/fetch-meeting-models.ts` puts in `models/meeting/`.
-pub const MODEL_FILES: [&str; 5] = ["encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt", "campplus.onnx"];
+pub const MODEL_FILES: [&str; 6] = ["encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt", "campplus.onnx", "dpdfnet2.onnx"];
 
 /// The bundled models, or the source tree's in a dev build. A release has
 /// only its bundle: a path on the machine that built it is no one's here, and
@@ -49,15 +63,18 @@ pub fn has_models(dir: &Path) -> bool {
 
 /// Every utterance of `audio`, speakers numbered by who spoke first, and their
 /// voices. The sound the models heard is written to `keep` — the meeting's own
-/// copy, so the original file is not needed after.
-pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
+/// copy, so the original file is not needed after. `denoise_mic`: `audio` is a
+/// call this app recorded, its left channel the microphone
+/// (`domain::recording`), which is denoised before the two are put together.
+pub fn recognize(audio: &Path, models: &Path, keep: &Path, denoise_mic: bool, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
     if !has_models(models) {
         return Err(MeetingError::ModelsMissing);
     }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS) as i32;
     progress(Stage::Decode, 0, 1);
-    let (raw, rate) = decode(audio)?;
-    let samples = to_16k(raw, rate)?;
+    let (tracks, rate) = decode_tracks(audio, denoise_mic)?;
+    let tracks = tracks.into_iter().map(|t| to_16k(t, rate)).collect::<Result<Vec<_>, _>>()?;
+    let samples = heard(tracks, denoise_mic, |mic| denoise(models, mic, threads as usize))?;
     app_dir::write_private(keep, &wav(&samples)?).map_err(MeetingError::Store)?;
     progress(Stage::Decode, 1, 1);
 
@@ -67,8 +84,16 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn Fn
     Ok(Recognized { utterances, seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
 
-/// The whole file as mono f32 at its own rate.
+/// The whole file as mono f32 at its own rate — what the tests read back.
+#[cfg(test)]
 pub(crate) fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
+    let (mut tracks, rate) = decode_tracks(path, false)?;
+    Ok((tracks.swap_remove(0), rate))
+}
+
+/// The whole file at its own rate: each channel on its own when `split`, else
+/// one, their mean.
+fn decode_tracks(path: &Path, split: bool) -> Result<(Vec<Vec<f32>>, u32), MeetingError> {
     let unreadable = |e: String| MeetingError::Unreadable(e);
     let file = File::open(path).map_err(|e| unreadable(format!("{}: {e}", path.display())))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -86,7 +111,7 @@ pub(crate) fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
         .map_err(|e| unreadable(format!("no decoder for this codec: {e}")))?;
     let track_id = track.id;
 
-    let mut mono = Vec::new();
+    let mut tracks: Vec<Vec<f32>> = vec![Vec::new()];
     let mut interleaved: Vec<f32> = Vec::new();
     let mut rate = 0;
     let mut damaged = None;
@@ -115,13 +140,96 @@ pub(crate) fn decode(path: &Path) -> Result<(Vec<f32>, u32), MeetingError> {
         let channels = buf.spec().channels().count().max(1);
         interleaved.resize(buf.samples_interleaved(), 0.0);
         buf.copy_to_slice_interleaved(&mut interleaved);
-        mono.extend(interleaved.chunks(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32));
+        if split {
+            tracks.resize_with(tracks.len().max(channels), Vec::new);
+            for frame in interleaved.chunks(channels) {
+                frame.iter().zip(tracks.iter_mut()).for_each(|(s, track)| track.push(*s));
+            }
+        } else {
+            tracks[0].extend(recording::mono(&interleaved, channels));
+        }
     }
-    match (mono.is_empty(), damaged) {
+    match (tracks[0].is_empty(), damaged) {
         (true, Some(e)) => Err(unreadable(e.to_string())),
         (true, None) => Err(MeetingError::Silent),
-        (false, _) => Ok((mono, rate)),
+        (false, _) => Ok((tracks, rate)),
     }
+}
+
+/// What the models hear: the tracks as one, the microphone's — a recording's
+/// first of two — through `denoise` first when asked.
+fn heard(
+    mut tracks: Vec<Vec<f32>>,
+    denoise_mic: bool,
+    denoise: impl FnOnce(&[f32]) -> Result<Vec<f32>, MeetingError>,
+) -> Result<Vec<f32>, MeetingError> {
+    if denoise_mic && tracks.len() == recording::CHANNELS as usize {
+        tracks[0] = denoise(&tracks[0])?;
+    }
+    Ok(mixed(tracks))
+}
+
+/// The tracks as one: their mean, the longest's length. One track is itself.
+fn mixed(mut tracks: Vec<Vec<f32>>) -> Vec<f32> {
+    if tracks.len() == 1 {
+        return tracks.swap_remove(0);
+    }
+    let len = tracks.iter().map(Vec::len).max().unwrap_or(0);
+    let n = tracks.len().max(1) as f32;
+    (0..len).map(|i| tracks.iter().map(|t| t.get(i).copied().unwrap_or(0.0)).sum::<f32>() / n).collect()
+}
+
+/// `mic` at 16 kHz with its noise taken down by DPDFNet-2, as far as
+/// [`DENOISE_LIMIT_DB`]; the same length.
+fn denoise(models: &Path, mic: &[f32], threads: usize) -> Result<Vec<f32>, MeetingError> {
+    let mut config = OfflineSpeechDenoiserConfig::default();
+    config.model.dpdfnet.model = path(models, MODEL_FILES[5]);
+    config.model.dpdfnet.attenuation_limit_db = DENOISE_LIMIT_DB;
+    config.model.num_threads = 1;
+    let rate = SAMPLE_RATE as usize;
+    in_chunks(
+        mic,
+        (DENOISE_CHUNK_SECONDS * rate, DENOISE_PREROLL_SECONDS * rate),
+        threads,
+        || OfflineSpeechDenoiser::create(&config),
+        |denoiser, piece| denoiser.run(piece, SAMPLE_RATE as i32).samples,
+    )
+    .ok_or(MeetingError::ModelFailed("denoiser"))
+}
+
+/// `samples` through `run` a `chunk` at a time, each begun `preroll` early and
+/// that part dropped, on `threads` workers with one `make()` each; the pieces
+/// back in order, as long as `samples` — a piece that came back short is
+/// silence past its end. `None` if a worker could not `make` its own.
+fn in_chunks<W>(
+    samples: &[f32],
+    (chunk, preroll): (usize, usize),
+    threads: usize,
+    make: impl Fn() -> Option<W> + Sync,
+    run: impl Fn(&W, &[f32]) -> Vec<f32> + Sync,
+) -> Option<Vec<f32>> {
+    let starts: Vec<usize> = (0..samples.len()).step_by(chunk.max(1)).collect();
+    let pieces: Mutex<Vec<Option<Vec<f32>>>> = Mutex::new(vec![None; starts.len()]);
+    let next = AtomicUsize::new(0);
+    let made = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.clamp(1, starts.len().max(1)))
+            .map(|_| {
+                scope.spawn(|| {
+                    let worker = make()?;
+                    while let Some(&start) = starts.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let (from, end) = (start.saturating_sub(preroll), (start + chunk).min(samples.len()));
+                        let out = run(&worker, &samples[from..end]);
+                        let mut own: Vec<f32> = out.get(start - from..).unwrap_or_default().iter().copied().take(end - start).collect();
+                        own.resize(end - start, 0.0);
+                        pieces.lock().unwrap_or_else(|e| e.into_inner())[start / chunk.max(1)] = Some(own);
+                    }
+                    Some(())
+                })
+            })
+            .collect();
+        workers.into_iter().all(|w| w.join().ok().flatten().is_some())
+    });
+    made.then(|| pieces.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().flatten().flatten().collect())
 }
 
 /// `samples` at 16 kHz; already there, the same ones, not a copy of an hour.
@@ -263,6 +371,79 @@ mod tests {
         assert_eq!(untimed, [Word { start: 22.0, end: 44.0, text: "всё окно".into() }], "not dropped for starting in the overlap");
         assert_eq!(own_words(None, "", (20.0, 44.0), 22.0, 42.0), []);
         assert_eq!(own_words(None, "начало", (0.0, 24.0), f32::NEG_INFINITY, 22.0)[0].start, 0.0);
+    }
+
+    #[test]
+    fn a_track_in_pieces_comes_back_whole_and_in_order() {
+        let samples: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        // Each piece marked by its worker's run: what is kept is the piece's own part.
+        let doubled = in_chunks(&samples, (300, 50), 3, || Some(()), |_, piece| piece.iter().map(|s| s * 2.0).collect()).unwrap();
+        assert_eq!(doubled, samples.iter().map(|s| s * 2.0).collect::<Vec<_>>(), "the preroll is dropped, nothing doubled or lost");
+
+        // A piece begun early starts at its preroll: what `run` saw first is that.
+        let firsts = Mutex::new(Vec::new());
+        in_chunks(&samples, (300, 50), 2, || Some(()), |_, piece| {
+            firsts.lock().unwrap().push((piece[0], piece.len()));
+            piece.to_vec()
+        })
+        .unwrap();
+        let mut firsts = firsts.into_inner().unwrap();
+        firsts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(firsts, [(0.0, 300), (250.0, 350), (550.0, 350), (850.0, 150)]);
+
+        let short = in_chunks(&samples, (300, 0), 2, || Some(()), |_, piece| piece[..piece.len() / 2].to_vec()).unwrap();
+        assert_eq!(short.len(), 1000, "a piece back short is silence past its end");
+        assert_eq!((short[149], short[150], short[300]), (149.0, 0.0, 300.0));
+        assert!(in_chunks(&samples, (300, 0), 2, || None::<()>, |_, p| p.to_vec()).is_none(), "no worker, no result");
+        assert_eq!(in_chunks(&[], (300, 0), 4, || Some(()), |_, p| p.to_vec()), Some(vec![]));
+    }
+
+    #[test]
+    fn a_recordings_channels_read_apart_and_put_together() {
+        let path = crate::testing::temp_dir("speech-split").join("call.wav");
+        let mut bytes = recording::wav_header(2, 4 * 3).to_vec();
+        bytes.extend(recording::interleave(&[0.5, 0.25, 0.0], &[-0.5, 0.25, 1.0], 3));
+        std::fs::write(&path, bytes).unwrap();
+        let (tracks, rate) = decode_tracks(&path, true).unwrap();
+        let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+        assert_eq!((tracks.len(), rate), (2, SAMPLE_RATE));
+        assert!(near(&tracks[0], &[0.5, 0.25, 0.0]) && near(&tracks[1], &[-0.5, 0.25, 1.0]), "{tracks:?}");
+        let (one, _) = decode_tracks(&path, false).unwrap();
+        assert!(one.len() == 1 && near(&one[0], &[0.0, 0.25, 0.5]), "{one:?}");
+        assert!(near(&mixed(tracks), &one[0]), "put together as unsplit");
+        assert_eq!(mixed(vec![vec![1.0, 1.0], vec![0.0]]), [0.5, 0.5], "the shorter is silence past its end");
+
+        let louder = |mic: &[f32]| Ok(mic.iter().map(|s| s * 3.0).collect());
+        assert_eq!(heard(vec![vec![0.2], vec![0.4]], true, louder).unwrap(), [0.5], "the microphone, and only it, goes through");
+        assert_eq!(heard(vec![vec![0.2], vec![0.4]], false, louder).unwrap(), [0.3f32], "not asked: as it is");
+        assert_eq!(heard(vec![vec![0.2]], true, louder).unwrap(), [0.2], "one track is no recording of ours");
+        assert!(heard(vec![vec![0.2], vec![0.4]], true, |_| Err(MeetingError::ModelFailed("denoiser"))).is_err());
+    }
+
+    /// The bundled denoiser on speech under noise: `cargo test denoise_live -- --ignored`.
+    /// A tone stands in for a voice, white noise for the room; with the model's
+    /// files in `models/meeting/` (`bun scripts/fetch-meeting-models.ts`).
+    #[test]
+    #[ignore]
+    fn denoise_live() {
+        let models = Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("meeting");
+        let seconds = 130; // three pieces, one short
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+        };
+        let noisy: Vec<f32> = (0..seconds * SAMPLE_RATE as usize).map(|i| 0.3 * (i as f32 / 16.0).sin() * ((i / 8000) % 2) as f32 + 0.2 * noise()).collect();
+        let started = std::time::Instant::now();
+        let clean = denoise(&models, &noisy, MAX_THREADS).unwrap();
+        let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+        // The gaps between "words" — every other half second, the first one left
+        // out while the model warms up: noise only, before and after.
+        let gaps = |s: &[f32]| s.chunks(8000).step_by(2).skip(1).flatten().copied().collect::<Vec<_>>();
+        eprintln!("{seconds} s in {:.1} s; noise in the gaps {:.4} → {:.4}", started.elapsed().as_secs_f32(), rms(&gaps(&noisy)), rms(&gaps(&clean)));
+        assert_eq!(clean.len(), noisy.len());
+        assert!(rms(&gaps(&clean)) < rms(&gaps(&noisy)) / 2.0, "the noise is taken down");
+        assert!(rms(&gaps(&clean)) > rms(&gaps(&noisy)) / 8.0, "but not out: 12 dB is a quarter");
     }
 
     #[test]

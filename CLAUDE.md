@@ -103,6 +103,14 @@ asks for it:
 cd src-tauri && cargo test record_live -- --ignored --nocapture
 ```
 
+The microphone's denoiser (`infra/speech.rs`, DPDFNet-2) has one too: noise under a tone,
+taken down by about the 12 dB limit and not further, the length kept. It needs the models
+(`bun scripts/fetch-meeting-models.ts`); run it after touching the denoiser or its chunks:
+
+```bash
+cd src-tauri && cargo test --release denoise_live -- --ignored --nocapture
+```
+
 ## Mutation testing
 
 New backend code is not done when `cargo test` is green — the tests have to be shown to

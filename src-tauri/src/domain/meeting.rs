@@ -19,6 +19,9 @@ use super::voices::{Speech, MIN_PHRASE_WORDS};
 
 /// The first argument that makes the app's exe the recognition process.
 pub const SIDECAR_FLAG: &str = "--meeting-sidecar";
+/// After its paths: the recording is this app's, its left channel the
+/// microphone, to be denoised before the two are put together.
+pub const DENOISE_MIC_FLAG: &str = "--denoise-mic";
 
 /// How long a token lasts when the model gives only where it starts: one GigaAM
 /// frame is 40 ms, a token rarely less than two.

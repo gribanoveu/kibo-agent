@@ -252,6 +252,17 @@ export async function meetingRecordingAccessSettings(source: Source): Promise<vo
   return invoke("meeting_recording_access_settings", { source });
 }
 
+/** Whether a recorded call's microphone is denoised when it is transcribed — on unless turned off. */
+export async function meetingDenoiseGet(): Promise<boolean> {
+  if (!inTauri()) return true;
+  return invoke<boolean>("meeting_denoise_get");
+}
+
+export async function meetingDenoiseSet(on: boolean): Promise<void> {
+  requireBackend();
+  return invoke("meeting_denoise_set", { on });
+}
+
 /** Whether a recording is transcribed as soon as it is stopped. */
 export async function meetingAutoProcessGet(): Promise<boolean> {
   if (!inTauri()) return false;

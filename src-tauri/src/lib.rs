@@ -371,6 +371,8 @@ pub fn run() {
             commands::meeting::meeting_recording_access,
             commands::meeting::meeting_recording_access_request,
             commands::meeting::meeting_recording_access_settings,
+            commands::meeting::meeting_denoise_get,
+            commands::meeting::meeting_denoise_set,
             commands::meeting::meeting_auto_process_get,
             commands::meeting::meeting_auto_process_set,
             commands::features::features_list,

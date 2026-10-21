@@ -15,6 +15,7 @@ let running: unknown = null;
 let recordings: { id: string; created: string; seconds: number }[] = [];
 let recordingNow: { id: string; seconds: number; muted: boolean } | null = null;
 let autoOn = false;
+let denoiseOn = true;
 let finishRecording: (result: { id?: string; error?: string }) => void = () => {};
 let access: Record<string, string> = { microphone: "granted", call: "granted" };
 
@@ -46,6 +47,11 @@ mock.module("@tauri-apps/api/core", () => ({
     }
     if (command === "meeting_recordings") return Promise.resolve(structuredClone(recordings));
     if (command === "meeting_auto_process_get") return Promise.resolve(autoOn);
+    if (command === "meeting_denoise_get") return Promise.resolve(denoiseOn);
+    if (command === "meeting_denoise_set") {
+      denoiseOn = Boolean(args!.on);
+      return Promise.resolve(null);
+    }
     if (command === "meeting_auto_process_set") {
       autoOn = Boolean(args!.on);
       return Promise.resolve(null);
@@ -145,6 +151,7 @@ beforeEach(() => {
   recordings = [];
   recordingNow = null;
   autoOn = false;
+  denoiseOn = true;
   access = { microphone: "granted", call: "granted" };
 });
 
@@ -405,6 +412,22 @@ describe("the meetings page", () => {
     fireEvent.click(within(screen.getByRole("status", { name: "Recording" })).getByText("Stop"));
     await settle();
     expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1"]);
+  });
+
+  test("noise reduction on the microphone is on until turned off, and stays as set", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const toggle = () => screen.getByRole("switch", { name: "Reduce noise on my microphone" });
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle());
+    await settle();
+    expect(denoiseOn).toBe(false);
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+
+    cleanup();
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
   });
 
   test("a page opened while a call is recorded shows it; a silent call says to check the permission", async () => {

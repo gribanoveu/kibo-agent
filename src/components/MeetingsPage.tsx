@@ -111,6 +111,12 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           Auto-transcribe recordings
         </label>
       )}
+      {!openId && (
+        <label className="meetings-auto" title="Your side of a recorded call is cleaned up before it is transcribed; the recording itself stays as it was">
+          <Switch label="Reduce noise on my microphone" on={meetings.denoise} onChange={() => void meetings.toggleDenoise()} />
+          Reduce noise on my microphone
+        </label>
+      )}
       {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
       {remembering && (
         <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
