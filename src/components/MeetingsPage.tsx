@@ -82,39 +82,39 @@ export function MeetingsPage({ sideHandle }: PageContext) {
 
   const bar = (
     <div className="meetings-head">
-    <div className="meetings-bar">
-      {openId && (
-        <button type="button" className="btn btn-ghost" onClick={() => meetings.open(null)}>
-          <ChevronLeft size={14} />
-          All meetings
-        </button>
-      )}
-      {!openId && (
-        <button type="button" className="btn btn-primary" disabled={job !== null} onClick={() => void meetings.importRecording()}>
-          <Plus size={14} />
-          Import recording
-        </button>
-      )}
-      {!openId && (
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={meetings.recording !== null || meetings.switching || !access.ready}
-          title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
-          onClick={() => void meetings.record()}
-        >
-          <Mic size={14} />
-          Record
-        </button>
-      )}
-      {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
-      {remembering && (
-        <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
-          <Users size={14} />
-          Voices
-        </button>
-      )}
-    </div>
+      <div className="meetings-bar">
+        {openId && (
+          <button type="button" className="btn btn-ghost" onClick={() => meetings.open(null)}>
+            <ChevronLeft size={14} />
+            All meetings
+          </button>
+        )}
+        {!openId && (
+          <button
+            type="button"
+            className="btn btn-primary meetings-record"
+            disabled={meetings.recording !== null || meetings.switching || !access.ready}
+            title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
+            onClick={() => void meetings.record()}
+          >
+            <Mic size={14} />
+            Record
+          </button>
+        )}
+        {!openId && (
+          <button type="button" className="btn btn-ghost" disabled={job !== null} onClick={() => void meetings.importRecording()}>
+            <Plus size={14} />
+            Import recording
+          </button>
+        )}
+        {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
+        {remembering && (
+          <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
+            <Users size={14} />
+            Voices
+          </button>
+        )}
+      </div>
       {!openId && (
         <div className="meetings-options">
           <label className="meetings-auto" title="A recording is transcribed as soon as it is stopped">
