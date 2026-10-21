@@ -51,6 +51,22 @@ pub fn update<T>(create: bool, change: impl FnOnce(&mut VoiceBook) -> T) -> Resu
     Ok(Some(out))
 }
 
+/// Every print gone — the feature's "Delete data". Under the lock: an
+/// [`update`] that read the book before would write all of it back after.
+pub fn delete() -> Result<(), MeetingError> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match fs::remove_file(path()?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(store(e)),
+        _ => Ok(()),
+    }
+}
+
+/// The book held as a change holds it, for a test of what waits on it.
+#[cfg(test)]
+pub(crate) fn held() -> std::sync::MutexGuard<'static, ()> {
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +81,21 @@ mod tests {
             assert_eq!(read().unwrap().heard.len(), 1);
             update(false, |b| b.forget_meeting("m")).unwrap();
             assert_eq!(read().unwrap(), VoiceBook::default());
+        });
+    }
+
+    #[test]
+    fn a_delete_waits_for_a_change_under_way() {
+        with_app_dir("voices-store-delete", || {
+            update(true, |_| ()).unwrap();
+            let held = held();
+            let deleting = std::thread::spawn(delete);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(path().unwrap().exists(), "not while a change holds the book");
+            drop(held);
+            deleting.join().unwrap().unwrap();
+            assert!(!path().unwrap().exists());
+            delete().unwrap();
         });
     }
 }

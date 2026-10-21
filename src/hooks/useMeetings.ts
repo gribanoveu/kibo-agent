@@ -91,7 +91,11 @@ export function useMeetings() {
     };
   }, []);
 
+  // Which call of `run` is the last: a snapshot read for an earlier one is stale.
+  const runs = useRef(0);
+
   const run = async (next: Job, work: () => Promise<unknown>) => {
+    const mine = ++runs.current;
     setError(null);
     stopping.current = false;
     setJob(next);
@@ -100,8 +104,12 @@ export function useMeetings() {
     } catch (e) {
       if (!stopping.current) setError(String(e));
     } finally {
-      setJob(null);
-      setDraft(null);
+      // What runs now, read again rather than assumed gone: a call turned away
+      // as busy ended nothing — another job runs, and its card and notes stay.
+      meetingJob().then(
+        (running) => runs.current === mine && setJob(running),
+        (e) => setError(String(e)),
+      );
       void readList();
       readOpen(openRef.current);
     }

@@ -4,7 +4,6 @@
 //! takes the cores, and the page has one Stop.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::domain::features::Feature;
@@ -20,7 +19,7 @@ use crate::services::llm_session::{self, LlmSession};
 pub struct MeetingNotes {
     /// The job running now, as its events have told it; `None` is a free slot.
     job: Mutex<Option<JobState>>,
-    stopped: AtomicBool,
+    /// The recognition process, and whether the job was stopped.
     running: Running,
 }
 
@@ -58,7 +57,7 @@ impl MeetingNotes {
             return Err(MeetingError::Busy);
         }
         *slot = Some(state);
-        self.stopped.store(false, Ordering::SeqCst);
+        self.running.reset();
         Ok(Job { notes: self, sink })
     }
 
@@ -69,8 +68,15 @@ impl MeetingNotes {
 
     /// Stops the job running now, recognition or summary.
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
         self.running.stop();
+    }
+
+    /// Feature `id` turned on or off. Meeting notes off stops its job: the
+    /// page and its Stop are gone, and what the job made would not be kept.
+    pub fn feature_set(&self, id: &str, on: bool) {
+        if !on && Feature::from_id(id) == Some(Feature::MeetingNotes) {
+            self.stop();
+        }
     }
 
     /// `audio` recognized by `exe`, saved, then summarized; the meeting's id.
@@ -143,7 +149,7 @@ impl MeetingNotes {
 
     fn summarize_into(&self, meeting: &Meeting, sink: &dyn Fn(MeetingEvent)) -> Result<(), MeetingError> {
         let session = llm_session::resolve(None).map_err(|e| MeetingError::Summary(e.to_string()))?;
-        let summary = write_summary(&session, meeting, sink, &|| self.stopped.load(Ordering::SeqCst))?;
+        let summary = write_summary(&session, meeting, sink, &|| self.running.stopped())?;
         // Read again: a speaker renamed while the notes were written keeps the name.
         // ponytail: read, change, write without a lock; one per meeting if two writers ever race.
         let mut now = meeting_store::get(&meeting.id)?;
@@ -215,11 +221,12 @@ fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &dyn Fn(MeetingE
                 tools: Vec::new(),
                 model: session.model.clone(),
             };
-            let response = session.provider.chat(request).map_err(|e| MeetingError::Summary(e.to_string()))?;
+            // Streamed only to be stoppable mid-part; its pieces are not the page's.
+            let part_notes = session.provider.chat_stream(request, &|_| {}, cancelled).map_err(|e| MeetingError::Summary(e.to_string()))?;
             if cancelled() {
                 return Err(MeetingError::Cancelled);
             }
-            notes.push(format!("### Part {} of {}\n\n{}", i + 1, parts.len(), response.content.unwrap_or_default().trim()));
+            notes.push(format!("### Part {} of {}\n\n{}", i + 1, parts.len(), part_notes.text.trim()));
         }
         // Every part read: what follows is the notes of the whole.
         read(parts.len());
@@ -255,18 +262,27 @@ mod tests {
     struct Notes {
         chunks: Vec<&'static str>,
         asked: Mutex<Vec<ChatRequest>>,
+        /// Whether each request was stopped, as the provider was told.
+        stopped: Mutex<Vec<bool>>,
     }
 
     impl LlmProvider for Notes {
-        /// A part's notes: which part it was, by its first line's time.
-        fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-            let part = request.messages[1].content.clone().unwrap_or_default();
-            self.asked.lock().unwrap().push(request);
-            Ok(ChatResponse { content: Some(format!("notes from {}", &part[..7])), tool_calls: Vec::new(), usage: None })
+        fn chat(&self, _: ChatRequest) -> Result<ChatResponse, LlmError> {
+            unreachable!("every request streams, to be stoppable")
         }
 
-        fn chat_stream(&self, request: ChatRequest, on_event: &dyn Fn(StreamEvent), _: &dyn Fn() -> bool) -> Result<ChatStreamResult, LlmError> {
+        /// A part's notes: which part it was, by its first line's time. The
+        /// notes of the whole: `chunks`.
+        fn chat_stream(&self, request: ChatRequest, on_event: &dyn Fn(StreamEvent), cancel: &dyn Fn() -> bool) -> Result<ChatStreamResult, LlmError> {
+            self.stopped.lock().unwrap().push(cancel());
+            let part = request.messages[0] == LlmMessage::system(meeting::PART_INSTRUCTIONS);
+            let text = request.messages[1].content.clone().unwrap_or_default();
             self.asked.lock().unwrap().push(request);
+            if part {
+                let notes = format!("notes from {}", &text[..7]);
+                on_event(StreamEvent::Text(&notes));
+                return Ok(ChatStreamResult { text: notes, ..Default::default() });
+            }
             self.chunks.iter().for_each(|c| on_event(StreamEvent::Text(c)));
             Ok(ChatStreamResult { text: self.chunks.concat(), ..Default::default() })
         }
@@ -277,7 +293,7 @@ mod tests {
     }
 
     fn session(chunks: Vec<&'static str>, context_limit: Option<u32>) -> (LlmSession, Arc<Notes>) {
-        let provider = Arc::new(Notes { chunks, asked: Mutex::new(Vec::new()) });
+        let provider = Arc::new(Notes { chunks, asked: Mutex::new(Vec::new()), stopped: Mutex::new(Vec::new()) });
         let session = LlmSession {
             provider: provider.clone(),
             provider_id: "test".into(),
@@ -353,7 +369,9 @@ mod tests {
         let (quiet, _) = recorder();
         assert_eq!(write_summary(&stopped, &long, &*quiet, &|| true), Err(MeetingError::Cancelled));
         assert_eq!(provider.asked.lock().unwrap().len(), 1);
+        assert_eq!(*provider.stopped.lock().unwrap(), [true], "a part's request is told of the stop as it runs");
 
+        assert!(!events.lock().unwrap().iter().any(|e| matches!(e, MeetingEvent::SummaryDelta { text, .. } if text.starts_with("notes from"))), "a part's notes do not stream to the page");
         let progress: Vec<_> = events.lock().unwrap().iter().filter_map(|e| match e {
             MeetingEvent::Progress { stage: Stage::Notes, done, total, .. } => Some((*done, *total)),
             _ => None,
@@ -427,7 +445,7 @@ mod tests {
         let notes = MeetingNotes::default();
         notes.stop();
         let job = notes.begin(JobState::new(JobKind::Summary, Some("m".into())), &sink).unwrap();
-        assert!(!notes.stopped.load(Ordering::SeqCst), "a stop before the job is not its stop");
+        assert!(!notes.running.stopped(), "a stop before the job is not its stop");
         assert!(matches!(notes.begin(JobState::new(JobKind::Process, None), &sink), Err(MeetingError::Busy)));
         job.tell(MeetingEvent::Progress { id: "m".into(), name: "call.wav".into(), stage: Stage::Notes, done: 1, total: 3 });
         assert_eq!(notes.current().map(|j| (j.kind, j.done, j.total)), Some((JobKind::Summary, 1, 3)), "a page opened now sees it");
@@ -435,6 +453,17 @@ mod tests {
         assert_eq!(notes.current(), None);
         assert_eq!(events.lock().unwrap().last(), Some(&MeetingEvent::Ended), "the page is told it ended");
         assert!(notes.begin(JobState::new(JobKind::Process, None), &sink).is_ok());
+    }
+
+    #[test]
+    fn turning_meeting_notes_off_stops_its_job() {
+        let notes = MeetingNotes::default();
+        for (id, on) in [("meeting-notes", true), ("voice-memory", false), ("board", false)] {
+            notes.feature_set(id, on);
+            assert!(!notes.running.stopped(), "{id} {on}");
+        }
+        notes.feature_set("meeting-notes", false);
+        assert!(notes.running.stopped());
     }
 
     /// A stand-in for the exe that writes the copy of the sound it was given, then says `line`.

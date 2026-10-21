@@ -250,6 +250,19 @@ describe("the meetings page", () => {
     expect((screen.getByText("Import recording").closest("button") as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test("a call turned away as busy leaves the job that runs on its card", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Import recording"));
+    await settle();
+    // Another job held the slot all along.
+    running = { kind: "summary", id: "m1", stage: "notes", done: 0, total: 0 };
+    await act(async () => finishProcess({ error: "a recording is already being processed — wait for it or stop it" }));
+    await settle();
+    expect(screen.getByText("a recording is already being processed — wait for it or stop it")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Writing the notes");
+  });
+
   test("a meeting is deleted only after it is confirmed", async () => {
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();

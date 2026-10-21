@@ -32,12 +32,14 @@ const MAX_THREADS: usize = 4;
 /// `scripts/fetch-meeting-models.ts` puts in `models/meeting/`.
 pub const MODEL_FILES: [&str; 5] = ["encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt", "campplus.onnx"];
 
-/// The bundled models, or the source tree's in a dev build.
+/// The bundled models, or the source tree's in a dev build. A release has
+/// only its bundle: a path on the machine that built it is no one's here, and
+/// a bundle without the models says so rather than finding them elsewhere.
 pub fn models_dir(resource_dir: Option<&Path>) -> PathBuf {
-    resource_dir
-        .map(|dir| dir.join("models").join("meeting"))
-        .filter(|dir| has_models(dir))
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("meeting"))
+    let bundled = resource_dir.map(|dir| dir.join("models").join("meeting"));
+    #[cfg(debug_assertions)]
+    let bundled = bundled.filter(|dir| has_models(dir)).or_else(|| Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("meeting")));
+    bundled.unwrap_or_default()
 }
 
 pub fn has_models(dir: &Path) -> bool {
@@ -60,7 +62,8 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, progress: &mut dyn Fn
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
     let (segments, voices) = speakers(models, threads, &samples, &words, progress)?;
-    Ok(Recognized { utterances: meeting::utterances(&words, &segments), seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
+    let (utterances, voices) = meeting::by_first_word(meeting::utterances(&words, &segments), voices);
+    Ok(Recognized { utterances, seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
 
 /// The whole file as mono f32 at its own rate.
@@ -243,6 +246,19 @@ fn speakers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bundle_is_where_the_models_are_and_only_a_dev_build_looks_further() {
+        let bundle = crate::testing::temp_dir("speech-bundle");
+        let models = bundle.join("models").join("meeting");
+        std::fs::create_dir_all(&models).unwrap();
+        MODEL_FILES.iter().for_each(|f| std::fs::write(models.join(f), "").unwrap());
+        assert_eq!(models_dir(Some(&bundle)), models, "the bundle's, when it has them");
+        let empty = crate::testing::temp_dir("speech-bundle-empty");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("meeting");
+        let fallback = if cfg!(debug_assertions) { source } else { empty.join("models").join("meeting") };
+        assert_eq!(models_dir(Some(&empty)), fallback);
+    }
 
     #[test]
     fn each_window_keeps_its_own_words_with_or_without_timestamps() {

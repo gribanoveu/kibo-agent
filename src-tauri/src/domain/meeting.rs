@@ -664,6 +664,21 @@ pub fn utterances(words: &[Word], segments: &[Segment]) -> Vec<Utterance> {
     out
 }
 
+/// Speakers numbered again by who speaks first in `utterances`, and `voices`
+/// (by the old numbers) put in the new order: a cluster that won no word is
+/// no speaker, and leaves no gap in the numbers.
+pub fn by_first_word(mut utterances: Vec<Utterance>, voices: Vec<Vec<f32>>) -> (Vec<Utterance>, Vec<Vec<f32>>) {
+    let old: Vec<usize> = utterances.iter().map(|u| u.speaker).collect();
+    let new = first_seen_order(&old);
+    let mut from = vec![0; new.iter().max().map_or(0, |m| m + 1)];
+    for (&o, &n) in old.iter().zip(&new) {
+        from[n] = o;
+    }
+    utterances.iter_mut().zip(&new).for_each(|(u, &n)| u.speaker = n);
+    let voices = from.iter().filter_map(|&o| voices.get(o).cloned()).collect();
+    (utterances, voices)
+}
+
 fn speaker_of(w: &Word, segments: &[Segment]) -> usize {
     let overlap = |s: &Segment| w.end.min(s.end) - w.start.max(s.start);
     segments.iter().max_by(|a, b| overlap(a).total_cmp(&overlap(b))).map_or(0, |s| s.speaker)
@@ -683,6 +698,18 @@ mod tests {
 
     fn tokens(t: &[&str]) -> Vec<String> {
         t.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_speaker_without_words_leaves_no_gap() {
+        let said = |speaker, start: f32| Utterance { speaker, start, end: start + 1.0, text: "да".into() };
+        let voices = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0]];
+        // Label 1 won no word; label 3 spoke before label 2.
+        let (utterances, voices) = by_first_word(vec![said(0, 0.0), said(3, 2.0), said(2, 4.0), said(0, 6.0)], voices);
+        assert_eq!(utterances.iter().map(|u| u.speaker).collect::<Vec<_>>(), [0, 1, 2, 0]);
+        assert_eq!(voices, [vec![0.0], vec![3.0], vec![2.0]], "each voice follows its speaker");
+        let (_, none) = by_first_word(vec![said(0, 0.0)], Vec::new());
+        assert_eq!(none, Vec::<Vec<f32>>::new(), "no voices stays none");
     }
 
     #[test]

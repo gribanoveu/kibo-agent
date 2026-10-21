@@ -19,6 +19,12 @@ pub fn main(args: &[String]) -> i32 {
         emit(&SidecarLine::Error { message: format!("usage: {FLAG} <audio> <models> <keep>") });
         return 2;
     };
+    // The app holds stdin open and writes nothing: its end is the app gone —
+    // quit, crashed or killed — and an hour's recognition is then for no one.
+    std::thread::spawn(|| {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        std::process::exit(3);
+    });
     let mut progress = |stage, done, total| emit(&SidecarLine::Progress { stage, done, total });
     match speech::recognize(Path::new(audio), Path::new(models), Path::new(keep), &mut progress) {
         Ok(recognized) => {

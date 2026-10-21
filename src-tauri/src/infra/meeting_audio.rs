@@ -11,8 +11,11 @@ use crate::infra::meeting_store;
 
 pub const SCHEME: &str = "meeting";
 
-/// A range open at its end is answered this much at a time: the player asks
-/// for the rest as it goes, and an hour's 115 MB is never read whole.
+/// A range is answered this much at a time, at most: the player asks for the
+/// rest as it goes, and an hour's 115 MB is never read whole. Chromium
+/// (WebView2) asks `bytes=N-`; WebKit's player (macOS) names the end, often the
+/// file's last byte. A shorter answer than asked is fine by both: they read
+/// `Content-Range`.
 const CHUNK: u64 = 1 << 20;
 
 /// The response to a request for `path`, with its `Range` header if it had one:
@@ -76,13 +79,10 @@ fn bytes(header: &str, total: u64) -> Option<(u64, u64)> {
     let last = total.checked_sub(1)?;
     let (start, end) = match (from.trim(), to.trim()) {
         ("", suffix) => (total.saturating_sub(suffix.parse().ok()?), last),
-        (from, "") => {
-            let start: u64 = from.parse().ok()?;
-            (start, start.saturating_add(CHUNK - 1).min(last))
-        }
+        (from, "") => (from.parse().ok()?, last),
         (from, to) => (from.parse().ok()?, to.parse::<u64>().ok()?.min(last)),
     };
-    (start <= end).then_some((start, end))
+    (start <= end).then_some((start, end.min(start.saturating_add(CHUNK - 1))))
 }
 
 #[cfg(test)]
@@ -98,6 +98,8 @@ mod tests {
         assert_eq!(bytes("bytes=-500", 100), Some((0, 99)));
         assert_eq!(bytes("bytes=10-", 100), Some((10, 99)));
         assert_eq!(bytes("bytes=10-", 10 * CHUNK), Some((10, 10 + CHUNK - 1)), "an open end is a chunk");
+        assert_eq!(bytes(&format!("bytes=10-{}", 10 * CHUNK - 1), 10 * CHUNK), Some((10, 10 + CHUNK - 1)), "so is a far one");
+        assert_eq!(bytes("bytes=-100", 10 * CHUNK), Some((10 * CHUNK - 100, 10 * CHUNK - 1)));
         assert_eq!(bytes("bytes=5-6, 9-10", 100), Some((5, 6)));
         for unsatisfiable in ["bytes=100-", "bytes=7-3", "items=0-1", "bytes=a-b", "bytes=0"] {
             assert_eq!(bytes(unsatisfiable, 100), None, "{unsatisfiable}");

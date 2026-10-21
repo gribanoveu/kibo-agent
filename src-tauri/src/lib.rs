@@ -406,7 +406,7 @@ pub fn run() {
                 app.state::<std::sync::Arc<services::mcp_servers::McpServers>>().stop_all();
                 app.state::<std::sync::Arc<infra::background::Processes>>().stop_all();
                 app.state::<std::sync::Arc<infra::terminal::Terminals>>().close_all();
-                // The recognition process takes no stdin to notice the app gone by.
+                // The recognition process would also see its stdin close; a kill is now.
                 app.state::<std::sync::Arc<services::meeting_notes::MeetingNotes>>().stop();
             }
         });
