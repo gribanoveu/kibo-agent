@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, FolderOpen, Images, Maximize2, Minimize2, MousePointerClick, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
+import { AppWindow, Download, FolderOpen, Images, Maximize2, Minimize2, MousePointerClick, Play, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { PrototypeAssets } from "./PrototypeAssets";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
@@ -74,6 +74,17 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
     setPicking(!picking);
   };
 
+  // The page over the whole screen, as a deck's own F does from inside it. The
+  // frame itself goes full screen — the page's origin is not the panel's to
+  // reach — and is focused, so the deck's keys turn its slides; Escape ends it.
+  const play = () => {
+    const page = frame.current;
+    page?.requestFullscreen().then(
+      () => page.focus(),
+      (e) => onNotify(`Full screen was refused: ${e}`),
+    );
+  };
+
   // One file, the libraries in it, of what the panel shows now.
   const saveAs = async () => {
     const page = preview.page;
@@ -137,6 +148,9 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
         >
           <Images size={13} />
           {(preview.assets?.assets.length ?? 0) > 0 && <span>{preview.assets?.assets.length}</span>}
+        </button>
+        <button type="button" className="iconbtn" title="Play full screen — Escape to come back" disabled={!preview.url} onClick={play}>
+          <Play size={13} />
         </button>
         <button type="button" className="iconbtn" title="Reload the page" onClick={preview.refresh}>
           <RotateCw size={13} />

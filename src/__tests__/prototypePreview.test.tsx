@@ -227,6 +227,29 @@ describe("the panel", () => {
     expect(frame.getAttribute("allow")).toBe("fullscreen *");
   });
 
+  test("Play puts the page itself over the whole screen and hands it the keys", async () => {
+    const preview = panel([presented("p1", 1)]);
+    const told: string[] = [];
+    const { container } = render(<PrototypePreview preview={preview.current} chatId="c1" onNotify={(m) => told.push(m)} />);
+    const frame = container.querySelector("iframe")!;
+    const asked: Element[] = [];
+    frame.requestFullscreen = function (this: Element) {
+      asked.push(this);
+      return Promise.resolve();
+    };
+    let focused = false;
+    frame.focus = () => void (focused = true);
+    fireEvent.click(screen.getByTitle("Play full screen — Escape to come back"));
+    await waitFor(() => expect(focused).toBe(true));
+    expect(asked).toEqual([frame]);
+
+    frame.requestFullscreen = () => Promise.reject(new Error("denied"));
+    focused = false;
+    fireEvent.click(screen.getByTitle("Play full screen — Escape to come back"));
+    await waitFor(() => expect(told).toEqual(["Full screen was refused: Error: denied"]));
+    expect(focused).toBe(false);
+  });
+
   test("lists the page's own errors, ignores anyone else's, and hands one to the composer", () => {
     const preview = panel([presented("p1", 1)]);
     const asked: string[] = [];
