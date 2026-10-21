@@ -20,7 +20,7 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Stage, Word};
+use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Sound, Stage, Word};
 use crate::domain::recording;
 use crate::infra::app_dir;
 
@@ -63,24 +63,53 @@ pub fn has_models(dir: &Path) -> bool {
 
 /// Every utterance of `audio`, speakers numbered by who spoke first, and their
 /// voices. The sound the models heard is written to `keep` — the meeting's own
-/// copy, so the original file is not needed after. `denoise_mic`: `audio` is a
-/// call this app recorded, its left channel the microphone
-/// (`domain::recording`), which is denoised before the two are put together.
-pub fn recognize(audio: &Path, models: &Path, keep: &Path, denoise_mic: bool, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
+/// copy, so the original file is not needed after. A [`Sound::Call`] has its
+/// microphone denoised when asked before the two sides are put together, and
+/// is recognized as one sound like any other; then what was said into the
+/// microphone is one speaker, and only the call's side is told apart by voice,
+/// from its own track.
+pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progress: &mut dyn FnMut(Stage, usize, usize)) -> Result<Recognized, MeetingError> {
     if !has_models(models) {
         return Err(MeetingError::ModelsMissing);
     }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS) as i32;
     progress(Stage::Decode, 0, 1);
-    let (tracks, rate) = decode_tracks(audio, denoise_mic)?;
+    let (tracks, rate) = decode_tracks(audio, sound != Sound::Import)?;
     let tracks = tracks.into_iter().map(|t| to_16k(t, rate)).collect::<Result<Vec<_>, _>>()?;
-    let samples = heard(tracks, denoise_mic, |mic| denoise(models, mic, threads as usize))?;
+    let tracks = heard(tracks, sound, |mic| denoise(models, mic, threads as usize))?;
+    let samples = mixed(&tracks);
     app_dir::write_private(keep, &wav(&samples)?).map_err(MeetingError::Store)?;
     progress(Stage::Decode, 1, 1);
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
-    let (segments, voices) = speakers(models, threads, &samples, &words, progress)?;
-    let (utterances, voices) = meeting::by_first_word(meeting::utterances(&words, &segments), voices);
+    let extractor = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() })
+        .ok_or(MeetingError::ModelFailed("voice"))?;
+    let (utterances, voices) = match tracks.as_slice() {
+        [mic, call] if sound != Sound::Import => {
+            let here = meeting::said_here(&words, mic, call, SAMPLE_RATE);
+            let side = |yours: bool| meeting::windows_over(&words.iter().zip(&here).filter(|(_, h)| **h == yours).map(|(w, _)| w.clone()).collect::<Vec<_>>());
+            let (yours, theirs) = (side(true), side(false));
+            let (before, total) = (yours.len(), yours.len() + theirs.len());
+            let (_, own) = embed(&extractor, mic, yours, (0, total), progress);
+            let (windows, heard) = embed(&extractor, call, theirs, (before, total), progress);
+            let labels = meeting::spectral(&heard);
+            // Yours one voice, speaker 0; none when nothing was said here — no speaker then.
+            let mut voices = meeting::centroids(&own, &vec![0; own.len()]);
+            voices.resize(1, Vec::new());
+            voices.extend(meeting::centroids(&heard, &labels));
+            (meeting::call_utterances(&words, &here, &segments_of(windows, labels)), voices)
+        }
+        _ => {
+            let windows = meeting::windows_over(&words);
+            let total = windows.len();
+            let (windows, embeddings) = embed(&extractor, &samples, windows, (0, total), progress);
+            let labels = meeting::spectral(&embeddings);
+            let voices = meeting::centroids(&embeddings, &labels);
+            (meeting::utterances(&words, &segments_of(windows, labels)), voices)
+        }
+    };
+    progress(Stage::Speakers, 1, 1);
+    let (utterances, voices) = meeting::by_first_word(utterances, voices);
     Ok(Recognized { utterances, seconds: samples.len() as f32 / SAMPLE_RATE as f32, voices })
 }
 
@@ -156,23 +185,25 @@ fn decode_tracks(path: &Path, split: bool) -> Result<(Vec<Vec<f32>>, u32), Meeti
     }
 }
 
-/// What the models hear: the tracks as one, the microphone's — a recording's
-/// first of two — through `denoise` first when asked.
+/// The tracks as the models hear them: the microphone's — a recording's first
+/// of two — through `denoise` first when the sound asks for it.
 fn heard(
     mut tracks: Vec<Vec<f32>>,
-    denoise_mic: bool,
+    sound: Sound,
     denoise: impl FnOnce(&[f32]) -> Result<Vec<f32>, MeetingError>,
-) -> Result<Vec<f32>, MeetingError> {
-    if denoise_mic && tracks.len() == recording::CHANNELS as usize {
+) -> Result<Vec<Vec<f32>>, MeetingError> {
+    if sound == (Sound::Call { denoise_mic: true }) && tracks.len() == recording::CHANNELS as usize {
         tracks[0] = denoise(&tracks[0])?;
     }
-    Ok(mixed(tracks))
+    Ok(tracks)
 }
 
 /// The tracks as one: their mean, the longest's length. One track is itself.
-fn mixed(mut tracks: Vec<Vec<f32>>) -> Vec<f32> {
-    if tracks.len() == 1 {
-        return tracks.swap_remove(0);
+// ponytail: a call's two sides are copied into a third, ~230 MB an hour of f32; mixed
+// in place into the longer if memory is ever short.
+fn mixed(tracks: &[Vec<f32>]) -> Vec<f32> {
+    if let [one] = tracks {
+        return one.clone();
     }
     let len = tracks.iter().map(Vec::len).max().unwrap_or(0);
     let n = tracks.len().max(1) as f32;
@@ -304,26 +335,23 @@ fn own_words(found: Option<Vec<Word>>, text: &str, (from, to): (f32, f32), kept_
     found.into_iter().filter(|w| w.start >= kept_from && w.start < cut && !w.text.is_empty()).collect()
 }
 
-/// Windows over the words, one voice embedding each, labeled by spectral
-/// clustering; and each label's mean voice.
-fn speakers(
-    models: &Path,
-    threads: i32,
+/// One voice embedding for each of `windows` of `samples` long enough to
+/// have one, and the windows that did; progress told as `done` of `total`
+/// from `before`.
+fn embed(
+    extractor: &SpeakerEmbeddingExtractor,
     samples: &[f32],
-    words: &[Word],
+    windows: Vec<(f32, f32)>,
+    (before, total): (usize, usize),
     progress: &mut dyn FnMut(Stage, usize, usize),
-) -> Result<(Vec<Segment>, Vec<Vec<f32>>), MeetingError> {
-    let config = SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() };
-    let extractor = SpeakerEmbeddingExtractor::create(&config).ok_or(MeetingError::ModelFailed("voice"))?;
-    let over = meeting::windows_over(words);
-    let total = over.len();
+) -> (Vec<(f32, f32)>, Vec<Vec<f32>>) {
     // An hour is thousands of windows: told a hundredth at a time, not each.
     let step = (total / 100).max(1);
-    let mut windows = Vec::new();
+    let mut kept = Vec::new();
     let mut embeddings = Vec::new();
-    for (i, (start, end)) in over.into_iter().enumerate() {
-        if i % step == 0 {
-            progress(Stage::Speakers, i, total);
+    for (i, (start, end)) in windows.into_iter().enumerate() {
+        if (before + i) % step == 0 {
+            progress(Stage::Speakers, before + i, total);
         }
         let from = (start * SAMPLE_RATE as f32) as usize;
         let to = ((end * SAMPLE_RATE as f32) as usize).min(samples.len());
@@ -334,14 +362,15 @@ fn speakers(
             continue;
         }
         if let Some(e) = extractor.compute(&stream) {
-            windows.push((start, end));
+            kept.push((start, end));
             embeddings.push(e);
         }
     }
-    progress(Stage::Speakers, total, total);
-    let labels = meeting::spectral(&embeddings);
-    let voices = meeting::centroids(&embeddings, &labels);
-    Ok((windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect(), voices))
+    (kept, embeddings)
+}
+
+fn segments_of(windows: Vec<(f32, f32)>, labels: Vec<usize>) -> Vec<Segment> {
+    windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect()
 }
 
 #[cfg(test)]
@@ -410,14 +439,17 @@ mod tests {
         assert!(near(&tracks[0], &[0.5, 0.25, 0.0]) && near(&tracks[1], &[-0.5, 0.25, 1.0]), "{tracks:?}");
         let (one, _) = decode_tracks(&path, false).unwrap();
         assert!(one.len() == 1 && near(&one[0], &[0.0, 0.25, 0.5]), "{one:?}");
-        assert!(near(&mixed(tracks), &one[0]), "put together as unsplit");
-        assert_eq!(mixed(vec![vec![1.0, 1.0], vec![0.0]]), [0.5, 0.5], "the shorter is silence past its end");
+        assert!(near(&mixed(&tracks), &one[0]), "put together as unsplit");
+        assert_eq!(mixed(&[vec![1.0, 1.0], vec![0.0]]), [0.5, 0.5], "the shorter is silence past its end");
 
         let louder = |mic: &[f32]| Ok(mic.iter().map(|s| s * 3.0).collect());
-        assert_eq!(heard(vec![vec![0.2], vec![0.4]], true, louder).unwrap(), [0.5], "the microphone, and only it, goes through");
-        assert_eq!(heard(vec![vec![0.2], vec![0.4]], false, louder).unwrap(), [0.3f32], "not asked: as it is");
-        assert_eq!(heard(vec![vec![0.2]], true, louder).unwrap(), [0.2], "one track is no recording of ours");
-        assert!(heard(vec![vec![0.2], vec![0.4]], true, |_| Err(MeetingError::ModelFailed("denoiser"))).is_err());
+        let denoised = Sound::Call { denoise_mic: true };
+        let two = || vec![vec![0.2], vec![0.4]];
+        assert_eq!(heard(two(), denoised, louder).unwrap(), [[0.6f32], [0.4]], "the microphone, and only it, goes through");
+        assert_eq!(heard(two(), Sound::Call { denoise_mic: false }, louder).unwrap(), two(), "not asked: as it is");
+        assert_eq!(heard(two(), Sound::Import, louder).unwrap(), two(), "an import is not ours");
+        assert_eq!(heard(vec![vec![0.2]], denoised, louder).unwrap(), [[0.2]], "one track is no recording of ours");
+        assert!(heard(two(), denoised, |_| Err(MeetingError::ModelFailed("denoiser"))).is_err());
     }
 
     /// The bundled denoiser on speech under noise: `cargo test denoise_live -- --ignored`.

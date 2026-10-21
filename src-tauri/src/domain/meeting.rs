@@ -19,9 +19,42 @@ use super::voices::{Speech, MIN_PHRASE_WORDS};
 
 /// The first argument that makes the app's exe the recognition process.
 pub const SIDECAR_FLAG: &str = "--meeting-sidecar";
-/// After its paths: the recording is this app's, its left channel the
-/// microphone, to be denoised before the two are put together.
-pub const DENOISE_MIC_FLAG: &str = "--denoise-mic";
+/// After its paths: the recording is a call this app recorded ([`Sound::Call`]).
+pub const CALL_FLAG: &str = "--call";
+/// The same, its microphone denoised first.
+pub const DENOISED_CALL_FLAG: &str = "--call-denoised";
+
+/// What the recognition is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sound {
+    /// A file imported: whatever channels it has are one sound, its speakers
+    /// told apart by voice alone.
+    Import,
+    /// A call this app recorded: its left channel the microphone, the right the
+    /// call (`domain::recording`). What is said into the microphone is yours;
+    /// only the call's side is told apart by voice ([`said_here`]).
+    Call { denoise_mic: bool },
+}
+
+impl Sound {
+    /// The recognition process's argument for it.
+    pub fn flag(self) -> Option<&'static str> {
+        match self {
+            Sound::Import => None,
+            Sound::Call { denoise_mic: false } => Some(CALL_FLAG),
+            Sound::Call { denoise_mic: true } => Some(DENOISED_CALL_FLAG),
+        }
+    }
+
+    /// Back from the process's arguments after its paths.
+    pub fn of_flags(flags: &[String]) -> Self {
+        match flags.iter().find_map(|f| [CALL_FLAG, DENOISED_CALL_FLAG].into_iter().position(|known| known == f)) {
+            Some(0) => Sound::Call { denoise_mic: false },
+            Some(_) => Sound::Call { denoise_mic: true },
+            None => Sound::Import,
+        }
+    }
+}
 
 /// How long a token lasts when the model gives only where it starts: one GigaAM
 /// frame is 40 ms, a token rarely less than two.
@@ -666,9 +699,22 @@ fn first_seen_order(labels: &[usize]) -> Vec<usize> {
 /// every segment the overlap is minus the gap, so that is the nearest one;
 /// consecutive words of one speaker, with no long pause between, are one utterance.
 pub fn utterances(words: &[Word], segments: &[Segment]) -> Vec<Utterance> {
+    joined(words.iter().map(|w| (w, speaker_of(w, segments))))
+}
+
+/// A recorded call's utterances: a word [`said_here`] is speaker 0, the
+/// microphone's; the rest are the call's `segments`' speakers, from 1.
+// ponytail: a voice is never moved across sides — a call cluster as alike as yours is
+// not folded into you: on one room's mic two people were 0.83–0.87 alike, as alike as one;
+// fold it if real recordings show your words reaching the call's side.
+pub fn call_utterances(words: &[Word], here: &[bool], segments: &[Segment]) -> Vec<Utterance> {
+    joined(words.iter().zip(here).map(|(w, &here)| (w, if here { 0 } else { 1 + speaker_of(w, segments) })))
+}
+
+/// Consecutive words of one speaker, with no long pause between, as one utterance.
+fn joined<'a>(words: impl Iterator<Item = (&'a Word, usize)>) -> Vec<Utterance> {
     let mut out: Vec<Utterance> = Vec::new();
-    for w in words {
-        let speaker = speaker_of(w, segments);
+    for (w, speaker) in words {
         match out.last_mut() {
             Some(last) if last.speaker == speaker && w.start - last.end < JOIN_GAP_SECONDS => {
                 last.text.push(' ');
@@ -699,6 +745,56 @@ pub fn by_first_word(mut utterances: Vec<Utterance>, voices: Vec<Vec<f32>>) -> (
 fn speaker_of(w: &Word, segments: &[Segment]) -> usize {
     let overlap = |s: &Segment| w.end.min(s.end) - w.start.max(s.start);
     segments.iter().max_by(|a, b| overlap(a).total_cmp(&overlap(b))).map_or(0, |s| s.speaker)
+}
+
+/// What a track's loudness is read over to tell whose a word is.
+const LEVEL_FRAME_SECONDS: f32 = 0.1;
+/// Quieter than this the call's side is not speaking, however quiet it is all along (−60 dBFS).
+const CALL_FLOOR: f32 = 1e-3;
+/// …nor this far under its own loud speech (−20 dB).
+const CALL_QUIET: f32 = 0.1;
+/// A word is the microphone's when it is louder than the call would make it
+/// by this much (+6 dB): heard from the speakers, plus the room.
+const HERE_MARGIN: f32 = 2.0;
+
+/// Which of `words` were said into the microphone, not heard from the call. A
+/// recorded call has each side on its own track, at `rate`: a word is the
+/// call's where the call speaks and the microphone is no louder than the call
+/// would make it — without headphones the microphone hears the speakers too.
+/// How much it hears them is the recording's own: the microphone's level over
+/// its quiet, as a share of the call's, the median of everywhere the call speaks.
+pub fn said_here(words: &[Word], mic: &[f32], call: &[f32], rate: u32) -> Vec<bool> {
+    let frame = ((LEVEL_FRAME_SECONDS * rate as f32) as usize).max(1);
+    let (mic, call) = (levels(mic, frame), levels(call, frame));
+    let floor = CALL_FLOOR.max(CALL_QUIET * quantile(&call, 0.9));
+    let room = quantile(&mic, 0.1);
+    let speaks = |i: usize| call.get(i).is_some_and(|c| *c > floor);
+    let shares: Vec<f32> = (0..mic.len()).filter(|&i| speaks(i)).map(|i| (mic[i] - room).max(0.0) / call[i]).collect();
+    let echo = quantile(&shares, 0.5);
+    let mean = |track: &[f32], w: &Word| {
+        let from = ((w.start / LEVEL_FRAME_SECONDS) as usize).min(track.len());
+        let to = ((w.end / LEVEL_FRAME_SECONDS).ceil() as usize).clamp(from + 1, track.len().max(from + 1));
+        track.get(from..to).map_or(0.0, |f| f.iter().sum::<f32>() / f.len().max(1) as f32)
+    };
+    words
+        .iter()
+        .map(|w| {
+            let (m, c) = (mean(&mic, w), mean(&call, w));
+            c <= floor || m > HERE_MARGIN * (echo * c + room)
+        })
+        .collect()
+}
+
+/// Each `frame` of `track`'s RMS.
+fn levels(track: &[f32], frame: usize) -> Vec<f32> {
+    track.chunks(frame).map(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt()).collect()
+}
+
+/// The `q`th quantile of `values`, 0 to 1; none is 0.
+fn quantile(values: &[f32], q: f32) -> f32 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    sorted.get(((sorted.len() as f32 * q) as usize).min(sorted.len().saturating_sub(1))).copied().unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -1000,5 +1096,63 @@ mod tests {
         }
         let wire = r#"{"type":"progress","stage":"speakers","done":0,"total":1}"#;
         assert_eq!(serde_json::from_str::<SidecarLine>(wire).unwrap(), SidecarLine::Progress { stage: Stage::Speakers, done: 0, total: 1 });
+    }
+
+    /// Tracks at 10 Hz, a frame a sample: `(mic, call, frames)` stretches of constant level.
+    fn tracks(parts: &[(f32, f32, usize)]) -> (Vec<f32>, Vec<f32>) {
+        parts.iter().flat_map(|&(m, c, n)| std::iter::repeat_n((m, c), n)).unzip()
+    }
+
+    #[test]
+    fn a_word_is_yours_where_the_call_is_quiet_or_you_are_louder_than_its_echo() {
+        // You alone; the others, heard back a quarter as loud over the room; both at once; quiet.
+        let (mic, call) = tracks(&[(0.5, 0.0, 10), (0.11, 0.4, 20), (0.61, 0.4, 10), (0.01, 0.0, 10)]);
+        let words = [word(0.2, 0.6, "я"), word(1.2, 1.6, "они"), word(3.2, 3.6, "оба"), word(4.2, 4.6, "тишина")];
+        assert_eq!(said_here(&words, &mic, &call, 10), [true, false, true, true]);
+
+        // Headphones: the microphone hears only the room while they speak.
+        let (mic, call) = tracks(&[(0.5, 0.0, 10), (0.01, 0.4, 30)]);
+        assert_eq!(said_here(&words[..2], &mic, &call, 10), [true, false]);
+        // Their voice turned down low is still their voice.
+        let (mic, call) = tracks(&[(0.5, 0.0, 10), (0.01, 0.004, 30)]);
+        assert_eq!(said_here(&words[..2], &mic, &call, 10), [true, false]);
+        // Muted, every word is theirs; no call at all, every word is yours.
+        let (mic, call) = tracks(&[(0.0, 0.4, 40)]);
+        assert_eq!(said_here(&words[..2], &mic, &call, 10), [false, false]);
+        let (mic, call) = tracks(&[(0.3, 0.0, 40)]);
+        assert_eq!(said_here(&words[..2], &mic, &call, 10), [true, true]);
+        // A word past the end of the sound reads as silence, not a panic.
+        assert_eq!(said_here(&[word(9.0, 9.5, "после")], &mic, &call, 10), [true]);
+        assert_eq!(said_here(&words[..1], &[], &[], 10), [true]);
+    }
+
+    #[test]
+    fn what_the_call_would_make_of_the_microphone_is_its_echo_its_room_and_a_margin() {
+        let yours = |parts: &[(f32, f32, usize)], at: f32| {
+            let (mic, call) = tracks(parts);
+            said_here(&[word(at, at + 0.3, "слово")], &mic, &call, 10)[0]
+        };
+        // Their echo louder for a moment, still under 6 dB over what it usually is: theirs.
+        assert!(!yours(&[(0.5, 0.0, 10), (0.11, 0.4, 20), (0.16, 0.4, 5), (0.61, 0.4, 10), (0.01, 0.0, 10)], 3.1));
+        // The call's hiss between its words is not it speaking: the echo is read where it speaks.
+        assert!(!yours(&[(0.5, 0.01, 10), (0.11, 0.4, 10), (0.01, 0.01, 30)], 1.1));
+        // A call that is only digital quiet never speaks: a word over the room alone is yours.
+        assert!(yours(&[(0.5, 0.0005, 10), (0.01, 0.0005, 30)], 2.1));
+        // Headphones, the call loud then soft: the room is not a share of the call.
+        assert!(!yours(&[(0.5, 0.0, 10), (0.01, 0.4, 20), (0.01, 0.05, 10), (0.01, 0.0, 10)], 3.1));
+        // A loud room is not echo: over it and their echo, you talking over them is yours.
+        assert!(yours(&[(0.5, 0.0, 10), (0.15, 0.4, 20), (0.35, 0.4, 5), (0.05, 0.0, 10)], 3.1));
+    }
+
+    #[test]
+    fn on_a_recorded_call_your_words_are_one_speaker_and_theirs_their_voices() {
+        let words = [word(0.0, 0.5, "привет"), word(1.0, 1.5, "здравствуйте"), word(2.0, 2.5, "коллеги"), word(3.0, 3.5, "да")];
+        let segments = [seg(0, 0.8, 2.6), seg(1, 2.8, 4.0)];
+        let got = call_utterances(&words, &[true, false, false, true], &segments);
+        let said: Vec<(usize, &str)> = got.iter().map(|u| (u.speaker, u.text.as_str())).collect();
+        assert_eq!(said, [(0, "привет"), (1, "здравствуйте коллеги"), (0, "да")], "yours 0 though the call's segment there is another's");
+        let theirs = call_utterances(&words[3..], &[false], &segments);
+        assert_eq!(theirs[0].speaker, 2, "the call's speakers from 1");
+        assert_eq!(utterances(&words[..2], &segments).iter().map(|u| u.speaker).collect::<Vec<_>>(), [0], "an import by voice alone");
     }
 }

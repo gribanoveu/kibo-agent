@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use crate::domain::meeting::{MeetingError, Recognized, SidecarLine, Stage, DENOISE_MIC_FLAG, SIDECAR_FLAG};
+use crate::domain::meeting::{MeetingError, Recognized, SidecarLine, Sound, Stage, SIDECAR_FLAG};
 
 /// The process while one runs, for [`Running::stop`] to kill, and whether the
 /// job was stopped — a stop before the process starts keeps it from starting.
@@ -41,15 +41,14 @@ impl Running {
 }
 
 /// `audio` recognized by `exe` — the app's own, or a stand-in under test —
-/// and the sound it heard written to `keep`; `denoise_mic` for a call this
-/// app recorded, its microphone's channel to be denoised first.
+/// and the sound it heard written to `keep`, as the `sound` it is.
 pub fn recognize(
     running: &Running,
     exe: &Path,
     audio: &Path,
     models: &Path,
     keep: &Path,
-    denoise_mic: bool,
+    sound: Sound,
     progress: &mut dyn FnMut(Stage, usize, usize),
 ) -> Result<Recognized, MeetingError> {
     let stdout = {
@@ -62,7 +61,7 @@ pub fn recognize(
             .arg(audio)
             .arg(models)
             .arg(keep)
-            .args(denoise_mic.then_some(DENOISE_MIC_FLAG))
+            .args(sound.flag())
             // Held open and never written to: its end tells the process the app is
             // gone, however it went (`meeting_sidecar`).
             .stdin(Stdio::piped())
@@ -117,12 +116,12 @@ mod tests {
     }
 
     fn run(running: &Running, exe: &Path) -> (Result<Recognized, MeetingError>, Vec<(Stage, usize, usize)>) {
-        run_denoising(running, exe, false)
+        run_as(running, exe, Sound::Import)
     }
 
-    fn run_denoising(running: &Running, exe: &Path, denoise_mic: bool) -> (Result<Recognized, MeetingError>, Vec<(Stage, usize, usize)>) {
+    fn run_as(running: &Running, exe: &Path, sound: Sound) -> (Result<Recognized, MeetingError>, Vec<(Stage, usize, usize)>) {
         let mut seen = Vec::new();
-        let result = recognize(running, exe, Path::new("a.wav"), Path::new("models"), Path::new("a.kept.wav"), denoise_mic, &mut |s, d, t| seen.push((s, d, t)));
+        let result = recognize(running, exe, Path::new("a.wav"), Path::new("models"), Path::new("a.kept.wav"), sound, &mut |s, d, t| seen.push((s, d, t)));
         (result, seen)
     }
 
@@ -144,11 +143,14 @@ echo '{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"
     }
 
     #[test]
-    fn a_recordings_microphone_is_asked_to_be_denoised_and_an_imports_is_not() {
-        let exe = sidecar("sidecar-denoise", &format!(r#"seconds=1.0; [ "$5" = {DENOISE_MIC_FLAG} ] && seconds=2.0
+    fn a_recorded_call_is_said_to_be_one_and_an_import_is_not() {
+        use crate::domain::meeting::{CALL_FLAG, DENOISED_CALL_FLAG};
+        let exe = sidecar("sidecar-sound", &format!(r#"seconds=1.0; [ "$5" = {CALL_FLAG} ] && seconds=2.0; [ "$5" = {DENOISED_CALL_FLAG} ] && seconds=3.0
 echo "{{\"type\":\"result\",\"utterances\":[],\"seconds\":$seconds}}""#));
-        assert_eq!(run_denoising(&Running::default(), &exe, true).0.map(|r| r.seconds), Ok(2.0));
-        assert_eq!(run_denoising(&Running::default(), &exe, false).0.map(|r| r.seconds), Ok(1.0));
+        let seconds = |sound| run_as(&Running::default(), &exe, sound).0.map(|r| r.seconds);
+        assert_eq!(seconds(Sound::Import), Ok(1.0));
+        assert_eq!(seconds(Sound::Call { denoise_mic: false }), Ok(2.0));
+        assert_eq!(seconds(Sound::Call { denoise_mic: true }), Ok(3.0));
     }
 
     #[test]
