@@ -3,6 +3,76 @@
 //! microphone, R the call — at the rate the models read. The rules of the file
 //! live here; the devices and the disk are `infra::meeting_recorder`.
 
+use serde::Serialize;
+
+/// How loud each track was over the last moment, 0 to 1, and how long the
+/// recording is by now — what the page draws while it records.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Levels {
+    pub seconds: f32,
+    pub mic: f32,
+    pub call: f32,
+}
+
+/// The recording under way, for a page opened while it runs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordingState {
+    pub id: String,
+    pub seconds: f32,
+    /// The microphone written as silence for now.
+    pub muted: bool,
+}
+
+/// A call recorded and not yet made into a meeting: a row of the list.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordingInfo {
+    pub id: String,
+    /// When it was stopped — its file last written — RFC 3339.
+    pub created: String,
+    pub seconds: f32,
+}
+
+/// What a recording needs the system's leave for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Source {
+    Microphone,
+    /// What the computer plays — the other side of the call.
+    Call,
+}
+
+/// Whether the system lets the app record a [`Source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Access {
+    Granted,
+    /// Refused, or barred by a policy: asking again shows nothing, only
+    /// System Settings changes it.
+    Denied,
+    /// Not asked yet: asking shows the system's prompt.
+    NotAsked,
+    /// The system does not say — another platform, or no way to ask.
+    Unknown,
+}
+
+/// Both sources' access, for the page to say what is missing before Record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingAccess {
+    pub microphone: Access,
+    pub call: Access,
+}
+
+/// How long `data_bytes` of [`CHANNELS`] at [`RATE`] last.
+pub fn seconds_of(data_bytes: u64) -> f32 {
+    data_bytes as f32 / (RATE as f32 * CHANNELS as f32 * 2.0)
+}
+
+/// The loudest of `samples`, for a level meter; silence is 0.
+pub fn peak(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0f32, |m, s| m.max(s.abs())).min(1.0)
+}
+
 /// What the models read, and so what is kept.
 pub const RATE: u32 = 16_000;
 /// The canonical header: `RIFF`, `fmt ` and `data` with nothing between.
@@ -108,6 +178,15 @@ mod tests {
         assert_eq!(data_bytes_of(u64::MAX, 2), max_data_bytes(2), "never past what a WAV holds");
         assert_eq!(max_data_bytes(2) % 4, 0);
         assert!(max_data_bytes(2) as u64 + 36 <= u32::MAX as u64);
+    }
+
+    #[test]
+    fn a_meter_reads_the_loudest_and_a_file_its_length() {
+        assert_eq!(peak(&[0.1, -0.6, 0.3]), 0.6);
+        assert_eq!(peak(&[]), 0.0);
+        assert_eq!(peak(&[3.0]), 1.0, "past full is full");
+        assert_eq!(seconds_of(64_000 * 90), 90.0);
+        assert_eq!(seconds_of(0), 0.0);
     }
 
     #[test]

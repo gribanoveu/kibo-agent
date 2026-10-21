@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The app is signed with the hardened runtime (Tauri's default), under which
+  the microphone is refused without a prompt unless this entitlement is
+  there — recording a call on the Meetings page (docs/36). The system's sound
+  needs none: its permission is TCC's alone.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

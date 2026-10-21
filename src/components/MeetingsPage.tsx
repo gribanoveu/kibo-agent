@@ -1,15 +1,32 @@
 import { useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { AudioLines, Calendar, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, LoaderCircle, MessageSquareText, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, ShieldAlert, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
+import { Switch } from "./Switch";
 import { useMeetings, type Job } from "../hooks/useMeetings";
 import { useCopied } from "../hooks/useCopied";
 import { useFeatures } from "../hooks/useFeatures";
 import { useVoices } from "../hooks/useVoices";
 import { usePlayer, type Player } from "../hooks/usePlayer";
-import { audioUrl, meetingTitle, speakerCount, speakerName, withoutTitle, type Meeting, type MeetingInfo, type Stage, type VoiceInfo } from "../lib/meeting";
+import { useRecordingAccess } from "../hooks/useRecordingAccess";
+import {
+  audioUrl,
+  callSilent,
+  meetingTitle,
+  speakerCount,
+  speakerName,
+  withoutTitle,
+  type Meeting,
+  type MeetingInfo,
+  type Recording,
+  type RecordingAccess,
+  type RecordingInfo,
+  type Source,
+  type Stage,
+  type VoiceInfo,
+} from "../lib/meeting";
 import type { PageContext } from "./pages";
 import "./MeetingsPage.css";
 
@@ -55,10 +72,12 @@ const when = (created: string) =>
 export function MeetingsPage({ sideHandle }: PageContext) {
   const meetings = useMeetings();
   const { job, meeting, openId } = meetings;
-  const [deleting, setDeleting] = useState<MeetingInfo | null>(null);
+  // A meeting, or a recording not yet transcribed — the only copy of its call.
+  const [deleting, setDeleting] = useState<{ id: string; title: string; recording: boolean } | null>(null);
   const remembering = useFeatures().isOn("voice-memory");
   const [voicesOpen, setVoicesOpen] = useState(false);
   const player = usePlayer(openId && audioUrl(openId));
+  const access = useRecordingAccess();
 
   const bar = (
     <div className="meetings-bar">
@@ -73,6 +92,24 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           <Plus size={14} />
           Import recording
         </button>
+      )}
+      {!openId && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={meetings.recording !== null || !access.ready}
+          title={access.ready ? "Record a call: your microphone and what the computer plays" : "Allow the microphone and system audio first"}
+          onClick={() => void meetings.record()}
+        >
+          <Mic size={14} />
+          Record
+        </button>
+      )}
+      {!openId && (
+        <label className="meetings-auto" title="A recording is transcribed as soon as it is stopped">
+          <Switch label="Auto-transcribe recordings" on={meetings.autoProcess} onChange={() => void meetings.toggleAutoProcess()} />
+          Auto-transcribe recordings
+        </label>
       )}
       {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
       {remembering && (
@@ -90,10 +127,24 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   return (
     <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
       {openId && <audio {...player.audio} />}
+      {!openId && access.access && <AccessBanner access={access.access} onAllow={(source) => void access.allow(source)} />}
+      {access.error && <p className="meetings-error">{access.error}</p>}
+      {meetings.recording && (
+        <RecorderCard recording={meetings.recording} onMute={(on) => void meetings.mute(on)} onStop={() => void meetings.stopRecording()} />
+      )}
       {job && <JobCard job={job} title={titleOf(job, meetings.list)} onStop={meetings.stop} />}
       {meetings.error && <p className="meetings-error">{meetings.error}</p>}
       {openId === null ? (
-        <MeetingList list={meetings.list} onOpen={meetings.open} onDelete={setDeleting} job={job} />
+        <MeetingList
+          list={meetings.list}
+          recordings={meetings.recordings}
+          queued={meetings.queued}
+          onOpen={meetings.open}
+          onDelete={(m) => setDeleting({ id: m.id, title: meetingTitle(m), recording: false })}
+          onTranscribe={meetings.transcribe}
+          onDeleteRecording={(r) => setDeleting({ id: r.id, title: recordedTitle, recording: true })}
+          job={job}
+        />
       ) : (
         meeting && (
           <MeetingView
@@ -108,7 +159,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
         )
       )}
       <Modal
-        title={`Delete ${deleting ? meetingTitle(deleting) : ""}?`}
+        title={`Delete ${deleting?.title ?? ""}?`}
         open={deleting !== null}
         onClose={() => setDeleting(null)}
         footer={
@@ -120,7 +171,8 @@ export function MeetingsPage({ sideHandle }: PageContext) {
               type="button"
               className="btn btn-primary"
               onClick={() => {
-                if (deleting) void meetings.remove(deleting.id);
+                if (deleting?.recording) void meetings.removeRecording(deleting.id);
+                else if (deleting) void meetings.remove(deleting.id);
                 setDeleting(null);
               }}
             >
@@ -129,9 +181,93 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           </>
         }
       >
-        <p className="meetings-confirm">Its transcript, notes and the app's copy of the recording go. The file it was imported from stays where it is.</p>
+        <p className="meetings-confirm">
+          {deleting?.recording
+            ? "The recording goes, and with it the only copy of this call."
+            : "Its transcript, notes and the app's copy of the recording go. The file it was imported from stays where it is."}
+        </p>
       </Modal>
     </Page>
+  );
+}
+
+const SOURCES: Source[] = ["microphone", "call"];
+const SOURCE_NAMES: Record<Source, string> = { microphone: "Microphone — your side", call: "System audio — the call's side" };
+
+/** What the system has not let the app record yet, each with the way to allow it: its
+    prompt, or System Settings for one refused. Nothing when both are allowed or it does not say. */
+function AccessBanner({ access, onAllow }: { access: RecordingAccess; onAllow: (source: Source) => void }) {
+  const missing = SOURCES.filter((s) => access[s] === "denied" || access[s] === "notAsked");
+  if (missing.length === 0) return null;
+  return (
+    <div className="meetings-access" role="note" aria-label="Recording permissions">
+      <span className="meetings-access-icon" aria-hidden>
+        <ShieldAlert size={16} />
+      </span>
+      <div className="meetings-access-body">
+        <p className="meetings-access-title">To record a call, allow the app to hear:</p>
+        {missing.map((source) => (
+          <div key={source} className="meetings-access-row">
+            <span className="meetings-access-name">{SOURCE_NAMES[source]}</span>
+            <span className="meetings-access-state">{access[source] === "denied" ? "Turned off in System Settings" : "Not allowed yet"}</span>
+            <button type="button" className="btn btn-ghost" onClick={() => onAllow(source)}>
+              {access[source] === "denied" ? "Open System Settings" : "Allow"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** What a recording not yet transcribed is called in the list. */
+const recordedTitle = "Recorded call";
+
+/** The call being recorded: how long, how loud each side is, your microphone's Mute, and Stop. */
+function RecorderCard({ recording, onMute, onStop }: { recording: Recording; onMute: (on: boolean) => void; onStop: () => void }) {
+  return (
+    <div className="meetings-recorder" role="status" aria-label="Recording">
+      <span className="meetings-recorder-dot" aria-hidden />
+      <div className="meetings-recorder-body">
+        <div className="meetings-job-head">
+          <span className="meetings-job-title">Recording</span>
+          <span className="meetings-recorder-time">{clock(recording.seconds)}</span>
+        </div>
+        <Meter label="You" level={recording.mic} muted={recording.muted} />
+        <Meter label="Call" level={recording.call} />
+        {callSilent(recording) && (
+          <p className="meetings-recorder-hint">No sound from the call — check the System Audio Recording permission in System Settings → Privacy & Security.</p>
+        )}
+      </div>
+      <button
+        type="button"
+        className="btn btn-ghost meetings-mute"
+        aria-pressed={recording.muted}
+        title={recording.muted ? "Your microphone is recorded as silence — click to be heard again" : "Record silence for your side for now — noise around you stays out"}
+        onClick={() => onMute(!recording.muted)}
+      >
+        {recording.muted ? <MicOff size={12} /> : <Mic size={12} />}
+        {recording.muted ? "Unmute" : "Mute"}
+      </button>
+      <button type="button" className="btn btn-ghost" onClick={onStop}>
+        <Square size={12} />
+        Stop
+      </button>
+    </div>
+  );
+}
+
+/** One side's level, 0 to 1; `muted` says so instead. */
+function Meter({ label, level, muted = false }: { label: string; level: number; muted?: boolean }) {
+  return (
+    <div className="meetings-meter">
+      <span className="meetings-meter-label">{label}</span>
+      {muted && <span className="meetings-meter-muted">Muted</span>}
+      <span className="meetings-meter-track" role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={1} aria-valuenow={level}>
+        {/* A square root: speech peaks low, and a meter that barely moves says nothing. */}
+        <span className="meetings-meter-fill" style={{ width: `${Math.round(100 * Math.sqrt(Math.min(1, level)))}%` }} />
+      </span>
+    </div>
   );
 }
 
@@ -244,30 +380,42 @@ function MeetingState({ summarized, writing }: { summarized: boolean; writing: b
 
 function MeetingList({
   list,
+  recordings,
+  queued,
   onOpen,
   onDelete,
+  onTranscribe,
+  onDeleteRecording,
   job,
 }: {
   list: MeetingInfo[];
+  recordings: RecordingInfo[];
+  queued: string[];
   onOpen: (id: string) => void;
   onDelete: (m: MeetingInfo) => void;
+  onTranscribe: (id: string) => void;
+  onDeleteRecording: (r: RecordingInfo) => void;
   job: Job | null;
 }) {
   const busy = job !== null;
-  if (list.length === 0) {
+  if (list.length === 0 && recordings.length === 0) {
     return (
       <p className="meetings-empty">
-        No meetings yet. Import a call's recording — sound or video — and its notes are written here: what was decided, who does what.
+        No meetings yet. Record a call, or import its recording — sound or video — and its notes are written here: what was decided, who does what.
       </p>
     );
   }
-  // Newest first already: a day's rows are together.
-  const days: [string, MeetingInfo[]][] = [];
-  for (const m of list) {
-    const label = day(m.created);
+  // Both newest first, merged: a day's rows are together.
+  const rows: { created: string; meeting?: MeetingInfo; recording?: RecordingInfo }[] = [
+    ...list.map((m) => ({ created: m.created, meeting: m })),
+    ...recordings.map((r) => ({ created: r.created, recording: r })),
+  ].sort((a, b) => Date.parse(b.created) - Date.parse(a.created));
+  const days: [string, typeof rows][] = [];
+  for (const row of rows) {
+    const label = day(row.created);
     const last = days[days.length - 1];
-    if (last?.[0] === label) last[1].push(m);
-    else days.push([label, [m]]);
+    if (last?.[0] === label) last[1].push(row);
+    else days.push([label, [row]]);
   }
   return (
     <div className="meetings-days">
@@ -275,37 +423,98 @@ function MeetingList({
         <section key={label} className="meetings-day" aria-label={label}>
           <h3 className="meetings-day-head">{label}</h3>
           <ul className="meetings-list">
-            {rows.map((m) => (
-              <li key={m.id} className="meetings-row">
-                <button type="button" className="meetings-row-open" onClick={() => onOpen(m.id)}>
-                  <span className="meetings-row-icon" aria-hidden>
-                    <AudioLines size={16} />
-                  </span>
-                  <span className="meetings-row-body">
-                    <span className="meetings-row-name">{meetingTitle(m)}</span>
-                    <span className="meetings-row-meta">
-                      <span>{time(m.created)}</span>
-                      <span title="Duration">
-                        <Clock size={11} />
-                        {clock(m.seconds)}
-                      </span>
-                      <span title="Speakers">
-                        <Users size={11} />
-                        {m.speakers}
-                      </span>
-                    </span>
-                  </span>
-                  <MeetingState summarized={m.summarized} writing={job?.id === m.id && job.stage === "notes"} />
-                </button>
-                <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
-                  <Trash2 size={14} />
-                </button>
-              </li>
-            ))}
+            {rows.map((row) =>
+              row.meeting ? (
+                <MeetingRow key={row.meeting.id} m={row.meeting} job={job} busy={busy} onOpen={onOpen} onDelete={onDelete} />
+              ) : (
+                row.recording && (
+                  <RecordingRow
+                    key={row.recording.id}
+                    r={row.recording}
+                    queued={queued.includes(row.recording.id)}
+                    onTranscribe={onTranscribe}
+                    onDelete={onDeleteRecording}
+                  />
+                )
+              ),
+            )}
           </ul>
         </section>
       ))}
     </div>
+  );
+}
+
+function MeetingRow({ m, job, busy, onOpen, onDelete }: { m: MeetingInfo; job: Job | null; busy: boolean; onOpen: (id: string) => void; onDelete: (m: MeetingInfo) => void }) {
+  return (
+    <li className="meetings-row">
+      <button type="button" className="meetings-row-open" onClick={() => onOpen(m.id)}>
+        <span className="meetings-row-icon" aria-hidden>
+          <AudioLines size={16} />
+        </span>
+        <span className="meetings-row-body">
+          <span className="meetings-row-name">{meetingTitle(m)}</span>
+          <span className="meetings-row-meta">
+            <span>{time(m.created)}</span>
+            <span title="Duration">
+              <Clock size={11} />
+              {clock(m.seconds)}
+            </span>
+            <span title="Speakers">
+              <Users size={11} />
+              {m.speakers}
+            </span>
+          </span>
+        </span>
+        <MeetingState summarized={m.summarized} writing={job?.id === m.id && job.stage === "notes"} />
+      </button>
+      <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${meetingTitle(m)}`} disabled={busy} onClick={() => onDelete(m)}>
+        <Trash2 size={14} />
+      </button>
+    </li>
+  );
+}
+
+/** A call recorded and not yet transcribed: Transcribe makes it a meeting, or waits for the job running now. */
+function RecordingRow({ r, queued, onTranscribe, onDelete }: { r: RecordingInfo; queued: boolean; onTranscribe: (id: string) => void; onDelete: (r: RecordingInfo) => void }) {
+  return (
+    <li className="meetings-row">
+      <div className="meetings-row-open meetings-row-recording">
+        <span className="meetings-row-icon" aria-hidden>
+          <Mic size={16} />
+        </span>
+        <span className="meetings-row-body">
+          <span className="meetings-row-name">{recordedTitle}</span>
+          <span className="meetings-row-meta">
+            <span>{time(r.created)}</span>
+            <span title="Duration">
+              <Clock size={11} />
+              {clock(r.seconds)}
+            </span>
+          </span>
+        </span>
+        {queued ? (
+          <span className="meetings-state">
+            <Hourglass size={11} />
+            Waiting
+          </span>
+        ) : (
+          <>
+            <span className="meetings-state">
+              <FileText size={11} />
+              Not transcribed
+            </span>
+            <button type="button" className="btn btn-ghost" onClick={() => onTranscribe(r.id)}>
+              <Sparkles size={12} />
+              Transcribe
+            </button>
+          </>
+        )}
+      </div>
+      <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${recordedTitle} of ${time(r.created)}`} disabled={queued} onClick={() => onDelete(r)}>
+        <Trash2 size={14} />
+      </button>
+    </li>
   );
 }
 

@@ -1,6 +1,7 @@
 import { Fragment, useState, type ComponentProps } from "react";
 import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
+import { Switch } from "./Switch";
 import { KubeSettings } from "./KubeSettings";
 import { WebSearchSettings } from "./WebSearchSettings";
 import { ShellSettings } from "./ShellSettings";
@@ -328,7 +329,7 @@ export function Settings({
                           —
                         </span>
                       ) : (
-                        <AlertSwitch
+                        <Switch
                           label={`${label}: sound`}
                           on={alerts.sound[attention]}
                           onChange={(on) => onAlerts({ ...alerts, sound: { ...alerts.sound, [attention]: on } })}
@@ -336,7 +337,7 @@ export function Settings({
                       )}
                     </td>
                     <td>
-                      <AlertSwitch
+                      <Switch
                         label={`${label}: notification`}
                         on={alerts.notify[attention]}
                         onChange={(on) => onAlerts({ ...alerts, notify: { ...alerts.notify, [attention]: on } })}
@@ -447,18 +448,6 @@ const ALERT_ROWS: { attention: Attention; label: string }[] = [
   { attention: "approval", label: "Waiting for approval" },
 ];
 
-function AlertSwitch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      className={`alert-switch${on ? " on" : ""}`}
-      onClick={() => onChange(!on)}
-    />
-  );
-}
 
 const MODE_LABELS: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
 

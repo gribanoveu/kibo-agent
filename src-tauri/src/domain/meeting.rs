@@ -132,6 +132,8 @@ pub enum MeetingError {
     AlreadyRecording,
     #[error("nothing is being recorded")]
     NotRecording,
+    #[error("this call is still being recorded — stop it first")]
+    StillRecording,
 }
 
 /// A recording made into notes. Its sound is kept beside it (`infra::meeting_store`).
@@ -267,6 +269,9 @@ pub enum MeetingEvent {
     SummaryDelta { id: String, text: String },
     /// The job ended, however it ended: read the list and the meeting again.
     Ended,
+    /// A call being recorded: how long by now and how loud each side is — at
+    /// most ten a second.
+    Recording { id: String, seconds: f32, mic: f32, call: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -308,7 +313,7 @@ impl JobState {
                 (self.done, self.total) = (*done, *total);
             }
             MeetingEvent::Transcribed { .. } => (self.stage, self.done, self.total) = (Some(Stage::Notes), 0, 0),
-            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended => {}
+            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended | MeetingEvent::Recording { .. } => {}
         }
     }
 }

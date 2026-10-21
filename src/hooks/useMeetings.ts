@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pickRecording } from "../lib/dialog";
 import {
+  hearLevels,
+  meetingAutoProcessGet,
+  meetingAutoProcessSet,
   meetingDelete,
   meetingGet,
   meetingJob,
   meetingList,
   meetingProcess,
+  meetingProcessRecording,
+  meetingRecordMute,
+  meetingRecordStart,
+  meetingRecordStop,
+  meetingRecording,
+  meetingRecordingDelete,
+  meetingRecordings,
   meetingRenameSpeaker,
   meetingStop,
   meetingSummarize,
@@ -13,6 +23,8 @@ import {
   type Meeting,
   type MeetingInfo,
   type MeetingJob,
+  type Recording,
+  type RecordingInfo,
 } from "../lib/meeting";
 
 export type Job = MeetingJob;
@@ -20,7 +32,8 @@ export type Job = MeetingJob;
 /**
  * The Meetings page's state: the list, the meeting open, and the one job the
  * backend runs at a time. Events name their meeting; a piece of notes is kept
- * for the meeting it is about and shown only while that one is open.
+ * for the meeting it is about and shown only while that one is open. Beside
+ * them, the call being recorded and the recorded ones waiting to be transcribed.
  */
 export function useMeetings() {
   const [list, setList] = useState<MeetingInfo[]>([]);
@@ -29,6 +42,13 @@ export function useMeetings() {
   const [job, setJob] = useState<Job | null>(null);
   const [draft, setDraft] = useState<{ id: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recordings, setRecordings] = useState<RecordingInfo[]>([]);
+  const [recording, setRecording] = useState<Recording | null>(null);
+  const [autoProcess, setAutoProcess] = useState(false);
+  // Recordings to transcribe once the job running now ends, in order.
+  const [queued, setQueued] = useState<string[]>([]);
+  // Recordings stopped here: a level event about one that lands after the stop is late, not a new recording.
+  const stoppedIds = useRef(new Set<string>());
   const stopping = useRef(false);
   // The job's meeting as the listener sees it, without re-subscribing per event.
   const jobRef = useRef<Job | null>(null);
@@ -37,7 +57,10 @@ export function useMeetings() {
   const openRef = useRef<string | null>(null);
   openRef.current = openId;
 
-  const readList = useCallback(() => meetingList().then(setList, (e) => setError(String(e))), []);
+  const readList = useCallback(
+    () => Promise.all([meetingList().then(setList), meetingRecordings().then(setRecordings)]).catch((e) => setError(String(e))),
+    [],
+  );
   // A read that lands after another meeting was opened is dropped.
   const readOpen = useCallback((id: string | null) => {
     if (id === null) return setMeeting(null);
@@ -48,6 +71,7 @@ export function useMeetings() {
   }, []);
 
   useEffect(() => void readList(), []);
+  useEffect(() => void meetingAutoProcessGet().then(setAutoProcess, (e) => setError(String(e))), []);
   useEffect(() => readOpen(openId), [openId]);
 
   // How many jobs were seen to end: a snapshot asked for before the last one
@@ -65,6 +89,8 @@ export function useMeetings() {
         // The recording just added opens as soon as there is a transcript to read.
         if (jobRef.current?.id === event.id) setOpenId(event.id);
         setJob((now) => (now?.id === event.id ? { ...now, stage: "notes" } : now));
+      } else if (event.kind === "recording") {
+        if (!stoppedIds.current.has(event.id)) setRecording((now) => hearLevels(now, event));
       } else if (event.kind === "summaryDelta") {
         setDraft((now) => ({ id: event.id, text: (now?.id === event.id ? now.text : "") + event.text }));
       } else {
@@ -82,6 +108,11 @@ export function useMeetings() {
       const seen = ends.current;
       meetingJob().then(
         (running) => live && ends.current === seen && setJob((now) => now ?? running),
+        (e) => live && setError(String(e)),
+      );
+      // A call being recorded since before the page opened; what a level event said wins.
+      meetingRecording().then(
+        (on) => live && on && setRecording((now) => now ?? { ...hearLevels(null, { ...on, mic: 0, call: 0 }), muted: on.muted }),
         (e) => live && setError(String(e)),
       );
     });
@@ -122,6 +153,74 @@ export function useMeetings() {
 
   const summarize = (id: string) => run({ kind: "summary", id, stage: "notes" }, () => meetingSummarize(id));
 
+  // One job at a time: a recording asked for while one runs waits for it to end.
+  const transcribe = (id: string) => {
+    if (jobRef.current !== null) setQueued((now) => (now.includes(id) ? now : [...now, id]));
+    else void run({ kind: "process" }, () => meetingProcessRecording(id));
+  };
+  // ponytail: the queue is the page's; one left when the page closes stays in the list for Transcribe.
+  useEffect(() => {
+    if (job !== null || queued.length === 0) return;
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    void run({ kind: "process" }, () => meetingProcessRecording(next));
+  }, [job, queued]);
+
+  const record = async () => {
+    setError(null);
+    try {
+      const id = await meetingRecordStart();
+      setRecording((now) => now ?? hearLevels(null, { id, seconds: 0, mic: 0, call: 0 }));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const stopRecording = async () => {
+    const was = recording;
+    if (was) stoppedIds.current.add(was.id);
+    try {
+      const id = await meetingRecordStop();
+      stoppedIds.current.add(id);
+      setRecording(null);
+      await readList();
+      if (autoProcess) transcribe(id);
+    } catch (e) {
+      setRecording(null);
+      setError(String(e));
+    }
+  };
+
+  const mute = async (on: boolean) => {
+    try {
+      await meetingRecordMute(on);
+      setRecording((now) => now && { ...now, muted: on });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const removeRecording = async (id: string) => {
+    try {
+      await meetingRecordingDelete(id);
+      setQueued((now) => now.filter((q) => q !== id));
+      await readList();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const toggleAutoProcess = async () => {
+    const next = !autoProcess;
+    setAutoProcess(next);
+    try {
+      await meetingAutoProcessSet(next);
+    } catch (e) {
+      setAutoProcess(!next);
+      setError(String(e));
+    }
+  };
+
   const stop = () => {
     stopping.current = true;
     void meetingStop();
@@ -158,6 +257,16 @@ export function useMeetings() {
     error,
     importRecording,
     summarize,
+    recordings,
+    recording,
+    queued,
+    autoProcess,
+    record,
+    stopRecording,
+    mute,
+    transcribe,
+    removeRecording,
+    toggleAutoProcess,
     stop,
     rename,
     remove,

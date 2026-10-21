@@ -10,9 +10,10 @@ use std::sync::{Mutex, MutexGuard};
 use crate::domain::features::Feature;
 use crate::domain::llm::{ChatRequest, LlmMessage, StreamEvent};
 use crate::domain::meeting::{self, JobKind, JobState, Meeting, MeetingError, MeetingEvent, MeetingEventSink, Stage};
+use crate::domain::recording::{self, RecordingInfo, RecordingState};
 use crate::domain::voices::VoiceInfo;
 use crate::infra::meeting_process::{self, Running};
-use crate::infra::meeting_recorder::Recorder;
+use crate::infra::meeting_recorder::{self, Recorder};
 use crate::infra::{meeting_store, speech, voices_store};
 use crate::services::features;
 use crate::services::llm_session::{self, LlmSession};
@@ -92,11 +93,13 @@ impl MeetingNotes {
 
     /// The call recorded from now on — the microphone and what the computer
     /// plays — into `meetings/recordings/<id>.wav`; its id. Only while Meeting
-    /// notes is on.
-    pub fn record_start(&self) -> Result<String, MeetingError> {
+    /// notes is on. How long and how loud it is goes to `sink` as it records.
+    pub fn record_start(&self, sink: &MeetingEventSink) -> Result<String, MeetingError> {
         still_on()?;
         let id = uuid::Uuid::new_v4().to_string();
-        self.recorder.start(&id, &meeting_store::recording(&id)?)?;
+        let (sink, named) = (sink.clone(), id.clone());
+        let levels = Box::new(move |l: recording::Levels| sink(MeetingEvent::Recording { id: named.clone(), seconds: l.seconds, mic: l.mic, call: l.call }));
+        self.recorder.start(&id, &meeting_store::recording(&id)?, levels)?;
         Ok(id)
     }
 
@@ -105,12 +108,72 @@ impl MeetingNotes {
         self.recorder.stop()
     }
 
+    /// Your microphone muted in the recording, or heard again.
+    pub fn record_mute(&self, on: bool) -> Result<(), MeetingError> {
+        self.recorder.mute(on)
+    }
+
+    /// The call being recorded now, for a page opened while it records.
+    pub fn recording(&self) -> Option<RecordingState> {
+        self.recorder.current()
+    }
+
+    /// The calls recorded and not yet made into meetings, newest first. One a
+    /// crash left without its sizes gets them here: the list is where it is
+    /// next seen, and it reads as nothing without them.
+    pub fn recordings(&self) -> Result<Vec<RecordingInfo>, MeetingError> {
+        let recording = self.recorder.current().map(|r| r.id);
+        let mut rows: Vec<RecordingInfo> = meeting_store::recordings()?
+            .into_iter()
+            .filter(|(id, _)| Some(id) != recording.as_ref())
+            .filter_map(|(id, path)| {
+                // ponytail: a file that is not a WAV of ours is left out, not removed; Delete data takes it.
+                meeting_recorder::repair(&path).ok()?;
+                let meta = std::fs::metadata(&path).ok()?;
+                let created = chrono::DateTime::<chrono::Utc>::from(meta.modified().ok()?).to_rfc3339();
+                let seconds = recording::seconds_of(recording::data_bytes_of(meta.len(), recording::CHANNELS) as u64);
+                Some(RecordingInfo { id, created, seconds })
+            })
+            .collect();
+        rows.sort_by(|a, b| b.created.cmp(&a.created));
+        Ok(rows)
+    }
+
+    /// The call recorded as `id` made into a meeting, like an imported file;
+    /// the recording goes once the meeting is saved — they are one call.
+    pub fn process_recording(&self, exe: &Path, models: &Path, id: &str, sink: &MeetingEventSink) -> Result<String, MeetingError> {
+        if self.recorder.current().is_some_and(|r| r.id == id) {
+            return Err(MeetingError::StillRecording);
+        }
+        let path = meeting_store::recording(id)?;
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map_err(|_| MeetingError::NotFound(id.to_string()))?;
+        let name = chrono::DateTime::<chrono::Local>::from(modified).format("Call %Y-%m-%d %H:%M").to_string();
+        self.process_as(exe, models, &path, name, sink, &|| {
+            let _ = meeting_store::delete_recording(id);
+        })
+    }
+
+    /// The recording `id` thrown away — not the one being recorded.
+    pub fn delete_recording(&self, id: &str) -> Result<(), MeetingError> {
+        if self.recorder.current().is_some_and(|r| r.id == id) {
+            return Err(MeetingError::StillRecording);
+        }
+        meeting_store::delete_recording(id)
+    }
+
     /// `audio` recognized by `exe`, saved, then summarized; the meeting's id.
     /// The meeting keeps its own copy of the sound, so `audio` — an imported
     /// file, or a recording to be thrown away — is not needed after. A summary
     /// that fails leaves the meeting saved, to summarize again; a recognition
     /// that fails leaves nothing.
     pub fn process(&self, exe: &Path, models: &Path, audio: &Path, sink: &MeetingEventSink) -> Result<String, MeetingError> {
+        let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
+        self.process_as(exe, models, audio, name, sink, &|| {})
+    }
+
+    /// [`process`](Self::process) with the meeting called `name`, and `saved`
+    /// called once it is saved — before its notes, which may fail.
+    fn process_as(&self, exe: &Path, models: &Path, audio: &Path, name: String, sink: &MeetingEventSink, saved: &dyn Fn()) -> Result<String, MeetingError> {
         let job = self.begin(JobState::new(JobKind::Process, None), sink)?;
         if !speech::has_models(models) {
             return Err(MeetingError::ModelsMissing);
@@ -121,7 +184,6 @@ impl MeetingNotes {
             let _ = delete_meeting(&left);
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
         let meeting = match self.transcribe(exe, models, audio, &id, name, &|e| job.tell(e)) {
             Ok(meeting) => meeting,
             Err(e) => {
@@ -130,6 +192,7 @@ impl MeetingNotes {
                 return Err(e);
             }
         };
+        saved();
         job.tell(MeetingEvent::Transcribed { id: id.clone() });
         self.summarize_into(&meeting, &|e| job.tell(e))?;
         Ok(id)
@@ -485,7 +548,7 @@ mod tests {
     fn a_call_is_recorded_only_while_meeting_notes_is_on() {
         crate::testing::with_app_dir("meeting-record-off", || {
             let notes = MeetingNotes::default();
-            assert_eq!(notes.record_start(), Err(MeetingError::Off));
+            assert_eq!(notes.record_start(&recorder().0), Err(MeetingError::Off));
             assert!(!meeting_store::audio("0").unwrap().parent().unwrap().parent().unwrap().join("recordings").exists(), "no folder made for it");
             assert_eq!(notes.record_stop(), Err(MeetingError::NotRecording));
             notes.stop_all(); // nothing to stop is no failure
@@ -554,6 +617,63 @@ mod tests {
             assert_eq!(meeting_store::list().unwrap().len(), 1);
             let left: Vec<_> = std::fs::read_dir(meeting_store::audio(id).unwrap().parent().unwrap().parent().unwrap()).unwrap().collect();
             assert_eq!(left.len(), 1, "not even its sound");
+        });
+    }
+
+    /// A recording as the recorder leaves one, `frames` long; or as a crash
+    /// does, its sizes 0.
+    fn recorded(id: &str, frames: usize, whole: bool) -> std::path::PathBuf {
+        let path = meeting_store::recording(id).unwrap();
+        let data = (frames * 4) as u32;
+        let mut bytes = recording::wav_header(recording::CHANNELS, if whole { data } else { 0 }).to_vec();
+        bytes.extend(recording::interleave(&vec![0.1; frames], &vec![0.2; frames], frames));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn recordings_are_listed_newest_first_with_a_crashed_one_made_whole_and_the_one_recording_left_out() {
+        crate::testing::with_app_dir("meeting-recordings", || {
+            let notes = MeetingNotes::default();
+            assert_eq!(notes.recordings().unwrap(), [], "none recorded yet");
+            recorded("aa", 16_000, true);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let crashed = recorded("bb", 32_000, false);
+            recorded("cc", 8_000, true);
+            notes.recorder.pretend("cc");
+            assert_eq!(notes.recording().map(|r| r.id), Some("cc".into()));
+
+            let rows = notes.recordings().unwrap();
+            assert_eq!(rows.iter().map(|r| (r.id.as_str(), r.seconds)).collect::<Vec<_>>(), [("bb", 2.0), ("aa", 1.0)]);
+            assert_eq!(std::fs::read(&crashed).unwrap()[40..44], (32_000u32 * 4).to_le_bytes(), "its sizes put in");
+
+            assert_eq!(notes.delete_recording("cc"), Err(MeetingError::StillRecording));
+            assert_eq!(notes.process_recording(Path::new("x"), Path::new("y"), "cc", &recorder().0), Err(MeetingError::StillRecording));
+            notes.delete_recording("aa").unwrap();
+            assert_eq!(notes.recordings().unwrap().len(), 1);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recording_made_into_a_meeting_is_gone_and_one_that_failed_stays() {
+        crate::testing::with_app_dir("meeting-process-recording", || {
+            features::set("meeting-notes", true).unwrap();
+            let notes = MeetingNotes::default();
+            let (sink, _) = recorder();
+            let (failing, models) = sidecar("recording-fails", r#"{"type":"error","message":"no"}"#);
+            let kept = recorded("aa", 16_000, true);
+            assert!(notes.process_recording(&failing, &models, "aa", &sink).is_err());
+            assert!(kept.exists(), "a recognition that failed leaves the call to try again");
+
+            let (exe, models) = sidecar("recording-ok", r#"{"type":"result","utterances":[{"speaker":0,"start":0.0,"end":1.0,"text":"да"}],"seconds":1.0}"#);
+            // No model is set up here, so the notes fail — after the meeting is saved.
+            assert!(matches!(notes.process_recording(&exe, &models, "aa", &sink), Err(MeetingError::Summary(_))));
+            assert!(!kept.exists(), "the meeting is the call now");
+            let meetings = meeting_store::list().unwrap();
+            assert_eq!(meetings.len(), 1);
+            assert!(meetings[0].name.starts_with("Call 20"), "{}", meetings[0].name);
+            assert_eq!(notes.process_recording(&exe, &models, "aa", &sink), Err(MeetingError::NotFound("aa".into())));
         });
     }
 

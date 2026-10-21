@@ -167,9 +167,148 @@
 @media (prefers-reduced-motion: reduce) {
   .meetings-job-icon svg,
   .meetings-job-fill.busy,
+  .meetings-recorder-dot,
   .meetings-state.writing svg {
     animation: none;
   }
+}
+/* What the system has not let the app record yet, and the way to allow each. */
+.meetings-access {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 820px;
+  margin-top: 4px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border-soft));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--amber) 6%, var(--bg-panel));
+}
+.meetings-access-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+.meetings-access-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.meetings-access-title {
+  margin: 0 0 2px;
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.meetings-access-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.meetings-access-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.meetings-access-state {
+  flex: none;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+/* The call being recorded: a red dot, its length, a meter each side, Stop. */
+.meetings-recorder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 820px;
+  margin-top: 4px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border-soft));
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.meetings-recorder-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin: 0 11px;
+  border-radius: 50%;
+  background: var(--red);
+  animation: meetings-pulse 1.2s ease-in-out infinite;
+}
+.meetings-recorder-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.meetings-recorder-time {
+  flex: none;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.meetings-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.meetings-meter-label {
+  flex: none;
+  width: 36px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.meetings-meter-track {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.meetings-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 0.1s linear;
+}
+.meetings-meter-muted {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}
+.meetings-mute[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+/* Auto-transcribe: a switch and its words, either one toggles it. */
+.meetings-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.meetings-recorder-hint {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--amber);
+}
+/* A recording's row opens nothing: its Transcribe is the way in. */
+.meetings-row-recording {
+  cursor: default;
 }
 .meetings-error {
   color: var(--red);

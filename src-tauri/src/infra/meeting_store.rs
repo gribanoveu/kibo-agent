@@ -32,9 +32,13 @@ fn dir() -> Result<PathBuf, MeetingError> {
     Ok(app_dir::dir().map_err(store)?.join(DIR))
 }
 
-/// The id is the window's: only what [`save`] could have named.
+/// The id is the window's: only what [`save`] could have named — a uuid.
+fn ours(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
 fn folder(dir: &Path, id: &str) -> Result<PathBuf, MeetingError> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+    if !ours(id) {
         return Err(MeetingError::NotFound(id.to_string()));
     }
     Ok(dir.join(id))
@@ -52,6 +56,29 @@ pub fn recording(id: &str) -> Result<PathBuf, MeetingError> {
     let dir = dir()?.join(RECORDINGS);
     fs::create_dir_all(&dir).map_err(store)?;
     Ok(folder(&dir, id)?.with_extension("wav"))
+}
+
+/// The calls recorded and not made into meetings yet: each id and its file.
+pub fn recordings() -> Result<Vec<(String, PathBuf)>, MeetingError> {
+    let entries = match fs::read_dir(dir()?.join(RECORDINGS)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(store(e)),
+    };
+    Ok(entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|path| path.extension().is_some_and(|x| x == "wav"))
+        .filter_map(|path| Some((path.file_stem()?.to_str().filter(|id| ours(id))?.to_string(), path)))
+        .collect())
+}
+
+/// The recording `id`, gone; none is no failure.
+pub fn delete_recording(id: &str) -> Result<(), MeetingError> {
+    match fs::remove_file(recording(id)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(store(e)),
+        _ => Ok(()),
+    }
 }
 
 /// Newest first. A meeting that does not read is skipped, not the list.
@@ -141,6 +168,13 @@ mod tests {
             let recorded = recording("ee").unwrap();
             assert_eq!(recorded, dir().unwrap().join("recordings").join("ee.wav"));
             assert_eq!(unfinished().unwrap(), ["dd"], "a recording waiting is not a meeting left half-made");
+            fs::write(&recorded, "RIFF").unwrap();
+            fs::write(recorded.with_file_name("ab.txt"), "").unwrap();
+            fs::write(recorded.with_file_name("x.y.wav"), "").unwrap();
+            assert_eq!(recordings().unwrap(), [("ee".to_string(), recorded.clone())], "only ours, by id");
+            delete_recording("ee").unwrap();
+            assert_eq!(recordings().unwrap(), []);
+            delete_recording("ee").unwrap();
             assert_eq!(get("aa").unwrap(), meeting("aa", "2026-10-01T10:00:00Z"));
             assert_eq!(list().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["bb", "aa"]);
 

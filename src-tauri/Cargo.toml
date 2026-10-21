@@ -118,6 +118,11 @@ strip = true
 # honestly instead of losing the key silently.
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# Asking for the microphone and the system's sound before a call is recorded
+# (`infra::recording_access`): AVFoundation's class methods and their
+# completion blocks. Tauri brings both already; named here to be called.
+objc2 = "0.6.4"
+block2 = "0.6.2"
 
 # `sync-secret-service`: a blocking Secret Service client over dbus, since
 # there is no free async context here. `crypto-rust` encrypts the dbus

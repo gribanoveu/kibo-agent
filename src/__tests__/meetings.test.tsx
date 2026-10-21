@@ -12,6 +12,11 @@ let finishProcess: (result: { id?: string; error?: string }) => void = () => {};
 let voiceMemoryOn = false;
 let voices: { id: string; name: string; meetings: number }[] = [];
 let running: unknown = null;
+let recordings: { id: string; created: string; seconds: number }[] = [];
+let recordingNow: { id: string; seconds: number; muted: boolean } | null = null;
+let autoOn = false;
+let finishRecording: (result: { id?: string; error?: string }) => void = () => {};
+let access: Record<string, string> = { microphone: "granted", call: "granted" };
 
 const info = (m: Meeting) => ({
   id: m.id,
@@ -33,6 +38,46 @@ mock.module("@tauri-apps/api/core", () => ({
       return Promise.resolve(structuredClone(voices));
     }
     if (command === "meeting_job") return Promise.resolve(running);
+    if (command === "meeting_recording") return Promise.resolve(recordingNow);
+    if (command === "meeting_recording_access") return Promise.resolve({ ...access });
+    if (command === "meeting_recording_access_request") {
+      access[String(args!.source)] = "granted";
+      return Promise.resolve("granted");
+    }
+    if (command === "meeting_recordings") return Promise.resolve(structuredClone(recordings));
+    if (command === "meeting_auto_process_get") return Promise.resolve(autoOn);
+    if (command === "meeting_auto_process_set") {
+      autoOn = Boolean(args!.on);
+      return Promise.resolve(null);
+    }
+    if (command === "meeting_record_mute") {
+      if (!recordingNow) return Promise.reject("nothing is being recorded");
+      recordingNow.muted = Boolean(args!.on);
+      return Promise.resolve(null);
+    }
+    if (command === "meeting_record_start") {
+      recordingNow = { id: "r1", seconds: 0, muted: false };
+      return Promise.resolve("r1");
+    }
+    if (command === "meeting_record_stop") {
+      const id = recordingNow?.id;
+      recordingNow = null;
+      if (!id) return Promise.reject("nothing is being recorded");
+      recordings = [{ id, created: "2026-10-21T10:00:00Z", seconds: 95 }, ...recordings];
+      return Promise.resolve(id);
+    }
+    if (command === "meeting_recording_delete") {
+      recordings = recordings.filter((r) => r.id !== args!.id);
+      return Promise.resolve(null);
+    }
+    if (command === "meeting_process_recording") {
+      return new Promise((resolve, reject) => {
+        finishRecording = ({ id, error }) => {
+          if (!error) recordings = recordings.filter((r) => r.id !== args!.id);
+          return error ? reject(error) : resolve(id);
+        };
+      });
+    }
     if (command === "meeting_list") return Promise.resolve(stored.map(info));
     if (command === "meeting_get") return Promise.resolve(structuredClone(stored.find((m) => m.id === args!.id)));
     if (command === "meeting_delete") {
@@ -97,6 +142,10 @@ beforeEach(() => {
   voiceMemoryOn = false;
   voices = [];
   running = null;
+  recordings = [];
+  recordingNow = null;
+  autoOn = false;
+  access = { microphone: "granted", call: "granted" };
 });
 
 describe("the meetings page", () => {
@@ -261,6 +310,167 @@ describe("the meetings page", () => {
     await settle();
     expect(screen.getByText("a recording is already being processed — wait for it or stop it")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("Writing the notes");
+  });
+
+  test("a call recorded shows its length and both sides' levels, and once stopped waits in the list", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Record"));
+    await settle();
+    expect(calls.some((c) => c.command === "meeting_record_start")).toBe(true);
+    const card = () => screen.getByRole("status", { name: "Recording" });
+    expect((screen.getByText("Record").closest("button") as HTMLButtonElement).disabled).toBe(true);
+
+    await emit({ kind: "recording", id: "r1", seconds: 65, mic: 0.25, call: 0.04 });
+    expect(card().textContent).toContain("1:05");
+    expect(within(card()).getByRole("meter", { name: "You" }).getAttribute("aria-valuenow")).toBe("0.25");
+    expect(within(card()).getByRole("meter", { name: "Call" }).getAttribute("aria-valuenow")).toBe("0.04");
+
+    fireEvent.click(within(card()).getByText("Stop"));
+    await settle();
+    // The recorder's last moment, told after the stop: late, not a new recording.
+    await emit({ kind: "recording", id: "r1", seconds: 95, mic: 0.1, call: 0.1 });
+    expect(screen.queryByRole("status", { name: "Recording" })).toBeNull();
+    expect(screen.getByText("Not transcribed")).toBeTruthy();
+    expect(screen.getByText("Recorded call")).toBeTruthy();
+    expect(screen.getByText("1:35")).toBeTruthy();
+    expect(calls.some((c) => c.command === "meeting_process_recording")).toBe(false);
+  });
+
+  test("your microphone is muted and heard again while the call records; a page opened later knows", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("Record"));
+    await settle();
+    const card = () => screen.getByRole("status", { name: "Recording" });
+    expect(card().textContent).not.toContain("Muted");
+    fireEvent.click(within(card()).getByText("Mute"));
+    await settle();
+    expect(calls.some((c) => c.command === "meeting_record_mute" && c.args?.on === true)).toBe(true);
+    expect(card().textContent).toContain("Muted");
+    // A level event keeps it so.
+    await emit({ kind: "recording", id: "r1", seconds: 3, mic: 0, call: 0.2 });
+    expect(within(card()).getByText("Unmute").closest("button")!.getAttribute("aria-pressed")).toBe("true");
+
+    cleanup();
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(card().textContent).toContain("Muted");
+    fireEvent.click(within(card()).getByText("Unmute"));
+    await settle();
+    expect(recordingNow!.muted).toBe(false);
+    expect(card().textContent).not.toContain("Muted");
+  });
+
+  test("Transcribe makes a recording a meeting; one asked for while a job runs waits for it", async () => {
+    recordings = [
+      { id: "r1", created: "2026-10-21T10:00:00Z", seconds: 60 },
+      { id: "r2", created: "2026-10-21T09:00:00Z", seconds: 30 },
+    ];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const [first, second] = screen.getAllByText("Transcribe");
+    fireEvent.click(first);
+    await settle();
+    expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1"]);
+    expect(screen.getByRole("status").textContent).toContain("Starting");
+
+    fireEvent.click(second);
+    await settle();
+    expect(screen.getByText("Waiting")).toBeTruthy();
+    const waiting = screen.getAllByLabelText(/^Delete Recorded call/)[1] as HTMLButtonElement;
+    expect(waiting.disabled).toBe(true); // it is about to be read
+    expect(calls.filter((c) => c.command === "meeting_process_recording")).toHaveLength(1);
+
+    await act(async () => finishRecording({ id: "m9" }));
+    await settle();
+    expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1", "r2"]);
+    await act(async () => finishRecording({ id: "m10" }));
+    await settle();
+    expect(screen.queryByText("Not transcribed")).toBeNull();
+  });
+
+  test("with Auto-transcribe on, a recording stopped is transcribed at once", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const toggle = screen.getByRole("switch", { name: "Auto-transcribe recordings" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await settle();
+    expect(autoOn).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(screen.getByText("Record"));
+    await settle();
+    fireEvent.click(within(screen.getByRole("status", { name: "Recording" })).getByText("Stop"));
+    await settle();
+    expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1"]);
+  });
+
+  test("a page opened while a call is recorded shows it; a silent call says to check the permission", async () => {
+    recordingNow = { id: "r7", seconds: 30, muted: false };
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const card = () => screen.getByRole("status", { name: "Recording" });
+    expect(card().textContent).toContain("0:30");
+    await emit({ kind: "recording", id: "r7", seconds: 200, mic: 0, call: 0 });
+    expect(card().textContent).not.toContain("No sound from the call"); // nobody spoke at all
+    await emit({ kind: "recording", id: "r7", seconds: 201, mic: 0, call: 0.2 });
+    await emit({ kind: "recording", id: "r7", seconds: 300, mic: 0.3, call: 0 });
+    expect(card().textContent).not.toContain("No sound from the call"); // not two minutes since the call was last heard
+    await emit({ kind: "recording", id: "r7", seconds: 330, mic: 0.3, call: 0 });
+    expect(card().textContent).toContain("No sound from the call");
+    await emit({ kind: "recording", id: "r7", seconds: 331, mic: 0.3, call: 0.2 });
+    expect(card().textContent).not.toContain("No sound from the call");
+  });
+
+  test("what the system has not allowed is said over the list, each with its way to allow it", async () => {
+    access = { microphone: "notAsked", call: "denied" };
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const banner = () => screen.queryByRole("note", { name: "Recording permissions" });
+    const record = () => screen.getByText("Record").closest("button") as HTMLButtonElement;
+    expect(record().disabled).toBe(true); // a recording would ask past the note
+    expect(banner()!.textContent).toContain("Microphone — your side");
+    expect(banner()!.textContent).toContain("Turned off in System Settings");
+
+    fireEvent.click(within(banner()!).getByText("Allow"));
+    await settle();
+    expect(calls.some((c) => c.command === "meeting_recording_access_request" && c.args?.source === "microphone")).toBe(true);
+    expect(banner()!.textContent).not.toContain("Microphone");
+    expect(record().disabled).toBe(true); // one is still missing
+
+    fireEvent.click(within(banner()!).getByText("Open System Settings"));
+    await settle();
+    expect(calls.some((c) => c.command === "meeting_recording_access_settings" && c.args?.source === "call")).toBe(true);
+    expect(calls.some((c) => c.command === "meeting_recording_access_request" && c.args?.source === "call")).toBe(false);
+
+    // Turned on in System Settings, then back to the app.
+    access.call = "granted";
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await settle();
+    expect(banner()).toBeNull();
+    expect(record().disabled).toBe(false);
+  });
+
+  test("nothing is said where the system does not say", async () => {
+    access = { microphone: "unknown", call: "unknown" };
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    expect(screen.queryByRole("note", { name: "Recording permissions" })).toBeNull();
+    expect((screen.getByText("Record").closest("button") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("a recording is deleted only after it is confirmed", async () => {
+    recordings = [{ id: "r1", created: "2026-10-21T10:00:00Z", seconds: 60 }];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByLabelText(/^Delete Recorded call/));
+    expect(screen.getByText("The recording goes, and with it the only copy of this call.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Delete"));
+    await settle();
+    expect(calls.some((c) => c.command === "meeting_recording_delete" && c.args?.id === "r1")).toBe(true);
+    expect(screen.queryByText("Recorded call")).toBeNull();
   });
 
   test("a meeting is deleted only after it is confirmed", async () => {

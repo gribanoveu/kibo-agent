@@ -580,9 +580,12 @@ Air M4, macOS 15.6.1, встроенные динамики и микрофон,
 ### Как встаёт в приложение
 
 - **`src-tauri/Info.plist`**: `NSMicrophoneUsageDescription` и
-  `NSAudioCaptureUsageDescription`. Без второго tap молча пишет нули. Entitlement
-  `com.apple.security.device.audio-input` нужен только с hardened runtime, которого у
-  сборки нет.
+  `NSAudioCaptureUsageDescription`. Без второго tap молча пишет нули. **Entitlement
+  `com.apple.security.device.audio-input` нужен** (`src-tauri/Entitlements.plist`): Tauri
+  подписывает бандл с hardened runtime по умолчанию (`codesign -dv` — `flags=…(adhoc,runtime)`),
+  и без него macOS отказывает в микрофоне молча — без запроса и без строки в «Микрофоне»
+  System Settings. Звуку системы entitlement не нужен (проверено в R-2: видео писалось,
+  микрофон — нет).
 - **`infra/meeting_recorder.rs`**: два потока `cpal`. Каждый сводит свои каналы в моно и
   передискретизирует в 16 кГц тем же `LinearResampler` sherpa, что и `to_16k`. Писатель
   раз в секунду дописывает **стерео-WAV**: L — микрофон, R — система, 64 КБ/с, ~230 МБ в
@@ -616,7 +619,7 @@ Air M4, macOS 15.6.1, встроенные динамики и микрофон,
 | Шаг | Что | Проверка |
 |---|---|---|
 | R-1 | `meeting_recorder`: стерео-WAV, восстановление заголовка, команды `meeting_record_start/stop`, `Info.plist` | Тесты писателя (заголовок, восстановление, сведение каналов), мутации; вживую из `.app`. **Сделано**, кроме звука системы из `.app` — его проверит R-2 с кнопкой Record: из терминала (`record_live`) микрофон пишется, система — нули, как и ожидалось |
-| R-2 | Страница: Record/Stop, уровни, «Not transcribed» + Transcribe, `meetingAutoProcess` | `bun test`, строка в `CHANGELOG.md` |
+| R-2 | Страница: Record/Stop, уровни, «Not transcribed» + Transcribe, `meetingAutoProcess` | `bun test`, строка в `CHANGELOG.md`. **Сделано**: уровни идут событием `recording` по `meeting:event` раз в 100 мс; «Auto-transcribe recordings» — переключатель на самой странице; Mute пишет тишину вместо микрофона, не закрывая поток; очередь записей, ждущих чужого разбора, живёт на странице — закрытая страница оставляет их в списке под Transcribe. Над списком — плашка разрешений (`infra::recording_access`): микрофон читается публичным `AVCaptureDevice authorizationStatus`, звук системы — частным `TCCAccessPreflight`/`TCCAccessRequest` через `dlopen`, как в AudioCap; отказанное открывает свой раздел System Settings, статус перечитывается, когда окно снова в фокусе. На Windows статус неизвестен — плашки нет (R-3) |
 | R-3 | Windows вживую: тишина loopback по меткам времени, смена устройства на обеих платформах | Сборка из CI на Windows, звонок с паузами, переключение наушников |
 | R-4 | Дорожки в сайдкар: «я» по микрофону, диаризация только по системе; эхо — по сравнению уровней дорожек или AEC | WDER на записи с наушниками и без |
 

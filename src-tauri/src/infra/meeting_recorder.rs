@@ -3,8 +3,9 @@
 //! on Windows — into one stereo WAV, L the microphone and R the call, 16 kHz
 //! (`domain::recording`, `docs/36-meeting-notes-research.md`).
 //!
-//! The streams live on a thread of their own, which also writes: a second at a
-//! time, each track brought to 16 kHz and the two put side by side. The header
+//! The streams live on a thread of their own, which also writes: a tenth of a
+//! second at a time, each track brought to 16 kHz and the two put side by
+//! side, and how loud each was told to whoever started it. The header
 //! says 0 until the recording stops; a file left so by a crash is sized by
 //! [`repair`].
 
@@ -12,6 +13,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -21,10 +23,11 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 use sherpa_onnx::LinearResampler;
 
 use crate::domain::meeting::MeetingError;
-use crate::domain::recording::{self, CHANNELS, HEADER_BYTES, RATE};
+use crate::domain::recording::{self, Levels, RecordingState, CHANNELS, HEADER_BYTES, RATE};
 
-/// How often what the devices gave is written.
-const TICK: Duration = Duration::from_secs(1);
+/// How often what the devices gave is written, and its levels told: ten a
+/// second at most, the throttle of a source that changes fast (AGENTS.md).
+const TICK: Duration = Duration::from_millis(100);
 /// A track this far behind the other is taken as silent (`recording::frames_ready`).
 const MAX_LAG: usize = RATE as usize;
 
@@ -32,15 +35,23 @@ const MAX_LAG: usize = RATE as usize;
 #[derive(Default)]
 pub struct Recorder(Mutex<Option<Session>>);
 
+/// What a recording tells as it goes.
+pub type LevelSink = Box<dyn Fn(Levels) + Send>;
+
 struct Session {
     id: String,
     stop: mpsc::Sender<()>,
     thread: JoinHandle<Result<(), MeetingError>>,
+    /// Frames written by now.
+    frames: Arc<AtomicU64>,
+    /// The microphone written as silence while set.
+    muted: Arc<AtomicBool>,
 }
 
 impl Recorder {
-    /// Records into `path` as `id` from now on, once both devices are open.
-    pub fn start(&self, id: &str, path: &Path) -> Result<(), MeetingError> {
+    /// Records into `path` as `id` from now on, once both devices are open;
+    /// how loud each side is goes to `levels` as it records.
+    pub fn start(&self, id: &str, path: &Path, levels: LevelSink) -> Result<(), MeetingError> {
         let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if slot.is_some() {
             return Err(MeetingError::AlreadyRecording);
@@ -48,10 +59,13 @@ impl Recorder {
         let (stop, stopped) = mpsc::channel();
         let (ready, opened) = mpsc::sync_channel(1);
         let path = path.to_path_buf();
-        let thread = std::thread::spawn(move || record(&path, &stopped, &ready));
+        let frames = Arc::new(AtomicU64::new(0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let (written, silent) = (frames.clone(), muted.clone());
+        let thread = std::thread::spawn(move || record(&path, &stopped, &ready, &written, &silent, &*levels));
         match opened.recv() {
             Ok(Ok(())) => {
-                *slot = Some(Session { id: id.to_string(), stop, thread });
+                *slot = Some(Session { id: id.to_string(), stop, thread, frames, muted });
                 Ok(())
             }
             Ok(Err(e)) => Err(e),
@@ -66,11 +80,51 @@ impl Recorder {
         session.thread.join().map_err(|_| MeetingError::Device("the recording thread failed".into()))??;
         Ok(session.id)
     }
+
+    /// A recording under way as `id`, with no devices behind it — for the
+    /// tests of what must leave the one being recorded alone.
+    #[cfg(test)]
+    pub(crate) fn pretend(&self, id: &str) {
+        let (stop, _) = mpsc::channel();
+        let session = Session {
+            id: id.to_string(),
+            stop,
+            thread: std::thread::spawn(|| Ok(())),
+            frames: Arc::new(AtomicU64::new(RATE as u64 * 3)),
+            muted: Arc::default(),
+        };
+        *self.0.lock().unwrap() = Some(session);
+    }
+
+    /// The recording under way, how long it is by now, and whether the microphone is muted.
+    pub fn current(&self) -> Option<RecordingState> {
+        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_ref().map(|s| RecordingState {
+            id: s.id.clone(),
+            seconds: s.frames.load(Ordering::Relaxed) as f32 / RATE as f32,
+            muted: s.muted.load(Ordering::Relaxed),
+        })
+    }
+
+    /// The microphone written as silence from now on, or heard again. The
+    /// stream stays open: the two sides stay in step, and unmuting is at once.
+    pub fn mute(&self, on: bool) -> Result<(), MeetingError> {
+        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_ref().ok_or(MeetingError::NotRecording)?.muted.store(on, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
-/// The recording thread: devices opened (said on `ready`), then a write each
-/// [`TICK`] until `stop`, then the rest and the header's sizes.
-fn record(path: &Path, stop: &Receiver<()>, ready: &SyncSender<Result<(), MeetingError>>) -> Result<(), MeetingError> {
+/// The recording thread: devices opened (said on `ready`), then a write and
+/// its `levels` each [`TICK`] until `stop`, then the rest and the header's sizes.
+fn record(
+    path: &Path,
+    stop: &Receiver<()>,
+    ready: &SyncSender<Result<(), MeetingError>>,
+    frames_written: &AtomicU64,
+    muted: &AtomicBool,
+    levels: &dyn Fn(Levels),
+) -> Result<(), MeetingError> {
     let opened = open_devices().and_then(|(streams, mic, call)| Ok((streams, WavWriter::create(path)?, mic, call)));
     let (streams, mut file, mut mic, mut call) = match opened {
         Ok(opened) => opened,
@@ -87,12 +141,14 @@ fn record(path: &Path, stop: &Receiver<()>, ready: &SyncSender<Result<(), Meetin
             // Closed first: nothing arrives after what is flushed.
             streams.take();
         }
-        mic.pull(flush);
-        call.pull(flush);
+        let (mic_level, call_level) = (mic.pull(flush, muted.load(Ordering::Relaxed)), call.pull(flush, false));
         let frames = recording::frames_ready(mic.pending.len(), call.pending.len(), MAX_LAG, flush);
         let full = file.append(&recording::interleave(&mic.pending, &call.pending, frames))?;
         mic.take(frames);
         call.take(frames);
+        let written = file.frames();
+        frames_written.store(written, Ordering::Relaxed);
+        levels(Levels { seconds: written as f32 / RATE as f32, mic: mic_level, call: call_level });
         if flush || full {
             return file.finish();
         }
@@ -117,14 +173,20 @@ impl Track {
         Ok(Track { arrived: Arc::default(), resampler, pending: Vec::new() })
     }
 
-    /// What arrived since the last pull, at 16 kHz, onto what waits. `flush`:
-    /// the resampler's own last samples too.
-    fn pull(&mut self, flush: bool) {
-        let arrived = std::mem::take(&mut *self.arrived.lock().unwrap_or_else(|e| e.into_inner()));
+    /// What arrived since the last pull, at 16 kHz, onto what waits; its
+    /// peak. `flush`: the resampler's own last samples too. `silent`: as
+    /// silence of the same length — muted, the track keeps its time.
+    fn pull(&mut self, flush: bool, silent: bool) -> f32 {
+        let mut arrived = std::mem::take(&mut *self.arrived.lock().unwrap_or_else(|e| e.into_inner()));
+        if silent {
+            arrived.fill(0.0);
+        }
+        let level = recording::peak(&arrived);
         match &self.resampler {
             Some(resampler) => self.pending.extend(resampler.resample(&arrived, flush)),
             None => self.pending.extend(arrived),
         }
+        level
     }
 
     fn take(&mut self, frames: usize) {
@@ -201,6 +263,10 @@ impl WavWriter {
         self.file.write_all(bytes).map_err(store)?;
         self.written += bytes.len() as u32;
         Ok(bytes.len() == room)
+    }
+
+    fn frames(&self) -> u64 {
+        self.written as u64 / (CHANNELS as u64 * 2)
     }
 
     /// The header's sizes put in: the file is whole.
@@ -310,9 +376,10 @@ mod tests {
     fn a_track_at_another_rate_arrives_at_16_khz() {
         let mut track = Track::new(48_000).unwrap();
         track.arrived.lock().unwrap().extend(std::iter::repeat_n(0.5, 48_000));
-        track.pull(false);
+        assert_eq!(track.pull(false, false), 0.5, "its level");
+        assert_eq!(track.pull(false, false), 0.0, "nothing new is silence");
         assert!(track.pending.len() < RATE as usize, "the resampler keeps its last few for what comes next");
-        track.pull(true);
+        track.pull(true, false);
         assert_eq!(track.pending.len(), RATE as usize, "a second is a second once flushed");
         track.take(10);
         track.take(usize::MAX);
@@ -320,9 +387,12 @@ mod tests {
 
         let mut same = Track::new(RATE).unwrap();
         same.arrived.lock().unwrap().extend([0.1, 0.2]);
-        same.pull(false);
+        same.pull(false, false);
         assert_eq!(same.pending, [0.1, 0.2], "already at 16 kHz: as it came");
         assert!(same.arrived.lock().unwrap().is_empty(), "taken, not copied");
+        same.arrived.lock().unwrap().extend([0.3, -0.4, 0.5]);
+        assert_eq!(same.pull(false, true), 0.0, "muted: silent on the meter");
+        assert_eq!(same.pending, [0.1, 0.2, 0.0, 0.0, 0.0], "and in the file, for as long as it was");
     }
 
     /// The real microphone and output for a few seconds, a voice playing:
@@ -335,24 +405,59 @@ mod tests {
     fn record_live() {
         let path = temp("recorder-live");
         let recorder = Recorder::default();
-        recorder.start("live", &path).unwrap();
-        assert_eq!(recorder.start("again", &path), Err(MeetingError::AlreadyRecording));
+        let loudest = Arc::new(Mutex::new(Levels { seconds: 0.0, mic: 0.0, call: 0.0 }));
+        let told = loudest.clone();
+        recorder
+            .start("live", &path, Box::new(move |l| {
+                let mut m = told.lock().unwrap();
+                *m = Levels { seconds: l.seconds, mic: m.mic.max(l.mic), call: m.call.max(l.call) };
+            }))
+            .unwrap();
+        assert_eq!(recorder.start("again", &path, Box::new(|_| {})), Err(MeetingError::AlreadyRecording));
         let _ = std::process::Command::new("say").args(["-v", "Milena", "Проверка записи созвона, раз, два, три"]).status();
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(300));
+        // Muted, the microphone's side is silence however loud it is around it.
+        recorder.mute(true).unwrap();
+        std::thread::sleep(Duration::from_millis(300)); // what arrived before the mute is written first
+        let muted_from = recorder.current().unwrap().seconds;
+        let _ = std::process::Command::new("say").args(["-v", "Milena", "Этого не слышно"]).status();
+        let now = recorder.current().unwrap();
+        assert!(now.muted);
+        assert_eq!(now.id, "live");
         assert_eq!(recorder.stop().unwrap(), "live");
+        assert_eq!(recorder.current(), None);
         assert!(!repair(&path).unwrap(), "stopped, its sizes are in");
 
         let bytes = std::fs::read(&path).unwrap();
         let samples: Vec<i16> = bytes[HEADER_BYTES as usize..].chunks(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
         let peak = |channel: usize| samples.iter().skip(channel).step_by(2).map(|s| s.unsigned_abs()).max().unwrap_or(0) as f32 / i16::MAX as f32;
         let seconds = samples.len() as f32 / 2.0 / RATE as f32;
-        eprintln!("{seconds:.1} s, peak: microphone {:.3}, call {:.3} — {}", peak(0), peak(1), path.display());
+        let told = *loudest.lock().unwrap();
+        eprintln!("{seconds:.1} s, peak: microphone {:.3}, call {:.3}; told {told:?}; {:.1} s while running — {}", peak(0), peak(1), now.seconds, path.display());
         assert!(seconds > 1.0, "{seconds}");
+        assert!(now.seconds > 1.0 && now.seconds <= seconds, "{} of {seconds}", now.seconds);
+        assert!((told.seconds - seconds).abs() < 0.2, "the last told is the whole: {told:?}");
+        assert!((told.mic - peak(0)).abs() < 0.05, "the meter saw what was written: {told:?}");
+        let muted_tail = samples[(muted_from * RATE as f32) as usize * 2..].iter().step_by(2).map(|s| s.unsigned_abs()).max().unwrap_or(0);
+        assert_eq!(muted_tail, 0, "from {muted_from:.1} s the microphone is silence");
         assert_eq!(crate::infra::speech::decode(&path).unwrap().1, RATE);
     }
 
     #[test]
     fn stopping_with_nothing_recorded_says_so() {
         assert_eq!(Recorder::default().stop(), Err(MeetingError::NotRecording));
+        assert_eq!(Recorder::default().current(), None);
+        assert_eq!(Recorder::default().mute(true), Err(MeetingError::NotRecording));
+    }
+
+    #[test]
+    fn a_mute_is_the_recordings_until_undone() {
+        let recorder = Recorder::default();
+        recorder.pretend("r");
+        assert_eq!(recorder.current().map(|r| r.muted), Some(false));
+        recorder.mute(true).unwrap();
+        assert_eq!(recorder.current().map(|r| r.muted), Some(true));
+        recorder.mute(false).unwrap();
+        assert_eq!(recorder.current().map(|r| r.muted), Some(false));
     }
 }

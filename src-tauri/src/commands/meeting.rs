@@ -7,8 +7,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
 
 use crate::domain::meeting::{JobState, Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
+use crate::domain::recording::{Access, RecordingAccess, RecordingInfo, RecordingState, Source};
 use crate::domain::voices::VoiceInfo;
-use crate::infra::{meeting_audio, meeting_store, speech};
+use crate::infra::{meeting_audio, meeting_store, recording_access, settings_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
 
 use super::blocking;
@@ -85,11 +86,79 @@ pub async fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) -> Result<(), Str
     .await
 }
 
-/// The call recorded from now on, both devices open once this resolves; the recording's id.
+/// The call recorded from now on, both devices open once this resolves; the
+/// recording's id. Its length and levels report on [`MEETING_EVENT`].
 #[tauri::command]
-pub async fn meeting_record_start(notes: State<'_, Arc<MeetingNotes>>) -> Result<String, String> {
+pub async fn meeting_record_start<R: Runtime>(app: AppHandle<R>, notes: State<'_, Arc<MeetingNotes>>) -> Result<String, String> {
     let notes = notes.inner().clone();
-    blocking(move || notes.record_start()).await
+    let sink = meeting_event_sink(&app);
+    blocking(move || notes.record_start(&sink)).await
+}
+
+/// Your microphone written as silence in the recording from now on, or heard again.
+#[tauri::command]
+pub fn meeting_record_mute(notes: State<'_, Arc<MeetingNotes>>, on: bool) -> Result<(), String> {
+    notes.record_mute(on).map_err(|e| e.to_string())
+}
+
+/// The call being recorded now, if one is — for the page opened while it records.
+#[tauri::command]
+pub fn meeting_recording(notes: State<'_, Arc<MeetingNotes>>) -> Option<RecordingState> {
+    notes.recording()
+}
+
+/// The calls recorded and not yet transcribed, newest first.
+#[tauri::command]
+pub async fn meeting_recordings(notes: State<'_, Arc<MeetingNotes>>) -> Result<Vec<RecordingInfo>, String> {
+    let notes = notes.inner().clone();
+    blocking(move || notes.recordings()).await
+}
+
+/// The recorded call `id` made into a meeting, as an import is; resolves with
+/// the meeting's id once it is all done.
+#[tauri::command]
+pub async fn meeting_process_recording<R: Runtime>(app: AppHandle<R>, notes: State<'_, Arc<MeetingNotes>>, id: String) -> Result<String, String> {
+    let notes = notes.inner().clone();
+    let sink = meeting_event_sink(&app);
+    let models = speech::models_dir(app.path().resource_dir().ok().as_deref());
+    let exe = std::env::current_exe().map_err(|e| format!("where this app is: {e}"))?;
+    blocking(move || notes.process_recording(&exe, &models, &id, &sink)).await
+}
+
+#[tauri::command]
+pub async fn meeting_recording_delete(notes: State<'_, Arc<MeetingNotes>>, id: String) -> Result<(), String> {
+    let notes = notes.inner().clone();
+    blocking(move || notes.delete_recording(&id)).await
+}
+
+/// Whether the system lets the app record the microphone and the call's sound.
+#[tauri::command]
+pub async fn meeting_recording_access() -> Result<RecordingAccess, String> {
+    blocking(|| Ok::<_, String>(recording_access::status())).await
+}
+
+/// The system's prompt for `source`, waited for; the access after.
+#[tauri::command]
+pub async fn meeting_recording_access_request(source: Source) -> Result<Access, String> {
+    blocking(move || Ok::<_, String>(recording_access::request(source))).await
+}
+
+/// System Settings opened where `source` is turned on — for one refused, which no prompt asks again.
+#[tauri::command]
+pub fn meeting_recording_access_settings(source: Source) -> Result<(), String> {
+    let url = recording_access::settings_url(source).ok_or("this system has no such setting")?;
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Whether a recording stopped is transcribed at once.
+#[tauri::command]
+pub fn meeting_auto_process_get() -> bool {
+    settings_store::load().map(|s| s.meeting_auto_process).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn meeting_auto_process_set(on: bool) -> Result<(), String> {
+    settings_store::update(|s| s.meeting_auto_process = on).map_err(|e| e.to_string())
 }
 
 /// The recording stopped and its file whole; its id.
