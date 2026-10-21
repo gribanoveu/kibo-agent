@@ -262,6 +262,7 @@ export function useMeetings() {
     job,
     draft: draft && draft.id === openId ? draft.text : null,
     error,
+    clearError: () => setError(null),
     importRecording,
     summarize,
     recordings,

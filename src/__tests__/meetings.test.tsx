@@ -287,7 +287,10 @@ describe("the meetings page", () => {
     await settle();
     await act(async () => finishProcess({ error: "this recording cannot be read: no audio track" }));
     await settle();
-    expect(screen.getByText("this recording cannot be read: no audio track")).toBeTruthy();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("this recording cannot be read: no audio track");
+    fireEvent.click(within(alert).getByLabelText("Close"));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("a page opened while a job runs shows it, can stop it, and lets go when it ends", async () => {
@@ -447,23 +450,25 @@ describe("the meetings page", () => {
     expect(card().textContent).not.toContain("No sound from the call");
   });
 
-  test("what the system has not allowed is said over the list, each with its way to allow it", async () => {
+  test("each side the system has not allowed has its own note, with its way to allow it", async () => {
     access = { microphone: "notAsked", call: "denied" };
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    const banner = () => screen.queryByRole("note", { name: "Recording permissions" });
+    const mic = () => screen.queryByRole("note", { name: "Microphone permission" });
+    const call = () => screen.queryByRole("note", { name: "System audio permission" });
     const record = () => screen.getByText("Record").closest("button") as HTMLButtonElement;
-    expect(record().disabled).toBe(true); // a recording would ask past the note
-    expect(banner()!.textContent).toContain("Microphone — your side");
-    expect(banner()!.textContent).toContain("Turned off in System Settings");
+    expect(record().disabled).toBe(true); // a recording would ask past the notes
+    expect(mic()!.textContent).toContain("macOS asks once");
+    expect(call()!.textContent).toContain("Turned off in System Settings");
 
-    fireEvent.click(within(banner()!).getByText("Allow"));
+    fireEvent.click(within(mic()!).getByText("Allow"));
     await settle();
     expect(calls.some((c) => c.command === "meeting_recording_access_request" && c.args?.source === "microphone")).toBe(true);
-    expect(banner()!.textContent).not.toContain("Microphone");
+    expect(mic()).toBeNull();
+    expect(call()).not.toBeNull();
     expect(record().disabled).toBe(true); // one is still missing
 
-    fireEvent.click(within(banner()!).getByText("Open System Settings"));
+    fireEvent.click(within(call()!).getByText("Open System Settings"));
     await settle();
     expect(calls.some((c) => c.command === "meeting_recording_access_settings" && c.args?.source === "call")).toBe(true);
     expect(calls.some((c) => c.command === "meeting_recording_access_request" && c.args?.source === "call")).toBe(false);
@@ -472,7 +477,7 @@ describe("the meetings page", () => {
     access.call = "granted";
     await act(async () => void window.dispatchEvent(new Event("focus")));
     await settle();
-    expect(banner()).toBeNull();
+    expect(call()).toBeNull();
     expect(record().disabled).toBe(false);
   });
 
@@ -480,7 +485,7 @@ describe("the meetings page", () => {
     access = { microphone: "unknown", call: "unknown" };
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
-    expect(screen.queryByRole("note", { name: "Recording permissions" })).toBeNull();
+    expect(screen.queryAllByRole("note")).toHaveLength(0);
     expect((screen.getByText("Record").closest("button") as HTMLButtonElement).disabled).toBe(false);
   });
 

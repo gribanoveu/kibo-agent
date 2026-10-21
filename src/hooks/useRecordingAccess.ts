@@ -36,5 +36,5 @@ export function useRecordingAccess() {
   // one would ask for it there, past the note that says what is missing.
   const ready = access !== null && Object.values(access).every((a) => a === "granted" || a === "unknown");
 
-  return { access, ready, error, allow };
+  return { access, ready, error, clearError: () => setError(null), allow };
 }

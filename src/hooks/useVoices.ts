@@ -27,5 +27,5 @@ export function useVoices(changed: unknown) {
     }
   };
 
-  return { voices, error, remove };
+  return { voices, error, clearError: () => setError(null), remove };
 }

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
-import { AudioLines, Calendar, ShieldAlert, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -80,6 +80,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   const access = useRecordingAccess();
 
   const bar = (
+    <div className="meetings-head">
     <div className="meetings-bar">
       {openId && (
         <button type="button" className="btn btn-ghost" onClick={() => meetings.open(null)}>
@@ -105,24 +106,25 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           Record
         </button>
       )}
-      {!openId && (
-        <label className="meetings-auto" title="A recording is transcribed as soon as it is stopped">
-          <Switch label="Auto-transcribe recordings" on={meetings.autoProcess} onChange={() => void meetings.toggleAutoProcess()} />
-          Auto-transcribe recordings
-        </label>
-      )}
-      {!openId && (
-        <label className="meetings-auto" title="Your side of a recorded call is cleaned up before it is transcribed; the recording itself stays as it was">
-          <Switch label="Reduce noise on my microphone" on={meetings.denoise} onChange={() => void meetings.toggleDenoise()} />
-          Reduce noise on my microphone
-        </label>
-      )}
       {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
       {remembering && (
         <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
           <Users size={14} />
           Voices
         </button>
+      )}
+    </div>
+      {!openId && (
+        <div className="meetings-options">
+          <label className="meetings-auto" title="A recording is transcribed as soon as it is stopped">
+            <Switch label="Auto-transcribe recordings" on={meetings.autoProcess} onChange={() => void meetings.toggleAutoProcess()} />
+            Auto-transcribe recordings
+          </label>
+          <label className="meetings-auto" title="Your side of a recorded call is cleaned up before it is transcribed; the recording itself stays as it was">
+            <Switch label="Reduce noise on my microphone" on={meetings.denoise} onChange={() => void meetings.toggleDenoise()} />
+            Reduce noise on my microphone
+          </label>
+        </div>
       )}
     </div>
   );
@@ -133,13 +135,13 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   return (
     <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
       {openId && <audio {...player.audio} />}
-      {!openId && access.access && <AccessBanner access={access.access} onAllow={(source) => void access.allow(source)} />}
-      {access.error && <p className="meetings-error">{access.error}</p>}
+      {!openId && access.access && <AccessNotes access={access.access} onAllow={(source) => void access.allow(source)} />}
+      {access.error && <ErrorNote message={access.error} onClose={access.clearError} />}
       {meetings.recording && (
         <RecorderCard recording={meetings.recording} onMute={(on) => void meetings.mute(on)} onStop={() => void meetings.stopRecording()} />
       )}
       {job && <JobCard job={job} title={titleOf(job, meetings.list)} onStop={meetings.stop} />}
-      {meetings.error && <p className="meetings-error">{meetings.error}</p>}
+      {meetings.error && <ErrorNote message={meetings.error} onClose={meetings.clearError} />}
       {openId === null ? (
         <MeetingList
           list={meetings.list}
@@ -197,31 +199,58 @@ export function MeetingsPage({ sideHandle }: PageContext) {
   );
 }
 
-const SOURCES: Source[] = ["microphone", "call"];
-const SOURCE_NAMES: Record<Source, string> = { microphone: "Microphone — your side", call: "System audio — the call's side" };
-
-/** What the system has not let the app record yet, each with the way to allow it: its
-    prompt, or System Settings for one refused. Nothing when both are allowed or it does not say. */
-function AccessBanner({ access, onAllow }: { access: RecordingAccess; onAllow: (source: Source) => void }) {
-  const missing = SOURCES.filter((s) => access[s] === "denied" || access[s] === "notAsked");
-  if (missing.length === 0) return null;
+/** What failed, said until it is closed — or until the next try clears it. */
+function ErrorNote({ message, onClose }: { message: string; onClose: () => void }) {
   return (
-    <div className="meetings-access" role="note" aria-label="Recording permissions">
+    <div className="meetings-error" role="alert">
+      <span className="meetings-error-icon" aria-hidden>
+        <CircleAlert size={16} />
+      </span>
+      <p className="meetings-error-text">{message}</p>
+      <button type="button" className="meetings-error-close" aria-label="Close" title="Close" onClick={onClose}>
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+const SOURCES: Source[] = ["microphone", "call"];
+const SOURCE_TEXT: Record<Source, { name: string; title: string; why: string }> = {
+  microphone: {
+    name: "Microphone",
+    title: "Allow the microphone — your side of the call",
+    why: "macOS asks once. Your voice is recorded only between Record and Stop.",
+  },
+  call: {
+    name: "System audio",
+    title: "Allow system audio — the call's side",
+    why: "What the computer plays, so the others on the call are recorded too.",
+  },
+};
+
+/** A note for each side the system has not let the app record yet: nothing when both
+    are allowed, or where it does not say. */
+function AccessNotes({ access, onAllow }: { access: RecordingAccess; onAllow: (source: Source) => void }) {
+  const missing = SOURCES.filter((s) => access[s] === "denied" || access[s] === "notAsked");
+  return missing.map((source) => <AccessNote key={source} source={source} denied={access[source] === "denied"} onAllow={() => onAllow(source)} />);
+}
+
+/** One side not allowed, and the way to allow it: the system's prompt, or System Settings
+    for one refused — no prompt asks that again. */
+function AccessNote({ source, denied, onAllow }: { source: Source; denied: boolean; onAllow: () => void }) {
+  const text = SOURCE_TEXT[source];
+  return (
+    <div className="meetings-access" role="note" aria-label={`${text.name} permission`}>
       <span className="meetings-access-icon" aria-hidden>
-        <ShieldAlert size={16} />
+        {source === "microphone" ? <Mic size={16} /> : <Volume2 size={16} />}
       </span>
       <div className="meetings-access-body">
-        <p className="meetings-access-title">To record a call, allow the app to hear:</p>
-        {missing.map((source) => (
-          <div key={source} className="meetings-access-row">
-            <span className="meetings-access-name">{SOURCE_NAMES[source]}</span>
-            <span className="meetings-access-state">{access[source] === "denied" ? "Turned off in System Settings" : "Not allowed yet"}</span>
-            <button type="button" className="btn btn-ghost" onClick={() => onAllow(source)}>
-              {access[source] === "denied" ? "Open System Settings" : "Allow"}
-            </button>
-          </div>
-        ))}
+        <p className="meetings-access-title">{text.title}</p>
+        <p className="meetings-access-state">{denied ? "Turned off in System Settings — switch Kibo Agent on there." : text.why}</p>
       </div>
+      <button type="button" className="btn btn-ghost" onClick={onAllow}>
+        {denied ? "Open System Settings" : "Allow"}
+      </button>
     </div>
   );
 }
@@ -732,11 +761,11 @@ function NameEditor({ speaker, name, onSave, onClose }: { speaker: number; name:
 /** The voice memory's voices, each one forgotten on request — its every sample
     goes; the names already given in meetings stay as text. */
 function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => void }) {
-  const { voices, error, remove } = useVoices(changed);
+  const { voices, error, clearError, remove } = useVoices(changed);
   const [forgetting, setForgetting] = useState<VoiceInfo | null>(null);
   return (
     <PagePanel icon={Users} title="Voices" label="Voices" onClose={onClose}>
-      {error && <p className="meetings-error">{error}</p>}
+      {error && <ErrorNote message={error} onClose={clearError} />}
       {voices.length === 0 ? (
         <p className="meetings-empty">
           No voices yet. Name a speaker who said 20 seconds and 20 words or more in a meeting, in phrases rather than single words, and the next one knows them by voice.
