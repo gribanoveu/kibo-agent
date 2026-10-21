@@ -5,7 +5,10 @@
 //!
 //! The streams live on a thread of their own, which also writes: a tenth of a
 //! second at a time, each track brought to 16 kHz and the two put side by
-//! side, and how loud each was told to whoever started it. The header
+//! side, and how loud each was told to whoever started it. Each device's
+//! sound goes where it was captured, so one that gives nothing for a while —
+//! Windows' loopback while nothing plays — or is opened again after the
+//! system's default moved leaves silence there, not a shift. The header
 //! says 0 until the recording stops; a file left so by a crash is sized by
 //! [`repair`].
 
@@ -19,17 +22,23 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, SampleFormat, SizedSample};
+use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample, StreamInstant};
 use sherpa_onnx::LinearResampler;
 
 use crate::domain::meeting::MeetingError;
-use crate::domain::recording::{self, Levels, RecordingState, CHANNELS, HEADER_BYTES, RATE};
+use crate::domain::recording::{self, Levels, RecordingState, Source, CHANNELS, HEADER_BYTES, RATE};
 
 /// How often what the devices gave is written, and its levels told: ten a
 /// second at most, the throttle of a source that changes fast (AGENTS.md).
 const TICK: Duration = Duration::from_millis(100);
 /// A track this far behind the other is taken as silent (`recording::frames_ready`).
 const MAX_LAG: usize = RATE as usize;
+/// How often, in ticks, each side is checked for a device gone or the system's
+/// default moved: once a second.
+// ponytail: asked each second, not told — cpal says nothing when the default moves
+// from a device still there (macOS' loopback, a microphone); a listener of our own
+// on Core Audio and IMMNotificationClient if a second's delay is ever too long.
+const CHECK: u32 = 10;
 
 /// The recording under way, if one is. One at a time: there is one microphone.
 #[derive(Default)]
@@ -117,6 +126,9 @@ impl Recorder {
 
 /// The recording thread: devices opened (said on `ready`), then a write and
 /// its `levels` each [`TICK`] until `stop`, then the rest and the header's sizes.
+/// Each [`CHECK`] a side whose device went away, or whose system default moved
+/// (headphones plugged in), is opened again on the default; its sound picks up
+/// where it is heard, the time between silence.
 fn record(
     path: &Path,
     stop: &Receiver<()>,
@@ -125,8 +137,11 @@ fn record(
     muted: &AtomicBool,
     levels: &dyn Fn(Levels),
 ) -> Result<(), MeetingError> {
-    let opened = open_devices().and_then(|(streams, mic, call)| Ok((streams, WavWriter::create(path)?, mic, call)));
-    let (streams, mut file, mut mic, mut call) = match opened {
+    let host = cpal::default_host();
+    let opened = Input::open(&host, Source::Microphone)
+        .and_then(|mic| Ok((mic, Input::open(&host, Source::Call)?)))
+        .and_then(|(mic, call)| Ok((WavWriter::create(path)?, mic, call)));
+    let (mut file, mut mic, mut call) = match opened {
         Ok(opened) => opened,
         Err(e) => {
             let _ = ready.send(Err(e));
@@ -134,14 +149,22 @@ fn record(
         }
     };
     let _ = ready.send(Ok(()));
-    let mut streams = Some(streams);
+    let mut origin = None;
+    let mut ticks = 0u32;
     loop {
         let flush = !matches!(stop.recv_timeout(TICK), Err(RecvTimeoutError::Timeout));
+        let silent = muted.load(Ordering::Relaxed);
+        ticks += 1;
         if flush {
             // Closed first: nothing arrives after what is flushed.
-            streams.take();
+            mic.stream = None;
+            call.stream = None;
+        } else if ticks % CHECK == 0 {
+            mic.follow(&host, &mut origin, silent);
+            call.follow(&host, &mut origin, false);
         }
-        let (mic_level, call_level) = (mic.pull(flush, muted.load(Ordering::Relaxed)), call.pull(flush, false));
+        let (mic_level, call_level) = (mic.track.pull(&mut origin, flush, silent), call.track.pull(&mut origin, flush, false));
+        let (mic, call) = (&mut mic.track, &mut call.track);
         let frames = recording::frames_ready(mic.pending.len(), call.pending.len(), MAX_LAG, flush);
         let full = file.append(&recording::interleave(&mic.pending, &call.pending, frames))?;
         mic.take(frames);
@@ -155,76 +178,161 @@ fn record(
     }
 }
 
-/// One device's sound as it arrives — mono, at the device's rate — and as it
-/// waits to be written, at 16 kHz.
+/// Sound as a device gave it: mono at its rate, and when it was captured.
+struct Chunk {
+    at: StreamInstant,
+    samples: Vec<f32>,
+}
+
+/// One device's sound as it arrives and as it waits to be written, at 16 kHz,
+/// each piece where it was heard.
 struct Track {
-    arrived: Arc<Mutex<Vec<f32>>>,
+    arrived: Arc<Mutex<Vec<Chunk>>>,
+    /// The device's rate, which `arrived` is at.
+    rate: u32,
     /// `None` when the device is at 16 kHz already.
     resampler: Option<LinearResampler>,
     pending: Vec<f32>,
+    /// Frames of it written by now, the silence written for it included.
+    taken: u64,
+    /// Where the last sound to arrive ended, nanoseconds into the recording.
+    end: Option<u64>,
 }
 
 impl Track {
     fn new(rate: u32) -> Result<Self, MeetingError> {
-        let resampler = match rate {
+        let mut track = Track { arrived: Arc::default(), rate, resampler: None, pending: Vec::new(), taken: 0, end: None };
+        track.tune(rate)?;
+        Ok(track)
+    }
+
+    /// What arrives from now on comes at `rate`.
+    fn tune(&mut self, rate: u32) -> Result<(), MeetingError> {
+        self.resampler = match rate {
             RATE => None,
             rate => Some(LinearResampler::create(rate as i32, RATE as i32).ok_or(MeetingError::ModelFailed("resampler"))?),
         };
-        Ok(Track { arrived: Arc::default(), resampler, pending: Vec::new() })
+        self.rate = rate;
+        Ok(())
     }
 
-    /// What arrived since the last pull, at 16 kHz, onto what waits; its
-    /// peak. `flush`: the resampler's own last samples too. `silent`: as
-    /// silence of the same length — muted, the track keeps its time.
-    fn pull(&mut self, flush: bool, silent: bool) -> f32 {
-        let mut arrived = std::mem::take(&mut *self.arrived.lock().unwrap_or_else(|e| e.into_inner()));
-        if silent {
-            arrived.fill(0.0);
+    /// What arrived since the last pull, at 16 kHz, onto what waits — after
+    /// silence where the device gave nothing (`recording::silence_before`),
+    /// timed from `origin`, the first sound of either side. Its peak. `flush`:
+    /// the resampler's own last samples too. `silent`: as silence of the same
+    /// length — muted, the track keeps its time.
+    fn pull(&mut self, origin: &mut Option<StreamInstant>, flush: bool, silent: bool) -> f32 {
+        let arrived = std::mem::take(&mut *self.arrived.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut level = 0.0f32;
+        for Chunk { at, mut samples } in arrived {
+            let at = at.saturating_duration_since(*origin.get_or_insert(at)).as_nanos() as u64;
+            let gap = recording::silence_before(at, self.end, self.taken + self.pending.len() as u64);
+            self.pending.extend(std::iter::repeat_n(0.0, gap as usize));
+            self.end = Some(at + samples.len() as u64 * 1_000_000_000 / self.rate as u64);
+            if silent {
+                samples.fill(0.0);
+            }
+            level = level.max(recording::peak(&samples));
+            match &self.resampler {
+                Some(resampler) => self.pending.extend(resampler.resample(&samples, false)),
+                None => self.pending.extend(samples),
+            }
         }
-        let level = recording::peak(&arrived);
-        match &self.resampler {
-            Some(resampler) => self.pending.extend(resampler.resample(&arrived, flush)),
-            None => self.pending.extend(arrived),
+        if let (true, Some(resampler)) = (flush, &self.resampler) {
+            self.pending.extend(resampler.resample(&[], true));
         }
         level
     }
 
+    /// `frames` written: what waited, and silence past it for a track behind.
     fn take(&mut self, frames: usize) {
         self.pending.drain(..frames.min(self.pending.len()));
+        self.taken = self.taken.saturating_add(frames as u64);
     }
 }
 
-/// The two streams, playing, and the tracks they fill.
-fn open_devices() -> Result<([cpal::Stream; 2], Track, Track), MeetingError> {
-    let host = cpal::default_host();
-    let microphone = host.default_input_device().ok_or(MeetingError::NoDevice("microphone"))?;
-    let speakers = host.default_output_device().ok_or(MeetingError::NoDevice("sound output"))?;
-    let device = |e: cpal::Error| MeetingError::Device(e.to_string());
-    let mic_config = microphone.default_input_config().map_err(device)?;
-    // Loopback: the output device opened for input, in its output format.
-    let call_config = speakers.default_output_config().map_err(device)?;
-    let mic = Track::new(mic_config.sample_rate())?;
-    let call = Track::new(call_config.sample_rate())?;
-    let streams = [open(&microphone, &mic_config, &mic)?, open(&speakers, &call_config, &call)?];
-    for stream in &streams {
-        stream.play().map_err(device)?;
-    }
-    Ok((streams, mic, call))
+/// One side of the call: its device's stream as it is now, and its track.
+struct Input {
+    source: Source,
+    /// `None` while no device of its kind opens; tried again each [`CHECK`].
+    stream: Option<cpal::Stream>,
+    /// The device it is open on, to tell when the system's default moves.
+    device: Option<cpal::DeviceId>,
+    /// Set by the stream once it gives no more sound.
+    broken: Arc<AtomicBool>,
+    track: Track,
 }
 
-fn open(device: &cpal::Device, config: &cpal::SupportedStreamConfig, track: &Track) -> Result<cpal::Stream, MeetingError> {
+impl Input {
+    /// `source`'s default device, open and playing.
+    fn open(host: &cpal::Host, source: Source) -> Result<Self, MeetingError> {
+        let mut input = Input { source, stream: None, device: None, broken: Arc::default(), track: Track::new(RATE)? };
+        input.connect(host)?;
+        Ok(input)
+    }
+
+    fn connect(&mut self, host: &cpal::Host) -> Result<(), MeetingError> {
+        let device = default_device(host, self.source)?;
+        let config = match self.source {
+            Source::Microphone => device.default_input_config(),
+            // Loopback: the output device opened for input, in its output format.
+            Source::Call => device.default_output_config(),
+        }
+        .map_err(device_error)?;
+        self.track.tune(config.sample_rate())?;
+        let broken = Arc::new(AtomicBool::new(false));
+        let stream = open(&device, &config, self.track.arrived.clone(), broken.clone())?;
+        stream.play().map_err(device_error)?;
+        (self.stream, self.device, self.broken) = (Some(stream), device.id().ok(), broken);
+        Ok(())
+    }
+
+    /// Opened again on the default when its stream broke, the default moved,
+    /// or it is not open; what the old one gave goes first, at its own rate.
+    fn follow(&mut self, host: &cpal::Host, origin: &mut Option<StreamInstant>, silent: bool) {
+        let default = default_device(host, self.source).ok().and_then(|d| d.id().ok());
+        if self.stream.is_some() && default == self.device && !self.broken.load(Ordering::Relaxed) {
+            return;
+        }
+        self.stream = None;
+        self.device = None;
+        self.track.pull(origin, true, silent);
+        // ponytail: a side that does not open is tried again each second, logged each time.
+        if let Err(e) = self.connect(host) {
+            eprintln!("meeting recorder: {:?} not open again: {e}", self.source);
+        }
+    }
+}
+
+fn default_device(host: &cpal::Host, source: Source) -> Result<cpal::Device, MeetingError> {
+    match source {
+        Source::Microphone => host.default_input_device().ok_or(MeetingError::NoDevice("microphone")),
+        Source::Call => host.default_output_device().ok_or(MeetingError::NoDevice("sound output")),
+    }
+}
+
+fn device_error(e: cpal::Error) -> MeetingError {
+    MeetingError::Device(e.to_string())
+}
+
+/// Whether a stream's error means it gives no more sound. Rerouted (cpal
+/// followed the default itself), a glitch or no real-time priority, it goes on.
+fn ends_stream(kind: ErrorKind) -> bool {
+    !matches!(kind, ErrorKind::DeviceChanged | ErrorKind::Xrun | ErrorKind::RealtimeDenied)
+}
+
+fn open(device: &cpal::Device, config: &cpal::SupportedStreamConfig, arrived: Arc<Mutex<Vec<Chunk>>>, broken: Arc<AtomicBool>) -> Result<cpal::Stream, MeetingError> {
     let channels = config.channels() as usize;
-    let arrived = track.arrived.clone();
     match config.sample_format() {
-        SampleFormat::F32 => input::<f32>(device, config, channels, arrived),
-        SampleFormat::I16 => input::<i16>(device, config, channels, arrived),
-        SampleFormat::I32 => input::<i32>(device, config, channels, arrived),
-        SampleFormat::U16 => input::<u16>(device, config, channels, arrived),
+        SampleFormat::F32 => input::<f32>(device, config, channels, arrived, broken),
+        SampleFormat::I16 => input::<i16>(device, config, channels, arrived, broken),
+        SampleFormat::I32 => input::<i32>(device, config, channels, arrived, broken),
+        SampleFormat::U16 => input::<u16>(device, config, channels, arrived, broken),
         other => Err(MeetingError::Device(format!("the device gives {other:?} samples, which this does not read"))),
     }
 }
 
-fn input<T>(device: &cpal::Device, config: &cpal::SupportedStreamConfig, channels: usize, arrived: Arc<Mutex<Vec<f32>>>) -> Result<cpal::Stream, MeetingError>
+fn input<T>(device: &cpal::Device, config: &cpal::SupportedStreamConfig, channels: usize, arrived: Arc<Mutex<Vec<Chunk>>>, broken: Arc<AtomicBool>) -> Result<cpal::Stream, MeetingError>
 where
     T: SizedSample,
     f32: FromSample<T>,
@@ -232,15 +340,20 @@ where
     device
         .build_input_stream(
             config.config(),
-            move |buffer: &[T], _: &cpal::InputCallbackInfo| {
+            move |buffer: &[T], info: &cpal::InputCallbackInfo| {
                 let samples: Vec<f32> = buffer.iter().map(|s| s.to_sample::<f32>()).collect();
-                arrived.lock().unwrap_or_else(|e| e.into_inner()).extend(recording::mono(&samples, channels));
+                let chunk = Chunk { at: info.timestamp().capture, samples: recording::mono(&samples, channels).collect() };
+                arrived.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
             },
-            // ponytail: a stream's error is only logged; R-3 opens it again (a device unplugged, the output changed).
-            |e| eprintln!("meeting recorder: {e}"),
+            move |e: cpal::Error| {
+                eprintln!("meeting recorder: {e}");
+                if ends_stream(e.kind()) {
+                    broken.store(true, Ordering::Relaxed);
+                }
+            },
             None,
         )
-        .map_err(|e| MeetingError::Device(e.to_string()))
+        .map_err(device_error)
 }
 
 /// The recording's file: a header saying 0, then frames as they come.
@@ -372,27 +485,66 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().len(), HEADER_BYTES + 8);
     }
 
+    /// `samples` as a device gives them, captured `ms` into the recording.
+    fn give(track: &Track, ms: u64, samples: impl IntoIterator<Item = f32>) {
+        let chunk = Chunk { at: StreamInstant::from_millis(1000 + ms), samples: samples.into_iter().collect() };
+        track.arrived.lock().unwrap().push(chunk);
+    }
+
     #[test]
     fn a_track_at_another_rate_arrives_at_16_khz() {
+        let mut origin = None;
         let mut track = Track::new(48_000).unwrap();
-        track.arrived.lock().unwrap().extend(std::iter::repeat_n(0.5, 48_000));
-        assert_eq!(track.pull(false, false), 0.5, "its level");
-        assert_eq!(track.pull(false, false), 0.0, "nothing new is silence");
+        give(&track, 0, std::iter::repeat_n(0.5, 48_000));
+        assert_eq!(track.pull(&mut origin, false, false), 0.5, "its level");
+        assert_eq!(track.pull(&mut origin, false, false), 0.0, "nothing new is silence");
         assert!(track.pending.len() < RATE as usize, "the resampler keeps its last few for what comes next");
-        track.pull(true, false);
+        track.pull(&mut origin, true, false);
         assert_eq!(track.pending.len(), RATE as usize, "a second is a second once flushed");
         track.take(10);
         track.take(usize::MAX);
         assert!(track.pending.is_empty());
 
         let mut same = Track::new(RATE).unwrap();
-        same.arrived.lock().unwrap().extend([0.1, 0.2]);
-        same.pull(false, false);
+        give(&same, 0, [0.1, 0.2]);
+        same.pull(&mut origin, false, false);
         assert_eq!(same.pending, [0.1, 0.2], "already at 16 kHz: as it came");
         assert!(same.arrived.lock().unwrap().is_empty(), "taken, not copied");
-        same.arrived.lock().unwrap().extend([0.3, -0.4, 0.5]);
-        assert_eq!(same.pull(false, true), 0.0, "muted: silent on the meter");
+        give(&same, 0, [0.3, -0.4, 0.5]);
+        assert_eq!(same.pull(&mut origin, false, true), 0.0, "muted: silent on the meter");
         assert_eq!(same.pending, [0.1, 0.2, 0.0, 0.0, 0.0], "and in the file, for as long as it was");
+    }
+
+    #[test]
+    fn a_device_silent_for_a_while_comes_back_where_it_is_heard() {
+        let mut origin = None;
+        let mut track = Track::new(RATE).unwrap();
+        give(&track, 0, std::iter::repeat_n(0.5, 1600)); // 0.1 s
+        give(&track, 101, std::iter::repeat_n(0.5, 1600)); // a millisecond late: it follows on
+        track.pull(&mut origin, false, false);
+        assert_eq!(track.pending.len(), 3200);
+
+        // Nothing for a while: what was written past its end as it lagged counts.
+        track.take(8000);
+        give(&track, 1000, std::iter::repeat_n(0.25, 160));
+        track.pull(&mut origin, false, false);
+        assert_eq!((track.taken, track.pending.len()), (8000, 16_000 - 8000 + 160), "a second in, at a second");
+        assert!(track.pending[..8000].iter().all(|&s| s == 0.0) && track.pending[8000] == 0.25);
+
+        // A second device, opened later, starts where it was first heard, not at the start.
+        let mut late = Track::new(RATE).unwrap();
+        give(&late, 500, [0.5]);
+        late.pull(&mut origin, false, false);
+        assert_eq!(late.pending.len(), 8001);
+    }
+
+    #[test]
+    fn a_stream_is_given_up_only_when_it_gives_no_more() {
+        assert!(ends_stream(ErrorKind::DeviceNotAvailable), "unplugged");
+        assert!(ends_stream(ErrorKind::StreamInvalidated), "Windows' default moved, or the rate");
+        assert!(!ends_stream(ErrorKind::DeviceChanged), "cpal rerouted it itself");
+        assert!(!ends_stream(ErrorKind::Xrun));
+        assert!(!ends_stream(ErrorKind::RealtimeDenied));
     }
 
     /// The real microphone and output for a few seconds, a voice playing:
@@ -441,6 +593,31 @@ mod tests {
         let muted_tail = samples[(muted_from * RATE as f32) as usize * 2..].iter().step_by(2).map(|s| s.unsigned_abs()).max().unwrap_or(0);
         assert_eq!(muted_tail, 0, "from {muted_from:.1} s the microphone is silence");
         assert_eq!(crate::infra::speech::decode(&path).unwrap().1, RATE);
+    }
+
+    /// A side whose stream broke is opened again on the default, and its
+    /// track goes on where the time is — run with `record_live`.
+    #[test]
+    #[ignore]
+    fn record_live_reopened() {
+        let host = cpal::default_host();
+        let mut origin = None;
+        let mut mic = Input::open(&host, Source::Microphone).unwrap();
+        let begun = std::time::Instant::now();
+        std::thread::sleep(Duration::from_millis(1500));
+        mic.track.pull(&mut origin, false, false);
+        let before = mic.track.pending.len();
+        mic.broken.store(true, Ordering::Relaxed);
+        mic.follow(&host, &mut origin, false);
+        assert!(mic.stream.is_some() && !mic.broken.load(Ordering::Relaxed), "open again");
+        mic.follow(&host, &mut origin, false);
+        std::thread::sleep(Duration::from_millis(1500));
+        mic.track.pull(&mut origin, true, false);
+        let (frames, elapsed) = (mic.track.pending.len(), begun.elapsed().as_secs_f32());
+        eprintln!("{before} frames before, {frames} after, {elapsed:.2} s");
+        assert!(frames > before + RATE as usize, "it gave sound again");
+        // Its first sound came some way into the wait: the track ends where the time is, not short of it.
+        assert!((frames as f32 / RATE as f32 - elapsed).abs() < 0.5, "{frames} frames in {elapsed} s");
     }
 
     #[test]

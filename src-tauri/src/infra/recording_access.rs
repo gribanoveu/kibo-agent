@@ -3,7 +3,9 @@
 //! TCC's `kTCCServiceAudioCapture` — which has no public call, so the private
 //! TCC framework is opened as AudioCap does (`docs/36`, "Запись созвона"); if
 //! a macOS without it comes, that access is [`Access::Unknown`] and the page's
-//! silence hint is what is left. Elsewhere nothing is asked here.
+//! silence hint is what is left. Windows asks nothing of a desktop app: its
+//! microphone switches in Settings are read from the registry, and its loopback
+//! needs no leave. Elsewhere the system does not say.
 
 use crate::domain::recording::{Access, RecordingAccess, Source};
 
@@ -18,12 +20,26 @@ pub fn request(source: Source) -> Access {
     imp::status(source)
 }
 
-/// Where in System Settings `source` is turned on, for one refused.
+/// Where in the system's settings `source` is turned on, for one refused.
 pub fn settings_url(source: Source) -> Option<&'static str> {
-    cfg!(target_os = "macos").then_some(match source {
-        Source::Microphone => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        Source::Call => "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture",
-    })
+    match source {
+        Source::Microphone if cfg!(windows) => Some("ms-settings:privacy-microphone"),
+        _ if !cfg!(target_os = "macos") => None,
+        Source::Microphone => Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
+        Source::Call => Some("x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"),
+    }
+}
+
+/// The microphone's access from Windows' switches, each `None` when not read:
+/// one off is no microphone, none read is not known.
+#[cfg(any(windows, test))]
+fn consent<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Access {
+    let read: Vec<&str> = values.into_iter().flatten().collect();
+    match read.as_slice() {
+        [] => Access::Unknown,
+        read if read.contains(&"Deny") => Access::Denied,
+        _ => Access::Granted,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -121,11 +137,42 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+mod imp {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::{RegKey, HKEY};
+
+    use crate::domain::recording::{Access, Source};
+
+    const STORE: &str = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+
+    pub fn status(source: Source) -> Access {
+        match source {
+            // Settings → Privacy & security → Microphone: the machine's "Microphone access", the
+            // user's "Let apps access your microphone", and "Let desktop apps access …" below it.
+            // ponytail: a group policy's AppPrivacy\LetAppsAccessMicrophone is not read; the
+            // switches it greys out say Deny in most setups anyway.
+            Source::Microphone => super::consent([
+                value(HKEY_LOCAL_MACHINE, STORE).as_deref(),
+                value(HKEY_CURRENT_USER, STORE).as_deref(),
+                value(HKEY_CURRENT_USER, &format!(r"{STORE}\NonPackaged")).as_deref(),
+            ]),
+            Source::Call => Access::Granted,
+        }
+    }
+
+    /// Windows has no prompt for a desktop app: Settings is the way.
+    pub fn request(_: Source) {}
+
+    fn value(root: HKEY, key: &str) -> Option<String> {
+        RegKey::predef(root).open_subkey(key).and_then(|k| k.get_value("Value")).ok()
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
     use crate::domain::recording::{Access, Source};
 
-    // ponytail: Windows' "Let desktop apps access your microphone" is not read; R-3 reads it from the registry.
     pub fn status(_: Source) -> Access {
         Access::Unknown
     }
@@ -144,6 +191,9 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_ne!(now.microphone, Access::Unknown, "AVFoundation always says");
             assert_ne!(now.call, Access::Unknown, "this macOS has TCC's calls");
+        } else if cfg!(windows) {
+            assert_ne!(now.microphone, Access::Unknown, "the user's switch is always there");
+            assert_eq!(now.call, Access::Granted, "loopback asks nothing");
         } else {
             assert_eq!(now, RecordingAccess { microphone: Access::Unknown, call: Access::Unknown });
         }
@@ -155,8 +205,19 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert!(urls[0].is_some_and(|u| u.ends_with("Privacy_Microphone")));
             assert!(urls[1].is_some_and(|u| u.ends_with("Privacy_AudioCapture")));
+        } else if cfg!(windows) {
+            assert_eq!(urls, [Some("ms-settings:privacy-microphone"), None]);
         } else {
             assert_eq!(urls, [None, None]);
         }
+    }
+
+    #[test]
+    fn one_windows_switch_off_is_no_microphone() {
+        assert_eq!(consent([Some("Allow"), Some("Allow"), Some("Allow")]), Access::Granted);
+        assert_eq!(consent([Some("Allow"), Some("Allow"), Some("Deny")]), Access::Denied, "desktop apps off");
+        assert_eq!(consent([Some("Deny"), None, None]), Access::Denied, "the machine's off");
+        assert_eq!(consent([None, Some("Allow"), None]), Access::Granted, "a switch never set is on");
+        assert_eq!(consent([None, None, None]), Access::Unknown);
     }
 }

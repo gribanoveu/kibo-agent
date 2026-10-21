@@ -132,6 +132,9 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# Windows' microphone switches are registry values (`infra::recording_access`);
+# 0.10 is the one portable-pty already brings.
+winreg = "0.10"
 
 # Killing a timed-out command means killing its whole process group:
 # `Child::kill()` signals the direct child only, and `sh -c '... &'` leaves the

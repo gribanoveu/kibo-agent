@@ -97,7 +97,8 @@ Recording a call has a live test on the real microphone and output: a few second
 voice playing (`say`), checked to be a whole stereo WAV. Run it after touching
 `infra/meeting_recorder.rs`. From a terminal macOS asks for the microphone, and the call's
 track records as silence — System Audio Recording goes to the `.app`, whose `Info.plist`
-asks for it:
+asks for it. The same filter runs `record_live_reopened`: the microphone's stream marked
+broken and opened again on the default, its track ending where the time is:
 
 ```bash
 cd src-tauri && cargo test record_live -- --ignored --nocapture

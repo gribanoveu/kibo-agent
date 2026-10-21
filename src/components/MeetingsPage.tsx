@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
+import { windowsFrame } from "../lib/window";
 import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
@@ -235,7 +236,13 @@ function AccessNotes({ access, onAllow }: { access: RecordingAccess; onAllow: (s
   return missing.map((source) => <AccessNote key={source} source={source} denied={access[source] === "denied"} onAllow={() => onAllow(source)} />);
 }
 
-/** One side not allowed, and the way to allow it: the system's prompt, or System Settings
+/** Where a refused side is turned on. Windows refuses only the microphone, and asks a
+    desktop app nothing: its notes are always that one, refused. */
+const SETTINGS = windowsFrame
+  ? { name: "Settings", how: "Turned off in Settings → Privacy & security → Microphone — turn on access for desktop apps there." }
+  : { name: "System Settings", how: "Turned off in System Settings — switch Kibo Agent on there." };
+
+/** One side not allowed, and the way to allow it: the system's prompt, or its settings
     for one refused — no prompt asks that again. */
 function AccessNote({ source, denied, onAllow }: { source: Source; denied: boolean; onAllow: () => void }) {
   const text = SOURCE_TEXT[source];
@@ -246,10 +253,10 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
       </span>
       <div className="meetings-access-body">
         <p className="meetings-access-title">{text.title}</p>
-        <p className="meetings-access-state">{denied ? "Turned off in System Settings — switch Kibo Agent on there." : text.why}</p>
+        <p className="meetings-access-state">{denied ? SETTINGS.how : text.why}</p>
       </div>
       <button type="button" className="btn btn-ghost" onClick={onAllow}>
-        {denied ? "Open System Settings" : "Allow"}
+        {denied ? `Open ${SETTINGS.name}` : "Allow"}
       </button>
     </div>
   );
@@ -270,7 +277,8 @@ function RecorderCard({ recording, onMute, onStop }: { recording: Recording; onM
         </div>
         <Meter label="You" level={recording.mic} muted={recording.muted} />
         <Meter label="Call" level={recording.call} />
-        {callSilent(recording) && (
+        {/* Windows' loopback asks no leave: a call silent there is a quiet one. */}
+        {!windowsFrame && callSilent(recording) && (
           <p className="meetings-recorder-hint">No sound from the call — check the System Audio Recording permission in System Settings → Privacy & Security.</p>
         )}
       </div>

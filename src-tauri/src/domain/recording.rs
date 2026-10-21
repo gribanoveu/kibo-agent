@@ -120,13 +120,31 @@ pub fn mono(interleaved: &[f32], channels: usize) -> impl Iterator<Item = f32> +
     interleaved.chunks(channels).map(move |frame| frame.iter().sum::<f32>() / channels as f32)
 }
 
+/// Sound a device gives within this of where its last ended follows on it; later
+/// is after a gap — the device gave nothing (Windows' loopback while nothing
+/// plays) or was opened again.
+pub const GAP_NANOS: u64 = 50_000_000;
+
+/// Silence, in frames, to put before sound a device captured `at` nanoseconds
+/// into the recording, so it lands where it was heard: `placed` frames of its
+/// track are there already, and its last sound ended at `last_end` (`None`: this
+/// is its first). Only after a gap — within a stream the device's own clock is
+/// trusted, so its drift against the other side never becomes holes in speech.
+/// Silence [`frames_ready`] already wrote for a device behind counts as placed.
+pub fn silence_before(at: u64, last_end: Option<u64>, placed: u64) -> u64 {
+    if last_end.is_some_and(|end| at < end.saturating_add(GAP_NANOS)) {
+        return 0;
+    }
+    let due = (at as u128 * RATE as u128 / 1_000_000_000) as u64;
+    due.saturating_sub(placed)
+}
+
 /// How many frames to write now, given `mic` and `call` samples waiting. The
 /// two devices deliver at their own pace, so what both have is written and the
 /// rest waits for its other half — unless one is `max_lag` behind: a device
 /// that stopped delivering is silence, not a reason to hold the other back.
-/// `flush` (the recording stops) writes everything, the shorter padded.
-// ponytail: aligned by count, not by capture time; Windows loopback sends nothing while
-// nothing plays, so a pause there is closed up to `max_lag` late — R-3 places it by timestamp.
+/// `flush` (the recording stops) writes everything, the shorter padded. Where
+/// the late one's sound then goes is [`silence_before`]'s.
 pub fn frames_ready(mic: usize, call: usize, max_lag: usize, flush: bool) -> usize {
     let (short, long) = (mic.min(call), mic.max(call));
     if flush {
@@ -204,6 +222,18 @@ mod tests {
         assert_eq!(frames_ready(40_000, 0, 16_000, false), 24_000, "a track a second behind is silence");
         assert_eq!(frames_ready(0, 40_000, 16_000, false), 24_000);
         assert_eq!(frames_ready(1000, 990, 16_000, true), 1000, "a stop writes it all");
+    }
+
+    #[test]
+    fn sound_after_a_gap_lands_where_it_was_heard() {
+        const S: u64 = 1_000_000_000;
+        assert_eq!(silence_before(2 * S, None, 0), 32_000, "a device first heard two seconds in starts there");
+        assert_eq!(silence_before(0, None, 0), 0);
+        assert_eq!(silence_before(5 * S, Some(S), 16_000), 64_000, "four seconds of nothing from it are silence");
+        assert_eq!(silence_before(5 * S, Some(S), 64_000), 16_000, "what was padded while it lagged is not put twice");
+        assert_eq!(silence_before(5 * S, Some(S), 90_000), 0, "never back over what is written");
+        assert_eq!(silence_before(S + GAP_NANOS - 1, Some(S), 0), 0, "within the gap it follows on: drift is not a hole");
+        assert_eq!(silence_before(S + GAP_NANOS, Some(S), 0), 16_800, "a gap is a gap");
     }
 
     #[test]

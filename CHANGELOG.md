@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-21 A call being recorded follows headphones plugged in or out, or another sound output picked: each side opens again on the new default within a second and goes on in the same file, the moment between silent; on Windows the page says when the microphone is off for desktop apps and opens Settings there, and a pause in the call's sound no longer shifts it against yours
 - 2026-10-21 A call recorded on the Meetings page has your microphone's noise reduced before it is transcribed — a drill or hammering next door costs fewer words; the recording itself stays as it was, and Reduce noise on my microphone turns it off
 - 2026-10-21 Record a call on the Meetings page: your microphone and the call's sound together (macOS 14.6+ and Windows), with a level meter for each side and Mute for your microphone, a note over the list for a permission macOS has not given yet — Allow asks, Open System Settings goes where a refused one is turned on — and a hint when the call stays silent; the recording waits in the list as Not transcribed until you press Transcribe, or is transcribed as soon as you stop it with Auto-transcribe recordings on
 - 2026-10-20 Turn on Voice memory in the Catalog, and a speaker you name on the Meetings page is named by voice in the next meeting; the Voices panel there lists the voices it knows, each forgotten on request

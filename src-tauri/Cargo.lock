@@ -3022,6 +3022,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "winreg 0.10.1",
  "yaml_serde",
  "zeroize",
 ]
