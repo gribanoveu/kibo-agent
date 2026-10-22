@@ -69,7 +69,8 @@
 }
 .artifacts-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  /* `auto`: the menu's chip (dots and chevron) is wider than any fixed guess, and spills over the size. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
 }
