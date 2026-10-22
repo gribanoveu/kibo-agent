@@ -41,8 +41,9 @@ pub async fn meeting_rename_speaker(id: String, speaker: usize, name: String) ->
 }
 
 #[tauri::command]
-pub async fn meeting_delete(id: String) -> Result<(), String> {
-    blocking(move || meeting_notes::delete_meeting(&id)).await
+pub async fn meeting_delete(notes: State<'_, Arc<MeetingNotes>>, id: String) -> Result<(), String> {
+    let notes = notes.inner().clone();
+    blocking(move || notes.delete_meeting(&id)).await
 }
 
 /// The voices the voice memory knows, by name.

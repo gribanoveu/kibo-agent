@@ -143,6 +143,10 @@ pub enum MeetingError {
     Cancelled,
     #[error("a recording is already being processed — wait for it or stop it")]
     Busy,
+    /// A job works on this meeting now: deleting it would leave the job
+    /// writing into a meeting that is no more.
+    #[error("this meeting is being worked on — wait for it or stop it")]
+    InUse,
     /// Meeting notes were turned off while it ran: nothing is kept.
     #[error("meeting notes were turned off")]
     Off,

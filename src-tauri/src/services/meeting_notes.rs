@@ -91,6 +91,17 @@ impl MeetingNotes {
         self.slot().clone()
     }
 
+    /// Meeting `id` deleted, unless a job works on it now: its notes or a
+    /// document would be written into a meeting that is no more. The slot is
+    /// held while it goes, so no job on it starts in between.
+    pub fn delete_meeting(&self, id: &str) -> Result<(), MeetingError> {
+        let slot = self.slot();
+        if slot.as_ref().is_some_and(|job| job.id.as_deref() == Some(id)) {
+            return Err(MeetingError::InUse);
+        }
+        remove_meeting(id)
+    }
+
     /// Stops the job running now, recognition or summary.
     pub fn stop(&self) {
         self.running.stop();
@@ -204,14 +215,14 @@ impl MeetingNotes {
         // With the slot held no other is being recognized: a folder without its
         // meeting is one the app quit or crashed in the middle of.
         for left in meeting_store::unfinished()? {
-            let _ = delete_meeting(&left);
+            let _ = remove_meeting(&left);
         }
         let id = uuid::Uuid::new_v4().to_string();
         let meeting = match self.transcribe(exe, models, audio, &id, &|e| job.tell(e)) {
             Ok(meeting) => meeting,
             Err(e) => {
                 // The copy of the sound, written before the speech was found.
-                let _ = delete_meeting(&id);
+                let _ = remove_meeting(&id);
                 return Err(e);
             }
         };
@@ -312,8 +323,18 @@ pub fn rename_speaker(id: &str, speaker: usize, name: &str) -> Result<Meeting, M
     Ok(meeting)
 }
 
+/// Meeting `id` called `title` by the user: notes written again keep it
+/// (`docs/38-artifacts.md`). The title comes checked (`domain::artifacts::title`).
+pub fn rename_meeting(id: &str, title: &str) -> Result<Meeting, MeetingError> {
+    let mut meeting = meeting_store::get(id)?;
+    meeting.title = Some(title.to_string());
+    meeting.title_by_user = true;
+    meeting_store::save(&meeting)?;
+    Ok(meeting)
+}
+
 /// Meeting `id` gone — its recording too — and what the voice memory heard in it, on or off.
-pub fn delete_meeting(id: &str) -> Result<(), MeetingError> {
+fn remove_meeting(id: &str) -> Result<(), MeetingError> {
     meeting_store::delete(id)?;
     voices_store::update(false, |book| book.forget_meeting(id))?;
     Ok(())
@@ -479,6 +500,35 @@ mod tests {
         (session, provider)
     }
 
+    /// Not while a job works on it — the job would write into a meeting that
+    /// is no more; another meeting's job is no reason, and neither is none.
+    #[test]
+    fn a_meeting_a_job_works_on_is_not_deleted() {
+        crate::testing::with_app_dir("meeting-delete-in-use", || {
+            meeting_store::save(&Meeting { id: "ab".into(), ..meeting() }).unwrap();
+            meeting_store::save(&Meeting { id: "cd".into(), ..meeting() }).unwrap();
+            let notes = MeetingNotes::default();
+            *notes.slot() = Some(JobState::new(JobKind::Summary, Some("ab".into())));
+            assert_eq!(notes.delete_meeting("ab"), Err(MeetingError::InUse));
+            assert!(meeting_store::get("ab").is_ok(), "still there");
+            notes.delete_meeting("cd").unwrap();
+            *notes.slot() = Some(JobState::new(JobKind::Process, None));
+            notes.delete_meeting("ab").unwrap();
+            assert_eq!(meeting_store::get("ab"), Err(MeetingError::NotFound("ab".into())));
+        });
+    }
+
+    #[test]
+    fn a_meeting_renamed_keeps_its_title_through_new_notes() {
+        crate::testing::with_app_dir("meeting-rename", || {
+            meeting_store::save(&Meeting { id: "ab".into(), title: Some("Выпуск".into()), ..meeting() }).unwrap();
+            let renamed = rename_meeting("ab", "Планёрка").unwrap();
+            assert_eq!((renamed.title.as_deref(), renamed.title_by_user), (Some("Планёрка"), true));
+            assert_eq!(meeting_store::get("ab").unwrap(), renamed, "saved");
+            assert_eq!(rename_meeting("zz", "x"), Err(MeetingError::NotFound("zz".into())));
+        });
+    }
+
     fn meeting() -> Meeting {
         Meeting {
             id: "m1".into(),
@@ -625,7 +675,7 @@ mod tests {
             rename_speaker("a1", 0, "Альбина").unwrap();
             assert_eq!(voices().unwrap().iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["Альбина"]);
 
-            delete_meeting("a1").unwrap();
+            MeetingNotes::default().delete_meeting("a1").unwrap();
             assert_eq!(voices().unwrap(), []);
             assert_eq!(voices_store::read().unwrap(), Default::default());
         });
@@ -849,13 +899,13 @@ mod tests {
             recorded("aa", 16_000, true);
             let _ = notes.process_recording(&exe, &models, "aa", &sink);
             assert_eq!(heard(), "denoised", "on by default");
-            delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
+            notes.delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
 
             settings_store::update(|s| s.meeting_denoise = Some(false)).unwrap();
             recorded("bb", 16_000, true);
             let _ = notes.process_recording(&exe, &models, "bb", &sink);
             assert_eq!(heard(), "call", "turned off: still a call of ours");
-            delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
+            notes.delete_meeting(&meeting_store::list().unwrap()[0].id).unwrap();
 
             settings_store::update(|s| s.meeting_denoise = Some(true)).unwrap();
             let _ = notes.process(&exe, &models, Path::new("/calls/call.m4a"), &sink);
