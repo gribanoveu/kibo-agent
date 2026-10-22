@@ -1,6 +1,6 @@
 # Артефакты: встречи и прототипы в одном месте, как папки на Диске
 
-План, принят 2026-10-22; сделано AR-1 (формат), AR-2 (домен и сервис), AR-3 (команды и обёртки) и AR-4 (страница). Новая страница сайдбара, **Artifacts**: всё, что
+Сделано 2026-10-22, AR-1…AR-5. Новая страница сайдбара, **Artifacts**: всё, что
 приложение сделало для пользователя, разложено по папкам, как на Google Диске. Верхний
 уровень — тип артефакта (`Meetings`, `Prototypes`), в нём — папка на каждую встречу или
 прототип под её названием, внутри — файлы. Файл открывается справа, в панели страницы:
@@ -190,7 +190,7 @@ pub enum ArtifactError {
 | `artifact_files(kind, id)` | `artifactFiles(kind, id)` |
 | `artifact_read(kind, id, path)` | `artifactRead(kind, id, path)` |
 | `artifact_rename(kind, id, title)` | `artifactRename(kind, id, title)` |
-| `artifact_delete(kind, id)` — только встречи, решение 6 | `artifactDelete(kind, id)` |
+| удаление — своей команды нет: встреча — готовый `meeting_delete` (с проверкой «в работе»), прототип — удаление чата через `removeChat` (решение 6) | `meetingDelete(id)` из `lib/meeting.ts`, `PageContext.removeChat` |
 | `artifact_reveal(kind, id)` | `artifactReveal(kind, id)` |
 | `artifact_save_as(kind, id, path, dest)` — файл коллекции, как его показывает страница (заметки — собранный текст, запись — копия); страница прототипа — одним HTML через `infra/prototype_export.rs` | `artifactSaveAs(kind, id, path, name?)`: путь из `pickSavePath` (`lib/dialog.ts`), отмена — ничего не делает |
 
@@ -351,6 +351,19 @@ files, read}`, `prototype_store::{listing, version_time, working_file}` — по
 или файла. Пустой тип не показан — так и Meetings при выключенной фиче: бэкенд их не
 отдаёт. Тесты Bun: уровни и крошки, фильтр, пустые состояния, перечитывание только по
 сигналам, что открывает каждый `view`.
+
+**AR-5 сделано 2026-10-22.** Меню строки (`Dropdown` у `⋯`): у коллекции Rename…, Open in
+Meetings / Open chat, Show in Finder, Delete…; у файла Save as…. Переименование и удаление —
+через `Modal`. Бэкенд: `domain::artifacts::title` (слова через один пробел, 1–80 символов),
+`services::artifacts::{rename, folder}`, `meeting_notes::rename_meeting`; удаление встречи —
+метод `MeetingNotes::delete_meeting`, который отказывает (`MeetingError::InUse`), пока над
+встречей идёт задача, и держит слот задач, пока удаляет; прежняя функция без проверки
+осталась внутренней — ею задача убирает свои же недоделанные папки. Переименование прототипа
+— под `claim` его папки (`Busy`, пока идёт ход), старому прототипу без манифеста пишет
+манифест. `PageContext` получил `item`, `openPage`, `openChat`, `removeChat`; `MeetingsPage`
+открывается на `item`. Мутаций 14, поймано 14; две выжили сначала и закрыты тестами:
+`folder` встречи проверялся на id, который отсекает уже проверка формата (`zz`), а
+переименование непоказанного прототипа через `files_dir` заводило ему пустую папку.
 
 ## Вне плана
 
