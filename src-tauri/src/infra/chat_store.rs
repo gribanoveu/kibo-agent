@@ -182,6 +182,17 @@ pub fn exists(id: &str) -> Result<bool, ChatError> {
         .map_err(store)
 }
 
+/// What the chat is called in the list — the model's name for it first —
+/// or `None` when there is no such chat: what names a prototype shown before
+/// it had a `prototype.json` (`docs/38-artifacts.md`).
+pub fn title(id: &str) -> Result<Option<String>, ChatError> {
+    chat_record::check_id(id)?;
+    open()?
+        .query_row("SELECT COALESCE(generated_title, title) FROM chats WHERE id = ?1", params![id], |row| row.get(0))
+        .optional()
+        .map_err(store)
+}
+
 /// Writes the conversation whole, keeping the moment it started.
 ///
 /// Whole because a conversation is edited from both ends — a compaction
@@ -603,6 +614,8 @@ mod tests {
 
             let saved = save_one("one", "/repo", "why is a token dropped?");
             assert_eq!(saved.title, "Lost token");
+            assert_eq!(title("one").unwrap().as_deref(), Some("Lost token"), "one chat's name, as the list has it");
+            assert_eq!(title("gone").unwrap(), None);
             assert_eq!(list("/repo").unwrap()[0].title, "Lost token");
 
             save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one")).unwrap();
