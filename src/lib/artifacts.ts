@@ -42,6 +42,12 @@ export async function artifactList(): Promise<Collection[]> {
   return invoke<Collection[]>("artifact_list");
 }
 
+/** Bytes still free on the disk the artifacts are kept on; `null` outside the app. */
+export async function artifactFreeSpace(): Promise<number | null> {
+  if (!inTauri()) return null;
+  return invoke<number>("artifact_free_space");
+}
+
 /** A collection's files, folders first. */
 export async function artifactFiles(kind: ArtifactKind, id: string): Promise<ArtifactFile[]> {
   requireBackend();

@@ -433,7 +433,16 @@ describe("the user's pictures", () => {
     expect(assetsNote([])).toBeNull();
     expect(assetsNote([logo])).toBe("[Attached picture, now in your folder: `assets/logo.png` (512×128).]");
     expect(assetsNote([logo, note])).toBe("[Attached pictures, now in your folder: `assets/logo.png` (512×128), `assets/notes.txt`.]");
-    expect([0, 10, 1536, 5 * 1024 * 1024, 1.25 * 1024 * 1024].map(sizeLabel)).toEqual(["0 KB", "1 KB", "2 KB", "5 MB", "1.3 MB"]);
+    expect([0, 10, 1536, 5 * 1024 * 1024, 1.25 * 1024 * 1024, 1023 * 1024 * 1024, 1024 ** 3, 245.5 * 1024 ** 3].map(sizeLabel)).toEqual([
+      "0 KB",
+      "1 KB",
+      "2 KB",
+      "5 MB",
+      "1.3 MB",
+      "1023 MB",
+      "1 GB",
+      "245.5 GB",
+    ]);
   });
 
   test("open the panel before there is a page, on its drawer; another chat closes the drawer", async () => {

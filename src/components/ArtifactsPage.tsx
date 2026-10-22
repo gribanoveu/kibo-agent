@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
-import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal, Search } from "lucide-react";
+import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -41,7 +41,6 @@ const when = (rfc3339: string) =>
 export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: PageContext) {
   const artifacts = useArtifacts();
   const [picked, setPicked] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
   const [said, setSaid] = useState<{ text: string; error: boolean } | null>(null);
   const [renaming, setRenaming] = useState<{
     collection: Collection;
@@ -142,11 +141,10 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
     ];
   };
 
-  // A new place starts with nothing picked and no filter.
+  // A new place starts with nothing picked.
   const go = (to: () => void) => {
     to();
     setPicked(null);
-    setFilter("");
   };
   const open = (row: Row) => {
     if (row.type === "kind") go(() => artifacts.openKind(row.kind));
@@ -155,7 +153,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
     else setPicked(row.id);
   };
 
-  const shown = filter.trim() ? artifacts.rows.filter((row) => row.name.toLowerCase().includes(filter.trim().toLowerCase())) : artifacts.rows;
   const file = artifacts.rows.find((row): row is Extract<Row, { type: "file" }> => row.type === "file" && row.id === picked)?.file;
 
   const crumbs: { label: string; to: Place }[] = [{ label: "Artifacts", to: { kind: null, id: null, folder: "" } }];
@@ -201,10 +198,10 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
               </span>
             ))}
           </nav>
-          <label className="artifacts-filter">
-            <Search size={14} />
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter by name" aria-label="Filter by name" />
-          </label>
+          <span className="artifacts-space" aria-label="Disk space">
+            {sizeLabel(artifacts.used)} used
+            {artifacts.free !== null && ` · ${sizeLabel(artifacts.free)} free on disk`}
+          </span>
         </>
       }
       panel={
@@ -217,18 +214,14 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
     >
       {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
       {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
-      {!artifacts.error && artifacts.loaded && shown.length === 0 && (
+      {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
         <p className="artifacts-empty">
-          {filter.trim()
-            ? `Nothing here is called “${filter.trim()}”.`
-            : place.kind === null
-              ? "Nothing here yet. Meetings made into notes and prototypes presented in a chat show up here."
-              : "This folder is empty."}
+          {place.kind === null ? "Nothing here yet. Meetings made into notes and prototypes presented in a chat show up here." : "This folder is empty."}
         </p>
       )}
-      {shown.length > 0 && (
+      {artifacts.rows.length > 0 && (
         <div className="artifacts-list" role="listbox" aria-label="Contents" onKeyDown={keys}>
-          {shown.map((row) => (
+          {artifacts.rows.map((row) => (
             <ArtifactRow
               key={row.id}
               row={row}

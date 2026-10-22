@@ -37,30 +37,11 @@
 .artifacts-crumb-sep {
   color: var(--text-faint);
 }
-.artifacts-filter {
-  flex: 0 1 240px;
-  min-width: 160px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+.artifacts-space {
+  flex: 0 0 auto;
   color: var(--text-faint);
-}
-.artifacts-filter:focus-within {
-  border-color: var(--accent);
-}
-.artifacts-filter input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: none;
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
 }
 .artifacts-list {
   display: flex;

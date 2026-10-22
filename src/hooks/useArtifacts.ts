@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLiveRead } from "./useLiveRead";
 import {
   artifactFiles,
+  artifactFreeSpace,
   artifactList,
   artifactRename,
   artifactReveal,
@@ -40,6 +41,8 @@ export function useArtifacts(on = true) {
   const [round, setRound] = useState(0);
   const reload = () => setRound((n) => n + 1);
   const list = useLiveRead(artifactList, onArtifactsChanged, [], on, `${round}`);
+  // Read with the list: what frees or fills the disk here is what changes the list.
+  const free = useLiveRead(artifactFreeSpace, onArtifactsChanged, null, on, `${round}`);
 
   const kind = place.kind;
   const open = kind && place.id ? { kind, id: place.id } : null;
@@ -69,6 +72,10 @@ export function useArtifacts(on = true) {
     place,
     rows,
     collection,
+    /** Every collection's bytes together. */
+    used: list.value.reduce((sum, c) => sum + c.bytes, 0),
+    /** Free on the disk they are kept on; `null` until read, or when it could not be. */
+    free: free.value,
     /** The open collection's files; `null` while they are read. */
     files,
     error: open ? (read.error ?? null) : list.error,

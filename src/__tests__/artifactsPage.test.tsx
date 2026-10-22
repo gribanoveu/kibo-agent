@@ -22,6 +22,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "artifact_list") return Promise.resolve(structuredClone(collections));
     if (command === "artifact_files") return Promise.resolve(structuredClone(files[`${args!.kind}/${args!.id}`] ?? []));
     if (command === "artifact_read") return Promise.resolve(`text of ${args!.path}`);
+    if (command === "artifact_free_space") return Promise.resolve(245.5 * 1024 ** 3);
     return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
@@ -126,25 +127,24 @@ describe("ArtifactsPage", () => {
 
     fireEvent.keyDown(row(/logo/), { code: "Backspace" });
     expect(names()).toEqual(["assets", "app.jsx", "index.html"]);
-    fireEvent.keyDown(screen.getByLabelText("Filter by name"), { code: "Backspace" });
-    expect(crumbs()).toHaveLength(3);
-
     fireEvent.click(screen.getByRole("button", { name: "Artifacts" }));
     expect(names()).toEqual(["Meetings", "Prototypes"]);
     fireEvent.keyDown(row(/Meetings/), { code: "Backspace" });
     expect(names()).toEqual(["Meetings", "Prototypes"], "the top has no up");
   });
 
-  test("filters what is listed by name, and says so when nothing is left", async () => {
+  test("says what every artifact takes together and what the disk has left, and only the first when the disk cannot be read", async () => {
+    const { unmount } = page();
+    const space = () => screen.getByLabelText("Disk space").textContent;
+    await waitFor(() => expect(space()).toBe("13 KB used · 245.5 GB free on disk"));
+    fireEvent.doubleClick(row(/Prototypes/));
+    expect(space()).toBe("13 KB used · 245.5 GB free on disk", "every kind, wherever the page is");
+    unmount();
+
+    failing = { artifact_free_space: "no disk" };
     page();
     await waitFor(() => expect(names()).toHaveLength(2));
-    fireEvent.doubleClick(row(/Prototypes/));
-    fireEvent.change(screen.getByLabelText("Filter by name"), { target: { value: "даш" } });
-    expect(names()).toEqual(["Дашборд"]);
-    fireEvent.change(screen.getByLabelText("Filter by name"), { target: { value: "nope" } });
-    expect(screen.getByText("Nothing here is called “nope”.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Artifacts" }));
-    expect((screen.getByLabelText("Filter by name") as HTMLInputElement).value).toBe("");
+    expect(space()).toBe("13 KB used");
   });
 
   test("a kind with nothing in it is not shown, and an empty page says what lands here", async () => {
@@ -235,8 +235,11 @@ describe("ArtifactsPage's actions", () => {
     expect(screen.getByLabelText("New name")).toBeTruthy();
 
     delete failing.artifact_rename;
-    fireEvent.keyDown(screen.getByLabelText("New name"), { code: "Enter" });
-    await waitFor(() => expect(screen.queryByLabelText("New name")).toBeNull());
+    // Inside `act`: the rename's promise settles there, and its update lands at once rather than on waitFor's slow path.
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("New name"), { code: "Enter" });
+    });
+    expect(screen.queryByLabelText("New name")).toBeNull();
     expect(calls).toContainEqual({ command: "artifact_rename", args: { kind: "meetings", id: "m1", title: "Ретро" } });
     expect(reads("artifact_list")).toBe(before + 1, "once, after it was renamed — not after the refusal");
   });
