@@ -234,6 +234,30 @@ describe("the meetings page", () => {
     expect(withoutTopics("## Итоги\n- Documents")).toBe("## Итоги\n- Documents");
   });
 
+  test("the notes, a document and the transcript each fold to their title, their actions kept", async () => {
+    stored[0].documents = [{ topic: "Как устроен релиз", text: "Собрать сборку." }];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    for (const [card, inside] of [
+      ["Notes", "Release on Friday."],
+      ["Как устроен релиз", "Собрать сборку."],
+      ["Transcript", "Я подготовлю релиз."],
+    ]) {
+      const region = within(screen.getByRole("region", { name: card }));
+      const fold = region.getByRole("button", { name: card });
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(fold);
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(region.queryByText(inside)).toBeNull();
+      if (card !== "Transcript") expect(region.getByText("Write again")).toBeTruthy();
+    }
+    expect(within(screen.getByRole("region", { name: "Transcript" })).queryByLabelText("Speakers")).toBeNull(); // they fold with it
+    fireEvent.click(within(screen.getByRole("region", { name: "Notes" })).getByRole("button", { name: "Notes" }));
+    expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Release on Friday.")).toBeTruthy();
+  });
+
   test("a meeting whose recording is gone shows no size", async () => {
     stored = [{ ...structuredClone(call), id: "m9" }];
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);

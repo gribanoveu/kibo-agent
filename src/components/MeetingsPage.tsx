@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
-import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -725,21 +725,25 @@ function MeetingView({
         </div>
       </header>
 
-      <section className="meeting-card" aria-label="Notes">
-        <div className="meeting-card-head">
-          <Sparkles size={14} className="meeting-card-icon" />
-          <h3>Notes</h3>
-          {notes && !writing && (
-            <button type="button" className="btn btn-ghost" onClick={() => copy(notes)}>
-              <Copy size={12} />
-              {copied ? "Copied" : "Copy"}
+      <div className="meeting-cap" aria-hidden />
+      <MeetingCard
+        title="Notes"
+        icon={<Sparkles size={14} className="meeting-card-icon" />}
+        actions={
+          <>
+            {notes && !writing && (
+              <button type="button" className="btn btn-ghost" onClick={() => copy(notes)}>
+                <Copy size={12} />
+                {copied ? "Copied" : "Copy"}
+              </button>
+            )}
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={onSummarize}>
+              <RefreshCw size={12} />
+              {meeting.summary ? "Write again" : "Write notes"}
             </button>
-          )}
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onSummarize}>
-            <RefreshCw size={12} />
-            {meeting.summary ? "Write again" : "Write notes"}
-          </button>
-        </div>
+          </>
+        }
+      >
         <div className="meeting-notes">
           {notes ? (
             <Markdown text={notes} streaming={writing} />
@@ -760,7 +764,7 @@ function MeetingView({
             ))}
           </div>
         )}
-      </section>
+      </MeetingCard>
 
       {documents.map((d) => (
         <DocumentCard
@@ -773,11 +777,7 @@ function MeetingView({
         />
       ))}
 
-      <section className="meeting-card" aria-label="Transcript">
-        <div className="meeting-card-head">
-          <MessageSquareText size={14} className="meeting-card-icon" />
-          <h3>Transcript</h3>
-        </div>
+      <MeetingCard title="Transcript" icon={<MessageSquareText size={14} className="meeting-card-icon" />}>
         <Speakers meeting={meeting} onRename={onRename} />
         <div className="meeting-transcript">
           {turns(meeting).map((turn, i, all) => {
@@ -811,7 +811,7 @@ function MeetingView({
             );
           })}
         </div>
-      </section>
+      </MeetingCard>
     </article>
   );
 }
@@ -834,25 +834,48 @@ function DocumentCard({
   const writing = draft !== null;
   const text = writing ? draft : document.text;
   return (
-    <section className="meeting-card" aria-label={document.topic}>
-      <div className="meeting-card-head">
-        <FileText size={14} className="meeting-card-icon" />
-        <h3>{document.topic}</h3>
-        {text && !writing && (
-          <button type="button" className="btn btn-ghost" onClick={() => copy(text)}>
-            <Copy size={12} />
-            {copied ? "Copied" : "Copy"}
+    <MeetingCard
+      title={document.topic}
+      icon={<FileText size={14} className="meeting-card-icon" />}
+      actions={
+        <>
+          {text && !writing && (
+            <button type="button" className="btn btn-ghost" onClick={() => copy(text)}>
+              <Copy size={12} />
+              {copied ? "Copied" : "Copy"}
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onWrite}>
+            <RefreshCw size={12} />
+            Write again
           </button>
-        )}
-        <button type="button" className="btn btn-ghost" disabled={busy} onClick={onWrite}>
-          <RefreshCw size={12} />
-          Write again
-        </button>
-        <button type="button" className="btn btn-ghost" aria-label={`Delete ${document.topic}`} title="Delete" disabled={busy} onClick={onDelete}>
-          <Trash2 size={12} />
-        </button>
-      </div>
+          <button type="button" className="btn btn-ghost" aria-label={`Delete ${document.topic}`} title="Delete" disabled={busy} onClick={onDelete}>
+            <Trash2 size={12} />
+          </button>
+        </>
+      }
+    >
       <div className="meeting-notes">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
+    </MeetingCard>
+  );
+}
+
+/** A card of the open meeting: its title folds it to that one line, its actions stay beside it. */
+function MeetingCard({ title, icon, actions, children }: { title: string; icon: React.ReactNode; actions?: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="meeting-card" aria-label={title}>
+      <div className="meeting-card-head">
+        <h3>
+          <button type="button" className="meeting-card-fold" aria-expanded={open} title={open ? "Fold" : "Unfold"} onClick={() => setOpen(!open)}>
+            <ChevronRight size={13} className="meeting-card-chev" />
+            {icon}
+            {title}
+          </button>
+        </h3>
+        {actions}
+      </div>
+      {open && children}
     </section>
   );
 }
