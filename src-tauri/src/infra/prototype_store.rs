@@ -1,17 +1,19 @@
 //! `<app dir>/prototypes/<chat id>/`: a Prototype chat's folder
 //! (`docs/31-prototype-role.md`). `files/` is what its tools work in; the
-//! presented versions will sit beside it, out of their reach. Made on the
-//! chat's first turn, gone with the chat.
+//! presented versions sit beside it in `versions/`, and `prototype.json`
+//! (`docs/38-artifacts.md`), out of their reach. Made on the chat's first
+//! turn, gone with the chat.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::prototype::{self, Asset, Assets, PrototypeError, ASSETS};
+use crate::domain::prototype::{self, Asset, Assets, Manifest, PrototypeError, ASSETS};
 use crate::infra::app_dir;
 
 const DIR: &str = "prototypes";
 const FILES: &str = "files";
 const VERSIONS: &str = "versions";
+const MANIFEST: &str = "prototype.json";
 /// The working folder while a restore swaps it out.
 const OLD: &str = ".files.old";
 
@@ -113,6 +115,52 @@ pub fn replace_with_version(files: &Path, n: u32) -> Result<(), PrototypeError> 
     }
     let _ = fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// The chat's `prototype.json`, `None` before its first `present` wrote one.
+/// One that does not read is as none: the next `present` writes it whole.
+pub fn manifest(files: &Path) -> Result<Option<Manifest>, PrototypeError> {
+    let path = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?.join(MANIFEST);
+    match fs::read(&path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(io(&path, source)),
+    }
+}
+
+/// Writes the chat's `prototype.json`, whole or not at all. Its writers — a
+/// turn's `present`, a rename — hold the folder's claim
+/// (`services::prototype_versions::claim`), so they do not cross.
+pub fn write_manifest(files: &Path, manifest: &Manifest) -> Result<(), PrototypeError> {
+    let path = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?.join(MANIFEST);
+    let bytes = serde_json::to_vec_pretty(manifest).map_err(|e| io(&path, std::io::Error::other(e)))?;
+    app_dir::write_private(&path, &bytes).map_err(|e| io(&path, std::io::Error::other(e)))
+}
+
+/// The chats whose prototype has been presented — a version kept — by id:
+/// what the artifacts list. A folder only worked in is not one yet.
+pub fn presented() -> Result<Vec<String>, PrototypeError> {
+    presented_in(&app_dir::dir()?)
+}
+
+fn presented_in(base: &Path) -> Result<Vec<String>, PrototypeError> {
+    let dir = base.join(DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io(&dir, source)),
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
+        let Some(chat) = chat_dir(base, &id) else { continue };
+        let versions = chat.join(VERSIONS);
+        if versions.is_dir() && highest(&versions)? > 0 {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    Ok(ids)
 }
 
 fn versions_of(files: &Path) -> Result<PathBuf, PrototypeError> {
@@ -435,6 +483,41 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             assert!(matches!(snapshot(&folder), Err(PrototypeError::NotAChatFolder(_))), "{folder:?}");
         }
+    }
+
+    /// Written whole and read back; none before the first, and one that does
+    /// not read is as none. It sits beside `files/`, so no version holds it.
+    #[test]
+    fn the_manifest_sits_beside_the_folder_and_reads_back() {
+        let base = temp_dir("prototype-manifest");
+        let files = files_dir_in(&base, ID).unwrap();
+        assert_eq!(manifest(&files).unwrap(), None);
+        let written = Manifest { title: "Лендинг".into(), title_by_user: false, page: "index.html".into(), presented: "2026-10-22T10:00:00Z".into(), version: 1 };
+        write_manifest(&files, &written).unwrap();
+        assert_eq!(manifest(&files).unwrap(), Some(written));
+        assert!(files.parent().unwrap().join("prototype.json").is_file());
+        fs::write(files.join("index.html"), "x").unwrap();
+        snapshot(&files).unwrap();
+        assert!(!files.parent().unwrap().join("versions").join("1").join("prototype.json").exists());
+        fs::write(files.parent().unwrap().join("prototype.json"), "not json").unwrap();
+        assert_eq!(manifest(&files).unwrap(), None);
+        assert!(matches!(manifest(&base), Err(PrototypeError::NotAChatFolder(_))));
+    }
+
+    /// Listed once a version is kept: a folder only worked in, one whose
+    /// versions are all half-copied, or a name no chat could have, is not.
+    #[test]
+    fn a_folder_without_a_version_is_not_listed() {
+        let base = temp_dir("prototype-presented");
+        assert_eq!(presented_in(&base).unwrap(), Vec::<String>::new(), "no folder yet is none");
+        let shown = files_dir_in(&base, ID).unwrap();
+        fs::write(shown.join("index.html"), "x").unwrap();
+        snapshot(&shown).unwrap();
+        files_dir_in(&base, "worked-in-only").unwrap();
+        let partial = files_dir_in(&base, "half-copied").unwrap();
+        fs::create_dir_all(partial.parent().unwrap().join("versions").join(".1.partial")).unwrap();
+        fs::create_dir_all(base.join("prototypes").join("a.b").join("versions").join("1")).unwrap();
+        assert_eq!(presented_in(&base).unwrap(), [ID]);
     }
 
     /// Every chat is deleted through here, and most never had a folder.

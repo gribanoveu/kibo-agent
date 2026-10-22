@@ -1,8 +1,10 @@
 //! `present` — the Prototype role's page put in front of the user
 //! (`docs/31-prototype-role.md`, P-4): the call names the page, the chat's
 //! folder is kept as a version beside it, and the transcript shows a card.
+//! `prototype.json` takes the title and page (`docs/38-artifacts.md`).
 
 use crate::domain::llm::LlmToolDefinition;
+use crate::domain::prototype::Manifest;
 use crate::domain::tools::{PresentArgs, ToolError, ToolResult, ToolScope};
 use crate::infra::prototype_store;
 use crate::services::ai_tools::resolve::{relative_to_root, resolve_existing};
@@ -26,6 +28,9 @@ pub fn present(scope: &ToolScope, args: &PresentArgs) -> Result<ToolResult, Tool
     }
     let path = relative_to_root(scope, &page)?;
     let version = prototype_store::kept(scope.root())?;
+    let was = prototype_store::manifest(scope.root())?;
+    let at = chrono::Utc::now().to_rfc3339();
+    prototype_store::write_manifest(scope.root(), &Manifest::presented(was, title, &path, version, &at))?;
     Ok(ToolResult::Presented { path, title: title.to_string(), version })
 }
 
@@ -84,6 +89,22 @@ mod tests {
         let again = present(&scope, &args("index.html", "Coffee shop")).unwrap();
         assert!(matches!(again, ToolResult::Presented { version: 2, .. }), "{again:?}");
         assert!(!files.parent().unwrap().join("versions").join("3").exists());
+    }
+
+    #[test]
+    fn a_present_writes_the_manifest_and_keeps_the_users_title() {
+        let (scope, files) = chat("present-manifest");
+        present(&scope, &args("index.html", "Coffee shop")).unwrap();
+        let written = prototype_store::manifest(&files).unwrap().unwrap();
+        assert_eq!((written.title.as_str(), written.page.as_str(), written.version, written.title_by_user), ("Coffee shop", "index.html", 1, false));
+        assert!(chrono::DateTime::parse_from_rfc3339(&written.presented).is_ok(), "{}", written.presented);
+
+        prototype_store::write_manifest(&files, &Manifest { title: "Кофейня".into(), title_by_user: true, ..written }).unwrap();
+        fs::write(files.join("menu.html"), "<h1>menu</h1>").unwrap();
+        present(&scope, &args("menu.html", "Coffee shop menu")).unwrap();
+        let after = prototype_store::manifest(&files).unwrap().unwrap();
+        assert_eq!((after.title.as_str(), after.title_by_user), ("Кофейня", true), "the user's title outlasts a present");
+        assert_eq!((after.page.as_str(), after.version), ("menu.html", 2));
     }
 
     /// What could only be a mistake is refused with what to do instead, and
