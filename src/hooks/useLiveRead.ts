@@ -20,6 +20,8 @@ export function useLiveRead<T>(
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!on) return;
+    // What failed is the last key's: the new one has not failed yet.
+    setError(null);
     let live = true;
     const load = () =>
       read().then(

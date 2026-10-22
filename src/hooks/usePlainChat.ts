@@ -363,15 +363,14 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     }
   };
 
-  /** `false` for the open chat while a turn is under way: its next save would write it back. */
+  /** `false` for the open chat while a turn is under way: its next save would write it back. Rejects when the delete failed. */
   const remove = async (id: string) => {
     if (id === chatId && !newChat()) return false;
     try {
       await deleteChat(id);
-    } catch (e) {
-      setError(String(e));
+    } finally {
+      void refresh();
     }
-    void refresh();
     return true;
   };
 

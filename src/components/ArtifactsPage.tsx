@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
@@ -38,8 +38,8 @@ const when = (rfc3339: string) =>
  * Backspace goes up; a file picked opens in the panel on the right. A row's
  * menu renames, deletes, shows in Finder, saves a file elsewhere.
  */
-export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: PageContext) {
-  const artifacts = useArtifacts();
+export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chats }: PageContext) {
+  const artifacts = useArtifacts(chats.map((c) => c.id).join());
   const [picked, setPicked] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; error: boolean } | null>(null);
   const [renaming, setRenaming] = useState<{
@@ -141,10 +141,20 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
     ];
   };
 
-  // A new place starts with nothing picked.
+  // A new place starts with nothing picked, and the keys go on working in it:
+  // the row that had focus is gone, so its first row takes it — the list
+  // itself when it has none.
+  const body = useRef<HTMLDivElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!refocus.current || !artifacts.loaded) return;
+    refocus.current = false;
+    (body.current?.querySelector<HTMLElement>('[role="option"]') ?? body.current)?.focus();
+  }, [place, artifacts.loaded, artifacts.rows.length]);
   const go = (to: () => void) => {
     to();
     setPicked(null);
+    refocus.current = true;
   };
   const open = (row: Row) => {
     if (row.type === "kind") go(() => artifacts.openKind(row.kind));
@@ -212,27 +222,29 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
         ) : undefined
       }
     >
-      {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
-      {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
-      {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
-        <p className="artifacts-empty">
-          {place.kind === null ? "Nothing here yet. Meetings made into notes and prototypes presented in a chat show up here." : "This folder is empty."}
-        </p>
-      )}
-      {artifacts.rows.length > 0 && (
-        <div className="artifacts-list" role="listbox" aria-label="Contents" onKeyDown={keys}>
-          {artifacts.rows.map((row) => (
-            <ArtifactRow
-              key={row.id}
-              row={row}
-              picked={row.id === picked}
-              onPick={() => (row.type === "file" ? open(row) : setPicked(row.id))}
-              onOpen={() => open(row)}
-              actions={menu(row)}
-            />
-          ))}
-        </div>
-      )}
+      <div ref={body} tabIndex={-1} className="artifacts-body" onKeyDown={keys}>
+        {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
+        {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
+        {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
+          <p className="artifacts-empty">
+            {place.kind === null ? "Nothing here yet. Meetings made into notes and prototypes presented in a chat show up here." : "This folder is empty."}
+          </p>
+        )}
+        {artifacts.rows.length > 0 && (
+          <div className="artifacts-list" role="listbox" aria-label="Contents">
+            {artifacts.rows.map((row) => (
+              <ArtifactRow
+                key={row.id}
+                row={row}
+                picked={row.id === picked}
+                onPick={() => (row.type === "file" ? open(row) : setPicked(row.id))}
+                onOpen={() => open(row)}
+                actions={menu(row)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
       <Modal
         title={`Rename “${renaming?.collection.title ?? ""}”`}
         open={renaming !== null}
@@ -251,7 +263,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
         <input
           className="artifacts-rename"
           autoFocus
-          maxLength={MAX_TITLE}
           value={renaming?.title ?? ""}
           aria-label="New name"
           onChange={(e) => renaming && setRenaming({ ...renaming, title: e.target.value, error: null })}
@@ -288,9 +299,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat }: Pa
     </Page>
   );
 }
-
-/** The most a name may be: `domain::artifacts::MAX_TITLE_CHARS`. */
-const MAX_TITLE = 80;
 
 type Action = { value: string; label: string; hint: string; run: () => void };
 
@@ -344,6 +352,9 @@ export function ArtifactViewer({ kind, id, file }: { kind: ArtifactKind; id: str
   const text = file.view === "markdown" || file.view === "code";
   const at = `${kind}/${id}/${file.path}`;
   const read = useLiveRead(() => artifactRead(kind, id, file.path).then((body) => ({ at, body })), onArtifactsChanged, { at: "", body: "" }, text, at);
+  // What loads from its protocol is drawn again on the same signal: the
+  // protocol answers `no-store`, so a new element fetches the file as it is now.
+  const drawn = useLiveRead(() => Promise.resolve(Date.now()), onArtifactsChanged, 0, !text, at);
   const url = artifactUrl(kind, id, file.path);
   const name = file.path.split("/").pop() ?? file.path;
 
@@ -357,8 +368,8 @@ export function ArtifactViewer({ kind, id, file }: { kind: ArtifactKind; id: str
       </div>
     );
   }
-  if (file.view === "html" && url) return <PrototypeFrame className="artifacts-frame" title={`Page ${name}`} src={url} />;
-  if (file.view === "image" && url) return <img className="artifacts-image" src={url} alt={name} />;
+  if (file.view === "html" && url) return <PrototypeFrame key={drawn.value} className="artifacts-frame" title={`Page ${name}`} src={url} />;
+  if (file.view === "image" && url) return <img key={drawn.value} className="artifacts-image" src={url} alt={name} />;
   if (file.view === "audio" && url) return <audio className="artifacts-audio" controls src={url} aria-label={`Recording ${name}`} />;
   return (
     <p className="artifacts-viewer-note">

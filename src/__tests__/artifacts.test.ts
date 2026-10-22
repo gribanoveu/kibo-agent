@@ -39,7 +39,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { artifactSaveAs, artifactUrl, onArtifactsChanged } = await import("../lib/artifacts");
+const { artifactSaveAs, artifactUrl, onArtifactsChanged, onCollectionsChanged } = await import("../lib/artifacts");
 
 beforeEach(() => {
   calls = [];
@@ -75,6 +75,19 @@ describe("onArtifactsChanged", () => {
     emit("chat:turn-event", turn("toolResult", { id: "c5", result: { result: "presented" } }));
     expect(said).toBe(4);
     expect([...listeners.values()].every((set) => set.size === 0)).toBe(true);
+  });
+});
+
+describe("onCollectionsChanged", () => {
+  test("says so on a meeting and a page presented, not on every file a turn changes", async () => {
+    let said = 0;
+    const stop = await onCollectionsChanged(() => said++);
+    emit("meeting:event", { kind: "transcribed", id: "m" });
+    emit("chat:turn-event", turn("toolResult", { id: "c1", result: { result: "presented", path: "index.html", title: "T", version: 1 } }));
+    expect(said).toBe(2);
+    emit("chat:turn-event", turn("toolResult", { id: "c2", changes: [{ path: "/repo/src/a.ts", before: { kind: "absent" }, after: { kind: "unstored" } }] }));
+    expect(said).toBe(2);
+    stop();
   });
 });
 

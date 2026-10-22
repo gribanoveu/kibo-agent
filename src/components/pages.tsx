@@ -22,6 +22,8 @@ export type PageContext = {
   openChat: (id: string) => void;
   /** A Chat mode chat deleted, as the sidebar deletes one; `false` while it must stay open. */
   removeChat: (id: string) => Promise<boolean>;
+  /** The Chat mode chats, as the sidebar lists them. */
+  chats: readonly { id: string }[];
 };
 
 export type PageDef = {

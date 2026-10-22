@@ -757,7 +757,11 @@ export default function App() {
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }
           onDeleteChat={(id) => {
-            if (!agentMode) return void plain.remove(id).then((removed) => removed || toast.show(STAY));
+            if (!agentMode)
+              return void plain.remove(id).then(
+                (removed) => removed || toast.show(STAY),
+                (e) => toast.show(String(e)),
+              );
             // The open chat goes first: left on screen, its next save would write it back.
             if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
             history.remove(id).catch((e) => toast.show(String(e)));
@@ -793,6 +797,7 @@ export default function App() {
                   void plain.open(id).then((opened) => opened || toast.show(STAY));
                 }}
                 removeChat={plain.remove}
+                chats={plain.chats}
                 sideHandle={
                   <PanelResizeHandle
                     invert

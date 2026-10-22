@@ -8,6 +8,7 @@ import {
   artifactReveal,
   artifactSaveAs,
   onArtifactsChanged,
+  onCollectionsChanged,
   type ArtifactFile,
   type ArtifactKind,
   type Collection,
@@ -31,18 +32,20 @@ const KINDS = Object.keys(KIND_NAMES) as ArtifactKind[];
 
 /**
  * The Artifacts page's state (docs/38-artifacts.md): the collections, read
- * while the page is on screen and again on `onArtifactsChanged` — never on a
- * timer — the open collection's files, the same way, and where the page is.
- * The page's own changes read again when they are done.
+ * while the page is on screen and again on `onCollectionsChanged` — never on a
+ * timer — the open collection's files on `onArtifactsChanged`, and where the page is.
+ * The page's own changes read again when they are done; so does a change to
+ * `chats`, the Chat mode chats' ids — a prototype goes with its chat, and no
+ * backend signal says a chat was deleted.
  */
-export function useArtifacts(on = true) {
+export function useArtifacts(chats = "", on = true) {
   const [place, setPlace] = useState<Place>(TOP);
   // Moves when the page changed something itself: no signal says a rename.
   const [round, setRound] = useState(0);
   const reload = () => setRound((n) => n + 1);
-  const list = useLiveRead(artifactList, onArtifactsChanged, [], on, `${round}`);
+  const list = useLiveRead(artifactList, onCollectionsChanged, [], on, `${round}#${chats}`);
   // Read with the list: what frees or fills the disk here is what changes the list.
-  const free = useLiveRead(artifactFreeSpace, onArtifactsChanged, null, on, `${round}`);
+  const free = useLiveRead(artifactFreeSpace, onCollectionsChanged, null, on, `${round}#${chats}`);
 
   const kind = place.kind;
   const open = kind && place.id ? { kind, id: place.id } : null;
@@ -53,7 +56,7 @@ export function useArtifacts(on = true) {
     onArtifactsChanged,
     { at: "", files: [] as ArtifactFile[] },
     on && open !== null,
-    `${at}#${round}`,
+    `${at}#${round}#${chats}`,
   );
   const files = open && read.value.at === at ? read.value.files : null;
   const collection = open ? (list.value.find((c) => c.kind === open.kind && c.id === open.id) ?? null) : null;

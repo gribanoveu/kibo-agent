@@ -62,6 +62,8 @@ beforeEach(() => {
   offered = undefined;
   opened = [];
   removable = true;
+  removeFails = null;
+  chats = [{ id: "c1" }, { id: "c2" }];
   collections = [
     { kind: "meetings", id: "m1", title: "Планёрка", updated: "2026-10-22T10:00:00+00:00", bytes: 4096 },
     { kind: "prototypes", id: "c1", title: "Лендинг кофейни", updated: "2026-10-21T10:00:00+00:00", bytes: 8192, page: "index.html" },
@@ -75,8 +77,10 @@ beforeEach(() => {
 
 let opened: string[] = [];
 let removable = true;
-const page = () =>
-  render(
+let removeFails: string | null = null;
+let chats = [{ id: "c1" }, { id: "c2" }];
+const page = () => render(view());
+const view = () => (
     <ArtifactsPage
       openPane={() => {}}
       sideHandle={<span />}
@@ -84,10 +88,11 @@ const page = () =>
       openChat={(id) => opened.push(`chat ${id}`)}
       removeChat={(id) => {
         opened.push(`remove ${id}`);
-        return Promise.resolve(removable);
+        return removeFails ? Promise.reject(removeFails) : Promise.resolve(removable);
       }}
-    />,
-  );
+      chats={chats}
+    />
+);
 /** Picks `action` in the menu of the row called `name`. */
 const menu = (name: string, action: string) => {
   fireEvent.click(screen.getByTitle(`Actions for ${name}`));
@@ -194,8 +199,17 @@ describe("ArtifactsPage", () => {
     const frame = panel().querySelector("iframe")!;
     expect(frame.getAttribute("src")).toBe("artifact://localhost/c1/files/index.html");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-modals allow-forms");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    emit("chat:turn-event", { turnId: "t", seq: 1, round: 0, type: "toolResult", payload: { id: "w", changes: [{ path: "/p/files/index.html" }] } });
+    await waitFor(() => expect(panel().querySelector("iframe")).not.toBe(frame), { timeout: 500 });
 
+    failing.artifact_read = "app.jsx is over 1 MB, too big to show here";
     fireEvent.click(row(/app\.jsx/));
+    await waitFor(() => expect(panel().textContent).toContain("too big"));
+    delete failing.artifact_read;
+    fireEvent.click(row(/index\.html/));
+    fireEvent.click(row(/app\.jsx/));
+    expect(panel().textContent).not.toContain("too big");
     await waitFor(() => expect(panel().textContent).toContain("text of app.jsx"));
     expect(calls.at(-1)).toEqual({ command: "artifact_read", args: { kind: "prototypes", id: "c1", path: "app.jsx" } });
 
@@ -217,6 +231,23 @@ describe("ArtifactsPage", () => {
     expect(panel().querySelector("audio")!.getAttribute("src")).toBe("meeting://localhost/m1");
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(screen.queryByRole("complementary", { name: /^File / })).toBeNull();
+  });
+});
+
+describe("ArtifactsPage's keys", () => {
+  test("Enter and Backspace go on working after the place changes, an empty folder included", async () => {
+    files["prototypes/c2"] = [];
+    page();
+    await waitFor(() => expect(names()).toHaveLength(2));
+    row(/Prototypes/).focus();
+    fireEvent.keyDown(row(/Prototypes/), { code: "Enter" });
+    await waitFor(() => expect(document.activeElement).toBe(row(/Лендинг/)));
+    row(/Дашборд/).focus();
+    fireEvent.keyDown(row(/Дашборд/), { code: "Enter" });
+    await waitFor(() => expect(screen.getByText("This folder is empty.")).toBeTruthy());
+    fireEvent.keyDown(document.activeElement!, { code: "Backspace" });
+    await waitFor(() => expect(names()).toEqual(["Лендинг кофейни", "Дашборд"]));
+    expect(crumbs()).toEqual(["Artifacts", "Prototypes"]);
   });
 });
 
@@ -281,6 +312,23 @@ describe("ArtifactsPage's actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(reads("artifact_list")).toBe(before + 1));
     expect(screen.queryByText(/Stop the running turn/)).toBeNull();
+
+    removeFails = "database is locked";
+    menu("Лендинг кофейни", "Delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.getByText("database is locked")).toBeTruthy());
+  });
+
+  test("reads again when a chat is deleted elsewhere: a prototype goes with it", async () => {
+    const shown = page();
+    await waitFor(() => expect(names()).toHaveLength(2));
+    const before = reads("artifact_list");
+    collections = collections.filter((c) => c.id !== "c2");
+    chats = [{ id: "c1" }];
+    shown.rerender(view());
+    await waitFor(() => expect(reads("artifact_list")).toBe(before + 1));
+    fireEvent.doubleClick(row(/Prototypes/));
+    expect(names()).toEqual(["Лендинг кофейни"]);
   });
 
   test("shows a collection in Finder, opens a meeting in Meetings and a prototype's chat", async () => {

@@ -100,16 +100,28 @@ export function artifactUrl(kind: ArtifactKind, id: string, path: string, window
 }
 
 /**
- * Said whenever what the page lists may have changed, by the signals that
- * already say so: a meeting transcribed or its job ended, and in any turn a
- * tool call that changed files or presented a page. A signal to read again.
+ * Said whenever the collections may have changed, by the signals that already
+ * say so: a meeting transcribed or its job ended, and in any turn a page
+ * presented. A signal to read again — the whole list, so not on every edit.
  */
-export async function onArtifactsChanged(handler: () => void): Promise<UnlistenFn> {
+export function onCollectionsChanged(handler: () => void): Promise<UnlistenFn> {
+  return onSignals(handler, false);
+}
+
+/**
+ * Said whenever an open collection's files may have changed: what
+ * [`onCollectionsChanged`] says, and in any turn a tool call that changed files.
+ */
+export function onArtifactsChanged(handler: () => void): Promise<UnlistenFn> {
+  return onSignals(handler, true);
+}
+
+async function onSignals(handler: () => void, edits: boolean): Promise<UnlistenFn> {
   const stops = await Promise.all([
     onMeetingEvent((event) => (event.kind === "transcribed" || event.kind === "ended") && handler()),
     onAnyToolResult((result) => {
       const presented = (result.result as { result?: string } | undefined)?.result === "presented";
-      if (presented || (result.changes?.length ?? 0) > 0) handler();
+      if (presented || (edits && (result.changes?.length ?? 0) > 0)) handler();
     }),
   ]);
   return () => stops.forEach((stop) => stop());

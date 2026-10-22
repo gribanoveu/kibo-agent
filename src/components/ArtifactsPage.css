@@ -162,3 +162,6 @@
   width: calc(100% - 24px);
   margin: 12px;
 }
+.artifacts-body:focus {
+  outline: none;
+}
