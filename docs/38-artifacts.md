@@ -1,6 +1,6 @@
 # Артефакты: встречи и прототипы в одном месте, как папки на Диске
 
-План, принят 2026-10-22; сделано AR-1 (формат). Новая страница сайдбара, **Artifacts**: всё, что
+План, принят 2026-10-22; сделано AR-1 (формат) и AR-2 (домен и сервис). Новая страница сайдбара, **Artifacts**: всё, что
 приложение сделало для пользователя, разложено по папкам, как на Google Диске. Верхний
 уровень — тип артефакта (`Meetings`, `Prototypes`), в нём — папка на каждую встречу или
 прототип под её названием, внутри — файлы. Файл открывается справа, в панели страницы:
@@ -10,7 +10,7 @@ iframe, что и в чате.
 ```text
 Artifacts
 ├── Meetings
-│   ├── Планёрка по релизу 2.4        notes.md · transcript.md · audio.wav
+│   ├── Планёрка по релизу 2.4        notes.md · Деплой.md · transcript.txt · audio.wav
 │   └── Интервью с кандидатом         …
 └── Prototypes
     ├── Лендинг кофейни               index.html · app.jsx · assets/logo.png
@@ -51,8 +51,9 @@ Artifacts
 спикера (`Meeting::rename`) и новые заметки (`take_notes`) правят JSON, и вторую копию
 пришлось бы держать в согласии с ним при каждой правке — два источника правды ради
 показа. Вместо этого сервис артефактов **выводит** файлы из встречи при чтении
-(решение 2): `notes.md` — `# title` и `summary`, `transcript.md` — `render_transcript`,
-`audio.wav` — настоящий файл. Сам `meeting.json` не показывается: это хранилище, не
+(решение 2): `notes.md` — `# title` и `summary`, по файлу `<тема>.md` на каждый документ
+встречи (`documents`, `be97873`) — `# topic` и текст, `transcript.txt` — `render_transcript`
+(текстом, а не Markdown: Markdown склеил бы строки в абзац), `audio.wav` — настоящий файл. Сам `meeting.json` не показывается: это хранилище, не
 документ.
 
 Единственная правка у встреч — не в формате, а в правиле: название, данное
@@ -126,7 +127,8 @@ pub struct Collection {
     /// RFC 3339: когда встреча распознана / прототип последний раз показан.
     pub updated: String,
     pub bytes: u64,
-    pub files: usize,
+    /// Страница прототипа (из манифеста или `index.html`); у встречи нет.
+    pub page: Option<String>,
 }
 
 pub struct ArtifactFile {
@@ -141,11 +143,12 @@ pub enum FileView { Markdown, Code, Html, Image, Audio, Other }
 
 #[derive(thiserror::Error)]
 pub enum ArtifactError {
-    #[error("no such artifact")] NotFound,
-    #[error("{0} is too big to show here")] TooBig(String),
+    #[error("there is no {0}")] NotFound(String),
+    #[error("{path} is over … MB, too big to show here")] TooBig { path: String, limit: u64 },
+    #[error("{0} is not text")] NotText(String),
+    #[error("{path}: {source}")] Io { path: String, source: std::io::Error },
     #[error(transparent)] Meeting(#[from] MeetingError),
     #[error(transparent)] Prototype(#[from] PrototypeError),
-    #[error(transparent)] Chat(#[from] ChatError),
 }
 ```
 
@@ -166,7 +169,7 @@ pub enum ArtifactError {
   Тип `Meetings` — только пока фича `meeting-notes` включена (`Features`, как у
   страниц): выключенная фича не светит своих данных и здесь.
 - `files(kind, id) -> Vec<ArtifactFile>` — у встречи выведенные `notes.md` (если есть
-  `summary`), `transcript.md`, `audio.wav` (если есть); у прототипа — дерево `files/`
+  `summary`), `<тема>.md` на документ, `transcript.txt` (если есть речь), `audio.wav` (если есть); у прототипа — дерево `files/`
   без ссылок, как его копирует снимок.
 - `read(kind, id, path) -> String` — текст для `Markdown`/`Code`: у встречи — собранный
   из `meeting.json`, у прототипа — файл из `files/`, путь проверен тем же правилом, что
@@ -316,6 +319,15 @@ dock: false }`, без `feature` — страница есть всегда, п�
 Мутаций 12, поймано 12: потерянная метка и её значение у обоих типов, `serde(default)` у
 старых файлов, `present` без прежнего манифеста, папка без версии, половинная копия и
 чужое имя в списке, нечитаемый манифест.
+
+**AR-2 сделано 2026-10-22.** `domain::artifacts` (`FileView::of`, `file_order`,
+`sort_collections`, `meeting_texts` с именами документов), `services::artifacts::{list,
+files, read}`, `prototype_store::{listing, version_time, working_file}` — последний читает
+файл по правилу `artifact://` (`prototype_protocol::file`). Мутаций 20, поймано 20 (одна
+выжила — файл и папка одного имени, — тест на неё дописан и перепроверен): путь в `read`
+без проверки выхода из `files/`, папка как файл, ссылки в списке, непоказанный прототип,
+предел 1 МБ, запись встречи как текст, встречи при выключенной фиче, название и страница
+старого прототипа, размеры, имена документов, порядок.
 
 ## Вне плана
 
