@@ -234,6 +234,8 @@ pub fn run() {
             commands::artifacts::artifact_files,
             commands::artifacts::artifact_read,
             commands::artifacts::artifact_save_as,
+            commands::artifacts::artifact_rename,
+            commands::artifacts::artifact_reveal,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
             commands::chat::workspace_open,

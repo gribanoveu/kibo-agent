@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::artifacts::{self, ArtifactError, ArtifactFile, ArtifactKind, Collection, FileView, AUDIO};
 use crate::domain::features::{Feature, Features};
-use crate::domain::prototype::PrototypeError;
+use crate::domain::prototype::{Manifest, PrototypeError};
 use crate::infra::prototype_protocol::Roots;
 use crate::infra::{app_dir, chat_store, meeting_store, prototype_export, prototype_store};
+use crate::services::{meeting_notes, prototype_versions};
 
 /// The most a file shown as text may be.
 pub const MAX_TEXT_BYTES: u64 = 1024 * 1024;
@@ -83,6 +84,44 @@ pub fn read(kind: ArtifactKind, id: &str, path: &str) -> Result<String, Artifact
             }
             String::from_utf8(fs::read(&file).map_err(io)?).map_err(|_| ArtifactError::NotText(path.to_string()))
         }
+    }
+}
+
+/// Collection `id` called `title` by the user. A meeting's through
+/// `meeting_notes`; a prototype's in its `prototype.json`, under its folder's
+/// claim — `Busy` while a turn or a restore works in it. One presented before
+/// it had a manifest gets one now, from what the list shows of it.
+pub fn rename(kind: ArtifactKind, id: &str, title: &str) -> Result<(), ArtifactError> {
+    let title = artifacts::title(title)?;
+    match kind {
+        ArtifactKind::Meetings => meeting_notes::rename_meeting(id, &title).map(|_| ()).map_err(ArtifactError::from),
+        ArtifactKind::Prototypes => {
+            let _claim = prototype_versions::claim(id)?;
+            let files = presented(id)?;
+            let manifest = match prototype_store::manifest(&files)? {
+                Some(manifest) => Manifest { title, title_by_user: true, ..manifest },
+                None => {
+                    let shown = prototype(id)?;
+                    let version = prototype_store::latest(&files)?.ok_or_else(|| ArtifactError::NotFound(id.to_string()))?;
+                    let page = shown.page.unwrap_or_else(|| PAGE.to_string());
+                    Manifest { title, title_by_user: true, page, presented: shown.updated, version }
+                }
+            };
+            Ok(prototype_store::write_manifest(&files, &manifest)?)
+        }
+    }
+}
+
+/// The folder a collection is kept in, for the system's file manager: a
+/// meeting's, a prototype's working folder.
+pub fn folder(kind: ArtifactKind, id: &str) -> Result<PathBuf, ArtifactError> {
+    match kind {
+        ArtifactKind::Meetings => {
+            meeting_store::get(id)?;
+            let audio = meeting_store::audio(id)?;
+            audio.parent().map(Path::to_path_buf).ok_or_else(|| ArtifactError::NotFound(id.to_string()))
+        }
+        ArtifactKind::Prototypes => presented(id),
     }
 }
 
@@ -406,6 +445,70 @@ mod tests {
             fs::write(out.join("notes.md"), "old").unwrap();
             save_as(&roots(), ArtifactKind::Meetings, "aa", "notes.md", &out.join("notes.md")).unwrap();
             assert_ne!(fs::read_to_string(out.join("notes.md")).unwrap(), "old", "a file the user chose to replace is replaced");
+        });
+    }
+
+    #[test]
+    fn a_meeting_is_renamed_for_good() {
+        with_app_dir("artifacts-rename-meeting", || {
+            meeting_store::save(&meeting("aa", "2026-10-20T10:00:00+00:00")).unwrap();
+            rename(ArtifactKind::Meetings, "aa", "  Ретро \n команды ").unwrap();
+            let saved = meeting_store::get("aa").unwrap();
+            assert_eq!((saved.title.as_deref(), saved.title_by_user), (Some("Ретро команды"), true));
+            assert_eq!(list(&on(true)).unwrap()[0].title, "Ретро команды");
+            assert!(matches!(rename(ArtifactKind::Meetings, "aa", "  "), Err(ArtifactError::NoTitle)));
+            assert!(matches!(rename(ArtifactKind::Meetings, "zz", "x"), Err(ArtifactError::Meeting(MeetingError::NotFound(_)))));
+            assert_eq!(meeting_store::get("aa").unwrap().title.as_deref(), Some("Ретро команды"), "a refused name changes nothing");
+        });
+    }
+
+    #[test]
+    fn a_prototype_is_renamed_in_its_manifest_and_not_while_its_chat_works() {
+        with_app_dir("artifacts-rename-prototype", || {
+            let files_dir = prototype_of(CHAT);
+            let manifest = Manifest { title: "Лендинг".into(), title_by_user: false, page: "menu.html".into(), presented: "2026-10-22T10:00:00+00:00".into(), version: 1 };
+            prototype_store::write_manifest(&files_dir, &manifest).unwrap();
+            rename(ArtifactKind::Prototypes, CHAT, "Кофейня").unwrap();
+            assert_eq!(prototype_store::manifest(&files_dir).unwrap().unwrap(), Manifest { title: "Кофейня".into(), title_by_user: true, ..manifest.clone() });
+
+            let turn = prototype_versions::claim(CHAT).unwrap();
+            assert!(matches!(rename(ArtifactKind::Prototypes, CHAT, "Другое"), Err(ArtifactError::Prototype(PrototypeError::Busy))));
+            drop(turn);
+            assert_eq!(prototype_store::manifest(&files_dir).unwrap().unwrap().title, "Кофейня", "nothing written while busy");
+            rename(ArtifactKind::Prototypes, CHAT, "Другое").unwrap();
+            assert!(prototype_versions::claim(CHAT).is_ok(), "the claim let go");
+
+            let unpresented = prototype_store::files_dir(OLD).unwrap();
+            assert!(matches!(rename(ArtifactKind::Prototypes, OLD, "x"), Err(ArtifactError::NotFound(_))));
+            assert_eq!(prototype_store::manifest(&unpresented).unwrap(), None);
+            assert!(matches!(rename(ArtifactKind::Prototypes, "never-had-one", "x"), Err(ArtifactError::NotFound(_))));
+            assert_eq!(prototype_store::existing_files_dir("never-had-one").unwrap(), None, "no folder made for a chat with none");
+        });
+    }
+
+    /// Presented before it had a manifest: renaming writes one, the rest as the list showed it.
+    #[test]
+    fn renaming_an_old_prototype_gives_it_a_manifest() {
+        with_app_dir("artifacts-rename-old", || {
+            let files_dir = prototype_of(OLD);
+            let shown = list(&on(false)).unwrap().remove(0);
+            rename(ArtifactKind::Prototypes, OLD, "Кофейня").unwrap();
+            let written = prototype_store::manifest(&files_dir).unwrap().unwrap();
+            assert_eq!(written, Manifest { title: "Кофейня".into(), title_by_user: true, page: "index.html".into(), presented: shown.updated, version: 1 });
+        });
+    }
+
+    #[test]
+    fn a_collections_folder_is_where_it_is_kept() {
+        with_app_dir("artifacts-folder", || {
+            meeting_store::save(&meeting("aa", "2026-10-20T10:00:00+00:00")).unwrap();
+            assert_eq!(folder(ArtifactKind::Meetings, "aa").unwrap(), meeting_store::audio("aa").unwrap().parent().unwrap());
+            assert!(folder(ArtifactKind::Meetings, "zz").is_err());
+            assert!(matches!(folder(ArtifactKind::Meetings, "ab"), Err(ArtifactError::Meeting(MeetingError::NotFound(_)))), "an id of ours with no meeting");
+            let files_dir = prototype_of(CHAT);
+            assert_eq!(folder(ArtifactKind::Prototypes, CHAT).unwrap(), files_dir);
+            prototype_store::files_dir(OLD).unwrap();
+            assert!(matches!(folder(ArtifactKind::Prototypes, OLD), Err(ArtifactError::NotFound(_))));
         });
     }
 

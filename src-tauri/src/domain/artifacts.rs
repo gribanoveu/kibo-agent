@@ -83,6 +83,10 @@ pub enum ArtifactError {
     /// A recording, a picture: what opens through its protocol, not as text.
     #[error("{0} is not text")]
     NotText(String),
+    #[error("a name cannot be empty")]
+    NoTitle,
+    #[error("a name is {0} characters at most")]
+    TitleTooLong(usize),
     /// "Save as" named a place it does not write to: not a file's full path,
     /// or inside the app's own folder, whose files are its state.
     #[error("cannot save to {0} — choose a file outside the app's own folder")]
@@ -93,6 +97,20 @@ pub enum ArtifactError {
     Meeting(#[from] MeetingError),
     #[error(transparent)]
     Prototype(#[from] PrototypeError),
+}
+
+/// The most a collection's name may be: a few words, as a `present` card's.
+pub const MAX_TITLE_CHARS: usize = 80;
+
+/// A name the user gave a collection: its words with one space between them,
+/// neither empty nor long.
+pub fn title(raw: &str) -> Result<String, ArtifactError> {
+    let words = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    match words.chars().count() {
+        0 => Err(ArtifactError::NoTitle),
+        n if n > MAX_TITLE_CHARS => Err(ArtifactError::TitleTooLong(MAX_TITLE_CHARS)),
+        _ => Ok(words),
+    }
 }
 
 /// Newest first; one moment's in kind, then id order, so a list reads the same each time.
@@ -197,6 +215,14 @@ mod tests {
         ] {
             assert_eq!(FileView::of(path), view, "{path}");
         }
+    }
+
+    #[test]
+    fn a_name_is_its_words_neither_empty_nor_long() {
+        assert_eq!(title("  Планёрка \n по  релизу\t").unwrap(), "Планёрка по релизу");
+        assert!(matches!(title(" \n\t"), Err(ArtifactError::NoTitle)));
+        assert_eq!(title(&"я".repeat(MAX_TITLE_CHARS)).unwrap().chars().count(), MAX_TITLE_CHARS, "the limit itself is a name");
+        assert!(matches!(title(&"я".repeat(MAX_TITLE_CHARS + 1)), Err(ArtifactError::TitleTooLong(MAX_TITLE_CHARS))));
     }
 
     #[test]

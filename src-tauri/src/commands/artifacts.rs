@@ -36,3 +36,19 @@ pub async fn artifact_save_as(app: AppHandle, kind: ArtifactKind, id: String, pa
     let roots = super::prototype::roots(&app);
     blocking(move || artifacts::save_as(&roots, kind, &id, &path, Path::new(&dest))).await
 }
+
+/// Collection `id` called `title`; a prototype's refused while its chat works.
+#[tauri::command]
+pub async fn artifact_rename(kind: ArtifactKind, id: String, title: String) -> Result<(), String> {
+    blocking(move || artifacts::rename(kind, &id, &title)).await
+}
+
+/// Shows the folder a collection is kept in, in Finder or Explorer.
+#[tauri::command]
+pub async fn artifact_reveal(kind: ArtifactKind, id: String) -> Result<(), String> {
+    blocking(move || -> Result<(), String> {
+        let folder = artifacts::folder(kind, &id).map_err(|e| e.to_string())?;
+        tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| e.to_string())
+    })
+    .await
+}
