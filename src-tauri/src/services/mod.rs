@@ -5,6 +5,7 @@ pub mod llm_chat;
 pub mod plain_chat;
 pub mod prototype_assets;
 pub mod prototype_versions;
+pub mod artifacts;
 pub mod features;
 pub mod kubeconfigs;
 pub mod kube_changes;

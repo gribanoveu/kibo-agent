@@ -163,6 +163,45 @@ fn presented_in(base: &Path) -> Result<Vec<String>, PrototypeError> {
     Ok(ids)
 }
 
+/// When version `n` of the working folder `files` was kept: its folder's time.
+pub fn version_time(files: &Path, n: u32) -> Result<std::time::SystemTime, PrototypeError> {
+    let version = version_dir(files, n)?;
+    fs::metadata(&version).and_then(|m| m.modified()).map_err(|source| io(&version, source))
+}
+
+/// The files of the working folder `files`, by their path inside it written
+/// with `/`, and their sizes. Links are left out, as a version leaves them.
+pub fn listing(files: &Path) -> Result<Vec<(String, u64)>, PrototypeError> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) -> Result<(), PrototypeError> {
+        for entry in fs::read_dir(dir).map_err(|source| io(dir, source))? {
+            let entry = entry.map_err(|source| io(dir, source))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|source| io(&path, source))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let inside = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            if kind.is_dir() {
+                walk(&path, &inside, out)?;
+            } else if kind.is_file() {
+                out.push((inside, entry.metadata().map_err(|source| io(&path, source))?.len()));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(files, "", &mut out)?;
+    Ok(out)
+}
+
+/// The file `path` (with `/`) names in the chat's working folder, if it is
+/// one there — by the protocol's rule, so nothing past `files/` is reached:
+/// not `versions/`, not `prototype.json`, not where a link points.
+pub fn working_file(chat_id: &str, path: &str) -> Result<Option<PathBuf>, PrototypeError> {
+    let roots = crate::infra::prototype_protocol::Roots { app_dir: Some(app_dir::dir()?), libs: None };
+    let mut segments = vec![chat_id.to_string(), FILES.to_string()];
+    segments.extend(path.split('/').map(str::to_string));
+    Ok(crate::infra::prototype_protocol::file(&roots, &segments).filter(|file| file.is_file()))
+}
+
 fn versions_of(files: &Path) -> Result<PathBuf, PrototypeError> {
     let chat = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?;
     Ok(chat.join(VERSIONS))
