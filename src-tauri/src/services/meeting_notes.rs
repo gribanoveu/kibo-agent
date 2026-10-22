@@ -39,11 +39,13 @@ fn began(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
     meta.modified().ok()?.checked_sub(std::time::Duration::from_secs_f32(length(meta)))
 }
 
-/// What a job recognizes: the file, what the meeting is called, and what it is.
+/// What a job recognizes: the file, what the meeting is called, and what it is;
+/// when the call began, for a recording of ours — an import is dated when recognized.
 struct Audio<'a> {
     path: &'a Path,
     name: String,
     sound: Sound,
+    began: Option<std::time::SystemTime>,
 }
 
 /// The job slot, freed when the job ends however it ends — and the page told so.
@@ -168,7 +170,7 @@ impl MeetingNotes {
         let began = std::fs::metadata(&path).ok().and_then(|m| began(&m)).ok_or_else(|| MeetingError::NotFound(id.to_string()))?;
         let name = chrono::DateTime::<chrono::Local>::from(began).format("Call %Y-%m-%d %H:%M").to_string();
         let sound = Sound::Call { denoise_mic: settings_store::load().unwrap_or_default().meeting_denoise() };
-        self.process_as(exe, models, Audio { path: &path, name, sound }, sink, &|| {
+        self.process_as(exe, models, Audio { path: &path, name, sound, began: Some(began) }, sink, &|| {
             let _ = meeting_store::delete_recording(id);
         })
     }
@@ -189,7 +191,7 @@ impl MeetingNotes {
     pub fn process(&self, exe: &Path, models: &Path, audio: &Path, sink: &MeetingEventSink) -> Result<String, MeetingError> {
         let name = audio.file_name().map_or_else(|| audio.display().to_string(), |n| n.to_string_lossy().into_owned());
         // An import has no microphone of ours: whatever it holds is one sound.
-        self.process_as(exe, models, Audio { path: audio, name, sound: Sound::Import }, sink, &|| {})
+        self.process_as(exe, models, Audio { path: audio, name, sound: Sound::Import, began: None }, sink, &|| {})
     }
 
     /// [`process`](Self::process) of `audio`, and `saved` called once the
@@ -221,7 +223,7 @@ impl MeetingNotes {
 
     fn transcribe(&self, exe: &Path, models: &Path, audio: Audio, id: &str, sink: &dyn Fn(MeetingEvent)) -> Result<Meeting, MeetingError> {
         let keep = meeting_store::audio(id)?;
-        let Audio { path, name, sound } = audio;
+        let Audio { path, name, sound, began } = audio;
         let recognized = meeting_process::recognize(&self.running, exe, path, models, &keep, sound, &mut |stage, done, total| {
             sink(MeetingEvent::Progress { id: id.to_string(), name: name.clone(), stage, done, total })
         })?;
@@ -231,7 +233,7 @@ impl MeetingNotes {
         let mut meeting = Meeting {
             id: id.to_string(),
             name,
-            created: chrono::Utc::now().to_rfc3339(),
+            created: began.map_or_else(chrono::Utc::now, chrono::DateTime::<chrono::Utc>::from).to_rfc3339(),
             seconds: recognized.seconds,
             utterances: recognized.utterances,
             summary: None,
@@ -704,6 +706,7 @@ mod tests {
             let meetings = meeting_store::list().unwrap();
             assert_eq!(meetings.len(), 1);
             assert_eq!(meetings[0].name, "Call 2026-10-21 14:28");
+            assert_eq!(meetings[0].created, (stopped - chrono::Duration::minutes(2)).with_timezone(&chrono::Utc).to_rfc3339(), "dated when the call began, not when recognized");
             assert_eq!(notes.process_recording(&exe, &models, "aa", &sink), Err(MeetingError::NotFound("aa".into())));
         });
     }
