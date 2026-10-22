@@ -1,6 +1,6 @@
 # Артефакты: встречи и прототипы в одном месте, как папки на Диске
 
-План, принят 2026-10-22; сделано AR-1 (формат) и AR-2 (домен и сервис). Новая страница сайдбара, **Artifacts**: всё, что
+План, принят 2026-10-22; сделано AR-1 (формат), AR-2 (домен и сервис) и AR-3 (команды и обёртки). Новая страница сайдбара, **Artifacts**: всё, что
 приложение сделало для пользователя, разложено по папкам, как на Google Диске. Верхний
 уровень — тип артефакта (`Meetings`, `Prototypes`), в нём — папка на каждую встречу или
 прототип под её названием, внутри — файлы. Файл открывается справа, в панели страницы:
@@ -192,11 +192,16 @@ pub enum ArtifactError {
 | `artifact_rename(kind, id, title)` | `artifactRename(kind, id, title)` |
 | `artifact_delete(kind, id)` — только встречи, решение 6 | `artifactDelete(kind, id)` |
 | `artifact_reveal(kind, id)` | `artifactReveal(kind, id)` |
-| `artifact_save_as(kind, id, path, dest)` — копия файла коллекции; страница прототипа — одним HTML через `infra/prototype_export.rs` | `artifactSaveAs(kind, id, path)`: путь из `pickSavePath` (`lib/dialog.ts`), отмена — ничего не делает |
+| `artifact_save_as(kind, id, path, dest)` — файл коллекции, как его показывает страница (заметки — собранный текст, запись — копия); страница прототипа — одним HTML через `infra/prototype_export.rs` | `artifactSaveAs(kind, id, path, name?)`: путь из `pickSavePath` (`lib/dialog.ts`), отмена — ничего не делает |
 
-Адреса для протоколов — чистые функции в той же обёртке: `artifactUrl(chatId, path)`
-рядом с готовым `audioUrl(id)` из `lib/meeting.ts` (с учётом `http://*.localhost` на
-Windows). Регистрация — `generate_handler![]` в `lib.rs`; главное окно получает команды
+`dest` — выбор пользователя в системном диалоге, но бэкенд не может знать, что путь пришёл
+именно оттуда: окно присылает строку. Поэтому `save_as` проверяет то, что может: путь
+полный, это не папка, папка назначения существует, и ни сам путь, ни то, куда ведёт
+ссылка на его месте, не внутри папки приложения (`~/.kibo`: настройки, чаты, встречи).
+
+Адреса для протоколов — чистая функция в той же обёртке: `artifactUrl(kind, id, path)` —
+готовые `pageUrl` из `lib/prototype.ts` и `audioUrl` из `lib/meeting.ts` (с учётом
+`http://*.localhost` на Windows), `null` для того, что читается текстом. Регистрация — `generate_handler![]` в `lib.rs`; главное окно получает команды
 само (`build.rs`), окну просмотрщика они не нужны. Модуль — в список «медленных» в
 `architecture.rs`, если тест этого попросит.
 
@@ -306,9 +311,8 @@ dock: false }`, без `feature` — страница есть всегда, п�
   `PrototypePreview`. Тесты Bun: навигация по уровням, перечитывание по сигналу, что
   открывает каждый `view`.
 - **AR-5 · действия.** `rename`, `delete`, `reveal`, `openChat`/`removeChat` в
-  `PageContext`, «Open in Meetings», `Save as…` у любого файла (заметки `.md`, запись
-  `.wav`, файл прототипа; страница прототипа — одним HTML). Тест: `dest` вне выбора
-  диалога не принимается, `path` не выходит из коллекции. Строка в `CHANGELOG.md`.
+  `PageContext`, «Open in Meetings», пункт `Save as…` в меню файла (команда и обёртка
+  уже есть с AR-3). Строка в `CHANGELOG.md`.
 
 Мутационная проверка (`docs/11`) — по AR-1 и AR-2: правило `titleByUser`, «папка без
 версий не видна», путь в `read` не выходит из `files/`.
@@ -328,6 +332,14 @@ files, read}`, `prototype_store::{listing, version_time, working_file}` — по
 без проверки выхода из `files/`, папка как файл, ссылки в списке, непоказанный прототип,
 предел 1 МБ, запись встречи как текст, встречи при выключенной фиче, название и страница
 старого прототипа, размеры, имена документов, порядок.
+
+**AR-3 сделано 2026-10-22.** `commands/artifacts.rs` (`artifact_list`, `artifact_files`,
+`artifact_read`, `artifact_save_as`, все через `blocking`; `artifacts::` — в «медленных»
+`architecture.rs`), `services::artifacts::save_as` с проверкой `dest`, `lib/artifacts.ts`
+(обёртки, `artifactUrl`, `artifactSaveAs`, `onArtifactsChanged`), `onAnyToolResult` в
+`lib/chat.ts`. Мутаций 16 (10 в Rust, 6 в TS), поймано 16; выжил сначала «относительный
+`dest`» — `notes.md` отказывался и без проверки, тест дополнен путём `./…` с существующей
+папкой.
 
 ## Вне плана
 
