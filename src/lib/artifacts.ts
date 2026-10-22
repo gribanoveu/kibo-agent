@@ -54,6 +54,18 @@ export async function artifactRead(kind: ArtifactKind, id: string, path: string)
   return invoke<string>("artifact_read", { kind, id, path });
 }
 
+/** Collection `id` called `title` for good; a prototype's refused while its chat works. */
+export async function artifactRename(kind: ArtifactKind, id: string, title: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("artifact_rename", { kind, id, title });
+}
+
+/** The folder a collection is kept in, shown in Finder or Explorer. */
+export async function artifactReveal(kind: ArtifactKind, id: string): Promise<void> {
+  requireBackend();
+  return invoke<void>("artifact_reveal", { kind, id });
+}
+
 /**
  * The file saved where the user chooses in the system's dialog — a
  * prototype's page as one HTML file any browser opens. The dialog offers

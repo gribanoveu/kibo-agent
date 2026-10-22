@@ -117,6 +117,8 @@ export default function App() {
   // A sidebar page in the chat's place; picking a mode or a chat leaves it.
   // The IDE layout has no sidebar to pick one from.
   const [page, setPage] = useState<PageId | null>(null);
+  // What the page was opened on by another page — a meeting from Artifacts; none from the sidebar.
+  const [pageItem, setPageItem] = useState<string | undefined>(undefined);
   // A feature's page only while it is on: turned off, an open one closes.
   const features = useFeatures();
   const pages = pagesShown(features.isOn);
@@ -743,7 +745,10 @@ export default function App() {
           }}
           pages={pages}
           page={onPage?.id ?? null}
-          onPage={setPage}
+          onPage={(next) => {
+            setPageItem(undefined);
+            setPage(next);
+          }}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           onSelectChat={selectChat}
@@ -777,6 +782,17 @@ export default function App() {
               <onPage.Component
                 key="page"
                 openPane={openTab}
+                item={pageItem}
+                openPage={(next, item) => {
+                  setPageItem(item);
+                  setPage(next);
+                }}
+                openChat={(id) => {
+                  setPage(null);
+                  setMode("chat");
+                  void plain.open(id).then((opened) => opened || toast.show(STAY));
+                }}
+                removeChat={plain.remove}
                 sideHandle={
                   <PanelResizeHandle
                     invert

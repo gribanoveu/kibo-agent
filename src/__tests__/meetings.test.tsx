@@ -164,6 +164,13 @@ beforeEach(() => {
 });
 
 describe("the meetings page", () => {
+  test("opens on the meeting another page asked for", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} item="m1" />);
+    await settle();
+    expect(calls).toContainEqual({ command: "meeting_get", args: { id: "m1" } });
+    expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Release on Friday.")).toBeTruthy();
+  });
+
   test("lists the meetings; one opens to its notes over its transcript", async () => {
     stored[0].utterances.push({ speaker: 1, start: 70, end: 72, text: "И напишу клиентам." });
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);

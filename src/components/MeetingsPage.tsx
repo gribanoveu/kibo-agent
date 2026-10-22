@@ -73,8 +73,8 @@ const when = (created: string) =>
 /** A call's recording in, its notes out: the summary first, the transcript
     with speakers and times under it. Recognition runs on this computer; the
     notes are written by the model chosen in Settings. */
-export function MeetingsPage({ sideHandle }: PageContext) {
-  const meetings = useMeetings();
+export function MeetingsPage({ sideHandle, item }: PageContext) {
+  const meetings = useMeetings(item);
   const { job, meeting, openId } = meetings;
   // A meeting, or a recording not yet transcribed — the only copy of its call.
   const [deleting, setDeleting] = useState<{ id: string; title: string; recording: boolean } | null>(null);

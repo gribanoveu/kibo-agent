@@ -1,6 +1,17 @@
 import { useState } from "react";
 import { useLiveRead } from "./useLiveRead";
-import { artifactFiles, artifactList, onArtifactsChanged, type ArtifactFile, type ArtifactKind, type Collection } from "../lib/artifacts";
+import {
+  artifactFiles,
+  artifactList,
+  artifactRename,
+  artifactReveal,
+  artifactSaveAs,
+  onArtifactsChanged,
+  type ArtifactFile,
+  type ArtifactKind,
+  type Collection,
+} from "../lib/artifacts";
+import { meetingDelete } from "../lib/meeting";
 
 /** Where the page is: the top, a kind, a collection, a folder inside it. */
 export type Place = { kind: ArtifactKind | null; id: string | null; folder: string };
@@ -21,10 +32,14 @@ const KINDS = Object.keys(KIND_NAMES) as ArtifactKind[];
  * The Artifacts page's state (docs/38-artifacts.md): the collections, read
  * while the page is on screen and again on `onArtifactsChanged` — never on a
  * timer — the open collection's files, the same way, and where the page is.
+ * The page's own changes read again when they are done.
  */
 export function useArtifacts(on = true) {
   const [place, setPlace] = useState<Place>(TOP);
-  const list = useLiveRead(artifactList, onArtifactsChanged, [], on);
+  // Moves when the page changed something itself: no signal says a rename.
+  const [round, setRound] = useState(0);
+  const reload = () => setRound((n) => n + 1);
+  const list = useLiveRead(artifactList, onArtifactsChanged, [], on, `${round}`);
 
   const kind = place.kind;
   const open = kind && place.id ? { kind, id: place.id } : null;
@@ -35,7 +50,7 @@ export function useArtifacts(on = true) {
     onArtifactsChanged,
     { at: "", files: [] as ArtifactFile[] },
     on && open !== null,
-    at,
+    `${at}#${round}`,
   );
   const files = open && read.value.at === at ? read.value.files : null;
   const collection = open ? (list.value.find((c) => c.kind === open.kind && c.id === open.id) ?? null) : null;
@@ -64,6 +79,20 @@ export function useArtifacts(on = true) {
     /** One level up; at the top, nothing. */
     up: () => setPlace(upFrom(place)),
     go: setPlace,
+    rename: async (c: Collection, title: string) => {
+      await artifactRename(c.kind, c.id, title);
+      reload();
+    },
+    /** A meeting deleted; a prototype goes with its chat, through `removeChat`. `false` when the chat must stay. */
+    remove: async (c: Collection, removeChat: (id: string) => Promise<boolean>) => {
+      if (c.kind === "meetings") await meetingDelete(c.id);
+      else if (!(await removeChat(c.id))) return false;
+      reload();
+      return true;
+    },
+    reveal: (c: Collection) => artifactReveal(c.kind, c.id),
+    /** A file of the open collection saved where the user chooses; where it went, or `null` when they cancelled. */
+    saveAs: (file: ArtifactFile, name?: string) => (open ? artifactSaveAs(open.kind, open.id, file.path, name) : Promise.resolve(null)),
   };
 }
 

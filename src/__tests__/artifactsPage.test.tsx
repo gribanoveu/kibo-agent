@@ -10,10 +10,15 @@ import type { ArtifactFile, Collection } from "../lib/artifacts";
 let collections: Collection[];
 let files: Record<string, ArtifactFile[]>;
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
+/** A command that fails, with its error. */
+let failing: Record<string, string> = {};
+let chosen: string | null = null;
+let offered: unknown;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
+    if (failing[command]) return Promise.reject(failing[command]);
     if (command === "artifact_list") return Promise.resolve(structuredClone(collections));
     if (command === "artifact_files") return Promise.resolve(structuredClone(files[`${args!.kind}/${args!.id}`] ?? []));
     if (command === "artifact_read") return Promise.resolve(`text of ${args!.path}`);
@@ -32,6 +37,14 @@ mock.module("@tauri-apps/api/event", () => ({
   },
 }));
 
+mock.module("@tauri-apps/plugin-dialog", () => ({
+  save: (options: unknown) => {
+    offered = options;
+    return Promise.resolve(chosen);
+  },
+  open: () => Promise.resolve(null),
+}));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -43,6 +56,11 @@ const file = (path: string, view: ArtifactFile["view"], bytes = 2048): ArtifactF
 
 beforeEach(() => {
   calls = [];
+  failing = {};
+  chosen = null;
+  offered = undefined;
+  opened = [];
+  removable = true;
   collections = [
     { kind: "meetings", id: "m1", title: "Планёрка", updated: "2026-10-22T10:00:00+00:00", bytes: 4096 },
     { kind: "prototypes", id: "c1", title: "Лендинг кофейни", updated: "2026-10-21T10:00:00+00:00", bytes: 8192, page: "index.html" },
@@ -54,7 +72,33 @@ beforeEach(() => {
   };
 });
 
-const page = () => render(<ArtifactsPage openPane={() => {}} sideHandle={<span />} />);
+let opened: string[] = [];
+let removable = true;
+const page = () =>
+  render(
+    <ArtifactsPage
+      openPane={() => {}}
+      sideHandle={<span />}
+      openPage={(id, item) => opened.push(`page ${id} ${item}`)}
+      openChat={(id) => opened.push(`chat ${id}`)}
+      removeChat={(id) => {
+        opened.push(`remove ${id}`);
+        return Promise.resolve(removable);
+      }}
+    />,
+  );
+/** Picks `action` in the menu of the row called `name`. */
+const menu = (name: string, action: string) => {
+  fireEvent.click(screen.getByTitle(`Actions for ${name}`));
+  fireEvent.click(screen.getByRole("option", { name: new RegExp(`^${action}`) }));
+};
+const reads = (command: string) => calls.filter((c) => c.command === command).length;
+/** At the meetings, or the prototypes, of the top. */
+const into = async (kind: "Meetings" | "Prototypes") => {
+  page();
+  await waitFor(() => expect(names()).toHaveLength(2));
+  fireEvent.doubleClick(row(new RegExp(kind)));
+};
 const row = (name: string | RegExp) => screen.getByRole("option", { name });
 const names = () => screen.queryAllByRole("option").map((o) => o.querySelector(".artifacts-name")?.textContent);
 const crumbs = () => within(screen.getByRole("navigation", { name: "Where you are" })).getAllByRole("button").map((b) => b.textContent);
@@ -173,5 +217,100 @@ describe("ArtifactsPage", () => {
     expect(panel().querySelector("audio")!.getAttribute("src")).toBe("meeting://localhost/m1");
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(screen.queryByRole("complementary", { name: /^File / })).toBeNull();
+  });
+});
+
+describe("ArtifactsPage's actions", () => {
+  test("renames a collection, reads the list again, and keeps the dialog open on a refusal", async () => {
+    await into("Meetings");
+    const before = reads("artifact_list");
+    menu("Планёрка", "Rename");
+    const field = screen.getByLabelText("New name") as HTMLInputElement;
+    expect(field.value).toBe("Планёрка");
+
+    failing.artifact_rename = "the chat's folder is in use";
+    fireEvent.change(field, { target: { value: "Ретро" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(screen.getByText("the chat's folder is in use")).toBeTruthy());
+    expect(screen.getByLabelText("New name")).toBeTruthy();
+
+    delete failing.artifact_rename;
+    fireEvent.keyDown(screen.getByLabelText("New name"), { code: "Enter" });
+    await waitFor(() => expect(screen.queryByLabelText("New name")).toBeNull());
+    expect(calls).toContainEqual({ command: "artifact_rename", args: { kind: "meetings", id: "m1", title: "Ретро" } });
+    expect(reads("artifact_list")).toBe(before + 1, "once, after it was renamed — not after the refusal");
+  });
+
+  test("deletes a meeting after asking, and says why when it may not", async () => {
+    await into("Meetings");
+    menu("Планёрка", "Delete");
+    expect(screen.getByText(/Deletes the meeting with its recording/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(calls.some((c) => c.command === "meeting_delete")).toBe(false);
+
+    failing.meeting_delete = "this meeting is being worked on — wait for it or stop it";
+    menu("Планёрка", "Delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.getByText(/being worked on/)).toBeTruthy());
+
+    delete failing.meeting_delete;
+    const before = reads("artifact_list");
+    menu("Планёрка", "Delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(reads("artifact_list")).toBe(before + 1));
+    expect(calls.filter((c) => c.command === "meeting_delete").at(-1)).toEqual({ command: "meeting_delete", args: { id: "m1" } });
+    expect(opened).toEqual([], "a meeting has no chat to remove");
+  });
+
+  test("deletes a prototype with its chat, and not while the chat must stay", async () => {
+    await into("Prototypes");
+    menu("Дашборд", "Delete");
+    expect(screen.getByText(/Deletes the chat “Дашборд” with its prototype/)).toBeTruthy();
+    removable = false;
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.getByText(/Stop the running turn/)).toBeTruthy());
+    expect(opened).toEqual(["remove c2"]);
+    expect(calls.some((c) => c.command === "meeting_delete")).toBe(false);
+
+    removable = true;
+    const before = reads("artifact_list");
+    menu("Дашборд", "Delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(reads("artifact_list")).toBe(before + 1));
+    expect(screen.queryByText(/Stop the running turn/)).toBeNull();
+  });
+
+  test("shows a collection in Finder, opens a meeting in Meetings and a prototype's chat", async () => {
+    await into("Meetings");
+    menu("Планёрка", "Show in Finder");
+    await waitFor(() => expect(calls).toContainEqual({ command: "artifact_reveal", args: { kind: "meetings", id: "m1" } }));
+    menu("Планёрка", "Open in Meetings");
+    fireEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    fireEvent.doubleClick(row(/Prototypes/));
+    menu("Лендинг кофейни", "Open chat");
+    expect(opened).toEqual(["page meetings m1", "chat c1"]);
+  });
+
+  test("saves any file where the user chooses, named after its collection", async () => {
+    await into("Meetings");
+    fireEvent.doubleClick(row(/Планёрка/));
+    await waitFor(() => expect(names()).toHaveLength(3));
+    expect(screen.queryByTitle("Actions for Meetings")).toBeNull();
+
+    chosen = "/Users/me/Desktop/Планёрка notes.md";
+    menu("notes.md", "Save as");
+    await waitFor(() => expect(screen.getByText("Saved to Планёрка notes.md")).toBeTruthy());
+    expect(offered).toMatchObject({ defaultPath: "Планёрка notes.md" });
+    expect(calls).toContainEqual({ command: "artifact_save_as", args: { kind: "meetings", id: "m1", path: "notes.md", dest: chosen } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    fireEvent.doubleClick(row(/Prototypes/));
+    fireEvent.doubleClick(row(/Лендинг/));
+    await waitFor(() => expect(names()).toHaveLength(3));
+    chosen = null;
+    menu("index.html", "Save as");
+    await waitFor(() => expect(offered).toMatchObject({ defaultPath: "Лендинг кофейни.html" }));
+    expect(calls.some((c) => c.command === "artifact_save_as" && c.args?.path === "index.html")).toBe(false);
+    expect(screen.queryByText(/Saved to/)).toBeNull();
   });
 });

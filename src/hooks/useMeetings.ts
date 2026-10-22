@@ -38,10 +38,11 @@ export type Job = MeetingJob;
  * backend runs at a time. Events name their meeting; a piece of notes is kept
  * for the meeting it is about and shown only while that one is open. Beside
  * them, the call being recorded and the recorded ones waiting to be transcribed.
+ * `first` is the meeting open to begin with — one another page asked for.
  */
-export function useMeetings() {
+export function useMeetings(first?: string) {
   const [list, setList] = useState<MeetingInfo[]>([]);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(first ?? null);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   // What is being written now, for meeting `id`: its notes (`topic` null) or its document on `topic`.

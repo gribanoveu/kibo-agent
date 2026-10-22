@@ -14,6 +14,14 @@ export type PageContext = {
   /** The handle to put left of a panel the page shows on its right: it sizes
       that panel as the dock's handle sizes the dock, to the same width. */
   sideHandle: ReactElement;
+  /** What the page was opened on — a meeting's id for Meetings. */
+  item?: string;
+  /** Another page, opened on `item`. */
+  openPage: (id: PageId, item?: string) => void;
+  /** A Chat mode chat opened, leaving the page — a prototype's. */
+  openChat: (id: string) => void;
+  /** A Chat mode chat deleted, as the sidebar deletes one; `false` while it must stay open. */
+  removeChat: (id: string) => Promise<boolean>;
 };
 
 export type PageDef = {
