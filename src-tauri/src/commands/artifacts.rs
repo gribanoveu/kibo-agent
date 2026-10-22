@@ -1,0 +1,38 @@
+//! The Artifacts page (`docs/38-artifacts.md`): the meetings and prototypes as
+//! folders, read through `services::artifacts`. Nothing here is new state, so
+//! there is no channel of its own: the page re-reads on `meeting:event` and
+//! `chat:turn-event`, which already say when either changes.
+
+use std::path::Path;
+
+use tauri::AppHandle;
+
+use crate::domain::artifacts::{ArtifactFile, ArtifactKind, Collection};
+use crate::services::{artifacts, features};
+
+use super::blocking;
+
+/// Every collection, newest first; meetings while their feature is on.
+#[tauri::command]
+pub async fn artifact_list() -> Result<Vec<Collection>, String> {
+    blocking(|| artifacts::list(&features::enabled())).await
+}
+
+#[tauri::command]
+pub async fn artifact_files(kind: ArtifactKind, id: String) -> Result<Vec<ArtifactFile>, String> {
+    blocking(move || artifacts::files(kind, &id)).await
+}
+
+/// A collection's file as text, for the page to show.
+#[tauri::command]
+pub async fn artifact_read(kind: ArtifactKind, id: String, path: String) -> Result<String, String> {
+    blocking(move || artifacts::read(kind, &id, &path)).await
+}
+
+/// A collection's file written at `dest`, from the system's save dialog; a
+/// prototype's page as one HTML file.
+#[tauri::command]
+pub async fn artifact_save_as(app: AppHandle, kind: ArtifactKind, id: String, path: String, dest: String) -> Result<(), String> {
+    let roots = super::prototype::roots(&app);
+    blocking(move || artifacts::save_as(&roots, kind, &id, &path, Path::new(&dest))).await
+}

@@ -62,7 +62,7 @@ pub async fn prototype_asset_remove(chat_id: String, name: String) -> Result<(),
 }
 
 /// Where the protocol and "Save as" read from.
-fn roots<R: Runtime>(app: &AppHandle<R>) -> prototype_protocol::Roots {
+pub(super) fn roots<R: Runtime>(app: &AppHandle<R>) -> prototype_protocol::Roots {
     prototype_protocol::Roots {
         app_dir: app_dir::dir().ok(),
         libs: prototype_protocol::libs_dir(app.path().resource_dir().ok().as_deref()),
