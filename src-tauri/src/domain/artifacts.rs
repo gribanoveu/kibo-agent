@@ -83,6 +83,10 @@ pub enum ArtifactError {
     /// A recording, a picture: what opens through its protocol, not as text.
     #[error("{0} is not text")]
     NotText(String),
+    /// "Save as" named a place it does not write to: not a file's full path,
+    /// or inside the app's own folder, whose files are its state.
+    #[error("cannot save to {0} — choose a file outside the app's own folder")]
+    NotADestination(String),
     #[error("{path}: {source}")]
     Io { path: String, source: std::io::Error },
     #[error(transparent)]

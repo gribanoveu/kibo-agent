@@ -4,11 +4,13 @@
 //! two, and a third is a variant the compiler points at every place for.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::domain::artifacts::{self, ArtifactError, ArtifactFile, ArtifactKind, Collection, FileView, AUDIO};
 use crate::domain::features::{Feature, Features};
-use crate::infra::{chat_store, meeting_store, prototype_store};
+use crate::domain::prototype::PrototypeError;
+use crate::infra::prototype_protocol::Roots;
+use crate::infra::{app_dir, chat_store, meeting_store, prototype_export, prototype_store};
 
 /// The most a file shown as text may be.
 pub const MAX_TEXT_BYTES: u64 = 1024 * 1024;
@@ -82,6 +84,53 @@ pub fn read(kind: ArtifactKind, id: &str, path: &str) -> Result<String, Artifact
             String::from_utf8(fs::read(&file).map_err(io)?).map_err(|_| ArtifactError::NotText(path.to_string()))
         }
     }
+}
+
+/// A collection's file written at `dest`, from the system's save dialog: a
+/// meeting's as the page shows it, its recording as it is; a prototype's page
+/// as one HTML file any browser opens (`infra::prototype_export`), its other
+/// files as they are. `dest` is the user's choice, with two refusals: a path
+/// that is not a file's full path, and the app's own folder.
+pub fn save_as(roots: &Roots, kind: ArtifactKind, id: &str, path: &str, dest: &Path) -> Result<(), ArtifactError> {
+    destination(dest)?;
+    let io = |source| ArtifactError::Io { path: dest.display().to_string(), source };
+    match kind {
+        ArtifactKind::Meetings if path == AUDIO => {
+            meeting_store::get(id)?;
+            let audio = meeting_store::audio(id)?;
+            if !audio.is_file() {
+                return Err(ArtifactError::NotFound(path.to_string()));
+            }
+            fs::copy(audio, dest).map(|_| ()).map_err(io)
+        }
+        ArtifactKind::Meetings => fs::write(dest, read(kind, id, path)?).map_err(io),
+        ArtifactKind::Prototypes => {
+            presented(id)?;
+            let file = prototype_store::working_file(id, path)?.ok_or_else(|| ArtifactError::NotFound(path.to_string()))?;
+            match FileView::of(path) {
+                FileView::Html => Ok(prototype_export::export(roots, id, None, path, dest)?),
+                _ => fs::copy(file, dest).map(|_| ()).map_err(io),
+            }
+        }
+    }
+}
+
+/// Where "Save as" may write: a file's full path, in a folder that is there,
+/// and not in the app's own folder — not even through a link already there.
+fn destination(dest: &Path) -> Result<(), ArtifactError> {
+    let refused = || ArtifactError::NotADestination(dest.display().to_string());
+    if !dest.is_absolute() || dest.is_dir() {
+        return Err(refused());
+    }
+    let (Some(folder), Some(name)) = (dest.parent(), dest.file_name()) else { return Err(refused()) };
+    let folder = folder.canonicalize().map_err(|_| refused())?;
+    let target = dest.canonicalize().unwrap_or_else(|_| folder.join(name));
+    let app = app_dir::dir().map_err(PrototypeError::from)?;
+    let app = app.canonicalize().unwrap_or(app);
+    if folder.starts_with(&app) || target.starts_with(&app) {
+        return Err(refused());
+    }
+    Ok(())
 }
 
 fn file(path: String, bytes: u64) -> ArtifactFile {
@@ -260,6 +309,103 @@ mod tests {
             for id in ["worked-in-only", "never-had-one", "../x", ""] {
                 assert!(files(ArtifactKind::Prototypes, id).is_err(), "{id}");
             }
+        });
+    }
+
+    fn roots() -> Roots {
+        Roots { app_dir: Some(app_dir::dir().unwrap()), libs: None }
+    }
+
+    #[test]
+    fn a_file_is_saved_where_the_user_chose_as_the_page_shows_it() {
+        with_app_dir("artifacts-save-as", || {
+            let out = crate::testing::temp_dir("artifacts-save-as-out");
+            meeting_store::save(&meeting("aa", "2026-10-20T10:00:00+00:00")).unwrap();
+            fs::write(meeting_store::audio("aa").unwrap(), "RIFF").unwrap();
+            let files_dir = prototype_of(CHAT);
+            fs::write(files_dir.join("style.css"), "a{}").unwrap();
+
+            save_as(&roots(), ArtifactKind::Meetings, "aa", "notes.md", &out.join("notes.md")).unwrap();
+            assert_eq!(fs::read_to_string(out.join("notes.md")).unwrap(), "# Планёрка\n\n## Итоги");
+            save_as(&roots(), ArtifactKind::Meetings, "aa", "audio.wav", &out.join("call.wav")).unwrap();
+            assert_eq!(fs::read(out.join("call.wav")).unwrap(), b"RIFF");
+            save_as(&roots(), ArtifactKind::Prototypes, CHAT, "style.css", &out.join("style.css")).unwrap();
+            assert_eq!(fs::read_to_string(out.join("style.css")).unwrap(), "a{}");
+            save_as(&roots(), ArtifactKind::Prototypes, CHAT, "index.html", &out.join("page.html")).unwrap();
+            let page = fs::read_to_string(out.join("page.html")).unwrap();
+            assert!(page.contains(PAGE_HTML) && page.contains("Content-Security-Policy"), "one HTML file, the preview's rules in it: {page}");
+
+            fs::remove_file(meeting_store::audio("aa").unwrap()).unwrap();
+            assert!(matches!(save_as(&roots(), ArtifactKind::Meetings, "aa", "audio.wav", &out.join("gone.wav")), Err(ArtifactError::NotFound(_))));
+            assert!(!out.join("gone.wav").exists());
+        });
+    }
+
+    /// Nothing past the collection is saved: the same rule as reading it.
+    #[test]
+    fn save_as_reaches_no_file_past_the_collection() {
+        with_app_dir("artifacts-save-as-outside", || {
+            let out = crate::testing::temp_dir("artifacts-save-as-outside-out");
+            meeting_store::save(&meeting("aa", "2026-10-20T10:00:00+00:00")).unwrap();
+            let files_dir = prototype_of(CHAT);
+            prototype_store::write_manifest(&files_dir, &Manifest { title: "T".into(), title_by_user: false, page: "index.html".into(), presented: "2026-10-22T10:00:00+00:00".into(), version: 1 }).unwrap();
+            for (kind, id, path) in [
+                (ArtifactKind::Prototypes, CHAT, "../prototype.json"),
+                (ArtifactKind::Prototypes, CHAT, "../versions/1/index.html"),
+                (ArtifactKind::Prototypes, CHAT, "assets/../../prototype.json"),
+                (ArtifactKind::Prototypes, CHAT, "assets"),
+                (ArtifactKind::Meetings, "aa", "meeting.json"),
+                (ArtifactKind::Meetings, "aa", "../aa/meeting.json"),
+            ] {
+                assert!(matches!(save_as(&roots(), kind, id, path, &out.join("x")), Err(ArtifactError::NotFound(_))), "{path}");
+                assert!(!out.join("x").exists(), "{path}: nothing written");
+            }
+            let unpresented = prototype_store::files_dir(OLD).unwrap();
+            fs::write(unpresented.join("index.html"), "x").unwrap();
+            assert!(matches!(save_as(&roots(), ArtifactKind::Prototypes, OLD, "index.html", &out.join("x")), Err(ArtifactError::NotFound(_))));
+        });
+    }
+
+    /// The user's choice, but a full path to a file, and never the app's own
+    /// folder — its settings, chats and meetings — not even through a link.
+    #[test]
+    fn save_as_writes_only_where_a_file_may_go() {
+        with_app_dir("artifacts-save-as-dest", || {
+            let out = crate::testing::temp_dir("artifacts-save-as-dest-out");
+            meeting_store::save(&meeting("aa", "2026-10-20T10:00:00+00:00")).unwrap();
+            let app = app_dir::dir().unwrap();
+            let settings = app.join("settings.json");
+            fs::write(&settings, "{}").unwrap();
+            // Relative is the process's folder, never the user's choice; one
+            // that names a folder that is there is refused too. Accepted, it
+            // would land in the tests' own folder — named so a stray is plain.
+            let stray = PathBuf::from(".").join("artifacts-save-as-relative.md");
+            let mut refused = vec![
+                PathBuf::from("notes.md"),
+                stray.clone(),
+                out.clone(),
+                out.join("missing-folder").join("notes.md"),
+                settings.clone(),
+                app.join("meetings").join("aa").join("meeting.json"),
+                app.join("new.md"),
+                app.join("meetings").join("..").join("other.md"),
+            ];
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&settings, out.join("link.md")).unwrap();
+                std::os::unix::fs::symlink(&app, out.join("app")).unwrap();
+                refused.extend([out.join("link.md"), out.join("app").join("notes.md")]);
+            }
+            for dest in &refused {
+                assert!(matches!(save_as(&roots(), ArtifactKind::Meetings, "aa", "notes.md", dest), Err(ArtifactError::NotADestination(_))), "{dest:?}");
+            }
+            assert_eq!(fs::read_to_string(&settings).unwrap(), "{}", "the app's files untouched");
+            assert!(!stray.exists());
+            assert!(!app.join("new.md").exists() && !app.join("other.md").exists());
+            save_as(&roots(), ArtifactKind::Meetings, "aa", "notes.md", &out.join("notes.md")).unwrap();
+            fs::write(out.join("notes.md"), "old").unwrap();
+            save_as(&roots(), ArtifactKind::Meetings, "aa", "notes.md", &out.join("notes.md")).unwrap();
+            assert_ne!(fs::read_to_string(out.join("notes.md")).unwrap(), "old", "a file the user chose to replace is replaced");
         });
     }
 
