@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
-import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PagePanel } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -20,7 +20,9 @@ import {
   speakerCount,
   speakerName,
   withoutTitle,
+  withoutTopics,
   type Meeting,
+  type MeetingDocument,
   type MeetingInfo,
   type Recording,
   type RecordingAccess,
@@ -162,9 +164,11 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           <MeetingView
             meeting={meeting}
             draft={meetings.draft}
-            writing={job?.id === meeting.id && job.stage === "notes"}
+            writing={job?.id === meeting.id && job.stage === "notes" ? (job.kind === "document" ? (job.topic ?? null) : NOTES) : null}
             busy={job !== null}
             onSummarize={() => void meetings.summarize(meeting.id)}
+            onWriteDocument={(topic) => void meetings.writeDocument(meeting.id, topic)}
+            onDeleteDocument={(topic) => void meetings.deleteDocument(topic)}
             onRename={(speaker, name) => void meetings.rename(speaker, name)}
             player={player}
             bytes={meetings.list.find((m) => m.id === meeting.id)?.bytes ?? 0}
@@ -432,7 +436,7 @@ function JobCard({ job, title, onStop }: { job: Job; title: string; onStop: () =
   // Every voice embedded, the clustering runs and says nothing until done.
   const grouping = stage === "speakers" && total > 0 && done >= total;
   const part = grouping ? null : share(job);
-  const label = grouping ? "Grouping the voices" : stage ? STAGES[stage] : "Starting";
+  const label = grouping ? "Grouping the voices" : job.topic ? `Writing up “${job.topic}”` : stage ? STAGES[stage] : "Starting";
   const detail = part === null ? "" : stage === "notes" ? ` part ${done + 1} of ${total}` : ` ${Math.round(100 * part)}%`;
   return (
     <div className="meetings-job" role="status">
@@ -652,28 +656,42 @@ function RecordingRow({
   );
 }
 
+/** What `writing` names when the notes are being written, not a document. */
+const NOTES = Symbol("notes");
+
 function MeetingView({
   meeting,
   draft,
-  writing,
+  writing: what,
   busy,
   onSummarize,
+  onWriteDocument,
+  onDeleteDocument,
   onRename,
   player,
   bytes,
 }: {
   meeting: Meeting;
-  draft: string | null;
-  writing: boolean;
+  /** What is streaming in: the notes (`topic` null) or a document. */
+  draft: { topic: string | null; text: string } | null;
+  /** What is being written now: the notes, the document on a subject, or nothing. */
+  writing: typeof NOTES | string | null;
   busy: boolean;
   onSummarize: () => void;
+  onWriteDocument: (topic: string) => void;
+  onDeleteDocument: (topic: string) => void;
   onRename: (speaker: number, name: string) => void;
   player: Player;
   /** Its kept recording's size on disk, from the list; 0 when it has none. */
   bytes: number;
 }) {
   const { copied, copy } = useCopied();
-  const notes = writing ? withoutTitle(draft ?? "") : meeting.summary;
+  const writing = what === NOTES;
+  const notes = writing ? withoutTopics(withoutTitle(draft?.topic === null ? draft.text : "")) : meeting.summary;
+  // The documents, and the one being written first time after them.
+  const written = meeting.documents ?? [];
+  const documents = typeof what === "string" && !written.some((d) => d.topic === what) ? [...written, { topic: what, text: "" }] : written;
+  const suggested = (meeting.topics ?? []).filter((t) => !documents.some((d) => d.topic === t));
   const speakers = speakerCount(meeting);
   return (
     <article className="meeting" aria-label={meetingTitle(meeting)}>
@@ -729,7 +747,31 @@ function MeetingView({
             <p className="meetings-empty">{writing ? "Writing…" : "No notes yet — the model may have failed or been stopped."}</p>
           )}
         </div>
+        {suggested.length > 0 && !writing && (
+          <div className="meeting-topics" aria-label="Worth a document">
+            <span className="meeting-topics-label">
+              <FilePlus size={13} />
+              Write up
+            </span>
+            {suggested.map((topic) => (
+              <button key={topic} type="button" className="meeting-topic" disabled={busy} title="Write a document on everything the meeting said about this" onClick={() => onWriteDocument(topic)}>
+                {topic}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
+
+      {documents.map((d) => (
+        <DocumentCard
+          key={d.topic}
+          document={d}
+          draft={what === d.topic ? (draft?.topic === d.topic ? draft.text : "") : null}
+          busy={busy}
+          onWrite={() => onWriteDocument(d.topic)}
+          onDelete={() => onDeleteDocument(d.topic)}
+        />
+      ))}
 
       <section className="meeting-card" aria-label="Transcript">
         <div className="meeting-card-head">
@@ -771,6 +813,47 @@ function MeetingView({
         </div>
       </section>
     </article>
+  );
+}
+
+/** A document written from the meeting, shown as its notes are; `draft` is its text streaming in while it is written. */
+function DocumentCard({
+  document,
+  draft,
+  busy,
+  onWrite,
+  onDelete,
+}: {
+  document: MeetingDocument;
+  draft: string | null;
+  busy: boolean;
+  onWrite: () => void;
+  onDelete: () => void;
+}) {
+  const { copied, copy } = useCopied();
+  const writing = draft !== null;
+  const text = writing ? draft : document.text;
+  return (
+    <section className="meeting-card" aria-label={document.topic}>
+      <div className="meeting-card-head">
+        <FileText size={14} className="meeting-card-icon" />
+        <h3>{document.topic}</h3>
+        {text && !writing && (
+          <button type="button" className="btn btn-ghost" onClick={() => copy(text)}>
+            <Copy size={12} />
+            {copied ? "Copied" : "Copy"}
+          </button>
+        )}
+        <button type="button" className="btn btn-ghost" disabled={busy} onClick={onWrite}>
+          <RefreshCw size={12} />
+          Write again
+        </button>
+        <button type="button" className="btn btn-ghost" aria-label={`Delete ${document.topic}`} title="Delete" disabled={busy} onClick={onDelete}>
+          <Trash2 size={12} />
+        </button>
+      </div>
+      <div className="meeting-notes">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
+    </section>
   );
 }
 

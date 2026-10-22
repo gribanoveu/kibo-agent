@@ -241,6 +241,8 @@ impl MeetingNotes {
             guessed: Vec::new(),
             title: None,
             title_by_user: false,
+            topics: Vec::new(),
+            documents: Vec::new(),
         };
         if remembering() {
             let speech = meeting.speech();
@@ -271,6 +273,29 @@ impl MeetingNotes {
         still_on()?;
         meeting_store::save(&now)
     }
+
+    /// A document on `topic` written from meeting `id`, in place of the one it had.
+    pub fn write_document(&self, id: &str, topic: &str, sink: &MeetingEventSink) -> Result<(), MeetingError> {
+        let topic = meeting::clean_topic(topic)?;
+        let state = JobState { topic: Some(topic.clone()), ..JobState::new(JobKind::Document, Some(id.to_string())) };
+        let job = self.begin(state, sink)?;
+        let session = llm_session::resolve(None).map_err(|e| MeetingError::Summary(e.to_string()))?;
+        let meeting = meeting_store::get(id)?;
+        let text = write_document(&session, &meeting, &topic, &|e| job.tell(e), &|| self.running.stopped())?;
+        // Read again, as the notes are: a speaker renamed meanwhile keeps the name.
+        let mut now = meeting_store::get(id)?;
+        now.take_document(&topic, &text, &meeting);
+        still_on()?;
+        meeting_store::save(&now)
+    }
+}
+
+/// Meeting `id` without its document on `topic`; the meeting after.
+pub fn delete_document(id: &str, topic: &str) -> Result<Meeting, MeetingError> {
+    let mut meeting = meeting_store::get(id)?;
+    meeting.documents.retain(|d| d.topic != topic);
+    meeting_store::save(&meeting)?;
+    Ok(meeting)
 }
 
 /// Speaker `speaker` of meeting `id` called `name` — blank for its number again.
@@ -316,10 +341,43 @@ fn still_on() -> Result<(), MeetingError> {
     if features::enabled().is_on(Feature::MeetingNotes) { Ok(()) } else { Err(MeetingError::Off) }
 }
 
-/// The notes of `meeting`, streamed to `sink` as they are written. A meeting
-/// too long for one request is read in parts: notes of each, then the notes of
-/// the whole from those. A stopped or empty answer is no summary.
+/// The notes of `meeting`, streamed to `sink` as they are written.
 fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &dyn Fn(MeetingEvent), cancelled: &dyn Fn() -> bool) -> Result<String, MeetingError> {
+    let asked = Asked { part: meeting::PART_INSTRUCTIONS.to_string(), preface: meeting::PARTS_PREFACE, whole: meeting::summary_instructions(session.reply_language) };
+    let text = |text: &str| sink(MeetingEvent::SummaryDelta { id: meeting.id.clone(), text: text.to_string() });
+    write_over(session, meeting, &asked, sink, &text, cancelled)
+}
+
+/// The document on `topic` from `meeting`, streamed to `sink` as it is written.
+fn write_document(session: &LlmSession, meeting: &Meeting, topic: &str, sink: &dyn Fn(MeetingEvent), cancelled: &dyn Fn() -> bool) -> Result<String, MeetingError> {
+    let asked = Asked {
+        part: meeting::document_part_instructions(topic),
+        preface: meeting::DOCUMENT_PARTS_PREFACE,
+        whole: meeting::document_instructions(topic, session.reply_language),
+    };
+    let text = |text: &str| sink(MeetingEvent::DocumentDelta { id: meeting.id.clone(), topic: topic.to_string(), text: text.to_string() });
+    write_over(session, meeting, &asked, sink, &text, cancelled)
+}
+
+/// What the model is told over a whole meeting: for each part of one too long
+/// to read at once, before what the parts gave, and for the whole.
+struct Asked<'a> {
+    part: String,
+    preface: &'a str,
+    whole: String,
+}
+
+/// What `asked` makes of `meeting`, its pieces to `text` as they are written. A
+/// meeting too long for one request is read in parts: each part as `asked.part`
+/// says, then the whole from those. A stopped or empty answer is nothing written.
+fn write_over(
+    session: &LlmSession,
+    meeting: &Meeting,
+    asked: &Asked,
+    sink: &dyn Fn(MeetingEvent),
+    text: &dyn Fn(&str),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, MeetingError> {
     let lines = meeting::render_transcript(meeting);
     let transcript = lines.concat();
     let input = if meeting::fits(&transcript, session.context_limit).is_ok() {
@@ -331,7 +389,7 @@ fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &dyn Fn(MeetingE
         for (i, part) in parts.iter().enumerate() {
             read(i);
             let request = ChatRequest {
-                messages: vec![LlmMessage::system(meeting::PART_INSTRUCTIONS), LlmMessage::user(part.clone())],
+                messages: vec![LlmMessage::system(&asked.part), LlmMessage::user(part.clone())],
                 tools: Vec::new(),
                 model: session.model.clone(),
             };
@@ -344,17 +402,17 @@ fn write_summary(session: &LlmSession, meeting: &Meeting, sink: &dyn Fn(MeetingE
         }
         // Every part read: what follows is the notes of the whole.
         read(parts.len());
-        format!("{}\n\n{}", meeting::PARTS_PREFACE, notes.join("\n\n"))
+        format!("{}\n\n{}", asked.preface, notes.join("\n\n"))
     };
     meeting::fits(&input, session.context_limit)?;
     let request = ChatRequest {
-        messages: vec![LlmMessage::system(meeting::summary_instructions(session.reply_language)), LlmMessage::user(input)],
+        messages: vec![LlmMessage::system(&asked.whole), LlmMessage::user(input)],
         tools: Vec::new(),
         model: session.model.clone(),
     };
     let on_event = |event: StreamEvent| {
-        if let StreamEvent::Text(text) = event {
-            sink(MeetingEvent::SummaryDelta { id: meeting.id.clone(), text: text.to_string() });
+        if let StreamEvent::Text(piece) = event {
+            text(piece);
         }
     };
     let result = session.provider.chat_stream(request, &on_event, cancelled).map_err(|e| MeetingError::Summary(e.to_string()))?;
@@ -389,7 +447,8 @@ mod tests {
         /// notes of the whole: `chunks`.
         fn chat_stream(&self, request: ChatRequest, on_event: &dyn Fn(StreamEvent), cancel: &dyn Fn() -> bool) -> Result<ChatStreamResult, LlmError> {
             self.stopped.lock().unwrap().push(cancel());
-            let part = request.messages[0] == LlmMessage::system(meeting::PART_INSTRUCTIONS);
+            // The notes' and a document's both say so.
+            let part = request.messages[0].content.as_deref().is_some_and(|c| c.contains("one part of a long meeting's transcript"));
             let text = request.messages[1].content.clone().unwrap_or_default();
             self.asked.lock().unwrap().push(request);
             if part {
@@ -432,6 +491,8 @@ mod tests {
             guessed: Vec::new(),
             title: None,
             title_by_user: false,
+            topics: Vec::new(),
+            documents: Vec::new(),
         }
     }
 
@@ -492,6 +553,49 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(progress, (0..=parts).map(|i| (i, parts)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_document_is_written_on_its_subject_from_the_meeting_or_from_its_parts() {
+        let (short, provider) = session(vec!["## Как\n", "Так."], None);
+        let (sink, events) = recorder();
+        assert_eq!(write_document(&short, &meeting(), "Выпуск", &*sink, &|| false).unwrap(), "## Как\nТак.");
+        let asked = provider.asked.lock().unwrap();
+        assert_eq!(asked[0].messages[0], LlmMessage::system(meeting::document_instructions("Выпуск", Some("Russian"))));
+        assert_eq!(asked[0].messages[1], LlmMessage::user("[00:01] Speaker 1: Решили выпустить в пятницу.\n"));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                MeetingEvent::DocumentDelta { id: "m1".into(), topic: "Выпуск".into(), text: "## Как\n".into() },
+                MeetingEvent::DocumentDelta { id: "m1".into(), topic: "Выпуск".into(), text: "Так.".into() },
+            ],
+            "its pieces are the document's, not the notes'"
+        );
+        drop(asked);
+
+        let mut long = meeting();
+        long.utterances = (0..12).map(|i| Utterance { speaker: 0, start: 60.0 * i as f32, end: 1.0, text: "Решили выпустить в пятницу.".into() }).collect();
+        let (reading, provider) = session(vec!["## Как"], Some(150));
+        let (sink, _) = recorder();
+        write_document(&reading, &long, "Выпуск", &*sink, &|| false).unwrap();
+        let asked = provider.asked.lock().unwrap();
+        let parts = asked.len() - 1;
+        assert!(parts >= 2, "{parts}");
+        assert!(asked[..parts].iter().all(|r| r.messages[0] == LlmMessage::system(meeting::document_part_instructions("Выпуск"))));
+        let whole = asked[parts].messages[1].content.clone().unwrap();
+        assert!(whole.starts_with(meeting::DOCUMENT_PARTS_PREFACE), "{whole}");
+        assert_eq!(asked[parts].messages[0], LlmMessage::system(meeting::document_instructions("Выпуск", Some("Russian"))));
+    }
+
+    #[test]
+    fn a_deleted_document_is_gone_from_the_saved_meeting_and_the_others_stay() {
+        crate::testing::with_app_dir("meeting-documents", || {
+            let docs = ["Выпуск", "Лицензии"].map(|t| meeting::MeetingDocument { topic: t.into(), text: "x".into() }).to_vec();
+            meeting_store::save(&Meeting { id: "ab".into(), documents: docs, ..meeting() }).unwrap();
+            let after = delete_document("ab", "Выпуск").unwrap();
+            assert_eq!(meeting_store::get("ab").unwrap(), after);
+            assert_eq!(after.documents.iter().map(|d| d.topic.as_str()).collect::<Vec<_>>(), ["Лицензии"]);
+        });
     }
 
     #[test]

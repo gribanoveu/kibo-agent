@@ -7,6 +7,7 @@ import {
   meetingDenoiseGet,
   meetingDenoiseSet,
   meetingDelete,
+  meetingDeleteDocument,
   meetingGet,
   meetingJob,
   meetingList,
@@ -21,6 +22,7 @@ import {
   meetingRenameSpeaker,
   meetingStop,
   meetingSummarize,
+  meetingWriteDocument,
   onMeetingEvent,
   type Meeting,
   type MeetingInfo,
@@ -42,7 +44,8 @@ export function useMeetings() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [job, setJob] = useState<Job | null>(null);
-  const [draft, setDraft] = useState<{ id: string; text: string } | null>(null);
+  // What is being written now, for meeting `id`: its notes (`topic` null) or its document on `topic`.
+  const [draft, setDraft] = useState<{ id: string; topic: string | null; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recordings, setRecordings] = useState<RecordingInfo[]>([]);
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -104,8 +107,9 @@ export function useMeetings() {
         setRecording((now) => (now?.id === event.id ? null : now));
         setError(event.error);
         void readList();
-      } else if (event.kind === "summaryDelta") {
-        setDraft((now) => ({ id: event.id, text: (now?.id === event.id ? now.text : "") + event.text }));
+      } else if (event.kind === "summaryDelta" || event.kind === "documentDelta") {
+        const topic = event.kind === "documentDelta" ? event.topic : null;
+        setDraft((now) => ({ id: event.id, topic, text: (now?.id === event.id && now.topic === topic ? now.text : "") + event.text }));
       } else {
         ends.current += 1;
         setJob(null);
@@ -165,6 +169,7 @@ export function useMeetings() {
   };
 
   const summarize = (id: string) => run({ kind: "summary", id, stage: "notes" }, () => meetingSummarize(id));
+  const writeDocument = (id: string, topic: string) => run({ kind: "document", id, topic, stage: "notes" }, () => meetingWriteDocument(id, topic));
 
   // One job at a time: a recording asked for while one runs waits for it to end.
   const transcribeNow = (id: string) => {
@@ -264,6 +269,17 @@ export function useMeetings() {
     }
   };
 
+  const deleteDocument = async (topic: string) => {
+    const id = openRef.current;
+    if (id === null) return;
+    try {
+      const after = await meetingDeleteDocument(id, topic);
+      if (openRef.current === id) setMeeting(after);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const remove = async (id: string) => {
     try {
       await meetingDelete(id);
@@ -280,11 +296,13 @@ export function useMeetings() {
     openId,
     open: setOpenId,
     job,
-    draft: draft && draft.id === openId ? draft.text : null,
+    draft: draft && draft.id === openId ? { topic: draft.topic, text: draft.text } : null,
     error,
     clearError: () => setError(null),
     importRecording,
     summarize,
+    writeDocument,
+    deleteDocument,
     recordings,
     recording,
     switching,

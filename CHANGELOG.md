@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-22 Meeting notes suggest subjects the call explained at length; one click writes a document on everything said about it, shown beside the notes, written again or deleted
 - 2026-10-22 A transcribed call is listed at the time it began, not when its transcription finished
 - 2026-10-22 A recording being transcribed says so on its row and can no longer be queued again or deleted
 - 2026-10-22 Record is red, not pink, in the dark themes

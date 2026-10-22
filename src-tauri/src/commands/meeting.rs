@@ -75,6 +75,20 @@ pub async fn meeting_summarize<R: Runtime>(app: AppHandle<R>, notes: State<'_, A
     blocking(move || notes.summarize(&id, &sink)).await
 }
 
+/// A document on `topic` written from meeting `id`; resolves once it is saved.
+#[tauri::command]
+pub async fn meeting_write_document<R: Runtime>(app: AppHandle<R>, notes: State<'_, Arc<MeetingNotes>>, id: String, topic: String) -> Result<(), String> {
+    let notes = notes.inner().clone();
+    let sink = meeting_event_sink(&app);
+    blocking(move || notes.write_document(&id, &topic, &sink)).await
+}
+
+/// The meeting after its document on `topic` is gone.
+#[tauri::command]
+pub async fn meeting_delete_document(id: String, topic: String) -> Result<Meeting, String> {
+    blocking(move || meeting_notes::delete_document(&id, &topic)).await
+}
+
 /// A kill and a wait for the process: off the main thread.
 #[tauri::command]
 pub async fn meeting_stop(notes: State<'_, Arc<MeetingNotes>>) -> Result<(), String> {

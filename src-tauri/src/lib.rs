@@ -359,6 +359,8 @@ pub fn run() {
             commands::meeting::meeting_voice_delete,
             commands::meeting::meeting_process,
             commands::meeting::meeting_summarize,
+            commands::meeting::meeting_write_document,
+            commands::meeting::meeting_delete_document,
             commands::meeting::meeting_stop,
             commands::meeting::meeting_job,
             commands::meeting::meeting_record_start,
