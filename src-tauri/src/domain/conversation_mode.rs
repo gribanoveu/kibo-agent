@@ -78,6 +78,9 @@ fn base_tools() -> HashSet<ToolName> {
         // The same through DeepSeek, while the user has that feature on.
         ToolName::DeepseekSearch,
         ToolName::DeepseekFetch,
+        // Documentation checked against the standard: it reads, and only
+        // while the user has the feature on.
+        ToolName::DocStandards,
     ]
     .into_iter()
     .collect()

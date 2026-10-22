@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  FileCheck,
   Loader2,
   Plug,
   Plus,
@@ -50,6 +51,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   board: SquareKanban,
   "provider-balance": DeepSeekIcon,
   "deepseek-search": DeepSeekIcon,
+  "doc-standards": FileCheck,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {

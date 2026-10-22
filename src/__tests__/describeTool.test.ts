@@ -343,6 +343,24 @@ describe("what each call shows", () => {
     expect(describeActive(reading)).toBe("Reading with DeepSeek https://github.com/deepseek-ai");
   });
 
+  test("a documentation check shows its path and how many folders failed; a guide read, its topic", () => {
+    const checking = tool({ name: "docStandards", arguments: '{"op":"check","path":"docs/api"}', result: undefined });
+    expect(describeActive(checking)).toBe("Checking against the standard docs/api");
+    const checked = tool({
+      name: "docStandards",
+      arguments: '{"op":"check","path":"docs/api"}',
+      result: { result: "docStandards", text: "Папок метода: 2", summary: "1 of 2 failed" },
+    });
+    expect(describeTool(checked)).toMatchObject({ name: "Doc standard", arg: "docs/api", meta: "1 of 2 failed", detail: "Папок метода: 2" });
+    const guide = tool({
+      name: "docStandards",
+      arguments: '{"op":"guide","topic":"rules"}',
+      result: { result: "docStandards", text: "# Как исправлять", summary: "guide: rules" },
+    });
+    expect(describeTool(guide)).toMatchObject({ arg: "guide: rules", meta: undefined });
+    expect(describeRun([checked, checked])).toBe("Checked the documentation 2 times");
+  });
+
   test("a tool search shows its query and the tools it declared, by server", () => {
     const running = tool({ name: "toolSearch", arguments: '{"query":"create issue"}', result: undefined });
     expect(describeTool(running)).toMatchObject({ name: "Find tools", arg: "create issue", meta: undefined });

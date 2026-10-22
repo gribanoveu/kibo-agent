@@ -390,6 +390,13 @@ mod tests {
             // Like the checklist: a card's words are what the user asked
             // to keep, not file content.
             ToolName::Board => (None, ToolResult::Board { cards: vec![] }),
+            // Findings quote no file text, but a guide is the app's own and a
+            // report names the user's folders: both go as `text`. The path
+            // asked about stays — what the log is for.
+            ToolName::DocStandards => (
+                Some(ToolCall::DocStandards(crate::domain::tools::DocStandardsArgs { path: Some("docs".into()), ..Default::default() })),
+                ToolResult::DocStandards { text: LEAK.into(), summary: "1 of 2 failed".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

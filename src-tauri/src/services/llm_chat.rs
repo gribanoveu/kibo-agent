@@ -4113,10 +4113,10 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two — the Kubernetes role's and the Prototype role's
+        // DeepSeek's two, the documentation standard's — the Kubernetes role's and the Prototype role's
         // `present`; MCP tools come from servers, and none is connected — so
         // neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 7 - ChatRole::Kubernetes.tools().len());
+        assert_eq!(offered.len(), ToolName::ALL.len() - 8 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

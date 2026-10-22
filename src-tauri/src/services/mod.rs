@@ -6,6 +6,7 @@ pub mod plain_chat;
 pub mod prototype_assets;
 pub mod prototype_versions;
 pub mod features;
+pub mod doc_standards;
 pub mod kubeconfigs;
 pub mod kube_changes;
 pub mod context_compaction;

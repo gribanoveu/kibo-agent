@@ -84,6 +84,7 @@ export const LABELS: Record<string, string> = {
   deepseekSearch: "DeepSeek web",
   deepseekFetch: "DeepSeek page",
   board: "Board",
+  docStandards: "Doc standard",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -294,6 +295,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: op === "add" ? (str(args.title) ?? "") : op === "move" ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}` : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
         detail: str(args.note) ?? "",
+      };
+    }
+
+    // What was checked, or which part of the guide was read.
+    case "docStandards": {
+      const guide = str(args.op) === "guide";
+      return {
+        name,
+        arg: guide ? `guide: ${str(args.topic) ?? ""}` : (str(args.path) ?? ""),
+        meta: guide ? undefined : str(result.summary),
+        detail: str(result.text) ?? "",
       };
     }
 
@@ -657,6 +669,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Search: "Searching the code for",
   Web: "Searching the web for",
   Page: "Reading",
+  "Doc standard": "Checking against the standard",
   "DeepSeek web": "Searching the web with DeepSeek for",
   "DeepSeek page": "Reading with DeepSeek",
   "Find tools": "Finding tools for",
@@ -712,6 +725,7 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Logs: (n) => `read ${n === 1 ? "a log" : `${n} logs`}`,
   Scale: (n) => `scaled ${n === 1 ? "a workload" : `${n} workloads`}`,
   Diagnose: (n) => `diagnosed ${n === 1 ? "a workload" : `${n} workloads`}`,
+  "Doc standard": (n) => `checked the documentation${n > 1 ? ` ${n} times` : ""}`,
 };
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {

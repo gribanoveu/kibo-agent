@@ -21,6 +21,7 @@ pub enum Feature {
     DeepseekSearch,
     MeetingNotes,
     VoiceMemory,
+    DocStandards,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -36,7 +37,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::DocStandards];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -88,6 +89,16 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[],
                 data: Some("voices.json"),
+            },
+            Feature::DocStandards => Manifest {
+                id: "doc-standards",
+                name: "Documentation standard",
+                description: "A tool for the model, docStandards: checks API-method documentation in AsciiDoc against the \
+                    corporate standard, criteria К.1.1–К.7.1 — a method folder passes above 80% — and says what is wrong \
+                    and how it should be, with a guide to fixing it and a sample document. Reads the open folder only.",
+                enabled_by_default: false,
+                tools: &[ToolName::DocStandards],
+                data: None,
             },
         }
     }
@@ -156,7 +167,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "doc-standards"]);
     }
 
     #[test]
