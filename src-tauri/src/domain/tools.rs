@@ -91,6 +91,9 @@ pub enum ToolName {
     /// The Assistant's board: cards kept for later, which the user sees on
     /// the Board page (`domain::board`).
     Board,
+    /// The documentation standard's check of API-method folders, and its
+    /// guide to fixing what fails (`Feature::DocStandards`).
+    DocStandards,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -156,6 +159,7 @@ impl ToolName {
         ToolName::DeepseekSearch,
         ToolName::DeepseekFetch,
         ToolName::Board,
+        ToolName::DocStandards,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -209,6 +213,7 @@ impl ToolName {
             ToolName::DeepseekSearch => "deepseekSearch",
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
+            ToolName::DocStandards => "docStandards",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -296,6 +301,7 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             | ToolName::Board
+            | ToolName::DocStandards
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -330,6 +336,7 @@ impl ToolName {
             | ToolName::DeepseekFetch
             | ToolName::ToolSearch
             | ToolName::Board
+            | ToolName::DocStandards
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -395,6 +402,8 @@ impl ToolName {
             | ToolName::Present => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
+            // A walk of the docs, every method folder's documents read.
+            ToolName::DocStandards => 2,
             // Local git2 I/O plus diff/blame compaction.
             ToolName::GitDiff | ToolName::GitBlame => 2,
             // A walk of the history with a tree diff per commit.
@@ -603,7 +612,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            47,
+            48,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1296,6 +1305,7 @@ pub enum ToolCall {
     DeepseekSearch(DeepseekSearchArgs),
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
+    DocStandards(DocStandardsArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1348,6 +1358,7 @@ impl ToolCall {
             ToolCall::DeepseekSearch(_) => ToolName::DeepseekSearch,
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
+            ToolCall::DocStandards(_) => ToolName::DocStandards,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -1606,6 +1617,9 @@ pub enum ToolResult {
     ToolsFound { tools: Vec<FoundTool> },
     /// `board`: the whole board after the call.
     Board { cards: Vec<crate::domain::board::Card> },
+    /// `docStandards`: the check's summary or a part of the guide, already
+    /// text, and a few words for the row in the transcript.
+    DocStandards { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -1672,6 +1686,32 @@ pub enum BoardOp {
     List,
     Add,
     Move,
+}
+
+/// `docStandards`. Flat, like `board`'s: which fields go with which `op` is
+/// the tool's to check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DocStandardsArgs {
+    #[serde(default)]
+    pub op: DocStandardsOp,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub language: Option<crate::domain::doc_standards::ErrorLanguage>,
+    /// Per-rule overrides by id, `{"K.7.1": false}`.
+    #[serde(default)]
+    pub rules: Option<std::collections::BTreeMap<String, bool>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DocStandardsOp {
+    #[default]
+    Check,
+    Guide,
 }
 
 /// `webFetch`. `query` picks the passages of a long page.
