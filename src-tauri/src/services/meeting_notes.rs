@@ -238,6 +238,7 @@ impl MeetingNotes {
             names: Default::default(),
             guessed: Vec::new(),
             title: None,
+            title_by_user: false,
         };
         if remembering() {
             let speech = meeting.speech();
@@ -428,6 +429,7 @@ mod tests {
             names: Default::default(),
             guessed: Vec::new(),
             title: None,
+            title_by_user: false,
         }
     }
 

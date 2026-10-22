@@ -184,6 +184,9 @@ pub struct Meeting {
     /// A few words on what it was about, written with the notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The title is the user's (`docs/38-artifacts.md`): notes written again keep it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub title_by_user: bool,
     /// When it was recognized, RFC 3339.
     pub created: String,
     pub seconds: f32,
@@ -277,11 +280,13 @@ impl Meeting {
     }
 
     /// `notes` as the model wrote them while the meeting was `written`: their
-    /// title line is its title — the one it had stays when they have none —
-    /// and a speaker renamed since is called by the new name.
+    /// title line is its title — the one it had stays when they have none, or
+    /// when the user gave it — and a speaker renamed since is called by the new name.
     pub fn take_notes(&mut self, notes: &str, written: &Meeting) {
         let (title, notes) = split_title(notes);
-        self.title = title.or(self.title.take());
+        if !self.title_by_user {
+            self.title = title.or(self.title.take());
+        }
         self.summary = Some(renamed_since(&notes, written, self));
     }
 
@@ -940,6 +945,7 @@ mod tests {
             names: BTreeMap::new(),
             guessed: Vec::new(),
             title: None,
+            title_by_user: false,
         }
     }
 
@@ -1049,6 +1055,23 @@ mod tests {
         assert_eq!(now.info().title.as_deref(), Some("Выпуск"), "the list has it too");
         now.take_notes("## Итоги", &now.clone());
         assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Выпуск"), Some("## Итоги")));
+
+        now.title = Some("Планёрка".into());
+        now.title_by_user = true;
+        now.take_notes("# Релиз\n\n## Итоги", &now.clone());
+        assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Планёрка"), Some("## Итоги")), "the user's title outlasts new notes");
+    }
+
+    #[test]
+    fn a_title_the_user_gave_is_kept_on_disk_and_absent_from_older_files() {
+        let mut meeting = meeting_of(vec![]);
+        let json = serde_json::to_value(&meeting).unwrap();
+        assert!(json.get("titleByUser").is_none(), "not written while false");
+        assert_eq!(serde_json::from_value::<Meeting>(json).unwrap(), meeting, "a file without it reads");
+        meeting.title_by_user = true;
+        let json = serde_json::to_value(&meeting).unwrap();
+        assert_eq!(json["titleByUser"], true);
+        assert_eq!(serde_json::from_value::<Meeting>(json).unwrap(), meeting);
     }
 
     #[test]

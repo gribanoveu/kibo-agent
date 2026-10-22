@@ -156,6 +156,7 @@ mod tests {
             names: Default::default(),
             guessed: Vec::new(),
             title: None,
+            title_by_user: false,
         }
     }
 
