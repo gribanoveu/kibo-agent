@@ -138,7 +138,8 @@ pub fn write_manifest(files: &Path, manifest: &Manifest) -> Result<(), Prototype
 }
 
 /// The chats whose prototype has been presented — a version kept — by id:
-/// what the artifacts list. A folder only worked in is not one yet.
+/// what the artifacts list. A folder only worked in is not one yet; one whose
+/// versions do not read — gone with its chat meanwhile — is left out, not the list.
 pub fn presented() -> Result<Vec<String>, PrototypeError> {
     presented_in(&app_dir::dir()?)
 }
@@ -154,8 +155,7 @@ fn presented_in(base: &Path) -> Result<Vec<String>, PrototypeError> {
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
         let Some(chat) = chat_dir(base, &id) else { continue };
-        let versions = chat.join(VERSIONS);
-        if versions.is_dir() && highest(&versions)? > 0 {
+        if highest(&chat.join(VERSIONS)).is_ok_and(|n| n > 0) {
             ids.push(id);
         }
     }
@@ -557,6 +557,17 @@ mod tests {
         fs::create_dir_all(partial.parent().unwrap().join("versions").join(".1.partial")).unwrap();
         fs::create_dir_all(base.join("prototypes").join("a.b").join("versions").join("1")).unwrap();
         assert_eq!(presented_in(&base).unwrap(), [ID]);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = files_dir_in(&base, "locked").unwrap().parent().unwrap().join("versions");
+            fs::create_dir_all(locked.join("1")).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            let listed = presented_in(&base);
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(listed.unwrap(), [ID], "one whose versions do not read is left out, not the list");
+        }
     }
 
     /// Every chat is deleted through here, and most never had a folder.
