@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppWindow, Download, FolderOpen, Images, Maximize2, Minimize2, MousePointerClick, Play, RotateCcw, RotateCw, Wrench, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { PrototypeAssets } from "./PrototypeAssets";
+import { PrototypeFrame } from "./PrototypeFrame";
 import type { PrototypePreview as Preview } from "../hooks/usePrototypePreview";
 import { pickSavePath } from "../lib/dialog";
 import { exportPrototype, pointedOf, revealPrototype } from "../lib/prototype";
@@ -20,8 +21,7 @@ const NOW = "now";
 
 /**
  * The Preview panel in the column right of a Prototype chat: the page in a
- * sandboxed frame (docs/31-prototype-role.md, decision 4) — scripts run, and
- * nothing else: no same origin, no leaving the frame, no windows of its own.
+ * sandboxed frame (`PrototypeFrame`, docs/31-prototype-role.md, decision 4).
  * What goes wrong on the page arrives as a message (`prototype_protocol`'s
  * reporter) and is listed under it, to hand to the model.
  */
@@ -181,18 +181,7 @@ export function PrototypePreview({ preview, chatId, onNotify, onRestore }: Props
       </div>
       {!preview.url && <p className="prototype-preview-empty">No page yet — ask for one, and it is drawn here.</p>}
       {preview.url && (
-        <iframe
-          key={preview.key}
-          ref={frame}
-          className="prototype-preview-frame"
-          title="Preview of the page"
-          src={preview.url}
-          sandbox="allow-scripts allow-modals allow-forms"
-          // `*`, not the default `src`: without allow-same-origin the page's
-          // origin is opaque, and WebKit matches it against `src` literally —
-          // `requestFullscreen` was refused "by permissions policy".
-          allow="fullscreen *"
-        />
+        <PrototypeFrame key={preview.key} ref={frame} className="prototype-preview-frame" title="Preview of the page" src={preview.url} />
       )}
       {errors.length > 0 && (
         <div className="prototype-preview-errors">
