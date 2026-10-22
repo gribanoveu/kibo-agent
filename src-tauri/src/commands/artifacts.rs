@@ -8,6 +8,7 @@ use std::path::Path;
 use tauri::AppHandle;
 
 use crate::domain::artifacts::{ArtifactFile, ArtifactKind, Collection};
+use crate::infra::app_dir;
 use crate::services::{artifacts, features};
 
 use super::blocking;
@@ -16,6 +17,12 @@ use super::blocking;
 #[tauri::command]
 pub async fn artifact_list() -> Result<Vec<Collection>, String> {
     blocking(|| artifacts::list(&features::enabled())).await
+}
+
+/// Bytes still free on the disk the artifacts are kept on.
+#[tauri::command]
+pub async fn artifact_free_space() -> Result<u64, String> {
+    blocking(app_dir::free_space).await
 }
 
 #[tauri::command]

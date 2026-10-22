@@ -53,6 +53,11 @@ pub fn ensure() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Bytes the user may still write on the disk the app directory is on.
+pub fn free_space() -> std::io::Result<u64> {
+    fs4::available_space(ensure().map_err(std::io::Error::other)?)
+}
+
 /// Writes `bytes` so that no reader ever sees a half-written file, owner-only.
 ///
 /// Write-in-place is the obvious thing and is wrong for both files this is

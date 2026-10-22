@@ -231,6 +231,7 @@ pub fn run() {
             commands::prototype::prototype_asset_add,
             commands::prototype::prototype_asset_remove,
             commands::artifacts::artifact_list,
+            commands::artifacts::artifact_free_space,
             commands::artifacts::artifact_files,
             commands::artifacts::artifact_read,
             commands::artifacts::artifact_save_as,
