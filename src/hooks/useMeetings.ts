@@ -50,6 +50,8 @@ export function useMeetings() {
   const [denoise, setDenoise] = useState(true);
   // Recordings to transcribe once the job running now ends, in order.
   const [queued, setQueued] = useState<string[]>([]);
+  // The recording the job running now transcribes: the job is named after the meeting it makes, not the recording.
+  const [transcribing, setTranscribing] = useState<string | null>(null);
   // Recordings stopped here: a level event about one that lands after the stop is late, not a new recording.
   const stoppedIds = useRef(new Set<string>());
   // A Record or Stop on its way: a second click is not a second call.
@@ -165,16 +167,21 @@ export function useMeetings() {
   const summarize = (id: string) => run({ kind: "summary", id, stage: "notes" }, () => meetingSummarize(id));
 
   // One job at a time: a recording asked for while one runs waits for it to end.
+  const transcribeNow = (id: string) => {
+    setTranscribing(id);
+    void run({ kind: "process" }, () => meetingProcessRecording(id)).finally(() => setTranscribing((now) => (now === id ? null : now)));
+  };
   const transcribe = (id: string) => {
+    if (id === transcribing) return;
     if (jobRef.current !== null) setQueued((now) => (now.includes(id) ? now : [...now, id]));
-    else void run({ kind: "process" }, () => meetingProcessRecording(id));
+    else transcribeNow(id);
   };
   // ponytail: the queue is the page's; one left when the page closes stays in the list for Transcribe.
   useEffect(() => {
     if (job !== null || queued.length === 0) return;
     const [next, ...rest] = queued;
     setQueued(rest);
-    void run({ kind: "process" }, () => meetingProcessRecording(next));
+    transcribeNow(next);
   }, [job, queued]);
 
   const record = async () => {
@@ -282,6 +289,7 @@ export function useMeetings() {
     recording,
     switching,
     queued,
+    transcribing,
     autoProcess,
     denoise,
     record,

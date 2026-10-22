@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-22 A recording being transcribed says so on its row and can no longer be queued again or deleted
 - 2026-10-22 Record is red, not pink, in the dark themes
 - 2026-10-21 Play on the Prototype panel shows the page full screen, as a deck's F does; Escape comes back
 - 2026-10-21 An open meeting shows how much space its recording takes; the recording's two settings are behind a gear beside Record

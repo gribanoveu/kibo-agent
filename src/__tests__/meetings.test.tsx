@@ -433,6 +433,10 @@ describe("the meetings page", () => {
     await settle();
     expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1"]);
     expect(screen.getByRole("status").textContent).toContain("Starting");
+    // The one being transcribed is neither asked for again nor deleted under the job.
+    expect(screen.getByText("Transcribing")).toBeTruthy();
+    expect(screen.getAllByText("Transcribe")).toHaveLength(1);
+    expect((screen.getAllByLabelText(/^Delete Recorded call/)[0] as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(second);
     await settle();

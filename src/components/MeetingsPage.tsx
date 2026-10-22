@@ -150,6 +150,7 @@ export function MeetingsPage({ sideHandle }: PageContext) {
           list={meetings.list}
           recordings={meetings.recordings}
           queued={meetings.queued}
+          transcribing={meetings.transcribing}
           onOpen={meetings.open}
           onDelete={(m) => setDeleting({ id: m.id, title: meetingTitle(m), recording: false })}
           onTranscribe={meetings.transcribe}
@@ -495,6 +496,7 @@ function MeetingList({
   list,
   recordings,
   queued,
+  transcribing,
   onOpen,
   onDelete,
   onTranscribe,
@@ -504,6 +506,7 @@ function MeetingList({
   list: MeetingInfo[];
   recordings: RecordingInfo[];
   queued: string[];
+  transcribing: string | null;
   onOpen: (id: string) => void;
   onDelete: (m: MeetingInfo) => void;
   onTranscribe: (id: string) => void;
@@ -545,6 +548,7 @@ function MeetingList({
                     key={row.recording.id}
                     r={row.recording}
                     queued={queued.includes(row.recording.id)}
+                    transcribing={row.recording.id === transcribing}
                     onTranscribe={onTranscribe}
                     onDelete={onDeleteRecording}
                   />
@@ -588,8 +592,20 @@ function MeetingRow({ m, job, busy, onOpen, onDelete }: { m: MeetingInfo; job: J
   );
 }
 
-/** A call recorded and not yet transcribed: Transcribe makes it a meeting, or waits for the job running now. */
-function RecordingRow({ r, queued, onTranscribe, onDelete }: { r: RecordingInfo; queued: boolean; onTranscribe: (id: string) => void; onDelete: (r: RecordingInfo) => void }) {
+/** A call recorded and not yet transcribed: Transcribe makes it a meeting, or waits for the job running now. Being transcribed, or waiting, it is not deleted. */
+function RecordingRow({
+  r,
+  queued,
+  transcribing,
+  onTranscribe,
+  onDelete,
+}: {
+  r: RecordingInfo;
+  queued: boolean;
+  transcribing: boolean;
+  onTranscribe: (id: string) => void;
+  onDelete: (r: RecordingInfo) => void;
+}) {
   return (
     <li className="meetings-row">
       <div className="meetings-row-open meetings-row-recording">
@@ -606,7 +622,12 @@ function RecordingRow({ r, queued, onTranscribe, onDelete }: { r: RecordingInfo;
             </span>
           </span>
         </span>
-        {queued ? (
+        {transcribing ? (
+          <span className="meetings-state writing">
+            <LoaderCircle size={11} />
+            Transcribing
+          </span>
+        ) : queued ? (
           <span className="meetings-state">
             <Hourglass size={11} />
             Waiting
@@ -624,7 +645,7 @@ function RecordingRow({ r, queued, onTranscribe, onDelete }: { r: RecordingInfo;
           </>
         )}
       </div>
-      <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${recordedTitle} of ${time(r.created)}`} disabled={queued} onClick={() => onDelete(r)}>
+      <button type="button" className="meetings-row-delete" title="Delete" aria-label={`Delete ${recordedTitle} of ${time(r.created)}`} disabled={queued || transcribing} onClick={() => onDelete(r)}>
         <Trash2 size={14} />
       </button>
     </li>
