@@ -244,7 +244,9 @@ describe("ArtifactsPage's keys", () => {
     await waitFor(() => expect(document.activeElement).toBe(row(/Лендинг/)));
     row(/Дашборд/).focus();
     fireEvent.keyDown(row(/Дашборд/), { code: "Enter" });
-    await waitFor(() => expect(screen.getByText("This folder is empty.")).toBeTruthy());
+    // Focus moves in an effect, which may run after the folder is drawn: wait for it, not for the text.
+    await waitFor(() => expect(document.activeElement?.className).toBe("artifacts-body"));
+    expect(screen.getByText("This folder is empty.")).toBeTruthy();
     fireEvent.keyDown(document.activeElement!, { code: "Backspace" });
     await waitFor(() => expect(names()).toEqual(["Лендинг кофейни", "Дашборд"]));
     expect(crumbs()).toEqual(["Artifacts", "Prototypes"]);
