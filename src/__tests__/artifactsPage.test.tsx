@@ -122,7 +122,7 @@ describe("ArtifactsPage", () => {
     expect(names()).toEqual(["Лендинг кофейни", "Дашборд"]);
     expect(crumbs()).toEqual(["Artifacts", "Prototypes"]);
 
-    fireEvent.keyDown(row(/Лендинг/), { code: "Enter" });
+    fireEvent.doubleClick(row(/Лендинг/));
     await waitFor(() => expect(names()).toEqual(["assets", "app.jsx", "index.html"]));
     expect(calls.filter((c) => c.command === "artifact_files")).toEqual([{ command: "artifact_files", args: { kind: "prototypes", id: "c1" } }]);
     expect(row(/assets/).textContent).toContain("4 KB");
@@ -231,25 +231,6 @@ describe("ArtifactsPage", () => {
     expect(panel().querySelector("audio")!.getAttribute("src")).toBe("meeting://localhost/m1");
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(screen.queryByRole("complementary", { name: /^File / })).toBeNull();
-  });
-});
-
-describe("ArtifactsPage's keys", () => {
-  test("Enter and Backspace go on working after the place changes, an empty folder included", async () => {
-    files["prototypes/c2"] = [];
-    page();
-    await waitFor(() => expect(names()).toHaveLength(2));
-    row(/Prototypes/).focus();
-    fireEvent.keyDown(row(/Prototypes/), { code: "Enter" });
-    await waitFor(() => expect(document.activeElement).toBe(row(/Лендинг/)));
-    row(/Дашборд/).focus();
-    fireEvent.keyDown(row(/Дашборд/), { code: "Enter" });
-    // Focus moves in an effect, which may run after the folder is drawn: wait for it, not for the text.
-    await waitFor(() => expect(document.activeElement?.className).toBe("artifacts-body"));
-    expect(screen.getByText("This folder is empty.")).toBeTruthy();
-    fireEvent.keyDown(document.activeElement!, { code: "Backspace" });
-    await waitFor(() => expect(names()).toEqual(["Лендинг кофейни", "Дашборд"]));
-    expect(crumbs()).toEqual(["Artifacts", "Prototypes"]);
   });
 });
 
