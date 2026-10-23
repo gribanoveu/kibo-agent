@@ -57,7 +57,6 @@ export const SHORTCUTS = {
   textLarger: { label: "Larger text", group: "Markdown viewer", combos: [{ code: "Equal", mod: true }] },
   textSmaller: { label: "Smaller text", group: "Markdown viewer", combos: [{ code: "Minus", mod: true }] },
   textReset: { label: "Text at its usual size", group: "Markdown viewer", combos: [{ code: "Digit0", mod: true }] },
-  artifactUp: { label: "Up one folder", group: "Artifacts", combos: [{ code: "Backspace" }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

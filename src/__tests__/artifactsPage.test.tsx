@@ -110,7 +110,7 @@ const names = () => screen.queryAllByRole("option").map((o) => o.querySelector("
 const crumbs = () => within(screen.getByRole("navigation", { name: "Where you are" })).getAllByRole("button").map((b) => b.textContent);
 
 describe("ArtifactsPage", () => {
-  test("goes down a kind, a collection and a folder, and back up by the crumbs and Backspace", async () => {
+  test("goes down a kind, a collection and a folder, and back up by the crumbs", async () => {
     page();
     await waitFor(() => expect(names()).toEqual(["Meetings", "Prototypes"]));
     expect(row(/Prototypes/).textContent).toContain("2");
@@ -130,12 +130,10 @@ describe("ArtifactsPage", () => {
     expect(names()).toEqual(["fonts", "logo.png"]);
     expect(crumbs()).toEqual(["Artifacts", "Prototypes", "Лендинг кофейни", "assets"]);
 
-    fireEvent.keyDown(row(/logo/), { code: "Backspace" });
+    fireEvent.click(screen.getByRole("button", { name: "Лендинг кофейни" }));
     expect(names()).toEqual(["assets", "app.jsx", "index.html"]);
     fireEvent.click(screen.getByRole("button", { name: "Artifacts" }));
     expect(names()).toEqual(["Meetings", "Prototypes"]);
-    fireEvent.keyDown(row(/Meetings/), { code: "Backspace" });
-    expect(names()).toEqual(["Meetings", "Prototypes"], "the top has no up");
   });
 
   test("says what every artifact takes together and what the disk has left, and only the first when the disk cannot be read", async () => {

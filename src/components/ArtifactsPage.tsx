@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
@@ -34,8 +34,8 @@ const when = (rfc3339: string) =>
 /**
  * What the app made, as folders (docs/38-artifacts.md): a kind, its
  * collections — a meeting, a prototype — and their files, as a file manager
- * lists them. A click picks a row, a double click opens it, Backspace
- * goes up; a file picked opens in the panel on the right. A row's
+ * lists them. A click picks a row, a double click opens it, the crumbs
+ * go back up; a file picked opens in the panel on the right. A row's
  * menu renames, deletes, shows in Finder, saves a file elsewhere.
  */
 export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chats }: PageContext) {
@@ -176,12 +176,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
       }),
     );
 
-  const keys = (e: KeyboardEvent) => {
-    if (e.target instanceof HTMLInputElement || !matches(e, "artifactUp") || crumbs.length < 2) return;
-    e.preventDefault();
-    go(artifacts.up);
-  };
-
   return (
     <Page
       title="Artifacts"
@@ -212,7 +206,7 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
         ) : undefined
       }
     >
-      <div className="artifacts-body" onKeyDown={keys}>
+      <div className="artifacts-body">
         {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
         {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
         {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
