@@ -86,8 +86,6 @@ export function useArtifacts(chats = "", on = true) {
     openKind: (k: ArtifactKind) => setPlace({ kind: k, id: null, folder: "" }),
     openCollection: (id: string) => kind && setPlace({ kind, id, folder: "" }),
     openFolder: (path: string) => setPlace({ ...place, folder: path }),
-    /** One level up; at the top, nothing. */
-    up: () => setPlace(upFrom(place)),
     go: setPlace,
     rename: async (c: Collection, title: string) => {
       await artifactRename(c.kind, c.id, title);
@@ -104,12 +102,6 @@ export function useArtifacts(chats = "", on = true) {
     /** A file of the open collection saved where the user chooses; where it went, or `null` when they cancelled. */
     saveAs: (file: ArtifactFile, name?: string) => (open ? artifactSaveAs(open.kind, open.id, file.path, name) : Promise.resolve(null)),
   };
-}
-
-export function upFrom(place: Place): Place {
-  if (place.folder) return { ...place, folder: place.folder.split("/").slice(0, -1).join("/") };
-  if (place.id) return { ...place, id: null };
-  return TOP;
 }
 
 /** The folders and files directly in `folder` of a collection, in the order the backend gave — folders first. */

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
@@ -34,8 +34,8 @@ const when = (rfc3339: string) =>
 /**
  * What the app made, as folders (docs/38-artifacts.md): a kind, its
  * collections — a meeting, a prototype — and their files, as a file manager
- * lists them. A click picks a row, a double click or Enter opens it,
- * Backspace goes up; a file picked opens in the panel on the right. A row's
+ * lists them. A click picks a row, a double click opens it, the crumbs
+ * go back up; a file picked opens in the panel on the right. A row's
  * menu renames, deletes, shows in Finder, saves a file elsewhere.
  */
 export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chats }: PageContext) {
@@ -141,20 +141,10 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
     ];
   };
 
-  // A new place starts with nothing picked, and the keys go on working in it:
-  // the row that had focus is gone, so its first row takes it — the list
-  // itself when it has none.
-  const body = useRef<HTMLDivElement>(null);
-  const refocus = useRef(false);
-  useEffect(() => {
-    if (!refocus.current || !artifacts.loaded) return;
-    refocus.current = false;
-    (body.current?.querySelector<HTMLElement>('[role="option"]') ?? body.current)?.focus();
-  }, [place, artifacts.loaded, artifacts.rows.length]);
+  // A new place starts with nothing picked.
   const go = (to: () => void) => {
     to();
     setPicked(null);
-    refocus.current = true;
   };
   const open = (row: Row) => {
     if (row.type === "kind") go(() => artifacts.openKind(row.kind));
@@ -186,12 +176,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
       }),
     );
 
-  const keys = (e: KeyboardEvent) => {
-    if (e.target instanceof HTMLInputElement || !matches(e, "artifactUp") || crumbs.length < 2) return;
-    e.preventDefault();
-    go(artifacts.up);
-  };
-
   return (
     <Page
       title="Artifacts"
@@ -222,7 +206,7 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
         ) : undefined
       }
     >
-      <div ref={body} tabIndex={-1} className="artifacts-body" onKeyDown={keys}>
+      <div className="artifacts-body">
         {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
         {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
         {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
@@ -315,11 +299,6 @@ function ArtifactRow({ row, picked, onPick, onOpen, actions }: { row: Row; picke
         className="artifacts-row-main"
         onClick={onPick}
         onDoubleClick={onOpen}
-        onKeyDown={(e) => {
-          if (!matches(e, "artifactOpen")) return;
-          e.preventDefault();
-          onOpen();
-        }}
       >
         <Icon size={15} className={row.type === "file" ? "artifacts-icon" : "artifacts-icon folder"} />
         <span className="artifacts-name">{row.name}</span>

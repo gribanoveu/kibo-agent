@@ -26,6 +26,11 @@ jobs:
     env:
       # Vite bundle (shiki, mermaid) exceeds the default heap on CI runners.
       NODE_OPTIONS: --max-old-space-size=8192
+      # No directory named `target` on the way: sherpa-onnx-sys puts its downloaded
+      # library beside the nearest one, which rust-cache does not keep, while it
+      # keeps the build script's output pointing there — the next run links against
+      # nothing. Without one, the library stays in the build script's own OUT_DIR.
+      CARGO_BUILD_TARGET_DIR: ${{ github.workspace }}/cargo-build
     defaults:
       run:
         shell: bash
@@ -60,7 +65,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: src-tauri -> ../cargo-build
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup NASM (needed by git2 vendored OpenSSL build)
