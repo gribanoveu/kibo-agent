@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
-import { AudioLines, SquareKanban, Store } from "lucide-react";
+import { AudioLines, FolderOpen, SquareKanban, Store } from "lucide-react";
+import { ArtifactsPage } from "./ArtifactsPage";
 import { BoardPage } from "./BoardPage";
 import { CatalogPage } from "./CatalogPage";
 import { MeetingsPage } from "./MeetingsPage";
@@ -13,6 +14,16 @@ export type PageContext = {
   /** The handle to put left of a panel the page shows on its right: it sizes
       that panel as the dock's handle sizes the dock, to the same width. */
   sideHandle: ReactElement;
+  /** What the page was opened on — a meeting's id for Meetings. */
+  item?: string;
+  /** Another page, opened on `item`. */
+  openPage: (id: PageId, item?: string) => void;
+  /** A Chat mode chat opened, leaving the page — a prototype's. */
+  openChat: (id: string) => void;
+  /** A Chat mode chat deleted, as the sidebar deletes one; `false` while it must stay open. */
+  removeChat: (id: string) => Promise<boolean>;
+  /** The Chat mode chats, as the sidebar lists them. */
+  chats: readonly { id: string }[];
 };
 
 export type PageDef = {
@@ -39,6 +50,7 @@ export const PAGES = [
   { id: "catalog", label: "Catalog", title: "Catalog — skills, commands, MCP servers and hooks to install", icon: Store, dock: false, Component: CatalogPage },
   { id: "board", label: "Board", title: "Board — what the Assistant keeps for later", icon: SquareKanban, dock: false, feature: "board", Component: BoardPage },
   { id: "meetings", label: "Meetings", title: "Meetings — a call's recording made into notes", icon: AudioLines, dock: false, feature: "meeting-notes", Component: MeetingsPage },
+  { id: "artifacts", label: "Artifacts", title: "Artifacts — meetings and prototypes, as folders", icon: FolderOpen, dock: false, Component: ArtifactsPage },
 ] as const satisfies readonly PageDef[];
 
 export type PageId = (typeof PAGES)[number]["id"];

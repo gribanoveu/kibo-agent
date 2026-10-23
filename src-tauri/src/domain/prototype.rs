@@ -1,7 +1,8 @@
 //! A Prototype chat's folder (`docs/31-prototype-role.md`): what a restore
-//! did, the pictures the user put in it, and what can go wrong with it.
+//! did, the pictures the user put in it, what it says about itself, and what
+//! can go wrong with it.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::chat_record::ChatError;
@@ -55,6 +56,35 @@ pub struct Restored {
     pub from: u32,
     pub version: u32,
     pub before: Option<u32>,
+}
+
+/// `prototype.json` beside the chat's `files/` and `versions/`
+/// (`docs/38-artifacts.md`): what the prototype is called and which page is
+/// it, as of the last `present` — the folder named without reading the chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    pub title: String,
+    /// The title is the user's: `present` leaves it.
+    #[serde(default)]
+    pub title_by_user: bool,
+    /// The page presented last, relative to `files/`.
+    pub page: String,
+    /// When, RFC 3339.
+    pub presented: String,
+    pub version: u32,
+}
+
+impl Manifest {
+    /// What a `present` of `page` as `version` leaves of the manifest `was`:
+    /// its page, time and version, and its title unless the user gave one.
+    pub fn presented(was: Option<Manifest>, title: &str, page: &str, version: u32, at: &str) -> Manifest {
+        let (title, title_by_user) = match was {
+            Some(was) if was.title_by_user => (was.title, true),
+            _ => (title.to_string(), false),
+        };
+        Manifest { title, title_by_user, page: page.to_string(), presented: at.to_string(), version }
+    }
 }
 
 /// The folder the user's pictures go in, inside the chat's working folder:
@@ -114,6 +144,26 @@ pub fn asset_name(hint: &str, extension: &str, taken: impl Fn(&str) -> bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_present_names_the_prototype_unless_the_user_did() {
+        let first = Manifest::presented(None, "Лендинг", "index.html", 1, "2026-10-22T10:00:00Z");
+        assert_eq!(first, Manifest { title: "Лендинг".into(), title_by_user: false, page: "index.html".into(), presented: "2026-10-22T10:00:00Z".into(), version: 1 });
+        let next = Manifest::presented(Some(first), "Лендинг кофейни", "deck.html", 2, "2026-10-22T11:00:00Z");
+        assert_eq!((next.title.as_str(), next.page.as_str(), next.version), ("Лендинг кофейни", "deck.html", 2), "the model's title follows its pages");
+
+        let named = Manifest { title: "Кофейня".into(), title_by_user: true, ..next };
+        let after = Manifest::presented(Some(named), "Landing", "index.html", 3, "2026-10-22T12:00:00Z");
+        assert_eq!((after.title.as_str(), after.title_by_user), ("Кофейня", true), "the user's title outlasts a present");
+        assert_eq!((after.page.as_str(), after.version, after.presented.as_str()), ("index.html", 3, "2026-10-22T12:00:00Z"), "the rest follows");
+    }
+
+    #[test]
+    fn a_manifest_without_the_users_mark_reads_as_the_models() {
+        let read: Manifest = serde_json::from_str(r#"{"title":"T","page":"index.html","presented":"2026-10-22T10:00:00Z","version":1}"#).unwrap();
+        assert!(!read.title_by_user);
+        assert_eq!(serde_json::to_value(&read).unwrap()["titleByUser"], false);
+    }
 
     #[test]
     fn a_picture_is_named_after_its_file_in_letters_a_url_takes() {

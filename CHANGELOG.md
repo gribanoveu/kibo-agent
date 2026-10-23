@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2026-10-22 An Artifacts page in the sidebar lists every meeting and every presented prototype as folders, like a drive: open one to see its notes, documents, transcript, recording or the prototype's files beside the list; rename it, show it in Finder, open it in Meetings or in its chat, delete it, or save any of its files elsewhere; the top says how much they all take and how much the disk has left
+- 2026-10-22 A meeting's notes, each document and the transcript fold to their title, which stays in view as the card scrolls by
+- 2026-10-22 Meeting notes suggest subjects the call explained at length; one click writes a document on everything said about it, shown beside the notes, written again or deleted
+- 2026-10-22 A transcribed call is listed at the time it began, not when its transcription finished
+- 2026-10-22 A recording being transcribed says so on its row and can no longer be queued again or deleted
+- 2026-10-22 Record is red, not pink, in the dark themes
 - 2026-10-21 Play on the Prototype panel shows the page full screen, as a deck's F does; Escape comes back
 - 2026-10-21 An open meeting shows how much space its recording takes; the recording's two settings are behind a gear beside Record
 - 2026-10-21 A call recorded on the Meetings page tells you from the others by the side the sound came from: what you said into the microphone is one speaker, only the call's side is told apart by voice, and without headphones the call heard back through your microphone stays theirs

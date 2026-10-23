@@ -345,6 +345,21 @@ export async function onTurnEvent(
   });
 }
 
+/** What a tool call came back with, in any turn. */
+export type ToolResultEvent = Extract<TurnEvent, { type: "toolResult" }>["payload"];
+
+/**
+ * Subscribes to every turn's tool results — for a view of what a turn
+ * changes that knows no turn by id: one is running under the page, in a chat
+ * left mounted. The other events on the channel are dropped here.
+ */
+export async function onAnyToolResult(handler: (result: ToolResultEvent) => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => {};
+  return listen<TurnEvent>(CHAT_TURN_EVENT, ({ payload }) => {
+    if (payload.type === "toolResult") handler(payload.payload);
+  });
+}
+
 // ------------------------------------------------------------- previewing
 
 export type FileDiffStats = {

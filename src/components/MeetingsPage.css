@@ -566,18 +566,34 @@
   flex: none;
   color: var(--text-faint);
 }
+/* The strip above the cards, the gap's height, in the gap before the first:
+   scrolled to the top it stays there, and what scrolls by goes under it. */
+.meeting-cap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 16px;
+  margin: -16px 0;
+  background: var(--bg-panel);
+}
 .meeting-card {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   background: var(--bg-panel);
-  overflow: hidden;
 }
+/* A card's head stops just under the top, over the strip, and keeps the
+   card's rounded top: it draws its own border over the card's. */
 .meeting-card-head {
+  position: sticky;
+  top: 6px;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: -1px -1px 0;
   padding: 8px 10px 8px 14px;
-  border-bottom: 1px solid var(--border-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius) var(--radius) 0 0;
   background: var(--bg-panel-soft);
 }
 .meeting-card-icon {
@@ -589,6 +605,31 @@
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
+}
+/* The title folds its card: a chevron that turns, the whole line a button. */
+.meeting-card-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.meeting-card-chev {
+  flex: none;
+  color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.meeting-card-fold[aria-expanded="true"] .meeting-card-chev {
+  transform: rotate(90deg);
+}
+/* Folded, the head is the whole card. */
+.meeting-card-head:last-child {
+  margin-bottom: -1px;
+  border-radius: var(--radius);
 }
 .meeting-notes {
   padding: 14px 18px 16px;
@@ -605,6 +646,41 @@
 }
 .meeting-notes .md > :first-child {
   margin-top: 0;
+}
+/* Under the notes: the subjects they found worth a document, one click each. */
+.meeting-topics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.meeting-topics-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 2px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.meeting-topic {
+  padding: 3px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.meeting-topic:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.meeting-topic:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .meeting-transcript {
   display: flex;

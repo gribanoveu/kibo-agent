@@ -143,6 +143,10 @@ pub enum MeetingError {
     Cancelled,
     #[error("a recording is already being processed — wait for it or stop it")]
     Busy,
+    /// A job works on this meeting now: deleting it would leave the job
+    /// writing into a meeting that is no more.
+    #[error("this meeting is being worked on — wait for it or stop it")]
+    InUse,
     /// Meeting notes were turned off while it ran: nothing is kept.
     #[error("meeting notes were turned off")]
     Off,
@@ -159,6 +163,8 @@ pub enum MeetingError {
     NoSpeaker(usize),
     #[error("a name is at most {0} characters")]
     NameTooLong(usize),
+    #[error("a document's subject is 1 to {0} characters")]
+    BadTopic(usize),
     /// The microphone or the output the call plays through.
     #[error("no {0} to record from")]
     NoDevice(&'static str),
@@ -184,6 +190,9 @@ pub struct Meeting {
     /// A few words on what it was about, written with the notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The title is the user's (`docs/38-artifacts.md`): notes written again keep it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub title_by_user: bool,
     /// When it was recognized, RFC 3339.
     pub created: String,
     pub seconds: f32,
@@ -197,6 +206,19 @@ pub struct Meeting {
     /// The speakers whose name the voice memory gave, not the user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guessed: Vec<usize>,
+    /// What the notes found the meeting explained at length — worth a document of its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<String>,
+    /// The documents written from the meeting, one per subject, in the order asked for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<MeetingDocument>,
+}
+
+/// Everything the meeting said on one subject, as the model wrote it up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingDocument {
+    pub topic: String,
+    pub text: String,
 }
 
 /// A row of the list: the meeting without its text.
@@ -217,6 +239,19 @@ pub struct MeetingInfo {
 
 /// A speaker's name, past which it is not one.
 pub const MAX_NAME_CHARS: usize = 60;
+/// A document's subject, past which it is not one.
+pub const MAX_TOPIC_CHARS: usize = 120;
+/// How many subjects the notes may suggest.
+const MAX_TOPICS: usize = 8;
+
+/// `topic` as a document's subject: its spaces collapsed, 1 to [`MAX_TOPIC_CHARS`] long.
+pub fn clean_topic(topic: &str) -> Result<String, MeetingError> {
+    let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
+    if topic.is_empty() || topic.chars().count() > MAX_TOPIC_CHARS {
+        return Err(MeetingError::BadTopic(MAX_TOPIC_CHARS));
+    }
+    Ok(topic)
+}
 
 impl Meeting {
     pub fn speakers(&self) -> usize {
@@ -270,19 +305,38 @@ impl Meeting {
             self.names.insert(speaker, name);
         }
         self.guessed.retain(|g| *g != speaker);
+        let speakers = self.speakers();
         if let Some(summary) = &self.summary {
-            self.summary = Some(renamed(summary, self.speakers(), &before, &self.names));
+            self.summary = Some(renamed(summary, speakers, &before, &self.names));
+        }
+        for document in &mut self.documents {
+            document.text = renamed(&document.text, speakers, &before, &self.names);
         }
         Ok(())
     }
 
     /// `notes` as the model wrote them while the meeting was `written`: their
-    /// title line is its title — the one it had stays when they have none —
-    /// and a speaker renamed since is called by the new name.
+    /// title line is its title — the one it had stays when they have none, or
+    /// when the user gave it — their `## Documents` its topics, and a speaker
+    /// renamed since is called by the new name. The documents written stay.
     pub fn take_notes(&mut self, notes: &str, written: &Meeting) {
         let (title, notes) = split_title(notes);
-        self.title = title.or(self.title.take());
+        if !self.title_by_user {
+            self.title = title.or(self.title.take());
+        }
+        let (topics, notes) = split_topics(&notes);
+        self.topics = topics;
         self.summary = Some(renamed_since(&notes, written, self));
+    }
+
+    /// The document on `topic`, as the model wrote it while the meeting was
+    /// `written`: in place of the one it had, or after the others.
+    pub fn take_document(&mut self, topic: &str, text: &str, written: &Meeting) {
+        let text = renamed_since(text, written, self);
+        match self.documents.iter_mut().find(|d| d.topic == topic) {
+            Some(document) => document.text = text,
+            None => self.documents.push(MeetingDocument { topic: topic.to_string(), text }),
+        }
     }
 
     pub fn info(&self) -> MeetingInfo {
@@ -309,6 +363,8 @@ pub enum MeetingEvent {
     Transcribed { id: String },
     /// A piece of the summary as the model writes it.
     SummaryDelta { id: String, text: String },
+    /// A piece of the document on `topic` as the model writes it.
+    DocumentDelta { id: String, topic: String, text: String },
     /// The job ended, however it ended: read the list and the meeting again.
     Ended,
     /// A call being recorded: how long by now and how loud each side is — at
@@ -326,6 +382,8 @@ pub enum JobKind {
     Process,
     /// A meeting's notes written again.
     Summary,
+    /// A document on one of a meeting's subjects written.
+    Document,
 }
 
 /// The job running now, as far as its events have told: what a page opened
@@ -342,12 +400,15 @@ pub struct JobState {
     pub stage: Option<Stage>,
     pub done: usize,
     pub total: usize,
+    /// The subject of the document being written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
 }
 
 impl JobState {
     pub fn new(kind: JobKind, id: Option<String>) -> Self {
-        let stage = (kind == JobKind::Summary).then_some(Stage::Notes);
-        JobState { kind, id, name: None, stage, done: 0, total: 0 }
+        let stage = (kind != JobKind::Process).then_some(Stage::Notes);
+        JobState { kind, id, name: None, stage, done: 0, total: 0, topic: None }
     }
 
     /// The job as `event` leaves it — the page's `useMeetings` reads events the same way.
@@ -358,7 +419,7 @@ impl JobState {
                 (self.done, self.total) = (*done, *total);
             }
             MeetingEvent::Transcribed { .. } => (self.stage, self.done, self.total) = (Some(Stage::Notes), 0, 0),
-            MeetingEvent::SummaryDelta { .. } | MeetingEvent::Ended | MeetingEvent::Recording { .. } | MeetingEvent::RecordingEnded { .. } => {}
+            MeetingEvent::SummaryDelta { .. } | MeetingEvent::DocumentDelta { .. } | MeetingEvent::Ended | MeetingEvent::Recording { .. } | MeetingEvent::RecordingEnded { .. } => {}
         }
     }
 }
@@ -379,6 +440,10 @@ Then Markdown with these sections, the headings in the language of the notes:
 is not a decision: it goes to Open questions.
 ## Action items — who does what, and by when if it was said, one bullet each.
 ## Open questions — what was raised and left unresolved.
+## Documents — this heading in English whatever the notes' language: it is taken off the notes. The subjects the \
+meeting explained at length — how something works or is meant to work, a process, a design, rules, a setup — that \
+deserve a document of their own beyond the notes; at most 5, one bullet each, named in 3 to 8 words in the language \
+of the notes.
 
 Leave out a section that has nothing in it. Do not invent names, dates or numbers that are not in the transcript. \
 Reply with the notes only.";
@@ -400,6 +465,57 @@ pub fn split_title(notes: &str) -> (Option<String>, String) {
     let (line, body) = rest.split_once('\n').unwrap_or((rest, ""));
     (chat_record::clean_title(line), body.trim().to_string())
 }
+
+/// The notes' `## Documents` section taken off them as the subjects it lists,
+/// one per bullet; the notes as they are when they have none.
+pub fn split_topics(notes: &str) -> (Vec<String>, String) {
+    let lines: Vec<&str> = notes.lines().collect();
+    let Some(at) = lines.iter().position(|l| l.trim().eq_ignore_ascii_case("## documents")) else {
+        return (Vec::new(), notes.to_string());
+    };
+    let end = lines[at + 1..].iter().position(|l| l.trim_start().starts_with('#')).map_or(lines.len(), |n| at + 1 + n);
+    let topics = lines[at + 1..end]
+        .iter()
+        .filter_map(|l| l.trim().strip_prefix(['-', '*']))
+        .filter_map(|t| clean_topic(t.trim().trim_matches('*')).ok())
+        .take(MAX_TOPICS)
+        .collect();
+    let rest = [&lines[..at], &lines[end..]].concat().join("\n");
+    (topics, rest.trim().to_string())
+}
+
+/// What the writer of a document on `topic` is told. The transcript follows as the user's message.
+pub fn document_instructions(topic: &str, reply_language: Option<&str>) -> String {
+    let language = match reply_language {
+        Some(language) => format!("Write it in {language}."),
+        None => "Write it in the language the meeting was held in.".to_string(),
+    };
+    format!(
+        "You write a document on one subject from a meeting's transcript: {topic}\n\n\
+The transcript was made by speech recognition: words may be misheard and a line may be given to the wrong speaker, \
+so read for what was meant. Gather everything the meeting said on the subject, wherever in it it was said, and write \
+it up for someone who was not there: how it works or is meant to work, the steps, rules, numbers, examples and \
+exceptions, what is still unsettled. Keep the details — this document is where they are kept, not the notes. \
+Name people as the transcript does, and only where who said it matters.\n\n\
+Markdown with headings of your choosing, `##` and below; no title line. Do not invent what the transcript does not \
+say: where it is unclear or contradicts itself, say so. Reply with the document only. {language}"
+    )
+}
+
+/// What the model is told for one part of a meeting too long to read at once, when the document is on `topic`.
+pub fn document_part_instructions(topic: &str) -> String {
+    format!(
+        "You read one part of a long meeting's transcript for everything said on one subject: {topic}\n\n\
+A document on it is written afterwards from what every part gave, from yours alone. The transcript was made by \
+speech recognition, so read for what was meant. Keep every detail on the subject — how it works, steps, rules, \
+numbers, examples, doubts — as bullets with the time of each. Nothing else. When this part says nothing on it, \
+reply with exactly: Nothing."
+    )
+}
+
+/// What comes before the parts' extracts when they stand in for the transcript of a document.
+pub const DOCUMENT_PARTS_PREFACE: &str = "The meeting was too long to read at once. Instead of its transcript, here is \
+what each of its parts said on the subject, in order. A point made in one part may be corrected in a later one.";
 
 /// One line per utterance, `[mm:ss] Name: text` — `Speaker N` for whoever has no name.
 pub fn render_transcript(meeting: &Meeting) -> Vec<String> {
@@ -940,6 +1056,9 @@ mod tests {
             names: BTreeMap::new(),
             guessed: Vec::new(),
             title: None,
+            title_by_user: false,
+            topics: Vec::new(),
+            documents: Vec::new(),
         }
     }
 
@@ -1049,6 +1168,70 @@ mod tests {
         assert_eq!(now.info().title.as_deref(), Some("Выпуск"), "the list has it too");
         now.take_notes("## Итоги", &now.clone());
         assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Выпуск"), Some("## Итоги")));
+
+        now.title = Some("Планёрка".into());
+        now.title_by_user = true;
+        now.take_notes("# Релиз\n\n## Итоги", &now.clone());
+        assert_eq!((now.title.as_deref(), now.summary.as_deref()), (Some("Планёрка"), Some("## Итоги")), "the user's title outlasts new notes");
+    }
+
+    #[test]
+    fn the_notes_documents_section_is_their_topics_and_is_taken_off_them() {
+        let notes = "## Итоги\nВыпуск.\n\n## documents\n- Как устроена выгрузка в ЕНС\n* **Лицензии по Калуге**\n-   \nне пункт\n\n## Открытые вопросы\n- Когда?";
+        let (topics, rest) = split_topics(notes);
+        assert_eq!(topics, ["Как устроена выгрузка в ЕНС", "Лицензии по Калуге"]);
+        assert_eq!(rest, "## Итоги\nВыпуск.\n\n## Открытые вопросы\n- Когда?", "the sections around it stay");
+
+        let many = format!("## Documents\n{}", (1..=10).map(|i| format!("- Тема {i}\n")).collect::<String>());
+        assert_eq!(split_topics(&many), ((1..=8).map(|i| format!("Тема {i}")).collect::<Vec<_>>(), String::new()), "at most eight, the last section");
+        assert_eq!(split_topics("## Итоги\n- Документы"), (Vec::new(), "## Итоги\n- Документы".to_string()), "no section, no topics");
+    }
+
+    #[test]
+    fn notes_taken_again_give_new_topics_and_keep_the_documents() {
+        let mut meeting = meeting_of(vec![said(0, 0.0, "да")]);
+        meeting.documents.push(MeetingDocument { topic: "Старое".into(), text: "текст".into() });
+        meeting.take_notes("# Выпуск\n\n## Итоги\nДа.\n\n## Documents\n- Выгрузка", &meeting.clone());
+        assert_eq!((meeting.topics.as_slice(), meeting.summary.as_deref()), (&["Выгрузка".to_string()][..], Some("## Итоги\nДа.")));
+        assert_eq!(meeting.documents.len(), 1);
+        meeting.take_notes("## Итоги", &meeting.clone());
+        assert!(meeting.topics.is_empty(), "notes without the section suggest nothing");
+    }
+
+    #[test]
+    fn a_document_written_again_takes_the_place_of_its_own_and_follows_renames() {
+        let written = meeting_of(vec![said(0, 0.0, "да"), said(1, 1.0, "нет")]);
+        let mut now = written.clone();
+        now.take_document("Выгрузка", "Speaker 1 объяснила.", &written);
+        now.take_document("Лицензии", "Speaker 2 спросил.", &written);
+        now.names.insert(0, "Альбина".into());
+        now.take_document("Выгрузка", "Speaker 1 поправила.", &written);
+        let docs: Vec<_> = now.documents.iter().map(|d| (d.topic.as_str(), d.text.as_str())).collect();
+        assert_eq!(docs, [("Выгрузка", "Альбина поправила."), ("Лицензии", "Speaker 2 спросил.")]);
+
+        now.rename(1, "Вася").unwrap();
+        assert_eq!(now.documents[1].text, "Вася спросил.", "a rename reaches the documents too");
+    }
+
+    #[test]
+    fn a_documents_subject_is_one_short_line() {
+        assert_eq!(clean_topic("  Как   устроена\nвыгрузка "), Ok("Как устроена выгрузка".into()));
+        assert_eq!(clean_topic("   "), Err(MeetingError::BadTopic(MAX_TOPIC_CHARS)));
+        assert!(clean_topic(&"я".repeat(MAX_TOPIC_CHARS)).is_ok());
+        assert_eq!(clean_topic(&"я".repeat(MAX_TOPIC_CHARS + 1)), Err(MeetingError::BadTopic(MAX_TOPIC_CHARS)));
+        assert!(document_instructions("Выгрузка", Some("Russian")).contains("Выгрузка") && document_instructions("x", Some("Russian")).ends_with("Write it in Russian."));
+    }
+
+    #[test]
+    fn a_title_the_user_gave_is_kept_on_disk_and_absent_from_older_files() {
+        let mut meeting = meeting_of(vec![]);
+        let json = serde_json::to_value(&meeting).unwrap();
+        assert!(json.get("titleByUser").is_none(), "not written while false");
+        assert_eq!(serde_json::from_value::<Meeting>(json).unwrap(), meeting, "a file without it reads");
+        meeting.title_by_user = true;
+        let json = serde_json::to_value(&meeting).unwrap();
+        assert_eq!(json["titleByUser"], true);
+        assert_eq!(serde_json::from_value::<Meeting>(json).unwrap(), meeting);
     }
 
     #[test]
@@ -1090,6 +1273,9 @@ mod tests {
         job.hear(&MeetingEvent::Transcribed { id: "m".into() });
         assert_eq!((job.stage, job.done, job.total), (Some(Stage::Notes), 0, 0));
         assert_eq!(JobState::new(JobKind::Summary, Some("m".into())).stage, Some(Stage::Notes));
+        assert_eq!(JobState::new(JobKind::Document, Some("m".into())).stage, Some(Stage::Notes));
+        let document = MeetingEvent::DocumentDelta { id: "m".into(), topic: "t".into(), text: "x".into() };
+        assert_eq!(serde_json::to_string(&document).unwrap(), r#"{"kind":"documentDelta","id":"m","topic":"t","text":"x"}"#);
     }
 
     #[test]

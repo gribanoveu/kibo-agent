@@ -27,7 +27,7 @@ export function Page({ title, bar, panel, sideHandle, children }: PageProps) {
           <h1 className="page-title">{title}</h1>
           {bar && <div className="page-bar">{bar}</div>}
         </header>
-        {children}
+        <div className="page-body">{children}</div>
       </section>
       {panel && sideHandle}
       {panel}

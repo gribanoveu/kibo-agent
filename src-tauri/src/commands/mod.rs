@@ -9,6 +9,7 @@ pub mod chat;
 pub mod chat_events;
 pub mod plain_chat;
 pub mod prototype;
+pub mod artifacts;
 pub mod settings;
 pub mod chat_history;
 pub mod workspace_events;

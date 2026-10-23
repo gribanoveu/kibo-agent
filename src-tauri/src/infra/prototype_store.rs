@@ -1,17 +1,19 @@
 //! `<app dir>/prototypes/<chat id>/`: a Prototype chat's folder
 //! (`docs/31-prototype-role.md`). `files/` is what its tools work in; the
-//! presented versions will sit beside it, out of their reach. Made on the
-//! chat's first turn, gone with the chat.
+//! presented versions sit beside it in `versions/`, and `prototype.json`
+//! (`docs/38-artifacts.md`), out of their reach. Made on the chat's first
+//! turn, gone with the chat.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::domain::prototype::{self, Asset, Assets, PrototypeError, ASSETS};
+use crate::domain::prototype::{self, Asset, Assets, Manifest, PrototypeError, ASSETS};
 use crate::infra::app_dir;
 
 const DIR: &str = "prototypes";
 const FILES: &str = "files";
 const VERSIONS: &str = "versions";
+const MANIFEST: &str = "prototype.json";
 /// The working folder while a restore swaps it out.
 const OLD: &str = ".files.old";
 
@@ -113,6 +115,91 @@ pub fn replace_with_version(files: &Path, n: u32) -> Result<(), PrototypeError> 
     }
     let _ = fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// The chat's `prototype.json`, `None` before its first `present` wrote one.
+/// One that does not read is as none: the next `present` writes it whole.
+pub fn manifest(files: &Path) -> Result<Option<Manifest>, PrototypeError> {
+    let path = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?.join(MANIFEST);
+    match fs::read(&path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(io(&path, source)),
+    }
+}
+
+/// Writes the chat's `prototype.json`, whole or not at all. Its writers — a
+/// turn's `present`, a rename — hold the folder's claim
+/// (`services::prototype_versions::claim`), so they do not cross.
+pub fn write_manifest(files: &Path, manifest: &Manifest) -> Result<(), PrototypeError> {
+    let path = chat_of(files).ok_or_else(|| PrototypeError::NotAChatFolder(files.display().to_string()))?.join(MANIFEST);
+    let bytes = serde_json::to_vec_pretty(manifest).map_err(|e| io(&path, std::io::Error::other(e)))?;
+    app_dir::write_private(&path, &bytes).map_err(|e| io(&path, std::io::Error::other(e)))
+}
+
+/// The chats whose prototype has been presented — a version kept — by id:
+/// what the artifacts list. A folder only worked in is not one yet; one whose
+/// versions do not read — gone with its chat meanwhile — is left out, not the list.
+pub fn presented() -> Result<Vec<String>, PrototypeError> {
+    presented_in(&app_dir::dir()?)
+}
+
+fn presented_in(base: &Path) -> Result<Vec<String>, PrototypeError> {
+    let dir = base.join(DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io(&dir, source)),
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
+        let Some(chat) = chat_dir(base, &id) else { continue };
+        if highest(&chat.join(VERSIONS)).is_ok_and(|n| n > 0) {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+/// When version `n` of the working folder `files` was kept: its folder's time.
+pub fn version_time(files: &Path, n: u32) -> Result<std::time::SystemTime, PrototypeError> {
+    let version = version_dir(files, n)?;
+    fs::metadata(&version).and_then(|m| m.modified()).map_err(|source| io(&version, source))
+}
+
+/// The files of the working folder `files`, by their path inside it written
+/// with `/`, and their sizes. Links are left out, as a version leaves them.
+pub fn listing(files: &Path) -> Result<Vec<(String, u64)>, PrototypeError> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) -> Result<(), PrototypeError> {
+        for entry in fs::read_dir(dir).map_err(|source| io(dir, source))? {
+            let entry = entry.map_err(|source| io(dir, source))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|source| io(&path, source))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let inside = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            if kind.is_dir() {
+                walk(&path, &inside, out)?;
+            } else if kind.is_file() {
+                out.push((inside, entry.metadata().map_err(|source| io(&path, source))?.len()));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(files, "", &mut out)?;
+    Ok(out)
+}
+
+/// The file `path` (with `/`) names in the chat's working folder, if it is
+/// one there — by the protocol's rule, so nothing past `files/` is reached:
+/// not `versions/`, not `prototype.json`, not where a link points.
+pub fn working_file(chat_id: &str, path: &str) -> Result<Option<PathBuf>, PrototypeError> {
+    let roots = crate::infra::prototype_protocol::Roots { app_dir: Some(app_dir::dir()?), libs: None };
+    let mut segments = vec![chat_id.to_string(), FILES.to_string()];
+    segments.extend(path.split('/').map(str::to_string));
+    Ok(crate::infra::prototype_protocol::file(&roots, &segments).filter(|file| file.is_file()))
 }
 
 fn versions_of(files: &Path) -> Result<PathBuf, PrototypeError> {
@@ -434,6 +521,52 @@ mod tests {
         for folder in [base.clone(), base.join("files"), base.join("prototypes").join(ID)] {
             fs::create_dir_all(&folder).unwrap();
             assert!(matches!(snapshot(&folder), Err(PrototypeError::NotAChatFolder(_))), "{folder:?}");
+        }
+    }
+
+    /// Written whole and read back; none before the first, and one that does
+    /// not read is as none. It sits beside `files/`, so no version holds it.
+    #[test]
+    fn the_manifest_sits_beside_the_folder_and_reads_back() {
+        let base = temp_dir("prototype-manifest");
+        let files = files_dir_in(&base, ID).unwrap();
+        assert_eq!(manifest(&files).unwrap(), None);
+        let written = Manifest { title: "Лендинг".into(), title_by_user: false, page: "index.html".into(), presented: "2026-10-22T10:00:00Z".into(), version: 1 };
+        write_manifest(&files, &written).unwrap();
+        assert_eq!(manifest(&files).unwrap(), Some(written));
+        assert!(files.parent().unwrap().join("prototype.json").is_file());
+        fs::write(files.join("index.html"), "x").unwrap();
+        snapshot(&files).unwrap();
+        assert!(!files.parent().unwrap().join("versions").join("1").join("prototype.json").exists());
+        fs::write(files.parent().unwrap().join("prototype.json"), "not json").unwrap();
+        assert_eq!(manifest(&files).unwrap(), None);
+        assert!(matches!(manifest(&base), Err(PrototypeError::NotAChatFolder(_))));
+    }
+
+    /// Listed once a version is kept: a folder only worked in, one whose
+    /// versions are all half-copied, or a name no chat could have, is not.
+    #[test]
+    fn a_folder_without_a_version_is_not_listed() {
+        let base = temp_dir("prototype-presented");
+        assert_eq!(presented_in(&base).unwrap(), Vec::<String>::new(), "no folder yet is none");
+        let shown = files_dir_in(&base, ID).unwrap();
+        fs::write(shown.join("index.html"), "x").unwrap();
+        snapshot(&shown).unwrap();
+        files_dir_in(&base, "worked-in-only").unwrap();
+        let partial = files_dir_in(&base, "half-copied").unwrap();
+        fs::create_dir_all(partial.parent().unwrap().join("versions").join(".1.partial")).unwrap();
+        fs::create_dir_all(base.join("prototypes").join("a.b").join("versions").join("1")).unwrap();
+        assert_eq!(presented_in(&base).unwrap(), [ID]);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = files_dir_in(&base, "locked").unwrap().parent().unwrap().join("versions");
+            fs::create_dir_all(locked.join("1")).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            let listed = presented_in(&base);
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(listed.unwrap(), [ID], "one whose versions do not read is left out, not the list");
         }
     }
 

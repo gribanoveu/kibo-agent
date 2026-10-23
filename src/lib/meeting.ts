@@ -28,7 +28,14 @@ export type Meeting = {
   names?: Record<string, string>;
   /** The speakers whose name the voice memory gave, not the user. */
   guessed?: number[];
+  /** What the notes found the meeting explained at length — worth a document of its own. */
+  topics?: string[];
+  /** The documents written from the meeting, one per subject. */
+  documents?: MeetingDocument[];
 };
+
+/** Everything the meeting said on one subject, as the model wrote it up. */
+export type MeetingDocument = { topic: string; text: string };
 
 /** A voice the voice memory knows (`domain::voices`), and in how many meetings it was named. */
 export type VoiceInfo = { id: string; name: string; meetings: number };
@@ -45,6 +52,10 @@ export const meetingTitle = (m: { name: string; title?: string }) => m.title ?? 
 /** Notes as they stream, without the `# title` line the model starts them with
     (`domain::meeting::split_title` takes it off the saved ones). */
 export const withoutTitle = (notes: string) => notes.replace(/^\s*#(?!#)[^\n]*(\n|$)/, "").trimStart();
+
+/** Notes as they stream, without the `## Documents` section that becomes their
+    topics (`domain::meeting::split_topics` takes it off the saved ones). */
+export const withoutTopics = (notes: string) => notes.replace(/^##[ \t]*documents[ \t]*$(\n(?!#).*)*/im, "").trimEnd();
 
 /** Where the page's player reads meeting `id`'s recording (`infra::meeting_audio`).
     Windows serves an app's scheme as `http://<scheme>.localhost`. */
@@ -71,6 +82,7 @@ export type MeetingEvent =
   /** The transcript is saved: read the meeting again. */
   | { kind: "transcribed"; id: string }
   | { kind: "summaryDelta"; id: string; text: string }
+  | { kind: "documentDelta"; id: string; topic: string; text: string }
   /** The job ended, however it ended: read the list and the meeting again. */
   | { kind: "ended" }
   /** A call being recorded: how long by now, how loud each side, 0 to 1 — at most ten a second. */
@@ -129,9 +141,11 @@ export async function meetingRecordMute(on: boolean): Promise<void> {
   return invoke("meeting_record_mute", { on });
 }
 
-/** What runs now (`domain::meeting::JobState`): a recording being processed, or notes written again. */
+/** What runs now (`domain::meeting::JobState`): a recording being processed, notes written again, or a document. */
 export type MeetingJob = {
-  kind: "process" | "summary";
+  kind: "process" | "summary" | "document";
+  /** The subject of the document being written. */
+  topic?: string;
   /** Known once the backend names it — at once for notes, on the first progress for a recording. */
   id?: string;
   name?: string;
@@ -183,6 +197,18 @@ export async function meetingRenameSpeaker(id: string, speaker: number, name: st
 export async function meetingSummarize(id: string): Promise<void> {
   requireBackend();
   return invoke("meeting_summarize", { id });
+}
+
+/** A document on `topic` written from meeting `id`, in place of the one it had. */
+export async function meetingWriteDocument(id: string, topic: string): Promise<void> {
+  requireBackend();
+  return invoke("meeting_write_document", { id, topic });
+}
+
+/** The meeting after its document on `topic` is gone. */
+export async function meetingDeleteDocument(id: string, topic: string): Promise<Meeting> {
+  requireBackend();
+  return invoke<Meeting>("meeting_delete_document", { id, topic });
 }
 
 /** The job running now, if one is — for a page opened while it runs. */

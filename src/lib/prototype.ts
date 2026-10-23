@@ -170,5 +170,6 @@ export function assetsNote(assets: Asset[]): string | null {
 /** A size as the drawer says it: kilobytes under a megabyte, else megabytes to one decimal. */
 export function sizeLabel(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(bytes > 0 ? 1 : 0, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "")} GB`;
 }

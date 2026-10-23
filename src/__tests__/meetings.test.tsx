@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { Meeting, MeetingEvent } from "../lib/meeting";
+import { withoutTopics, type Meeting, type MeetingEvent } from "../lib/meeting";
 
 // The Meetings page (docs/36): a recording in, its notes and transcript out.
 // The backend's job reports on `meeting:event`, each event naming its meeting;
@@ -17,6 +17,7 @@ let recordingNow: { id: string; seconds: number; muted: boolean } | null = null;
 let autoOn = false;
 let denoiseOn = true;
 let finishRecording: (result: { id?: string; error?: string }) => void = () => {};
+let finishDocument: () => void = () => {};
 let access: Record<string, string> = { microphone: "granted", call: "granted" };
 
 const info = (m: Meeting) => ({
@@ -84,6 +85,12 @@ mock.module("@tauri-apps/api/core", () => ({
           return error ? reject(error) : resolve(id);
         };
       });
+    }
+    if (command === "meeting_write_document") return new Promise((resolve) => (finishDocument = () => resolve(null)));
+    if (command === "meeting_delete_document") {
+      const m = stored.find((x) => x.id === args!.id)!;
+      m.documents = (m.documents ?? []).filter((d) => d.topic !== args!.topic);
+      return Promise.resolve(structuredClone(m));
     }
     if (command === "meeting_list") return Promise.resolve(stored.map(info));
     if (command === "meeting_get") return Promise.resolve(structuredClone(stored.find((m) => m.id === args!.id)));
@@ -157,6 +164,13 @@ beforeEach(() => {
 });
 
 describe("the meetings page", () => {
+  test("opens on the meeting another page asked for", async () => {
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} item="m1" />);
+    await settle();
+    expect(calls).toContainEqual({ command: "meeting_get", args: { id: "m1" } });
+    expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Release on Friday.")).toBeTruthy();
+  });
+
   test("lists the meetings; one opens to its notes over its transcript", async () => {
     stored[0].utterances.push({ speaker: 1, start: 70, end: 72, text: "И напишу клиентам." });
     render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
@@ -178,6 +192,77 @@ describe("the meetings page", () => {
     expect(screen.getByTitle("Speakers").textContent).toBe("2");
     expect(screen.getByTitle("Duration").textContent).toBe("12:34");
     expect(screen.queryByTitle("Size of the recording")).toBeNull();
+  });
+
+  test("a subject the notes found is written up as a document of its own, again or deleted", async () => {
+    stored[0].topics = ["Как устроен релиз", "Лицензии"];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    fireEvent.click(within(screen.getByLabelText("Worth a document")).getByText("Как устроен релиз"));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_write_document", args: { id: "m1", topic: "Как устроен релиз" } });
+    expect(screen.getByRole("status").textContent).toContain("Writing up “Как устроен релиз”");
+    const suggested = within(screen.getByLabelText("Worth a document"));
+    expect(suggested.queryByText("Как устроен релиз")).toBeNull();
+    expect((suggested.getByText("Лицензии") as HTMLButtonElement).disabled).toBe(true); // one job at a time
+    expect(within(screen.getByRole("region", { name: "Как устроен релиз" })).getByText("Writing…")).toBeTruthy();
+
+    await emit({ kind: "documentDelta", id: "m1", topic: "Лицензии", text: "not this one" });
+    await emit({ kind: "documentDelta", id: "m1", topic: "Как устроен релиз", text: "## Шаги\n\nСобрать сборку." });
+    expect(screen.getByRole("region", { name: "Как устроен релиз" }).textContent).toContain("Собрать сборку.");
+    expect(screen.getByRole("region", { name: "Как устроен релиз" }).textContent).not.toContain("not this one");
+    expect(screen.getByRole("region", { name: "Notes" }).textContent).not.toContain("Собрать");
+
+    stored[0].documents = [{ topic: "Как устроен релиз", text: "Собрать сборку и выпустить." }];
+    await act(async () => finishDocument());
+    await settle();
+    const written = within(screen.getByRole("region", { name: "Как устроен релиз" }));
+    expect(written.getByText("Собрать сборку и выпустить.")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    fireEvent.click(written.getByText("Write again"));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_write_document", args: { id: "m1", topic: "Как устроен релиз" } });
+    await act(async () => finishDocument());
+    await settle();
+
+    fireEvent.click(screen.getByLabelText("Delete Как устроен релиз"));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "meeting_delete_document", args: { id: "m1", topic: "Как устроен релиз" } });
+    expect(screen.queryByRole("region", { name: "Как устроен релиз" })).toBeNull();
+    expect(within(screen.getByLabelText("Worth a document")).getByText("Как устроен релиз")).toBeTruthy();
+  });
+
+  test("notes streaming in do not show the section their subjects come from", () => {
+    expect(withoutTopics("## Итоги\nДа.\n\n## Documents\n- Релиз\n- Лицензии")).toBe("## Итоги\nДа.");
+    expect(withoutTopics("## Итоги\n\n## documents\n- Релиз\n\n## Вопросы\n- Когда?")).toBe("## Итоги\n\n\n## Вопросы\n- Когда?");
+    expect(withoutTopics("## Итоги\n- Documents")).toBe("## Итоги\n- Documents");
+  });
+
+  test("the notes, a document and the transcript each fold to their title, their actions kept", async () => {
+    stored[0].documents = [{ topic: "Как устроен релиз", text: "Собрать сборку." }];
+    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    fireEvent.click(screen.getByText("planning.wav"));
+    await settle();
+    for (const [card, inside] of [
+      ["Notes", "Release on Friday."],
+      ["Как устроен релиз", "Собрать сборку."],
+      ["Transcript", "Я подготовлю релиз."],
+    ]) {
+      const region = within(screen.getByRole("region", { name: card }));
+      const fold = region.getByRole("button", { name: card });
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(fold);
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(region.queryByText(inside)).toBeNull();
+      if (card !== "Transcript") expect(region.getByText("Write again")).toBeTruthy();
+    }
+    expect(within(screen.getByRole("region", { name: "Transcript" })).queryByLabelText("Speakers")).toBeNull(); // they fold with it
+    fireEvent.click(within(screen.getByRole("region", { name: "Notes" })).getByRole("button", { name: "Notes" }));
+    expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Release on Friday.")).toBeTruthy();
   });
 
   test("a meeting whose recording is gone shows no size", async () => {
@@ -433,6 +518,10 @@ describe("the meetings page", () => {
     await settle();
     expect(calls.filter((c) => c.command === "meeting_process_recording").map((c) => c.args?.id)).toEqual(["r1"]);
     expect(screen.getByRole("status").textContent).toContain("Starting");
+    // The one being transcribed is neither asked for again nor deleted under the job.
+    expect(screen.getByText("Transcribing")).toBeTruthy();
+    expect(screen.getAllByText("Transcribe")).toHaveLength(1);
+    expect((screen.getAllByLabelText(/^Delete Recorded call/)[0] as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(second);
     await settle();

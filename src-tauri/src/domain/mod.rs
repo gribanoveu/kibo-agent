@@ -18,6 +18,7 @@ pub mod next_prompt;
 pub mod conversation_mode;
 pub mod chat_role;
 pub mod prototype;
+pub mod artifacts;
 pub mod kube;
 pub mod kube_probe;
 pub mod kube_view;

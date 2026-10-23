@@ -505,3 +505,23 @@ describe("rewinding a chat", () => {
     expect(called("rewind_apply").length).toBe(applied);
   });
 });
+
+describe("deleting a chat", () => {
+  test("a delete that failed rejects with why, and the list is read again either way", async () => {
+    const { result } = renderHook(() => usePlainChat());
+    results.chat_delete = new Error("database is locked");
+    let failed: unknown = null;
+    await act(async () => {
+      await result.current.remove("gone").catch((e) => (failed = e));
+    });
+    expect(failed).toBe("database is locked");
+    expect(called("plain_chat_list").length).toBeGreaterThan(0);
+
+    delete results.chat_delete;
+    let removed: boolean | undefined;
+    await act(async () => {
+      removed = await result.current.remove("gone");
+    });
+    expect(removed).toBe(true);
+  });
+});

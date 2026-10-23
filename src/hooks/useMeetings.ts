@@ -7,6 +7,7 @@ import {
   meetingDenoiseGet,
   meetingDenoiseSet,
   meetingDelete,
+  meetingDeleteDocument,
   meetingGet,
   meetingJob,
   meetingList,
@@ -21,6 +22,7 @@ import {
   meetingRenameSpeaker,
   meetingStop,
   meetingSummarize,
+  meetingWriteDocument,
   onMeetingEvent,
   type Meeting,
   type MeetingInfo,
@@ -36,13 +38,15 @@ export type Job = MeetingJob;
  * backend runs at a time. Events name their meeting; a piece of notes is kept
  * for the meeting it is about and shown only while that one is open. Beside
  * them, the call being recorded and the recorded ones waiting to be transcribed.
+ * `first` is the meeting open to begin with — one another page asked for.
  */
-export function useMeetings() {
+export function useMeetings(first?: string) {
   const [list, setList] = useState<MeetingInfo[]>([]);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(first ?? null);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [job, setJob] = useState<Job | null>(null);
-  const [draft, setDraft] = useState<{ id: string; text: string } | null>(null);
+  // What is being written now, for meeting `id`: its notes (`topic` null) or its document on `topic`.
+  const [draft, setDraft] = useState<{ id: string; topic: string | null; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recordings, setRecordings] = useState<RecordingInfo[]>([]);
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -50,6 +54,8 @@ export function useMeetings() {
   const [denoise, setDenoise] = useState(true);
   // Recordings to transcribe once the job running now ends, in order.
   const [queued, setQueued] = useState<string[]>([]);
+  // The recording the job running now transcribes: the job is named after the meeting it makes, not the recording.
+  const [transcribing, setTranscribing] = useState<string | null>(null);
   // Recordings stopped here: a level event about one that lands after the stop is late, not a new recording.
   const stoppedIds = useRef(new Set<string>());
   // A Record or Stop on its way: a second click is not a second call.
@@ -102,8 +108,9 @@ export function useMeetings() {
         setRecording((now) => (now?.id === event.id ? null : now));
         setError(event.error);
         void readList();
-      } else if (event.kind === "summaryDelta") {
-        setDraft((now) => ({ id: event.id, text: (now?.id === event.id ? now.text : "") + event.text }));
+      } else if (event.kind === "summaryDelta" || event.kind === "documentDelta") {
+        const topic = event.kind === "documentDelta" ? event.topic : null;
+        setDraft((now) => ({ id: event.id, topic, text: (now?.id === event.id && now.topic === topic ? now.text : "") + event.text }));
       } else {
         ends.current += 1;
         setJob(null);
@@ -163,18 +170,24 @@ export function useMeetings() {
   };
 
   const summarize = (id: string) => run({ kind: "summary", id, stage: "notes" }, () => meetingSummarize(id));
+  const writeDocument = (id: string, topic: string) => run({ kind: "document", id, topic, stage: "notes" }, () => meetingWriteDocument(id, topic));
 
   // One job at a time: a recording asked for while one runs waits for it to end.
+  const transcribeNow = (id: string) => {
+    setTranscribing(id);
+    void run({ kind: "process" }, () => meetingProcessRecording(id)).finally(() => setTranscribing((now) => (now === id ? null : now)));
+  };
   const transcribe = (id: string) => {
+    if (id === transcribing) return;
     if (jobRef.current !== null) setQueued((now) => (now.includes(id) ? now : [...now, id]));
-    else void run({ kind: "process" }, () => meetingProcessRecording(id));
+    else transcribeNow(id);
   };
   // ponytail: the queue is the page's; one left when the page closes stays in the list for Transcribe.
   useEffect(() => {
     if (job !== null || queued.length === 0) return;
     const [next, ...rest] = queued;
     setQueued(rest);
-    void run({ kind: "process" }, () => meetingProcessRecording(next));
+    transcribeNow(next);
   }, [job, queued]);
 
   const record = async () => {
@@ -257,6 +270,17 @@ export function useMeetings() {
     }
   };
 
+  const deleteDocument = async (topic: string) => {
+    const id = openRef.current;
+    if (id === null) return;
+    try {
+      const after = await meetingDeleteDocument(id, topic);
+      if (openRef.current === id) setMeeting(after);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const remove = async (id: string) => {
     try {
       await meetingDelete(id);
@@ -273,15 +297,18 @@ export function useMeetings() {
     openId,
     open: setOpenId,
     job,
-    draft: draft && draft.id === openId ? draft.text : null,
+    draft: draft && draft.id === openId ? { topic: draft.topic, text: draft.text } : null,
     error,
     clearError: () => setError(null),
     importRecording,
     summarize,
+    writeDocument,
+    deleteDocument,
     recordings,
     recording,
     switching,
     queued,
+    transcribing,
     autoProcess,
     denoise,
     record,

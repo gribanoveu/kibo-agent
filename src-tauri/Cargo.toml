@@ -100,6 +100,8 @@ nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 # Recording a call (`infra::meeting_recorder`): the microphone, and the output's
 # sound as loopback — a Core Audio process tap on macOS 14.6+, WASAPI on Windows.
 cpal = "0.18.2"
+# Free space on the disk the app keeps its files on (the Artifacts page).
+fs4 = { version = "1.1.0", default-features = false }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

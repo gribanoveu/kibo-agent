@@ -8,7 +8,7 @@ import type { AsideTab } from "../types";
  */
 export type Combo = { code: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean };
 
-export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer";
+export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts";
 type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
@@ -57,6 +57,8 @@ export const SHORTCUTS = {
   textLarger: { label: "Larger text", group: "Markdown viewer", combos: [{ code: "Equal", mod: true }] },
   textSmaller: { label: "Smaller text", group: "Markdown viewer", combos: [{ code: "Minus", mod: true }] },
   textReset: { label: "Text at its usual size", group: "Markdown viewer", combos: [{ code: "Digit0", mod: true }] },
+  artifactOpen: { label: "Open the folder or file chosen in the list", group: "Artifacts", combos: [{ code: "Enter" }, { code: "NumpadEnter" }] },
+  artifactUp: { label: "Up one folder", group: "Artifacts", combos: [{ code: "Backspace" }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;
@@ -99,6 +101,7 @@ const KEY_LABELS: Record<string, string> = {
   ArrowDown: "↓",
   ArrowUp: "↑",
   NumpadEnter: "Keypad Enter",
+  Backspace: "⌫",
 };
 
 /** The keys to draw, in the platform's order: ⌃⌥⇧⌘ on a Mac, Ctrl+Alt+Shift elsewhere. */

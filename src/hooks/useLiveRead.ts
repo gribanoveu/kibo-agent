@@ -6,17 +6,22 @@ import { useEffect, useState } from "react";
  * again, never the state itself (AGENTS.md, "Keeping the frontend current").
  * A read that lands after it stopped listening is dropped. `setValue` and
  * `setError` are for the hook's own actions, which answer with the new list.
+ * `key` names what is read — an open folder, say: a new one starts over, and
+ * `read` is the one drawn with it.
  */
 export function useLiveRead<T>(
   read: () => Promise<T>,
   listen: (changed: () => void) => Promise<() => void>,
   initial: T,
   on = true,
+  key = "",
 ) {
   const [value, setValue] = useState<T>(initial);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!on) return;
+    // What failed is the last key's: the new one has not failed yet.
+    setError(null);
     let live = true;
     const load = () =>
       read().then(
@@ -34,6 +39,6 @@ export function useLiveRead<T>(
       live = false;
       unlisten?.();
     };
-  }, [on]);
+  }, [on, key]);
   return { value, setValue, error, setError };
 }
