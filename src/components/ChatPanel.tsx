@@ -1172,17 +1172,21 @@ function TaskTicker({ checklist }: { checklist: Task[] }) {
     box.scrollTo?.({ top: row.offsetTop - (box.clientHeight - row.offsetHeight) / 2, behavior: "smooth" });
   }, [current, checklist.length]);
   if (!hasOpen(checklist)) return null;
+  // The frame holds the padding, so the list scrolls inside it and a row
+  // never shows half above or below the border.
   return (
-    <ul ref={list} className="task-ticker" aria-label="Checklist">
-      {checklist.map((task, index) => {
-        const { icon: Icon, label } = TASK_MARK[task.status];
-        return (
-          <li key={task.id} className={`task-ticker-row ${task.status}`} aria-current={index === current || undefined}>
-            <Icon size={14} className="task-ticker-mark" aria-label={label} />
-            <span className="task-ticker-title">{task.title}</span>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="task-ticker">
+      <ul ref={list} className="task-ticker-list" aria-label="Checklist">
+        {checklist.map((task, index) => {
+          const { icon: Icon, label } = TASK_MARK[task.status];
+          return (
+            <li key={task.id} className={`task-ticker-row ${task.status}`} aria-current={index === current || undefined}>
+              <Icon size={14} className="task-ticker-mark" aria-label={label} />
+              <span className="task-ticker-title">{task.title}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
