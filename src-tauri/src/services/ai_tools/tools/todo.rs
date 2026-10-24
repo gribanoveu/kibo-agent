@@ -36,6 +36,9 @@ pub fn todo(todos: &mut Vec<Task>, args: &TodoArgs) -> Result<ToolResult, ToolEr
 fn write(todos: &[Task], titles: &[String]) -> Result<Vec<Task>, ToolError> {
     let finished = todos.iter().all(|t| matches!(t.status, TodoStatus::Completed | TodoStatus::Cancelled));
     let kept: &[Task] = if finished { &[] } else { todos };
+    if kept.is_empty() && titles.len() > MAX_TASKS {
+        return Err(ToolError::TodoListTooLong { adding: titles.len(), max: MAX_TASKS });
+    }
     if kept.len() + titles.len() > MAX_TASKS {
         return Err(ToolError::TooManyTasks {
             current: kept.len(),
@@ -439,6 +442,17 @@ mod tests {
 
         assert!(matches!(err, ToolError::TooManyTasks { max: MAX_TASKS, .. }));
         assert_eq!(todos.len(), MAX_TASKS, "the list is unchanged");
+    }
+
+    /// A new list too long says so, not that it "already has 0" tasks.
+    #[test]
+    fn a_new_list_over_the_cap_is_told_to_merge_steps() {
+        let mut todos = Vec::new();
+        let many: Vec<String> = (0..=MAX_TASKS).map(|i| format!("task {i}")).collect();
+        let err = todo(&mut todos, &TodoArgs::Write { tasks: many }).expect_err("over the cap");
+        assert!(matches!(err, ToolError::TodoListTooLong { adding, max: MAX_TASKS } if adding == MAX_TASKS + 1), "{err}");
+        assert!(err.to_string().starts_with("a todo list holds at most 20 tasks, and this one has 21 — merge"), "{err}");
+        assert!(todos.is_empty());
     }
 
     /// A failed call must not half-apply: the caller's list is only replaced

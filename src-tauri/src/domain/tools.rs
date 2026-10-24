@@ -1177,6 +1177,10 @@ pub enum ToolError {
         adding: usize,
         max: usize,
     },
+    /// A new list longer than any list may be: nothing on it to finish
+    /// first, so the way out is fewer, larger steps.
+    #[error("a todo list holds at most {max} tasks, and this one has {adding} — merge small steps into one task, then write it again")]
+    TodoListTooLong { adding: usize, max: usize },
     /// A `todo update` naming an id that is not in the list — usually a stale
     /// id from earlier in the conversation, or a checklist the model never
     /// created before trying to complete a task on it.

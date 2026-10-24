@@ -11,7 +11,7 @@ The "Knowledge" section of your instructions lists what is already written about
 
 Find the topics without reading the code end to end: the layout of the tracked files, the README, the build manifest and the configuration (`application.yml`, `.env.example`, Helm values and the like), then the entry points — controllers and routes, message producers and consumers, scheduled jobs, the database access layer.
 
-Write the plan with `todo`, one task per topic and kind:
+Write the plan with `todo`, one task per topic and kind — at most 20 tasks, `service` included; when there are more topics, merge the small ones of a kind into one task (one document may still cover each):
 
 - `service` — one per repository: what it is for, what it talks to. Always the last task.
 - `api` — one per group of endpoints that belong together.
