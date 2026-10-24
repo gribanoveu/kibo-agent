@@ -107,6 +107,28 @@ impl KnowledgeStore {
         Ok(RepoRecord { name, repository_id: id, path, commit: None })
     }
 
+    pub fn repos(&self) -> Result<Vec<RepoRecord>, KnowledgeStoreError> {
+        read_list(&self.dir.join(REPOS_FILE))
+    }
+
+    /// Every file kept as a document, by its path from the base:
+    /// `<domain>/<repo>/<slug>.md`. Anything else under it is left out.
+    pub fn documents(&self) -> Result<Vec<String>, KnowledgeStoreError> {
+        let mut found = Vec::new();
+        for domain in children(&self.dir)? {
+            for repo in children(&self.dir.join(&domain))? {
+                for file in children(&self.dir.join(&domain).join(&repo))? {
+                    let relative = format!("{domain}/{repo}/{file}");
+                    if crate::domain::knowledge::place_of(&relative).is_some() {
+                        found.push(relative);
+                    }
+                }
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+
     /// Where the document `<repo>/<slug>` is kept, in whichever domain.
     pub fn find(&self, repo: &str, slug: &str) -> Result<Option<PathBuf>, KnowledgeStoreError> {
         let entries = match fs::read_dir(&self.dir) {
@@ -162,6 +184,15 @@ impl KnowledgeStore {
 impl KnowledgeStore {
     pub fn at(dir: PathBuf) -> Self {
         Self { dir }
+    }
+}
+
+/// The names in a folder; none when it is not one.
+fn children(dir: &Path) -> Result<Vec<String>, KnowledgeStoreError> {
+    match fs::read_dir(dir) {
+        Ok(entries) => Ok(entries.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect()),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => Ok(Vec::new()),
+        Err(source) => Err(KnowledgeStoreError::Read { path: dir.to_path_buf(), source }),
     }
 }
 
@@ -260,6 +291,20 @@ mod tests {
             store.apply(Change { delete: vec!["tariff".into(), "never-was".into()], ..write(repo, &[]) }).unwrap();
             assert_eq!(store.find("usn-api", "tariff").unwrap(), None);
             assert!(store.find("usn-api", "service").unwrap().is_some(), "only what was named is deleted");
+        });
+    }
+
+    #[test]
+    fn the_documents_are_the_files_where_documents_go() {
+        with_app_dir("knowledge-list", || {
+            let store = store("knowledge-list-base");
+            assert_eq!(store.documents().unwrap(), Vec::<String>::new(), "no base yet");
+            let repo = store.repo(&repo_at("knowledge-list-repo", "git@h:o/usn-api.git")).unwrap();
+            store.apply(write(repo, &[("usn", "tariff", "t"), ("general", "service", "s")])).unwrap();
+            fs::write(store.dir.join("usn").join("usn-api").join("notes.txt"), "x").unwrap();
+            fs::write(store.dir.join("usn").join("stray.md"), "x").unwrap();
+            assert_eq!(store.documents().unwrap(), ["general/usn-api/service.md", "usn/usn-api/tariff.md"]);
+            assert_eq!(store.repos().unwrap().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["usn-api"]);
         });
     }
 

@@ -322,13 +322,14 @@ mod tests {
                         section: Some("Формат".into()),
                         text: LEAK.into(),
                         evidence: vec!["src/a.rs#L1".into()],
+                        stale: false,
                     }],
                     weak: false,
                 },
             ),
             ToolName::KnowledgeRead => (
                 Some(ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs { id: "tax-api/events".into(), section: None })),
-                ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into() },
+                ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into(), stale: false },
             ),
             ToolName::ReportFinding => (
                 None,

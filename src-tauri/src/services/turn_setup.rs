@@ -132,6 +132,11 @@ pub fn run_in_folder(
     };
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
+    // A base that cannot be read costs the prompt its block; the tools say why when called.
+    let knowledge_overview = match features.is_on(Feature::Knowledge) {
+        true => crate::services::knowledge::overview(workspace).ok(),
+        false => None,
+    };
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
 
     let turn = Turn {
@@ -147,6 +152,7 @@ pub fn run_in_folder(
         shell_described: &shell_described,
         search: app.search,
         knowledge: app.knowledge,
+        knowledge_overview: knowledge_overview.as_ref(),
         skills: &skills,
         rules: &rules,
         log_call: &log_call,

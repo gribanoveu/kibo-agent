@@ -477,6 +477,10 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
+    let features = crate::services::features::enabled();
+    let knowledge = root
+        .filter(|_| features.is_on(crate::domain::features::Feature::Knowledge))
+        .and_then(|root| crate::services::knowledge::overview(root).ok());
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -489,10 +493,11 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
+            knowledge: knowledge.as_ref(),
         },
         &mcp,
         crate::services::web_search::is_on(WebSearchPlace::Agent),
-        &crate::services::features::enabled(),
+        &features,
     )
 }
 

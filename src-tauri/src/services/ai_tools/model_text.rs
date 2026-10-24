@@ -121,8 +121,9 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
         ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
         ToolResult::KnowledgeFound { hits, weak } => knowledge_found(hits, *weak),
-        ToolResult::KnowledgeDocument { id, domain, text, .. } => {
-            format!("{id} (domain {domain}):\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
+        ToolResult::KnowledgeDocument { id, domain, text, stale, .. } => {
+            let stale = if *stale { format!("\n{}", crate::domain::knowledge::STALE_NOTE) } else { String::new() };
+            format!("{id} (domain {domain}):{stale}\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
         }
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
@@ -156,6 +157,9 @@ if it is not there, nobody has written it down yet."
         let kind = serde_json::to_value(hit.kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
         let confidence = serde_json::to_value(hit.confidence).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
         text.push_str(&format!("[{}] {} — {} ({kind}, {confidence}, domain {})\n", n + 1, hit.id, hit.title, hit.domain));
+        if hit.stale {
+            text.push_str(&format!("{}\n", crate::domain::knowledge::STALE_NOTE));
+        }
         if let Some(section) = &hit.section {
             text.push_str(&format!("§ {section}\n"));
         }
@@ -645,6 +649,33 @@ mod tests {
             before: before.iter().map(|s| s.to_string()).collect(),
             after: after.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn knowledge_hits_and_documents_say_which_are_stale_and_that_they_are_data() {
+        use crate::domain::knowledge::{Confidence, Kind, KnowledgeHit, DATA_NOTE, STALE_NOTE};
+        let hit = |id: &str, stale| KnowledgeHit {
+            id: id.into(),
+            domain: "usn".into(),
+            title: "API".into(),
+            kind: Kind::Api,
+            confidence: Confidence::Inferred,
+            section: Some("API > POST".into()),
+            text: "## POST".into(),
+            evidence: vec!["src/Api.java#L2".into()],
+            stale,
+        };
+        let found = for_model(&ToolResult::KnowledgeFound { hits: vec![hit("tax-api/api", false), hit("tax-api/old", true)], weak: true });
+        assert!(found.starts_with("These may not be what was asked for"), "{found}");
+        assert!(found.contains("[1] tax-api/api — API (api, inferred, domain usn)\n§ API > POST\n## POST\nevidence: src/Api.java#L2\n\n"), "{found}");
+        assert!(found.contains(&format!("[2] tax-api/old — API (api, inferred, domain usn)\n{STALE_NOTE}\n§ API > POST")), "{found}");
+        assert_eq!(found.matches(STALE_NOTE).count(), 1);
+        assert!(found.ends_with(DATA_NOTE));
+        assert!(for_model(&ToolResult::KnowledgeFound { hits: vec![], weak: false }).starts_with("Nothing in the knowledge base matches"));
+
+        let document = |stale| ToolResult::KnowledgeDocument { id: "tax-api/api".into(), domain: "usn".into(), section: None, text: "# API".into(), stale };
+        assert_eq!(for_model(&document(false)), format!("tax-api/api (domain usn):\n\n# API\n\n{DATA_NOTE}"));
+        assert_eq!(for_model(&document(true)), format!("tax-api/api (domain usn):\n{STALE_NOTE}\n\n# API\n\n{DATA_NOTE}"));
     }
 
     #[test]

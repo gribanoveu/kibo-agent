@@ -210,6 +210,7 @@ mod tests {
                 worktree_of: None,
                 language: None,
                 mcp_servers: mcp.notes(),
+                knowledge: None,
             },
             mcp,
             false,

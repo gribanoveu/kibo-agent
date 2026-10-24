@@ -1648,6 +1648,7 @@ pub enum ToolResult {
         domain: String,
         section: Option<String>,
         text: String,
+        stale: bool,
     },
     /// An MCP tool's answer, already text.
     Mcp { text: String },

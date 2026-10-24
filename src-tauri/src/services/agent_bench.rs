@@ -308,6 +308,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         notes_typed: &notes_typed,
         search: Some(search),
         knowledge: None,
+        knowledge_overview: None,
         skills: &[],
         rules: &rules,
         log_call: &log_call,

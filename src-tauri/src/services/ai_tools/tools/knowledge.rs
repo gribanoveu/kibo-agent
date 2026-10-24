@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 
 use crate::domain::code_search::SearchFilter;
 use crate::domain::knowledge::{self, Document, Header, KnowledgeHit, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
@@ -24,6 +25,7 @@ use crate::infra::knowledge_store::{Change, KnowledgeStore};
 use crate::infra::repository_identity::head_commit;
 use crate::services::ai_tools::resolve::resolve_existing;
 use crate::services::ai_tools::tools::semantic_search::shorten;
+use crate::services::knowledge::Staleness;
 
 const DEFAULT_HITS: usize = 8;
 const MAX_HITS: usize = 20;
@@ -162,6 +164,8 @@ pub fn knowledge_search(args: &KnowledgeSearchArgs, deps: &ToolDeps) -> Result<T
     let found = search(&[args.query.as_str()], None, asked, &filter).map_err(fail)?;
 
     let store = KnowledgeStore::open().map_err(|e| fail(e.to_string()))?;
+    let roots = repository_roots(&store);
+    let mut staleness = Staleness::default();
     let mut headers: HashMap<String, Option<Header>> = HashMap::new();
     let mut hits = Vec::new();
     for found in found.matches {
@@ -181,6 +185,7 @@ pub fn knowledge_search(args: &KnowledgeSearchArgs, deps: &ToolDeps) -> Result<T
         }
         // The first section carries the frontmatter, which the header already says.
         let text = split_frontmatter(&found.text).map_or(found.text.as_str(), |(_, body)| body);
+        let stale = stale_in(&roots, &mut staleness, &id, header);
         hits.push(KnowledgeHit {
             id,
             domain: domain.to_string(),
@@ -190,6 +195,7 @@ pub fn knowledge_search(args: &KnowledgeSearchArgs, deps: &ToolDeps) -> Result<T
             section: found.name,
             text: shorten(text.trim(), HIT_CHARS),
             evidence: header.evidence.clone(),
+            stale,
         });
         if hits.len() == limit {
             break;
@@ -210,6 +216,9 @@ pub fn knowledge_read(args: &KnowledgeReadArgs) -> Result<ToolResult, ToolError>
     let text = fs::read_to_string(&path).map_err(|e| fail(format!("could not read it: {e}")))?;
     let domain = path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
     let section = args.section.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let id = format!("{repo}/{slug}");
+    let stale = knowledge::read_header(&text)
+        .is_some_and(|(header, _)| stale_in(&repository_roots(&store), &mut Staleness::default(), &id, &header));
     let text = match section {
         None => text,
         Some(wanted) => {
@@ -219,12 +228,19 @@ pub fn knowledge_read(args: &KnowledgeReadArgs) -> Result<ToolResult, ToolError>
                 .to_string()
         }
     };
-    Ok(ToolResult::KnowledgeDocument {
-        id: format!("{repo}/{slug}"),
-        domain: domain.unwrap_or_default(),
-        section: section.map(str::to_string),
-        text,
-    })
+    Ok(ToolResult::KnowledgeDocument { id, domain: domain.unwrap_or_default(), section: section.map(str::to_string), text, stale })
+}
+
+/// Where each repository of the base was open last. A list that cannot be
+/// read leaves every document unmarked rather than failing the call.
+fn repository_roots(store: &KnowledgeStore) -> HashMap<String, PathBuf> {
+    store.repos().unwrap_or_default().into_iter().map(|r| (r.name, PathBuf::from(r.path))).collect()
+}
+
+/// Whether document `id` is stale, in its repository as it is on this machine.
+fn stale_in(roots: &HashMap<String, PathBuf>, staleness: &mut Staleness, id: &str, header: &Header) -> bool {
+    let owner = id.split_once('/').map_or(id, |(owner, _)| owner);
+    roots.get(owner).is_some_and(|root| staleness.of(root, header))
 }
 
 /// What is wrong with citing `evidence`: not a file of the open folder, or
@@ -692,10 +708,10 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
             let read = |id: &str, section: Option<&str>| {
                 knowledge_read(&KnowledgeReadArgs { id: id.into(), section: section.map(str::to_string) }).map_err(|e| e.to_string())
             };
-            let ToolResult::KnowledgeDocument { id, domain, section, text } = read("tax-api/tariff", None).unwrap() else {
+            let ToolResult::KnowledgeDocument { id, domain, section, text, stale } = read("tax-api/tariff", None).unwrap() else {
                 panic!()
             };
-            assert_eq!((id.as_str(), domain.as_str(), section), ("tax-api/tariff", "general", None));
+            assert_eq!((id.as_str(), domain.as_str(), section, stale), ("tax-api/tariff", "general", None, false));
             assert!(text.starts_with("---\nid: tax-api/tariff") && text.contains("## Пример"), "{text}");
 
             let ToolResult::KnowledgeDocument { domain, section, text, .. } = read(" tax-api/tariff ", Some("входы")).unwrap() else {
@@ -710,6 +726,47 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
             assert!(read("tax-api/nothing", None).unwrap_err().contains("there is no document `tax-api/nothing`"));
             assert!(read("tariff", None).unwrap_err().contains("not a document id"));
             assert!(read("../tariff", None).unwrap_err().contains("not a document id"));
+        });
+    }
+
+    /// Commits the folder's files as they are now.
+    fn commit_all(dir: &Path) {
+        let git = git2::Repository::open(dir).unwrap();
+        let mut index = git.index().unwrap();
+        index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+        let tree = git.find_tree(index.write_tree().unwrap()).unwrap();
+        let me = git2::Signature::now("t", "t@example.com").unwrap();
+        let parent = git.head().ok().and_then(|h| h.peel_to_commit().ok());
+        git.commit(Some("HEAD"), &me, &me, "c", &tree, &parent.iter().collect::<Vec<_>>()).unwrap();
+    }
+
+    #[test]
+    fn a_document_whose_evidence_changed_since_is_stale_where_it_is_found_and_read() {
+        with_app_dir("knowledge-stale", || {
+            let (scope, dir) = repo("knowledge-stale-repo");
+            fs::write(dir.join("src/Job.java"), "j\n").unwrap();
+            commit_all(&dir);
+            let pass = |_: &str, _: &str| Ok(());
+            let deps = ToolDeps { check: Some(&pass), ..ToolDeps::default() };
+            let call = args(&[doc("declarations-api", "usn", "src/Job.java"), TARIFF.to_string()], &[], &[usn()]);
+            knowledge_write(&scope, &call, &deps).unwrap();
+            fs::write(dir.join("src/Api.java"), "changed\n").unwrap();
+            commit_all(&dir);
+
+            let (with, _) = answering(vec![
+                found("usn/tax-api/declarations-api.md", None, "# Декларации API"),
+                found("general/tax-api/tariff.md", None, "# Расчёт тарифа"),
+            ]);
+            let hits = search(query("x"), &with).unwrap();
+            assert_eq!(hits.iter().map(|h| (h.id.as_str(), h.stale)).collect::<Vec<_>>(), [("tax-api/declarations-api", false), ("tax-api/tariff", true)]);
+            let read = |id: &str, section: Option<&str>| {
+                match knowledge_read(&KnowledgeReadArgs { id: id.into(), section: section.map(str::to_string) }) {
+                    Ok(ToolResult::KnowledgeDocument { stale, .. }) => stale,
+                    other => panic!("{other:?}"),
+                }
+            };
+            assert!(read("tax-api/tariff", Some("Входы")), "a section of a stale document is stale");
+            assert!(!read("tax-api/declarations-api", None));
         });
     }
 

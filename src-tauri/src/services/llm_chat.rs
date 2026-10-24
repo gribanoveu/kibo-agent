@@ -196,6 +196,9 @@ pub struct Turn<'a> {
     /// Search of the knowledge base, for `knowledgeSearch`; `None` where the
     /// app has none.
     pub knowledge: Option<CodeSearchFn>,
+    /// What the knowledge base has, for the prompt; `None` while the feature
+    /// is off. Read once per turn, as the skills are.
+    pub knowledge_overview: Option<&'a crate::domain::knowledge::Overview>,
     /// The open folder's skills and the user's, listed in the prompt for
     /// `skill` to load. Read once per turn, so the prompt does not change
     /// between its rounds.
@@ -1217,6 +1220,7 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         search: turn.search.clone(),
         // A helper looks up what another repository's agent wrote, as the calling turn would.
         knowledge: turn.knowledge.clone(),
+        knowledge_overview: turn.knowledge_overview,
         skills: turn.skills,
         rules: turn.rules,
         log_call: turn.log_call,
@@ -1558,6 +1562,7 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
+        knowledge: turn.knowledge_overview,
     }
 }
 
@@ -2148,6 +2153,7 @@ mod tests {
         steering: Arc<SteeringQueue>,
         search: Option<CodeSearchFn>,
         skills: Vec<Skill>,
+        knowledge_overview: Option<crate::domain::knowledge::Overview>,
         rules: Vec<RuleFile>,
         logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
         plan: Option<String>,
@@ -2201,6 +2207,7 @@ mod tests {
             steering,
             search: None,
             skills: Vec::new(),
+            knowledge_overview: None,
             rules: Vec::new(),
             logged: Arc::new(Mutex::new(Vec::new())),
             plan: None,
@@ -2259,6 +2266,7 @@ mod tests {
                 notes_typed: &notes_typed,
                 search: self.search.clone(),
                 knowledge: None,
+                knowledge_overview: self.knowledge_overview.as_ref(),
                 shell: &shell,
                 shell_described: &self.shell_described,
                 skills: &self.skills,
@@ -5589,6 +5597,26 @@ mod tests {
             let back = tool_contents(&h.provider.requests()[1]);
             assert!(back[0].starts_with("Saved to the knowledge base:"), "{back:?}");
         });
+    }
+
+    /// What the knowledge base has is in the prompt of the turn and of its
+    /// helper — which reads the base but does not write it.
+    #[test]
+    fn the_knowledge_block_reaches_the_turn_and_its_helper() {
+        let mut h = harness(
+            "knowledge-block",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is nowhere"), text("done")],
+        );
+        h.knowledge_overview = Some(crate::domain::knowledge::Overview { repo: "tax-api".into(), ..Default::default() });
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        let block = |request: &ChatRequest| {
+            request.messages.iter().filter(|m| m.role == LlmRole::System).find_map(|m| m.content.clone().filter(|c| c.starts_with("## Knowledge")))
+        };
+        let caller = block(&requests[0]).expect("the turn's prompt has it");
+        assert!(caller.contains("`knowledgeWrite`") && caller.contains("`tax-api` in the base"), "{caller}");
+        let helper = block(&requests[1]).expect("the helper's prompt has it");
+        assert!(!helper.contains("knowledgeWrite"), "{helper}");
     }
 
     /// The helper works in a conversation of its own, and the calling turn

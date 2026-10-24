@@ -128,6 +128,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         notes_typed: &|| 0,
         search: None,
         knowledge: None,
+        knowledge_overview: None,
         skills: &[],
         rules: &[],
         log_call: chat.log_call,

@@ -312,7 +312,10 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.query) ?? "",
         meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "document" : "documents"}`,
         detail: hits
-          .map((h) => `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}\n${str(h.text) ?? ""}`)
+          .map(
+            (h) =>
+              `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}${h.stale === true ? " — stale" : ""}\n${str(h.text) ?? ""}`,
+          )
           .join("\n\n"),
       };
     }
@@ -323,7 +326,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       return {
         name,
         arg: `${str(args.id) ?? ""}${section ? ` § ${section}` : ""}`,
-        meta: str(result.domain),
+        meta: [str(result.domain), result.stale === true ? "stale" : undefined].filter(Boolean).join(" · ") || undefined,
         detail: str(result.text) ?? "",
       };
     }

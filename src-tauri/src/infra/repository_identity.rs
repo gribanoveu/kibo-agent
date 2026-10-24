@@ -17,7 +17,9 @@
 
 use std::path::Path;
 
-use git2::Repository;
+use git2::{Oid, Repository};
+
+use crate::domain::knowledge::Since;
 
 /// A stable name for the repository at `root`, as 64 hex characters.
 ///
@@ -67,6 +69,34 @@ pub fn head_commit(root: &Path) -> Option<String> {
     let repo = Repository::open(root).ok()?;
     let commit = repo.head().ok()?.peel_to_commit().ok()?;
     Some(commit.id().to_string())
+}
+
+/// The files changed at `root` between `commit` and HEAD, for what a document
+/// written at `commit` may no longer say. Renames are not looked for: a moved
+/// file is its old path deleted and its new one added, each a delta of its own
+/// whose `new_file` carries the path, a deleted one's too.
+/// `Unknown` when `root` is no repository with a HEAD; `Gone` when `commit` is
+/// not in it (rewritten history, a clone without it).
+pub fn changed_since(root: &Path, commit: &str) -> Since {
+    let Ok(repo) = Repository::open(root) else {
+        return Since::Unknown;
+    };
+    let Ok(head) = repo.head().and_then(|head| head.peel_to_tree()) else {
+        return Since::Unknown;
+    };
+    let then = Oid::from_str(commit).and_then(|id| repo.find_commit(id)).and_then(|commit| commit.tree());
+    let Ok(then) = then else {
+        return Since::Gone;
+    };
+    let Ok(diff) = repo.diff_tree_to_tree(Some(&then), Some(&head), None) else {
+        return Since::Gone;
+    };
+    let paths = diff
+        .deltas()
+        .filter_map(|delta| delta.new_file().path())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    Since::Changed(paths)
 }
 
 /// The canonical form of this repository's remote, if it has exactly one
@@ -218,6 +248,37 @@ mod tests {
         let id = repo.commit(Some("HEAD"), &me, &me, "first", &tree, &[]).unwrap();
         assert_eq!(head_commit(&dir), Some(id.to_string()));
         assert_eq!(head_commit(&temp_dir("head-plain")), None);
+    }
+
+    #[test]
+    fn what_changed_since_a_commit_is_every_path_it_touched() {
+        let dir = repo_with_remotes("changed-since", &[]);
+        let repo = Repository::open(&dir).unwrap();
+        let me = git2::Signature::now("t", "t@example.com").unwrap();
+        let commit = |files: &[(&str, &str)]| {
+            let mut index = repo.index().unwrap();
+            index.clear().unwrap();
+            for (path, text) in files {
+                let full = dir.join(path);
+                std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+                std::fs::write(&full, text).unwrap();
+                index.add_path(Path::new(path)).unwrap();
+            }
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<git2::Commit> = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect();
+            repo.commit(Some("HEAD"), &me, &me, "c", &tree, &parents.iter().collect::<Vec<_>>()).unwrap().to_string()
+        };
+        assert_eq!(changed_since(&dir, "abc"), Since::Unknown, "no HEAD yet");
+        let first = commit(&[("src/Api.java", "a"), ("src/Old.java", "o"), ("pom.xml", "p")]);
+        assert_eq!(changed_since(&dir, &first), Since::Changed(Default::default()));
+        commit(&[("src/Api.java", "b"), ("src/New.java", "o"), ("pom.xml", "p")]);
+        let Since::Changed(changed) = changed_since(&dir, &first) else { panic!() };
+        let mut changed: Vec<_> = changed.into_iter().collect();
+        changed.sort();
+        assert_eq!(changed, ["src/Api.java", "src/New.java", "src/Old.java"]);
+        assert_eq!(changed_since(&dir, "0123456789012345678901234567890123456789"), Since::Gone);
+        assert_eq!(changed_since(&dir, "not a commit"), Since::Gone);
+        assert_eq!(changed_since(&temp_dir("changed-plain"), &first), Since::Unknown);
     }
 
     // -------------------------------------------------------------- identity
