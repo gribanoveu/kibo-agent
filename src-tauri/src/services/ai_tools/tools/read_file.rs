@@ -60,6 +60,14 @@ pub fn read_file(
     reads: &mut ReadFiles,
 ) -> Result<ToolResult, ToolError> {
     if let Some(paths) = &args.paths {
+        // One file in `paths` with a range or an outline is that file read
+        // with `path`: what was meant is plain, and a refusal costs a round.
+        let mut named: Vec<&String> = std::iter::once(&args.path).chain(paths).filter(|p| !p.is_empty()).collect();
+        named.dedup();
+        let part = args.start_line.is_some() || args.end_line.is_some() || args.outline == Some(true);
+        if let ([one], true) = (named.as_slice(), part) {
+            return read_file(scope, &ReadFileArgs { path: (*one).clone(), paths: None, ..args.clone() }, reads);
+        }
         return read_files(scope, args, paths, reads);
     }
     if args.path.is_empty() {
@@ -764,11 +772,27 @@ mod tests {
         assert_eq!((files[0].end_line, files[0].truncated), (DATA_HEAD_LINES, true));
     }
 
+    /// A range or an outline on one file in `paths` is that file read with
+    /// `path`, as a model sends it: `paths: ["application.yml"]`, lines 195–280.
+    #[test]
+    fn one_file_in_paths_takes_a_range_as_path_does() {
+        let (scope, _) = fixture("read-many-one", "one\ntwo\nthree\n");
+        for args in [
+            ReadFileArgs { start_line: Some(2), end_line: Some(3), ..many("", &["file.txt"]) },
+            ReadFileArgs { start_line: Some(2), end_line: Some(3), ..many("file.txt", &["file.txt"]) },
+        ] {
+            assert!(matches!(read(&scope, &args), Ok(ToolResult::File { ref content, .. }) if content == "two\nthree\n"), "{args:?}");
+        }
+        let outline = ReadFileArgs { outline: Some(true), ..many("", &["file.txt"]) };
+        assert!(matches!(read(&scope, &outline), Ok(ToolResult::File { .. })), "a small file's outline is the file");
+    }
+
     #[test]
     fn paths_refuses_what_only_fits_one_file() {
-        let (scope, _) = fixture("read-many-refused", "one\n");
-        let ranged = ReadFileArgs { start_line: Some(1), ..many("", &["file.txt"]) };
-        let outline = ReadFileArgs { outline: Some(true), ..many("", &["file.txt"]) };
+        let (scope, root) = fixture("read-many-refused", "one\n");
+        std::fs::write(root.join("b.txt"), "b\n").unwrap();
+        let ranged = ReadFileArgs { start_line: Some(1), ..many("", &["file.txt", "b.txt"]) };
+        let outline = ReadFileArgs { outline: Some(true), ..many("file.txt", &["b.txt"]) };
         let names: Vec<String> = (0..=MAX_READ_PATHS).map(|n| format!("f{n}.txt")).collect();
         let too_many = many("", &names.iter().map(String::as_str).collect::<Vec<_>>());
         for refused in [ranged, outline, too_many, ReadFileArgs::default()] {
