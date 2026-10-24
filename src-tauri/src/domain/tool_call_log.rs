@@ -310,6 +310,26 @@ mod tests {
                 })),
                 ToolResult::KnowledgeWritten { repo: "tax-api".into(), written: vec!["tax-api/a".into()], deleted: vec![], new_domains: vec![] },
             ),
+            ToolName::KnowledgeSearch => (
+                Some(ToolCall::KnowledgeSearch(crate::domain::tools::KnowledgeSearchArgs { query: "tax events".into(), ..Default::default() })),
+                ToolResult::KnowledgeFound {
+                    hits: vec![crate::domain::knowledge::KnowledgeHit {
+                        id: "tax-api/events".into(),
+                        domain: "usn".into(),
+                        title: "Events".into(),
+                        kind: crate::domain::knowledge::Kind::Event,
+                        confidence: crate::domain::knowledge::Confidence::Confirmed,
+                        section: Some("Формат".into()),
+                        text: LEAK.into(),
+                        evidence: vec!["src/a.rs#L1".into()],
+                    }],
+                    weak: false,
+                },
+            ),
+            ToolName::KnowledgeRead => (
+                Some(ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs { id: "tax-api/events".into(), section: None })),
+                ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into() },
+            ),
             ToolName::ReportFinding => (
                 None,
                 ToolResult::FindingNoted { path: path(), start_line: 3, end_line: 4 },

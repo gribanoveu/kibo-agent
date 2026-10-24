@@ -23,6 +23,8 @@ const ACCOUNTED = new Set([
   "gitBlame",
   "gitLog",
   "semanticSearch",
+  "knowledgeSearch",
+  "knowledgeRead",
   "webSearch",
   "webFetch",
   "deepseekSearch",

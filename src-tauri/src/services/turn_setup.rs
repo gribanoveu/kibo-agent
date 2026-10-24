@@ -67,6 +67,8 @@ pub enum TurnSetupError {
 pub struct FolderHandles {
     /// The open folder's search, for `semanticSearch`.
     pub search: Option<CodeSearchFn>,
+    /// The knowledge base's, for `knowledgeSearch`.
+    pub knowledge: Option<CodeSearchFn>,
     /// The index's model, which web search reads pages with.
     pub embeddings: Option<Arc<dyn EmbeddingProvider>>,
     pub mcp_servers: Option<Arc<McpServers>>,
@@ -144,6 +146,7 @@ pub fn run_in_folder(
         shell: &shell,
         shell_described: &shell_described,
         search: app.search,
+        knowledge: app.knowledge,
         skills: &skills,
         rules: &rules,
         log_call: &log_call,

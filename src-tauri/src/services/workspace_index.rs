@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::domain::chunk_index::ChunkBuildOptions;
 use crate::domain::embeddings::EmbeddingProvider;
+use crate::domain::code_search::{CodeSearchResult, SearchMeta};
 use crate::domain::tools::CodeSearchFn;
 use crate::domain::workspace_index::{IndexEvent, IndexEventSink};
 use crate::infra::file_watcher::FileWatcher;
@@ -35,7 +36,14 @@ pub struct WorkspaceIndex {
     index_dir: PathBuf,
     provider: Arc<dyn EmbeddingProvider>,
     open: Mutex<Option<Open>>,
+    /// The knowledge base's own index (`docs/40-knowledge-base.md`), opened
+    /// by its first search.
+    knowledge: Arc<Mutex<Option<Arc<RepoIndexer>>>>,
 }
+
+/// The knowledge base's store under `index_dir`, beside the folders' stores,
+/// which are named by a 64-character hash and so never this.
+const KNOWLEDGE_STORE: &str = "knowledge";
 
 struct Open {
     root: PathBuf,
@@ -47,7 +55,7 @@ struct Open {
 
 impl WorkspaceIndex {
     pub fn new(index_dir: PathBuf, provider: Arc<dyn EmbeddingProvider>) -> Self {
-        Self { index_dir, provider, open: Mutex::new(None) }
+        Self { index_dir, provider, open: Mutex::new(None), knowledge: Arc::default() }
     }
 
     /// The bundled model, shared: a chat's web search picks a page's passages
@@ -108,6 +116,41 @@ impl WorkspaceIndex {
         }))
     }
 
+    /// Search of the knowledge base at `base`, as the tools take it — the
+    /// same ranking as a folder's, over its documents only.
+    ///
+    /// No watcher: the base changes when `knowledgeWrite` writes or the user
+    /// edits a file, and each search syncs first. A sync that finds nothing
+    /// new reads the files' hashes and embeds nothing, so it costs a walk.
+    ///
+    /// ponytail: a walk of the base per search. Fine for hundreds of
+    /// documents; past thousands, sync from `knowledgeWrite` and a watcher.
+    pub fn knowledge_searcher(&self, base: PathBuf) -> CodeSearchFn {
+        let slot = Arc::clone(&self.knowledge);
+        let provider = Arc::clone(&self.provider);
+        let store_dir = self.index_dir.join(KNOWLEDGE_STORE);
+        Arc::new(move |queries, fts, top_k, filter| {
+            if !base.is_dir() {
+                let meta = SearchMeta { tiers_used: Vec::new(), weak: false, hint: None };
+                return Ok(CodeSearchResult { matches: Vec::new(), meta });
+            }
+            let indexer = {
+                let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                match slot.as_ref() {
+                    Some(indexer) => Arc::clone(indexer),
+                    None => {
+                        let opened = RepoIndexer::open(&base, &store_dir, Arc::clone(&provider), ChunkBuildOptions::default())
+                            .map_err(|error| error.to_string())?;
+                        Arc::clone(slot.insert(Arc::new(opened)))
+                    }
+                }
+            };
+            let quiet: IndexEventSink = Arc::new(|_| {});
+            indexer.sync(&quiet).map_err(|error| error.to_string())?;
+            code_search::search_many(&indexer, queries, fts, top_k, filter).map_err(|error| error.to_string())
+        })
+    }
+
     /// The open folder's indexer, for search.
     pub fn current(&self) -> Option<Arc<RepoIndexer>> {
         self.open.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|open| Arc::clone(&open.indexer))
@@ -118,6 +161,7 @@ impl WorkspaceIndex {
 mod tests {
     use super::*;
     use crate::domain::embeddings::{Embedding, EmbeddingError};
+    use crate::domain::code_search::SearchFilter;
     use crate::domain::search_query::fts5_query;
     use crate::testing::temp_dir;
     use std::fs;
@@ -180,6 +224,32 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the save never reached the index");
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// The base is read again at each search: a document written since the
+    /// last one is found, and one removed is not — no watcher in between.
+    #[test]
+    fn the_knowledge_searcher_syncs_the_base_before_each_search() {
+        let index = workspace_index("ws-knowledge");
+        let base = temp_dir("ws-knowledge-base").join("knowledge");
+        let search = index.knowledge_searcher(base.clone());
+        let docs = SearchFilter { include_docs: true, ..Default::default() };
+        let found = |word: &str| -> Vec<String> {
+            search(&[word], None, 5, &docs).unwrap().matches.into_iter().map(|m| m.path).collect()
+        };
+        assert_eq!(found("anything"), Vec::<String>::new(), "no base yet: nothing, and no store opened");
+        assert!(!index.index_dir.join(KNOWLEDGE_STORE).exists());
+
+        fs::create_dir_all(base.join("usn/tax-api")).unwrap();
+        fs::write(base.join("usn/tax-api/tariff.md"), "# Тариф\n\nRetrySubmissionJob повторяет отправку.\n").unwrap();
+        assert_eq!(found("RetrySubmissionJob"), ["usn/tax-api/tariff.md"]);
+        // `FlatModel` finds everything by meaning; the word puts its own first.
+
+        fs::write(base.join("usn/tax-api/events.md"), "# События\n\nTaxEventProducer пишет в топик.\n").unwrap();
+        assert_eq!(found("TaxEventProducer")[0], "usn/tax-api/events.md", "written after the first search");
+        fs::remove_file(base.join("usn/tax-api/tariff.md")).unwrap();
+        assert_eq!(found("RetrySubmissionJob"), ["usn/tax-api/events.md"], "the removed one is gone");
+        assert!(index.index_dir.join(KNOWLEDGE_STORE).is_dir(), "its own store, beside the folders'");
     }
 
     #[test]

@@ -120,6 +120,10 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Remembered { already: false } => "Saved. It is under \"Memory\" in every later conversation in this folder.".to_string(),
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
         ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
+        ToolResult::KnowledgeFound { hits, weak } => knowledge_found(hits, *weak),
+        ToolResult::KnowledgeDocument { id, domain, text, .. } => {
+            format!("{id} (domain {domain}):\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
+        }
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
@@ -136,6 +140,35 @@ pub fn for_model(result: &ToolResult) -> String {
 
 /// By column, a line a card: `c3 file the memory request — wlbuh`. The
 /// archive only as a count: it is the past, and up to a hundred lines of it.
+/// Each section under its document's id and what the document is, then the
+/// reminder that this is data.
+fn knowledge_found(hits: &[crate::domain::knowledge::KnowledgeHit], weak: bool) -> String {
+    if hits.is_empty() {
+        return "Nothing in the knowledge base matches. Reword with the names the code uses, or try the other language; \
+if it is not there, nobody has written it down yet."
+            .to_string();
+    }
+    let mut text = String::new();
+    if weak {
+        text.push_str("These may not be what was asked for — reword if they do not answer it.\n\n");
+    }
+    for (n, hit) in hits.iter().enumerate() {
+        let kind = serde_json::to_value(hit.kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let confidence = serde_json::to_value(hit.confidence).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        text.push_str(&format!("[{}] {} — {} ({kind}, {confidence}, domain {})\n", n + 1, hit.id, hit.title, hit.domain));
+        if let Some(section) = &hit.section {
+            text.push_str(&format!("§ {section}\n"));
+        }
+        text.push_str(&hit.text);
+        if !hit.evidence.is_empty() {
+            text.push_str(&format!("\nevidence: {}", hit.evidence.join(", ")));
+        }
+        text.push_str("\n\n");
+    }
+    text.push_str(crate::domain::knowledge::DATA_NOTE);
+    text
+}
+
 /// What changed, and the name the repository goes by — the model needs it
 /// for `related` and for ids it writes next.
 fn knowledge_written(repo: &str, written: &[String], deleted: &[String], new_domains: &[String]) -> String {

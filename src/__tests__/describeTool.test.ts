@@ -137,6 +137,30 @@ describe("what each call shows", () => {
     });
   });
 
+  test("knowledge search: the query, how many documents, each hit with its section", () => {
+    const args = JSON.stringify({ query: "декларации" });
+    expect(describeTool(tool({ name: "knowledgeSearch", arguments: args }))).toMatchObject({ name: "Knowledge search", arg: "декларации", meta: undefined });
+    const hits = [
+      { id: "tax-api/api", title: "API", section: "API > POST", text: "## POST" },
+      { id: "tax-api/tariff", title: "Тариф", text: "# Тариф" },
+    ];
+    expect(describeTool(tool({ name: "knowledgeSearch", arguments: args, result: { result: "knowledgeFound", hits, weak: false } }))).toMatchObject({
+      meta: "2 documents",
+      detail: "tax-api/api  API § API > POST\n## POST\n\ntax-api/tariff  Тариф\n# Тариф",
+    });
+  });
+
+  test("knowledge doc: the id and section asked for, the domain, the text read", () => {
+    const args = JSON.stringify({ id: "tax-api/tariff", section: " Входы " });
+    expect(describeTool(tool({ name: "knowledgeRead", arguments: args }))).toMatchObject({ name: "Knowledge doc", arg: "tax-api/tariff § Входы", meta: undefined });
+    const result = { result: "knowledgeDocument", id: "tax-api/tariff", domain: "usn", section: "Входы", text: "## Входы" };
+    expect(describeTool(tool({ name: "knowledgeRead", arguments: JSON.stringify({ id: "tax-api/tariff" }), result }))).toMatchObject({
+      arg: "tax-api/tariff",
+      meta: "usn",
+      detail: "## Входы",
+    });
+  });
+
   test("the user's terminal: which one and what it showed; a typed line and where it went", () => {
     const read = describeTool(
       tool({

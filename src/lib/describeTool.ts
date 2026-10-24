@@ -63,6 +63,8 @@ export const LABELS: Record<string, string> = {
   explore: "Explore",
   remember: "Memory",
   knowledgeWrite: "Knowledge",
+  knowledgeSearch: "Knowledge search",
+  knowledgeRead: "Knowledge doc",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -299,6 +301,30 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: written.length ? written.join(", ") : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`,
         meta: [deleted.length ? `${deleted.length} deleted` : "", domains.length ? `new: ${domains.join(", ")}` : ""].filter(Boolean).join(" · ") || undefined,
         detail: documents.join("\n\n"),
+      };
+    }
+
+    // The hits as the model got them: id, title, section, the passage.
+    case "knowledgeSearch": {
+      const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
+      return {
+        name,
+        arg: str(args.query) ?? "",
+        meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "document" : "documents"}`,
+        detail: hits
+          .map((h) => `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}\n${str(h.text) ?? ""}`)
+          .join("\n\n"),
+      };
+    }
+
+    // The document, or the section of it, the model read.
+    case "knowledgeRead": {
+      const section = str(args.section)?.trim();
+      return {
+        name,
+        arg: `${str(args.id) ?? ""}${section ? ` § ${section}` : ""}`,
+        meta: str(result.domain),
+        detail: str(result.text) ?? "",
       };
     }
 

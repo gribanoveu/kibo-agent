@@ -79,6 +79,11 @@ impl KnowledgeStore {
         Ok(Self { dir: dir.join("knowledge") })
     }
 
+    /// The base itself — what its search indexes. Not created until a change is applied.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub fn domains(&self) -> Result<Vec<Domain>, KnowledgeStoreError> {
         read_list(&self.dir.join(DOMAINS_FILE))
     }

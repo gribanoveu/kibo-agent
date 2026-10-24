@@ -658,6 +658,13 @@ fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
     app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
 }
 
+/// The knowledge base's search. `None` without the index — and without an
+/// app directory, where the base would be.
+fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
+    let base = crate::infra::knowledge_store::KnowledgeStore::open().ok()?;
+    Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
+}
+
 /// `/review`: a turn in Review mode over the open folder's working tree
 /// against `HEAD`. What is sent is decided here (`domain::review::select`):
 /// the diffs go in as the turn's message, added to `messages`, and the
@@ -717,6 +724,7 @@ where
     let (mode, review) = state.turn_mode();
     let handles = FolderHandles {
         search: searcher_of(&app),
+        knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes: app

@@ -79,6 +79,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Explore, explore::definition),
     (ToolName::Remember, remember::definition),
     (ToolName::KnowledgeWrite, knowledge::definition),
+    (ToolName::KnowledgeSearch, knowledge::search_definition),
+    (ToolName::KnowledgeRead, knowledge::read_definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RunCommand, run_command::definition),
     (ToolName::Skill, skill::definition),
@@ -161,6 +163,8 @@ pub fn dispatch(
         ToolCall::Explore(args) => explore::explore(args, deps),
         ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),
+        ToolCall::KnowledgeSearch(args) => knowledge::knowledge_search(args, deps),
+        ToolCall::KnowledgeRead(args) => knowledge::knowledge_read(args),
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
@@ -390,6 +394,23 @@ mod definition_tests {
                     documents: Some(vec!["---\nid: a\n---\n# A\n".to_string()]),
                     delete: Some(vec!["r/b".to_string()]),
                     new_domains: vec![crate::domain::knowledge::Domain { id: "usn".into(), name: "УСН".into(), description: "x".into() }],
+                })],
+            ),
+            ToolName::KnowledgeSearch => (
+                r#"{"query":"tax events"}"#,
+                vec![ToolCall::KnowledgeSearch(crate::domain::tools::KnowledgeSearchArgs {
+                    query: "tax events".to_string(),
+                    domain: Some("usn".to_string()),
+                    repo: Some("tax-api".to_string()),
+                    kind: Some(crate::domain::knowledge::Kind::Event),
+                    limit: Some(3),
+                })],
+            ),
+            ToolName::KnowledgeRead => (
+                r#"{"id":"tax-api/events"}"#,
+                vec![ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs {
+                    id: "tax-api/events".to_string(),
+                    section: Some("Формат".to_string()),
                 })],
             ),
             ToolName::Skill => (

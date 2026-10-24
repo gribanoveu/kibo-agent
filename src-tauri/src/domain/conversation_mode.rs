@@ -65,6 +65,10 @@ fn base_tools() -> HashSet<ToolName> {
         ToolName::GitBlame,
         ToolName::GitLog,
         ToolName::SemanticSearch,
+        // While the user has the knowledge base on (`domain::features`):
+        // what other repositories' agents wrote down, read.
+        ToolName::KnowledgeSearch,
+        ToolName::KnowledgeRead,
         ToolName::Skill,
         // A process's output is something to look at; one may still run
         // from an Agent turn before the mode changed.

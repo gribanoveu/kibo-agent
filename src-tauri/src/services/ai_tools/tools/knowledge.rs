@@ -1,6 +1,7 @@
-//! `knowledgeWrite` — documents about the open repository, kept in the
-//! knowledge base for agents working in other repositories
-//! (`docs/40-knowledge-base.md`).
+//! The knowledge base's tools (`docs/40-knowledge-base.md`): `knowledgeWrite`
+//! keeps documents about the open repository for agents working in other
+//! repositories; `knowledgeSearch` and `knowledgeRead` find and read what
+//! any repository's agent kept.
 //!
 //! All or nothing, as `kb`'s `publish_docs` was: every document is parsed and
 //! its evidence found in the tree first, and every reason goes back at once,
@@ -8,14 +9,26 @@
 //! (`KNOWLEDGE_CHECK_PROMPT`), as it checks a `remember` note, and only then
 //! is anything written. No approval card: one `/analyze` writes dozens.
 
+use std::collections::HashMap;
 use std::fs;
 
-use crate::domain::knowledge::{self, Document, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
+use crate::domain::code_search::SearchFilter;
+use crate::domain::knowledge::{self, Document, Header, KnowledgeHit, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
 use crate::domain::llm::LlmToolDefinition;
-use crate::domain::tools::{KnowledgeWriteArgs, ToolDeps, ToolError, ToolResult, ToolScope};
+use crate::domain::search_query::PathFilter;
+use crate::domain::skills::split_frontmatter;
+use crate::domain::tools::{
+    KnowledgeReadArgs, KnowledgeSearchArgs, KnowledgeWriteArgs, ToolDeps, ToolError, ToolResult, ToolScope,
+};
 use crate::infra::knowledge_store::{Change, KnowledgeStore};
 use crate::infra::repository_identity::head_commit;
 use crate::services::ai_tools::resolve::resolve_existing;
+use crate::services::ai_tools::tools::semantic_search::shorten;
+
+const DEFAULT_HITS: usize = 8;
+const MAX_HITS: usize = 20;
+/// Per section found: enough for a fact and its context, not a document.
+const HIT_CHARS: usize = 1_500;
 
 pub fn knowledge_write(scope: &ToolScope, args: &KnowledgeWriteArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     let documents = args.documents.as_deref().unwrap_or_default();
@@ -123,6 +136,97 @@ pub fn knowledge_write(scope: &ToolScope, args: &KnowledgeWriteArgs, deps: &Tool
     })
 }
 
+/// The sections nearest the question, across the base or within a domain or
+/// repository, each with what its document is. The same ranking as
+/// `semanticSearch`, over the base's documents only.
+pub fn knowledge_search(args: &KnowledgeSearchArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
+    let fail = |why: String| ToolError::KnowledgeRead(format!("knowledgeSearch: {why}"));
+    let search = deps.knowledge.as_ref().ok_or_else(|| fail("the knowledge base is not available here".into()))?;
+    if args.query.trim().is_empty() {
+        return Err(fail("`query` is empty — say what to find".into()));
+    }
+    let domain = args.domain.as_deref().map(str::trim).filter(|d| !d.is_empty());
+    let repo = args.repo.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    if let Some(domain) = domain.filter(|d| !knowledge::is_domain_id(d)) {
+        return Err(fail(format!("`{domain}` is not a domain id — lowercase Latin letters, digits and -")));
+    }
+    if let Some(repo) = repo.filter(|r| !knowledge::is_repo_name(r)) {
+        return Err(fail(format!("`{repo}` is not a repository name — as it is in document ids, before the `/`")));
+    }
+    // Only the documents: `domains.json` and `repos.json` are in the base too.
+    let glob = format!("{}/{}/*.md", domain.unwrap_or("*"), repo.unwrap_or("*"));
+    let filter = SearchFilter { include_docs: true, paths: PathFilter::new(Some(&glob), None).map_err(fail)? };
+    let limit = args.limit.unwrap_or(DEFAULT_HITS).clamp(1, MAX_HITS);
+    // A kind is known only from each document's header: ask for more, keep the kind.
+    let asked = if args.kind.is_some() { limit * 3 } else { limit };
+    let found = search(&[args.query.as_str()], None, asked, &filter).map_err(fail)?;
+
+    let store = KnowledgeStore::open().map_err(|e| fail(e.to_string()))?;
+    let mut headers: HashMap<String, Option<Header>> = HashMap::new();
+    let mut hits = Vec::new();
+    for found in found.matches {
+        let Some((domain, id)) = knowledge::place_of(&found.path) else {
+            continue;
+        };
+        let header = headers.entry(found.path.clone()).or_insert_with(|| {
+            let text = fs::read_to_string(store.dir().join(&found.path)).ok()?;
+            knowledge::read_header(&text).map(|(header, _)| header)
+        });
+        // A file gone since the sync, or edited past reading.
+        let Some(header) = header.as_ref() else {
+            continue;
+        };
+        if args.kind.is_some_and(|kind| kind != header.kind) {
+            continue;
+        }
+        // The first section carries the frontmatter, which the header already says.
+        let text = split_frontmatter(&found.text).map_or(found.text.as_str(), |(_, body)| body);
+        hits.push(KnowledgeHit {
+            id,
+            domain: domain.to_string(),
+            title: header.title.clone(),
+            kind: header.kind,
+            confidence: header.confidence,
+            section: found.name,
+            text: shorten(text.trim(), HIT_CHARS),
+            evidence: header.evidence.clone(),
+        });
+        if hits.len() == limit {
+            break;
+        }
+    }
+    Ok(ToolResult::KnowledgeFound { hits, weak: found.meta.weak })
+}
+
+/// A document of any repository by its id, whole or one section of it.
+pub fn knowledge_read(args: &KnowledgeReadArgs) -> Result<ToolResult, ToolError> {
+    let fail = |why: String| ToolError::KnowledgeRead(format!("knowledgeRead: {why}"));
+    let (repo, slug) = knowledge::parse_id(&args.id).map_err(|e| fail(e.to_string()))?;
+    let store = KnowledgeStore::open().map_err(|e| fail(e.to_string()))?;
+    let path = store
+        .find(repo, slug)
+        .map_err(|e| fail(e.to_string()))?
+        .ok_or_else(|| fail(format!("there is no document `{repo}/{slug}` — find it with knowledgeSearch")))?;
+    let text = fs::read_to_string(&path).map_err(|e| fail(format!("could not read it: {e}")))?;
+    let domain = path.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+    let section = args.section.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let text = match section {
+        None => text,
+        Some(wanted) => {
+            let body = split_frontmatter(&text).map_or(text.as_str(), |(_, body)| body);
+            knowledge::section(body, wanted)
+                .map_err(|headings| fail(format!("no section matches `{wanted}` — its sections are: {}", headings.join("; "))))?
+                .to_string()
+        }
+    };
+    Ok(ToolResult::KnowledgeDocument {
+        id: format!("{repo}/{slug}"),
+        domain: domain.unwrap_or_default(),
+        section: section.map(str::to_string),
+        text,
+    })
+}
+
 /// What is wrong with citing `evidence`: not a file of the open folder, or
 /// not as many lines as it names. `None` when it holds.
 fn evidence_problem(scope: &ToolScope, evidence: &knowledge::Evidence) -> Option<String> {
@@ -144,6 +248,51 @@ fn evidence_problem(scope: &ToolScope, evidence: &knowledge::Evidence) -> Option
 
 fn fail(why: impl ToString) -> ToolError {
     ToolError::Knowledge(why.to_string())
+}
+
+pub(super) fn search_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "knowledgeSearch".to_string(),
+        description: format!(
+            "Search the knowledge base: documents agents wrote about the repositories they worked in — services, their endpoints, \
+topics and queues, tables, algorithms, how-tos — filed by domain (a subject area such as usn, ausn, fns-exchange). \
+Use it before reading another repository's code or guessing how it behaves: when this code calls another service, reads its topic or table, \
+or the user asks how something works elsewhere. Write the query the way code names things — identifiers, topic and table names, config keys — \
+plus a few domain words, in Russian or English; if nothing fits, reword or try the other language. \
+Each hit is one section, with its document's id, domain, kind, confidence and evidence; read more with knowledgeRead. \
+The same words can mean different things in different domains: narrow with `domain` when the conversation says which. \
+Returns at most {MAX_HITS} sections, {DEFAULT_HITS} by default."
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Identifiers and a few words: `RetrySubmissionJob повтор отправки декларации`." },
+                "domain": { "type": "string", "description": "Only this domain's documents." },
+                "repo": { "type": "string", "description": "Only this repository's documents, by the name in their ids." },
+                "kind": { "type": "string", "enum": ["service", "api", "event", "datastore", "concept", "algorithm", "howto"] },
+                "limit": { "type": "integer", "description": "How many sections, at most 20." }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+pub(super) fn read_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "knowledgeRead".to_string(),
+        description: "Read a knowledge base document by its id (`<repo>/<slug>`, from knowledgeSearch): the whole document with its frontmatter, \
+or with `section` only the part under the heading that contains it, subheadings included. Its evidence names files of that repository, \
+which may not be the open one."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "`tax-api/tax-events`" },
+                "section": { "type": "string", "description": "Words of a heading: `Формат события`." }
+            },
+            "required": ["id"]
+        }),
+    }
 }
 
 pub(super) fn definition() -> LlmToolDefinition {
@@ -397,6 +546,170 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
             knowledge_write(&scope, &args(&[doc("a", "general", "src/Api.java")], &[], &[]), &deps).unwrap();
             let err = knowledge_write(&scope, &args(&[doc("a", "general", "src/Api.java")], &["a"], &[]), &deps).unwrap_err();
             assert!(err.to_string().contains("delete `a`: it is written in the same call"), "{err}");
+        });
+    }
+
+    const TARIFF: &str = "---\nid: tariff\nkind: algorithm\ntitle: Расчёт тарифа\nevidence:\n  - src/Api.java#L2\nconfidence: inferred\n---\n\
+# Расчёт тарифа\n\nКак выбирается тариф.\n\n## Входы\n\nсумма, регион\n\n## Пример\n\n100 → 6\n";
+
+    /// Two documents of `tax-api`: an API in `usn`, an algorithm in `general`.
+    fn two_documents(label: &str) {
+        let (scope, _) = repo(label);
+        let pass = |_: &str, _: &str| Ok(());
+        let deps = ToolDeps { check: Some(&pass), ..ToolDeps::default() };
+        let call = args(&[doc("declarations-api", "usn", "src/Api.java"), TARIFF.to_string()], &[], &[usn()]);
+        knowledge_write(&scope, &call, &deps).unwrap();
+    }
+
+    fn found(path: &str, name: Option<&str>, text: &str) -> crate::domain::code_search::CodeMatch {
+        crate::domain::code_search::CodeMatch {
+            path: path.into(),
+            start_line: 1,
+            end_line: 9,
+            name: name.map(str::to_string),
+            text: text.into(),
+            source: crate::domain::code_search::MatchSource::Lexical,
+        }
+    }
+
+    /// A search that answers `matches` and remembers what it was asked.
+    fn answering(
+        matches: Vec<crate::domain::code_search::CodeMatch>,
+    ) -> (crate::domain::tools::CodeSearchFn, std::sync::Arc<std::sync::Mutex<Vec<(usize, SearchFilter)>>>) {
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&asked);
+        let search: crate::domain::tools::CodeSearchFn = std::sync::Arc::new(move |_, _, top_k, filter: &SearchFilter| {
+            seen.lock().unwrap().push((top_k, filter.clone()));
+            let meta = crate::domain::code_search::SearchMeta { tiers_used: vec![], weak: false, hint: None };
+            Ok(crate::domain::code_search::CodeSearchResult { matches: matches.clone(), meta })
+        });
+        (search, asked)
+    }
+
+    fn search(args: KnowledgeSearchArgs, with: &crate::domain::tools::CodeSearchFn) -> Result<Vec<KnowledgeHit>, String> {
+        let deps = ToolDeps { knowledge: Some(with.clone()), ..ToolDeps::default() };
+        match knowledge_search(&args, &deps) {
+            Ok(ToolResult::KnowledgeFound { hits, .. }) => Ok(hits),
+            Ok(other) => panic!("{other:?}"),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn query(text: &str) -> KnowledgeSearchArgs {
+        KnowledgeSearchArgs { query: text.into(), ..KnowledgeSearchArgs::default() }
+    }
+
+    #[test]
+    fn a_hit_is_a_section_with_what_its_document_is() {
+        with_app_dir("knowledge-search-hits", || {
+            two_documents("knowledge-search-hits-repo");
+            let api = kept("tax-api", "declarations-api").unwrap();
+            let (with, asked) = answering(vec![
+                found("usn/tax-api/declarations-api.md", Some("Декларации API"), &api),
+                found("domains.json", None, "[]"),
+                found("general/tax-api/gone.md", None, "# Gone"),
+                found("general/tax-api/tariff.md", Some("Расчёт тарифа > Входы"), &format!("## Входы\n\n{}", "я".repeat(HIT_CHARS + 10))),
+            ]);
+            let hits = search(query("декларации"), &with).unwrap();
+            assert_eq!(hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["tax-api/declarations-api", "tax-api/tariff"]);
+            let first = &hits[0];
+            assert_eq!((first.domain.as_str(), first.title.as_str(), first.kind), ("usn", "Декларации API", knowledge::Kind::Api));
+            assert_eq!(first.confidence, knowledge::Confidence::Confirmed);
+            assert_eq!(first.section.as_deref(), Some("Декларации API"));
+            assert!(first.text.starts_with("# Декларации API"), "the frontmatter is left out: {}", first.text);
+            assert_eq!(first.evidence, ["src/Api.java"]);
+            assert_eq!(hits[1].domain, "general");
+            assert_eq!(hits[1].text.chars().count(), HIT_CHARS + 1, "cut, with an ellipsis");
+
+            let (top_k, filter) = asked.lock().unwrap()[0].clone();
+            assert_eq!(top_k, DEFAULT_HITS);
+            assert!(filter.include_docs);
+            assert!(filter.paths.allows("usn/tax-api/declarations-api.md") && !filter.paths.allows("domains.json"));
+        });
+    }
+
+    #[test]
+    fn a_search_narrows_by_domain_repository_kind_and_count() {
+        with_app_dir("knowledge-search-narrow", || {
+            two_documents("knowledge-search-narrow-repo");
+            let both = || {
+                vec![
+                    found("usn/tax-api/declarations-api.md", None, "# Декларации API"),
+                    found("general/tax-api/tariff.md", None, "# Расчёт тарифа"),
+                ]
+            };
+            let (with, asked) = answering(both());
+            let narrowed = KnowledgeSearchArgs { domain: Some("usn".into()), repo: Some("tax-api".into()), ..query("x") };
+            search(narrowed, &with).unwrap();
+            let (_, filter) = asked.lock().unwrap().pop().unwrap();
+            assert!(filter.paths.allows("usn/tax-api/a.md"));
+            assert!(!filter.paths.allows("general/tax-api/a.md") && !filter.paths.allows("usn/usn-api/a.md"));
+            search(KnowledgeSearchArgs { repo: Some("usn-api".into()), ..query("x") }, &with).unwrap();
+            let (_, filter) = asked.lock().unwrap().pop().unwrap();
+            assert!(filter.paths.allows("ausn/usn-api/a.md") && !filter.paths.allows("ausn/tax-api/a.md"));
+
+            let algorithms = KnowledgeSearchArgs { kind: Some(knowledge::Kind::Algorithm), limit: Some(2), ..query("x") };
+            let hits = search(algorithms, &with).unwrap();
+            assert_eq!(hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["tax-api/tariff"]);
+            assert_eq!(asked.lock().unwrap().pop().unwrap().0, 6, "more asked for, as the kind drops some");
+
+            let one = search(KnowledgeSearchArgs { limit: Some(1), ..query("x") }, &with).unwrap();
+            assert_eq!(one.len(), 1);
+            assert_eq!(asked.lock().unwrap().pop().unwrap().0, 1);
+            search(KnowledgeSearchArgs { limit: Some(500), ..query("x") }, &with).unwrap();
+            assert_eq!(asked.lock().unwrap().pop().unwrap().0, MAX_HITS);
+            search(KnowledgeSearchArgs { limit: Some(0), ..query("x") }, &with).unwrap();
+            assert_eq!(asked.lock().unwrap().pop().unwrap().0, 1, "at least one");
+
+            // A search the index calls weak says so to the model.
+            let weak: crate::domain::tools::CodeSearchFn = std::sync::Arc::new(|_, _, _, _| {
+                let meta = crate::domain::code_search::SearchMeta { tiers_used: vec![], weak: true, hint: None };
+                Ok(crate::domain::code_search::CodeSearchResult { matches: vec![], meta })
+            });
+            let deps = ToolDeps { knowledge: Some(weak), ..ToolDeps::default() };
+            assert!(matches!(knowledge_search(&query("x"), &deps), Ok(ToolResult::KnowledgeFound { weak: true, .. })));
+        });
+    }
+
+    #[test]
+    fn a_search_that_cannot_be_done_says_why() {
+        with_app_dir("knowledge-search-refused", || {
+            let (with, asked) = answering(vec![]);
+            assert!(search(query(" "), &with).unwrap_err().contains("`query` is empty"));
+            assert!(search(KnowledgeSearchArgs { domain: Some("*".into()), ..query("x") }, &with).unwrap_err().contains("not a domain id"));
+            assert!(search(KnowledgeSearchArgs { repo: Some("a/b".into()), ..query("x") }, &with).unwrap_err().contains("not a repository name"));
+            assert!(asked.lock().unwrap().is_empty(), "nothing searched for a call that is wrong");
+            assert_eq!(search(query("x"), &with), Ok(vec![]));
+            let none = knowledge_search(&query("x"), &ToolDeps::default()).unwrap_err().to_string();
+            assert!(none.contains("not available here"), "{none}");
+        });
+    }
+
+    #[test]
+    fn a_document_is_read_whole_or_by_section() {
+        with_app_dir("knowledge-read", || {
+            two_documents("knowledge-read-repo");
+            let read = |id: &str, section: Option<&str>| {
+                knowledge_read(&KnowledgeReadArgs { id: id.into(), section: section.map(str::to_string) }).map_err(|e| e.to_string())
+            };
+            let ToolResult::KnowledgeDocument { id, domain, section, text } = read("tax-api/tariff", None).unwrap() else {
+                panic!()
+            };
+            assert_eq!((id.as_str(), domain.as_str(), section), ("tax-api/tariff", "general", None));
+            assert!(text.starts_with("---\nid: tax-api/tariff") && text.contains("## Пример"), "{text}");
+
+            let ToolResult::KnowledgeDocument { domain, section, text, .. } = read(" tax-api/tariff ", Some("входы")).unwrap() else {
+                panic!()
+            };
+            assert_eq!((domain.as_str(), section.as_deref(), text.as_str()), ("general", Some("входы"), "## Входы\n\nсумма, регион"));
+            let ToolResult::KnowledgeDocument { domain, .. } = read("tax-api/declarations-api", Some(" ")).unwrap() else { panic!() };
+            assert_eq!(domain, "usn", "a blank section is the whole document");
+
+            let missing = read("tax-api/tariff", Some("Выходы")).unwrap_err();
+            assert!(missing.contains("no section matches `Выходы` — its sections are: Расчёт тарифа; Входы; Пример"), "{missing}");
+            assert!(read("tax-api/nothing", None).unwrap_err().contains("there is no document `tax-api/nothing`"));
+            assert!(read("tariff", None).unwrap_err().contains("not a document id"));
+            assert!(read("../tariff", None).unwrap_err().contains("not a document id"));
         });
     }
 

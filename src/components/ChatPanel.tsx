@@ -83,6 +83,8 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Search: Search,
   Memory: NotebookPen,
   Knowledge: Library,
+  "Knowledge search": Library,
+  "Knowledge doc": Library,
   Plan: ScrollText,
   Explore: Telescope,
   Board: SquareKanban,

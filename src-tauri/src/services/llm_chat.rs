@@ -193,6 +193,9 @@ pub struct Turn<'a> {
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
+    /// Search of the knowledge base, for `knowledgeSearch`; `None` where the
+    /// app has none.
+    pub knowledge: Option<CodeSearchFn>,
     /// The open folder's skills and the user's, listed in the prompt for
     /// `skill` to load. Read once per turn, so the prompt does not change
     /// between its rounds.
@@ -988,6 +991,7 @@ fn execute_call(
         shell: turn.shell.clone(),
         output: Some(output.clone()),
         search: turn.search.clone(),
+        knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
@@ -1211,6 +1215,8 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         take_steering: &no_steering,
         notes_typed: &|| 0,
         search: turn.search.clone(),
+        // A helper looks up what another repository's agent wrote, as the calling turn would.
+        knowledge: turn.knowledge.clone(),
         skills: turn.skills,
         rules: turn.rules,
         log_call: turn.log_call,
@@ -2252,6 +2258,7 @@ mod tests {
                 take_steering: &take_steering,
                 notes_typed: &notes_typed,
                 search: self.search.clone(),
+                knowledge: None,
                 shell: &shell,
                 shell_described: &self.shell_described,
                 skills: &self.skills,
@@ -4117,10 +4124,10 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, `knowledgeWrite` — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's three — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected — so neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 8 - ChatRole::Kubernetes.tools().len());
+        assert_eq!(offered.len(), ToolName::ALL.len() - 10 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
