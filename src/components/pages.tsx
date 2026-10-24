@@ -1,8 +1,9 @@
 import type { ReactElement, ReactNode } from "react";
-import { AudioLines, FolderOpen, SquareKanban, Store } from "lucide-react";
+import { AudioLines, FolderOpen, Library, SquareKanban, Store } from "lucide-react";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { BoardPage } from "./BoardPage";
 import { CatalogPage } from "./CatalogPage";
+import { KnowledgePage } from "./KnowledgePage";
 import { MeetingsPage } from "./MeetingsPage";
 import type { AsideTab } from "../types";
 import "./pages.css";
@@ -50,6 +51,7 @@ export const PAGES = [
   { id: "catalog", label: "Catalog", title: "Catalog — skills, commands, MCP servers and hooks to install", icon: Store, dock: false, Component: CatalogPage },
   { id: "board", label: "Board", title: "Board — what the Assistant keeps for later", icon: SquareKanban, dock: false, feature: "board", Component: BoardPage },
   { id: "meetings", label: "Meetings", title: "Meetings — a call's recording made into notes", icon: AudioLines, dock: false, feature: "meeting-notes", Component: MeetingsPage },
+  { id: "knowledge", label: "Knowledge", title: "Knowledge — what agents wrote about repositories", icon: Library, dock: false, feature: "knowledge", Component: KnowledgePage },
   { id: "artifacts", label: "Artifacts", title: "Artifacts — meetings and prototypes, as folders", icon: FolderOpen, dock: false, Component: ArtifactsPage },
 ] as const satisfies readonly PageDef[];
 

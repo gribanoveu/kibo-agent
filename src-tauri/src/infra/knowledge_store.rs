@@ -41,6 +41,8 @@ pub enum KnowledgeStoreError {
     Corrupt { path: PathBuf, reason: String },
     #[error("could not write: {0}")]
     Write(String),
+    #[error("there is no domain `{0}` in the base")]
+    NoDomain(String),
 }
 
 /// A repository the base has documents of.
@@ -180,6 +182,56 @@ impl KnowledgeStore {
     }
 }
 
+/// What the Knowledge page changes by hand (`docs/40-knowledge-base.md`, decision 9).
+impl KnowledgeStore {
+    /// A domain's name and description, as the user put them.
+    pub fn edit_domain(&self, domain: &Domain) -> Result<(), KnowledgeStoreError> {
+        let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        let path = self.dir.join(DOMAINS_FILE);
+        let mut domains: Vec<Domain> = read_list(&path)?;
+        let kept = domains.iter_mut().find(|d| d.id == domain.id).ok_or_else(|| KnowledgeStoreError::NoDomain(domain.id.clone()))?;
+        *kept = domain.clone();
+        write_json(&path, &domains)
+    }
+
+    /// A domain off the list, its folder with it once nothing is left in it.
+    pub fn remove_domain(&self, id: &str) -> Result<(), KnowledgeStoreError> {
+        let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        let path = self.dir.join(DOMAINS_FILE);
+        let mut domains: Vec<Domain> = read_list(&path)?;
+        domains.retain(|d| d.id != id);
+        write_json(&path, &domains)?;
+        remove_empty(&self.dir.join(id))
+    }
+
+    /// Every document of the repository `name`, in every domain, and its record.
+    pub fn remove_repo(&self, name: &str) -> Result<(), KnowledgeStoreError> {
+        let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        for domain in children(&self.dir)? {
+            let folder = self.dir.join(&domain).join(name);
+            if folder.is_dir() {
+                fs::remove_dir_all(&folder).map_err(|e| KnowledgeStoreError::Write(format!("could not remove {}: {e}", folder.display())))?;
+            }
+        }
+        let path = self.dir.join(REPOS_FILE);
+        let mut repos: Vec<RepoRecord> = read_list(&path)?;
+        repos.retain(|r| r.name != name);
+        write_json(&path, &repos)
+    }
+}
+
+/// Removes the folders under `dir` that hold no file, then `dir` itself if it is empty.
+fn remove_empty(dir: &Path) -> Result<(), KnowledgeStoreError> {
+    for child in children(dir)? {
+        let _ = fs::remove_dir(dir.join(child));
+    }
+    match fs::remove_dir(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty) => Ok(()),
+        Err(e) => Err(KnowledgeStoreError::Write(format!("could not remove {}: {e}", dir.display()))),
+    }
+}
+
 #[cfg(test)]
 impl KnowledgeStore {
     pub fn at(dir: PathBuf) -> Self {
@@ -305,6 +357,34 @@ mod tests {
             fs::write(store.dir.join("usn").join("stray.md"), "x").unwrap();
             assert_eq!(store.documents().unwrap(), ["general/usn-api/service.md", "usn/usn-api/tariff.md"]);
             assert_eq!(store.repos().unwrap().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["usn-api"]);
+        });
+    }
+
+    #[test]
+    fn the_page_edits_a_domain_removes_one_and_removes_a_repository() {
+        with_app_dir("knowledge-page-store", || {
+            let store = store("knowledge-page-store-base");
+            let repo = store.repo(&repo_at("knowledge-page-store-repo", "git@h:o/usn-api.git")).unwrap();
+            let other = RepoRecord { name: "ledger".into(), repository_id: "other".into(), ..repo.clone() };
+            let new = [domain("usn"), domain("ausn")];
+            store.apply(Change { new_domains: &new, ..write(repo, &[("usn", "tariff", "t"), ("ausn", "rules", "r")]) }).unwrap();
+            store.apply(write(other, &[("usn", "listener", "l")])).unwrap();
+
+            let renamed = Domain { id: "usn".into(), name: "Бухгалтерия УСН".into(), description: "упрощёнка".into() };
+            store.edit_domain(&renamed).unwrap();
+            assert_eq!(store.domains().unwrap(), [renamed.clone(), domain("ausn")]);
+            assert!(matches!(store.edit_domain(&domain("fns")), Err(KnowledgeStoreError::NoDomain(id)) if id == "fns"));
+
+            store.remove_repo("usn-api").unwrap();
+            assert_eq!(store.documents().unwrap(), ["usn/ledger/listener.md"]);
+            assert_eq!(store.repos().unwrap().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["ledger"]);
+
+            fs::create_dir_all(store.dir.join("ausn").join("left-empty")).unwrap();
+            store.remove_domain("ausn").unwrap();
+            assert_eq!(store.domains().unwrap(), [renamed]);
+            assert!(!store.dir.join("ausn").exists(), "its folder, empty now, is gone");
+            store.remove_domain("usn").unwrap();
+            assert!(store.dir.join("usn").join("ledger").join("listener.md").exists(), "a folder with documents stays");
         });
     }
 

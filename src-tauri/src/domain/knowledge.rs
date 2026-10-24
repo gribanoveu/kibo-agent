@@ -553,21 +553,53 @@ pub struct Overview {
     pub domains: Vec<DomainCount>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A document as the prompt and the Knowledge page list it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Listed {
     pub id: String,
     pub domain: String,
+    pub repo: String,
+    pub kind: Kind,
     pub title: String,
+    pub confidence: Confidence,
     pub stale: bool,
     /// It cites a file: without one, nothing says when it goes out of date.
     pub cited: bool,
+    /// When its file was last written, in seconds since 1970.
+    pub written: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DomainCount {
     pub domain: Domain,
     pub documents: usize,
     pub repos: usize,
+}
+
+/// A repository of the base, as the Knowledge page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoSummary {
+    pub name: String,
+    /// Where it was open last.
+    pub path: String,
+    pub commit: Option<String>,
+    pub documents: usize,
+    pub stale: usize,
+    /// When a document of it was last written, in seconds since 1970.
+    pub written: Option<u64>,
+}
+
+/// The whole base, for the Knowledge page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Base {
+    pub domains: Vec<DomainCount>,
+    pub repos: Vec<RepoSummary>,
+    /// By domain, then id.
+    pub documents: Vec<Listed>,
 }
 
 /// `general` as the domains' list shows it: it is in no `domains.json`.

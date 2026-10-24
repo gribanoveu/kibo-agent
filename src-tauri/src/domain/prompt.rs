@@ -632,9 +632,15 @@ mod tests {
 
     /// The agent's notes are not the maintainers' rules: their own block,
     /// after the rules, and none at all when only the memory is there.
+    fn listed_doc(id: &str, domain: &str, title: &str, stale: bool, cited: bool) -> crate::domain::knowledge::Listed {
+        use crate::domain::knowledge::{Confidence, Kind};
+        let (repo, kind, confidence) = ("tax-api".into(), Kind::Api, Confidence::Confirmed);
+        crate::domain::knowledge::Listed { id: id.into(), domain: domain.into(), repo, kind, title: title.into(), confidence, stale, cited, written: None }
+    }
+
     fn overview() -> Overview {
-        use crate::domain::knowledge::{Domain, DomainCount, Listed};
-        let listed = |id: &str, domain: &str, title: &str, stale, cited| Listed { id: id.into(), domain: domain.into(), title: title.into(), stale, cited };
+        use crate::domain::knowledge::{Domain, DomainCount};
+        let listed = |id: &str, domain: &str, title: &str, stale, cited| listed_doc(id, domain, title, stale, cited);
         let domain = |id: &str, name: &str, documents, repos| DomainCount {
             domain: Domain { id: id.into(), name: name.into(), description: format!("about {id}") },
             documents,
@@ -684,7 +690,7 @@ mod tests {
     fn a_long_knowledge_list_is_cut_with_a_count() {
         let many = Overview {
             documents: (0..400)
-                .map(|n| crate::domain::knowledge::Listed { id: format!("tax-api/doc-{n}"), domain: "usn".into(), title: "Документ".into(), stale: false, cited: true })
+                .map(|n| listed_doc(&format!("tax-api/doc-{n}"), "usn", "Документ", false, true))
                 .collect(),
             ..overview()
         };
