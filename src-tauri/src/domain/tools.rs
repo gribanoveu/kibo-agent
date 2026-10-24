@@ -1672,6 +1672,7 @@ pub enum BoardOp {
     List,
     Add,
     Move,
+    Edit,
 }
 
 /// `webFetch`. `query` picks the passages of a long page.

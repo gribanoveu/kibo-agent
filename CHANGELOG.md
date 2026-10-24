@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-24 Tell the Assistant more about something already on the Board — a date, a detail, a new wording — and it edits that card instead of adding a second one
 - 2026-10-23 Drag a card on the Board to a place in its column or into another one, or pick it up with Space from the keyboard and move it with the arrows
 - 2026-10-23 Add cards to the Board yourself — Add a card under To do — and edit any card's title and note in place
 - 2026-10-22 An Artifacts page in the sidebar lists every meeting and every presented prototype as folders, like a drive: open one to see its notes, documents, transcript, recording or the prototype's files beside the list; rename it, show it in Finder, open it in Meetings or in its chat, delete it, or save any of its files elsewhere; the top says how much they all take and how much the disk has left

@@ -56,9 +56,16 @@ pub enum BoardChange {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
-    /// The page's only: the title and the note in place, the column and the
-    /// place in it kept. An empty note clears it.
-    Edit { id: String, title: String, note: Option<String> },
+    /// The title, the note or both in place, the column and the place in it
+    /// kept: what is left out stays, an empty note clears it. The page sends
+    /// both; the model, what it adds to a card instead of a second one.
+    Edit {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// The page's only: the model moves a card to Done instead. From any
     /// column, the archive's too.
     Remove { id: String },
@@ -105,7 +112,8 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
         }
         BoardChange::Edit { id, title, note } => {
             let at = position(cards, id)?;
-            let (title, note) = text(title, note.as_deref())?;
+            let card = &cards[at];
+            let (title, note) = text(title.as_deref().unwrap_or(&card.title), note.as_deref().or(card.note.as_deref()))?;
             next[at].title = title;
             next[at].note = note;
         }
@@ -343,30 +351,40 @@ mod tests {
     fn an_edit_changes_only_the_text_trimmed_and_an_empty_note_clears_it() {
         let mut cards = add(&add(&add(&[], "a"), "b"), "c");
         cards = done(&cards, "c2");
-        let edited = apply(&cards, &BoardChange::Edit { id: "c2".into(), title: "  bee  ".into(), note: Some(" stung ".into()) }).unwrap();
+        let edited = apply(&cards, &BoardChange::Edit { id: "c2".into(), title: Some("  bee  ".into()), note: Some(" stung ".into()) }).unwrap();
         assert_eq!(edited[2], Card { id: "c2".into(), title: "bee".into(), note: Some("stung".into()), column: Column::Done });
         assert_eq!(edited[..2], cards[..2]);
 
-        let cleared = apply(&edited, &BoardChange::Edit { id: "c2".into(), title: "bee".into(), note: Some("  ".into()) }).unwrap();
-        assert_eq!(cleared[2].note, None);
-        let without = apply(&edited, &BoardChange::Edit { id: "c2".into(), title: "bee".into(), note: None }).unwrap();
-        assert_eq!(without[2].note, None);
+        let cleared = apply(&edited, &BoardChange::Edit { id: "c2".into(), title: None, note: Some("  ".into()) }).unwrap();
+        assert_eq!((cleared[2].title.as_str(), cleared[2].note.as_deref()), ("bee", None));
+    }
+
+    #[test]
+    fn what_an_edit_leaves_out_stays() {
+        let cards = apply(&[], &BoardChange::Add { title: "renew cert".into(), note: Some("wlbuh".into()) }).unwrap();
+        let edit = |title: Option<&str>, note: Option<&str>| {
+            let edited = apply(&cards, &BoardChange::Edit { id: "c1".into(), title: title.map(Into::into), note: note.map(Into::into) }).unwrap();
+            (edited[0].title.clone(), edited[0].note.clone())
+        };
+        assert_eq!(edit(None, Some("wlbuh, expires 1 Nov")), ("renew cert".into(), Some("wlbuh, expires 1 Nov".into())));
+        assert_eq!(edit(Some("renew the cert"), None), ("renew the cert".into(), Some("wlbuh".into())));
+        assert_eq!(edit(None, None), ("renew cert".into(), Some("wlbuh".into())));
     }
 
     #[test]
     fn an_edit_is_checked_as_a_new_card_is_and_a_full_board_still_takes_it() {
         let cards = add(&[], "a");
-        let edit = |title: &str, note: Option<String>| apply(&cards, &BoardChange::Edit { id: "c1".into(), title: title.into(), note });
+        let edit = |title: &str, note: Option<String>| apply(&cards, &BoardChange::Edit { id: "c1".into(), title: Some(title.into()), note });
         assert_eq!(edit(" ", None), Err(BoardError::EmptyTitle));
         assert_eq!(edit(&"x".repeat(MAX_TITLE_CHARS + 1), None), Err(BoardError::TitleTooLong(MAX_TITLE_CHARS + 1)));
         assert_eq!(edit("a", Some("y".repeat(MAX_NOTE_CHARS + 1))), Err(BoardError::NoteTooLong(MAX_NOTE_CHARS + 1)));
-        let err = apply(&cards, &BoardChange::Edit { id: "c9".into(), title: "b".into(), note: None }).unwrap_err();
+        let err = apply(&cards, &BoardChange::Edit { id: "c9".into(), title: Some("b".into()), note: None }).unwrap_err();
         assert_eq!(err.to_string(), "no card with id c9 — the board has: c1");
 
         let full: Vec<Card> = (1..=MAX_CARDS)
             .map(|i| Card { id: format!("c{i}"), title: "t".into(), note: None, column: Column::Todo })
             .collect();
-        assert_eq!(apply(&full, &BoardChange::Edit { id: "c1".into(), title: "u".into(), note: None }).unwrap()[0].title, "u");
+        assert_eq!(apply(&full, &BoardChange::Edit { id: "c1".into(), title: Some("u".into()), note: None }).unwrap()[0].title, "u");
     }
 
     #[test]
@@ -386,6 +404,8 @@ mod tests {
         let change: BoardChange = serde_json::from_str(r#"{"op":"move","id":"c1","column":"todo","index":2}"#).unwrap();
         assert_eq!(change, BoardChange::Move { id: "c1".into(), column: Column::Todo, index: Some(2) });
         let change: BoardChange = serde_json::from_str(r#"{"op":"edit","id":"c1","title":"b","note":"n"}"#).unwrap();
-        assert_eq!(change, BoardChange::Edit { id: "c1".into(), title: "b".into(), note: Some("n".into()) });
+        assert_eq!(change, BoardChange::Edit { id: "c1".into(), title: Some("b".into()), note: Some("n".into()) });
+        let change: BoardChange = serde_json::from_str(r#"{"op":"edit","id":"c1","note":""}"#).unwrap();
+        assert_eq!(change, BoardChange::Edit { id: "c1".into(), title: None, note: Some("".into()) });
     }
 }

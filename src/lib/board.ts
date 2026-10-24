@@ -14,10 +14,10 @@ export type Card = {
 };
 
 /** The page's own changes; the model adds and moves through its `board` tool.
-    An `edit` replaces both the title and the note; an empty note clears it. */
+    An `edit` replaces what it is given — the page gives both; an empty note clears it. */
 export type BoardChange =
   | { op: "add"; title: string; note?: string }
-  | { op: "edit"; id: string; title: string; note?: string }
+  | { op: "edit"; id: string; title?: string; note?: string }
   /** `index`: its place among the column's other cards; Done ignores it. */
   | { op: "move"; id: string; column: Column; index?: number }
   | { op: "remove"; id: string };

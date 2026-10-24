@@ -3,7 +3,8 @@
 //!
 //! No approval card: it writes only the app's own board, and what it wrote is
 //! on screen. It cannot remove a card — the model moves one to Done, and the
-//! user clears it.
+//! user clears it. It edits one, so a detail added later lands on the card
+//! already there rather than on a second.
 
 use crate::domain::board::{BoardChange, BoardError};
 use crate::domain::llm::LlmToolDefinition;
@@ -23,6 +24,13 @@ pub fn board(args: &BoardArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
             let column = args.column.ok_or_else(|| missing("column"))?;
             board.change(&BoardChange::Move { id, column, index: None })?
         }
+        BoardOp::Edit => {
+            let id = args.id.clone().ok_or_else(|| missing("id"))?;
+            if args.title.is_none() && args.note.is_none() {
+                return Err(missing("title` or `note"));
+            }
+            board.change(&BoardChange::Edit { id, title: args.title.clone(), note: args.note.clone() })?
+        }
     };
     Ok(ToolResult::Board { cards })
 }
@@ -32,6 +40,7 @@ fn op_name(op: BoardOp) -> &'static str {
         BoardOp::List => "list",
         BoardOp::Add => "add",
         BoardOp::Move => "move",
+        BoardOp::Edit => "edit",
     }
 }
 
@@ -44,16 +53,18 @@ pub(super) fn definition() -> LlmToolDefinition {
             You cannot remind them at a time: when they name a day or a deadline, put its date in the title — the \
             prompt says what today is — and say the card is on the board. `list` shows every card with its id and \
             column, all but the archive, where Done's oldest go — call it before answering what is on the board, or \
-            before moving a card you have not seen this turn. `move` puts a card in `todo`, `doing` or `done`; when the user says something is done or no longer \
-            needed, move it to `done` — only the user removes cards."
+            before moving or editing a card you have not seen this turn. `move` puts a card in `todo`, `doing` or `done`; when the user says something is done or no longer \
+            needed, move it to `done` — only the user removes cards. When the user adds to something already on the board — a detail, a date, a \
+            new wording — `edit` that card rather than adding a second: `note` replaces the whole note, so send the old one with the addition; \
+            what you leave out stays as it was."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "op": { "type": "string", "enum": ["list", "add", "move"] },
-                "title": { "type": ["string", "null"], "description": "Only for op \"add\": the card's title." },
-                "note": { "type": ["string", "null"], "description": "Only for op \"add\": details, optional." },
-                "id": { "type": ["string", "null"], "description": "Only for op \"move\": the card's id, as `list` shows it." },
+                "op": { "type": "string", "enum": ["list", "add", "move", "edit"] },
+                "title": { "type": ["string", "null"], "description": "For op \"add\": the card's title. For op \"edit\": its new title, or null to keep it." },
+                "note": { "type": ["string", "null"], "description": "For op \"add\": details, optional. For op \"edit\": the whole new note, or null to keep it; an empty string clears it." },
+                "id": { "type": ["string", "null"], "description": "For ops \"move\" and \"edit\": the card's id, as `list` shows it." },
                 "column": { "type": ["string", "null"], "enum": ["todo", "doing", "done", null], "description": "Only for op \"move\": where the card goes." }
             },
             "required": ["op"],
@@ -108,6 +119,22 @@ mod tests {
         assert!(err.contains("op \"move\" needs `column`"), "{err}");
         let err = call(&deps, r#"{"op":"move","column":"done"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"move\" needs `id`"), "{err}");
+    }
+
+    #[test]
+    fn edit_changes_what_it_is_given_and_needs_an_id_and_something_to_change() {
+        let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
+        call(&deps, r#"{"op":"add","title":"renew cert","note":"wlbuh"}"#).unwrap();
+        let edited = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":"wlbuh, expires 1 Nov"}"#).unwrap();
+        let ToolResult::Board { cards } = edited else { panic!("{edited:?}") };
+        assert_eq!((cards.len(), cards[0].title.as_str(), cards[0].note.as_deref()), (1, "renew cert", Some("wlbuh, expires 1 Nov")));
+
+        let err = call(&deps, r#"{"op":"edit","title":"x"}"#).unwrap_err().to_string();
+        assert!(err.contains("op \"edit\" needs `id`"), "{err}");
+        let err = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":null}"#).unwrap_err().to_string();
+        assert!(err.contains("op \"edit\" needs `title` or `note`"), "{err}");
+        let err = call(&deps, r#"{"op":"edit","id":"c1","title":"  "}"#).unwrap_err().to_string();
+        assert!(err.contains("a card needs a title"), "{err}");
     }
 
     #[test]
