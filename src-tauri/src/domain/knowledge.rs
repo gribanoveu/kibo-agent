@@ -304,6 +304,10 @@ pub enum KnowledgeError {
     Placeholder(String),
     #[error("`{0}` is not evidence — a path from the repository root, optionally with lines: `src/a.rs#L40-L60`")]
     BadEvidence(String),
+    #[error("`{0}` is not a field — the fields are id, domain, kind, title, aliases, tags, provides, consumes, evidence, related, confidence")]
+    UnknownField(String),
+    #[error("domain `{id}` is not in the base — use one of {known}, `general`, or add it in `newDomains`")]
+    UnknownDomain { id: String, known: String },
     /// Evidence the open folder does not back: no such file, or fewer lines.
     #[error("evidence `{path}`: {why}")]
     Uncited { path: String, why: String },
@@ -312,7 +316,6 @@ pub enum KnowledgeError {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Frontmatter {
     id: String,
     /// Accepted as `kb` wrote them; the app knows both better.
@@ -337,6 +340,10 @@ struct Frontmatter {
     #[serde(default)]
     related: Vec<String>,
     confidence: Confidence,
+    /// Kept, not refused while reading: each is a problem of its own, said
+    /// with the others.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, yaml_serde::Value>,
 }
 
 /// The same fields, in the order a file shows them.
@@ -393,61 +400,88 @@ impl Document {
     }
 }
 
-/// `text` as a document of `repo`, the open repository, or why it is not one.
-/// `id` may name the slug alone; a different repository's prefix is refused.
-pub fn parse_document(text: &str, repo: &str) -> Result<Document, KnowledgeError> {
-    let (yaml, body) = split_frontmatter(text).ok_or(KnowledgeError::NoFrontmatter)?;
-    let front: Frontmatter = yaml_serde::from_str(yaml).map_err(|e| KnowledgeError::Frontmatter(e.to_string()))?;
-    if front.repo.as_deref().is_some_and(|r| r != repo) {
-        return Err(KnowledgeError::WrongRepo { id: front.id.clone(), repo: repo.to_string() });
+/// What [`parse_document`] asks of what it cannot see itself.
+pub struct Checks<'a> {
+    /// Why documents cannot be filed under this domain, if they cannot.
+    pub domain: &'a dyn Fn(&str) -> Option<KnowledgeError>,
+    /// The evidence as it is kept — its path as the repository names it — or
+    /// why it cannot be cited.
+    pub evidence: &'a dyn Fn(&Evidence) -> Result<Evidence, KnowledgeError>,
+}
+
+/// `text` as a document of `repo`, the open repository, or every reason it is
+/// not one — all of them, so one round fixes them. `id` may name the slug
+/// alone; a different repository's prefix is refused.
+pub fn parse_document(text: &str, repo: &str, checks: &Checks) -> Result<Document, Vec<KnowledgeError>> {
+    let (yaml, body) = split_frontmatter(text).ok_or_else(|| vec![KnowledgeError::NoFrontmatter])?;
+    let body = body.trim_start().to_string();
+    let mut found = Vec::new();
+    let front: Option<Frontmatter> = yaml_serde::from_str(yaml).map_err(|e| found.push(KnowledgeError::Frontmatter(e.to_string()))).ok();
+    if let Some(front) = &front {
+        found.extend(front.unknown.keys().map(|key| KnowledgeError::UnknownField(key.clone())));
+        if front.repo.as_deref().is_some_and(|r| r != repo) {
+            found.push(KnowledgeError::WrongRepo { id: front.id.clone(), repo: repo.to_string() });
+        }
     }
-    let slug = own_slug(&front.id, repo)?;
-    let domain = front.domain.as_deref().map_or(GENERAL_DOMAIN, str::trim).to_string();
-    check_domain_id(&domain)?;
-    let title = front.title.trim().to_string();
-    if title.is_empty() {
-        return Err(KnowledgeError::NoTitle);
+    let slug = front.as_ref().and_then(|front| own_slug(&front.id, repo).map(str::to_string).map_err(|e| found.push(e)).ok());
+    let domain = front.as_ref().map_or(GENERAL_DOMAIN, |front| front.domain.as_deref().map_or(GENERAL_DOMAIN, str::trim)).to_string();
+    if front.is_some() {
+        match check_domain_id(&domain) {
+            Err(e) => found.push(e),
+            Ok(()) => found.extend((checks.domain)(&domain)),
+        }
+    }
+    let title = front.as_ref().map(|front| front.title.trim().to_string()).unwrap_or_default();
+    if front.is_some() && title.is_empty() {
+        found.push(KnowledgeError::NoTitle);
     }
 
-    let body = body.trim_start().to_string();
     if !body.starts_with("# ") {
-        return Err(KnowledgeError::NoHeading);
+        found.push(KnowledgeError::NoHeading);
     }
     let chars = body.chars().count();
     if chars > MAX_BODY_CHARS {
-        return Err(KnowledgeError::TooLong(chars));
+        found.push(KnowledgeError::TooLong(chars));
     }
 
-    let provides = contracts(&front.provides)?;
-    let consumes = contracts(&front.consumes)?;
-    let evidence = front.evidence.iter().map(|e| Evidence::parse(e)).collect::<Result<Vec<_>, _>>()?;
-    if evidence.is_empty() {
+    let mut listed = |raw: &[RawContract]| contracts(raw).map_err(|e| found.push(e)).unwrap_or_default();
+    let provides = front.as_ref().map(|front| listed(&front.provides)).unwrap_or_default();
+    let consumes = front.as_ref().map(|front| listed(&front.consumes)).unwrap_or_default();
+    let mut evidence = Vec::new();
+    for raw in front.as_ref().map_or(&[][..], |front| &front.evidence[..]) {
+        match Evidence::parse(raw).and_then(|parsed| (checks.evidence)(&parsed)) {
+            Ok(kept) => evidence.push(kept),
+            Err(e) => found.push(e),
+        }
+    }
+    if let Some(front) = front.as_ref().filter(|front| front.evidence.is_empty()) {
         if front.confidence == Confidence::Confirmed {
-            return Err(KnowledgeError::ConfirmedWithoutEvidence);
+            found.push(KnowledgeError::ConfirmedWithoutEvidence);
         }
-        if !provides.is_empty() || !consumes.is_empty() {
-            return Err(KnowledgeError::ContractsWithoutEvidence);
+        if !front.provides.is_empty() || !front.consumes.is_empty() {
+            found.push(KnowledgeError::ContractsWithoutEvidence);
         }
     }
-    if let Some(found) = find_secret(text) {
-        return Err(KnowledgeError::Secret(found));
-    }
+    found.extend(find_secret(text).map(KnowledgeError::Secret));
 
-    Ok(Document {
-        repo: repo.to_string(),
-        slug: slug.to_string(),
-        domain,
-        kind: front.kind,
-        title,
-        aliases: front.aliases,
-        tags: front.tags,
-        provides,
-        consumes,
-        evidence,
-        related: front.related,
-        confidence: front.confidence,
-        body,
-    })
+    match (front, slug) {
+        (Some(front), Some(slug)) if found.is_empty() => Ok(Document {
+            repo: repo.to_string(),
+            slug,
+            domain,
+            kind: front.kind,
+            title,
+            aliases: front.aliases,
+            tags: front.tags,
+            provides,
+            consumes,
+            evidence,
+            related: front.related,
+            confidence: front.confidence,
+            body,
+        }),
+        _ => Err(found),
+    }
 }
 
 /// Said with every document the model reads from the base: another agent
@@ -804,6 +838,16 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// A document with one thing wrong, as most tests here write it: that
+    /// one problem, with nothing outside the text checked.
+    fn parse_document(text: &str, repo: &str) -> Result<Document, KnowledgeError> {
+        let checks = Checks { domain: &|_| None, evidence: &|e| Ok(e.clone()) };
+        super::parse_document(text, repo, &checks).map_err(|mut all| {
+            assert_eq!(all.len(), 1, "one problem: {all:?}");
+            all.remove(0)
+        })
+    }
+
     const DOC: &str = "---
 id: tax-api/tax-events
 domain: fns-exchange
@@ -902,10 +946,19 @@ confidence: confirmed
         assert!(matches!(parse_document(&with("kind", "endpoint"), "tax-api"), Err(KnowledgeError::Frontmatter(_))));
         assert!(matches!(parse_document(&with("confidence", "sure"), "tax-api"), Err(KnowledgeError::Frontmatter(_))));
         let typo = DOC.replace("evidence:", "evidences:");
-        assert!(matches!(parse_document(&typo, "tax-api"), Err(KnowledgeError::Frontmatter(_))), "an unknown field");
+        let checks = Checks { domain: &|_| None, evidence: &|e| Ok(e.clone()) };
+        assert_eq!(
+            super::parse_document(&typo, "tax-api", &checks),
+            Err(vec![KnowledgeError::UnknownField("evidences".into()), KnowledgeError::ConfirmedWithoutEvidence, KnowledgeError::ContractsWithoutEvidence]),
+            "an unknown field, and what its absence leaves out — all at once"
+        );
         assert_eq!(parse_document(&with("title", "' '"), "tax-api"), Err(KnowledgeError::NoTitle));
         let headless = DOC.replace("# События налоговых деклараций\n", "События\n");
         assert_eq!(parse_document(&headless, "tax-api"), Err(KnowledgeError::NoHeading));
+        // A frontmatter that does not read still leaves the body to check.
+        let checks = Checks { domain: &|_| None, evidence: &|e| Ok(e.clone()) };
+        let both = super::parse_document(&headless.replace("kind: event", "kind: endpoint"), "tax-api", &checks).unwrap_err();
+        assert!(matches!(both[..], [KnowledgeError::Frontmatter(_), KnowledgeError::NoHeading]), "{both:?}");
         // A section is not the title: the document has to open with `# `.
         let sections_only = DOC.replace("# События налоговых деклараций\n", "## О чём\n");
         assert_eq!(parse_document(&sections_only, "tax-api"), Err(KnowledgeError::NoHeading));

@@ -14,7 +14,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::domain::code_search::SearchFilter;
-use crate::domain::knowledge::{self, Document, Entity, Header, KnowledgeHit, Relation, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
+use crate::domain::knowledge::{
+    self, Checks, Document, Entity, Evidence, Header, KnowledgeError, KnowledgeHit, Relation, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT,
+    MAX_BODY_CHARS,
+};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::search_query::PathFilter;
 use crate::domain::skills::split_frontmatter;
@@ -54,39 +57,24 @@ pub fn knowledge_write(scope: &ToolScope, args: &KnowledgeWriteArgs, deps: &Tool
             Ok(()) => {}
         }
     }
-    let known = |id: &str| id == GENERAL_DOMAIN || kept.iter().any(|d| d.id == id) || new_domains.iter().any(|d| d.id == id);
+    let known_domain = |id: &str| id == GENERAL_DOMAIN || kept.iter().any(|d| d.id == id) || new_domains.iter().any(|d| d.id == id);
+
+    let ids: Vec<String> = kept.iter().map(|d| format!("`{}` ({})", d.id, d.name)).collect();
+    let unknown_domain = |id: &str| {
+        let known = if ids.is_empty() { "none yet".to_string() } else { ids.join(", ") };
+        (!known_domain(id)).then(|| KnowledgeError::UnknownDomain { id: id.to_string(), known })
+    };
+    let cite = |evidence: &Evidence| evidence_path(scope, evidence).map(|path| Evidence { path, ..evidence.clone() });
+    let checks = Checks { domain: &unknown_domain, evidence: &cite };
 
     let mut parsed: Vec<Document> = Vec::new();
     for (i, text) in documents.iter().enumerate() {
-        let mut doc = match knowledge::parse_document(text, &repo.name) {
-            Ok(doc) => doc,
-            Err(e) => {
-                problems.push(format!("documents[{i}]: {e}"));
-                continue;
+        match knowledge::parse_document(text, &repo.name, &checks) {
+            Err(found) => problems.extend(found.iter().map(|why| format!("{}: {why}", shown(i, text, &repo.name)))),
+            Ok(doc) if parsed.iter().any(|d| d.slug == doc.slug) => {
+                problems.push(format!("{}: this id is in the call twice", shown(i, text, &repo.name)))
             }
-        };
-        let mut wrong = Vec::new();
-        if !known(&doc.domain) {
-            let ids: Vec<String> = kept.iter().map(|d| format!("`{}` ({})", d.id, d.name)).collect();
-            wrong.push(format!(
-                "domain `{}` is not in the base — use one of {}, `{GENERAL_DOMAIN}`, or add it in `newDomains`",
-                doc.domain,
-                if ids.is_empty() { "none yet".to_string() } else { ids.join(", ") },
-            ));
-        }
-        for evidence in &mut doc.evidence {
-            match evidence_path(scope, evidence) {
-                Ok(path) => evidence.path = path,
-                Err(why) => wrong.push(why.to_string()),
-            }
-        }
-        if parsed.iter().any(|d| d.slug == doc.slug) {
-            wrong.push("this id is in the call twice".to_string());
-        }
-        if wrong.is_empty() {
-            parsed.push(doc);
-        } else {
-            problems.extend(wrong.into_iter().map(|why| format!("documents[{i}] (`{}`): {why}", doc.id())));
+            Ok(doc) => parsed.push(doc),
         }
     }
 
@@ -296,8 +284,8 @@ fn stale_in(roots: &HashMap<String, PathBuf>, staleness: &mut Staleness, id: &st
 /// or `..` — which is what staleness compares with the history. `Err` says
 /// why it cannot be cited: not a file of the open folder, or not as many
 /// lines as it names.
-fn evidence_path(scope: &ToolScope, evidence: &knowledge::Evidence) -> Result<String, knowledge::KnowledgeError> {
-    let uncited = |why: String| knowledge::KnowledgeError::Uncited { path: evidence.path.clone(), why };
+fn evidence_path(scope: &ToolScope, evidence: &Evidence) -> Result<String, KnowledgeError> {
+    let uncited = |why: String| KnowledgeError::Uncited { path: evidence.path.clone(), why };
     let path = resolve_existing(scope, &evidence.path).map_err(|_| uncited("no such file in the repository".into()))?;
     if !path.is_file() {
         return Err(uncited("not a file".into()));
@@ -309,6 +297,19 @@ fn evidence_path(scope: &ToolScope, evidence: &knowledge::Evidence) -> Result<St
         return Err(uncited(format!("the file has {total} lines")));
     }
     relative_to_root(scope, &path).map_err(|e| uncited(e.to_string()))
+}
+
+/// `documents[i]`, with the document's id when its frontmatter names one of
+/// this repository — what the model finds it by among a call's documents.
+fn shown(i: usize, text: &str, repo: &str) -> String {
+    let id = split_frontmatter(text)
+        .and_then(|(yaml, _)| yaml_serde::from_str::<yaml_serde::Mapping>(yaml).ok())
+        .and_then(|fields| fields.get("id")?.as_str().map(str::to_string))
+        .and_then(|id| knowledge::own_slug(&id, repo).ok().map(|slug| format!("{repo}/{slug}")));
+    match id {
+        Some(id) => format!("documents[{i}] (`{id}`)"),
+        None => format!("documents[{i}]"),
+    }
 }
 
 fn fail(why: impl ToString) -> ToolError {
@@ -554,6 +555,8 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
                     doc("other/x", "general", "src/Api.java"),
                     doc("unfiled", "ausn", "src/Api.java"),
                     doc("good", "general", "src/Api.java"),
+                    // As a model wrote one: a field of its own, no title line, lines past the end.
+                    doc("thrift", "general", "src/Api.java#L2-L9").replace("kind:", "slugs: [thrift]\nkind:").replace("# Декларации API\n\n", ""),
                 ],
                 &["usn-api/x", "never-was"],
                 &[Domain { id: "general".into(), name: "G".into(), description: "g".into() }, Domain { id: "Bad".into(), ..usn() }, usn(), usn()],
@@ -568,6 +571,9 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
                 "documents[5]: `id` `other/x` is of another repository — this one is `tax-api`",
                 "documents[6] (`tax-api/unfiled`): domain `ausn` is not in the base — use one of none yet, `general`",
                 "documents[7] (`tax-api/good`): this id is in the call twice",
+                "documents[8] (`tax-api/thrift`): `slugs` is not a field",
+                "documents[8] (`tax-api/thrift`): the body must start with `# <title>`",
+                "documents[8] (`tax-api/thrift`): evidence `src/Api.java`: the file has 3 lines",
                 "delete `usn-api/x`:",
                 "delete `never-was`: there is no such document",
                 "newDomains[0]: `general` is already a domain",
