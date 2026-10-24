@@ -42,6 +42,8 @@ pub const CONTENT_FIELDS: &[&str] = &[
     "output",
     // skill
     "instructions",
+    // knowledgeWrite: whole documents, written from code that was read
+    "documents",
 ];
 
 pub const REDACTED: &str = "<redacted>";
@@ -299,6 +301,14 @@ mod tests {
             ToolName::Remember => (
                 Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
                 ToolResult::Remembered { already: false },
+            ),
+            ToolName::KnowledgeWrite => (
+                Some(ToolCall::KnowledgeWrite(crate::domain::tools::KnowledgeWriteArgs {
+                    documents: Some(vec![LEAK.into()]),
+                    delete: Some(vec!["tax-api/old".into()]),
+                    new_domains: vec![],
+                })),
+                ToolResult::KnowledgeWritten { repo: "tax-api".into(), written: vec!["tax-api/a".into()], deleted: vec![], new_domains: vec![] },
             ),
             ToolName::ReportFinding => (
                 None,

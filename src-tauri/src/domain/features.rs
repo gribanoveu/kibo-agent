@@ -21,6 +21,7 @@ pub enum Feature {
     DeepseekSearch,
     MeetingNotes,
     VoiceMemory,
+    Knowledge,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -36,7 +37,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -88,6 +89,16 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[],
                 data: Some("voices.json"),
+            },
+            Feature::Knowledge => Manifest {
+                id: "knowledge",
+                name: "Knowledge base",
+                description: "The model keeps documents about the repositories it works in — endpoints, topics, tables, \
+                    how a calculation goes — filed by domain, for work in other repositories later. Kept on this computer; \
+                    each document is checked by the model before it is saved.",
+                enabled_by_default: false,
+                tools: &[ToolName::KnowledgeWrite],
+                data: Some("knowledge"),
             },
         }
     }
@@ -156,7 +167,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge"]);
     }
 
     #[test]

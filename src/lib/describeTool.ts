@@ -62,6 +62,7 @@ export const LABELS: Record<string, string> = {
   reportFinding: "Finding",
   explore: "Explore",
   remember: "Memory",
+  knowledgeWrite: "Knowledge",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -282,6 +283,22 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.url) ?? "",
         meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
         detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
+      };
+    }
+
+    // The documents by id once kept; while the call is written, how many.
+    // The open row shows them as the model wrote them.
+    case "knowledgeWrite": {
+      const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+      const documents = strings(args.documents);
+      const written = strings(result.written);
+      const deleted = strings(result.deleted);
+      const domains = strings(result.newDomains);
+      return {
+        name,
+        arg: written.length ? written.join(", ") : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`,
+        meta: [deleted.length ? `${deleted.length} deleted` : "", domains.length ? `new: ${domains.join(", ")}` : ""].filter(Boolean).join(" · ") || undefined,
+        detail: documents.join("\n\n"),
       };
     }
 

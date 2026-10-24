@@ -125,6 +125,18 @@ describe("what each call shows", () => {
     expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: true } })).meta).toBe("already saved");
   });
 
+  test("knowledge documents: how many while written, their ids once kept, the documents when open", () => {
+    const args = JSON.stringify({ documents: ["---\nid: api\n---\n# API\n", "---\nid: events\n---\n# Events\n"], delete: ["tax-api/old"] });
+    const writing = describeTool(tool({ name: "knowledgeWrite", arguments: args }));
+    expect(writing).toMatchObject({ name: "Knowledge", arg: "2 documents", meta: undefined });
+    expect(writing.detail).toBe("---\nid: api\n---\n# API\n\n\n---\nid: events\n---\n# Events\n");
+    const result = { result: "knowledgeWritten", repo: "tax-api", written: ["tax-api/api", "tax-api/events"], deleted: ["tax-api/old"], newDomains: ["usn"] };
+    expect(describeTool(tool({ name: "knowledgeWrite", arguments: args, result }))).toMatchObject({
+      arg: "tax-api/api, tax-api/events",
+      meta: "1 deleted · new: usn",
+    });
+  });
+
   test("the user's terminal: which one and what it showed; a typed line and where it went", () => {
     const read = describeTool(
       tool({

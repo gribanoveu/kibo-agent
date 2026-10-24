@@ -119,6 +119,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::PlanWritten { lines } => format!("Plan saved ({lines} lines). The user sees it in the Plan tab."),
         ToolResult::Remembered { already: false } => "Saved. It is under \"Memory\" in every later conversation in this folder.".to_string(),
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
+        ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
@@ -135,6 +136,23 @@ pub fn for_model(result: &ToolResult) -> String {
 
 /// By column, a line a card: `c3 file the memory request — wlbuh`. The
 /// archive only as a count: it is the past, and up to a hundred lines of it.
+/// What changed, and the name the repository goes by — the model needs it
+/// for `related` and for ids it writes next.
+fn knowledge_written(repo: &str, written: &[String], deleted: &[String], new_domains: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !new_domains.is_empty() {
+        parts.push(format!("New domains: {}.", new_domains.join(", ")));
+    }
+    if !written.is_empty() {
+        parts.push(format!("Saved to the knowledge base: {}.", written.join(", ")));
+    }
+    if !deleted.is_empty() {
+        parts.push(format!("Deleted: {}.", deleted.join(", ")));
+    }
+    parts.push(format!("This repository is `{repo}` in the base: its ids are `{repo}/<slug>`."));
+    parts.join(" ")
+}
+
 fn board(cards: &[crate::domain::board::Card]) -> String {
     use crate::domain::board::Column;
     let archived = cards.iter().filter(|c| c.column == Column::Archived).count();

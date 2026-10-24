@@ -41,6 +41,34 @@ pub fn repository_id(root: &Path) -> String {
     blake3::hash(source.as_bytes()).to_hex().to_string()
 }
 
+/// A name for people and for document ids: the last part of the remote
+/// (`git@host:org/tax-api.git` → `tax-api`), or the folder's own name without
+/// one. Lowercase, `[a-z0-9._-]`, never empty. Not an identity: two
+/// repositories can share it, and the knowledge base tells them apart by
+/// [`repository_id`].
+pub fn repository_name(root: &Path) -> String {
+    let source = remote_identity(root).unwrap_or_else(|| {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    });
+    let last = source.rsplit('/').next().unwrap_or_default();
+    let name: String = last
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    let name = name.trim_matches(['-', '.']);
+    if name.is_empty() { "repository".to_string() } else { name.to_string() }
+}
+
+/// The commit checked out at `root`; `None` outside a repository or before
+/// its first commit.
+pub fn head_commit(root: &Path) -> Option<String> {
+    let repo = Repository::open(root).ok()?;
+    let commit = repo.head().ok()?.peel_to_commit().ok()?;
+    Some(commit.id().to_string())
+}
+
 /// The canonical form of this repository's remote, if it has exactly one
 /// obvious candidate.
 ///
@@ -158,6 +186,38 @@ mod tests {
             canonicalize_remote_url("https://GitHub.com/Org/Repo"),
             "github.com/Org/Repo"
         );
+    }
+
+    // ------------------------------------------------------- the readable name
+
+    #[test]
+    fn the_name_is_the_remotes_last_part_or_the_folders() {
+        let ssh = repo_with_remotes("name-ssh", &[("origin", "git@github.com:Org/Tax-API.git")]);
+        assert_eq!(repository_name(&ssh), "tax-api");
+        let https = repo_with_remotes("name-https", &[("origin", "https://gitlab.example.com/a/b/usn_service/")]);
+        assert_eq!(repository_name(&https), "usn_service");
+
+        let folder = temp_dir("Plain.Folder");
+        assert!(repository_name(&folder).starts_with("plain.folder-"), "{}", repository_name(&folder));
+        // `temp_dir` adds `-<n>`: what is left of «Мой проект-<n>» is the number.
+        let cyrillic = repository_name(&temp_dir("Мой проект"));
+        assert!(!cyrillic.is_empty() && cyrillic.chars().all(|c| c.is_ascii_digit()), "{cyrillic}");
+        let nothing_left = temp_dir("name-none").join("Проект");
+        std::fs::create_dir(&nothing_left).unwrap();
+        assert_eq!(repository_name(&nothing_left), "repository");
+    }
+
+    #[test]
+    fn the_head_is_the_checked_out_commit() {
+        let dir = repo_with_remotes("head-commit", &[]);
+        assert_eq!(head_commit(&dir), None, "no commit yet");
+        let repo = Repository::open(&dir).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let me = git2::Signature::now("t", "t@example.com").unwrap();
+        let id = repo.commit(Some("HEAD"), &me, &me, "first", &tree, &[]).unwrap();
+        assert_eq!(head_commit(&dir), Some(id.to_string()));
+        assert_eq!(head_commit(&temp_dir("head-plain")), None);
     }
 
     // -------------------------------------------------------------- identity

@@ -55,6 +55,9 @@ pub enum ToolName {
     /// A note for later conversations in this folder, checked by the model
     /// before it is kept.
     Remember,
+    /// Documents about the open repository for the knowledge base, checked
+    /// like a note (`docs/40-knowledge-base.md`).
+    KnowledgeWrite,
     /// The Kubernetes role's reads of the cluster its chat is pinned to
     /// (`docs/21-kubernetes-mode.md`, K-3).
     KubeList,
@@ -134,6 +137,7 @@ impl ToolName {
         ToolName::ReportFinding,
         ToolName::Explore,
         ToolName::Remember,
+        ToolName::KnowledgeWrite,
         ToolName::KubeList,
         ToolName::KubeGet,
         ToolName::KubeEvents,
@@ -187,6 +191,7 @@ impl ToolName {
             ToolName::ReportFinding => "reportFinding",
             ToolName::Explore => "explore",
             ToolName::Remember => "remember",
+            ToolName::KnowledgeWrite => "knowledgeWrite",
             ToolName::KubeList => "kubeList",
             ToolName::KubeGet => "kubeGet",
             ToolName::KubeEvents => "kubeEvents",
@@ -281,6 +286,8 @@ impl ToolName {
             | ToolName::ReportFinding
             | ToolName::Explore
             | ToolName::Remember
+            // The app's own folder, as `remember`; the tree is not touched.
+            | ToolName::KnowledgeWrite
             | ToolName::KubeList
             | ToolName::KubeGet
             | ToolName::KubeEvents
@@ -341,8 +348,8 @@ impl ToolName {
             | ToolName::Explore => true,
             // Anything at all; a command line is not a tool name.
             ToolName::RunCommand | ToolName::Mcp => false,
-            // The folder's memory file, which stays.
-            ToolName::Remember => false,
+            // The folder's memory file and the knowledge base, which stay.
+            ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // The cluster, in a chat — no folder to rewind.
@@ -419,6 +426,9 @@ impl ToolName {
             ToolName::Explore => 5,
             // A short request to the model, and a line appended.
             ToolName::Remember => 2,
+            // A short request to the model and a few files written, each
+            // evidence path read once.
+            ToolName::KnowledgeWrite => 2,
             // A request or two to the cluster; logs may be ten pods' worth.
             ToolName::KubeList
             | ToolName::KubeGet
@@ -603,7 +613,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            47,
+            48,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -995,9 +1005,11 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
-    /// Asks the model whether a `remember` note may be kept; `Err` says why
-    /// not, or why it could not be asked. `None` where there is no model.
-    pub check_memory: Option<&'a dyn Fn(&str) -> Result<(), String>>,
+    /// Asks the model whether text may be kept — a `remember` note, a
+    /// `knowledgeWrite`'s documents — under the tool's guard prompt, which
+    /// is answered SAVE or REFUSE; `Err` says why not, or why it could not be
+    /// asked. `None` where there is no model.
+    pub check: Option<&'a dyn Fn(&str, &str) -> Result<(), String>>,
     /// The cluster a Kubernetes chat is pinned to; `None` where there is
     /// none, or its kubeconfig could not be read.
     pub kube: Option<crate::domain::kube::PinnedCluster<'a>>,
@@ -1194,6 +1206,9 @@ pub enum ToolError {
     /// A `remember` note that was not kept, and why.
     #[error("remember: {0}")]
     Memory(String),
+    /// Documents that were not written, and why — each one's reason.
+    #[error("knowledgeWrite: {0}")]
+    Knowledge(String),
     /// A change asked for while the chat's tab says "Read only". The switch
     /// is the user's; the model says what it would do and where to turn it on.
     #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
@@ -1274,6 +1289,7 @@ pub enum ToolCall {
     ReportFinding(crate::domain::review::FindingArgs),
     Explore(ExploreArgs),
     Remember(RememberArgs),
+    KnowledgeWrite(KnowledgeWriteArgs),
     KubeList(KubeListArgs),
     KubeGet(KubeGetArgs),
     KubeEvents(KubeEventsArgs),
@@ -1326,6 +1342,7 @@ impl ToolCall {
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Explore(_) => ToolName::Explore,
             ToolCall::Remember(_) => ToolName::Remember,
+            ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
             ToolCall::KubeList(_) => ToolName::KubeList,
             ToolCall::KubeGet(_) => ToolName::KubeGet,
             ToolCall::KubeEvents(_) => ToolName::KubeEvents,
@@ -1585,6 +1602,15 @@ pub enum ToolResult {
     /// A note was kept — or was there already, word for word. The text is in
     /// the call's own arguments.
     Remembered { already: bool },
+    /// What one `knowledgeWrite` changed: the documents by id, as the
+    /// repository is named in the base, and the domains it added.
+    #[serde(rename_all = "camelCase")]
+    KnowledgeWritten {
+        repo: String,
+        written: Vec<String>,
+        deleted: Vec<String>,
+        new_domains: Vec<String>,
+    },
     /// An MCP tool's answer, already text.
     Mcp { text: String },
     /// The helper turn's closing answer, which run it was — its number in
@@ -1941,6 +1967,19 @@ pub struct ExploreArgs {
 #[serde(rename_all = "camelCase")]
 pub struct RememberArgs {
     pub fact: String,
+}
+
+/// `knowledgeWrite`: whole documents, Markdown with frontmatter; ids of the
+/// open repository's documents to remove; domains to add for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeWriteArgs {
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub documents: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    pub delete: Option<Vec<String>>,
+    #[serde(default)]
+    pub new_domains: Vec<crate::domain::knowledge::Domain>,
 }
 
 /// `present` arguments: the page, by its path in the chat's folder, and what

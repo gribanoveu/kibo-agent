@@ -34,6 +34,7 @@ import {
   Trash2,
   RotateCcw,
   MousePointerClick,
+  Library,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard } from "./ReviewCard";
@@ -81,6 +82,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   "DeepSeek page": Globe,
   Search: Search,
   Memory: NotebookPen,
+  Knowledge: Library,
   Plan: ScrollText,
   Explore: Telescope,
   Board: SquareKanban,
