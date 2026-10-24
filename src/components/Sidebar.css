@@ -39,29 +39,52 @@
   padding: 14px 0 8px;
 }
 
+/* A row like the ones under it, set apart by its accent "+" alone; its key
+   shows while the pointer is on it. */
 .newchat {
   flex: 1;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 7px 9px;
-  border-radius: var(--radius-md);
-  color: var(--text);
-  font-size: var(--fs-md);
-  cursor: pointer;
-  background: none;
+  height: 32px;
+  padding: 0 8px;
   border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
   font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 500;
   white-space: nowrap;
+  cursor: pointer;
+}
+.newchat svg {
+  flex: none;
+  color: var(--accent);
 }
 .newchat:hover {
   background: var(--bg-hover);
 }
+.newchat-keys {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.newchat:hover .newchat-keys,
+.newchat:focus-visible .newchat-keys {
+  opacity: 1;
+}
 .window.collapsed .newchat {
   flex: none;
-  padding: 7px;
+  width: 30px;
+  padding: 0;
+  justify-content: center;
 }
-.window.collapsed .newchat .label {
+.window.collapsed .newchat .label,
+.window.collapsed .newchat-keys {
   display: none;
 }
 
@@ -73,7 +96,10 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
+  margin-top: 6px;
+}
+.sidebar-pages {
+  margin-top: 0;
 }
 .window.collapsed .mode-switch {
   flex: none;
@@ -112,12 +138,50 @@
 .mode-opt svg {
   flex: none;
 }
+/* A mode is where the work happens, a page something beside it: the modes'
+   icons sit in a tile, the lit one's tinted as its row is. */
+.mode-switch:not(.sidebar-pages) .mode-opt {
+  height: 34px;
+  padding: 0 6px;
+  color: var(--text);
+}
+.mode-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.mode-opt.active .mode-tile {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.sidebar-pages-head {
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 12px 8px 2px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+/* On the rail the heading is only its line between the two groups. */
+.window.collapsed .sidebar-pages-head {
+  flex: none;
+  width: 28px;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
 .window.collapsed .mode-opt {
   width: 30px;
   padding: 0;
   justify-content: center;
 }
-.window.collapsed .mode-opt span {
+.window.collapsed .mode-opt .mode-label {
   display: none;
 }
 
