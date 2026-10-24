@@ -1663,6 +1663,8 @@ pub struct BoardArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub column: Option<crate::domain::board::Column>,
+    #[serde(default)]
+    pub due: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

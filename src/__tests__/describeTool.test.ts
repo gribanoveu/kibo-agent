@@ -37,7 +37,9 @@ describe("what each call shows", () => {
     expect(board('{"op":"move","id":"c1","column":"done"}')).toMatchObject({ arg: "c1 → done" });
     expect(board('{"op":"edit","id":"c1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "c1", detail: "wlbuh, 1 Nov" });
     expect(board('{"op":"edit","id":"c1","title":"Renew the cert"}')).toMatchObject({ arg: "c1 Renew the cert" });
-    expect(board('{"op":"list"}')).toMatchObject({ arg: "list" });
+    expect(board('{"op":"edit","id":"c1","due":"2026-11-01"}')).toMatchObject({ arg: "c1", detail: "due 2026-11-01" });
+    expect(board('{"op":"add","title":"Renew cert","note":"wlbuh","due":"2026-11-01"}')).toMatchObject({ detail: "wlbuh\ndue 2026-11-01" });
+    expect(board('{"op":"list"}')).toMatchObject({ arg: "list", detail: "" });
   });
 
   test("a read of several files names them and opens on each under its header", () => {

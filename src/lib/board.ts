@@ -10,14 +10,17 @@ export type Card = {
   id: string;
   title: string;
   note?: string;
+  /** `YYYY-MM-DD`, a day in the user's own calendar. */
+  due?: string;
   column: Column;
 };
 
 /** The page's own changes; the model adds and moves through its `board` tool.
-    An `edit` replaces what it is given — the page gives both; an empty note clears it. */
+    An `edit` replaces what it is given — the page gives all three; an empty
+    note or due date clears it. */
 export type BoardChange =
-  | { op: "add"; title: string; note?: string }
-  | { op: "edit"; id: string; title?: string; note?: string }
+  | { op: "add"; title: string; note?: string; due?: string }
+  | { op: "edit"; id: string; title?: string; note?: string; due?: string }
   /** `index`: its place among the column's other cards; Done ignores it. */
   | { op: "move"; id: string; column: Column; index?: number }
   | { op: "remove"; id: string };
@@ -45,6 +48,15 @@ export function dropChange(before: Order, after: Order, id: string): BoardChange
   if (!to || (from && from.column === to.column && from.index === to.index)) return null;
   return { op: "move", id, column: to.column, index: to.index };
 }
+
+/** A day as a card's `due` is written, in the user's own time zone — not
+    `toISOString`, whose day is UTC's. */
+export const localDay = (at = new Date()) =>
+  `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+
+/** Whether a due day has come; both `YYYY-MM-DD`, which compare as strings. */
+export const dueState = (due: string, today: string): "past" | "today" | "ahead" =>
+  due < today ? "past" : due === today ? "today" : "ahead";
 
 export const BOARD_EVENT = "board:changed";
 

@@ -17,7 +17,7 @@ pub fn board(args: &BoardArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         BoardOp::List => board.cards()?,
         BoardOp::Add => {
             let title = args.title.clone().ok_or_else(|| missing("title"))?;
-            board.change(&BoardChange::Add { title, note: args.note.clone() })?
+            board.change(&BoardChange::Add { title, note: args.note.clone(), due: args.due.clone() })?
         }
         BoardOp::Move => {
             let id = args.id.clone().ok_or_else(|| missing("id"))?;
@@ -26,10 +26,10 @@ pub fn board(args: &BoardArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         }
         BoardOp::Edit => {
             let id = args.id.clone().ok_or_else(|| missing("id"))?;
-            if args.title.is_none() && args.note.is_none() {
-                return Err(missing("title` or `note"));
+            if args.title.is_none() && args.note.is_none() && args.due.is_none() {
+                return Err(missing("title`, `note` or `due"));
             }
-            board.change(&BoardChange::Edit { id, title: args.title.clone(), note: args.note.clone() })?
+            board.change(&BoardChange::Edit { id, title: args.title.clone(), note: args.note.clone(), due: args.due.clone() })?
         }
     };
     Ok(ToolResult::Board { cards })
@@ -50,12 +50,12 @@ pub(super) fn definition() -> LlmToolDefinition {
         description: "The user's board of things to do later, which they see on the Board page in the sidebar. \
             When the user asks you to remind them of something, note it, or keep it for later, add a card: a short \
             imperative title in the user's language, and in `note` the details they gave — names, numbers, links. \
-            You cannot remind them at a time: when they name a day or a deadline, put its date in the title — the \
-            prompt says what today is — and say the card is on the board. `list` shows every card with its id and \
+            You cannot remind them at a time: when they name a day or a deadline, put it in `due` as YYYY-MM-DD — the \
+            prompt says what today is — and say the card is on the board; the page marks it once the day comes. `list` shows every card with its id and \
             column, all but the archive, where Done's oldest go — call it before answering what is on the board, or \
             before moving or editing a card you have not seen this turn. `move` puts a card in `todo`, `doing` or `done`; when the user says something is done or no longer \
             needed, move it to `done` — only the user removes cards. When the user adds to something already on the board — a detail, a date, a \
-            new wording — `edit` that card rather than adding a second: `note` replaces the whole note, so send the old one with the addition; \
+            new wording, a new due date — `edit` that card rather than adding a second: `note` replaces the whole note, so send the old one with the addition; \
             what you leave out stays as it was."
             .to_string(),
         parameters: serde_json::json!({
@@ -65,7 +65,8 @@ pub(super) fn definition() -> LlmToolDefinition {
                 "title": { "type": ["string", "null"], "description": "For op \"add\": the card's title. For op \"edit\": its new title, or null to keep it." },
                 "note": { "type": ["string", "null"], "description": "For op \"add\": details, optional. For op \"edit\": the whole new note, or null to keep it; an empty string clears it." },
                 "id": { "type": ["string", "null"], "description": "For ops \"move\" and \"edit\": the card's id, as `list` shows it." },
-                "column": { "type": ["string", "null"], "enum": ["todo", "doing", "done", null], "description": "Only for op \"move\": where the card goes." }
+                "column": { "type": ["string", "null"], "enum": ["todo", "doing", "done", null], "description": "Only for op \"move\": where the card goes." },
+                "due": { "type": ["string", "null"], "description": "For ops \"add\" and \"edit\": the day it is due, YYYY-MM-DD, or null — for \"edit\", null keeps it and an empty string clears it." }
             },
             "required": ["op"],
             "additionalProperties": false
@@ -131,10 +132,23 @@ mod tests {
 
         let err = call(&deps, r#"{"op":"edit","title":"x"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"edit\" needs `id`"), "{err}");
-        let err = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":null}"#).unwrap_err().to_string();
-        assert!(err.contains("op \"edit\" needs `title` or `note`"), "{err}");
+        let err = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":null,"due":null}"#).unwrap_err().to_string();
+        assert!(err.contains("op \"edit\" needs `title`, `note` or `due`"), "{err}");
         let err = call(&deps, r#"{"op":"edit","id":"c1","title":"  "}"#).unwrap_err().to_string();
         assert!(err.contains("a card needs a title"), "{err}");
+    }
+
+    #[test]
+    fn a_due_date_goes_on_with_add_and_edit() {
+        let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
+        let added = call(&deps, r#"{"op":"add","title":"renew cert","due":"2026-11-01"}"#).unwrap();
+        let ToolResult::Board { cards } = added else { panic!("{added:?}") };
+        assert_eq!(cards[0].due.as_deref(), Some("2026-11-01"));
+        let edited = call(&deps, r#"{"op":"edit","id":"c1","due":"2026-11-03"}"#).unwrap();
+        let ToolResult::Board { cards } = edited else { panic!("{edited:?}") };
+        assert_eq!((cards[0].title.as_str(), cards[0].due.as_deref()), ("renew cert", Some("2026-11-03")));
+        let err = call(&deps, r#"{"op":"add","title":"x","due":"next friday"}"#).unwrap_err().to_string();
+        assert!(err.contains("give the due date as YYYY-MM-DD"), "{err}");
     }
 
     #[test]

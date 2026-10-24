@@ -300,7 +300,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
                 ? `${str(args.id) ?? ""} ${str(args.title) ?? ""}`.trim()
                 : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
-        detail: str(args.note) ?? "",
+        detail: [str(args.note), str(args.due) && `due ${str(args.due)}`].filter(Boolean).join("\n"),
       };
     }
 

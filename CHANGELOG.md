@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-24 A Board card can have a due day: pick it in the card's editor, or name a day to the Assistant; an open card shows it in amber on the day and in red once it has passed
 - 2026-10-24 Tell the Assistant more about something already on the Board — a date, a detail, a new wording — and it edits that card instead of adding a second one
 - 2026-10-23 Drag a card on the Board to a place in its column or into another one, or pick it up with Space from the keyboard and move it with the arrows
 - 2026-10-23 Add cards to the Board yourself — Add a card under To do — and edit any card's title and note in place

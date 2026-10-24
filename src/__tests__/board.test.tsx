@@ -17,8 +17,8 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "board_list") return Promise.resolve(structuredClone(stored));
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
-      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string };
-      const text = { title: change.title?.trim() ?? "", note: change.note?.trim() || undefined };
+      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string };
+      const text = { title: change.title?.trim() ?? "", note: change.note?.trim() || undefined, due: change.due || undefined };
       stored =
         change.op === "remove"
           ? stored.filter((c) => c.id !== change.id)
@@ -46,7 +46,7 @@ afterAll(() => {
 });
 
 const { BoardPage } = await import("../components/BoardPage");
-const { dropChange, orderOf } = await import("../lib/board");
+const { dropChange, dueState, localDay, orderOf } = await import("../lib/board");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const column = (name: string) => within(screen.getByRole("region", { name }));
 
@@ -120,7 +120,7 @@ describe("the board page", () => {
     fireEvent.change(form.getByLabelText("Note"), { target: { value: "about the card" } });
     fireEvent.keyDown(form.getByLabelText("Title"), { key: "Enter", code: "Enter" });
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "add", title: "Call the bank", note: "about the card" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "add", title: "Call the bank", note: "about the card", due: "" } } });
     expect(column("To do").getByText("Call the bank")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "New card" })).toBeNull();
   });
@@ -141,9 +141,35 @@ describe("the board page", () => {
     fireEvent.change(form.getByLabelText("Note"), { target: { value: "" } });
     fireEvent.click(form.getByRole("button", { name: "Save" }));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "File it today", note: "" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "File it today", note: "", due: "" } } });
     expect(column("To do").getByText("File it today")).toBeTruthy();
     expect(column("To do").queryByText("wlbuh")).toBeNull();
+  });
+
+  test("a due day is set in the editor, and marked on an open card once it has come", async () => {
+    stored = [
+      { id: "c1", title: "Late", due: "2000-01-01", column: "todo" },
+      { id: "c2", title: "Now", due: localDay(), column: "doing" },
+      { id: "c3", title: "Later", due: "2999-01-01", column: "todo" },
+      { id: "c4", title: "Finished late", due: "2000-01-01", column: "done" },
+    ];
+    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    await settle();
+    const due = (title: string) => screen.getByText(title).closest("article")!.querySelector(".board-card-due")!;
+    expect(due("Late").className).toContain("past");
+    expect(due("Late").getAttribute("title")).toStartWith("Overdue");
+    expect(due("Now").className).toContain("today");
+    expect(due("Later").className).toContain("ahead");
+    expect(due("Finished late").className).toContain("ahead");
+
+    fireEvent.click(column("To do").getAllByLabelText("Edit")[0]);
+    const form = within(screen.getByRole("group", { name: "Edit c1" }));
+    expect((form.getByLabelText("Due") as HTMLInputElement).value).toBe("2000-01-01");
+    fireEvent.change(form.getByLabelText("Due"), { target: { value: "2999-06-01" } });
+    fireEvent.click(form.getByRole("button", { name: "Save" }));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "Late", note: "", due: "2999-06-01" } } });
+    expect(due("Late").className).toContain("ahead");
   });
 
   test("a refused card keeps its editor open and says why", async () => {
@@ -172,6 +198,20 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
     await settle();
     expect(screen.getByText(/Add a card, or ask the Assistant to remind you/)).toBeTruthy();
+  });
+});
+
+describe("a due day", () => {
+  test("is the user's own calendar day, padded", () => {
+    expect(localDay(new Date(2026, 0, 5, 23, 59))).toBe("2026-01-05");
+    expect(localDay(new Date(2026, 10, 30, 0, 1))).toBe("2026-11-30");
+  });
+
+  test("has come when it is today or before", () => {
+    expect(dueState("2026-10-23", "2026-10-24")).toBe("past");
+    expect(dueState("2026-10-24", "2026-10-24")).toBe("today");
+    expect(dueState("2026-10-25", "2026-10-24")).toBe("ahead");
+    expect(dueState("2025-12-31", "2026-01-01")).toBe("past");
   });
 });
 

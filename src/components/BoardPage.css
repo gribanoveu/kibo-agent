@@ -68,8 +68,29 @@
   align-items: center;
   gap: 2px;
 }
-.board-card-id {
+/* The id the model names a card by, and its due day. */
+.board-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-right: auto;
+  min-width: 0;
+}
+.board-card-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.board-card-due.today {
+  color: var(--amber);
+}
+.board-card-due.past {
+  color: var(--red);
+}
+.board-card-id {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-faint);
@@ -138,8 +159,32 @@
 }
 .board-editor-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 6px;
+}
+/* The due day, left of Cancel and Save; the platform draws its calendar. */
+.board-editor-due {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.board-editor-due input {
+  padding: 2px 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.board-editor-due input:focus {
+  border-color: var(--accent);
 }
 .board-empty {
   color: var(--text-dim);

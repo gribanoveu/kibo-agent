@@ -2,10 +2,10 @@ import { useRef, useState, type ReactNode } from "react";
 import { DragDropProvider, KeyboardSensor, PointerSensor, useDroppable, type DragDropEventHandlers } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { Page } from "./Page";
 import { useBoard } from "../hooks/useBoard";
-import { dropChange, orderOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
+import { dropChange, dueState, localDay, orderOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./BoardPage.css";
@@ -90,7 +90,7 @@ export function BoardPage({ sideHandle }: PageContext) {
               ))}
               {column === "todo" &&
                 (adding ? (
-                  <CardEditor onSave={(title, note) => change({ op: "add", title, note })} onClose={() => setAdding(false)} />
+                  <CardEditor onSave={(title, note, due) => change({ op: "add", title, note, due })} onClose={() => setAdding(false)} />
                 ) : (
                   <button type="button" className="board-add" onClick={() => setAdding(true)}>
                     <Plus size={14} />
@@ -159,14 +159,17 @@ function BoardCard({ card, index, group, back, forward, onChange }: CardProps) {
     </button>
   );
   if (editing) {
-    return <CardEditor card={card} onSave={(title, note) => onChange({ op: "edit", id: card.id, title, note })} onClose={() => setEditing(false)} />;
+    return <CardEditor card={card} onSave={(title, note, due) => onChange({ op: "edit", id: card.id, title, note, due })} onClose={() => setEditing(false)} />;
   }
   return (
     <article ref={ref} className="board-card" data-card-id={card.id}>
       <div className="board-card-title">{card.title}</div>
       {card.note && <div className="board-card-note">{card.note}</div>}
       <div className="board-card-actions">
-        <span className="board-card-id">{card.id}</span>
+        <span className="board-card-meta">
+          <span className="board-card-id">{card.id}</span>
+          {card.due && <Due due={card.due} open={card.column === "todo" || card.column === "doing"} />}
+        </span>
         {back && moveTo(back, ChevronLeft)}
         {forward && moveTo(forward, ChevronRight)}
         <button type="button" title="Edit" aria-label="Edit" onClick={() => setEditing(true)}>
@@ -180,21 +183,36 @@ function BoardCard({ card, index, group, back, forward, onChange }: CardProps) {
   );
 }
 
+/** A card's due day, short; marked once it has come while the card is still open. */
+function Due({ due, open }: { due: string; open: boolean }) {
+  const day = new Date(`${due}T00:00`);
+  const thisYear = day.getFullYear() === new Date().getFullYear();
+  const text = day.toLocaleDateString(undefined, { day: "numeric", month: "short", year: thisYear ? undefined : "numeric" });
+  const state = open ? dueState(due, localDay()) : "ahead";
+  return (
+    <span className={`board-card-due ${state}`} title={state === "past" ? `Overdue — was due ${text}` : `Due ${text}`}>
+      <CalendarDays size={12} />
+      {text}
+    </span>
+  );
+}
+
 type EditorProps = {
   /** The card being edited; none for a new one. */
   card?: Card;
-  onSave: (title: string, note: string) => Promise<boolean>;
+  onSave: (title: string, note: string, due: string) => Promise<boolean>;
   onClose: () => void;
 };
 
-/** A card's title and note being written. Enter in the title or ⌘Enter in
+/** A card's title, note and due day being written. Enter in the title or ⌘Enter in
     the note saves, Escape leaves it as it was; a refused one stays open, with
     the reason over the columns. */
 function CardEditor({ card, onSave, onClose }: EditorProps) {
   const [title, setTitle] = useState(card?.title ?? "");
   const [note, setNote] = useState(card?.note ?? "");
+  const [due, setDue] = useState(card?.due ?? "");
   const save = async () => {
-    if (title.trim() && (await onSave(title, note))) onClose();
+    if (title.trim() && (await onSave(title, note, due))) onClose();
   };
   return (
     <div
@@ -222,6 +240,10 @@ function CardEditor({ card, onSave, onClose }: EditorProps) {
         onKeyDown={(e) => matches(e.nativeEvent, "cardSave") && void save()}
       />
       <div className="board-editor-actions">
+        <label className="board-editor-due">
+          Due
+          <input type="date" value={due} onChange={(e) => setDue(e.currentTarget.value)} />
+        </label>
         <button type="button" className="btn btn-ghost" onClick={onClose}>
           Cancel
         </button>
