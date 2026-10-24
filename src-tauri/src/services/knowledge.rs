@@ -30,6 +30,8 @@ pub enum KnowledgePageError {
     General,
     #[error("the base has no record of `{0}` — its documents were put there by hand")]
     NoRepo(String),
+    #[error("nothing was moved: {0} cannot be ({1})")]
+    Unmoved(String, String),
 }
 
 /// Whether documents are stale, asking each repository's history once per
@@ -68,7 +70,11 @@ pub fn base() -> Result<Base, KnowledgeStoreError> {
     let store = KnowledgeStore::open()?;
     let records = store.repos()?;
     let roots = records.iter().map(|r| (r.name.clone(), PathBuf::from(&r.path))).collect();
-    let (documents, domains) = walk(&store, &roots, None)?;
+    let (documents, mut domains) = walk(&store, &roots, None)?;
+    // The page files documents under `general` even while it has none.
+    if !domains.iter().any(|d| d.domain.id == GENERAL_DOMAIN) {
+        domains.push(DomainCount { domain: knowledge::general_domain(), documents: 0, repos: 0 });
+    }
     let repos = records
         .into_iter()
         .map(|record| {
@@ -100,6 +106,13 @@ fn walk(
         let Some((domain, id)) = knowledge::place_of(&relative) else {
             continue;
         };
+        // A file edited past reading is left out, as search leaves it out —
+        // and not counted, or a domain says more than it lists.
+        let path = store.dir().join(&relative);
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        let Some((header, _)) = knowledge::read_header(&text) else {
+            continue;
+        };
         let owner = id.split_once('/').map_or("", |(owner, _)| owner).to_string();
         let count = counts.entry(domain.to_string()).or_default();
         count.0 += 1;
@@ -107,12 +120,6 @@ fn walk(
         if only.is_some_and(|only| only != owner) {
             continue;
         }
-        // A file edited past reading is left out, as search leaves it out.
-        let path = store.dir().join(&relative);
-        let text = fs::read_to_string(&path).unwrap_or_default();
-        let Some((header, _)) = knowledge::read_header(&text) else {
-            continue;
-        };
         let stale = roots.get(&owner).is_some_and(|root| staleness.of(root, &header));
         let written = fs::metadata(&path).and_then(|m| m.modified()).ok();
         documents.push(Listed {
@@ -150,18 +157,23 @@ pub fn document(id: &str) -> Result<String, KnowledgePageError> {
 /// A document filed under another domain: its `domain` field and its folder.
 pub fn move_document(id: &str, into: &str) -> Result<(), KnowledgePageError> {
     let store = KnowledgeStore::open()?;
-    let (repo, slug) = knowledge::parse_id(id)?;
-    if into != GENERAL_DOMAIN && !store.domains()?.iter().any(|d| d.id == into) {
-        return Err(KnowledgePageError::NoDomain(into.to_string()));
-    }
+    known(&store.domains()?, into)?;
     let path = kept(&store, id)?;
-    let text = fs::read_to_string(&path).map_err(|source| KnowledgeStoreError::Read { path, source })?;
-    let commit = knowledge::read_header(&text).and_then(|(header, _)| header.commit);
-    let mut doc = knowledge::parse_document(&text, repo)?;
-    doc.domain = into.to_string();
-    let record = record_of(&store, repo)?;
-    let write = vec![(into.to_string(), slug.to_string(), doc.render(commit.as_deref()))];
-    Ok(store.apply(Change { repo: record, new_domains: &[], write, delete: Vec::new() })?)
+    let text = refiled(&path, into)?;
+    Ok(store.refile(&[(path, into.to_string(), text)])?)
+}
+
+/// The file at `path` as it reads filed under `domain`.
+fn refiled(path: &Path, domain: &str) -> Result<String, KnowledgePageError> {
+    let text = fs::read_to_string(path).map_err(|source| KnowledgeStoreError::Read { path: path.to_path_buf(), source })?;
+    Ok(knowledge::with_domain(&text, domain)?)
+}
+
+fn known(domains: &[Domain], id: &str) -> Result<(), KnowledgePageError> {
+    match id == GENERAL_DOMAIN || domains.iter().any(|d| d.id == id) {
+        true => Ok(()),
+        false => Err(KnowledgePageError::NoDomain(id.to_string())),
+    }
 }
 
 pub fn delete_document(id: &str) -> Result<(), KnowledgePageError> {
@@ -187,22 +199,26 @@ pub fn edit_domain(domain: &Domain) -> Result<(), KnowledgePageError> {
 }
 
 /// Every document of `from` moved into `into`, and `from` off the list.
+///
+/// Every file is read and rewritten before the first one moves: one that
+/// cannot be leaves the merge undone, not half done.
 pub fn merge_domains(from: &str, into: &str) -> Result<(), KnowledgePageError> {
     let store = KnowledgeStore::open()?;
-    let known = |id: &str| -> Result<bool, KnowledgeStoreError> { Ok(id == GENERAL_DOMAIN || store.domains()?.iter().any(|d| d.id == id)) };
-    for id in [from, into] {
-        if !known(id)? {
-            return Err(KnowledgePageError::NoDomain(id.to_string()));
-        }
-    }
+    let domains = store.domains()?;
+    known(&domains, from)?;
+    known(&domains, into)?;
     if from == into {
         return Ok(());
     }
+    let mut moves = Vec::new();
     for relative in store.documents()? {
-        if let Some((_, id)) = knowledge::place_of(&relative).filter(|(domain, _)| *domain == from) {
-            move_document(&id, into)?;
+        if knowledge::place_of(&relative).is_some_and(|(domain, _)| domain == from) {
+            let path = store.dir().join(&relative);
+            let text = refiled(&path, into).map_err(|e| KnowledgePageError::Unmoved(relative.clone(), e.to_string()))?;
+            moves.push((path, into.to_string(), text));
         }
     }
+    store.refile(&moves)?;
     Ok(store.remove_domain(from)?)
 }
 
@@ -294,7 +310,7 @@ mod tests {
                 "by domain; a file it cites changed, or its commit is gone"
             );
             let domains: Vec<_> = seen.domains.iter().map(|d| (d.domain.id.as_str(), d.documents, d.repos)).collect();
-            assert_eq!(domains, [("usn", 4, 2), ("ausn", 0, 0), ("general", 2, 1)]);
+            assert_eq!(domains, [("usn", 4, 2), ("ausn", 0, 0), ("general", 1, 1)], "a file without a header is not counted");
         });
     }
 
@@ -307,7 +323,8 @@ mod tests {
         with_app_dir("knowledge-page", || {
             let (root, first) = repository("knowledge-page-repo");
             let store = KnowledgeStore::open().unwrap();
-            assert_eq!(base().unwrap(), Base::default(), "an empty base");
+            let empty = Base { domains: vec![DomainCount { domain: knowledge::general_domain(), documents: 0, repos: 0 }], ..Base::default() };
+            assert_eq!(base().unwrap(), empty, "an empty base, which documents can still be filed under `general` in");
             let usn = Domain { id: "usn".into(), name: "УСН".into(), description: "упрощёнка".into() };
             let ausn = Domain { id: "ausn".into(), name: "АУСН".into(), description: "автоупрощёнка".into() };
             let record = store.repo(&root).unwrap();
@@ -333,7 +350,7 @@ mod tests {
             let repos: Vec<_> = seen.repos.iter().map(|r| (r.name.as_str(), r.documents, r.stale, r.written.is_some())).collect();
             assert_eq!(repos, [("tax-api", 2, 2, true), ("ledger", 1, 0, true)]);
             assert_eq!(seen.repos[0].written, Some(2_000_000_000), "the repository was written when its latest document was");
-            assert_eq!(seen.domains.iter().map(|d| (d.domain.id.as_str(), d.documents)).collect::<Vec<_>>(), [("usn", 2), ("ausn", 1)]);
+            assert_eq!(seen.domains.iter().map(|d| (d.domain.id.as_str(), d.documents)).collect::<Vec<_>>(), [("usn", 2), ("ausn", 1), ("general", 0)]);
             assert!(document("tax-api/api").unwrap().contains("title: API"));
             assert!(matches!(document("tax-api/none"), Err(KnowledgePageError::NoDocument(_))));
 
@@ -366,6 +383,39 @@ mod tests {
             let left = base().unwrap();
             assert_eq!(left.documents.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["tax-api/job"]);
             assert_eq!(left.repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["tax-api"]);
+            assert!(matches!(delete_repo(".."), Err(KnowledgePageError::Store(KnowledgeStoreError::NotARepo(_)))));
+            assert!(matches!(delete_repo(""), Err(KnowledgePageError::Store(KnowledgeStoreError::NotARepo(_)))));
+            assert_eq!(base().unwrap().documents.len(), 1, "a name that is a path removes nothing");
+        });
+    }
+
+    /// A merge moves files edited by hand as they are, with no record of
+    /// their repository; a file that cannot be moved leaves every one in place.
+    #[test]
+    fn a_merge_moves_every_file_or_none() {
+        with_app_dir("knowledge-merge", || {
+            let store = KnowledgeStore::open().unwrap();
+            let (usn, ausn) = (Domain { id: "usn".into(), name: "УСН".into(), description: "у".into() }, Domain { id: "ausn".into(), name: "АУСН".into(), description: "а".into() });
+            let record = crate::infra::knowledge_store::RepoRecord { name: "ledger".into(), repository_id: "l".into(), path: "/nowhere".into(), commit: None };
+            let new = [usn.clone(), ausn.clone()];
+            store.apply(Change { repo: record, new_domains: &new, write: vec![("ausn".into(), "a".into(), file("a", "ausn", "A", "abc"))], delete: vec![] }).unwrap();
+            // By hand: a field the tool would refuse, a body over the limit, a repository with no record.
+            let by_hand = format!("---\nid: x\ndomain: ausn\nkind: api\ntitle: B\nowner: me\nconfidence: confirmed\n---\n# B\n{}", "x".repeat(20_000));
+            fs::create_dir_all(store.dir().join("ausn/manual")).unwrap();
+            fs::write(store.dir().join("ausn/manual/b.md"), &by_hand).unwrap();
+            fs::write(store.dir().join("ausn/manual/broken.md"), "no frontmatter").unwrap();
+
+            let refused = merge_domains("ausn", "usn");
+            assert!(matches!(&refused, Err(KnowledgePageError::Unmoved(path, _)) if path == "ausn/manual/broken.md"), "{refused:?}");
+            assert_eq!(store.documents().unwrap(), ["ausn/ledger/a.md", "ausn/manual/b.md", "ausn/manual/broken.md"], "nothing moved");
+            assert_eq!(store.domains().unwrap(), new.to_vec());
+
+            fs::remove_file(store.dir().join("ausn/manual/broken.md")).unwrap();
+            merge_domains("ausn", "usn").unwrap();
+            assert_eq!(store.documents().unwrap(), ["usn/ledger/a.md", "usn/manual/b.md"]);
+            assert_eq!(store.domains().unwrap(), [usn]);
+            let moved = fs::read_to_string(store.dir().join("usn/manual/b.md")).unwrap();
+            assert_eq!(moved, by_hand.replace("domain: ausn", "domain: usn"), "only the domain changes");
         });
     }
 

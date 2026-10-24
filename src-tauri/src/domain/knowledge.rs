@@ -304,6 +304,9 @@ pub enum KnowledgeError {
     Placeholder(String),
     #[error("`{0}` is not evidence — a path from the repository root, optionally with lines: `src/a.rs#L40-L60`")]
     BadEvidence(String),
+    /// Evidence the open folder does not back: no such file, or fewer lines.
+    #[error("evidence `{path}`: {why}")]
+    Uncited { path: String, why: String },
     #[error("it looks like it holds {0} — write `<token>` or `${{DB_PASSWORD}}` instead of the value")]
     Secret(&'static str),
 }
@@ -616,6 +619,17 @@ pub fn general_domain() -> Domain {
 pub fn read_header(text: &str) -> Option<(Header, &str)> {
     let (yaml, body) = split_frontmatter(text)?;
     Some((yaml_serde::from_str(yaml).ok()?, body))
+}
+
+/// A kept file filed under `domain`: its frontmatter's `domain` set, every
+/// other field and the body as the file has them. A file edited by hand
+/// moves as it is — it is not checked again as `knowledgeWrite` checks one.
+pub fn with_domain(text: &str, domain: &str) -> Result<String, KnowledgeError> {
+    let (yaml, body) = split_frontmatter(text).ok_or(KnowledgeError::NoFrontmatter)?;
+    let bad = |e: yaml_serde::Error| KnowledgeError::Frontmatter(e.to_string());
+    let mut fields: yaml_serde::Mapping = yaml_serde::from_str(yaml).map_err(bad)?;
+    fields.insert("domain".into(), domain.into());
+    Ok(format!("---\n{}---\n{body}", yaml_serde::to_string(&fields).map_err(bad)?))
 }
 
 /// `<repo>/<slug>` as its two parts, each checked: an id names a file.

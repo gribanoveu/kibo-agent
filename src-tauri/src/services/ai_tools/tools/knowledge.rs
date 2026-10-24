@@ -23,7 +23,7 @@ use crate::domain::tools::{
 };
 use crate::infra::knowledge_store::{Change, KnowledgeStore};
 use crate::infra::repository_identity::head_commit;
-use crate::services::ai_tools::resolve::resolve_existing;
+use crate::services::ai_tools::resolve::{relative_to_root, resolve_existing};
 use crate::services::ai_tools::tools::semantic_search::shorten;
 use crate::services::knowledge::Staleness;
 
@@ -58,7 +58,7 @@ pub fn knowledge_write(scope: &ToolScope, args: &KnowledgeWriteArgs, deps: &Tool
 
     let mut parsed: Vec<Document> = Vec::new();
     for (i, text) in documents.iter().enumerate() {
-        let doc = match knowledge::parse_document(text, &repo.name) {
+        let mut doc = match knowledge::parse_document(text, &repo.name) {
             Ok(doc) => doc,
             Err(e) => {
                 problems.push(format!("documents[{i}]: {e}"));
@@ -74,7 +74,12 @@ pub fn knowledge_write(scope: &ToolScope, args: &KnowledgeWriteArgs, deps: &Tool
                 if ids.is_empty() { "none yet".to_string() } else { ids.join(", ") },
             ));
         }
-        wrong.extend(doc.evidence.iter().filter_map(|evidence| evidence_problem(scope, evidence)));
+        for evidence in &mut doc.evidence {
+            match evidence_path(scope, evidence) {
+                Ok(path) => evidence.path = path,
+                Err(why) => wrong.push(why.to_string()),
+            }
+        }
         if parsed.iter().any(|d| d.slug == doc.slug) {
             wrong.push("this id is in the call twice".to_string());
         }
@@ -287,23 +292,23 @@ fn stale_in(roots: &HashMap<String, PathBuf>, staleness: &mut Staleness, id: &st
     roots.get(owner).is_some_and(|root| staleness.of(root, header))
 }
 
-/// What is wrong with citing `evidence`: not a file of the open folder, or
-/// not as many lines as it names. `None` when it holds.
-fn evidence_problem(scope: &ToolScope, evidence: &knowledge::Evidence) -> Option<String> {
-    let shown = &evidence.path;
-    let Ok(path) = resolve_existing(scope, shown) else {
-        return Some(format!("evidence `{shown}`: no such file in the repository"));
-    };
+/// `evidence`'s file as git names it — from the root, `/`-separated, no `./`
+/// or `..` — which is what staleness compares with the history. `Err` says
+/// why it cannot be cited: not a file of the open folder, or not as many
+/// lines as it names.
+fn evidence_path(scope: &ToolScope, evidence: &knowledge::Evidence) -> Result<String, knowledge::KnowledgeError> {
+    let uncited = |why: String| knowledge::KnowledgeError::Uncited { path: evidence.path.clone(), why };
+    let path = resolve_existing(scope, &evidence.path).map_err(|_| uncited("no such file in the repository".into()))?;
     if !path.is_file() {
-        return Some(format!("evidence `{shown}`: not a file"));
+        return Err(uncited("not a file".into()));
     }
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) => return Some(format!("evidence `{shown}`: could not be read ({e})")),
-    };
+    let bytes = fs::read(&path).map_err(|e| uncited(format!("could not be read ({e})")))?;
     let newlines = bytes.iter().filter(|b| **b == b'\n').count();
     let total = newlines + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
-    (!evidence.fits(u32::try_from(total).unwrap_or(u32::MAX))).then(|| format!("evidence `{shown}`: the file has {total} lines"))
+    if !evidence.fits(u32::try_from(total).unwrap_or(u32::MAX)) {
+        return Err(uncited(format!("the file has {total} lines")));
+    }
+    relative_to_root(scope, &path).map_err(|e| uncited(e.to_string()))
 }
 
 fn fail(why: impl ToString) -> ToolError {
@@ -902,7 +907,7 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
         let (scope, dir): (ToolScope, PathBuf) = repo("knowledge-tool-lines");
         let at = |text: &str, cited: &str| {
             fs::write(Path::new(&dir).join("src/F.java"), text).unwrap();
-            evidence_problem(&scope, &knowledge::Evidence::parse(cited).unwrap())
+            evidence_path(&scope, &knowledge::Evidence::parse(cited).unwrap()).err().map(|e| e.to_string())
         };
         assert_eq!(at("a\nb", "src/F.java#L2"), None);
         assert_eq!(at("a\nb", "src/F.java#L3").as_deref(), Some("evidence `src/F.java`: the file has 2 lines"));
@@ -910,5 +915,25 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
         assert_eq!(at("a\nb\n", "src/F.java#L3").as_deref(), Some("evidence `src/F.java`: the file has 2 lines"));
         assert_eq!(at("", "src/F.java"), None);
         assert!(at("", "src/F.java#L1").is_some());
+    }
+
+    /// Evidence is kept as git names the file, whatever spelling found it:
+    /// staleness compares it with the paths a commit changed.
+    #[test]
+    fn evidence_is_kept_as_the_history_names_it() {
+        let (scope, _) = repo("knowledge-tool-spelling");
+        let path = |cited: &str| evidence_path(&scope, &knowledge::Evidence::parse(cited).unwrap());
+        for cited in ["src/Api.java", "./src/Api.java", "src//Api.java", "./src/./Api.java"] {
+            assert_eq!(path(cited).as_deref(), Ok("src/Api.java"), "{cited}");
+        }
+        assert!(path("../outside.java").is_err());
+
+        with_app_dir("knowledge-tool-spelling-kept", || {
+            let check = |_: &str, _: &str| Ok(());
+            let deps = ToolDeps { check: Some(&check), ..ToolDeps::default() };
+            knowledge_write(&scope, &args(&[doc("api", "general", "./src/Api.java#L1-L3")], &[], &[]), &deps).unwrap();
+            let text = kept("tax-api", "api").unwrap();
+            assert!(text.contains("- src/Api.java#L1-L3") && !text.contains("./src"), "{text}");
+        });
     }
 }
