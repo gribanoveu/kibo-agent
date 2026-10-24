@@ -1,17 +1,35 @@
 import { useState } from "react";
-import { FileText, MoreHorizontal, Trash2 } from "lucide-react";
+import { ChevronRight, FileText, Folder, MoreHorizontal, Search, Trash2 } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { Page, PagePanel } from "./Page";
 import { useKnowledge } from "../hooks/useKnowledge";
-import { documentMarkdown, type DomainCount, type KnowledgeDocument, type KnowledgeDomain, type KnowledgeKind, type RepoSummary } from "../lib/knowledge";
+import { splitDocument, type DocumentFacts, type DomainCount, type KnowledgeDocument, type KnowledgeDomain, type KnowledgeKind, type RepoSummary } from "../lib/knowledge";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./KnowledgePage.css";
 
 /** The kinds in the order a reader meets a service: what it is, then its surfaces, then the rest. */
 const KINDS: KnowledgeKind[] = ["service", "api", "event", "datastore", "algorithm", "concept", "howto"];
+
+const KIND_LABELS: Record<KnowledgeKind, string> = {
+  service: "Service",
+  api: "API",
+  event: "Events",
+  datastore: "Data stores",
+  algorithm: "Flows",
+  concept: "Concepts",
+  howto: "How-to",
+};
+
+/** The frontmatter's lists, in the order they are shown under the text's bar. */
+const FACTS: { key: keyof DocumentFacts; label: string }[] = [
+  { key: "provides", label: "Provides" },
+  { key: "consumes", label: "Consumes" },
+  { key: "evidence", label: "Evidence" },
+  { key: "aliases", label: "Also called" },
+];
 
 const GENERAL = "general";
 
@@ -25,11 +43,11 @@ type Confirm =
   | { what: "merge"; from: KnowledgeDomain; into: KnowledgeDomain };
 
 /**
- * The knowledge base (docs/40-knowledge-base.md, decision 9): each domain,
- * the repositories with documents in it, their documents by kind. A document
- * picked opens on the right, where it can go to another domain or be
- * deleted; a domain is renamed, described again or merged into another; a
- * repository's documents go all at once.
+ * The knowledge base (docs/40-knowledge-base.md, decision 9), as folders: the
+ * domains first, and in one its repositories' documents as cards, by kind. A
+ * search looks through every domain. A document picked opens on the right,
+ * where it can go to another domain or be deleted; a domain is renamed,
+ * described again or merged into another; a repository's documents go all at once.
  */
 export function KnowledgePage({ sideHandle }: PageContext) {
   const [open, setOpen] = useState<string | null>(null);
@@ -37,8 +55,16 @@ export function KnowledgePage({ sideHandle }: PageContext) {
   const { base } = knowledge;
   const [editing, setEditing] = useState<KnowledgeDomain | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [query, setQuery] = useState("");
+  const [folder, setFolder] = useState<string | null>(null);
 
   const doc = base.documents.find((d) => d.id === open);
+  const read = splitDocument(knowledge.file);
+  const words = query.trim().toLowerCase();
+  const found = base.documents.filter((d) => `${d.title} ${d.lead} ${d.id} ${d.kind} ${KIND_LABELS[d.kind]}`.toLowerCase().includes(words));
+  // A folder merged away or left empty is no place to stay in.
+  const inside = base.domains.find((d) => d.domain.id === folder && (d.documents > 0 || d.domain.id !== GENERAL));
+  const folders = base.domains.filter((d) => d.documents > 0 || d.domain.id !== GENERAL);
   const domainName = (id: string) => base.domains.find((d) => d.domain.id === id)?.domain.name ?? id;
 
   const confirmed = async () => {
@@ -57,11 +83,38 @@ export function KnowledgePage({ sideHandle }: PageContext) {
     <Page
       title="Knowledge"
       sideHandle={sideHandle}
+      bar={
+        <>
+          <nav className="knowledge-crumbs" aria-label="Where you are">
+            <button type="button" aria-current={inside ? undefined : "page"} onClick={() => setFolder(null)}>
+              All domains
+            </button>
+            {inside && (
+              <>
+                <ChevronRight size={13} className="knowledge-crumb-sep" />
+                <button type="button" aria-current="page">
+                  {inside.domain.name}
+                </button>
+              </>
+            )}
+          </nav>
+          {base.documents.length > 0 && (
+            <label className="knowledge-search">
+              <Search size={14} />
+              <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search every domain" aria-label="Search the knowledge base" />
+            </label>
+          )}
+        </>
+      }
       panel={
         doc ? (
           <PagePanel icon={FileText} title={doc.title} label={`Document ${doc.id}`} onClose={() => setOpen(null)}>
             <div className="knowledge-doc-bar">
-              <span className="knowledge-doc-id">{doc.id}</span>
+              <span className="knowledge-doc-meta">
+                {KIND_LABELS[doc.kind]} · {doc.confidence}
+                {doc.written && ` · ${day(doc.written)}`}
+                {doc.stale && <span className="knowledge-mark stale">stale</span>}
+              </span>
               <Dropdown
                 label={`Domain: ${domainName(doc.domain)}`}
                 title="Move it to another domain"
@@ -80,7 +133,20 @@ export function KnowledgePage({ sideHandle }: PageContext) {
               <p className="knowledge-error">{knowledge.fileError}</p>
             ) : (
               <div className="knowledge-doc-text">
-                <Markdown text={documentMarkdown(knowledge.file)} streaming={false} />
+                {FACTS.filter(({ key }) => read.facts[key].length > 0).map(({ key, label }) => (
+                  <details key={key} className="knowledge-facts">
+                    <summary>
+                      {label} <span className="knowledge-count">{read.facts[key].length}</span>
+                    </summary>
+                    <ul>
+                      {read.facts[key].map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ))}
+                <Markdown text={read.body} streaming={false} />
+                <p className="knowledge-doc-id">{doc.id}</p>
               </div>
             )}
           </PagePanel>
@@ -93,22 +159,48 @@ export function KnowledgePage({ sideHandle }: PageContext) {
           Nothing written yet. Run /analyze in a repository, or let the agent write down what it works out — documents land here by domain.
         </p>
       )}
-      {base.domains
-        .filter((d) => d.documents > 0 || d.domain.id !== GENERAL)
-        .map((count) => (
-          <DomainSection
-            key={count.domain.id}
-            count={count}
-            others={base.domains.filter((d) => d.domain.id !== count.domain.id).map((d) => d.domain)}
-            repos={base.repos}
-            documents={base.documents.filter((d) => d.domain === count.domain.id)}
-            open={open}
-            onOpen={setOpen}
-            onEdit={() => setEditing({ ...count.domain })}
-            onMerge={(into) => setConfirm({ what: "merge", from: count.domain, into })}
-            onRemoveRepo={(repo) => setConfirm({ what: "repo", repo })}
-          />
-        ))}
+      {words ? (
+        <>
+          {found.length === 0 && <p className="knowledge-empty">Nothing matches “{query.trim()}”.</p>}
+          {base.domains
+            .filter((d) => found.some((doc) => doc.domain === d.domain.id))
+            .map(({ domain }) => (
+              <section key={domain.id} className="knowledge-domain" aria-label={domain.name}>
+                <h2 className="knowledge-found-head">{domain.name}</h2>
+                <Cards label={`Found in ${domain.name}`} documents={found.filter((d) => d.domain === domain.id)} open={open} onOpen={setOpen} withKind />
+              </section>
+            ))}
+        </>
+      ) : inside ? (
+        <DomainView
+          count={inside}
+          others={base.domains.filter((d) => d.domain.id !== inside.domain.id).map((d) => d.domain)}
+          repos={base.repos}
+          documents={base.documents.filter((d) => d.domain === inside.domain.id)}
+          open={open}
+          onOpen={setOpen}
+          onEdit={() => setEditing({ ...inside.domain })}
+          onMerge={(into) => setConfirm({ what: "merge", from: inside.domain, into })}
+          onRemoveRepo={(repo) => setConfirm({ what: "repo", repo })}
+        />
+      ) : (
+        base.documents.length > 0 && (
+          <div className="knowledge-folders">
+            {folders.map(({ domain, documents, repos }) => (
+              <button key={domain.id} type="button" className="knowledge-folder" onClick={() => setFolder(domain.id)}>
+                <span className="knowledge-folder-name">
+                  <Folder size={16} className="knowledge-folder-icon" />
+                  {domain.name}
+                </span>
+                <span className="knowledge-folder-description">{domain.description}</span>
+                <span className="knowledge-count">
+                  {plural(documents, "document", "documents")} · {plural(repos, "repository", "repositories")}
+                </span>
+              </button>
+            ))}
+          </div>
+        )
+      )}
 
       <Modal
         title={`Edit “${editing?.id ?? ""}”`}
@@ -171,7 +263,7 @@ export function KnowledgePage({ sideHandle }: PageContext) {
   );
 }
 
-type SectionProps = {
+type ViewProps = {
   count: DomainCount;
   /** The domains it can be merged into. */
   others: KnowledgeDomain[];
@@ -184,7 +276,8 @@ type SectionProps = {
   onRemoveRepo: (repo: RepoSummary) => void;
 };
 
-function DomainSection({ count, others, repos, documents, open, onOpen, onEdit, onMerge, onRemoveRepo }: SectionProps) {
+/** One domain opened: what it is about, then each repository's documents by kind. */
+function DomainView({ count, others, repos, documents, open, onOpen, onEdit, onMerge, onRemoveRepo }: ViewProps) {
   const { domain } = count;
   const actions = [
     ...(domain.id === GENERAL ? [] : [{ value: "edit", label: "Rename or describe…", run: onEdit }]),
@@ -194,10 +287,7 @@ function DomainSection({ count, others, repos, documents, open, onOpen, onEdit, 
   return (
     <section className="knowledge-domain" aria-label={domain.name}>
       <header className="knowledge-domain-head">
-        <h2>
-          {domain.name}
-          <span className="knowledge-domain-id">{domain.id}</span>
-        </h2>
+        <p className="knowledge-domain-description">{domain.description}</p>
         <span className="knowledge-count">
           {plural(count.documents, "document", "documents")} · {plural(count.repos, "repository", "repositories")}
         </span>
@@ -213,11 +303,10 @@ function DomainSection({ count, others, repos, documents, open, onOpen, onEdit, 
           />
         )}
       </header>
-      <p className="knowledge-domain-description">{domain.description}</p>
       {names.length === 0 && <p className="knowledge-empty">No documents in it.</p>}
       {names.map((name) => {
         const repo = repos.find((r) => r.name === name);
-        const own = documents.filter((d) => d.repo === name).sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || a.title.localeCompare(b.title));
+        const own = documents.filter((d) => d.repo === name);
         return (
           <div key={name} className="knowledge-repo">
             <div className="knowledge-repo-head">
@@ -233,22 +322,59 @@ function DomainSection({ count, others, repos, documents, open, onOpen, onEdit, 
                 </button>
               )}
             </div>
-            <div role="listbox" aria-label={`${name}'s documents in ${domain.name}`} className="knowledge-docs">
-              {own.map((doc) => (
-                <button key={doc.id} type="button" role="option" aria-selected={doc.id === open} className={`knowledge-doc${doc.id === open ? " on" : ""}`} onClick={() => onOpen(doc.id)}>
-                  <span className="knowledge-kind">{doc.kind}</span>
-                  <span className="knowledge-title">{doc.title}</span>
-                  <span className="knowledge-marks">
-                    {doc.stale && <span className="knowledge-mark stale" title="A file in its evidence changed since it was written">stale</span>}
-                    {!doc.cited && <span className="knowledge-mark" title="It cites no file">no evidence</span>}
-                    <span className={`knowledge-mark ${doc.confidence}`}>{doc.confidence}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+            {KINDS.map((kind) => {
+              const ofKind = own.filter((d) => d.kind === kind);
+              return (
+                ofKind.length > 0 && (
+                  <div key={kind} className="knowledge-kind">
+                    <h4>
+                      {KIND_LABELS[kind]} <span className="knowledge-count">{ofKind.length}</span>
+                    </h4>
+                    <Cards label={`${KIND_LABELS[kind]} of ${name} in ${domain.name}`} documents={ofKind} open={open} onOpen={onOpen} />
+                  </div>
+                )
+              );
+            })}
           </div>
         );
       })}
     </section>
+  );
+}
+
+type CardsProps = {
+  label: string;
+  documents: KnowledgeDocument[];
+  open: string | null;
+  onOpen: (id: string) => void;
+  /** Say each one's kind: it is not the heading over them. */
+  withKind?: boolean;
+};
+
+/** Documents as cards: the title in full, what the document opens with, and only what is off about it. */
+function Cards({ label, documents, open, onOpen, withKind }: CardsProps) {
+  return (
+    <div role="listbox" aria-label={label} className="knowledge-cards">
+      {[...documents]
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .map((doc) => (
+          <button key={doc.id} type="button" role="option" aria-selected={doc.id === open} className={`knowledge-card${doc.id === open ? " on" : ""}`} onClick={() => onOpen(doc.id)}>
+            {withKind && <span className="knowledge-card-kind">{KIND_LABELS[doc.kind]}</span>}
+            <span className="knowledge-title">{doc.title}</span>
+            {doc.lead && <span className="knowledge-lead">{doc.lead}</span>}
+            {(doc.stale || !doc.cited || doc.confidence !== "confirmed") && (
+              <span className="knowledge-marks">
+                {doc.stale && <span className="knowledge-mark stale" title="A file in its evidence changed since it was written">stale</span>}
+                {!doc.cited && <span className="knowledge-mark" title="It cites no file">no evidence</span>}
+                {doc.confidence !== "confirmed" && (
+                  <span className="knowledge-mark" title="Not every claim in it is backed by the code it cites">
+                    {doc.confidence}
+                  </span>
+                )}
+              </span>
+            )}
+          </button>
+        ))}
+    </div>
   );
 }

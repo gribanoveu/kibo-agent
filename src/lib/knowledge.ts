@@ -37,6 +37,8 @@ export type KnowledgeDocument = {
   /** It cites a file at all. */
   cited: boolean;
   written: number | null;
+  /** Its first paragraph, as plain text. */
+  lead: string;
 };
 
 export type KnowledgeBase = { domains: DomainCount[]; repos: RepoSummary[]; documents: KnowledgeDocument[] };
@@ -87,12 +89,24 @@ export function onKnowledgeChanged(handler: () => void): Promise<UnlistenFn> {
   });
 }
 
+/** What a document's frontmatter lists, shown beside its text: the key and its items. */
+export type DocumentFacts = { provides: string[]; consumes: string[]; evidence: string[]; aliases: string[] };
+
 /**
- * A document's file to draw as Markdown: its frontmatter — evidence,
- * confidence, contracts — as a YAML block over the body.
+ * A document's file split for reading: its body, and the lists in its
+ * frontmatter. The frontmatter is the app's own (`knowledgeWrite` writes it),
+ * so a top-level `key:` and its `- item` lines are all there is to read.
  */
-export function documentMarkdown(file: string): string {
+export function splitDocument(file: string): { body: string; facts: DocumentFacts } {
+  const facts: DocumentFacts = { provides: [], consumes: [], evidence: [], aliases: [] };
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(file);
-  if (!m) return file;
-  return `\`\`\`yaml\n${m[1]}\n\`\`\`\n\n${file.slice(m[0].length)}`;
+  if (!m) return { body: file, facts };
+  let key = "";
+  for (const line of m[1].split(/\r?\n/)) {
+    const top = /^(\w+):/.exec(line);
+    if (top) key = top[1];
+    const item = /^- (.+)$/.exec(line);
+    if (item && key in facts) facts[key as keyof DocumentFacts].push(item[1].replace(/^(["'])(.*)\1$/, "$2"));
+  }
+  return { body: file.slice(m[0].length), facts };
 }

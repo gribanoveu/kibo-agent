@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-10-24 A Knowledge page lists the knowledge base by domain and repository: open a document to read it with its evidence, move it to another domain or delete it, delete a repository's documents, and rename, describe or merge domains
+- 2026-10-24 A Knowledge page shows the knowledge base as a folder per domain, in it each repository's documents as cards by kind — the title and how the document opens — with a search through every domain: open a document to read it, its evidence, contracts and aliases folded over the text, move it to another domain or delete it, delete a repository's documents, and rename, describe or merge domains
 - 2026-10-24 The agent asks the knowledge base who provides and who consumes a topic, an endpoint, a table or a bucket, across every repository and domain written down
 - 2026-10-24 A knowledge base, turned on in the Catalog: the agent writes documents about the repositories it works in — services, endpoints, topics, tables, algorithms — filed by domain, finds them from any other repository, and is told which of this one's are out of date; /analyze documents the open repository
 - 2026-10-24 Board cards read more calmly: a card's buttons show when you point at it, a long note is cut to three lines with Show more under it, a due day is a coloured chip, each column has its colour, and an empty one says what it is for
