@@ -81,7 +81,7 @@ mod tests {
         let (first, signals) = board(path.clone());
         assert_eq!(first.cards().unwrap(), []);
         first.change(&BoardChange::Add { title: "file the request".into(), note: None }).unwrap();
-        first.change(&BoardChange::Move { id: "c1".into(), column: Column::Doing }).unwrap();
+        first.change(&BoardChange::Move { id: "c1".into(), column: Column::Doing, index: None }).unwrap();
         assert_eq!(signals.load(Ordering::SeqCst), 2);
 
         let (again, _) = board(path);

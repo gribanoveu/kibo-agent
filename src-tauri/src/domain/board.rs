@@ -1,6 +1,6 @@
 //! The board: what the user asked the Assistant to keep for later — "remind
 //! me to file the memory request" — as cards in three columns, and the user's
-//! own moves of them on the Board page. Done holds the last few finished; the
+//! own cards and moves of them on the Board page. Done holds the last few finished; the
 //! ones before go to the archive, which the page shows on request.
 //!
 //! The rules live here, the file in `infra::board_store`: one [`apply`] for
@@ -47,7 +47,18 @@ pub struct Card {
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum BoardChange {
     Add { title: String, note: Option<String> },
-    Move { id: String, column: Column },
+    /// `index`, the page's only: the card's place among the column's other
+    /// cards, past their end meaning last. Without it the card keeps its place.
+    /// Done takes none — it keeps the order cards finished in, for the archive.
+    Move {
+        id: String,
+        column: Column,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// The page's only: the title and the note in place, the column and the
+    /// place in it kept. An empty note clears it.
+    Edit { id: String, title: String, note: Option<String> },
     /// The page's only: the model moves a card to Done instead. From any
     /// column, the archive's too.
     Remove { id: String },
@@ -86,24 +97,19 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
     let mut next = cards.to_vec();
     match change {
         BoardChange::Add { title, note } => {
-            let title = title.trim();
-            if title.is_empty() {
-                return Err(BoardError::EmptyTitle);
-            }
-            let title_chars = title.chars().count();
-            if title_chars > MAX_TITLE_CHARS {
-                return Err(BoardError::TitleTooLong(title_chars));
-            }
-            let note = note.as_deref().map(str::trim).filter(|n| !n.is_empty());
-            if let Some(chars) = note.map(|n| n.chars().count()).filter(|&c| c > MAX_NOTE_CHARS) {
-                return Err(BoardError::NoteTooLong(chars));
-            }
+            let (title, note) = text(title, note.as_deref())?;
             if cards.iter().filter(|c| c.column != Column::Archived).count() >= MAX_CARDS {
                 return Err(BoardError::Full);
             }
-            next.push(Card { id: next_id(cards), title: title.to_string(), note: note.map(str::to_string), column: Column::Todo });
+            next.push(Card { id: next_id(cards), title, note, column: Column::Todo });
         }
-        BoardChange::Move { id, column } => {
+        BoardChange::Edit { id, title, note } => {
+            let at = position(cards, id)?;
+            let (title, note) = text(title, note.as_deref())?;
+            next[at].title = title;
+            next[at].note = note;
+        }
+        BoardChange::Move { id, column, index } => {
             let at = position(cards, id)?;
             let mut card = next.remove(at);
             // Done keeps the order cards arrived in, so its first is the one
@@ -112,6 +118,9 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
             card.column = *column;
             if arrives {
                 next.push(card);
+            } else if let Some(index) = index.filter(|_| *column != Column::Done) {
+                let place = next.iter().enumerate().filter(|(_, c)| c.column == *column).map(|(i, _)| i).nth(index);
+                next.insert(place.unwrap_or(next.len()), card);
             } else {
                 next.insert(at, card);
             }
@@ -122,6 +131,23 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
         }
     }
     Ok(settle(next))
+}
+
+/// A card's title and note, trimmed and checked — the same for a new card and an edited one.
+fn text(title: &str, note: Option<&str>) -> Result<(String, Option<String>), BoardError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(BoardError::EmptyTitle);
+    }
+    let title_chars = title.chars().count();
+    if title_chars > MAX_TITLE_CHARS {
+        return Err(BoardError::TitleTooLong(title_chars));
+    }
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
+    if let Some(chars) = note.map(|n| n.chars().count()).filter(|&c| c > MAX_NOTE_CHARS) {
+        return Err(BoardError::NoteTooLong(chars));
+    }
+    Ok((title.to_string(), note.map(str::to_string)))
 }
 
 /// Done down to [`MAX_DONE`], the oldest to the archive; the archive down to
@@ -187,14 +213,46 @@ mod tests {
     #[test]
     fn a_move_changes_only_that_cards_column() {
         let two = add(&add(&[], "a"), "b");
-        let moved = apply(&two, &BoardChange::Move { id: "c2".into(), column: Column::Done }).unwrap();
+        let moved = apply(&two, &BoardChange::Move { id: "c2".into(), column: Column::Done, index: None }).unwrap();
         assert_eq!(moved.iter().map(|c| c.column).collect::<Vec<_>>(), [Column::Todo, Column::Done]);
+    }
+
+    fn put(cards: &[Card], id: &str, column: Column, index: usize) -> Vec<Card> {
+        apply(cards, &BoardChange::Move { id: id.into(), column, index: Some(index) }).unwrap()
+    }
+
+    #[test]
+    fn an_index_places_the_card_among_the_columns_others_and_past_their_end_last() {
+        let mut cards = add(&add(&add(&[], "a"), "b"), "c");
+        cards = put(&cards, "c2", Column::Doing, 0);
+        assert_eq!(titles_in(&cards, Column::Todo), ["a", "c"]);
+
+        assert_eq!(titles_in(&put(&cards, "c1", Column::Todo, 1), Column::Todo), ["c", "a"]);
+        assert_eq!(titles_in(&put(&cards, "c3", Column::Todo, 0), Column::Todo), ["c", "a"]);
+        assert_eq!(titles_in(&put(&cards, "c1", Column::Todo, 0), Column::Todo), ["a", "c"]);
+        assert_eq!(titles_in(&put(&cards, "c1", Column::Todo, 9), Column::Todo), ["c", "a"]);
+
+        // Into another column, at its top, between and at its end.
+        let doing = |cards: &[Card]| titles_in(cards, Column::Doing).into_iter().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(doing(&put(&cards, "c1", Column::Doing, 0)), ["a", "b"]);
+        assert_eq!(doing(&put(&cards, "c1", Column::Doing, 1)), ["b", "a"]);
+        let two = put(&cards, "c1", Column::Doing, 1);
+        assert_eq!(doing(&put(&two, "c3", Column::Doing, 1)), ["b", "c", "a"]);
+        assert_eq!(titles_in(&two, Column::Todo), ["c"]);
+    }
+
+    #[test]
+    fn done_takes_no_index_and_keeps_the_order_cards_finished_in() {
+        let mut cards = add(&add(&add(&[], "a"), "b"), "c");
+        cards = done(&done(&cards, "c1"), "c2");
+        assert_eq!(titles_in(&put(&cards, "c3", Column::Done, 0), Column::Done), ["a", "b", "c"]);
+        assert_eq!(titles_in(&put(&cards, "c2", Column::Done, 0), Column::Done), ["a", "b"]);
     }
 
     #[test]
     fn an_unknown_id_names_the_ones_there_are() {
         let two = add(&add(&[], "a"), "b");
-        let err = apply(&two, &BoardChange::Move { id: "c9".into(), column: Column::Done }).unwrap_err();
+        let err = apply(&two, &BoardChange::Move { id: "c9".into(), column: Column::Done, index: None }).unwrap_err();
         assert_eq!(err.to_string(), "no card with id c9 — the board has: c1, c2");
         let err = apply(&[], &BoardChange::Remove { id: "c1".into() }).unwrap_err();
         assert_eq!(err.to_string(), "no card with id c1 — the board has: no cards");
@@ -218,7 +276,7 @@ mod tests {
             .map(|i| Card { id: format!("c{i}"), title: "t".into(), note: None, column: Column::Todo })
             .collect();
         assert_eq!(apply(&full, &BoardChange::Add { title: "one more".into(), note: None }), Err(BoardError::Full));
-        assert!(apply(&full, &BoardChange::Move { id: "c1".into(), column: Column::Done }).is_ok());
+        assert!(apply(&full, &BoardChange::Move { id: "c1".into(), column: Column::Done, index: None }).is_ok());
         assert_eq!(apply(&full, &BoardChange::Remove { id: "c1".into() }).unwrap().len(), MAX_CARDS - 1);
         let almost = &full[1..];
         assert_eq!(apply(almost, &BoardChange::Add { title: "fits".into(), note: None }).unwrap().len(), MAX_CARDS);
@@ -229,7 +287,7 @@ mod tests {
     }
 
     fn done(cards: &[Card], id: &str) -> Vec<Card> {
-        apply(cards, &BoardChange::Move { id: id.into(), column: Column::Done }).unwrap()
+        apply(cards, &BoardChange::Move { id: id.into(), column: Column::Done, index: None }).unwrap()
     }
 
     #[test]
@@ -256,7 +314,7 @@ mod tests {
         cards = done(&done(&cards, "c2"), "c1");
         cards = done(&cards, "c2");
         assert_eq!(titles_in(&cards, Column::Done), ["b", "a"]);
-        cards = apply(&cards, &BoardChange::Move { id: "c2".into(), column: Column::Todo }).unwrap();
+        cards = apply(&cards, &BoardChange::Move { id: "c2".into(), column: Column::Todo, index: None }).unwrap();
         assert_eq!(titles_in(&cards, Column::Todo), ["c", "b"]);
     }
 
@@ -282,6 +340,36 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_changes_only_the_text_trimmed_and_an_empty_note_clears_it() {
+        let mut cards = add(&add(&add(&[], "a"), "b"), "c");
+        cards = done(&cards, "c2");
+        let edited = apply(&cards, &BoardChange::Edit { id: "c2".into(), title: "  bee  ".into(), note: Some(" stung ".into()) }).unwrap();
+        assert_eq!(edited[2], Card { id: "c2".into(), title: "bee".into(), note: Some("stung".into()), column: Column::Done });
+        assert_eq!(edited[..2], cards[..2]);
+
+        let cleared = apply(&edited, &BoardChange::Edit { id: "c2".into(), title: "bee".into(), note: Some("  ".into()) }).unwrap();
+        assert_eq!(cleared[2].note, None);
+        let without = apply(&edited, &BoardChange::Edit { id: "c2".into(), title: "bee".into(), note: None }).unwrap();
+        assert_eq!(without[2].note, None);
+    }
+
+    #[test]
+    fn an_edit_is_checked_as_a_new_card_is_and_a_full_board_still_takes_it() {
+        let cards = add(&[], "a");
+        let edit = |title: &str, note: Option<String>| apply(&cards, &BoardChange::Edit { id: "c1".into(), title: title.into(), note });
+        assert_eq!(edit(" ", None), Err(BoardError::EmptyTitle));
+        assert_eq!(edit(&"x".repeat(MAX_TITLE_CHARS + 1), None), Err(BoardError::TitleTooLong(MAX_TITLE_CHARS + 1)));
+        assert_eq!(edit("a", Some("y".repeat(MAX_NOTE_CHARS + 1))), Err(BoardError::NoteTooLong(MAX_NOTE_CHARS + 1)));
+        let err = apply(&cards, &BoardChange::Edit { id: "c9".into(), title: "b".into(), note: None }).unwrap_err();
+        assert_eq!(err.to_string(), "no card with id c9 — the board has: c1");
+
+        let full: Vec<Card> = (1..=MAX_CARDS)
+            .map(|i| Card { id: format!("c{i}"), title: "t".into(), note: None, column: Column::Todo })
+            .collect();
+        assert_eq!(apply(&full, &BoardChange::Edit { id: "c1".into(), title: "u".into(), note: None }).unwrap()[0].title, "u");
+    }
+
+    #[test]
     fn an_archived_card_is_removed_like_any_other() {
         let cards = vec![Card { id: "c1".into(), title: "a".into(), note: None, column: Column::Archived }];
         assert_eq!(apply(&cards, &BoardChange::Remove { id: "c1".into() }).unwrap(), []);
@@ -294,6 +382,10 @@ mod tests {
         let read: Card = serde_json::from_str(r#"{"id":"c1","title":"a"}"#).unwrap();
         assert_eq!(read.column, Column::Todo);
         let change: BoardChange = serde_json::from_str(r#"{"op":"move","id":"c1","column":"done"}"#).unwrap();
-        assert_eq!(change, BoardChange::Move { id: "c1".into(), column: Column::Done });
+        assert_eq!(change, BoardChange::Move { id: "c1".into(), column: Column::Done, index: None });
+        let change: BoardChange = serde_json::from_str(r#"{"op":"move","id":"c1","column":"todo","index":2}"#).unwrap();
+        assert_eq!(change, BoardChange::Move { id: "c1".into(), column: Column::Todo, index: Some(2) });
+        let change: BoardChange = serde_json::from_str(r#"{"op":"edit","id":"c1","title":"b","note":"n"}"#).unwrap();
+        assert_eq!(change, BoardChange::Edit { id: "c1".into(), title: "b".into(), note: Some("n".into()) });
     }
 }

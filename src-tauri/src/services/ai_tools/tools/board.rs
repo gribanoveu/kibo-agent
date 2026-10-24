@@ -21,7 +21,7 @@ pub fn board(args: &BoardArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         BoardOp::Move => {
             let id = args.id.clone().ok_or_else(|| missing("id"))?;
             let column = args.column.ok_or_else(|| missing("column"))?;
-            board.change(&BoardChange::Move { id, column })?
+            board.change(&BoardChange::Move { id, column, index: None })?
         }
     };
     Ok(ToolResult::Board { cards })
