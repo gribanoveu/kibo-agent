@@ -31,6 +31,17 @@ describe("what each call shows", () => {
     expect(done).toMatchObject({ name: "Prototype", arg: "Coffee shop", meta: "version 3", detail: "index.html" });
   });
 
+  test("a board call names the card it is about, and an edit shows the note it wrote", () => {
+    const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
+    expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });
+    expect(board('{"op":"move","id":"c1","column":"done"}')).toMatchObject({ arg: "c1 → done" });
+    expect(board('{"op":"edit","id":"c1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "c1", detail: "wlbuh, 1 Nov" });
+    expect(board('{"op":"edit","id":"c1","title":"Renew the cert"}')).toMatchObject({ arg: "c1 Renew the cert" });
+    expect(board('{"op":"edit","id":"c1","due":"2026-11-01"}')).toMatchObject({ arg: "c1", detail: "due 2026-11-01" });
+    expect(board('{"op":"add","title":"Renew cert","note":"wlbuh","due":"2026-11-01"}')).toMatchObject({ detail: "wlbuh\ndue 2026-11-01" });
+    expect(board('{"op":"list"}')).toMatchObject({ arg: "list", detail: "" });
+  });
+
   test("a read of several files names them and opens on each under its header", () => {
     const running = describeTool(tool({ arguments: '{"paths":["a.rs","b.rs"]}', status: "running" }));
     expect(running).toMatchObject({ name: "Read", arg: "a.rs, b.rs", meta: "2 files" });

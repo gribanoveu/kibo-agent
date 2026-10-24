@@ -80,8 +80,8 @@ mod tests {
         let path = temp_dir("board-store").join("board.json");
         let (first, signals) = board(path.clone());
         assert_eq!(first.cards().unwrap(), []);
-        first.change(&BoardChange::Add { title: "file the request".into(), note: None }).unwrap();
-        first.change(&BoardChange::Move { id: "c1".into(), column: Column::Doing }).unwrap();
+        first.change(&BoardChange::Add { title: "file the request".into(), note: None, due: None }).unwrap();
+        first.change(&BoardChange::Move { id: "c1".into(), column: Column::Doing, index: None }).unwrap();
         assert_eq!(signals.load(Ordering::SeqCst), 2);
 
         let (again, _) = board(path);
@@ -104,7 +104,7 @@ mod tests {
         fs::write(&path, "not json").unwrap();
         let (board, _) = board(path.clone());
         assert!(matches!(board.cards(), Err(BoardError::Store(_))));
-        assert!(board.change(&BoardChange::Add { title: "a".into(), note: None }).is_err());
+        assert!(board.change(&BoardChange::Add { title: "a".into(), note: None, due: None }).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
     }
 

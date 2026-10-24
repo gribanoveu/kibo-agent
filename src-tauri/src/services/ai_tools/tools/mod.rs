@@ -550,6 +550,7 @@ mod definition_tests {
                     note: Some("wlbuh".into()),
                     id: Some("c1".into()),
                     column: Some(crate::domain::board::Column::Done),
+                    due: None,
                 })],
             ),
             ToolName::Present => (

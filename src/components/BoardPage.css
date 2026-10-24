@@ -1,65 +1,198 @@
-/* Three columns side by side, each as tall as its cards. */
+/* Three columns side by side, as tall as the longest: an empty one is still
+   somewhere to drop a card. */
 .board-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
-  align-items: start;
 }
 .board-column {
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
+  padding: 10px 10px 12px;
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
 }
+/* The column's name after a dot in its colour: waiting, under way, finished. */
 .board-column-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 2px;
+  margin: 0;
+  padding: 2px 4px 4px;
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
 }
+.board-column-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.board-column[data-column="doing"] .board-column-dot {
+  background: var(--accent);
+}
+.board-column[data-column="done"] .board-column-dot {
+  background: var(--green);
+}
 .board-count {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
   color: var(--text-faint);
-  font-weight: 400;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+/* An empty column says what it is for, inside the place a card drops into. */
+.board-column-empty {
+  flex: 1;
+  margin: 0;
+  padding: 24px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+  text-wrap: balance;
 }
 .board-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 10px 12px 8px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
+  transition: border-color 0.12s;
+  position: relative;
+}
+.board-card:hover {
+  border-color: var(--border);
+}
+/* Grabbed by the pointer anywhere but its buttons; lifted while it moves —
+   dnd-kit marks it, and keeps its place in the column open. */
+.board-card[data-card-id] {
+  cursor: grab;
+}
+.board-card[data-dnd-dragging] {
+  cursor: grabbing;
+  border-color: var(--border);
+  box-shadow: var(--shadow-popover);
+}
+.board-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .board-card-title {
   font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1.35;
   color: var(--text);
   overflow-wrap: anywhere;
 }
+/* Three lines at most: the whole note is in the editor. */
 .board-card-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   font-size: var(--fs-sm);
+  line-height: 1.4;
   color: var(--text-dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* The id the model names a card by, and the moves — right-aligned. */
-.board-card-actions {
+.board-card-note.open {
+  display: block;
+}
+/* Under a note longer than its three lines. */
+.board-card-more {
+  align-self: flex-start;
+  margin-top: -2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.board-card-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+/* What is finished reads quieter than what is still to do. */
+.board-column[data-column="done"] .board-card-title,
+.board-archive .board-card-title {
+  color: var(--text-dim);
+}
+/* The id and the due day across the card; its buttons over the right end. */
+.board-card-foot {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
+  min-height: 24px;
+}
+.board-card-meta {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
 }
 .board-card-id {
-  margin-right: auto;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
-.board-card-actions button {
+.board-card-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.board-card-due.today {
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+.board-card-due.past {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+/* Shown on the card under the pointer or holding the focus, so a column of
+   cards is not a column of buttons; laid over the foot rather than beside it,
+   so the id and the due day keep the card's width. */
+.board-card-tools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 2px;
+  padding-left: 4px;
+  background: var(--bg-panel);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.board-card:hover .board-card-tools,
+.board-card:focus-visible .board-card-tools,
+.board-card:has(:focus-visible) .board-card-tools {
+  opacity: 1;
+}
+@media (hover: none) {
+  .board-card-tools {
+    opacity: 1;
+  }
+}
+.board-card-tools button {
   display: grid;
   place-items: center;
   width: 24px;
@@ -70,9 +203,85 @@
   color: var(--text-dim);
   cursor: pointer;
 }
-.board-card-actions button:hover {
+.board-card-tools button:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+/* Under To do's cards, until it opens into an editor. */
+.board-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.board-add:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* A card being written: the title, the note, Cancel and Save. */
+.board-editor {
+  gap: 6px;
+  border-color: var(--border);
+}
+.board-editor-title,
+.board-editor-note {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+}
+.board-editor-title {
+  font-size: var(--fs-md);
+}
+.board-editor-note {
+  font-size: var(--fs-sm);
+  resize: vertical;
+}
+.board-editor-title:focus,
+.board-editor-note:focus {
+  border-color: var(--accent);
+}
+.board-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* The due day, left of Cancel and Save; the platform draws its calendar. */
+.board-editor-due {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.board-editor-due input {
+  padding: 2px 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.board-editor-due input:focus {
+  border-color: var(--accent);
 }
 .board-empty {
   color: var(--text-dim);

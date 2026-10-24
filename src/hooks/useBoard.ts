@@ -9,12 +9,15 @@ import { boardChange, boardList, onBoardChanged, type BoardChange, type Card } f
 export function useBoard() {
   const { value: cards, setValue: setCards, error, setError } = useLiveRead(boardList, onBoardChanged, [] as Card[]);
 
+  /** Whether it was kept: a form stays open on a refusal, which `error` says. */
   const change = useCallback(async (next: BoardChange) => {
     try {
       setCards(await boardChange(next));
       setError(null);
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     }
   }, []);
 
