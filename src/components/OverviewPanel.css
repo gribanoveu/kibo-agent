@@ -94,8 +94,9 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
-.overview-ended {
-  margin-top: 4px;
+/* Two classes: `.overview-empty`, later in the file, sets `margin: 0`. */
+.overview-empty.overview-ended {
+  margin-top: 8px;
 }
 
 .overview-name {
