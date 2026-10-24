@@ -76,6 +76,7 @@ import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
 import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
+import analyzePrompt from "./prompts/analyze.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
@@ -354,13 +355,21 @@ export default function App() {
   // What `/name` in the composer runs: the app's own, then the user's files
   // in `.kibo/commands`. The composer takes whatever is in the list.
   const builtIn = builtInCommands(
-    { busy, started: agent.turn.blocks.length > 0, folder: !!workspace.path, agentMode: conversation.value === "agent" },
+    {
+      busy,
+      started: agent.turn.blocks.length > 0,
+      folder: !!workspace.path,
+      agentMode: conversation.value === "agent",
+      askMode: conversation.value === "ask",
+      knowledge: features.isOn("knowledge"),
+    },
     {
       compact: () => void compactNow(),
       fork: () => agent.branch(),
       review: () => void agent.review(),
       // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
+      analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
       trust: trust.ask,
     },
   );

@@ -23,7 +23,7 @@ use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubeSetup;
 use crate::domain::runbooks::{self, Runbook};
 use crate::domain::conversation_mode::{self, ConversationMode};
-use crate::domain::knowledge::{Overview, STALE_NOTE};
+use crate::domain::knowledge::{Overview, STALE_NOTE, UNCITED_NOTE};
 use crate::domain::llm::LlmMessage;
 use crate::domain::mcp::ServerNote;
 use crate::domain::project_rules::{MEMORY_NAME, RuleFile};
@@ -365,13 +365,21 @@ pub fn knowledge_block(overview: &Overview, mode: ConversationMode) -> String {
         );
     }
     if overview.documents.is_empty() {
-        text.push_str(&format!("\n\nNothing is written about this repository (`{}` in the base) yet.", overview.repo));
+        text.push_str(&format!(
+            "\n\nNothing is written about this repository (`{}` in the base) yet; the user's /analyze command writes it.",
+            overview.repo
+        ));
     } else {
-        text.push_str(&format!("\n\nThis repository is `{}` in the base. Its documents, by domain ({STALE_NOTE}):\n", overview.repo));
+        text.push_str(&format!("\n\nThis repository is `{}` in the base. Its documents, by domain ({STALE_NOTE}; {UNCITED_NOTE}):\n", overview.repo));
         let mut spent = 0;
         let mut domain = "";
         for (n, doc) in overview.documents.iter().enumerate() {
-            let line = format!("- {}: {}{}", doc.id, doc.title, if doc.stale { " — stale" } else { "" });
+            let mark = match (doc.stale, doc.cited) {
+                (true, _) => " — stale",
+                (false, false) => " — no evidence",
+                (false, true) => "",
+            };
+            let line = format!("- {}: {}{mark}", doc.id, doc.title);
             spent += line.len();
             if spent > KNOWLEDGE_LIST_BUDGET {
                 text.push_str(&format!("\n- … and {} more", overview.documents.len() - n));
@@ -624,7 +632,7 @@ mod tests {
     /// after the rules, and none at all when only the memory is there.
     fn overview() -> Overview {
         use crate::domain::knowledge::{Domain, DomainCount, Listed};
-        let listed = |id: &str, domain: &str, title: &str, stale| Listed { id: id.into(), domain: domain.into(), title: title.into(), stale };
+        let listed = |id: &str, domain: &str, title: &str, stale, cited| Listed { id: id.into(), domain: domain.into(), title: title.into(), stale, cited };
         let domain = |id: &str, name: &str, documents, repos| DomainCount {
             domain: Domain { id: id.into(), name: name.into(), description: format!("about {id}") },
             documents,
@@ -633,9 +641,9 @@ mod tests {
         Overview {
             repo: "tax-api".into(),
             documents: vec![
-                listed("tax-api/service", "general", "Сервис", false),
-                listed("tax-api/api", "usn", "Декларации API", true),
-                listed("tax-api/job", "usn", "Повтор", false),
+                listed("tax-api/service", "general", "Сервис", false, true),
+                listed("tax-api/api", "usn", "Декларации API", true, true),
+                listed("tax-api/job", "usn", "Повтор", false, false),
             ],
             domains: vec![domain("usn", "УСН", 3, 2), domain("general", "General", 1, 1)],
         }
@@ -655,7 +663,7 @@ mod tests {
         let listed = "This repository is `tax-api` in the base. Its documents, by domain (stale: ";
         assert!(text.contains(listed), "{text}");
         assert!(
-            text.contains("\n\ngeneral:\n- tax-api/service: Сервис\n\nusn:\n- tax-api/api: Декларации API — stale\n- tax-api/job: Повтор\n\nDomains"),
+            text.contains("\n\ngeneral:\n- tax-api/service: Сервис\n\nusn:\n- tax-api/api: Декларации API — stale\n- tax-api/job: Повтор — no evidence\n\nDomains"),
             "{text}"
         );
         assert!(text.ends_with("\n- usn — УСН: about usn (3 documents in 2 repositories)\n- general — General: about general (1 document in 1 repository)"), "{text}");
@@ -665,7 +673,7 @@ mod tests {
         let explore = knowledge_block(&seen, ConversationMode::Explore);
         assert!(!explore.contains("knowledgeWrite") && explore.contains("`knowledgeSearch`"), "{explore}");
         let empty = knowledge_block(&Overview { repo: "tax-api".into(), ..Overview::default() }, ConversationMode::Agent);
-        assert!(empty.ends_with("Nothing is written about this repository (`tax-api` in the base) yet."), "{empty}");
+        assert!(empty.ends_with("(`tax-api` in the base) yet; the user's /analyze command writes it."), "{empty}");
     }
 
     /// Past the budget the rest are counted; the domains are still there.
@@ -673,7 +681,7 @@ mod tests {
     fn a_long_knowledge_list_is_cut_with_a_count() {
         let many = Overview {
             documents: (0..400)
-                .map(|n| crate::domain::knowledge::Listed { id: format!("tax-api/doc-{n}"), domain: "usn".into(), title: "Документ".into(), stale: false })
+                .map(|n| crate::domain::knowledge::Listed { id: format!("tax-api/doc-{n}"), domain: "usn".into(), title: "Документ".into(), stale: false, cited: true })
                 .collect(),
             ..overview()
         };

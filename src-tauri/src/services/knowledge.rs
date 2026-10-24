@@ -55,7 +55,8 @@ pub fn overview(root: &Path) -> Result<Overview, KnowledgeStoreError> {
             continue;
         };
         let stale = staleness.of(root, &header);
-        documents.push(Listed { id, domain: domain.to_string(), title: header.title, stale });
+        let cited = !header.evidence.is_empty();
+        documents.push(Listed { id, domain: domain.to_string(), title: header.title, stale, cited });
     }
     // `general` is never in `domains.json`: `knowledgeWrite` refuses it as a new domain.
     let domains = store
@@ -126,6 +127,7 @@ mod tests {
                 &[
                     ("usn", "api", doc("Декларации API", "src/Api.java#L1", &first)),
                     ("usn", "job", doc("Повтор отправки", "src/Job.java", &first)),
+                    ("usn", "notes", format!("---\nid: x\nkind: concept\ntitle: Заметки\ncommit: {first}\nconfidence: unknown\n---\n# Заметки\n")),
                     ("general", "service", doc("Сервис", "src/Job.java", "0123456789012345678901234567890123456789")),
                     ("general", "broken", "no header".into()),
                 ],
@@ -136,17 +138,19 @@ mod tests {
 
             let seen = overview(&root).unwrap();
             let listed: Vec<_> = seen.documents.iter().map(|d| (d.domain.as_str(), d.id.as_str(), d.title.as_str(), d.stale)).collect();
+            assert_eq!(seen.documents.iter().map(|d| d.cited).collect::<Vec<_>>(), [true, true, true, false], "the notes cite nothing");
             assert_eq!(
                 listed,
                 [
                     ("general", "tax-api/service", "Сервис", true),
                     ("usn", "tax-api/api", "Декларации API", true),
                     ("usn", "tax-api/job", "Повтор отправки", false),
+                    ("usn", "tax-api/notes", "Заметки", false),
                 ],
                 "by domain; a file it cites changed, or its commit is gone"
             );
             let domains: Vec<_> = seen.domains.iter().map(|d| (d.domain.id.as_str(), d.documents, d.repos)).collect();
-            assert_eq!(domains, [("usn", 3, 2), ("ausn", 0, 0), ("general", 2, 1)]);
+            assert_eq!(domains, [("usn", 4, 2), ("ausn", 0, 0), ("general", 2, 1)]);
         });
     }
 
