@@ -2,6 +2,7 @@
    never narrower than it (`.main` in App.css, CHAT_MIN), so the columns beside
    it give way by the same rule. */
 .page {
+  position: relative;
   flex: 1;
   min-width: 400px;
   display: flex;
@@ -102,4 +103,34 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px 16px 20px;
+}
+
+/* A panel over the page rather than beside it (PageSheet): the page's right
+   side under it, its left still in view. */
+.page-sheet {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 5;
+  width: min(760px, calc(100% - 120px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+  animation: page-sheet-in 0.18s ease-out;
+}
+@keyframes page-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-sheet {
+    animation: none;
+  }
 }
