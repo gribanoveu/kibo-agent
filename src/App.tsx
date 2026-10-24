@@ -515,8 +515,6 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
-      running: busy,
-      onCompact: () => void compactNow(),
       onOpenProcess: openProcess,
       onOpenAgent: openAgent,
       onOpenPanel: openTab,

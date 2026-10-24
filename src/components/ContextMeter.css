@@ -126,6 +126,11 @@
   height: 7px;
   border-radius: 50%;
 }
+/* Not a part of the bar, so not one of its colours: the same dot, hollow. */
+.ctx-dot--cache {
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-faint);
+}
 
 .ctx-note {
   margin-bottom: 6px;

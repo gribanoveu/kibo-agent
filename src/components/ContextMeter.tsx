@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 import "./ContextMeter.css";
 import { matches } from "../lib/shortcuts";
@@ -22,6 +22,10 @@ const cacheNote = ({ promptTokens, cachedTokens = 0 }: ChatUsage) =>
     ? `, ${compact(cachedTokens)} of it (${Math.round((cachedTokens / promptTokens) * 100)}%) from the cache`
     : ", none of it reported as cached";
 
+// Of the last request; a dash where nothing was reported as cached, for the same reason.
+const cacheShare = ({ promptTokens, cachedTokens = 0 }: ChatUsage) =>
+  cachedTokens && promptTokens ? `${Math.round((cachedTokens / promptTokens) * 100)}%` : "—";
+
 // In the order of the bar: the fixed parts first, the conversation last.
 const PARTS = [
   { key: "instructions", label: "Instructions and rules" },
@@ -38,8 +42,18 @@ const CIRCUMFERENCE = 2 * Math.PI * R;
 // filling against a guess.
 const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.total / context.limit) : null);
 
-/** What the tokens are spent on, and the one thing to do about it: the ring's panel, and the Overview pane's. */
-export function ContextDetails({ context, usage, running, onCompact }: Omit<Props, "up">) {
+/** What the tokens are spent on: the ring's panel, and the Overview pane's. `cache` adds the
+    last request's cache hit as a row (the Overview's — the ring says it in a sentence); `children`
+    go under the rows. */
+export function ContextDetails({
+  context,
+  cache,
+  children,
+}: {
+  context: ContextUsage;
+  cache?: ChatUsage | null;
+  children?: ReactNode;
+}) {
   const share = shareOf(context);
   const percent = share === null ? null : Math.round(share * 100);
   return (
@@ -81,27 +95,18 @@ export function ContextDetails({ context, usage, running, onCompact }: Omit<Prop
             <dd>{compact(context[key])}</dd>
           </div>
         ))}
+        {cache !== undefined && (
+          <div>
+            <dt>
+              <i className="ctx-dot ctx-dot--cache" />
+              Cache hit
+            </dt>
+            <dd>{cache ? cacheShare(cache) : "—"}</dd>
+          </div>
+        )}
       </dl>
 
-      {context.compactsAt && (
-        <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
-      )}
-      {usage && (
-        <p className="ctx-note">
-          The last request actually cost {compact(usage.promptTokens)}
-          {cacheNote(usage)}.
-        </p>
-      )}
-
-      <button
-        type="button"
-        className="btn btn-ghost ctx-compact"
-        disabled={running}
-        title={running ? "Not while a turn is running" : undefined}
-        onClick={onCompact}
-      >
-        Compact now
-      </button>
+      {children}
     </>
   );
 }
@@ -164,15 +169,29 @@ export function ContextMeter({ context, usage, running, onCompact, up = false }:
 
       {open && (
         <div className={`ctx-pop${up ? " up" : ""}`} role="dialog" aria-label="Context">
-          <ContextDetails
-            context={context}
-            usage={usage}
-            running={running}
-            onCompact={() => {
-              setOpen(false);
-              onCompact();
-            }}
-          />
+          <ContextDetails context={context}>
+            {context.compactsAt && (
+              <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
+            )}
+            {usage && (
+              <p className="ctx-note">
+                The last request actually cost {compact(usage.promptTokens)}
+                {cacheNote(usage)}.
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost ctx-compact"
+              disabled={running}
+              title={running ? "Not while a turn is running" : undefined}
+              onClick={() => {
+                setOpen(false);
+                onCompact();
+              }}
+            >
+              Compact now
+            </button>
+          </ContextDetails>
         </div>
       )}
     </div>

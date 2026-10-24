@@ -57,8 +57,6 @@ export const SHORTCUTS = {
   textLarger: { label: "Larger text", group: "Markdown viewer", combos: [{ code: "Equal", mod: true }] },
   textSmaller: { label: "Smaller text", group: "Markdown viewer", combos: [{ code: "Minus", mod: true }] },
   textReset: { label: "Text at its usual size", group: "Markdown viewer", combos: [{ code: "Digit0", mod: true }] },
-  artifactOpen: { label: "Open the folder or file chosen in the list", group: "Artifacts", combos: [{ code: "Enter" }, { code: "NumpadEnter" }] },
-  artifactUp: { label: "Up one folder", group: "Artifacts", combos: [{ code: "Backspace" }] },
   cardDrag: { label: "Pick up the focused card, or put it down", group: "Board", combos: [{ code: "Space" }, { code: "Enter" }] },
   // Up, down, left, right — the board's keyboard drag takes them in this order.
   cardDragMove: { label: "Move the card you picked up", group: "Board", combos: [{ code: "ArrowUp" }, { code: "ArrowDown" }, { code: "ArrowLeft" }, { code: "ArrowRight" }] },
