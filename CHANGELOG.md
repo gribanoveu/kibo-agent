@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-24 The agent asks the knowledge base who provides and who consumes a topic, an endpoint, a table or a bucket, across every repository and domain written down
 - 2026-10-24 A knowledge base, turned on in the Catalog: the agent writes documents about the repositories it works in — services, endpoints, topics, tables, algorithms — filed by domain, finds them from any other repository, and is told which of this one's are out of date; /analyze documents the open repository
 - 2026-10-22 An Artifacts page in the sidebar lists every meeting and every presented prototype as folders, like a drive: open one to see its notes, documents, transcript, recording or the prototype's files beside the list; rename it, show it in Finder, open it in Meetings or in its chat, delete it, or save any of its files elsewhere; the top says how much they all take and how much the disk has left
 - 2026-10-22 A meeting's notes, each document and the transcript fold to their title, which stays in view as the card scrolls by
