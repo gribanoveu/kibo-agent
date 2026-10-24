@@ -3,7 +3,7 @@ import { ChevronRight, FileText, Folder, MoreHorizontal, Search, Trash2 } from "
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
-import { Page, PagePanel } from "./Page";
+import { Page, PageSheet } from "./Page";
 import { useKnowledge } from "../hooks/useKnowledge";
 import { splitDocument, type DocumentFacts, type DomainCount, type KnowledgeDocument, type KnowledgeDomain, type KnowledgeKind, type RepoSummary } from "../lib/knowledge";
 import { matches } from "../lib/shortcuts";
@@ -106,9 +106,9 @@ export function KnowledgePage({ sideHandle }: PageContext) {
           )}
         </>
       }
-      panel={
+      sheet={
         doc ? (
-          <PagePanel icon={FileText} title={doc.title} label={`Document ${doc.id}`} onClose={() => setOpen(null)}>
+          <PageSheet icon={FileText} title={doc.title} label={`Document ${doc.id}`} onClose={() => setOpen(null)}>
             <div className="knowledge-doc-bar">
               <span className="knowledge-doc-meta">
                 {KIND_LABELS[doc.kind]} · {doc.confidence}
@@ -149,7 +149,7 @@ export function KnowledgePage({ sideHandle }: PageContext) {
                 <p className="knowledge-doc-id">{doc.id}</p>
               </div>
             )}
-          </PagePanel>
+          </PageSheet>
         ) : undefined
       }
     >

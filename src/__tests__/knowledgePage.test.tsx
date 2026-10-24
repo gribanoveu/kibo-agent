@@ -139,6 +139,24 @@ describe("KnowledgePage", () => {
     await waitFor(() => expect(screen.queryByText("Body of billing/refunds-api")).toBeNull());
   });
 
+  test("a document opens in a sheet over the page; Escape closes what is on top first", async () => {
+    page();
+    await into("Payments");
+    fireEvent.click(screen.getByRole("option", { name: /Refunds API/ }));
+    await waitFor(() => screen.getByText("Body of billing/refunds-api"));
+    // The page stays as wide as it was, its cards still there to pick another.
+    expect(screen.getByRole("complementary", { name: "Document billing/refunds-api" }).className).toBe("page-sheet");
+    fireEvent.click(screen.getByRole("option", { name: /Billing service/ }));
+    await waitFor(() => screen.getByText("Body of billing/overview"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Body of billing/overview")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("complementary", { name: /^Document/ })).toBeNull();
+  });
+
   test("searches every domain's titles, leads, ids and kinds, keeping only the domains with a match", async () => {
     base.domains[2].documents = 1;
     base.documents.push(doc("billing/login", "auth", "howto", "Sign in", { lead: "Tokens expire after a retry window." }));
