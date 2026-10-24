@@ -17,8 +17,6 @@ export type OverviewProps = {
   /** `null` until the first estimate arrives. */
   context: ContextUsage | null;
   usage: ChatUsage | null;
-  running: boolean;
-  onCompact: () => void;
   servers: McpServerItem[];
   /** Background processes and helper agents, running or ended. */
   processes: ProcessInfo[];
@@ -53,8 +51,6 @@ export function OverviewPanel({
   changes,
   context,
   usage,
-  running,
-  onCompact,
   servers,
   processes,
   agents,
@@ -70,7 +66,7 @@ export function OverviewPanel({
     <div className="overview">
       {context && (
         <section className="overview-card overview-ctx">
-          <ContextDetails context={context} usage={usage} running={running} onCompact={onCompact} />
+          <ContextDetails context={context} cache={usage} />
         </section>
       )}
 

@@ -351,9 +351,16 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       const op = str(args.op);
       return {
         name,
-        arg: op === "add" ? (str(args.title) ?? "") : op === "move" ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}` : "list",
+        arg:
+          op === "add"
+            ? (str(args.title) ?? "")
+            : op === "move"
+              ? `${str(args.id) ?? ""} → ${str(args.column) ?? ""}`
+              : op === "edit"
+                ? `${str(args.id) ?? ""} ${str(args.title) ?? ""}`.trim()
+                : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
-        detail: str(args.note) ?? "",
+        detail: [str(args.note), str(args.due) && `due ${str(args.due)}`].filter(Boolean).join("\n"),
       };
     }
 

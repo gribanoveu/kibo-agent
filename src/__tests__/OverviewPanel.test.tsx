@@ -17,8 +17,6 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   changes: { files: 3, add: 593, del: 34 },
   context: null,
   usage: null,
-  running: false,
-  onCompact: () => {},
   servers: [],
   processes: [],
   agents: [],
@@ -83,5 +81,15 @@ describe("Overview", () => {
     render(<OverviewPanel {...props({ changes: null })} />);
     expect(screen.getByText("Not a git repository.")).toBeTruthy();
     expect(screen.getByText("Nothing is running.")).toBeTruthy();
+  });
+
+  test("shows the cache hit for the context, without the cost note or Compact", () => {
+    const context = { instructions: 1000, skills: 0, tools: 2000, mcp: 0, conversation: 7000, total: 10000, limit: 100000, compactsAt: 80000 };
+    const usage = { promptTokens: 10000, cachedTokens: 8000, completionTokens: 100, totalTokens: 10100 };
+    render(<OverviewPanel {...props({ context, usage })} />);
+    expect(screen.getByText("Cache hit").nextElementSibling?.textContent).toBe("80%");
+    expect(screen.queryByText(/actually cost/)).toBeNull();
+    expect(screen.queryByText(/on its own at/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Compact now" })).toBeNull();
   });
 });

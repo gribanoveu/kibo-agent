@@ -5,6 +5,12 @@
 - 2026-10-24 A Knowledge page lists the knowledge base by domain and repository: open a document to read it with its evidence, move it to another domain or delete it, delete a repository's documents, and rename, describe or merge domains
 - 2026-10-24 The agent asks the knowledge base who provides and who consumes a topic, an endpoint, a table or a bucket, across every repository and domain written down
 - 2026-10-24 A knowledge base, turned on in the Catalog: the agent writes documents about the repositories it works in — services, endpoints, topics, tables, algorithms — filed by domain, finds them from any other repository, and is told which of this one's are out of date; /analyze documents the open repository
+- 2026-10-24 Board cards read more calmly: a card's buttons show when you point at it, a long note is cut to three lines with Show more under it, a due day is a coloured chip, each column has its colour, and an empty one says what it is for
+- 2026-10-24 A Board card can have a due day: pick it in the card's editor, or name a day to the Assistant; an open card shows it in amber on the day and in red once it has passed
+- 2026-10-24 Tell the Assistant more about something already on the Board — a date, a detail, a new wording — and it edits that card instead of adding a second one
+- 2026-10-23 Drag a card on the Board to a place in its column or into another one, or pick it up with Space from the keyboard and move it with the arrows
+- 2026-10-23 Add cards to the Board yourself — Add a card under To do — and edit any card's title and note in place
+- 2026-10-23 Overview shows the last request's cache hit as a row of the context window; the cost note and Compact now stay in the ring beside the message box
 - 2026-10-22 An Artifacts page in the sidebar lists every meeting and every presented prototype as folders, like a drive: open one to see its notes, documents, transcript, recording or the prototype's files beside the list; rename it, show it in Finder, open it in Meetings or in its chat, delete it, or save any of its files elsewhere; the top says how much they all take and how much the disk has left
 - 2026-10-22 A meeting's notes, each document and the transcript fold to their title, which stays in view as the card scrolls by
 - 2026-10-22 Meeting notes suggest subjects the call explained at length; one click writes a document on everything said about it, shown beside the notes, written again or deleted
