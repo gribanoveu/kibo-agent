@@ -1,12 +1,13 @@
-/* Three columns side by side, each as tall as its cards. */
+/* Three columns side by side, as tall as the longest: an empty one is still
+   somewhere to drop a card. */
 .board-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
-  align-items: start;
 }
 .board-column {
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -35,6 +36,20 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
+}
+/* Grabbed by the pointer anywhere but its buttons; lifted while it moves —
+   dnd-kit marks it, and keeps its place in the column open. */
+.board-card[data-card-id] {
+  cursor: grab;
+}
+.board-card[data-dnd-dragging] {
+  cursor: grabbing;
+  border-color: var(--border);
+  box-shadow: var(--shadow-popover);
+}
+.board-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .board-card-title {
   font-size: var(--fs-md);
@@ -73,6 +88,58 @@
 .board-card-actions button:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+/* Under To do's cards, until it opens into an editor. */
+.board-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.board-add:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* A card being written: the title, the note, Cancel and Save. */
+.board-editor {
+  gap: 6px;
+  border-color: var(--border);
+}
+.board-editor-title,
+.board-editor-note {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+}
+.board-editor-title {
+  font-size: var(--fs-md);
+}
+.board-editor-note {
+  font-size: var(--fs-sm);
+  resize: vertical;
+}
+.board-editor-title:focus,
+.board-editor-note:focus {
+  border-color: var(--accent);
+}
+.board-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 .board-empty {
   color: var(--text-dim);
