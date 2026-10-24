@@ -97,7 +97,7 @@ impl Feature {
                     how a calculation goes — filed by domain, for work in other repositories later. Kept on this computer; \
                     each document is checked by the model before it is saved.",
                 enabled_by_default: false,
-                tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead],
+                tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
                 data: Some("knowledge"),
             },
         }

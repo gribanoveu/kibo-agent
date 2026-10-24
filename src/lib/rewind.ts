@@ -25,6 +25,7 @@ const ACCOUNTED = new Set([
   "semanticSearch",
   "knowledgeSearch",
   "knowledgeRead",
+  "knowledgeRelations",
   "webSearch",
   "webFetch",
   "deepseekSearch",

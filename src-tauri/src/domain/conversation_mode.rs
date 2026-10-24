@@ -68,6 +68,7 @@ fn base_tools() -> HashSet<ToolName> {
         // While the user has the knowledge base on (`domain::features`):
         // what other repositories' agents wrote down, read.
         ToolName::KnowledgeSearch,
+        ToolName::KnowledgeRelations,
         ToolName::KnowledgeRead,
         ToolName::Skill,
         // A process's output is something to look at; one may still run

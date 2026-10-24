@@ -61,7 +61,7 @@ pub enum Confidence {
 
 /// What a contract between repositories is: the nature of the link, not the
 /// technology — Kafka or RabbitMQ is said in the text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ContractKind {
     Topic,
@@ -86,7 +86,7 @@ impl ContractKind {
         Self::ALL.iter().find(|(_, k)| *k == key).map(|(kind, _)| *kind)
     }
 
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         Self::ALL.iter().find(|(kind, _)| *kind == self).map_or("", |(_, k)| k)
     }
 }
@@ -96,6 +96,84 @@ impl ContractKind {
 pub struct Contract {
     pub kind: ContractKind,
     pub name: String,
+}
+
+/// Which side of a contract a document is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Provides,
+    Consumes,
+}
+
+/// One document on one side of a contract: what `knowledgeRelations` answers.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Relation {
+    pub kind: ContractKind,
+    pub name: String,
+    pub side: Side,
+    pub domain: String,
+    pub id: String,
+    pub title: String,
+}
+
+impl Relation {
+    /// What two documents must share to be on one contract: its kind and its
+    /// name, spaces aside — `tax-api POST  /x` is `tax-api POST /x`.
+    pub fn key(&self) -> (ContractKind, String) {
+        (self.kind, spaced(&self.name))
+    }
+}
+
+fn spaced(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Every contract a document's header names, each a row of its own.
+pub fn relations_of(domain: &str, id: &str, header: &Header) -> Vec<Relation> {
+    let sides = [(Side::Provides, &header.provides), (Side::Consumes, &header.consumes)];
+    sides
+        .into_iter()
+        .flat_map(|(side, list)| list.iter().map(move |contract| (side, contract)))
+        .map(|(side, contract)| Relation {
+            kind: contract.kind,
+            name: contract.name.clone(),
+            side,
+            domain: domain.to_string(),
+            id: id.to_string(),
+            title: header.title.clone(),
+        })
+        .collect()
+}
+
+/// What `knowledgeRelations` is asked about: `topic: tax.events.v1`, or a
+/// name alone, of any kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entity {
+    pub kind: Option<ContractKind>,
+    pub name: String,
+}
+
+impl Entity {
+    pub fn parse(text: &str) -> Result<Entity, KnowledgeError> {
+        let (kind, name) = match text.split_once(':') {
+            Some((key, name)) => match ContractKind::from_key(&key.trim().to_lowercase()) {
+                Some(kind) => (Some(kind), name),
+                None => (None, text),
+            },
+            None => (None, text),
+        };
+        let name = spaced(name);
+        if name.is_empty() {
+            return Err(KnowledgeError::BadEntity(text.to_string()));
+        }
+        Ok(Entity { kind, name })
+    }
+
+    pub fn names(&self, relation: &Relation) -> bool {
+        self.kind.is_none_or(|kind| kind == relation.kind) && spaced(&relation.name) == self.name
+    }
 }
 
 /// `src/Producer.java#L40-L60`: a file of the repository, and the lines in it.
@@ -202,6 +280,8 @@ pub enum KnowledgeError {
     WrongRepo { id: String, repo: String },
     #[error("`{0}` is not a document id — `<repo>/<slug>`, as knowledgeSearch gives it")]
     NotAnId(String),
+    #[error("`{0}` names nothing to look up — a contract as documents write it: `topic: tax.events.v1`, `api: tax-api POST /api/v1/declarations`, `db: tax.declarations`")]
+    BadEntity(String),
     #[error("`{0}` is not a slug — lowercase Latin letters, digits, `-`, `_` and `.`, at most 80, not starting with `.`")]
     BadSlug(String),
     #[error("`{0}` is not a domain id — lowercase Latin letters, digits and `-`")]
@@ -409,6 +489,22 @@ pub struct Header {
     /// The commit it was written at; a hand-written one may be unquoted digits.
     #[serde(default, deserialize_with = "scalar")]
     pub commit: Option<String>,
+    /// The entries that read as contracts; one edited past reading is left out.
+    #[serde(default, deserialize_with = "some_contracts")]
+    pub provides: Vec<Contract>,
+    #[serde(default, deserialize_with = "some_contracts")]
+    pub consumes: Vec<Contract>,
+}
+
+fn some_contracts<'de, D: serde::Deserializer<'de>>(from: D) -> Result<Vec<Contract>, D::Error> {
+    let Some(yaml_serde::Value::Sequence(entries)) = Option::<yaml_serde::Value>::deserialize(from)? else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| yaml_serde::from_value::<RawContract>(entry).ok())
+        .filter_map(|entry| contracts(&[entry]).ok()?.pop())
+        .collect())
 }
 
 fn general() -> String {
@@ -926,6 +1022,44 @@ confidence: confirmed
         }
         for tool in ["todo", "explore", "knowledgeWrite", "knowledgeRead"] {
             assert!(words.contains(&tool), "{tool}");
+        }
+    }
+
+    #[test]
+    fn a_header_reads_its_contracts_and_skips_what_is_not_one() {
+        let text = "---\nkind: event\ntitle: T\nconfidence: inferred\nprovides:\n  - topic: tax.events.v1\n  - topic: ${TOPIC}\n  - colour: red\n  - 42\n\
+consumes:\n  - api: usn-api  POST /x\n---\n# T\n";
+        let (header, _) = read_header(text).unwrap();
+        assert_eq!(header.provides, [Contract { kind: ContractKind::Topic, name: "tax.events.v1".into() }]);
+        assert_eq!(header.consumes, [Contract { kind: ContractKind::Api, name: "usn-api  POST /x".into() }]);
+        let odd = "---\nkind: event\ntitle: T\nconfidence: inferred\nprovides: tax.events.v1\n---\n# T\n";
+        assert_eq!(read_header(odd).unwrap().0.provides, [], "not a list, and the header still reads");
+
+        let rows = relations_of("usn", "tax-api/events", &header);
+        let shown: Vec<_> = rows.iter().map(|r| (r.side, r.kind, r.name.as_str(), r.title.as_str())).collect();
+        assert_eq!(shown, [(Side::Provides, ContractKind::Topic, "tax.events.v1", "T"), (Side::Consumes, ContractKind::Api, "usn-api  POST /x", "T")]);
+        assert!(rows.iter().all(|r| r.domain == "usn" && r.id == "tax-api/events"));
+        assert_eq!(rows[1].key(), (ContractKind::Api, "usn-api POST /x".to_string()));
+    }
+
+    #[test]
+    fn an_entity_is_a_contract_or_a_name_of_any_kind() {
+        let row = |kind, name: &str| Relation { kind, name: name.into(), side: Side::Provides, domain: "d".into(), id: "r/s".into(), title: "T".into() };
+        let topic = Entity::parse(" Topic : tax.events.v1 ").unwrap();
+        assert_eq!(topic, Entity { kind: Some(ContractKind::Topic), name: "tax.events.v1".into() });
+        assert!(topic.names(&row(ContractKind::Topic, "tax.events.v1")));
+        assert!(!topic.names(&row(ContractKind::Db, "tax.events.v1")), "another kind");
+        assert!(!topic.names(&row(ContractKind::Topic, "tax.events.v2")));
+        assert!(!topic.names(&row(ContractKind::Topic, "Tax.Events.v1")), "the exact name");
+        let api = Entity::parse("api: tax-api   POST /x").unwrap();
+        assert!(api.names(&row(ContractKind::Api, "tax-api POST  /x")), "spaces aside");
+        let any = Entity::parse("tax.events.v1").unwrap();
+        assert_eq!(any.kind, None);
+        assert!(any.names(&row(ContractKind::Db, "tax.events.v1")));
+        let url = Entity::parse("https://fns.ru/api").unwrap();
+        assert_eq!(url, Entity { kind: None, name: "https://fns.ru/api".into() }, "a colon that is not after a kind");
+        for nothing in ["", "  ", "topic:", "db:  "] {
+            assert!(matches!(Entity::parse(nothing), Err(KnowledgeError::BadEntity(_))), "{nothing:?}");
         }
     }
 

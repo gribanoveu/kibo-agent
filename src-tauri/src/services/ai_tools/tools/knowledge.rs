@@ -9,17 +9,17 @@
 //! (`KNOWLEDGE_CHECK_PROMPT`), as it checks a `remember` note, and only then
 //! is anything written. No approval card: one `/analyze` writes dozens.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
 use crate::domain::code_search::SearchFilter;
-use crate::domain::knowledge::{self, Document, Header, KnowledgeHit, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
+use crate::domain::knowledge::{self, Document, Entity, Header, KnowledgeHit, Relation, GENERAL_DOMAIN, KNOWLEDGE_CHECK_PROMPT, MAX_BODY_CHARS};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::search_query::PathFilter;
 use crate::domain::skills::split_frontmatter;
 use crate::domain::tools::{
-    KnowledgeReadArgs, KnowledgeSearchArgs, KnowledgeWriteArgs, ToolDeps, ToolError, ToolResult, ToolScope,
+    KnowledgeReadArgs, KnowledgeRelationsArgs, KnowledgeSearchArgs, KnowledgeWriteArgs, ToolDeps, ToolError, ToolResult, ToolScope,
 };
 use crate::infra::knowledge_store::{Change, KnowledgeStore};
 use crate::infra::repository_identity::head_commit;
@@ -231,6 +231,50 @@ pub fn knowledge_read(args: &KnowledgeReadArgs) -> Result<ToolResult, ToolError>
     Ok(ToolResult::KnowledgeDocument { id, domain: domain.unwrap_or_default(), section: section.map(str::to_string), text, stale })
 }
 
+/// Who provides and who consumes the contract `entity` names — or every
+/// contract of `repo`'s documents — across every domain of the base.
+pub fn knowledge_relations(args: &KnowledgeRelationsArgs) -> Result<ToolResult, ToolError> {
+    let fail = |why: String| ToolError::KnowledgeRead(format!("knowledgeRelations: {why}"));
+    let entity = args.entity.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    let repo = args.repo.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let wanted = entity.map(Entity::parse).transpose().map_err(|e| fail(e.to_string()))?;
+    if let Some(repo) = repo.filter(|r| !knowledge::is_repo_name(r)) {
+        return Err(fail(format!("`{repo}` is not a repository name — as it is in document ids, before the `/`")));
+    }
+    let asked = match (entity, repo) {
+        (Some(entity), None) => format!("`{entity}`"),
+        (None, Some(repo)) => format!("anything `{repo}`'s documents name"),
+        (Some(entity), Some(repo)) => format!("`{entity}` among what `{repo}`'s documents name"),
+        (None, None) => {
+            return Err(fail("say what to look up: `entity`, a contract such as `topic: tax.events.v1`, or `repo`".into()));
+        }
+    };
+
+    // ponytail: every header read on each call, no index of its own — hundreds
+    // of files take milliseconds. An index when the base has thousands.
+    let store = KnowledgeStore::open().map_err(|e| fail(e.to_string()))?;
+    let mut all = Vec::new();
+    for relative in store.documents().map_err(|e| fail(e.to_string()))? {
+        let Some((domain, id)) = knowledge::place_of(&relative) else {
+            continue;
+        };
+        let text = fs::read_to_string(store.dir().join(&relative)).unwrap_or_default();
+        if let Some((header, _)) = knowledge::read_header(&text) {
+            all.extend(knowledge::relations_of(domain, &id, &header));
+        }
+    }
+    let of_repo: Option<HashSet<_>> =
+        repo.map(|repo| all.iter().filter(|r| r.id.split_once('/').is_some_and(|(owner, _)| owner == repo)).map(Relation::key).collect());
+    let mut relations: Vec<Relation> = all
+        .into_iter()
+        .filter(|r| wanted.as_ref().is_none_or(|wanted| wanted.names(r)))
+        .filter(|r| of_repo.as_ref().is_none_or(|keys| keys.contains(&r.key())))
+        .collect();
+    relations.sort_by(|a, b| (a.key(), a.side, &a.domain, &a.id).cmp(&(b.key(), b.side, &b.domain, &b.id)));
+    relations.dedup();
+    Ok(ToolResult::KnowledgeRelations { asked, relations })
+}
+
 /// Where each repository of the base was open last. A list that cannot be
 /// read leaves every document unmarked rather than failing the call.
 fn repository_roots(store: &KnowledgeStore) -> HashMap<String, PathBuf> {
@@ -289,6 +333,27 @@ Returns at most {MAX_HITS} sections, {DEFAULT_HITS} by default."
                 "limit": { "type": "integer", "description": "How many sections, at most 20." }
             },
             "required": ["query"]
+        }),
+    }
+}
+
+pub(super) fn relations_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "knowledgeRelations".to_string(),
+        description: "Who provides and who consumes a contract, across every repository and domain of the knowledge base, from the \
+`provides` and `consumes` of their documents: a topic or queue, an endpoint, a table, a storage bucket, a library, an external system. \
+Use it when this code calls another service's API or reads a topic, table or bucket it does not own — before guessing who is on the other side. \
+`entity` is the contract with its exact name, as code and configuration spell it: `topic: tax.events.v1`, `api: tax-api POST /api/v1/declarations`, \
+`db: tax.declarations`, `storage: <bucket>/<prefix>`, `lib: <package>`, `external: <system>`; without the kind, a name of any kind. \
+`repo` alone follows every contract that repository's documents name. Returns documents by id; read one with knowledgeRead."
+            .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "entity": { "type": "string", "description": "`topic: tax.events.v1`" },
+                "repo": { "type": "string", "description": "A repository's name, as in document ids: `tax-api`." }
+            },
+            "required": []
         }),
     }
 }
@@ -726,6 +791,67 @@ evidence:\n  - {evidence}\nconfidence: confirmed\n---\n# Декларации AP
             assert!(read("tax-api/nothing", None).unwrap_err().contains("there is no document `tax-api/nothing`"));
             assert!(read("tariff", None).unwrap_err().contains("not a document id"));
             assert!(read("../tariff", None).unwrap_err().contains("not a document id"));
+        });
+    }
+
+    /// A document put in the base by hand, as another repository's agent left it.
+    fn kept_by_hand(relative: &str, title: &str, contracts: &str) {
+        let path = base().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, format!("---\nkind: event\ntitle: {title}\nconfidence: inferred\n{contracts}---\n# {title}\n")).unwrap();
+    }
+
+    fn relations(entity: Option<&str>, repo: Option<&str>) -> Result<(String, Vec<String>), String> {
+        let args = KnowledgeRelationsArgs { entity: entity.map(str::to_string), repo: repo.map(str::to_string) };
+        match knowledge_relations(&args) {
+            Ok(ToolResult::KnowledgeRelations { asked, relations }) => {
+                let rows = relations
+                    .iter()
+                    .map(|r| format!("{}: {} | {:?} {}/{} {}", r.kind.key(), r.name, r.side, r.domain, r.id, r.title))
+                    .collect();
+                Ok((asked, rows))
+            }
+            Ok(other) => panic!("{other:?}"),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    #[test]
+    fn relations_are_who_provides_and_who_consumes_a_contract_in_every_domain() {
+        with_app_dir("knowledge-relations", || {
+            two_documents("knowledge-relations-repo");
+            kept_by_hand("usn/tax-api/events.md", "События", "provides:\n  - topic: tax.events.v1\nconsumes:\n  - db: tax.declarations\n");
+            let ledger = "consumes:\n  - topic: tax.events.v1\n  - api: tax-api  POST /api/v1/declarations\n";
+            kept_by_hand("ausn/ledger/listener.md", "Слушатель", ledger);
+            kept_by_hand("fns-exchange/gateway/fns.md", "Шлюз", "provides:\n  - external: fns\n  - topic: fns.answers\n");
+            fs::write(base().join("ausn/ledger/broken.md"), "consumes: [topic: tax.events.v1]").unwrap();
+
+            let topic = ["topic: tax.events.v1 | Provides usn/tax-api/events События", "topic: tax.events.v1 | Consumes ausn/ledger/listener Слушатель"];
+            assert_eq!(relations(Some("topic: tax.events.v1"), None), Ok(("`topic: tax.events.v1`".into(), topic.map(String::from).to_vec())));
+            assert_eq!(relations(Some(" tax.events.v1 "), None).unwrap().1, topic, "a name alone, of any kind");
+
+            let (asked, rows) = relations(None, Some("tax-api")).unwrap();
+            assert_eq!(asked, "anything `tax-api`'s documents name");
+            assert_eq!(
+                rows,
+                [
+                    topic[0],
+                    topic[1],
+                    "api: tax-api POST /api/v1/declarations | Provides usn/tax-api/declarations-api Декларации API",
+                    "api: tax-api  POST /api/v1/declarations | Consumes ausn/ledger/listener Слушатель",
+                    "db: tax.declarations | Consumes usn/tax-api/events События",
+                ],
+                "by contract, the provider first; another repository's side by the same name, spaces aside"
+            );
+            let (_, both) = relations(Some("api: tax-api POST /api/v1/declarations"), Some("ledger")).unwrap();
+            assert_eq!(both.len(), 2);
+            assert_eq!(relations(Some("topic: fns.answers"), Some("tax-api")).unwrap().1, Vec::<String>::new(), "not one of tax-api's");
+
+            let (asked, none) = relations(Some("topic: nothing"), None).unwrap();
+            assert_eq!((asked.as_str(), none.len()), ("`topic: nothing`", 0));
+            assert!(relations(None, Some(" ")).unwrap_err().contains("say what to look up"));
+            assert!(relations(Some("topic: "), None).unwrap_err().contains("names nothing to look up"));
+            assert!(relations(None, Some("a/b")).unwrap_err().contains("not a repository name"));
         });
     }
 

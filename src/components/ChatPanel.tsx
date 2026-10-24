@@ -85,6 +85,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Knowledge: Library,
   "Knowledge search": Library,
   "Knowledge doc": Library,
+  "Knowledge links": Library,
   Plan: ScrollText,
   Explore: Telescope,
   Board: SquareKanban,

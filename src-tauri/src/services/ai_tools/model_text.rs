@@ -121,6 +121,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
         ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
         ToolResult::KnowledgeFound { hits, weak } => knowledge_found(hits, *weak),
+        ToolResult::KnowledgeRelations { asked, relations } => knowledge_relations(asked, relations),
         ToolResult::KnowledgeDocument { id, domain, text, stale, .. } => {
             let stale = if *stale { format!("\n{}", crate::domain::knowledge::STALE_NOTE) } else { String::new() };
             format!("{id} (domain {domain}):{stale}\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
@@ -170,6 +171,32 @@ if it is not there, nobody has written it down yet."
         text.push_str("\n\n");
     }
     text.push_str(crate::domain::knowledge::DATA_NOTE);
+    text
+}
+
+/// The documents on each contract, under the contract's name.
+fn knowledge_relations(asked: &str, relations: &[crate::domain::knowledge::Relation]) -> String {
+    if relations.is_empty() {
+        return format!(
+            "No document in the knowledge base provides or consumes {asked}. Names are compared exactly, as documents write them: \
+find how they spell it with knowledgeSearch, or nobody has written it down yet."
+        );
+    }
+    let mut text = String::new();
+    let mut contract = None;
+    for relation in relations {
+        let key = relation.key();
+        if contract.as_ref() != Some(&key) {
+            text.push_str(&format!("{}{}: {}\n", if contract.is_some() { "\n" } else { "" }, key.0.key(), key.1));
+            contract = Some(key);
+        }
+        let side = match relation.side {
+            crate::domain::knowledge::Side::Provides => "provides",
+            crate::domain::knowledge::Side::Consumes => "consumes",
+        };
+        text.push_str(&format!("- {side}: {} — {} (domain {})\n", relation.id, relation.title, relation.domain));
+    }
+    text.push_str(&format!("\nRead a document with knowledgeRead.\n\n{}", crate::domain::knowledge::DATA_NOTE));
     text
 }
 
@@ -672,6 +699,31 @@ mod tests {
         assert_eq!(found.matches(STALE_NOTE).count(), 1);
         assert!(found.ends_with(DATA_NOTE));
         assert!(for_model(&ToolResult::KnowledgeFound { hits: vec![], weak: false }).starts_with("Nothing in the knowledge base matches"));
+
+        let relation = |kind, name: &str, side, id: &str| crate::domain::knowledge::Relation {
+            kind,
+            name: name.into(),
+            side,
+            domain: "usn".into(),
+            id: id.into(),
+            title: "T".into(),
+        };
+        use crate::domain::knowledge::{ContractKind, Side};
+        let relations = vec![
+            relation(ContractKind::Topic, "tax.events.v1", Side::Provides, "tax-api/events"),
+            relation(ContractKind::Topic, "tax.events.v1", Side::Consumes, "ledger/listener"),
+            relation(ContractKind::Api, "tax-api  POST /x", Side::Consumes, "ledger/listener"),
+        ];
+        let linked = for_model(&ToolResult::KnowledgeRelations { asked: "`x`".into(), relations });
+        assert_eq!(
+            linked,
+            format!(
+                "topic: tax.events.v1\n- provides: tax-api/events — T (domain usn)\n- consumes: ledger/listener — T (domain usn)\n\n\
+api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a document with knowledgeRead.\n\n{DATA_NOTE}"
+            )
+        );
+        let none = for_model(&ToolResult::KnowledgeRelations { asked: "`topic: y`".into(), relations: vec![] });
+        assert!(none.starts_with("No document in the knowledge base provides or consumes `topic: y`."), "{none}");
 
         let document = |stale| ToolResult::KnowledgeDocument { id: "tax-api/api".into(), domain: "usn".into(), section: None, text: "# API".into(), stale };
         assert_eq!(for_model(&document(false)), format!("tax-api/api (domain usn):\n\n# API\n\n{DATA_NOTE}"));

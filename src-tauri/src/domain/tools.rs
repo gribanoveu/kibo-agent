@@ -61,6 +61,8 @@ pub enum ToolName {
     /// The knowledge base searched, and one of its documents read.
     KnowledgeSearch,
     KnowledgeRead,
+    /// Who provides and who consumes a contract, across the base.
+    KnowledgeRelations,
     /// The Kubernetes role's reads of the cluster its chat is pinned to
     /// (`docs/21-kubernetes-mode.md`, K-3).
     KubeList,
@@ -143,6 +145,7 @@ impl ToolName {
         ToolName::KnowledgeWrite,
         ToolName::KnowledgeSearch,
         ToolName::KnowledgeRead,
+        ToolName::KnowledgeRelations,
         ToolName::KubeList,
         ToolName::KubeGet,
         ToolName::KubeEvents,
@@ -199,6 +202,7 @@ impl ToolName {
             ToolName::KnowledgeWrite => "knowledgeWrite",
             ToolName::KnowledgeSearch => "knowledgeSearch",
             ToolName::KnowledgeRead => "knowledgeRead",
+            ToolName::KnowledgeRelations => "knowledgeRelations",
             ToolName::KubeList => "kubeList",
             ToolName::KubeGet => "kubeGet",
             ToolName::KubeEvents => "kubeEvents",
@@ -287,6 +291,7 @@ impl ToolName {
             | ToolName::SemanticSearch
             | ToolName::KnowledgeSearch
             | ToolName::KnowledgeRead
+            | ToolName::KnowledgeRelations
             | ToolName::Skill
             | ToolName::WritePlan
             | ToolName::ReadOutput
@@ -342,6 +347,7 @@ impl ToolName {
             | ToolName::SemanticSearch
             | ToolName::KnowledgeSearch
             | ToolName::KnowledgeRead
+            | ToolName::KnowledgeRelations
             | ToolName::WebSearch
             | ToolName::WebFetch
             | ToolName::DeepseekSearch
@@ -426,6 +432,8 @@ impl ToolName {
             ToolName::KnowledgeSearch => 2,
             // One small file.
             ToolName::KnowledgeRead => 1,
+            // Every header of the base, which is small.
+            ToolName::KnowledgeRelations => 1,
             // Read, diff against the new content, write.
             ToolName::WriteFile | ToolName::EditFile => 2,
             // A rename. Atlas charged 2 because its `move` also rewrote
@@ -628,7 +636,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            50,
+            51,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1313,6 +1321,7 @@ pub enum ToolCall {
     KnowledgeWrite(KnowledgeWriteArgs),
     KnowledgeSearch(KnowledgeSearchArgs),
     KnowledgeRead(KnowledgeReadArgs),
+    KnowledgeRelations(KnowledgeRelationsArgs),
     KubeList(KubeListArgs),
     KubeGet(KubeGetArgs),
     KubeEvents(KubeEventsArgs),
@@ -1368,6 +1377,7 @@ impl ToolCall {
             ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
             ToolCall::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
             ToolCall::KnowledgeRead(_) => ToolName::KnowledgeRead,
+            ToolCall::KnowledgeRelations(_) => ToolName::KnowledgeRelations,
             ToolCall::KubeList(_) => ToolName::KubeList,
             ToolCall::KubeGet(_) => ToolName::KubeGet,
             ToolCall::KubeEvents(_) => ToolName::KubeEvents,
@@ -1642,6 +1652,9 @@ pub enum ToolResult {
         hits: Vec<crate::domain::knowledge::KnowledgeHit>,
         weak: bool,
     },
+    /// `knowledgeRelations`: every document on a side of what was asked
+    /// about, by contract; `asked` says what that was.
+    KnowledgeRelations { asked: String, relations: Vec<crate::domain::knowledge::Relation> },
     /// `knowledgeRead`: a document, or the one section asked for.
     KnowledgeDocument {
         id: String,
@@ -2555,6 +2568,17 @@ pub struct GitDiffArgs {
     /// a large change before asking for the files that matter.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub stat: Option<bool>,
+}
+
+/// `knowledgeRelations`: a contract by its exact name, or a repository whose
+/// contracts to follow; both narrow to that contract among the repository's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRelationsArgs {
+    #[serde(default)]
+    pub entity: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 /// `knowledgeSearch`: a question, and where to look.

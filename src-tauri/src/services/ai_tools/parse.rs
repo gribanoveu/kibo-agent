@@ -50,6 +50,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "knowledgeWrite" => ToolCall::KnowledgeWrite(args(call)?),
         "knowledgeSearch" => ToolCall::KnowledgeSearch(args(call)?),
         "knowledgeRead" => ToolCall::KnowledgeRead(args(call)?),
+        "knowledgeRelations" => ToolCall::KnowledgeRelations(args(call)?),
         "readOutput" => ToolCall::ReadOutput(args(call)?),
         "stopProcess" => ToolCall::StopProcess(args(call)?),
         "readTerminal" => ToolCall::ReadTerminal(args(call)?),

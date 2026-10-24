@@ -164,6 +164,8 @@ mod tests {
             confidence: knowledge::Confidence::Confirmed,
             evidence: vec![evidence.into()],
             commit: commit.map(str::to_string),
+            provides: vec![],
+            consumes: vec![],
         };
         let mut staleness = Staleness::default();
         assert!(!staleness.of(&root, &header("src/Api.java", Some(&first))));

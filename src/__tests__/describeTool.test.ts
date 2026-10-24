@@ -150,6 +150,25 @@ describe("what each call shows", () => {
     });
   });
 
+  test("knowledge links: what was asked about, how many documents, each on its side", () => {
+    const args = JSON.stringify({ entity: " topic: tax.events.v1 ", repo: "tax-api" });
+    expect(describeTool(tool({ name: "knowledgeRelations", arguments: args }))).toMatchObject({
+      name: "Knowledge links",
+      arg: "topic: tax.events.v1 in tax-api",
+      meta: undefined,
+    });
+    const relations = [
+      { kind: "topic", name: "tax.events.v1", side: "provides", domain: "usn", id: "tax-api/events", title: "События" },
+      { kind: "topic", name: "tax.events.v1", side: "consumes", domain: "ausn", id: "ledger/listener", title: "Слушатель" },
+    ];
+    const result = { result: "knowledgeRelations", asked: "x", relations };
+    expect(describeTool(tool({ name: "knowledgeRelations", arguments: JSON.stringify({ repo: "tax-api" }), result }))).toMatchObject({
+      arg: "in tax-api",
+      meta: "2 documents",
+      detail: "topic: tax.events.v1  provides  tax-api/events  События\ntopic: tax.events.v1  consumes  ledger/listener  Слушатель",
+    });
+  });
+
   test("knowledge doc: the id and section asked for, the domain, the text read", () => {
     const args = JSON.stringify({ id: "tax-api/tariff", section: " Входы " });
     expect(describeTool(tool({ name: "knowledgeRead", arguments: args }))).toMatchObject({ name: "Knowledge doc", arg: "tax-api/tariff § Входы", meta: undefined });

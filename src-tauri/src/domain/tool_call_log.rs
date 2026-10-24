@@ -327,6 +327,11 @@ mod tests {
                     weak: false,
                 },
             ),
+            // Contract names, ids and titles: what documents are, not what they say.
+            ToolName::KnowledgeRelations => (
+                Some(ToolCall::KnowledgeRelations(crate::domain::tools::KnowledgeRelationsArgs { entity: Some("topic: t".into()), repo: None })),
+                ToolResult::KnowledgeRelations { asked: "`topic: t`".into(), relations: vec![] },
+            ),
             ToolName::KnowledgeRead => (
                 Some(ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs { id: "tax-api/events".into(), section: None })),
                 ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into(), stale: false },

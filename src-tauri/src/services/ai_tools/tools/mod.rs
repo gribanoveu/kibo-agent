@@ -81,6 +81,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::KnowledgeWrite, knowledge::definition),
     (ToolName::KnowledgeSearch, knowledge::search_definition),
     (ToolName::KnowledgeRead, knowledge::read_definition),
+    (ToolName::KnowledgeRelations, knowledge::relations_definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RunCommand, run_command::definition),
     (ToolName::Skill, skill::definition),
@@ -165,6 +166,7 @@ pub fn dispatch(
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),
         ToolCall::KnowledgeSearch(args) => knowledge::knowledge_search(args, deps),
         ToolCall::KnowledgeRead(args) => knowledge::knowledge_read(args),
+        ToolCall::KnowledgeRelations(args) => knowledge::knowledge_relations(args),
         ToolCall::ReadOutput(args) => process::read_output(args, deps),
         ToolCall::StopProcess(args) => process::stop_process(args, deps),
         ToolCall::ReadTerminal(args) => terminal::read_terminal(args, deps),
@@ -404,6 +406,13 @@ mod definition_tests {
                     repo: Some("tax-api".to_string()),
                     kind: Some(crate::domain::knowledge::Kind::Event),
                     limit: Some(3),
+                })],
+            ),
+            ToolName::KnowledgeRelations => (
+                r#"{"entity":"topic: tax.events.v1"}"#,
+                vec![ToolCall::KnowledgeRelations(crate::domain::tools::KnowledgeRelationsArgs {
+                    entity: Some("topic: tax.events.v1".to_string()),
+                    repo: Some("tax-api".to_string()),
                 })],
             ),
             ToolName::KnowledgeRead => (

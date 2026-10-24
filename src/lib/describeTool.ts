@@ -65,6 +65,7 @@ export const LABELS: Record<string, string> = {
   knowledgeWrite: "Knowledge",
   knowledgeSearch: "Knowledge search",
   knowledgeRead: "Knowledge doc",
+  knowledgeRelations: "Knowledge links",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -317,6 +318,19 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
               `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}${h.stale === true ? " — stale" : ""}\n${str(h.text) ?? ""}`,
           )
           .join("\n\n"),
+      };
+    }
+
+    // Who is on each side of the contract asked about, as the model got it.
+    case "knowledgeRelations": {
+      const relations = Array.isArray(result.relations) ? (result.relations as Json[]) : [];
+      const entity = str(args.entity)?.trim();
+      const repo = str(args.repo)?.trim();
+      return {
+        name,
+        arg: [entity, repo && `in ${repo}`].filter(Boolean).join(" "),
+        meta: block.result === undefined ? undefined : `${relations.length} ${relations.length === 1 ? "document" : "documents"}`,
+        detail: relations.map((r) => `${str(r.kind) ?? ""}: ${str(r.name) ?? ""}  ${str(r.side) ?? ""}  ${str(r.id) ?? ""}  ${str(r.title) ?? ""}`).join("\n"),
       };
     }
 
