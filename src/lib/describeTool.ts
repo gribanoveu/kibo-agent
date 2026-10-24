@@ -1,5 +1,5 @@
 import type { Block } from "./chatTurnReducer";
-import { type AgentTokens, tokensSpent } from "./agents";
+import { type AgentTokens, briefTitle, tokensSpent } from "./agents";
 import { type ProcessState, processStatus } from "./processes";
 
 // One tool call, as a row in the transcript: what it did, to what, and the
@@ -703,8 +703,8 @@ function primaryArgument(wireName: string, args: Json): string {
     str(args.command) ??
     str(args.pattern) ??
     str(args.query) ??
-    // `explore`'s brief: its first line is the question.
-    str(args.task)?.split("\n")[0] ??
+    // `explore`'s brief, by its question.
+    (typeof args.task === "string" ? briefTitle(args.task) : undefined) ??
     (wireName === "gitStatus" ? "" : "")
   );
 }

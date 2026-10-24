@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collapseRedraws, describeActive, describeRun, describeTool } from "../lib/describeTool";
 import type { Block } from "../lib/chatTurnReducer";
+import { briefTitle } from "../lib/agents";
 
 // What a tool call looks like in the transcript. Rendering, so the tests are
 // about what reads well — and about not falling over on arguments that are
@@ -123,6 +124,14 @@ describe("what each call shows", () => {
     expect(running.agent).toBeUndefined();
     const failed = describeTool(tool({ name: "explore", arguments: args, error: "explore: stopped before it answered" }));
     expect(failed).toMatchObject({ arg: "Where is the token refreshed?", meta: "failed" });
+  });
+
+  test("a brief that opens with context is named by its goal", () => {
+    const task = "Repository: /Users/me/repos/tax-api (Spring Boot).\n\nGoal: the Thrift API under /tapi.\nReport files and lines.";
+    expect(describeTool(tool({ name: "explore", arguments: JSON.stringify({ task }), status: "running" })).arg).toBe("the Thrift API under /tapi.");
+    expect(briefTitle("Контекст: сервис налогов\nВопрос: где считается сальдо?")).toBe("где считается сальдо?");
+    expect(briefTitle("\n  Where is X?  \nGoals: none")).toBe("Where is X?");
+    expect(briefTitle("")).toBe("");
   });
 
   test("a note to memory shows the note, and says when it was there already", () => {

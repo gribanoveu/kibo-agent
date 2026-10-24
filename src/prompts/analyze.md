@@ -25,7 +25,7 @@ Skip topics that are already written and not marked. A written document whose to
 
 ## Step 2. Ask
 
-For each topic, send `explore` with one question about it — what a document on that topic has to say, and that every fact needs its file and lines. Topics that do not depend on each other go out together, several `explore` calls in one response. A helper answers from the code and writes nothing.
+For each topic, send `explore` with one question about it — what a document on that topic has to say, and that every fact needs its file and lines. The brief's first line is that question in a short sentence: the app shows it as the helper's name. Do not name the repository or its path — the helper works in the same folder. Topics that do not depend on each other go out together, several `explore` calls in one response. A helper answers from the code and writes nothing.
 
 When an answer is thin or contradicts another, ask again or read the code yourself before writing anything on it.
 

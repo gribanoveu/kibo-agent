@@ -29,6 +29,17 @@ export async function onAgentChanged(handler: (id: number) => void): Promise<Unl
   return listen<{ id: number }>(AGENT_EVENT, ({ payload }) => handler(payload.id));
 }
 
+/**
+ * What a helper is asked, in one line: the brief's `Goal:` or `Question:`
+ * line when it has one — a model often opens with context such as
+ * `Repository: /path` — else its first line.
+ */
+export function briefTitle(task: string): string {
+  const lines = task.split("\n").map((line) => line.trim()).filter(Boolean);
+  const asked = lines.map((line) => /^(?:goal|question|task|цель|вопрос|задача)\s*:\s*(.+)$/i.exec(line)?.[1]).find(Boolean);
+  return asked ?? lines[0] ?? "";
+}
+
 /** Newest first. */
 export async function agentsList(): Promise<AgentInfo[]> {
   if (!inTauri()) return [];
