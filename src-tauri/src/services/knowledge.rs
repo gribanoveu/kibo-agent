@@ -110,7 +110,7 @@ fn walk(
         // and not counted, or a domain says more than it lists.
         let path = store.dir().join(&relative);
         let text = fs::read_to_string(&path).unwrap_or_default();
-        let Some((header, _)) = knowledge::read_header(&text) else {
+        let Some((header, body)) = knowledge::read_header(&text) else {
             continue;
         };
         let owner = id.split_once('/').map_or("", |(owner, _)| owner).to_string();
@@ -132,6 +132,7 @@ fn walk(
             confidence: header.confidence,
             stale,
             written: written.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()),
+            lead: knowledge::lead(body),
         });
     }
     // `general` is never in `domains.json`: `knowledgeWrite` refuses it as a new domain.
@@ -240,7 +241,7 @@ mod tests {
     use git2::Repository;
 
     fn doc(title: &str, evidence: &str, commit: &str) -> String {
-        format!("---\nid: x\nkind: api\ntitle: {title}\ncommit: {commit}\nevidence:\n  - {evidence}\nconfidence: confirmed\n---\n# {title}\n")
+        format!("---\nid: x\nkind: api\ntitle: {title}\ncommit: {commit}\nevidence:\n  - {evidence}\nconfidence: confirmed\n---\n# {title}\n\nAbout {title}.\n")
     }
 
     /// A repository with `src/Api.java` and `src/Job.java`, committed; the commit.
@@ -299,6 +300,7 @@ mod tests {
             let seen = overview(&root).unwrap();
             let listed: Vec<_> = seen.documents.iter().map(|d| (d.domain.as_str(), d.id.as_str(), d.title.as_str(), d.stale)).collect();
             assert_eq!(seen.documents.iter().map(|d| d.cited).collect::<Vec<_>>(), [true, true, true, false], "the notes cite nothing");
+            assert!(seen.documents.iter().any(|d| d.lead == "About Декларации API."), "a card's lead is read from the body");
             assert_eq!(
                 listed,
                 [

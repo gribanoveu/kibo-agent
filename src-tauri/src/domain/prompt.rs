@@ -635,7 +635,7 @@ mod tests {
     fn listed_doc(id: &str, domain: &str, title: &str, stale: bool, cited: bool) -> crate::domain::knowledge::Listed {
         use crate::domain::knowledge::{Confidence, Kind};
         let (repo, kind, confidence) = ("tax-api".into(), Kind::Api, Confidence::Confirmed);
-        crate::domain::knowledge::Listed { id: id.into(), domain: domain.into(), repo, kind, title: title.into(), confidence, stale, cited, written: None }
+        crate::domain::knowledge::Listed { id: id.into(), domain: domain.into(), repo, kind, title: title.into(), confidence, stale, cited, written: None, lead: String::new() }
     }
 
     fn overview() -> Overview {

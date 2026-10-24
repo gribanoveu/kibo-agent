@@ -605,6 +605,8 @@ pub struct Listed {
     pub cited: bool,
     /// When its file was last written, in seconds since 1970.
     pub written: Option<u64>,
+    /// Its first paragraph, as plain text: what its card says under the title.
+    pub lead: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -653,6 +655,38 @@ pub fn general_domain() -> Domain {
 pub fn read_header(text: &str) -> Option<(Header, &str)> {
     let (yaml, body) = split_frontmatter(text)?;
     Some((yaml_serde::from_str(yaml).ok()?, body))
+}
+
+/// The longest lead a card shows, in characters.
+const LEAD_CHARS: usize = 240;
+
+/// A body's first paragraph of prose — not a heading, a list, a table, a
+/// quote or code — as one line of plain text, cut at `LEAD_CHARS`.
+pub fn lead(body: &str) -> String {
+    let not_prose = |line: &str| {
+        let line = line.trim_start();
+        ["#", "```", "- ", "* ", "|", ">"].iter().any(|mark| line.starts_with(mark))
+            || line.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    };
+    let mut fenced = false;
+    let mut paragraph: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        if fenced || line.trim().is_empty() || not_prose(line) {
+            if !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        paragraph.push(line.trim());
+    }
+    let text = paragraph.join(" ").replace("**", "").replace('`', "");
+    match text.char_indices().nth(LEAD_CHARS) {
+        Some((cut, _)) => format!("{}…", text[..cut].trim_end()),
+        None => text,
+    }
 }
 
 /// A kept file filed under `domain`: its frontmatter's `domain` set, every
@@ -836,6 +870,18 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_lead_is_the_first_paragraph_of_prose_as_plain_text() {
+        let body = "# Title\n\n```text\nnot this\n```\n- nor this\n1. nor this\n\nThe **service** reads `saldo`\nonce a day.\n\nNot the second.\n";
+        assert_eq!(super::lead(body), "The service reads saldo once a day.");
+        assert_eq!(super::lead("# Only a heading\n- and a list\n"), "");
+        let long = "й".repeat(300);
+        let cut = super::lead(&long);
+        assert_eq!(cut.chars().count(), 241, "{cut}");
+        assert!(cut.ends_with('…'));
+        assert_eq!(super::lead(&"й".repeat(240)), "й".repeat(240), "a lead that fits is not cut");
+    }
+
     use super::*;
 
     /// A document with one thing wrong, as most tests here write it: that
