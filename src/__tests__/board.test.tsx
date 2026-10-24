@@ -172,6 +172,37 @@ describe("the board page", () => {
     expect(due("Late").className).toContain("ahead");
   });
 
+  test("a note past its three lines opens in place with Show more, and a short one has none", async () => {
+    // happy-dom lays nothing out: a note says it is cut when it holds more than one line.
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("board-card-note") && this.textContent!.includes("\n") ? 100 : 0;
+      },
+    });
+    try {
+      stored = [
+        { id: "c1", title: "Long", note: "one\ntwo\nthree\nfour", column: "todo" },
+        { id: "c2", title: "Short", note: "one line", column: "todo" },
+      ];
+      render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+      await settle();
+      const more = column("To do").getAllByRole("button", { name: "Show more" });
+      expect(more).toHaveLength(1);
+      expect(screen.getByText("one line").closest("article")!.querySelector(".board-card-more")).toBeNull();
+
+      fireEvent.click(more[0]);
+      expect(screen.getByText(/four/).className).toContain("open");
+      expect(column("To do").getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(column("To do").getByRole("button", { name: "Show less" }));
+      expect(screen.getByText(/four/).className).not.toContain("open");
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, "scrollHeight", height);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
+
   test("a refused card keeps its editor open and says why", async () => {
     render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
     await settle();

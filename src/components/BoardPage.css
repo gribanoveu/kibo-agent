@@ -11,31 +11,66 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
+  padding: 10px 10px 12px;
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
 }
+/* The column's name after a dot in its colour: waiting, under way, finished. */
 .board-column-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 2px;
+  margin: 0;
+  padding: 2px 4px 4px;
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
 }
+.board-column-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.board-column[data-column="doing"] .board-column-dot {
+  background: var(--accent);
+}
+.board-column[data-column="done"] .board-column-dot {
+  background: var(--green);
+}
 .board-count {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
   color: var(--text-faint);
-  font-weight: 400;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+/* An empty column says what it is for, inside the place a card drops into. */
+.board-column-empty {
+  flex: 1;
+  margin: 0;
+  padding: 24px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+  text-wrap: balance;
 }
 .board-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 10px 12px 8px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
+  transition: border-color 0.12s;
+  position: relative;
+}
+.board-card:hover {
+  border-color: var(--border);
 }
 /* Grabbed by the pointer anywhere but its buttons; lifted while it moves —
    dnd-kit marks it, and keeps its place in the column open. */
@@ -53,49 +88,111 @@
 }
 .board-card-title {
   font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1.35;
   color: var(--text);
   overflow-wrap: anywhere;
 }
+/* Three lines at most: the whole note is in the editor. */
 .board-card-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   font-size: var(--fs-sm);
+  line-height: 1.4;
   color: var(--text-dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* The id the model names a card by, and the moves — right-aligned. */
-.board-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.board-card-note.open {
+  display: block;
 }
-/* The id the model names a card by, and its due day. */
-.board-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-right: auto;
-  min-width: 0;
-}
-.board-card-due {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+/* Under a note longer than its three lines. */
+.board-card-more {
+  align-self: flex-start;
+  margin-top: -2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
   font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.board-card-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+/* What is finished reads quieter than what is still to do. */
+.board-column[data-column="done"] .board-card-title,
+.board-archive .board-card-title {
   color: var(--text-dim);
-  white-space: nowrap;
 }
-.board-card-due.today {
-  color: var(--amber);
+/* The id and the due day across the card; its buttons over the right end. */
+.board-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
 }
-.board-card-due.past {
-  color: var(--red);
+.board-card-meta {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
 }
 .board-card-id {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
-.board-card-actions button {
+.board-card-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.board-card-due.today {
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+.board-card-due.past {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+/* Shown on the card under the pointer or holding the focus, so a column of
+   cards is not a column of buttons; laid over the foot rather than beside it,
+   so the id and the due day keep the card's width. */
+.board-card-tools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 2px;
+  padding-left: 4px;
+  background: var(--bg-panel);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.board-card:hover .board-card-tools,
+.board-card:focus-visible .board-card-tools,
+.board-card:has(:focus-visible) .board-card-tools {
+  opacity: 1;
+}
+@media (hover: none) {
+  .board-card-tools {
+    opacity: 1;
+  }
+}
+.board-card-tools button {
   display: grid;
   place-items: center;
   width: 24px;
@@ -106,7 +203,7 @@
   color: var(--text-dim);
   cursor: pointer;
 }
-.board-card-actions button:hover {
+.board-card-tools button:hover {
   background: var(--bg-hover);
   color: var(--text);
 }

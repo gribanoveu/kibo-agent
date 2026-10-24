@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { DragDropProvider, KeyboardSensor, PointerSensor, useDroppable, type DragDropEventHandlers } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
@@ -123,17 +123,25 @@ export function BoardPage({ sideHandle }: PageContext) {
   );
 }
 
+/** What an empty column is for — To do has Add a card instead. */
+const EMPTY: Record<Exclude<OpenColumn, "todo">, string> = {
+  doing: "Drag a card here when you start on it",
+  done: "Finished cards land here",
+};
+
 /** A column, and where a card is dropped when it has no card under it to go by. */
 function BoardColumn({ column, label, count, children }: { column: OpenColumn; label: string; count: number; children: ReactNode }) {
   // Low, so a card under the pointer wins over the column around it.
   const { ref } = useDroppable({ id: column, type: "column", accept: "card", collisionPriority: 1 });
   return (
-    <section ref={ref} className="board-column" aria-label={label}>
+    <section ref={ref} className="board-column" data-column={column} aria-label={label}>
       <h2 className="board-column-head">
+        <span className="board-column-dot" aria-hidden="true" />
         {label}
         <span className="board-count">{count}</span>
       </h2>
       {children}
+      {count === 0 && column !== "todo" && <p className="board-column-empty">{EMPTY[column]}</p>}
     </section>
   );
 }
@@ -164,22 +172,54 @@ function BoardCard({ card, index, group, back, forward, onChange }: CardProps) {
   return (
     <article ref={ref} className="board-card" data-card-id={card.id}>
       <div className="board-card-title">{card.title}</div>
-      {card.note && <div className="board-card-note">{card.note}</div>}
-      <div className="board-card-actions">
+      {card.note && <Note note={card.note} />}
+      <div className="board-card-foot">
         <span className="board-card-meta">
           <span className="board-card-id">{card.id}</span>
           {card.due && <Due due={card.due} open={card.column === "todo" || card.column === "doing"} />}
         </span>
-        {back && moveTo(back, ChevronLeft)}
-        {forward && moveTo(forward, ChevronRight)}
-        <button type="button" title="Edit" aria-label="Edit" onClick={() => setEditing(true)}>
-          <Pencil size={14} />
-        </button>
-        <button type="button" title="Remove" aria-label="Remove" onClick={() => void onChange({ op: "remove", id: card.id })}>
-          <Trash2 size={14} />
-        </button>
+        <span className="board-card-tools">
+          {back && moveTo(back, ChevronLeft)}
+          {forward && moveTo(forward, ChevronRight)}
+          <button type="button" title="Edit" aria-label="Edit" onClick={() => setEditing(true)}>
+            <Pencil size={14} />
+          </button>
+          <button type="button" title="Remove" aria-label="Remove" onClick={() => void onChange({ op: "remove", id: card.id })}>
+            <Trash2 size={14} />
+          </button>
+        </span>
       </div>
     </article>
+  );
+}
+
+/** A card's note, cut to three lines; Show more, when it runs past them,
+    opens the rest in place. */
+function Note({ note }: { note: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [cut, setCut] = useState(false);
+  const [open, setOpen] = useState(false);
+  // Measured while cut, and again as the column's width changes.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [note, open]);
+  return (
+    <>
+      <div ref={ref} className={open ? "board-card-note open" : "board-card-note"}>
+        {note}
+      </div>
+      {(cut || open) && (
+        <button type="button" className="board-card-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
   );
 }
 
