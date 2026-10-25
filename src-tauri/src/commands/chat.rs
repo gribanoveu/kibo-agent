@@ -665,7 +665,7 @@ fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
 
 /// The knowledge base's search. `None` without the index — and without an
 /// app directory, where the base would be.
-fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
+pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
     let base = crate::infra::knowledge_store::KnowledgeStore::open().ok()?;
     Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
 }

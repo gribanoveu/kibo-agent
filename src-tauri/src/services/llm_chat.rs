@@ -1532,7 +1532,7 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode, .. } => (scope, mode),
         Place::Chat { role, kube, runbooks, web, .. } => {
-            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &today());
+            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &turn.features, &today());
             messages.extend_from_slice(history);
             return messages;
         }

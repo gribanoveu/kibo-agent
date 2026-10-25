@@ -182,6 +182,8 @@ pub struct ChatTurnInput<'a> {
     pub clusters: Arc<Clusters>,
     pub board: Arc<dyn TaskBoard>,
     pub embeddings: Arc<dyn EmbeddingProvider>,
+    /// The knowledge base's search; `None` where the app has none.
+    pub knowledge: Option<CodeSearchFn>,
     pub approval: ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -224,6 +226,7 @@ pub fn run_in_chat(
     let features = features::enabled();
     let board = Some(chat.board).filter(|_| features.is_on(Feature::Board));
     let deepseek = web_search::deepseek_for(&features, &chat.embeddings);
+    let knowledge = chat.knowledge.filter(|_| features.is_on(Feature::Knowledge));
     let turn = plain_chat::ChatTurn {
         session: &session,
         role: chat.role,
@@ -239,6 +242,7 @@ pub fn run_in_chat(
         log_call: &log_call,
         board,
         deepseek,
+        knowledge,
         features,
     };
     Ok(run(&turn)?)
@@ -275,10 +279,10 @@ mod tests {
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
 
-    /// A chat's turn is given the board only while its feature is on, as
-    /// the agent's is.
+    /// A chat's turn is given the board and the knowledge base's search only
+    /// while their features are on, as the agent's is.
     #[test]
-    fn a_chat_turn_gets_the_board_only_while_it_is_on() {
+    fn a_chat_turn_gets_the_board_and_the_knowledge_base_only_while_they_are_on() {
         crate::testing::with_app_dir("turn-setup-chat", || {
             let mut settings = crate::infra::settings_store::load().unwrap();
             settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
@@ -301,8 +305,13 @@ mod tests {
             }
             let events: ChatEventSink = Arc::new(|_| {});
             let no = || false;
-            let has_board = |on: bool| {
-                crate::infra::settings_store::update(|s| s.features.insert("board".into(), on)).unwrap();
+            let search: crate::domain::tools::CodeSearchFn = Arc::new(|_, _, _, _| Err("not searched in this test".into()));
+            let handed = |on: bool| {
+                crate::infra::settings_store::update(|s| {
+                    s.features.insert("board".into(), on);
+                    s.features.insert("knowledge".into(), on);
+                })
+                .unwrap();
                 let chat = ChatTurnInput {
                     chat_id: "board-chat".into(),
                     role: ChatRole::Assistant,
@@ -310,13 +319,14 @@ mod tests {
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
                     embeddings: Arc::new(NoModel),
+                    knowledge: Some(search.clone()),
                     approval: ApprovalPolicy::default(),
                     events: &events,
                     cancelled: &no,
                 };
                 let mut seen = None;
                 run_in_chat(chat, |turn| {
-                    seen = Some(turn.board.is_some());
+                    seen = Some((turn.board.is_some(), turn.knowledge.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -327,8 +337,8 @@ mod tests {
                 .unwrap();
                 seen.expect("run was called")
             };
-            assert!(!has_board(false));
-            assert!(has_board(true));
+            assert_eq!(handed(false), (false, false));
+            assert_eq!(handed(true), (true, true));
         });
     }
 
@@ -368,6 +378,7 @@ mod tests {
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
                     embeddings: Arc::new(NoModel),
+                    knowledge: None,
                     approval: ApprovalPolicy::default(),
                     events: &events,
                     cancelled: &no,
