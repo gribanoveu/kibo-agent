@@ -805,14 +805,6 @@ export default function App() {
                 }}
                 removeChat={plain.remove}
                 chats={plain.chats}
-                sideHandle={
-                  <PanelResizeHandle
-                    invert
-                    ariaLabel="Resize the side panel"
-                    onResize={panels.resizeAsideBy}
-                    onResizeEnd={(size) => panels.endResize("aside", size)}
-                  />
-                }
               />
             )
           }

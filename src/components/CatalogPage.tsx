@@ -20,12 +20,11 @@ import {
 import { Markdown } from "./Markdown";
 import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
-import { Page, PagePanel } from "./Page";
+import { Page, PageSheet } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
 import type { FeatureView } from "../lib/features";
 import type { CatalogEntry, CatalogKind, CatalogSource } from "../lib/catalog";
-import type { PageContext } from "./pages";
 import "./CatalogPage.css";
 
 // In the order the page lists them.
@@ -115,6 +114,7 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
     <article
       className={`catalog-card${selected ? " selected" : ""}`}
       role="button"
+      data-sheet-opener
       tabIndex={0}
       aria-label={item.name}
       aria-pressed={selected}
@@ -174,7 +174,7 @@ function Details({
   const file = item.kind === "skill" ? "SKILL.md" : item.path.split("/").pop();
 
   return (
-    <PagePanel icon={kind.icon} title={kind.one} label={`${item.name} details`} onClose={onClose}>
+    <PageSheet icon={kind.icon} title={kind.one} label={`${item.name} details`} onClose={onClose}>
       <h3 className="catalog-detail-name">{item.name}</h3>
       {item.description && <p className="catalog-detail-desc">{item.description}</p>}
 
@@ -288,7 +288,7 @@ function Details({
           )}
         </p>
       </Modal>
-    </PagePanel>
+    </PageSheet>
   );
 }
 
@@ -305,6 +305,7 @@ function FeatureCard({ feature, selected, onOpen, onTurnOn }: { feature: Feature
     <article
       className={`catalog-card${selected ? " selected" : ""}`}
       role="button"
+      data-sheet-opener
       tabIndex={0}
       aria-label={feature.name}
       aria-pressed={selected}
@@ -357,7 +358,7 @@ function FeatureDetails({
 }) {
   const [confirming, setConfirming] = useState(false);
   return (
-    <PagePanel icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
+    <PageSheet icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
       <h3 className="catalog-detail-name">{feature.name}</h3>
       <p className="catalog-detail-desc">{feature.description}</p>
 
@@ -431,7 +432,7 @@ function FeatureDetails({
           <b>{feature.data}</b> is deleted, and everything in it with it. This cannot be undone.
         </p>
       </Modal>
-    </PagePanel>
+    </PageSheet>
   );
 }
 
@@ -629,7 +630,7 @@ function SourceLine({ source }: { source: CatalogSource }) {
 /** Skills, commands, runbooks, MCP servers and hooks published to the
     catalogs (docs/32-catalog.md), and installing them — and the app's own
     features (docs/33-features.md), turned on here. */
-export function CatalogPage({ sideHandle }: PageContext) {
+export function CatalogPage() {
   const { sources, loading, error, refresh, busy, failed, install, remove, update } = useCatalog();
   const features = useFeatures();
   const [tab, setTab] = useState<Tab>("all");
@@ -664,7 +665,6 @@ export function CatalogPage({ sideHandle }: PageContext) {
   return (
     <Page
       title="Catalog"
-      sideHandle={sideHandle}
       bar={
         <>
           <div className="catalog-tabs" role="tablist" aria-label="Kind">
@@ -690,7 +690,7 @@ export function CatalogPage({ sideHandle }: PageContext) {
           </button>
         </>
       }
-      panel={
+      sheet={
         shownFeature ? (
           <FeatureDetails
             key={shownFeature.id}

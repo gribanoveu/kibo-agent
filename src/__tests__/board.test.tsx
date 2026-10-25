@@ -63,7 +63,7 @@ beforeEach(() => {
 
 describe("the board page", () => {
   test("lists each card in its column, note included", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(column("To do").getByText("File the memory request")).toBeTruthy();
     expect(column("To do").getByText("wlbuh")).toBeTruthy();
@@ -71,7 +71,7 @@ describe("the board page", () => {
   });
 
   test("a card moves a column at a time, and is removed from any column", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(column("To do").queryByLabelText("Move to Done")).toBeNull();
     expect(column("Done").queryByLabelText("Move to Archive")).toBeNull();
@@ -92,7 +92,7 @@ describe("the board page", () => {
   });
 
   test("the archive is folded under the columns, newest first, and its cards can be removed", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(screen.queryByText("Old one")).toBeNull();
     const toggle = column("Archive").getByRole("button", { name: /Archive/ });
@@ -109,7 +109,7 @@ describe("the board page", () => {
   });
 
   test("a card is added to To do from its title and note; Enter in the title saves, an empty title cannot", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(column("Doing").queryByText("Add a card")).toBeNull();
     fireEvent.click(column("To do").getByText("Add a card"));
@@ -126,7 +126,7 @@ describe("the board page", () => {
   });
 
   test("a card is edited in place; Escape leaves it as it was", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("Done").getByLabelText("Edit"));
     fireEvent.change(column("Done").getByLabelText("Title"), { target: { value: "Something else" } });
@@ -153,7 +153,7 @@ describe("the board page", () => {
       { id: "c3", title: "Later", due: "2999-01-01", column: "todo" },
       { id: "c4", title: "Finished late", due: "2000-01-01", column: "done" },
     ];
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     const due = (title: string) => screen.getByText(title).closest("article")!.querySelector(".board-card-due")!;
     expect(due("Late").className).toContain("past");
@@ -186,7 +186,7 @@ describe("the board page", () => {
         { id: "c1", title: "Long", note: "one\ntwo\nthree\nfour", column: "todo" },
         { id: "c2", title: "Short", note: "one line", column: "todo" },
       ];
-      render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+      render(<BoardPage openPane={() => {}} />);
       await settle();
       const more = column("To do").getAllByRole("button", { name: "Show more" });
       expect(more).toHaveLength(1);
@@ -204,7 +204,7 @@ describe("the board page", () => {
   });
 
   test("a refused card keeps its editor open and says why", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     refusal = "the board is full (200 cards)";
     fireEvent.click(column("To do").getByText("Add a card"));
@@ -216,7 +216,7 @@ describe("the board page", () => {
   });
 
   test("a card the model added appears when the backend says the board changed", async () => {
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     stored = [...stored, { id: "c3", title: "Call the bank", column: "todo" }];
     act(() => listeners.forEach((handler) => handler()));
@@ -226,7 +226,7 @@ describe("the board page", () => {
 
   test("a board with only an archive says how cards get there", async () => {
     stored = [{ id: "c3", title: "Old one", column: "archived" }];
-    render(<BoardPage openPane={() => {}} sideHandle={<span />} />);
+    render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(screen.getByText(/Add a card, or ask the Assistant to remind you/)).toBeTruthy();
   });

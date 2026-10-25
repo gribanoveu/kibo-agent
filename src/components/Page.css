@@ -39,32 +39,7 @@
   margin-top: 20px;
 }
 
-/* Right of the page — the panes' place and look beside the chat
-   (AsidePanel.css). As wide as the panes' column, dragged by the same handle
-   (PageContext.sideHandle), and never past the window's edge: without room
-   it gives up width down to its minimum, as .dock-column does, while the
-   page keeps its own. */
-.page-panel {
-  flex: 0 1 auto;
-  width: var(--aside-width, 300px);
-  min-width: 260px;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-panel);
-  animation: page-panel-in 0.18s ease-out;
-}
-@keyframes page-panel-in {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .page-panel {
-    animation: none;
-  }
-}
-.page-panel-head {
+.page-sheet-head {
   flex: none;
   display: flex;
   align-items: center;
@@ -72,7 +47,7 @@
   padding: 0 12px;
   border-bottom: 1px solid var(--border-soft);
 }
-.page-panel-head h2 {
+.page-sheet-head h2 {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -81,7 +56,7 @@
   font-weight: 500;
   color: var(--text);
 }
-.page-panel-close {
+.page-sheet-close {
   display: grid;
   place-items: center;
   width: 26px;
@@ -93,11 +68,11 @@
   color: var(--text-dim);
   cursor: pointer;
 }
-.page-panel-close:hover {
+.page-sheet-close:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
-.page-panel-body {
+.page-sheet-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -105,21 +80,19 @@
   padding: 14px 16px 20px;
 }
 
-/* A panel over the page rather than beside it (PageSheet): the page's right
-   side under it, its left still in view. */
+/* A panel over the page rather than beside it (PageSheet): flush with the
+   page's right edge, as the panes are, its left still in view. */
 .page-sheet {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
+  top: 0;
+  right: 0;
+  bottom: 0;
   z-index: 5;
   width: min(760px, calc(100% - 120px));
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
+  border-left: 1px solid var(--border-soft);
   background: var(--bg-panel);
-  box-shadow: var(--shadow-popover);
   overflow: hidden;
   animation: page-sheet-in 0.18s ease-out;
 }

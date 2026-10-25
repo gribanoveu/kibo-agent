@@ -7,7 +7,6 @@ import { Page, PageSheet } from "./Page";
 import { useKnowledge } from "../hooks/useKnowledge";
 import { splitDocument, type DocumentFacts, type DomainCount, type KnowledgeDocument, type KnowledgeDomain, type KnowledgeKind, type RepoSummary } from "../lib/knowledge";
 import { matches } from "../lib/shortcuts";
-import type { PageContext } from "./pages";
 import "./KnowledgePage.css";
 
 /** The kinds in the order a reader meets a service: what it is, then its surfaces, then the rest. */
@@ -49,7 +48,7 @@ type Confirm =
  * where it can go to another domain or be deleted; a domain is renamed,
  * described again or merged into another; a repository's documents go all at once.
  */
-export function KnowledgePage({ sideHandle }: PageContext) {
+export function KnowledgePage() {
   const [open, setOpen] = useState<string | null>(null);
   const knowledge = useKnowledge(open);
   const { base } = knowledge;
@@ -82,7 +81,6 @@ export function KnowledgePage({ sideHandle }: PageContext) {
   return (
     <Page
       title="Knowledge"
-      sideHandle={sideHandle}
       bar={
         <>
           <nav className="knowledge-crumbs" aria-label="Where you are">
@@ -358,7 +356,7 @@ function Cards({ label, documents, open, onOpen, withKind }: CardsProps) {
       {[...documents]
         .sort((a, b) => a.title.localeCompare(b.title))
         .map((doc) => (
-          <button key={doc.id} type="button" role="option" aria-selected={doc.id === open} className={`knowledge-card${doc.id === open ? " on" : ""}`} onClick={() => onOpen(doc.id)}>
+          <button key={doc.id} type="button" role="option" data-sheet-opener aria-selected={doc.id === open} className={`knowledge-card${doc.id === open ? " on" : ""}`} onClick={() => onOpen(doc.id)}>
             {withKind && <span className="knowledge-card-kind">{KIND_LABELS[doc.kind]}</span>}
             <span className="knowledge-title">{doc.title}</span>
             {doc.lead && <span className="knowledge-lead">{doc.lead}</span>}

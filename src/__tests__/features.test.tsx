@@ -61,7 +61,7 @@ beforeEach(() => {
 
 describe("features on the catalog page", () => {
   test("a feature is a card under Features, and its panel says what the model gets and where", async () => {
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await settle();
     const section = within(screen.getByRole("region", { name: "Features" }));
     expect(section.getByText("Built into the app")).toBeTruthy();
@@ -74,7 +74,7 @@ describe("features on the catalog page", () => {
   });
 
   test("+ turns it on, and the panel turns it off again", async () => {
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByLabelText("Turn on Board"));
     await settle();
@@ -89,7 +89,7 @@ describe("features on the catalog page", () => {
 
   test("its data is deleted only while it is off, and only after asking", async () => {
     board = { ...board, on: true };
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
     expect(screen.queryByRole("button", { name: "Delete data" })).toBeNull();
@@ -105,7 +105,7 @@ describe("features on the catalog page", () => {
   });
 
   test("the Features tab shows only features, and search narrows them", async () => {
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("tab", { name: "Features" }));
     expect(screen.getByRole("region", { name: "Features" })).toBeTruthy();

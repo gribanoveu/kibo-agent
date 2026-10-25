@@ -75,7 +75,7 @@ const skill = (id: string) => entry({ id, kind: "skill", name: `Skill ${id}`, fi
 describe("the catalog page", () => {
   test("lists entries as cards by kind, each with its source, and what was left out", async () => {
     answer = [own];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     expect(await screen.findByText("Code review")).toBeTruthy();
     expect(screen.getAllByText("gribanoveu/kibo-agent-catalog")).toHaveLength(3);
     expect(screen.getByRole("region", { name: "Skills" })).toBeTruthy();
@@ -88,7 +88,7 @@ describe("the catalog page", () => {
 
   test("a tab lists one kind", async () => {
     answer = [own];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Code review");
     fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
     expect(screen.queryByText("Code review")).toBeNull();
@@ -97,7 +97,7 @@ describe("the catalog page", () => {
 
   test("search narrows by name, id or description, and says when nothing matches", async () => {
     answer = [own];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Code review");
     const search = screen.getByLabelText("Search the catalog");
     fireEvent.change(search, { target: { value: "  PRS " } });
@@ -112,7 +112,7 @@ describe("the catalog page", () => {
 
   test("All shows a few of a long kind, and Show all opens its tab", async () => {
     answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g"].map(skill) }];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Skill a");
     expect(screen.getByText("Skill f")).toBeTruthy();
     expect(screen.queryByText("Skill g")).toBeNull();
@@ -125,7 +125,7 @@ describe("the catalog page", () => {
   test("says when the list is the copy kept from last time, and asks again on Refresh", async () => {
     answer = [{ ...own, error: "the catalog answered 503", url: "https://cat.example/main/", builtIn: false }];
     asked = 0;
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     expect(await screen.findByText(/cat\.example\/main: showing the copy kept from last time — the catalog answered 503/)).toBeTruthy();
     expect(screen.getByText("Code review")).toBeTruthy();
     await waitFor(() => expect((screen.getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(false));
@@ -135,7 +135,7 @@ describe("the catalog page", () => {
 
   test("an unreachable source with nothing kept shows only why", async () => {
     answer = [{ ...own, items: [], problems: [], error: "the catalog could not be reached: no route", fetchedAt: null }];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     expect(await screen.findByText(/the catalog could not be reached: no route/)).toBeTruthy();
     expect(screen.queryByText(/showing the copy/)).toBeNull();
     expect(screen.queryByText(/Nothing/)).toBeNull();
@@ -145,7 +145,7 @@ describe("the catalog page", () => {
     answer = [own];
     calls = [];
     asked = 0;
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Code review");
     answer = [withItems({ ...own.items[0], state: "installed" }, ...own.items.slice(1))];
     fireEvent.click(screen.getByRole("button", { name: "Install Code review" }));
@@ -159,7 +159,7 @@ describe("the catalog page", () => {
   test("a card opens its details beside the page, with the text it installs", async () => {
     answer = [withItems({ ...own.items[0], files: ["SKILL.md", "checklist.md"] })];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Code review" }));
     const panel = screen.getByRole("complementary", { name: "Code review details" });
     expect(within(panel).getByText("~/.kibo/skills/review")).toBeTruthy();
@@ -176,7 +176,7 @@ describe("the catalog page", () => {
   test("a failed install says why in the panel", async () => {
     answer = [own];
     failInstall = "the catalog answered 404";
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
     expect(await screen.findByText("the catalog answered 404")).toBeTruthy();
@@ -186,7 +186,7 @@ describe("the catalog page", () => {
   test("Remove asks first only when the installed copy was changed here", async () => {
     answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "installed" }), entry({ id: "tls", kind: "runbook", name: "TLS", state: "changed", role: "kubernetes" }))];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(calls.filter(([c]) => c === "catalog_remove")).toHaveLength(1));
@@ -203,7 +203,7 @@ describe("the catalog page", () => {
 
   test("something else in the place is not installed over, and a built-in runbook's name is said", async () => {
     answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "taken" }), entry({ id: "crashloop", kind: "runbook", name: "Crash loop", role: "kubernetes", replacesBuiltIn: true }))];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
     expect((screen.getByRole("button", { name: "Install" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/was not installed from this catalog/)).toBeTruthy();
@@ -215,7 +215,7 @@ describe("the catalog page", () => {
   test("a server is installed from a dialog that shows it whole and asks for its secrets", async () => {
     answer = [own];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Install GitHub" }));
     const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
     expect(await within(dialog).findByText(/api\.example\/mcp/)).toBeTruthy();
@@ -233,7 +233,7 @@ describe("the catalog page", () => {
   test("hooks are installed from a dialog that shows their commands", async () => {
     answer = [own];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Install No force push" }));
     const dialog = screen.getByRole("dialog", { name: "Install No force push?" });
     expect(await within(dialog).findByText("exit 2")).toBeTruthy();
@@ -247,7 +247,7 @@ describe("the catalog page", () => {
   test("the panel's Install of a server asks too, and Cancel installs nothing", async () => {
     answer = [own];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
     fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Install" }));
     const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
@@ -259,7 +259,7 @@ describe("the catalog page", () => {
   test("an entry with a newer version updates from a dialog with each file's diff", async () => {
     answer = [withItems(entry({ id: "changelog", kind: "command", name: "/changelog", state: "changed", rev: "2", installedRev: "1" }))];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "/changelog" }));
     const panel = screen.getByRole("complementary");
     expect(within(panel).getByText("2 — 1 installed")).toBeTruthy();
@@ -278,7 +278,7 @@ describe("the catalog page", () => {
   test("a server's update asks only for the secrets it does not have, and up to date shows no Update", async () => {
     answer = [withItems({ ...own.items[1], state: "update", rev: "2", installedRev: "1" }, entry({ id: "x", kind: "command", name: "/x", state: "installed", installedRev: "1" }))];
     calls = [];
-    render(<CatalogPage openPane={() => {}} sideHandle={<div />} />);
+    render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "/x" }));
     expect(within(screen.getByRole("complementary")).queryByRole("button", { name: "Update" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "GitHub" }));

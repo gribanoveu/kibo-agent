@@ -82,7 +82,7 @@ beforeEach(() => {
 });
 
 const page = () =>
-  render(<KnowledgePage openPane={() => {}} sideHandle={<span />} openPage={() => {}} openChat={() => {}} removeChat={() => Promise.resolve(true)} chats={[]} />);
+  render(<KnowledgePage openPane={() => {}} openPage={() => {}} openChat={() => {}} removeChat={() => Promise.resolve(true)} chats={[]} />);
 const into = async (domain: string) => {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${domain}`) }));
   return screen.getByRole("region", { name: domain });
