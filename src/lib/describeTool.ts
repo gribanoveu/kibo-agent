@@ -1,5 +1,5 @@
 import type { Block } from "./chatTurnReducer";
-import { type AgentTokens, tokensSpent } from "./agents";
+import { type AgentTokens, briefTitle, tokensSpent } from "./agents";
 import { type ProcessState, processStatus } from "./processes";
 
 // One tool call, as a row in the transcript: what it did, to what, and the
@@ -62,6 +62,10 @@ export const LABELS: Record<string, string> = {
   reportFinding: "Finding",
   explore: "Explore",
   remember: "Memory",
+  knowledgeWrite: "Knowledge",
+  knowledgeSearch: "Knowledge search",
+  knowledgeRead: "Knowledge doc",
+  knowledgeRelations: "Knowledge links",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -282,6 +286,62 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.url) ?? "",
         meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
         detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
+      };
+    }
+
+    // The documents by id once kept; while the call is written, how many.
+    // The open row shows them as the model wrote them.
+    case "knowledgeWrite": {
+      const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+      const documents = strings(args.documents);
+      const written = strings(result.written);
+      const deleted = strings(result.deleted);
+      const domains = strings(result.newDomains);
+      return {
+        name,
+        arg: written.length ? written.join(", ") : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`,
+        meta: [deleted.length ? `${deleted.length} deleted` : "", domains.length ? `new: ${domains.join(", ")}` : ""].filter(Boolean).join(" · ") || undefined,
+        detail: documents.join("\n\n"),
+      };
+    }
+
+    // The hits as the model got them: id, title, section, the passage.
+    case "knowledgeSearch": {
+      const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
+      return {
+        name,
+        arg: str(args.query) ?? "",
+        meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "document" : "documents"}`,
+        detail: hits
+          .map(
+            (h) =>
+              `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}${h.stale === true ? " — stale" : ""}\n${str(h.text) ?? ""}`,
+          )
+          .join("\n\n"),
+      };
+    }
+
+    // Who is on each side of the contract asked about, as the model got it.
+    case "knowledgeRelations": {
+      const relations = Array.isArray(result.relations) ? (result.relations as Json[]) : [];
+      const entity = str(args.entity)?.trim();
+      const repo = str(args.repo)?.trim();
+      return {
+        name,
+        arg: [entity, repo && `in ${repo}`].filter(Boolean).join(" "),
+        meta: block.result === undefined ? undefined : `${relations.length} ${relations.length === 1 ? "document" : "documents"}`,
+        detail: relations.map((r) => `${str(r.kind) ?? ""}: ${str(r.name) ?? ""}  ${str(r.side) ?? ""}  ${str(r.id) ?? ""}  ${str(r.title) ?? ""}`).join("\n"),
+      };
+    }
+
+    // The document, or the section of it, the model read.
+    case "knowledgeRead": {
+      const section = str(args.section)?.trim();
+      return {
+        name,
+        arg: `${str(args.id) ?? ""}${section ? ` § ${section}` : ""}`,
+        meta: [str(result.domain), result.stale === true ? "stale" : undefined].filter(Boolean).join(" · ") || undefined,
+        detail: str(result.text) ?? "",
       };
     }
 
@@ -643,8 +703,8 @@ function primaryArgument(wireName: string, args: Json): string {
     str(args.command) ??
     str(args.pattern) ??
     str(args.query) ??
-    // `explore`'s brief: its first line is the question.
-    str(args.task)?.split("\n")[0] ??
+    // `explore`'s brief, by its question.
+    (typeof args.task === "string" ? briefTitle(args.task) : undefined) ??
     (wireName === "gitStatus" ? "" : "")
   );
 }

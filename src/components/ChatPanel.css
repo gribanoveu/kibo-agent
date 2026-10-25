@@ -275,15 +275,22 @@
    itself to keep the task under way in the middle. */
 .task-ticker {
   --task-row: 26px;
-  list-style: none;
   margin: 14px 0 0;
   padding: 6px 14px;
-  max-height: calc(3 * var(--task-row) + 12px);
-  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel-soft);
   font-size: var(--fs-sm);
+}
+/* Positioned, so a row's `offsetTop` is from the list's top — what the
+   scroll to the current task is counted from. */
+.task-ticker-list {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: calc(3 * var(--task-row));
+  overflow: hidden;
 }
 .task-ticker-row {
   display: flex;

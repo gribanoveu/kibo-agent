@@ -17,7 +17,9 @@
 
 use std::path::Path;
 
-use git2::Repository;
+use git2::{Oid, Repository};
+
+use crate::domain::knowledge::Since;
 
 /// A stable name for the repository at `root`, as 64 hex characters.
 ///
@@ -39,6 +41,68 @@ pub fn repository_id(root: &Path) -> String {
             .into_owned()
     });
     blake3::hash(source.as_bytes()).to_hex().to_string()
+}
+
+/// A name for people and for document ids: the last part of the remote
+/// (`git@host:org/tax-api.git` → `tax-api`), or the folder's own name without
+/// one. Lowercase, `[a-z0-9._-]`, never empty, at most `MAX_NAME_CHARS`.
+/// Not an identity: two repositories can share it, and the knowledge base
+/// tells them apart by [`repository_id`].
+pub fn repository_name(root: &Path) -> String {
+    let source = remote_identity(root).unwrap_or_else(|| {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    });
+    let last = source.rsplit('/').next().unwrap_or_default();
+    let name: String = last
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    // Ascii by now, so a byte is a character.
+    let name = name.trim_matches(['-', '.']);
+    let name = name[..name.len().min(MAX_NAME_CHARS)].trim_end_matches(['-', '.']);
+    if name.is_empty() { "repository".to_string() } else { name.to_string() }
+}
+
+/// The longest [`repository_name`]: the knowledge base takes ids of at most
+/// 80 characters, and adds `-2`, `-3`… to a name another repository has.
+const MAX_NAME_CHARS: usize = 64;
+
+/// The commit checked out at `root`; `None` outside a repository or before
+/// its first commit.
+pub fn head_commit(root: &Path) -> Option<String> {
+    let repo = Repository::open(root).ok()?;
+    let commit = repo.head().ok()?.peel_to_commit().ok()?;
+    Some(commit.id().to_string())
+}
+
+/// The files changed at `root` between `commit` and HEAD, for what a document
+/// written at `commit` may no longer say. Renames are not looked for: a moved
+/// file is its old path deleted and its new one added, each a delta of its own
+/// whose `new_file` carries the path, a deleted one's too.
+/// `Unknown` when `root` is no repository with a HEAD; `Gone` when `commit` is
+/// not in it (rewritten history, a clone without it).
+pub fn changed_since(root: &Path, commit: &str) -> Since {
+    let Ok(repo) = Repository::open(root) else {
+        return Since::Unknown;
+    };
+    let Ok(head) = repo.head().and_then(|head| head.peel_to_tree()) else {
+        return Since::Unknown;
+    };
+    let then = Oid::from_str(commit).and_then(|id| repo.find_commit(id)).and_then(|commit| commit.tree());
+    let Ok(then) = then else {
+        return Since::Gone;
+    };
+    let Ok(diff) = repo.diff_tree_to_tree(Some(&then), Some(&head), None) else {
+        return Since::Gone;
+    };
+    let paths = diff
+        .deltas()
+        .filter_map(|delta| delta.new_file().path())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    Since::Changed(paths)
 }
 
 /// The canonical form of this repository's remote, if it has exactly one
@@ -158,6 +222,73 @@ mod tests {
             canonicalize_remote_url("https://GitHub.com/Org/Repo"),
             "github.com/Org/Repo"
         );
+    }
+
+    // ------------------------------------------------------- the readable name
+
+    #[test]
+    fn the_name_is_the_remotes_last_part_or_the_folders() {
+        let ssh = repo_with_remotes("name-ssh", &[("origin", "git@github.com:Org/Tax-API.git")]);
+        assert_eq!(repository_name(&ssh), "tax-api");
+        let https = repo_with_remotes("name-https", &[("origin", "https://gitlab.example.com/a/b/usn_service/")]);
+        assert_eq!(repository_name(&https), "usn_service");
+        // Cut to what a knowledge id holds, and not on a `-`.
+        let remote = format!("git@h:o/{}.git", "abc-".repeat(30));
+        let long = repo_with_remotes("name-long", &[("origin", remote.as_str())]);
+        assert_eq!(repository_name(&long), "abc-".repeat(16).trim_end_matches('-'));
+
+        let folder = temp_dir("Plain.Folder");
+        assert!(repository_name(&folder).starts_with("plain.folder-"), "{}", repository_name(&folder));
+        // `temp_dir` adds `-<n>`: what is left of «Мой проект-<n>» is the number.
+        let cyrillic = repository_name(&temp_dir("Мой проект"));
+        assert!(!cyrillic.is_empty() && cyrillic.chars().all(|c| c.is_ascii_digit()), "{cyrillic}");
+        let nothing_left = temp_dir("name-none").join("Проект");
+        std::fs::create_dir(&nothing_left).unwrap();
+        assert_eq!(repository_name(&nothing_left), "repository");
+    }
+
+    #[test]
+    fn the_head_is_the_checked_out_commit() {
+        let dir = repo_with_remotes("head-commit", &[]);
+        assert_eq!(head_commit(&dir), None, "no commit yet");
+        let repo = Repository::open(&dir).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let me = git2::Signature::now("t", "t@example.com").unwrap();
+        let id = repo.commit(Some("HEAD"), &me, &me, "first", &tree, &[]).unwrap();
+        assert_eq!(head_commit(&dir), Some(id.to_string()));
+        assert_eq!(head_commit(&temp_dir("head-plain")), None);
+    }
+
+    #[test]
+    fn what_changed_since_a_commit_is_every_path_it_touched() {
+        let dir = repo_with_remotes("changed-since", &[]);
+        let repo = Repository::open(&dir).unwrap();
+        let me = git2::Signature::now("t", "t@example.com").unwrap();
+        let commit = |files: &[(&str, &str)]| {
+            let mut index = repo.index().unwrap();
+            index.clear().unwrap();
+            for (path, text) in files {
+                let full = dir.join(path);
+                std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+                std::fs::write(&full, text).unwrap();
+                index.add_path(Path::new(path)).unwrap();
+            }
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<git2::Commit> = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect();
+            repo.commit(Some("HEAD"), &me, &me, "c", &tree, &parents.iter().collect::<Vec<_>>()).unwrap().to_string()
+        };
+        assert_eq!(changed_since(&dir, "abc"), Since::Unknown, "no HEAD yet");
+        let first = commit(&[("src/Api.java", "a"), ("src/Old.java", "o"), ("pom.xml", "p")]);
+        assert_eq!(changed_since(&dir, &first), Since::Changed(Default::default()));
+        commit(&[("src/Api.java", "b"), ("src/New.java", "o"), ("pom.xml", "p")]);
+        let Since::Changed(changed) = changed_since(&dir, &first) else { panic!() };
+        let mut changed: Vec<_> = changed.into_iter().collect();
+        changed.sort();
+        assert_eq!(changed, ["src/Api.java", "src/New.java", "src/Old.java"]);
+        assert_eq!(changed_since(&dir, "0123456789012345678901234567890123456789"), Since::Gone);
+        assert_eq!(changed_since(&dir, "not a commit"), Since::Gone);
+        assert_eq!(changed_since(&temp_dir("changed-plain"), &first), Since::Unknown);
     }
 
     // -------------------------------------------------------------- identity

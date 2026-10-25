@@ -175,6 +175,16 @@ describe("the /init prompt", () => {
   });
 });
 
+const analyzePrompt = (await import("../prompts/analyze.md", { with: { type: "text" } })).default as string;
+
+describe("the /analyze prompt", () => {
+  test("is a prompt with one place for the focus and the domain", () => {
+    expect(analyzePrompt.startsWith("---")).toBe(false);
+    expect(analyzePrompt.split("$ARGUMENTS")).toHaveLength(2);
+    expect(expandTemplate(analyzePrompt, "тариф --domain usn")).toContain("(may be empty): тариф --domain usn\n");
+  });
+});
+
 describe("a command's prompt and the reply language", () => {
   // The prompt is the app's words; what the user typed — the one thing in
   // their language — is not what the model gets, so the prompt says it.
@@ -249,11 +259,13 @@ describe("the app's own commands", () => {
     fork: () => ran.push("fork"),
     review: () => ran.push("review"),
     init: (args: string) => ran.push(`init:${args}`),
+    analyze: (args: string) => ran.push(`analyze:${args}`),
     trust: () => ran.push("trust"),
   };
+  const ready = { busy: false, started: true, folder: true, agentMode: true, askMode: false, knowledge: true };
   const why = (state: Partial<Parameters<typeof builtInCommands>[0]>) =>
     Object.fromEntries(
-      builtInCommands({ busy: false, started: true, folder: true, agentMode: true, ...state }, actions).map((c) => [
+      builtInCommands({ ...ready, ...state }, actions).map((c) => [
         c.name,
         c.unavailable ?? null,
       ]),
@@ -261,18 +273,20 @@ describe("the app's own commands", () => {
 
   /// Each says why it cannot run, in its place in the menu.
   test("say why they cannot run now", () => {
-    expect(why({})).toEqual({ compact: null, fork: null, review: null, init: null, trust: null });
+    expect(why({})).toEqual({ compact: null, fork: null, review: null, init: null, analyze: null, trust: null });
     const running = why({ busy: true });
-    expect([running.compact, running.fork, running.review, running.init]).toEqual(Array(4).fill("Not while a turn is running"));
+    expect([running.compact, running.fork, running.review, running.init, running.analyze]).toEqual(Array(5).fill("Not while a turn is running"));
     expect(running.trust).toBeNull();
     expect(why({ started: false }).fork).toBe("Nothing to fork yet");
-    expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", trust: "Open a folder first" });
-    expect(why({ agentMode: false }).init).toBe("Switch to Agent mode — it writes files");
+    expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", analyze: "Open a folder first", trust: "Open a folder first" });
+    expect(why({ agentMode: false })).toMatchObject({ init: "Switch to Agent mode — it writes files", analyze: null });
+    expect(why({ agentMode: false, askMode: true }).analyze).toBe("Switch to Agent or Plan mode — it keeps a checklist");
+    expect("analyze" in why({ knowledge: false })).toBe(false);
   });
 
   test("run what they are given, init with what was typed after it", () => {
     ran.length = 0;
-    for (const command of builtInCommands({ busy: false, started: true, folder: true, agentMode: true }, actions)) command.run("docs only");
-    expect(ran).toEqual(["compact", "fork", "review", "init:docs only", "trust"]);
+    for (const command of builtInCommands(ready, actions)) command.run("docs only");
+    expect(ran).toEqual(["compact", "fork", "review", "init:docs only", "analyze:docs only", "trust"]);
   });
 });

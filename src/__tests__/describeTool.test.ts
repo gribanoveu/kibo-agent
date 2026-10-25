@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collapseRedraws, describeActive, describeRun, describeTool } from "../lib/describeTool";
 import type { Block } from "../lib/chatTurnReducer";
+import { briefTitle } from "../lib/agents";
 
 // What a tool call looks like in the transcript. Rendering, so the tests are
 // about what reads well — and about not falling over on arguments that are
@@ -125,6 +126,14 @@ describe("what each call shows", () => {
     expect(failed).toMatchObject({ arg: "Where is the token refreshed?", meta: "failed" });
   });
 
+  test("a brief that opens with context is named by its goal", () => {
+    const task = "Repository: /Users/me/repos/tax-api (Spring Boot).\n\nGoal: the Thrift API under /tapi.\nReport files and lines.";
+    expect(describeTool(tool({ name: "explore", arguments: JSON.stringify({ task }), status: "running" })).arg).toBe("the Thrift API under /tapi.");
+    expect(briefTitle("Контекст: сервис налогов\nВопрос: где считается сальдо?")).toBe("где считается сальдо?");
+    expect(briefTitle("\n  Where is X?  \nGoals: none")).toBe("Where is X?");
+    expect(briefTitle("")).toBe("");
+  });
+
   test("a note to memory shows the note, and says when it was there already", () => {
     const args = '{"fact":"bench needs --release"}';
     expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: false } }))).toMatchObject({
@@ -134,6 +143,62 @@ describe("what each call shows", () => {
       detail: "",
     });
     expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: true } })).meta).toBe("already saved");
+  });
+
+  test("knowledge documents: how many while written, their ids once kept, the documents when open", () => {
+    const args = JSON.stringify({ documents: ["---\nid: api\n---\n# API\n", "---\nid: events\n---\n# Events\n"], delete: ["tax-api/old"] });
+    const writing = describeTool(tool({ name: "knowledgeWrite", arguments: args }));
+    expect(writing).toMatchObject({ name: "Knowledge", arg: "2 documents", meta: undefined });
+    expect(writing.detail).toBe("---\nid: api\n---\n# API\n\n\n---\nid: events\n---\n# Events\n");
+    const result = { result: "knowledgeWritten", repo: "tax-api", written: ["tax-api/api", "tax-api/events"], deleted: ["tax-api/old"], newDomains: ["usn"] };
+    expect(describeTool(tool({ name: "knowledgeWrite", arguments: args, result }))).toMatchObject({
+      arg: "tax-api/api, tax-api/events",
+      meta: "1 deleted · new: usn",
+    });
+  });
+
+  test("knowledge search: the query, how many documents, each hit with its section", () => {
+    const args = JSON.stringify({ query: "декларации" });
+    expect(describeTool(tool({ name: "knowledgeSearch", arguments: args }))).toMatchObject({ name: "Knowledge search", arg: "декларации", meta: undefined });
+    const hits = [
+      { id: "tax-api/api", title: "API", section: "API > POST", text: "## POST" },
+      { id: "tax-api/tariff", title: "Тариф", text: "# Тариф", stale: true },
+    ];
+    expect(describeTool(tool({ name: "knowledgeSearch", arguments: args, result: { result: "knowledgeFound", hits, weak: false } }))).toMatchObject({
+      meta: "2 documents",
+      detail: "tax-api/api  API § API > POST\n## POST\n\ntax-api/tariff  Тариф — stale\n# Тариф",
+    });
+  });
+
+  test("knowledge links: what was asked about, how many documents, each on its side", () => {
+    const args = JSON.stringify({ entity: " topic: tax.events.v1 ", repo: "tax-api" });
+    expect(describeTool(tool({ name: "knowledgeRelations", arguments: args }))).toMatchObject({
+      name: "Knowledge links",
+      arg: "topic: tax.events.v1 in tax-api",
+      meta: undefined,
+    });
+    const relations = [
+      { kind: "topic", name: "tax.events.v1", side: "provides", domain: "usn", id: "tax-api/events", title: "События" },
+      { kind: "topic", name: "tax.events.v1", side: "consumes", domain: "ausn", id: "ledger/listener", title: "Слушатель" },
+    ];
+    const result = { result: "knowledgeRelations", asked: "x", relations };
+    expect(describeTool(tool({ name: "knowledgeRelations", arguments: JSON.stringify({ repo: "tax-api" }), result }))).toMatchObject({
+      arg: "in tax-api",
+      meta: "2 documents",
+      detail: "topic: tax.events.v1  provides  tax-api/events  События\ntopic: tax.events.v1  consumes  ledger/listener  Слушатель",
+    });
+  });
+
+  test("knowledge doc: the id and section asked for, the domain, the text read", () => {
+    const args = JSON.stringify({ id: "tax-api/tariff", section: " Входы " });
+    expect(describeTool(tool({ name: "knowledgeRead", arguments: args }))).toMatchObject({ name: "Knowledge doc", arg: "tax-api/tariff § Входы", meta: undefined });
+    const result = { result: "knowledgeDocument", id: "tax-api/tariff", domain: "usn", section: "Входы", text: "## Входы", stale: false };
+    expect(describeTool(tool({ name: "knowledgeRead", arguments: JSON.stringify({ id: "tax-api/tariff" }), result }))).toMatchObject({
+      arg: "tax-api/tariff",
+      meta: "usn",
+      detail: "## Входы",
+    });
+    expect(describeTool(tool({ name: "knowledgeRead", arguments: args, result: { ...result, stale: true } })).meta).toBe("usn · stale");
   });
 
   test("the user's terminal: which one and what it showed; a typed line and where it went", () => {

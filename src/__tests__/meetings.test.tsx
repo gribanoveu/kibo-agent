@@ -165,7 +165,7 @@ beforeEach(() => {
 
 describe("the meetings page", () => {
   test("opens on the meeting another page asked for", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} item="m1" />);
+    render(<MeetingsPage openPane={() => {}} item="m1" />);
     await settle();
     expect(calls).toContainEqual({ command: "meeting_get", args: { id: "m1" } });
     expect(within(screen.getByRole("region", { name: "Notes" })).getByText("Release on Friday.")).toBeTruthy();
@@ -173,7 +173,7 @@ describe("the meetings page", () => {
 
   test("lists the meetings; one opens to its notes over its transcript", async () => {
     stored[0].utterances.push({ speaker: 1, start: 70, end: 72, text: "И напишу клиентам." });
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -196,7 +196,7 @@ describe("the meetings page", () => {
 
   test("a subject the notes found is written up as a document of its own, again or deleted", async () => {
     stored[0].topics = ["Как устроен релиз", "Лицензии"];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -243,7 +243,7 @@ describe("the meetings page", () => {
 
   test("the notes, a document and the transcript each fold to their title, their actions kept", async () => {
     stored[0].documents = [{ topic: "Как устроен релиз", text: "Собрать сборку." }];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -267,7 +267,7 @@ describe("the meetings page", () => {
 
   test("a meeting whose recording is gone shows no size", async () => {
     stored = [{ ...structuredClone(call), id: "m9" }];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -284,7 +284,7 @@ describe("the meetings page", () => {
   });
 
   test("a turn plays the recording from where it starts; a meeting without one says so", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -307,7 +307,7 @@ describe("the meetings page", () => {
 
   test("each meeting says whether it has notes; the job's stage and share are on its card", async () => {
     stored.push({ ...structuredClone(call), id: "m0", name: "raw.wav", created: "2026-10-18T09:00:00Z", summary: undefined });
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.getByText("Notes")).toBeTruthy();
     expect(screen.getByText("Transcript only")).toBeTruthy();
@@ -326,7 +326,7 @@ describe("the meetings page", () => {
 
   test("a meeting is listed by the title its notes gave it", async () => {
     stored[0].title = "Выпуск в пятницу";
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.queryByText("planning.wav")).toBeNull();
     fireEvent.click(screen.getByText("Выпуск в пятницу"));
@@ -335,7 +335,7 @@ describe("the meetings page", () => {
   });
 
   test("a recording added shows its stage, opens on its transcript, and streams only its own notes", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Import recording"));
     await settle();
@@ -371,7 +371,7 @@ describe("the meetings page", () => {
   });
 
   test("a stop is not reported as a failure, a real failure is", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Import recording"));
     await settle();
@@ -393,7 +393,7 @@ describe("the meetings page", () => {
 
   test("a page opened while a job runs shows it, can stop it, and lets go when it ends", async () => {
     running = { kind: "process", id: "m2", name: "standup.m4a", stage: "speech", done: 1, total: 4 };
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.getByRole("status").textContent).toContain("Recognizing speech… 25%");
     expect((screen.getByText("Import recording").closest("button") as HTMLButtonElement).disabled).toBe(true);
@@ -408,7 +408,7 @@ describe("the meetings page", () => {
   });
 
   test("a call turned away as busy leaves the job that runs on its card", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Import recording"));
     await settle();
@@ -421,7 +421,7 @@ describe("the meetings page", () => {
   });
 
   test("a call recorded shows its length and both sides' levels, and once stopped waits in the list", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Record"));
     await settle();
@@ -446,7 +446,7 @@ describe("the meetings page", () => {
   });
 
   test("a second click on Record or Stop while the first is on its way is not a second call", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Record"));
     fireEvent.click(screen.getByText("Record"));
@@ -463,7 +463,7 @@ describe("the meetings page", () => {
   });
 
   test("a recording that ends by itself says why and waits in the list", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Record"));
     await settle();
@@ -482,7 +482,7 @@ describe("the meetings page", () => {
   });
 
   test("your microphone is muted and heard again while the call records; a page opened later knows", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Record"));
     await settle();
@@ -497,7 +497,7 @@ describe("the meetings page", () => {
     expect(within(card()).getByText("Unmute").closest("button")!.getAttribute("aria-pressed")).toBe("true");
 
     cleanup();
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(card().textContent).toContain("Muted");
     fireEvent.click(within(card()).getByText("Unmute"));
@@ -511,7 +511,7 @@ describe("the meetings page", () => {
       { id: "r1", created: "2026-10-21T10:00:00Z", seconds: 60 },
       { id: "r2", created: "2026-10-21T09:00:00Z", seconds: 30 },
     ];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     const [first, second] = screen.getAllByText("Transcribe");
     fireEvent.click(first);
@@ -539,7 +539,7 @@ describe("the meetings page", () => {
   });
 
   test("with Auto-transcribe on, a recording stopped is transcribed at once", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.queryByRole("switch")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Recording settings" }));
@@ -558,7 +558,7 @@ describe("the meetings page", () => {
   });
 
   test("noise reduction on the microphone is on until turned off, and stays as set", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     const toggle = () => screen.getByRole("switch", { name: "Reduce noise on my side before transcribing" });
     const gear = () => screen.getByRole("button", { name: "Recording settings" });
@@ -578,7 +578,7 @@ describe("the meetings page", () => {
     expect(screen.queryByRole("switch")).toBeNull();
 
     cleanup();
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(gear());
     expect(toggle().getAttribute("aria-checked")).toBe("false");
@@ -586,7 +586,7 @@ describe("the meetings page", () => {
 
   test("a page opened while a call is recorded shows it; a silent call says to check the permission", async () => {
     recordingNow = { id: "r7", seconds: 30, muted: false };
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     const card = () => screen.getByRole("status", { name: "Recording" });
     expect(card().textContent).toContain("0:30");
@@ -603,7 +603,7 @@ describe("the meetings page", () => {
 
   test("each side the system has not allowed has its own note, with its way to allow it", async () => {
     access = { microphone: "notAsked", call: "denied" };
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     const mic = () => screen.queryByRole("note", { name: "Microphone permission" });
     const call = () => screen.queryByRole("note", { name: "System audio permission" });
@@ -634,7 +634,7 @@ describe("the meetings page", () => {
 
   test("nothing is said where the system does not say", async () => {
     access = { microphone: "unknown", call: "unknown" };
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.queryAllByRole("note")).toHaveLength(0);
     expect((screen.getByText("Record").closest("button") as HTMLButtonElement).disabled).toBe(false);
@@ -642,7 +642,7 @@ describe("the meetings page", () => {
 
   test("a recording is deleted only after it is confirmed", async () => {
     recordings = [{ id: "r1", created: "2026-10-21T10:00:00Z", seconds: 60 }];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByLabelText(/^Delete Recorded call/));
     expect(screen.getByText("The recording goes, and with it the only copy of this call.")).toBeTruthy();
@@ -653,7 +653,7 @@ describe("the meetings page", () => {
   });
 
   test("a meeting is deleted only after it is confirmed", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByLabelText("Delete planning.wav"));
     expect(calls.some((c) => c.command === "meeting_delete")).toBe(false);
@@ -664,7 +664,7 @@ describe("the meetings page", () => {
   });
 
   test("a speaker renamed in place is called so in the transcript; Escape keeps the name", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -689,7 +689,7 @@ describe("the meetings page", () => {
   });
 
   test("a name typed is saved by clicking away or by ✓, unchanged it is not; × clears it", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();
@@ -718,7 +718,7 @@ describe("the meetings page", () => {
   });
 
   test("a long meeting's notes say which part is being read", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Import recording"));
     await settle();
@@ -730,14 +730,14 @@ describe("the meetings page", () => {
   });
 
   test("voices are listed only while the voice memory is on, and one is forgotten once confirmed", async () => {
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     expect(screen.queryByText("Voices")).toBeNull();
     cleanup();
 
     voiceMemoryOn = true;
     voices = [{ id: "v1", name: "Альбина", meetings: 2 }];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("Voices"));
     await settle();
@@ -755,7 +755,7 @@ describe("the meetings page", () => {
   test("a name the voice memory gave says so on its speaker", async () => {
     stored[0].names = { "1": "Илья" };
     stored[0].guessed = [1];
-    render(<MeetingsPage openPane={() => {}} sideHandle={<span />} />);
+    render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByText("planning.wav"));
     await settle();

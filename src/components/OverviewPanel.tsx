@@ -1,6 +1,6 @@
 import { ChevronRight, GitBranch, Plug, Telescope, TerminalSquare } from "lucide-react";
 import { ContextDetails } from "./ContextMeter";
-import type { AgentInfo } from "../lib/agents";
+import { type AgentInfo, briefTitle } from "../lib/agents";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 import type { AgentFocus } from "../lib/describeTool";
 import type { ChangeTotals } from "../lib/git";
@@ -115,7 +115,7 @@ export function OverviewPanel({
               <li key={`a${agent.id}`}>
                 <button type="button" className="overview-row" title={agent.task} onClick={() => onOpenAgent({ id: agent.id, task: agent.task })}>
                   <Telescope size={14} />
-                  <span className="overview-name">{agent.task}</span>
+                  <span className="overview-name">{briefTitle(agent.task)}</span>
                   <span className="overview-status ok">running</span>
                 </button>
               </li>

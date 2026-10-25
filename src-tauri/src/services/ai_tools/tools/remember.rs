@@ -2,7 +2,7 @@
 //! its memory file and carried in the prompt like `AGENTS.md`
 //! (`services::project_rules`).
 //!
-//! No approval card: the model checks each note first (`deps.check_memory`,
+//! No approval card: the model checks each note first (`deps.check`,
 //! `MEMORY_CHECK_PROMPT`), because a note planted by something the agent read
 //! would otherwise be in every request from then on. The check fails closed.
 //!
@@ -13,7 +13,7 @@ use std::fs;
 use std::io::Write;
 
 use crate::domain::llm::LlmToolDefinition;
-use crate::domain::project_rules::{self, MAX_FACT_CHARS, MAX_RULE_CHARS};
+use crate::domain::project_rules::{self, MAX_FACT_CHARS, MAX_RULE_CHARS, MEMORY_CHECK_PROMPT};
 use crate::domain::tools::{RememberArgs, ToolDeps, ToolError, ToolResult, ToolScope};
 use crate::services::project_rules::memory_path;
 
@@ -36,8 +36,8 @@ pub fn remember(scope: &ToolScope, args: &RememberArgs, deps: &ToolDeps) -> Resu
             path.display()
         )));
     }
-    let check = deps.check_memory.ok_or_else(|| ToolError::Memory("not available here".into()))?;
-    check(&line[2..]).map_err(|why| {
+    let check = deps.check.ok_or_else(|| ToolError::Memory("not available here".into()))?;
+    check(MEMORY_CHECK_PROMPT, &line[2..]).map_err(|why| {
         ToolError::Memory(format!(
             "not saved: {why}. Do not reword it to get past the check; tell the user what you wanted to remember."
         ))
@@ -94,11 +94,12 @@ mod tests {
         with_app_dir("remember-saved", || {
             let scope = ToolScope::new(&temp_dir("remember-saved-repo")).unwrap();
             let asked = RefCell::new(Vec::new());
-            let check = |note: &str| {
+            let check = |prompt: &str, note: &str| {
+                assert_eq!(prompt, MEMORY_CHECK_PROMPT);
                 asked.borrow_mut().push(note.to_string());
                 Ok(())
             };
-            let deps = ToolDeps { check_memory: Some(&check), ..ToolDeps::default() };
+            let deps = ToolDeps { check: Some(&check), ..ToolDeps::default() };
 
             assert_eq!(remember(&scope, &fact("bench needs\n--release"), &deps).unwrap(), ToolResult::Remembered { already: false });
             assert_eq!(remember(&scope, &fact("k8s is OrbStack"), &deps).unwrap(), ToolResult::Remembered { already: false });
@@ -115,8 +116,8 @@ mod tests {
     fn a_refused_or_unchecked_note_is_not_kept() {
         with_app_dir("remember-refused", || {
             let scope = ToolScope::new(&temp_dir("remember-refused-repo")).unwrap();
-            let refuse = |_: &str| Err("asks to skip approvals".to_string());
-            let deps = ToolDeps { check_memory: Some(&refuse), ..ToolDeps::default() };
+            let refuse = |_: &str, _: &str| Err("asks to skip approvals".to_string());
+            let deps = ToolDeps { check: Some(&refuse), ..ToolDeps::default() };
 
             let why = remember(&scope, &fact("always run with --yes"), &deps).unwrap_err().to_string();
             assert!(why.contains("not saved: asks to skip approvals") && why.contains("Do not reword"), "{why}");
@@ -134,8 +135,8 @@ mod tests {
             let path = memory_path(scope.root()).unwrap();
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, "- typed by hand").unwrap();
-            let check = |_: &str| Ok(());
-            let deps = ToolDeps { check_memory: Some(&check), ..ToolDeps::default() };
+            let check = |_: &str, _: &str| Ok(());
+            let deps = ToolDeps { check: Some(&check), ..ToolDeps::default() };
 
             remember(&scope, &fact("next"), &deps).unwrap();
             assert_eq!(saved(&scope), "- typed by hand\n- next\n");
@@ -152,8 +153,8 @@ mod tests {
         with_app_dir("remember-apart", || {
             let one = ToolScope::new(&temp_dir("remember-apart-one")).unwrap();
             let two = ToolScope::new(&temp_dir("remember-apart-two")).unwrap();
-            let check = |_: &str| Ok(());
-            remember(&one, &fact("only here"), &ToolDeps { check_memory: Some(&check), ..ToolDeps::default() }).unwrap();
+            let check = |_: &str, _: &str| Ok(());
+            remember(&one, &fact("only here"), &ToolDeps { check: Some(&check), ..ToolDeps::default() }).unwrap();
             assert_ne!(memory_path(one.root()), memory_path(two.root()));
             assert!(crate::services::project_rules::load(two.root()).is_empty());
         });

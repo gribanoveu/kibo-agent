@@ -24,7 +24,7 @@ Artifacts
 | Встреча — папка `~/.kibo/meetings/<uuid>/`: `meeting.json` (транскрипт, имена, заметки, название) и `audio.wav` | `infra/meeting_store.rs` | Коллекция `Meetings` — эти папки как есть, `list()` уже отдаёт строку на встречу |
 | Прототип — папка `~/.kibo/prototypes/<chat id>/`: `files/` (рабочая), `versions/<n>/` (снимки `present`) | `infra/prototype_store.rs` | Коллекция `Prototypes` — эти папки; файлы — содержимое `files/` |
 | `artifact://<chat>/files/<path>` отдаёт файлы прототипа с CSP, `meeting://localhost/<id>` — запись встречи | `infra/prototype_protocol.rs`, `infra/meeting_audio.rs` | Превью HTML, картинок и звука без новых протоколов; CSP окна уже пускает `artifact:` в `img-src`/`frame-src` и `meeting:` в `media-src` |
-| Страница сайдбара с панелью справа | `components/pages.tsx`, `Page`/`PagePanel` в `Page.tsx` | Новая страница — одна запись в `PAGES` |
+| Страница сайдбара с листом поверх неё | `components/pages.tsx`, `Page`/`PageSheet` в `Page.tsx` | Новая страница — одна запись в `PAGES` |
 | `Markdown`, `highlight`/`languageOf`, `Dropdown`, `Modal` | `components/Markdown.tsx`, `lib/highlight.ts` | Просмотр заметок и кода, меню и подтверждения |
 | Удаление встречи вместе с голосами из неё | `services::meeting_notes::delete_meeting` | Удаление коллекции `Meetings` — тот же вызов |
 | Удаление чата вместе с папкой прототипа, с открытым чатом на экране | `services::plain_chat::delete_chat`; `plain.remove(id)` в `App.tsx` | Удаление прототипа — тот же путь |
@@ -258,7 +258,7 @@ dock: false }`, без `feature` — страница есть всегда, п�
 
 ### 6. Открытие, переименование, удаление
 
-**Открытие — в `PagePanel` справа**, по `FileView`:
+**Открытие — в `PageSheet` поверх правой части страницы**, по `FileView`:
 
 | `view` | Как |
 |---|---|
@@ -349,7 +349,7 @@ files, read}`, `prototype_store::{listing, version_time, working_file}` — по
 **AR-4 сделано 2026-10-22.** `ArtifactsPage` (крошки, фильтр по названию, список; клик
 выбирает, двойной клик или `Enter` открывает, `Backspace` — вверх; клавиши
 `artifactOpen`/`artifactUp` в `shortcuts.ts`), `useArtifacts` (место, строки уровня,
-файлы открытой коллекции), `ArtifactViewer` в `PagePanel` по `view` — Markdown, код
+файлы открытой коллекции), `ArtifactViewer` в `PageSheet` по `view` — Markdown, код
 блоком Markdown с подсветкой, `PrototypeFrame`, `<img>`, `<audio>`. `PrototypeFrame`
 вынесен из `PrototypePreview`: `sandbox` и `allow` теперь в одном месте.
 `useLiveRead` получил необязательный `key` — перечитать при смене открытой коллекции

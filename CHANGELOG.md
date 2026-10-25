@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2026-10-25 The Chat assistant searches and reads the knowledge base while it is on in the Catalog, and asks it who provides and consumes a topic or an endpoint — answering from what agents wrote about your repositories, without writing to it
+- 2026-10-25 Catalog, Meetings and Artifacts open what you pick in a sheet over the page, as Knowledge does, and Escape or a click outside it closes it
+- 2026-10-24 The sidebar keeps the Agent and Chat modes in a group of their own and the pages under Workspace, and shows New chat's key while the pointer is on it
+- 2026-10-24 A Knowledge page shows the knowledge base as a folder per domain, in it each repository's documents as cards by kind — the title and how the document opens — with a search through every domain: open a document to read it in a sheet laid over the page, its evidence, contracts and aliases folded over the text, move it to another domain or delete it, delete a repository's documents, and rename, describe or merge domains
+- 2026-10-24 The agent asks the knowledge base who provides and who consumes a topic, an endpoint, a table or a bucket, across every repository and domain written down
+- 2026-10-24 A knowledge base, turned on in the Catalog: the agent writes documents about the repositories it works in — services, endpoints, topics, tables, algorithms — filed by domain, finds them from any other repository, and is told which of this one's are out of date; /analyze documents the open repository
 - 2026-10-24 Board cards read more calmly: a card's buttons show when you point at it, a long note is cut to three lines with Show more under it, a due day is a coloured chip, each column has its colour, and an empty one says what it is for
 - 2026-10-24 A Board card can have a due day: pick it in the card's editor, or name a day to the Assistant; an open card shows it in amber on the day and in red once it has passed
 - 2026-10-24 Tell the Assistant more about something already on the Board — a date, a detail, a new wording — and it edits that card instead of adding a second one

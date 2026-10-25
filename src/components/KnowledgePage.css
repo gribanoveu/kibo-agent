@@ -1,0 +1,438 @@
+.knowledge-empty,
+.knowledge-error {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.knowledge-error {
+  color: var(--red);
+}
+.knowledge-count {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+/* Where you are: the domains, then one of them. */
+.knowledge-crumbs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.knowledge-crumbs button {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.knowledge-crumbs button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.knowledge-crumbs button[aria-current="page"] {
+  color: var(--text);
+  font-weight: 600;
+}
+.knowledge-crumb-sep {
+  flex: none;
+  color: var(--text-faint);
+}
+
+/* The domains as folders: a name, what goes in it, how much is there. */
+.knowledge-folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.knowledge-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.knowledge-folder:hover {
+  border-color: var(--text-faint);
+  background: var(--bg-hover);
+}
+.knowledge-folder-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.knowledge-folder-icon {
+  flex: none;
+  color: var(--accent);
+}
+.knowledge-folder-description {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.knowledge-domain + .knowledge-domain {
+  margin-top: 20px;
+}
+.knowledge-domain-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.knowledge-domain-description {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+.knowledge-found-head {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+/* A repository as the service it is: one frame round its name, what its
+   overview says, its contents by kind and the sections they lead to. */
+.knowledge-service {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.knowledge-service-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.knowledge-service-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  cursor: pointer;
+}
+.knowledge-service-toggle:hover {
+  background: var(--bg-hover);
+}
+.knowledge-service-icon {
+  flex: none;
+  color: var(--accent);
+}
+.knowledge-service-head h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.knowledge-service-head .knowledge-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What the service is, from its overview: the text to read first, the way into the rest. */
+.knowledge-overview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.knowledge-overview .knowledge-lead {
+  -webkit-line-clamp: 4;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+.knowledge-overview:hover {
+  background: var(--bg-hover);
+}
+.knowledge-overview.on {
+  border-color: var(--accent);
+}
+.knowledge-overview-link {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+}
+/* Its contents: a kind and how many, each a jump to its section. */
+.knowledge-contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.knowledge-contents button {
+  padding: 2px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.knowledge-contents button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.knowledge-contents .knowledge-count {
+  margin-left: 2px;
+}
+.knowledge-kind {
+  scroll-margin-top: 12px;
+}
+.knowledge-icon-button {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.knowledge-icon-button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* A kind's documents under its name, the name a quiet label over them. */
+.knowledge-kind h4 {
+  margin: 16px 0 8px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.knowledge-kind h4 .knowledge-count {
+  margin-left: 4px;
+}
+
+/* A document as a card: the title in full, then what it opens with. */
+.knowledge-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.knowledge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.knowledge-card:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+.knowledge-card.on {
+  border-color: var(--accent);
+  background: var(--bg-active);
+}
+.knowledge-card-kind {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.knowledge-title {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1.35;
+}
+.knowledge-lead {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.knowledge-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.knowledge-mark {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.knowledge-mark.stale {
+  border-color: var(--red);
+  color: var(--red);
+}
+.knowledge-doc-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.knowledge-doc-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The frontmatter's lists, closed over the text: there when wanted, never in its way. */
+.knowledge-facts {
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.knowledge-facts summary {
+  cursor: pointer;
+}
+.knowledge-facts summary:hover {
+  color: var(--text);
+}
+.knowledge-facts ul {
+  margin: 4px 0 8px;
+  padding-left: 16px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.knowledge-doc-id {
+  margin: 16px 0 0;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.knowledge-search {
+  flex: 1;
+  min-width: 160px;
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+}
+.knowledge-search:focus-within {
+  border-color: var(--accent);
+}
+.knowledge-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+.knowledge-doc-text {
+  padding: 12px;
+  overflow: auto;
+}
+.knowledge-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.knowledge-field input,
+.knowledge-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  resize: vertical;
+}
+.knowledge-field input:focus,
+.knowledge-field textarea:focus {
+  border-color: var(--accent);
+}
+.knowledge-confirm {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}

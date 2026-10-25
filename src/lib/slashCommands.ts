@@ -194,6 +194,10 @@ export type BuiltInState = {
   folder: boolean;
   /** Agent mode, the one that writes files. */
   agentMode: boolean;
+  /** Ask mode, which has no checklist. */
+  askMode: boolean;
+  /** The knowledge base is turned on in the Catalog; without it there is no `/analyze`. */
+  knowledge: boolean;
 };
 
 /** What each of the app's own commands does when run. */
@@ -202,6 +206,7 @@ export type BuiltInActions = {
   fork: () => void;
   review: () => void;
   init: (args: string) => void;
+  analyze: (args: string) => void;
   trust: () => void;
 };
 
@@ -209,7 +214,14 @@ const NOT_NOW = "Not while a turn is running";
 
 /** The app's own `/` commands, each with why it cannot run now when it cannot. */
 export function builtInCommands(state: BuiltInState, run: BuiltInActions): SlashCommand[] {
-  const { busy, started, folder, agentMode } = state;
+  const { busy, started, folder, agentMode, askMode, knowledge } = state;
+  const analyze: SlashCommand = {
+    name: "analyze",
+    hint: "Document this repository in the knowledge base: its services, endpoints, topics, tables, algorithms",
+    argumentHint: "[focus] [--domain <id>]",
+    unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : askMode ? "Switch to Agent or Plan mode — it keeps a checklist" : undefined,
+    run: (args) => run.analyze(args),
+  };
   return [
     {
       name: "compact",
@@ -236,6 +248,7 @@ export function builtInCommands(state: BuiltInState, run: BuiltInActions): Slash
       unavailable: busy ? NOT_NOW : !agentMode ? "Switch to Agent mode — it writes files" : undefined,
       run: (args) => run.init(args),
     },
+    ...(knowledge ? [analyze] : []),
     {
       name: "trust",
       hint: "Trust this folder with its own skills and / commands, or stop trusting it",

@@ -67,7 +67,7 @@ pub fn chat_request_frame(
     features: &Features,
 ) -> RequestFrame {
     RequestFrame {
-        instructions: compaction::estimate_tokens(&prompt::chat_system_messages(role, kube, runbooks, language, web, &crate::services::llm_chat::today())),
+        instructions: compaction::estimate_tokens(&prompt::chat_system_messages(role, kube, runbooks, language, web, features, &crate::services::llm_chat::today())),
         skills: 0,
         tools: compaction::estimate_tool_schema_tokens(&tool_definitions_for_role(role, web, features)),
         mcp: 0,
@@ -210,6 +210,7 @@ mod tests {
                 worktree_of: None,
                 language: None,
                 mcp_servers: mcp.notes(),
+                knowledge: None,
             },
             mcp,
             false,

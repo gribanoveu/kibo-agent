@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
 import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
-import { Page, PagePanel } from "./Page";
+import { Page, PageSheet } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { Switch } from "./Switch";
@@ -73,7 +73,7 @@ const when = (created: string) =>
 /** A call's recording in, its notes out: the summary first, the transcript
     with speakers and times under it. Recognition runs on this computer; the
     notes are written by the model chosen in Settings. */
-export function MeetingsPage({ sideHandle, item }: PageContext) {
+export function MeetingsPage({ item }: PageContext) {
   const meetings = useMeetings(item);
   const { job, meeting, openId } = meetings;
   // A meeting, or a recording not yet transcribed — the only copy of its call.
@@ -120,7 +120,7 @@ export function MeetingsPage({ sideHandle, item }: PageContext) {
         )}
         {meeting && <PlayerBar player={player} seconds={meeting.seconds} />}
         {remembering && (
-          <button type="button" className="btn btn-ghost meetings-voices-toggle" aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
+          <button type="button" className="btn btn-ghost meetings-voices-toggle" data-sheet-opener aria-pressed={voicesOpen} onClick={() => setVoicesOpen(!voicesOpen)}>
             <Users size={14} />
             Voices
           </button>
@@ -133,7 +133,7 @@ export function MeetingsPage({ sideHandle, item }: PageContext) {
   const panel = remembering && voicesOpen && <VoicesPanel changed={meeting ?? meetings.list} onClose={() => setVoicesOpen(false)} />;
 
   return (
-    <Page title="Meetings" bar={bar} panel={panel} sideHandle={sideHandle}>
+    <Page title="Meetings" bar={bar} sheet={panel}>
       {openId && <audio {...player.audio} />}
       {!openId && access.access && <AccessNotes access={access.access} onAllow={(source) => void access.allow(source)} />}
       {access.error && <ErrorNote message={access.error} onClose={access.clearError} />}
@@ -978,7 +978,7 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
   const { voices, error, clearError, remove } = useVoices(changed);
   const [forgetting, setForgetting] = useState<VoiceInfo | null>(null);
   return (
-    <PagePanel icon={Users} title="Voices" label="Voices" onClose={onClose}>
+    <PageSheet icon={Users} title="Voices" label="Voices" onClose={onClose}>
       {error && <ErrorNote message={error} onClose={clearError} />}
       {voices.length === 0 ? (
         <p className="meetings-empty">
@@ -1023,6 +1023,6 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
       >
         <p className="meetings-confirm">Every sample of it goes. The name stays where you gave it, as text.</p>
       </Modal>
-    </PagePanel>
+    </PageSheet>
   );
 }

@@ -35,7 +35,7 @@ export const SHORTCUTS = {
   sidebar: { label: "Show or hide the sidebar", group: "General", combos: [{ code: "KeyB", mod: true }] },
   settings: { label: "Settings", group: "General", combos: [{ code: "Comma", mod: true }] },
   shortcuts: { label: "Keyboard shortcuts", group: "General", combos: [{ code: "Slash", mod: true }] },
-  close: { label: "Close a dialog, menu, the file viewer or the search in a file", group: "General", combos: [{ code: "Escape" }] },
+  close: { label: "Close a dialog, menu, a page's sheet, the file viewer or the search in a file", group: "General", combos: [{ code: "Escape" }] },
   accept: { label: "Use what was typed in a field — a namespace, a model, a key", group: "General", combos: [{ code: "Enter" }, { code: "NumpadEnter" }] },
   ideLayout: { label: "IDE layout: files, the file and the chat side by side", group: "General", combos: [{ code: "KeyD", mod: true, shift: true }] },
   ...PANE_SHORTCUTS,

@@ -24,7 +24,7 @@ pub(super) fn definition() -> LlmToolDefinition {
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "task": { "type": "string", "description": "The whole brief: the question, what is already known, and what the answer should contain." }
+                "task": { "type": "string", "description": "The whole brief. Its first line is the question in one short sentence — the app shows it as the helper's name; then what is already known and what the answer should contain." }
             },
             "required": ["task"]
         }),

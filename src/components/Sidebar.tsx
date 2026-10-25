@@ -26,7 +26,7 @@ import { GettingStarted } from "./GettingStarted";
 import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
+import { comboKeys, matches, shortcutText, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab } from "../types";
 import type { Scheme } from "../hooks/useTheme";
@@ -132,11 +132,12 @@ export function Sidebar({
   return (
     <nav className="sidebar">
       <div className="sidebar-top">
-        <button className="newchat" type="button" onClick={onNewChat}>
+        <button className="newchat" type="button" onClick={onNewChat} title={`New chat (${shortcutText("newChat")})`}>
           <Plus size={14} />
           <span className="label">New chat</span>
+          <span className="newchat-keys">{shortcutText("newChat")}</span>
         </button>
-        <div className="mode-switch" role="tablist" aria-label="View" aria-orientation="vertical">
+        <div className="mode-switch" role="tablist" aria-label="Mode" aria-orientation="vertical">
           {APP_MODES.map((value) => {
             const active = page === null && mode === value;
             return (
@@ -149,11 +150,14 @@ export function Sidebar({
                 title={MODES[value].title}
                 onClick={() => onMode(value)}
               >
-                {MODES[value].icon}
-                <span>{MODES[value].label}</span>
+                <span className="mode-tile">{MODES[value].icon}</span>
+                <span className="mode-label">{MODES[value].label}</span>
               </button>
             );
           })}
+        </div>
+        {pages.length > 0 && <div className="sidebar-pages-head">Workspace</div>}
+        <div className="mode-switch sidebar-pages" role="tablist" aria-label="Pages" aria-orientation="vertical">
           {pages.map(({ id, label, title, icon: Icon }) => (
             <button
               key={id}
@@ -165,7 +169,7 @@ export function Sidebar({
               onClick={() => onPage(id)}
             >
               <Icon size={14} />
-              <span>{label}</span>
+              <span className="mode-label">{label}</span>
             </button>
           ))}
         </div>

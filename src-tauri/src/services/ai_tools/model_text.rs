@@ -119,6 +119,13 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::PlanWritten { lines } => format!("Plan saved ({lines} lines). The user sees it in the Plan tab."),
         ToolResult::Remembered { already: false } => "Saved. It is under \"Memory\" in every later conversation in this folder.".to_string(),
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
+        ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
+        ToolResult::KnowledgeFound { hits, weak } => knowledge_found(hits, *weak),
+        ToolResult::KnowledgeRelations { asked, relations } => knowledge_relations(asked, relations),
+        ToolResult::KnowledgeDocument { id, domain, text, stale, .. } => {
+            let stale = if *stale { format!("\n{}", crate::domain::knowledge::STALE_NOTE) } else { String::new() };
+            format!("{id} (domain {domain}):{stale}\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
+        }
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
@@ -135,6 +142,81 @@ pub fn for_model(result: &ToolResult) -> String {
 
 /// By column, a line a card: `c3 file the memory request (due 2026-11-01) — wlbuh`. The
 /// archive only as a count: it is the past, and up to a hundred lines of it.
+/// Each section under its document's id and what the document is, then the
+/// reminder that this is data.
+fn knowledge_found(hits: &[crate::domain::knowledge::KnowledgeHit], weak: bool) -> String {
+    if hits.is_empty() {
+        return "Nothing in the knowledge base matches. Reword with the names the code uses, or try the other language; \
+if it is not there, nobody has written it down yet."
+            .to_string();
+    }
+    let mut text = String::new();
+    if weak {
+        text.push_str("These may not be what was asked for — reword if they do not answer it.\n\n");
+    }
+    for (n, hit) in hits.iter().enumerate() {
+        let kind = serde_json::to_value(hit.kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let confidence = serde_json::to_value(hit.confidence).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        text.push_str(&format!("[{}] {} — {} ({kind}, {confidence}, domain {})\n", n + 1, hit.id, hit.title, hit.domain));
+        if hit.stale {
+            text.push_str(&format!("{}\n", crate::domain::knowledge::STALE_NOTE));
+        }
+        if let Some(section) = &hit.section {
+            text.push_str(&format!("§ {section}\n"));
+        }
+        text.push_str(&hit.text);
+        if !hit.evidence.is_empty() {
+            text.push_str(&format!("\nevidence: {}", hit.evidence.join(", ")));
+        }
+        text.push_str("\n\n");
+    }
+    text.push_str(crate::domain::knowledge::DATA_NOTE);
+    text
+}
+
+/// The documents on each contract, under the contract's name.
+fn knowledge_relations(asked: &str, relations: &[crate::domain::knowledge::Relation]) -> String {
+    if relations.is_empty() {
+        return format!(
+            "No document in the knowledge base provides or consumes {asked}. Names are compared exactly, as documents write them: \
+find how they spell it with knowledgeSearch, or nobody has written it down yet."
+        );
+    }
+    let mut text = String::new();
+    let mut contract = None;
+    for relation in relations {
+        let key = relation.key();
+        if contract.as_ref() != Some(&key) {
+            text.push_str(&format!("{}{}: {}\n", if contract.is_some() { "\n" } else { "" }, key.0.key(), key.1));
+            contract = Some(key);
+        }
+        let side = match relation.side {
+            crate::domain::knowledge::Side::Provides => "provides",
+            crate::domain::knowledge::Side::Consumes => "consumes",
+        };
+        text.push_str(&format!("- {side}: {} — {} (domain {})\n", relation.id, relation.title, relation.domain));
+    }
+    text.push_str(&format!("\nRead a document with knowledgeRead.\n\n{}", crate::domain::knowledge::DATA_NOTE));
+    text
+}
+
+/// What changed, and the name the repository goes by — the model needs it
+/// for `related` and for ids it writes next.
+fn knowledge_written(repo: &str, written: &[String], deleted: &[String], new_domains: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !new_domains.is_empty() {
+        parts.push(format!("New domains: {}.", new_domains.join(", ")));
+    }
+    if !written.is_empty() {
+        parts.push(format!("Saved to the knowledge base: {}.", written.join(", ")));
+    }
+    if !deleted.is_empty() {
+        parts.push(format!("Deleted: {}.", deleted.join(", ")));
+    }
+    parts.push(format!("This repository is `{repo}` in the base: its ids are `{repo}/<slug>`."));
+    parts.join(" ")
+}
+
 fn board(cards: &[crate::domain::board::Card]) -> String {
     use crate::domain::board::Column;
     let archived = cards.iter().filter(|c| c.column == Column::Archived).count();
@@ -595,6 +677,58 @@ mod tests {
             before: before.iter().map(|s| s.to_string()).collect(),
             after: after.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn knowledge_hits_and_documents_say_which_are_stale_and_that_they_are_data() {
+        use crate::domain::knowledge::{Confidence, Kind, KnowledgeHit, DATA_NOTE, STALE_NOTE};
+        let hit = |id: &str, stale| KnowledgeHit {
+            id: id.into(),
+            domain: "usn".into(),
+            title: "API".into(),
+            kind: Kind::Api,
+            confidence: Confidence::Inferred,
+            section: Some("API > POST".into()),
+            text: "## POST".into(),
+            evidence: vec!["src/Api.java#L2".into()],
+            stale,
+        };
+        let found = for_model(&ToolResult::KnowledgeFound { hits: vec![hit("tax-api/api", false), hit("tax-api/old", true)], weak: true });
+        assert!(found.starts_with("These may not be what was asked for"), "{found}");
+        assert!(found.contains("[1] tax-api/api — API (api, inferred, domain usn)\n§ API > POST\n## POST\nevidence: src/Api.java#L2\n\n"), "{found}");
+        assert!(found.contains(&format!("[2] tax-api/old — API (api, inferred, domain usn)\n{STALE_NOTE}\n§ API > POST")), "{found}");
+        assert_eq!(found.matches(STALE_NOTE).count(), 1);
+        assert!(found.ends_with(DATA_NOTE));
+        assert!(for_model(&ToolResult::KnowledgeFound { hits: vec![], weak: false }).starts_with("Nothing in the knowledge base matches"));
+
+        let relation = |kind, name: &str, side, id: &str| crate::domain::knowledge::Relation {
+            kind,
+            name: name.into(),
+            side,
+            domain: "usn".into(),
+            id: id.into(),
+            title: "T".into(),
+        };
+        use crate::domain::knowledge::{ContractKind, Side};
+        let relations = vec![
+            relation(ContractKind::Topic, "tax.events.v1", Side::Provides, "tax-api/events"),
+            relation(ContractKind::Topic, "tax.events.v1", Side::Consumes, "ledger/listener"),
+            relation(ContractKind::Api, "tax-api  POST /x", Side::Consumes, "ledger/listener"),
+        ];
+        let linked = for_model(&ToolResult::KnowledgeRelations { asked: "`x`".into(), relations });
+        assert_eq!(
+            linked,
+            format!(
+                "topic: tax.events.v1\n- provides: tax-api/events — T (domain usn)\n- consumes: ledger/listener — T (domain usn)\n\n\
+api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a document with knowledgeRead.\n\n{DATA_NOTE}"
+            )
+        );
+        let none = for_model(&ToolResult::KnowledgeRelations { asked: "`topic: y`".into(), relations: vec![] });
+        assert!(none.starts_with("No document in the knowledge base provides or consumes `topic: y`."), "{none}");
+
+        let document = |stale| ToolResult::KnowledgeDocument { id: "tax-api/api".into(), domain: "usn".into(), section: None, text: "# API".into(), stale };
+        assert_eq!(for_model(&document(false)), format!("tax-api/api (domain usn):\n\n# API\n\n{DATA_NOTE}"));
+        assert_eq!(for_model(&document(true)), format!("tax-api/api (domain usn):\n{STALE_NOTE}\n\n# API\n\n{DATA_NOTE}"));
     }
 
     #[test]

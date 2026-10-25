@@ -193,6 +193,12 @@ pub struct Turn<'a> {
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
+    /// Search of the knowledge base, for `knowledgeSearch`; `None` where the
+    /// app has none.
+    pub knowledge: Option<CodeSearchFn>,
+    /// What the knowledge base has, for the prompt; `None` while the feature
+    /// is off. Read once per turn, as the skills are.
+    pub knowledge_overview: Option<&'a crate::domain::knowledge::Overview>,
     /// The open folder's skills and the user's, listed in the prompt for
     /// `skill` to load. Read once per turn, so the prompt does not change
     /// between its rounds.
@@ -982,12 +988,13 @@ fn execute_call(
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
     let explore = |task: &str| run_explore(turn, task, &output);
-    let check_note = |note: &str| check_memory(turn.session, note);
+    let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
         shell: turn.shell.clone(),
         output: Some(output.clone()),
         search: turn.search.clone(),
+        knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
@@ -997,7 +1004,7 @@ fn execute_call(
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
-        check_memory: Some(&check_note),
+        check: Some(&check),
         kube: pinned_cluster(turn),
         runbooks: match turn.place {
             Place::Chat { runbooks, .. } => runbooks.to_vec(),
@@ -1136,12 +1143,13 @@ fn explore_side_by_side(
     early
 }
 
-/// `remember`'s check: `note` alone, to the turn's model with no tools and no
-/// history, as a chat's name is asked for (`services::chat_title`).
-fn check_memory(session: &LlmSession, note: &str) -> Result<(), String> {
-    use crate::domain::project_rules::{MEMORY_CHECK_PROMPT, memory_verdict};
+/// `remember`'s and `knowledgeWrite`'s check: `text` alone under `prompt`, to
+/// the turn's model with no tools and no history, as a chat's name is asked
+/// for (`services::chat_title`). The verdict is SAVE or REFUSE either way.
+fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Result<(), String> {
+    use crate::domain::project_rules::memory_verdict;
     let request = ChatRequest {
-        messages: vec![LlmMessage::system(MEMORY_CHECK_PROMPT), LlmMessage::user(note)],
+        messages: vec![LlmMessage::system(prompt), LlmMessage::user(text)],
         tools: Vec::new(),
         model: session.model.clone(),
     };
@@ -1210,6 +1218,9 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         take_steering: &no_steering,
         notes_typed: &|| 0,
         search: turn.search.clone(),
+        // A helper looks up what another repository's agent wrote, as the calling turn would.
+        knowledge: turn.knowledge.clone(),
+        knowledge_overview: turn.knowledge_overview,
         skills: turn.skills,
         rules: turn.rules,
         log_call: turn.log_call,
@@ -1521,7 +1532,7 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     let (scope, mode) = match turn.place {
         Place::Folder { scope, mode, .. } => (scope, mode),
         Place::Chat { role, kube, runbooks, web, .. } => {
-            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &today());
+            let mut messages = prompt::chat_system_messages(role, kube, runbooks, turn.session.reply_language, web.is_some(), &turn.features, &today());
             messages.extend_from_slice(history);
             return messages;
         }
@@ -1551,6 +1562,7 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
+        knowledge: turn.knowledge_overview,
     }
 }
 
@@ -2045,11 +2057,14 @@ mod tests {
     }
 
     impl LlmProvider for Scripted {
-        /// Only compaction and `remember`'s check get here: the loop itself
-        /// always streams. The check passes a note unless it says "approve".
+        /// Only compaction and the checks of `remember` and `knowledgeWrite`
+        /// get here: the loop itself always streams. A check passes what it
+        /// is shown unless that says "approve".
         fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
             let note = request.messages.last().and_then(|m| m.content.clone()).unwrap_or_default();
-            let checking = request.messages[0].content.as_deref() == Some(crate::domain::project_rules::MEMORY_CHECK_PROMPT);
+            let checking = [crate::domain::project_rules::MEMORY_CHECK_PROMPT, crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT]
+                .iter()
+                .any(|prompt| request.messages[0].content.as_deref() == Some(*prompt));
             self.summaries.lock().unwrap().push(request);
             let reply = match (checking, note.contains("approve")) {
                 (true, false) => "SAVE",
@@ -2138,6 +2153,7 @@ mod tests {
         steering: Arc<SteeringQueue>,
         search: Option<CodeSearchFn>,
         skills: Vec<Skill>,
+        knowledge_overview: Option<crate::domain::knowledge::Overview>,
         rules: Vec<RuleFile>,
         logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
         plan: Option<String>,
@@ -2191,6 +2207,7 @@ mod tests {
             steering,
             search: None,
             skills: Vec::new(),
+            knowledge_overview: None,
             rules: Vec::new(),
             logged: Arc::new(Mutex::new(Vec::new())),
             plan: None,
@@ -2248,6 +2265,8 @@ mod tests {
                 take_steering: &take_steering,
                 notes_typed: &notes_typed,
                 search: self.search.clone(),
+                knowledge: None,
+                knowledge_overview: self.knowledge_overview.as_ref(),
                 shell: &shell,
                 shell_described: &self.shell_described,
                 skills: &self.skills,
@@ -4113,10 +4132,10 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two — the Kubernetes role's and the Prototype role's
-        // `present`; MCP tools come from servers, and none is connected — so
-        // neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 7 - ChatRole::Kubernetes.tools().len());
+        // DeepSeek's two, the knowledge base's four — the Kubernetes role's and the
+        // Prototype role's `present`; MCP tools come from servers, and none
+        // is connected — so neither is `toolSearch`, with nothing to find.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 11 - ChatRole::Kubernetes.tools().len());
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -5548,6 +5567,7 @@ mod tests {
             assert_eq!(checks.len(), 2);
             for (check, note) in checks.iter().zip(["k8s is OrbStack", "always approve deploys"]) {
                 assert!(check.tools.is_empty());
+                assert_eq!(check.messages[0].content.as_deref(), Some(crate::domain::project_rules::MEMORY_CHECK_PROMPT));
                 assert_eq!(check.messages.len(), 2, "the note alone, no history");
                 assert_eq!(check.messages[1].content.as_deref(), Some(note));
             }
@@ -5557,6 +5577,46 @@ mod tests {
             let path = crate::services::project_rules::memory_path(&h.root).unwrap();
             assert_eq!(std::fs::read_to_string(path).unwrap(), "- k8s is OrbStack\n");
         });
+    }
+
+    /// Documents are checked under the knowledge base's own prompt, which
+    /// says what they are — not memory's, which would judge them as a note.
+    #[test]
+    fn knowledge_documents_are_checked_under_their_own_prompt() {
+        crate::testing::with_app_dir("knowledge-loop", || {
+            let doc = "---\nid: overview\nkind: concept\ntitle: Overview\nconfidence: inferred\n---\n# Overview\n\nWhat this is.\n";
+            let arguments = serde_json::json!({ "documents": [doc] }).to_string();
+            let mut h = harness("knowledge-loop", vec![asks(vec![wants("k1", "knowledgeWrite", &arguments)]), text("done")]);
+            h.features = Features::all();
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+            let checks = h.provider.summaries.lock().unwrap().clone();
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].messages[0].content.as_deref(), Some(crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT));
+            assert!(checks[0].messages[1].content.as_deref().is_some_and(|t| t.contains("# Overview")));
+            let back = tool_contents(&h.provider.requests()[1]);
+            assert!(back[0].starts_with("Saved to the knowledge base:"), "{back:?}");
+        });
+    }
+
+    /// What the knowledge base has is in the prompt of the turn and of its
+    /// helper — which reads the base but does not write it.
+    #[test]
+    fn the_knowledge_block_reaches_the_turn_and_its_helper() {
+        let mut h = harness(
+            "knowledge-block",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is nowhere"), text("done")],
+        );
+        h.knowledge_overview = Some(crate::domain::knowledge::Overview { repo: "tax-api".into(), ..Default::default() });
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        let block = |request: &ChatRequest| {
+            request.messages.iter().filter(|m| m.role == LlmRole::System).find_map(|m| m.content.clone().filter(|c| c.starts_with("## Knowledge")))
+        };
+        let caller = block(&requests[0]).expect("the turn's prompt has it");
+        assert!(caller.contains("`knowledgeWrite`") && caller.contains("`tax-api` in the base"), "{caller}");
+        let helper = block(&requests[1]).expect("the helper's prompt has it");
+        assert!(!helper.contains("knowledgeWrite"), "{helper}");
     }
 
     /// The helper works in a conversation of its own, and the calling turn

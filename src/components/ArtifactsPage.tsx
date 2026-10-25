@@ -3,7 +3,7 @@ import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, More
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
-import { Page, PagePanel } from "./Page";
+import { Page, PageSheet } from "./Page";
 import { PrototypeFrame } from "./PrototypeFrame";
 import { KIND_NAMES, useArtifacts, type Place, type Row } from "../hooks/useArtifacts";
 import { useLiveRead } from "../hooks/useLiveRead";
@@ -38,7 +38,7 @@ const when = (rfc3339: string) =>
  * go back up; a file picked opens in the panel on the right. A row's
  * menu renames, deletes, shows in Finder, saves a file elsewhere.
  */
-export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chats }: PageContext) {
+export function ArtifactsPage({ openPage, openChat, removeChat, chats }: PageContext) {
   const artifacts = useArtifacts(chats.map((c) => c.id).join());
   const [picked, setPicked] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; error: boolean } | null>(null);
@@ -179,7 +179,6 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
   return (
     <Page
       title="Artifacts"
-      sideHandle={sideHandle}
       bar={
         <>
           <nav className="artifacts-crumbs" aria-label="Where you are">
@@ -198,11 +197,11 @@ export function ArtifactsPage({ sideHandle, openPage, openChat, removeChat, chat
           </span>
         </>
       }
-      panel={
+      sheet={
         file && place.kind && place.id ? (
-          <PagePanel icon={FILE_ICONS[file.view]} title={file.path.split("/").pop() ?? file.path} label={`File ${file.path}`} onClose={() => setPicked(null)}>
+          <PageSheet icon={FILE_ICONS[file.view]} title={file.path.split("/").pop() ?? file.path} label={`File ${file.path}`} onClose={() => setPicked(null)}>
             <ArtifactViewer kind={place.kind} id={place.id} file={file} />
-          </PagePanel>
+          </PageSheet>
         ) : undefined
       }
     >
@@ -295,6 +294,7 @@ function ArtifactRow({ row, picked, onPick, onOpen, actions }: { row: Row; picke
       <button
         type="button"
         role="option"
+        data-sheet-opener
         aria-selected={picked}
         className="artifacts-row-main"
         onClick={onPick}

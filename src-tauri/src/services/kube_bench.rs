@@ -256,6 +256,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         log_call: &log_call,
         board: None,
         deepseek: None,
+        knowledge: None,
         features: Default::default(),
     };
     let outcome = plain_chat::start(&chat, vec![LlmMessage::user(task.prompt.clone())]);

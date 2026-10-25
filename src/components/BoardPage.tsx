@@ -7,7 +7,6 @@ import { Page } from "./Page";
 import { useBoard } from "../hooks/useBoard";
 import { dropChange, dueState, localDay, orderOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
-import type { PageContext } from "./pages";
 import "./BoardPage.css";
 
 const COLUMNS: { column: OpenColumn; label: string }[] = [
@@ -30,7 +29,7 @@ const SENSORS = [
     in any column, edited, and any can be removed. Done keeps
     the last five finished — the backend sends older ones to the archive, shown
     under the columns on request. */
-export function BoardPage({ sideHandle }: PageContext) {
+export function BoardPage() {
   const { cards, error, change } = useBoard();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -61,7 +60,7 @@ export function BoardPage({ sideHandle }: PageContext) {
   };
 
   return (
-    <Page title="Board" sideHandle={sideHandle}>
+    <Page title="Board">
       <DragDropProvider
         sensors={SENSORS}
         onDragStart={() => setDragged(orderOf(cards))}

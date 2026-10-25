@@ -83,7 +83,7 @@ const page = () => render(view());
 const view = () => (
     <ArtifactsPage
       openPane={() => {}}
-      sideHandle={<span />}
+     
       openPage={(id, item) => opened.push(`page ${id} ${item}`)}
       openChat={(id) => opened.push(`chat ${id}`)}
       removeChat={(id) => {

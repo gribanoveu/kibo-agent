@@ -477,6 +477,10 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
+    let features = crate::services::features::enabled();
+    let knowledge = root
+        .filter(|_| features.is_on(crate::domain::features::Feature::Knowledge))
+        .and_then(|root| crate::services::knowledge::overview(root).ok());
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -489,10 +493,11 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
+            knowledge: knowledge.as_ref(),
         },
         &mcp,
         crate::services::web_search::is_on(WebSearchPlace::Agent),
-        &crate::services::features::enabled(),
+        &features,
     )
 }
 
@@ -658,6 +663,13 @@ fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
     app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
 }
 
+/// The knowledge base's search. `None` without the index — and without an
+/// app directory, where the base would be.
+pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
+    let base = crate::infra::knowledge_store::KnowledgeStore::open().ok()?;
+    Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
+}
+
 /// `/review`: a turn in Review mode over the open folder's working tree
 /// against `HEAD`. What is sent is decided here (`domain::review::select`):
 /// the diffs go in as the turn's message, added to `messages`, and the
@@ -717,6 +729,7 @@ where
     let (mode, review) = state.turn_mode();
     let handles = FolderHandles {
         search: searcher_of(&app),
+        knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes: app
