@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
-use crate::domain::knowledge::{is_domain_id, is_repo_name, Domain, GENERAL_DOMAIN};
+use crate::domain::knowledge::{is_domain_id, is_repo_name, place_of, Domain, GENERAL_DOMAIN};
 use crate::infra::app_dir;
 use crate::infra::repository_identity::{repository_id, repository_name};
 
@@ -127,7 +127,7 @@ impl KnowledgeStore {
             for repo in children(&self.dir.join(&domain))? {
                 for file in children(&self.dir.join(&domain).join(&repo))? {
                     let relative = format!("{domain}/{repo}/{file}");
-                    if crate::domain::knowledge::place_of(&relative).is_some() {
+                    if place_of(&relative).is_some() {
                         found.push(relative);
                     }
                 }
@@ -180,11 +180,12 @@ impl KnowledgeStore {
         }
 
         for (domain, slug, text) in &change.write {
+            // Written before the other copies go: a write that fails leaves the old one.
             let target = self.dir.join(domain).join(repo).join(format!("{slug}.md"));
+            app_dir::write_private(&target, text.as_bytes()).map_err(KnowledgeStoreError::Write)?;
             for kept in self.copies(repo, slug)?.into_iter().filter(|kept| *kept != target) {
                 remove(&kept)?;
             }
-            app_dir::write_private(&target, text.as_bytes()).map_err(KnowledgeStoreError::Write)?;
         }
         for slug in &change.delete {
             for kept in self.copies(repo, slug)? {
@@ -202,6 +203,11 @@ impl KnowledgeStore {
     /// Every domain is checked before the first file moves.
     pub fn refile(&self, moves: &[(PathBuf, String, String)]) -> Result<(), KnowledgeStoreError> {
         let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        self.refile_held(moves)
+    }
+
+    /// [`Self::refile`], by a caller holding `WRITING`.
+    fn refile_held(&self, moves: &[(PathBuf, String, String)]) -> Result<(), KnowledgeStoreError> {
         let domains: Vec<Domain> = read_list(&self.dir.join(DOMAINS_FILE))?;
         if let Some((_, missing, _)) = moves.iter().find(|(_, domain, _)| !known(&domains, domain)) {
             return Err(KnowledgeStoreError::NoDomain(missing.clone()));
@@ -237,9 +243,41 @@ impl KnowledgeStore {
         write_json(&path, &domains)
     }
 
-    /// A domain off the list, its folder with it once nothing is left in it.
-    pub fn remove_domain(&self, id: &str) -> Result<(), KnowledgeStoreError> {
+    /// Every document filed under `from` moved into `into`, and `from` off the
+    /// list — under one lock: a document written between the two would stay in
+    /// the folder of a domain that is gone. `rewrite` gives a file's text as
+    /// filed under `into`, from its path in the base and on disk; every file is
+    /// rewritten before the first one moves, so one it refuses leaves the merge
+    /// undone, not half done.
+    pub fn merge_domains<E: From<KnowledgeStoreError>>(
+        &self,
+        from: &str,
+        into: &str,
+        rewrite: impl Fn(&str, &Path) -> Result<String, E>,
+    ) -> Result<(), E> {
         let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        let domains: Vec<Domain> = read_list(&self.dir.join(DOMAINS_FILE))?;
+        if let Some(missing) = [from, into].into_iter().find(|id| !known(&domains, id)) {
+            return Err(KnowledgeStoreError::NoDomain(missing.to_string()).into());
+        }
+        if from == into {
+            return Ok(());
+        }
+        let mut moves = Vec::new();
+        for relative in self.documents()? {
+            if place_of(&relative).is_some_and(|(domain, _)| domain == from) {
+                let path = self.dir.join(&relative);
+                let text = rewrite(&relative, &path)?;
+                moves.push((path, into.to_string(), text));
+            }
+        }
+        self.refile_held(&moves)?;
+        Ok(self.drop_domain(from)?)
+    }
+
+    /// A domain off the list, its folder with it once nothing is left in it.
+    /// The caller holds `WRITING`.
+    fn drop_domain(&self, id: &str) -> Result<(), KnowledgeStoreError> {
         let path = self.dir.join(DOMAINS_FILE);
         let mut domains: Vec<Domain> = read_list(&path)?;
         domains.retain(|d| d.id != id);
@@ -248,20 +286,23 @@ impl KnowledgeStore {
     }
 
     /// Every document of the repository `name`, in every domain, and its record.
+    /// Only domain folders are looked in, as [`Self::documents`] reads them: a
+    /// folder of the user's own beside them is not the base's to remove.
     pub fn remove_repo(&self, name: &str) -> Result<(), KnowledgeStoreError> {
         // A folder under every domain is removed whole: `..` or `` would be the base or a domain.
         if !is_repo_name(name) {
             return Err(KnowledgeStoreError::NotARepo(name.to_string()));
         }
         let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
-        for domain in children(&self.dir)? {
+        // Read before anything goes: a list that does not parse stops the removal, not its last step.
+        let path = self.dir.join(REPOS_FILE);
+        let mut repos: Vec<RepoRecord> = read_list(&path)?;
+        for domain in children(&self.dir)?.into_iter().filter(|d| is_domain_id(d)) {
             let folder = self.dir.join(&domain).join(name);
             if folder.is_dir() {
                 fs::remove_dir_all(&folder).map_err(|e| KnowledgeStoreError::Write(format!("could not remove {}: {e}", folder.display())))?;
             }
         }
-        let path = self.dir.join(REPOS_FILE);
-        let mut repos: Vec<RepoRecord> = read_list(&path)?;
         repos.retain(|r| r.name != name);
         write_json(&path, &repos)
     }
@@ -428,10 +469,10 @@ mod tests {
             assert_eq!(store.repos().unwrap().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["ledger"]);
 
             fs::create_dir_all(store.dir.join("ausn").join("left-empty")).unwrap();
-            store.remove_domain("ausn").unwrap();
+            store.drop_domain("ausn").unwrap();
             assert_eq!(store.domains().unwrap(), [renamed]);
             assert!(!store.dir.join("ausn").exists(), "its folder, empty now, is gone");
-            store.remove_domain("usn").unwrap();
+            store.drop_domain("usn").unwrap();
             assert!(store.dir.join("usn").join("ledger").join("listener.md").exists(), "a folder with documents stays");
         });
     }
@@ -484,7 +525,7 @@ mod tests {
             let usn = [domain("usn")];
             let repo = store.repo(&repo_at("knowledge-race-c", "git@h:o/ledger.git")).unwrap();
             store.apply(Change { new_domains: &usn, ..write(repo.clone(), &[]) }).unwrap();
-            store.remove_domain("usn").unwrap();
+            store.drop_domain("usn").unwrap();
             assert!(matches!(store.apply(write(repo, &[("usn", "c", "c")])), Err(KnowledgeStoreError::NoDomain(d)) if d == "usn"));
             assert!(!store.dir.join("usn").exists());
 
@@ -517,6 +558,100 @@ mod tests {
             assert_eq!(store.documents().unwrap(), ["general/r/a.md"], "every copy gone");
             assert!(matches!(store.remove_repo(".."), Err(KnowledgeStoreError::NotARepo(_))));
             assert!(store.dir.join("general/r/a.md").exists());
+        });
+    }
+
+    /// A document moving to another domain is written before its old copy
+    /// goes: a write that fails leaves it where it was.
+    #[test]
+    fn a_move_that_cannot_be_written_keeps_the_old_copy() {
+        with_app_dir("knowledge-failed-move", || {
+            let store = store("knowledge-failed-move-base");
+            let repo = store.repo(&repo_at("knowledge-failed-move-repo", "git@h:o/r.git")).unwrap();
+            let new = [domain("usn")];
+            store.apply(Change { new_domains: &new, ..write(repo.clone(), &[("usn", "a", "one")]) }).unwrap();
+            // A folder where the new file would go: nothing can be renamed onto it.
+            fs::create_dir_all(store.dir.join("general/r/a.md")).unwrap();
+            assert!(matches!(store.apply(write(repo, &[("general", "a", "two")])), Err(KnowledgeStoreError::Write(_))));
+            assert_eq!(fs::read_to_string(store.dir.join("usn/r/a.md")).unwrap(), "one");
+        });
+    }
+
+    /// A repository's documents go from the domains' folders only, and
+    /// nothing goes while the list of repositories cannot be read.
+    #[test]
+    fn removing_a_repository_spares_other_folders_and_waits_for_a_readable_list() {
+        with_app_dir("knowledge-remove-repo", || {
+            let store = store("knowledge-remove-repo-base");
+            let repo = store.repo(&repo_at("knowledge-remove-repo-repo", "git@h:o/r.git")).unwrap();
+            store.apply(write(repo, &[("general", "a", "a")])).unwrap();
+            fs::create_dir_all(store.dir.join("Old Notes/r")).unwrap();
+            fs::write(store.dir.join("Old Notes/r/mine.md"), "mine").unwrap();
+
+            let kept = fs::read_to_string(store.dir.join(REPOS_FILE)).unwrap();
+            fs::write(store.dir.join(REPOS_FILE), "{ not json").unwrap();
+            assert!(matches!(store.remove_repo("r"), Err(KnowledgeStoreError::Corrupt { .. })));
+            assert!(store.dir.join("general/r/a.md").exists(), "nothing removed before the list was read");
+
+            fs::write(store.dir.join(REPOS_FILE), kept).unwrap();
+            store.remove_repo("r").unwrap();
+            assert!(!store.dir.join("general/r").exists());
+            assert!(store.repos().unwrap().is_empty());
+            assert!(store.dir.join("Old Notes/r/mine.md").exists(), "not a domain's folder");
+        });
+    }
+
+    /// A merge holds the lock from listing the documents to removing the
+    /// domain: a write meanwhile waits, then finds the domain gone — no
+    /// document is left in the folder of a domain that is off the list.
+    #[test]
+    fn a_write_during_a_merge_lands_after_it() {
+        with_app_dir("knowledge-merge-race", || {
+            let store = store("knowledge-merge-race-base");
+            let repo = store.repo(&repo_at("knowledge-merge-race-repo", "git@h:o/r.git")).unwrap();
+            let new = [domain("usn"), domain("ausn")];
+            store.apply(Change { new_domains: &new, ..write(repo.clone(), &[("ausn", "a", "a")]) }).unwrap();
+
+            let (started, merging) = std::sync::mpsc::channel();
+            std::thread::scope(|s| {
+                let (store, repo) = (&store, repo.clone());
+                let writer = s.spawn(move || {
+                    merging.recv().unwrap();
+                    store.apply(write(repo, &[("ausn", "b", "b")]))
+                });
+                store
+                    .merge_domains("ausn", "usn", |_, path| {
+                        let _ = started.send(());
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        Ok::<_, KnowledgeStoreError>(fs::read_to_string(path).unwrap())
+                    })
+                    .unwrap();
+                assert!(matches!(writer.join().unwrap(), Err(KnowledgeStoreError::NoDomain(d)) if d == "ausn"));
+            });
+            assert_eq!(store.documents().unwrap(), ["usn/r/a.md"]);
+            assert!(!store.dir.join("ausn").exists());
+        });
+    }
+
+    /// A repository with a name past what an id holds still gets one that
+    /// lists, finds and removes its documents — a namesake's too.
+    #[test]
+    fn a_long_name_still_makes_ids() {
+        with_app_dir("knowledge-long-name", || {
+            let store = store("knowledge-long-name-base");
+            let long = "a-very-long-service-name-".repeat(5);
+            let first = store.repo(&repo_at("knowledge-long-name-a", &format!("git@h:o/{long}.git"))).unwrap();
+            store.apply(write(first.clone(), &[("general", "a", "a")])).unwrap();
+            let namesake = store.repo(&repo_at("knowledge-long-name-b", &format!("git@other:x/{long}.git"))).unwrap();
+            store.apply(write(namesake.clone(), &[("general", "a", "a")])).unwrap();
+
+            assert_eq!(namesake.name, format!("{}-2", first.name));
+            let (one, two) = (format!("general/{}/a.md", first.name), format!("general/{}/a.md", namesake.name));
+            let mut ids = vec![one.clone(), two];
+            ids.sort();
+            assert_eq!(store.documents().unwrap(), ids);
+            store.remove_repo(&namesake.name).unwrap();
+            assert_eq!(store.documents().unwrap(), [one]);
         });
     }
 }

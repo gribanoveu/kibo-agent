@@ -134,19 +134,21 @@ impl WorkspaceIndex {
                 let meta = SearchMeta { tiers_used: Vec::new(), weak: false, hint: None };
                 return Ok(CodeSearchResult { matches: Vec::new(), meta });
             }
-            let indexer = {
-                let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-                match slot.as_ref() {
-                    Some(indexer) => Arc::clone(indexer),
-                    None => {
-                        let opened = RepoIndexer::open(&base, &store_dir, Arc::clone(&provider), ChunkBuildOptions::default())
-                            .map_err(|error| error.to_string())?;
-                        Arc::clone(slot.insert(Arc::new(opened)))
-                    }
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            let indexer = match slot.as_ref() {
+                Some(indexer) => Arc::clone(indexer),
+                None => {
+                    let opened = RepoIndexer::open(&base, &store_dir, Arc::clone(&provider), ChunkBuildOptions::default())
+                        .map_err(|error| error.to_string())?;
+                    Arc::clone(slot.insert(Arc::new(opened)))
                 }
             };
+            // Synced under the slot's lock: a sync already running would take
+            // this one in and return at once, and the search would miss what
+            // was written after that sync walked the base.
             let quiet: IndexEventSink = Arc::new(|_| {});
             indexer.sync(&quiet).map_err(|error| error.to_string())?;
+            drop(slot);
             code_search::search_many(&indexer, queries, fts, top_k, filter).map_err(|error| error.to_string())
         })
     }
@@ -250,6 +252,70 @@ mod tests {
         fs::remove_file(base.join("usn/tax-api/tariff.md")).unwrap();
         assert_eq!(found("RetrySubmissionJob"), ["usn/tax-api/events.md"], "the removed one is gone");
         assert!(index.index_dir.join(KNOWLEDGE_STORE).is_dir(), "its own store, beside the folders'");
+    }
+
+    /// Holds the first embedding until `open`, saying when it starts waiting;
+    /// every later one passes.
+    #[derive(Default)]
+    struct GatedModel {
+        held: std::sync::atomic::AtomicBool,
+        waiting: Mutex<Option<mpsc::Sender<()>>>,
+        open: (Mutex<bool>, std::sync::Condvar),
+    }
+
+    impl GatedModel {
+        fn open(&self) {
+            *self.open.0.lock().unwrap() = true;
+            self.open.1.notify_all();
+        }
+    }
+
+    impl EmbeddingProvider for GatedModel {
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
+            if !self.held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                if let Some(tx) = self.waiting.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                let mut open = self.open.0.lock().unwrap();
+                while !*open {
+                    open = self.open.1.wait(open).unwrap();
+                }
+            }
+            Ok(texts.iter().map(|_| Embedding(vec![1.0, 0.0])).collect())
+        }
+        fn dimensions(&self) -> usize {
+            2
+        }
+    }
+
+    /// A search while another's sync runs waits for it and syncs again: a
+    /// document written after that sync walked the base is found.
+    #[test]
+    fn a_search_during_a_sync_sees_what_was_written_meanwhile() {
+        let (waiting, embedding) = mpsc::channel();
+        let model = Arc::new(GatedModel { waiting: Mutex::new(Some(waiting)), ..Default::default() });
+        let index = WorkspaceIndex::new(temp_dir("ws-knowledge-race-indexes"), model.clone());
+        let base = temp_dir("ws-knowledge-race-base").join("knowledge");
+        fs::create_dir_all(base.join("usn/tax-api")).unwrap();
+        fs::write(base.join("usn/tax-api/tariff.md"), "# Тариф\n\nRetrySubmissionJob повторяет отправку.\n").unwrap();
+        let search = index.knowledge_searcher(base.clone());
+        let docs = SearchFilter { include_docs: true, ..Default::default() };
+        let found = |word: &str| -> Vec<String> {
+            search(&[word], None, 5, &docs).unwrap().matches.into_iter().map(|m| m.path).collect()
+        };
+
+        std::thread::scope(|s| {
+            let first = s.spawn(|| found("RetrySubmissionJob"));
+            embedding.recv_timeout(Duration::from_secs(10)).expect("the first sync embeds");
+            fs::write(base.join("usn/tax-api/events.md"), "# События\n\nTaxEventProducer пишет в топик.\n").unwrap();
+            let second = s.spawn(|| found("TaxEventProducer"));
+            // Long enough for a search that does not wait to come back without it.
+            std::thread::sleep(Duration::from_millis(300));
+            model.open();
+            assert!(first.join().unwrap().contains(&"usn/tax-api/tariff.md".to_string()));
+            let second = second.join().unwrap();
+            assert!(second.contains(&"usn/tax-api/events.md".to_string()), "{second:?}");
+        });
     }
 
     #[test]

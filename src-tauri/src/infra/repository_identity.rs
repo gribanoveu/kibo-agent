@@ -45,9 +45,9 @@ pub fn repository_id(root: &Path) -> String {
 
 /// A name for people and for document ids: the last part of the remote
 /// (`git@host:org/tax-api.git` → `tax-api`), or the folder's own name without
-/// one. Lowercase, `[a-z0-9._-]`, never empty. Not an identity: two
-/// repositories can share it, and the knowledge base tells them apart by
-/// [`repository_id`].
+/// one. Lowercase, `[a-z0-9._-]`, never empty, at most `MAX_NAME_CHARS`.
+/// Not an identity: two repositories can share it, and the knowledge base
+/// tells them apart by [`repository_id`].
 pub fn repository_name(root: &Path) -> String {
     let source = remote_identity(root).unwrap_or_else(|| {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -59,9 +59,15 @@ pub fn repository_name(root: &Path) -> String {
         .chars()
         .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') { c } else { '-' })
         .collect();
+    // Ascii by now, so a byte is a character.
     let name = name.trim_matches(['-', '.']);
+    let name = name[..name.len().min(MAX_NAME_CHARS)].trim_end_matches(['-', '.']);
     if name.is_empty() { "repository".to_string() } else { name.to_string() }
 }
+
+/// The longest [`repository_name`]: the knowledge base takes ids of at most
+/// 80 characters, and adds `-2`, `-3`… to a name another repository has.
+const MAX_NAME_CHARS: usize = 64;
 
 /// The commit checked out at `root`; `None` outside a repository or before
 /// its first commit.
@@ -226,6 +232,10 @@ mod tests {
         assert_eq!(repository_name(&ssh), "tax-api");
         let https = repo_with_remotes("name-https", &[("origin", "https://gitlab.example.com/a/b/usn_service/")]);
         assert_eq!(repository_name(&https), "usn_service");
+        // Cut to what a knowledge id holds, and not on a `-`.
+        let remote = format!("git@h:o/{}.git", "abc-".repeat(30));
+        let long = repo_with_remotes("name-long", &[("origin", remote.as_str())]);
+        assert_eq!(repository_name(&long), "abc-".repeat(16).trim_end_matches('-'));
 
         let folder = temp_dir("Plain.Folder");
         assert!(repository_name(&folder).starts_with("plain.folder-"), "{}", repository_name(&folder));

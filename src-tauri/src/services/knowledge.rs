@@ -202,25 +202,16 @@ pub fn edit_domain(domain: &Domain) -> Result<(), KnowledgePageError> {
 /// Every document of `from` moved into `into`, and `from` off the list.
 ///
 /// Every file is read and rewritten before the first one moves: one that
-/// cannot be leaves the merge undone, not half done.
+/// cannot be leaves the merge undone, not half done. The store does it under
+/// its lock, so a `knowledgeWrite` meanwhile lands before or after, never between.
 pub fn merge_domains(from: &str, into: &str) -> Result<(), KnowledgePageError> {
     let store = KnowledgeStore::open()?;
     let domains = store.domains()?;
     known(&domains, from)?;
     known(&domains, into)?;
-    if from == into {
-        return Ok(());
-    }
-    let mut moves = Vec::new();
-    for relative in store.documents()? {
-        if knowledge::place_of(&relative).is_some_and(|(domain, _)| domain == from) {
-            let path = store.dir().join(&relative);
-            let text = refiled(&path, into).map_err(|e| KnowledgePageError::Unmoved(relative.clone(), e.to_string()))?;
-            moves.push((path, into.to_string(), text));
-        }
-    }
-    store.refile(&moves)?;
-    Ok(store.remove_domain(from)?)
+    store.merge_domains(from, into, |relative, path| {
+        refiled(path, into).map_err(|e| KnowledgePageError::Unmoved(relative.to_string(), e.to_string()))
+    })
 }
 
 fn kept(store: &KnowledgeStore, id: &str) -> Result<PathBuf, KnowledgePageError> {
