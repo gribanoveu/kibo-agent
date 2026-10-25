@@ -98,8 +98,7 @@
 .knowledge-domain + .knowledge-domain {
   margin-top: 20px;
 }
-.knowledge-domain-head,
-.knowledge-repo-head {
+.knowledge-domain-head {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -119,15 +118,116 @@
   font-size: var(--fs-md);
   font-weight: 600;
 }
-.knowledge-repo {
-  margin-top: 22px;
+/* A repository as the service it is: one frame round its name, what its
+   overview says, its contents by kind and the sections they lead to. */
+.knowledge-service {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
 }
-.knowledge-repo-head h3 {
+.knowledge-service-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.knowledge-service-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  cursor: pointer;
+}
+.knowledge-service-toggle:hover {
+  background: var(--bg-hover);
+}
+.knowledge-service-icon {
+  flex: none;
+  color: var(--accent);
+}
+.knowledge-service-head h3 {
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
-  font-weight: 500;
+  font-weight: 600;
+}
+.knowledge-service-head .knowledge-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What the service is, from its overview: the text to read first, the way into the rest. */
+.knowledge-overview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.knowledge-overview .knowledge-lead {
+  -webkit-line-clamp: 4;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+.knowledge-overview:hover {
+  background: var(--bg-hover);
+}
+.knowledge-overview.on {
+  border-color: var(--accent);
+}
+.knowledge-overview-link {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+}
+/* Its contents: a kind and how many, each a jump to its section. */
+.knowledge-contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.knowledge-contents button {
+  padding: 2px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.knowledge-contents button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.knowledge-contents .knowledge-count {
+  margin-left: 2px;
+}
+.knowledge-kind {
+  scroll-margin-top: 12px;
 }
 .knowledge-icon-button {
   flex: 0 0 auto;

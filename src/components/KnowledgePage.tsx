@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, FileText, Folder, MoreHorizontal, Search, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, MoreHorizontal, Search, Server, Trash2 } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
@@ -302,40 +302,100 @@ function DomainView({ count, others, repos, documents, open, onOpen, onEdit, onM
         )}
       </header>
       {names.length === 0 && <p className="knowledge-empty">No documents in it.</p>}
-      {names.map((name) => {
-        const repo = repos.find((r) => r.name === name);
-        const own = documents.filter((d) => d.repo === name);
-        return (
-          <div key={name} className="knowledge-repo">
-            <div className="knowledge-repo-head">
-              <h3 title={repo?.path}>{name}</h3>
-              <span className="knowledge-count">
-                {repo && plural(repo.documents, "document", "documents")}
-                {repo && repo.stale > 0 && ` · ${repo.stale} stale`}
-                {repo?.written && ` · written ${day(repo.written)}`}
-              </span>
-              {repo && (
-                <button type="button" className="knowledge-icon-button" title={`Delete ${name}'s documents`} aria-label={`Delete ${name}'s documents`} onClick={() => onRemoveRepo(repo)}>
-                  <Trash2 size={13} />
-                </button>
-              )}
-            </div>
-            {KINDS.map((kind) => {
-              const ofKind = own.filter((d) => d.kind === kind);
-              return (
-                ofKind.length > 0 && (
-                  <div key={kind} className="knowledge-kind">
-                    <h4>
-                      {KIND_LABELS[kind]} <span className="knowledge-count">{ofKind.length}</span>
-                    </h4>
-                    <Cards label={`${KIND_LABELS[kind]} of ${name} in ${domain.name}`} documents={ofKind} open={open} onOpen={onOpen} />
-                  </div>
-                )
-              );
-            })}
+      {names.map((name) => (
+        <Service
+          key={name}
+          name={name}
+          repo={repos.find((r) => r.name === name)}
+          documents={documents.filter((d) => d.repo === name)}
+          domain={domain.name}
+          open={open}
+          onOpen={onOpen}
+          onRemove={onRemoveRepo}
+        />
+      ))}
+    </section>
+  );
+}
+
+type ServiceProps = {
+  name: string;
+  repo: RepoSummary | undefined;
+  /** Its documents in this domain. */
+  documents: KnowledgeDocument[];
+  domain: string;
+  open: string | null;
+  onOpen: (id: string) => void;
+  onRemove: (repo: RepoSummary) => void;
+};
+
+/**
+ * One repository as the service it is: its name, what its overview says (the
+ * `service` document, opened from here rather than listed as a card), what it
+ * has by kind — each a link down to its section — then those sections. It
+ * starts folded to its name and overview, so a domain reads as its services.
+ */
+function Service({ name, repo, documents, domain, open, onOpen, onRemove }: ServiceProps) {
+  const [unfolded, setUnfolded] = useState(false);
+  const overview = documents.filter((d) => d.kind === "service").sort((a, b) => a.title.localeCompare(b.title))[0];
+  const kinds = KINDS.map((kind) => ({ kind, docs: documents.filter((d) => d.kind === kind && d !== overview) })).filter((k) => k.docs.length > 0);
+  const stale = documents.filter((d) => d.stale).length;
+  const section = (kind: KnowledgeKind) => `knowledge-${name}-${kind}`;
+  return (
+    <section className="knowledge-service" aria-label={name}>
+      <header className="knowledge-service-head">
+        <button type="button" className="knowledge-service-toggle" aria-expanded={unfolded} title={repo?.path} onClick={() => setUnfolded(!unfolded)}>
+          {unfolded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <Server size={16} className="knowledge-service-icon" />
+          <h3>{name}</h3>
+        </button>
+        <span className="knowledge-count">
+          {plural(documents.length, "document", "documents")}
+          {stale > 0 && ` · ${stale} stale`}
+          {repo?.written && ` · updated ${day(repo.written)}`}
+        </span>
+        {repo && (
+          <Dropdown
+            label={<MoreHorizontal size={14} aria-label={`Actions for ${name}`} />}
+            title={`Actions for ${name}`}
+            options={[{ value: "delete", label: "Delete its documents…", hint: "In every domain" }]}
+            value=""
+            onPick={() => onRemove(repo)}
+            below
+            right
+          />
+        )}
+      </header>
+      {overview && (
+        <button
+          type="button"
+          data-sheet-opener
+          aria-pressed={overview.id === open}
+          className={`knowledge-overview${overview.id === open ? " on" : ""}`}
+          onClick={() => onOpen(overview.id)}
+        >
+          <span className="knowledge-lead">{overview.lead || overview.title}</span>
+          <span className="knowledge-overview-link">Read the overview</span>
+        </button>
+      )}
+      {unfolded && kinds.length > 1 && (
+        <nav className="knowledge-contents" aria-label={`What ${name} has`}>
+          {kinds.map(({ kind, docs }) => (
+            <button key={kind} type="button" onClick={() => document.getElementById(section(kind))?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+              {KIND_LABELS[kind]} <span className="knowledge-count">{docs.length}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+      {unfolded &&
+        kinds.map(({ kind, docs }) => (
+          <div key={kind} id={section(kind)} className="knowledge-kind">
+            <h4>
+              {KIND_LABELS[kind]} <span className="knowledge-count">{docs.length}</span>
+            </h4>
+            <Cards label={`${KIND_LABELS[kind]} of ${name} in ${domain}`} documents={docs} open={open} onOpen={onOpen} />
           </div>
-        );
-      })}
+        ))}
     </section>
   );
 }

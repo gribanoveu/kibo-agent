@@ -74,7 +74,7 @@ beforeEach(() => {
       { name: "gateway", path: "/src/gateway", commit: null, documents: 1, stale: 0, written: null },
     ],
     documents: [
-      doc("billing/refunds-api", "payments", "api", "Refunds API", { stale: true }),
+      doc("billing/refunds-api", "payments", "api", "Refunds API", { stale: true, confidence: "confirmed" }),
       doc("billing/overview", "payments", "service", "Billing service", { confidence: "confirmed" }),
       doc("gateway/charge", "payments", "algorithm", "Charge retry", { cited: false }),
     ],
@@ -87,6 +87,7 @@ const into = async (domain: string) => {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${domain}`) }));
   return screen.getByRole("region", { name: domain });
 };
+const unfold = (...services: string[]) => services.forEach((name) => fireEvent.click(screen.getByRole("button", { name, expanded: false })));
 const titles = (repo: string) =>
   screen
     .getAllByRole("listbox", { name: new RegExp(` of ${repo} in Payments$`) })
@@ -94,7 +95,7 @@ const titles = (repo: string) =>
     .map((o) => o.querySelector(".knowledge-title")?.textContent);
 
 describe("KnowledgePage", () => {
-  test("shows the domains as folders, and in one its repositories' documents by kind, with their marks", async () => {
+  test("shows the domains as folders, and in one each repository as a service: its overview, then its documents by kind", async () => {
     page();
     expect((await screen.findByRole("button", { name: /^Payments/ })).textContent).toContain("3 documents · 2 repositories");
     // An empty "general" is left out; another empty domain is shown, to be merged or described.
@@ -102,7 +103,15 @@ describe("KnowledgePage", () => {
     expect(screen.getByRole("button", { name: /^Auth/ })).toBeTruthy();
 
     const payments = await into("Payments");
-    expect(titles("billing")).toEqual(["Billing service", "Refunds API"]);
+    // Folded at first: a domain reads as its services, each with its overview.
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(within(screen.getByRole("region", { name: "billing" })).getByRole("button", { name: /What Billing service does/ })).toBeTruthy();
+    unfold("billing", "gateway");
+    // The service document is the repository's overview, read from its head, not a card.
+    expect(titles("billing")).toEqual(["Refunds API"]);
+    const billing = screen.getByRole("region", { name: "billing" });
+    expect(within(billing).getByRole("button", { name: /What Billing service does\. Read the overview/ })).toBeTruthy();
+    expect(billing.textContent).toContain("2 documents · 1 stale");
     expect(titles("gateway")).toEqual(["Charge retry"]);
     expect(payments.textContent).toContain("1 stale");
     expect(screen.getByRole("option", { name: /Refunds API/ }).textContent).toContain("What Refunds API does.");
@@ -110,7 +119,7 @@ describe("KnowledgePage", () => {
     expect(screen.getByRole("option", { name: /Charge retry/ }).textContent).toContain("no evidence");
     // Only what is off is marked: "confirmed" is the rule, "inferred" the exception.
     expect(screen.getByRole("option", { name: /Charge retry/ }).textContent).toContain("inferred");
-    expect(screen.getByRole("option", { name: /Billing service/ }).textContent).not.toContain("confirmed");
+    expect(screen.getByRole("option", { name: /Refunds API/ }).textContent).not.toContain("confirmed");
     expect(screen.getByRole("listbox", { name: "API of billing in Payments" }).textContent).toContain("Refunds API");
 
     fireEvent.click(screen.getByRole("button", { name: "All domains" }));
@@ -120,6 +129,7 @@ describe("KnowledgePage", () => {
   test("opens a document with its frontmatter, moves it and deletes it", async () => {
     page();
     await into("Payments");
+    unfold("billing");
     fireEvent.click(screen.getByRole("option", { name: /Refunds API/ }));
     await waitFor(() => expect(screen.getByText("Body of billing/refunds-api")).toBeTruthy());
     // The text first; the frontmatter's lists closed over it.
@@ -142,11 +152,12 @@ describe("KnowledgePage", () => {
   test("a document opens in a sheet over the page; Escape closes what is on top first", async () => {
     page();
     await into("Payments");
+    unfold("billing");
     fireEvent.click(screen.getByRole("option", { name: /Refunds API/ }));
     await waitFor(() => screen.getByText("Body of billing/refunds-api"));
     // The page stays as wide as it was, its cards still there to pick another.
     expect(screen.getByRole("complementary", { name: "Document billing/refunds-api" }).className).toBe("page-sheet");
-    fireEvent.click(screen.getByRole("option", { name: /Billing service/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Read the overview/ }));
     await waitFor(() => screen.getByText("Body of billing/overview"));
 
     fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
@@ -185,7 +196,8 @@ describe("KnowledgePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge" }));
     await waitFor(() => expect(calls).toContainEqual({ command: "knowledge_domain_merge", args: { from: "payments", into: "auth" } }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete gateway's documents" }));
+    fireEvent.click(screen.getByTitle("Actions for gateway"));
+    fireEvent.click(screen.getByRole("option", { name: /^Delete its documents/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls).toContainEqual({ command: "knowledge_delete_repo", args: { repo: "gateway" } }));
   });
