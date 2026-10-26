@@ -89,9 +89,10 @@ pub fn read_file(
     // Recorded against the whole file even when a slice is returned, and under
     // the canonical spelling rather than whatever the model typed — otherwise
     // `./src/a.rs` and `src/a.rs` would be two different files to the registry.
-    // A range that happens to cover the whole file still counts as partial:
-    // being conservative costs one re-read, being wrong costs the file. So does
-    // a whole-file read the limit cut short: the model has not seen the rest.
+    // A range that came back as every line, uncut, is a whole read: the model
+    // was told "All N lines", and refusing its write after that sent it round
+    // in circles. A whole-file read the limit cut short is not: the model has
+    // not seen the rest.
     let relative = relative_to_root(scope, &path)?;
     let asked_whole = start_line.is_none() && end_line.is_none();
     let data = asked_whole
@@ -99,7 +100,8 @@ pub fn read_file(
         && DATA_EXTENSIONS.contains(&extension_of(&args.path).as_str());
     let max_lines = if data { DATA_HEAD_LINES } else { MAX_READ_LINES };
     let result = slice_lines(&content, start_line, end_line, max_lines, MAX_READ_BYTES);
-    let whole = asked_whole && !matches!(result, ToolResult::File { truncated: true, .. });
+    let whole = matches!(result, ToolResult::File { start_line, end_line, total_lines, truncated: false, .. }
+        if asked_whole || (start_line == 1 && end_line == total_lines));
     reads.record(&relative, &content, whole);
     Ok(result)
 }
@@ -327,7 +329,7 @@ pub(super) fn definition() -> LlmToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::tools::{ReadFiles, ToolCall, ToolDeps};
+    use crate::domain::tools::{ReadFiles, ToolCall, ToolDeps, WriteBlocked};
     use crate::services::ai_tools::tools::execute_tool;
     use crate::testing::temp_dir;
     use std::path::PathBuf;
@@ -529,6 +531,41 @@ mod tests {
         assert_eq!((start, end, total), (1, MAX_READ_LINES, MAX_READ_LINES + 500));
         assert_eq!(content, numbered(MAX_READ_LINES));
         assert!(reads.check("file.txt", &body, true).is_err(), "a cut read is a partial one");
+    }
+
+    /// A range that comes back as every line is a whole read — it is said as
+    /// "All N lines" — and one that stops short of the end is not.
+    #[test]
+    fn a_range_covering_the_whole_file_unlocks_a_write() {
+        let body = numbered(10);
+        let (scope, _) = fixture("read-range-whole", &body);
+
+        let mut part = ReadFiles::default();
+        read_file(&scope, &args("file.txt", Some(1), Some(9)), &mut part).unwrap();
+        assert_eq!(part.check("file.txt", &body, true), Err(WriteBlocked::ReadInPart));
+        let mut tail = ReadFiles::default();
+        read_file(&scope, &args("file.txt", Some(2), Some(10)), &mut tail).unwrap();
+        assert_eq!(tail.check("file.txt", &body, true), Err(WriteBlocked::ReadInPart));
+
+        let mut whole = ReadFiles::default();
+        read_file(&scope, &args("file.txt", Some(1), Some(10)), &mut whole).unwrap();
+        assert_eq!(whole.check("file.txt", &body, true), Ok(()));
+        let mut past_end = ReadFiles::default();
+        read_file(&scope, &args("file.txt", Some(1), Some(5000)), &mut past_end).unwrap();
+        assert_eq!(past_end.check("file.txt", &body, true), Ok(()), "a range clamped to the file is still all of it");
+    }
+
+    /// A range over the whole of a file too long for one read is cut, and so
+    /// is not a whole read.
+    #[test]
+    fn a_cut_range_over_the_whole_file_does_not_unlock_a_write() {
+        let body = numbered(MAX_READ_LINES + 500);
+        let (scope, _) = fixture("read-range-cut", &body);
+        let mut reads = ReadFiles::default();
+
+        let result = read_file(&scope, &args("file.txt", Some(1), Some(MAX_READ_LINES + 500)), &mut reads).unwrap();
+        assert!(truncated(&result));
+        assert_eq!(reads.check("file.txt", &body, true), Err(WriteBlocked::ReadInPart));
     }
 
     /// Exactly at the limit is the whole file — byte for byte, the missing
