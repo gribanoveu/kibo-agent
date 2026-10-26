@@ -58,8 +58,7 @@
   white-space: nowrap;
 }
 .folder-tab-worktree,
-.folder-tab .index-badge,
-.folder-tab-changes {
+.folder-tab .index-badge {
   flex: none;
 }
 /* Narrow: words that have an icon and a tooltip become just the icon. */
@@ -131,34 +130,12 @@
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
-/* What the folder holds against its last commit; opens Changes. */
-.folder-tab-changes {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: pointer;
-}
 .folder-tab-end {
   margin-left: auto;
   min-width: 0;
   display: flex;
 }
-.folder-tab-changes + .folder-tab-end {
-  margin-left: 0;
-}
 /* Nothing to show there: no gap for it either. */
 .folder-tab-end:empty {
   display: none;
-}
-.folder-tab-changes:hover {
-  text-decoration: underline;
-  text-decoration-color: var(--text-faint);
 }

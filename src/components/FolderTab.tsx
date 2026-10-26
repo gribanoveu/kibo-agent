@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Dropdown } from "./Dropdown";
 import { IndexBadge } from "./IndexBadge";
 import type { RecentFolder } from "../lib/chat";
-import type { BranchRef, ChangeTotals } from "../lib/git";
+import type { BranchRef } from "../lib/git";
 import type { IndexState } from "../lib/indexStatus";
 import "./FolderTab.css";
 
@@ -49,9 +49,6 @@ type Props = {
   branch?: string | null;
   /** The folder's index; `null` until anything is known about it. */
   index?: IndexState | null;
-  /** Lines added and removed since the last commit; `null` outside a repository. */
-  changes?: ChangeTotals | null;
-  onOpenChanges: () => void;
   /** Offered while the chat has not started: switch the branch, or start a
       worktree from one. Without it the branch is only shown. */
   branchPicker?: {
@@ -67,8 +64,8 @@ type Props = {
   end?: ReactNode;
 };
 
-/** Where the next message will be worked on: the folder, its branch, its
-    index and what it holds against its last commit. Sits on the composer's
+/** Where the next message will be worked on: the folder, its branch and its
+    index. Sits on the composer's
     top edge — this is read before sending, not looked up in the sidebar. */
 export function FolderTab({
   path,
@@ -80,8 +77,6 @@ export function FolderTab({
   branch = null,
   worktreeOf = null,
   index = null,
-  changes = null,
-  onOpenChanges,
   branchPicker,
   end,
 }: Props) {
@@ -187,17 +182,6 @@ export function FolderTab({
         </span>
       )}
       {path && index && <IndexBadge state={index} />}
-      {path && changes && changes.files > 0 && (
-        <button
-          type="button"
-          className="folder-tab-changes"
-          title={`${changes.files} ${changes.files === 1 ? "file" : "files"} changed since the last commit`}
-          onClick={onOpenChanges}
-        >
-          <span className="add">+{changes.add}</span>
-          <span className="del">−{changes.del}</span>
-        </button>
-      )}
       {end && <span className="folder-tab-end">{end}</span>}
     </div>
   );

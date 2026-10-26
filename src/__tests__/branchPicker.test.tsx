@@ -230,7 +230,6 @@ describe("the folder tab's branch", () => {
         branch="main"
         onOpenFolder={() => {}}
         onPickFolder={() => {}}
-        onOpenChanges={() => {}}
         branchPicker={branchPicker}
       />,
     );
@@ -287,7 +286,6 @@ describe("a folder that is a worktree", () => {
         worktreeOf={worktreeOf}
         onOpenFolder={() => {}}
         onPickFolder={() => {}}
-        onOpenChanges={() => {}}
       />,
     );
 

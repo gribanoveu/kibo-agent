@@ -590,8 +590,6 @@ export default function App() {
                 branch={branch}
                 worktreeOf={worktreeOf}
                 index={index}
-                changes={changeTotals}
-                onOpenChanges={() => openTab("changes")}
                 end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={
                   unstarted

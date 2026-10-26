@@ -2,21 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FolderTab, folderOptions } from "../components/FolderTab";
 import type { RecentFolder } from "../lib/chat";
-import type { ChangeTotals } from "../lib/git";
 import { fromSnapshot, type IndexState } from "../lib/indexStatus";
 
 // The strip on the composer's top edge: which folder the next message is
-// worked on, and what that folder is like — its branch, index and changes.
+// worked on, and what that folder is like — its branch and index.
 
 type Over = {
   path?: string | null;
   recent?: string[];
   branch?: string | null;
   index?: IndexState | null;
-  changes?: ChangeTotals | null;
   onOpenFolder?: (path: string) => void;
   onPickFolder?: () => void;
-  onOpenChanges?: () => void;
 };
 
 const tab = (over: Over = {}) =>
@@ -26,10 +23,8 @@ const tab = (over: Over = {}) =>
       recent={(over.recent ?? []).map((path) => ({ path, worktreeOf: null }))}
       branch={over.branch}
       index={over.index}
-      changes={over.changes}
       onOpenFolder={over.onOpenFolder ?? (() => {})}
       onPickFolder={over.onPickFolder ?? (() => {})}
-      onOpenChanges={over.onOpenChanges ?? (() => {})}
     />,
   );
 
@@ -94,22 +89,6 @@ describe("the index", () => {
   });
 });
 
-describe("the changes", () => {
-  test("shows lines added and removed, and opens Changes", () => {
-    let opened = 0;
-    tab({ changes: { files: 2, add: 12, del: 3 }, onOpenChanges: () => opened++ });
-    const button = screen.getByTitle("2 files changed since the last commit");
-    expect(button.textContent).toBe("+12−3");
-    fireEvent.click(button);
-    expect(opened).toBe(1);
-  });
-
-  test("a clean folder, or no repository, shows nothing", () => {
-    tab({ changes: { files: 0, add: 0, del: 0 } });
-    expect(screen.queryByTitle(/changed since the last commit/)).toBeNull();
-  });
-});
-
 describe("the folder menu", () => {
   const folder = (path: string, worktreeOf: string | null = null): RecentFolder => ({ path, worktreeOf });
 
@@ -146,7 +125,6 @@ describe("the folder menu", () => {
         onOpenFolder={(path) => opened.push(path)}
         onPickFolder={() => {}}
         onForgetFolder={(path) => forgotten.push(path)}
-        onOpenChanges={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole("button", { expanded: false }));
@@ -166,7 +144,6 @@ describe("the folder menu", () => {
         recent={[folder("/work/kibo"), folder("/wt/kibo/main-0925-2214", "/work/kibo")]}
         onOpenFolder={() => {}}
         onPickFolder={() => {}}
-        onOpenChanges={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole("button", { expanded: false }));

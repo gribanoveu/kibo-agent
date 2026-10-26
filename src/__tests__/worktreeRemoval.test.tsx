@@ -141,7 +141,6 @@ describe("the folder menu", () => {
         onOpenFolder={() => {}}
         onPickFolder={() => {}}
         onRemoveWorktree={(path) => asked.push(path)}
-        onOpenChanges={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole("button", { expanded: false }));

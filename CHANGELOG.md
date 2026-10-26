@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-26 The strip over the message box no longer shows lines added and removed; the Overview and the Changes pane still do
 - 2026-10-26 The agent's Overview, and a chat's context meter in Chat mode, show how many tokens the whole session has spent — every model call of the chat, its helpers, title, knowledge-base checks and summaries included
 - 2026-10-25 The Chat assistant searches and reads the knowledge base while it is on in the Catalog, and asks it who provides and consumes a topic or an endpoint — answering from what agents wrote about your repositories, without writing to it
 - 2026-10-25 Catalog, Meetings and Artifacts open what you pick in a sheet over the page, as Knowledge does, and Escape or a click outside it closes it
