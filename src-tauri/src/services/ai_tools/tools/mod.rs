@@ -394,7 +394,7 @@ mod definition_tests {
             ),
             ToolName::Explore => (
                 r#"{"task":"where is X"}"#,
-                vec![ToolCall::Explore(crate::domain::tools::ExploreArgs { task: "where is X".to_string() })],
+                vec![ToolCall::Explore(crate::domain::tools::ExploreArgs { task: "where is X".to_string(), fork: false })],
             ),
             ToolName::Remember => (
                 r#"{"fact":"bench needs --release"}"#,

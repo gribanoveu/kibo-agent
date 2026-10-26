@@ -242,6 +242,10 @@ pub struct Turn<'a> {
     /// The features the user has on, read once a turn: a tool of one that is
     /// off is neither offered nor run (`domain::features`).
     pub features: crate::domain::features::Features,
+    /// A forked `explore` helper: the calling turn's prompt and tools, so its
+    /// start is read from the provider's cache, and of the tools only what
+    /// Explore mode offers runs (`preflight`).
+    pub fork: bool,
 }
 
 
@@ -724,7 +728,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         // cap a refusal no longer keeps the turn going.
         // A helper's answer — research, a review — is not the turn
         // ending: that is the calling turn's, and its Stop hooks run then.
-        let helper = matches!(turn.place.mode(), Some(ConversationMode::Explore | ConversationMode::Review));
+        let helper = turn.fork || matches!(turn.place.mode(), Some(ConversationMode::Explore | ConversationMode::Review));
         let refused = if waiting.is_empty() && !helper {
             let fields = serde_json::json!({ "stop_hook_active": pass.stop_blocks > 0 });
             match fire_hook(turn, &events, round, HookEvent::Stop, None, fields) {
@@ -991,7 +995,7 @@ fn execute_call(
     // Built per call, because the id is what pairs a line of output with the
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
-    let explore = |task: &str| run_explore(turn, task, &output);
+    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
@@ -1035,6 +1039,22 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
     }
     match turn.place {
         Place::Folder { scope, mode, .. } => {
+            // A fork is offered its parent's tools for the parent's cache,
+            // and runs only what an `explore` helper would: the folder, not
+            // the web — several run side by side, and the credits are the user's.
+            // Before the mode's own gate, so a write is told it is not for a
+            // fork, not that it needs a read first.
+            let reads_only = |tool: ToolName| {
+                conversation_mode::offers(ConversationMode::Explore, tool)
+                    && !tool.is_web()
+                    && !matches!(tool, ToolName::DeepseekSearch | ToolName::DeepseekFetch)
+            };
+            if turn.fork && !ToolName::from_wire_name(&call.name).is_some_and(reads_only) {
+                return Err(crate::domain::tools::ToolError::Command(format!(
+                    "`{}` is not for a fork, which only searches and reads. Answer from what you can read",
+                    call.name
+                )));
+            }
             preflight_tool_call(scope, mode, reads, call)?;
             // A review runs as a helper, with nobody to answer a card: what
             // would ask is refused rather than paused on.
@@ -1195,9 +1215,15 @@ fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Result<(), Stri
 /// Recorded in the Agents tab from start to end, and stopped from there too;
 /// the caller says how it ended (`Agents::finish`). The chat's own Stop ends
 /// both.
+///
+/// `fork`: the conversation so far comes before `brief`, and the helper is
+/// the calling turn's place, MCP tools and features — what its prompt and
+/// tool list are made of — so its requests start as the calling turn's last
+/// one did.
 fn run_helper(
     turn: &Turn,
     brief: &str,
+    fork: Option<&[LlmMessage]>,
     mode: ConversationMode,
     review: Option<Arc<crate::domain::review::ReviewDesk>>,
     approval: &ApprovalPolicy,
@@ -1230,12 +1256,26 @@ fn run_helper(
     };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
     let no_steering = Vec::new;
+    let (mode, web, mcp, features, messages) = match fork {
+        // A fork does not search the web either: offered for the cache, refused when called.
+        Some(history) => {
+            let web = match turn.place {
+                Place::Folder { web, .. } => web,
+                Place::Chat { .. } => None,
+            };
+            let mut messages = history.to_vec();
+            messages.push(LlmMessage::user(prompt::explore_fork_brief(brief)));
+            (turn.place.mode().unwrap_or(mode), web, turn.mcp, turn.features.clone(), messages)
+        }
+        // A helper reads; no feature of the user's is for it. Several run side
+        // by side, and each searching the web would multiply the queries — and
+        // Tavily's credits.
+        None => (mode, None, &McpTools::default(), Features::default(), vec![LlmMessage::user(brief)]),
+    };
     let helper = Turn {
         events: &events,
         session: turn.session,
-        // A helper reads the folder. Several run side by side, and each
-        // searching the web would multiply the queries — and Tavily's credits.
-        place: Place::Folder { scope, mode, web: None },
+        place: Place::Folder { scope, mode, web },
         approval,
         cancelled: &stopped,
         sleep: turn.sleep,
@@ -1252,7 +1292,7 @@ fn run_helper(
         log_call: turn.log_call,
         plan: None,
         worktree_of: turn.worktree_of,
-        mcp: &McpTools::default(),
+        mcp,
         hooks: turn.hooks,
         // The calling turn's to report when they end.
         processes: None,
@@ -1262,10 +1302,10 @@ fn run_helper(
         questions: None,
         board: None,
         deepseek: None,
-        // A helper reads; no feature of the user's is for it.
-        features: Features::default(),
+        features,
+        fork: fork.is_some(),
     };
-    let outcome = stream(&helper, vec![LlmMessage::user(brief)], Vec::new());
+    let outcome = stream(&helper, messages, Vec::new());
     Ok((agents, id, outcome))
 }
 
@@ -1275,10 +1315,25 @@ fn run_helper(
 ///
 /// Nothing it is offered asks for approval, so it never pauses; if it did,
 /// there would be no card to answer, and it ends as an error instead.
-fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolResult, crate::domain::tools::ToolError> {
+///
+/// A fork starts from `history` as it was before the reply that called it:
+/// what the calling turn's last request sent, so the provider has it cached,
+/// and no call of that reply left without its result.
+fn run_explore(
+    turn: &Turn,
+    args: &crate::domain::tools::ExploreArgs,
+    history: &[LlmMessage],
+    progress: &CommandSink,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     use crate::domain::tools::ToolError;
-    let (agents, id, outcome) = run_helper(turn, task, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress)?;
+    let task = args.task.as_str();
+    let before_reply = history.iter().rposition(|m| m.role == LlmRole::Assistant && !m.tool_calls.is_empty()).unwrap_or(history.len());
+    let fork = args.fork.then(|| &history[..before_reply]);
+    if let Some(start) = fork {
+        fork_can_start(turn, start, &history[before_reply..])?;
+    }
+    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress)?;
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match outcome {
         Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), .. })) => failed(format!(
@@ -1309,6 +1364,47 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
     answer
         .map(|text| ToolResult::Explored { text: explore_answer::checked(&text, &read, lines_of), agent: id, tokens })
         .map_err(ToolError::Explore)
+}
+
+/// Whether a fork may start from `start`, the conversation before the reply
+/// that asked for it; `reply` is that reply and what of it has run.
+///
+/// Not after a change in the same reply: the fork would read the folder as
+/// its conversation last saw it. And not from a conversation already half
+/// way to where old results are cleared: the fork's own reads would push its
+/// requests past it, and the clearing would cut into the conversation it was
+/// started for — and into the cached start that made it cheap.
+/// ponytail: half the trigger is a guess; a fork that reads more than the
+/// rest still clears into its start. A floor under `result_clearing::plan`
+/// is the way past.
+fn fork_can_start(turn: &Turn, start: &[LlmMessage], reply: &[LlmMessage]) -> Result<(), crate::domain::tools::ToolError> {
+    use crate::domain::tools::ToolError;
+    let ran = |id: &str| reply.iter().any(|m| m.tool_call_id.as_deref() == Some(id));
+    let changed: Vec<&str> = reply
+        .first()
+        .map(|asked| asked.tool_calls.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|call| ran(&call.id) && ToolName::from_wire_name(&call.name).is_some_and(ToolName::is_mutating))
+        .map(|call| call.name.as_str())
+        .collect();
+    if !changed.is_empty() {
+        return Err(ToolError::Explore(format!(
+            "a fork starts from before this reply, and `{}` in it has already run, so it would read the folder as it was. Give the helper a brief instead (no fork), or fork in a reply of its own",
+            changed.join("`, `")
+        )));
+    }
+    let usage = request_usage(turn, start);
+    let trigger = usage
+        .limit
+        .map(|limit| u64::from(limit) * result_clearing::TRIGGER_PERCENT / 100)
+        .unwrap_or(result_clearing::FALLBACK_TRIGGER_TOKENS as u64);
+    if usage.total as u64 * 2 >= trigger {
+        return Err(ToolError::Explore(
+            "this conversation is too long to fork: the helper's reading would clear what it was forked for. Give it a brief instead (no fork)".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// The files a helper opened, once each, from its steps (`explore_step`).
@@ -1391,7 +1487,7 @@ fn run_review(
     progress: &CommandSink,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
-    let (agents, id, outcome) = run_helper(turn, brief, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
+    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
     let (state, text) = match outcome {
         Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => {
             (AgentState::Done, Ok(format!("{}\n\n(The review ran out of rounds before it finished.)", done.result.text.trim())))
@@ -2434,6 +2530,7 @@ mod tests {
                 board: None,
                 deepseek: None,
                 features: self.features.clone(),
+                fork: false,
             };
             f(&turn)
         }
@@ -5994,6 +6091,113 @@ mod tests {
         assert!(tool_names(&requests[0]).contains(&"webSearch".to_string()), "the agent has it");
         let helper = tool_names(&requests[1]);
         assert!(!helper.contains(&"webSearch".to_string()) && !helper.contains(&"webFetch".to_string()), "{helper:?}");
+    }
+
+    /// A fork's requests start as the calling turn's last one did — the same
+    /// prompt, conversation and tools, which the provider has cached — and
+    /// then say what to find out. Offered the agent's tools, it runs only
+    /// what an explore helper would.
+    #[test]
+    fn explore_fork_starts_where_the_caller_was_and_only_reads() {
+        let mut h = harness(
+            "explore-fork",
+            vec![
+                asks(vec![wants("r0", "readFile", r#"{"path":"a.rs"}"#)]),
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]),
+                asks(vec![
+                    wants("s1", "webSearch", r#"{"query":"X"}"#),
+                    wants("w1", "writeFile", r#"{"path":"b.rs","content":"x"}"#),
+                    wants("r1", "readFile", r#"{"path":"a.rs"}"#),
+                ]),
+                text("Found:\n- a.rs:1 — X is set"),
+                text("done"),
+            ],
+        );
+        h.web = Some(Web::search_only(Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new()))));
+        h.features = Features::all();
+        let h = with_server(h, 1);
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        // Forked in the second round, after a read: its start is that round's request.
+        let requests = h.provider.requests();
+        let (caller, fork) = (&requests[1], &requests[2]);
+        assert_eq!(fork.messages[..caller.messages.len()], caller.messages[..]);
+        assert_eq!(fork.messages.len(), caller.messages.len() + 1);
+        let brief = fork.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.starts_with("[A fork of this conversation.") && brief.contains("Find out: where is X"), "{brief}");
+        assert_eq!(fork.tools, caller.tools);
+        assert!(tool_names(fork).iter().any(|t| t == "board") && tool_names(fork).iter().any(|t| t.contains("tracker")), "{:?}", tool_names(fork));
+
+        let back = tool_contents(&requests[3]).join("\n");
+        assert!(back.contains("`webSearch` is not for a fork") && back.contains("`writeFile` is not for a fork"), "{back}");
+        assert!(back.contains("let x = 1;"), "{back}");
+        assert!(!h.root.join("b.rs").exists());
+        assert!(tool_contents(&requests[4]).last().unwrap().starts_with("Found:\n- a.rs:1 — X is set\n\n[Checked by the app: all 1"));
+    }
+
+    /// A fork starts before its reply: after a write in that reply, it
+    /// would read the folder as it was.
+    #[test]
+    fn explore_fork_after_a_change_in_the_same_reply_is_refused() {
+        let h = harness(
+            "explore-fork-stale",
+            vec![
+                asks(vec![
+                    wants("w1", "writeFile", r#"{"path":"b.rs","content":"x"}"#),
+                    wants("e1", "explore", r#"{"task":"where is X","fork":true}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2, "no helper ran");
+        let back = tool_contents(&requests[1]);
+        assert!(back[1].contains("`writeFile` in it has already run"), "{back:?}");
+
+        // What ran before it and changed nothing is no reason.
+        let h = harness(
+            "explore-fork-after-todo",
+            vec![
+                asks(vec![
+                    wants("t1", "todo", r#"{"op":"write","tasks":["look"]}"#),
+                    wants("e1", "explore", r#"{"task":"where is X","fork":true}"#),
+                ]),
+                text("Not settled: None"),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(h.provider.requests().len(), 3, "the fork ran");
+    }
+
+    /// Half way to where old results are cleared, a fork's own reading would
+    /// clear what it was forked for: a brief is asked for instead.
+    #[test]
+    fn explore_fork_from_a_long_conversation_is_refused() {
+        let mut h = harness(
+            "explore-fork-long",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]), text("done")],
+        );
+        h.session.context_limit = Some(100_000);
+        let long = "word ".repeat(36_000);
+        h.run(|turn| stream(turn, vec![LlmMessage::user(&long)], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2, "no helper ran");
+        assert!(tool_contents(&requests[1])[0].contains("too long to fork"), "{:?}", tool_contents(&requests[1]));
+    }
+
+    /// The Stop hooks are the calling turn's, fork or not.
+    #[test]
+    fn explore_fork_finishing_does_not_run_the_stop_hooks() {
+        let h = harness(
+            "explore-fork-stop",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]), text("Not settled: all of it"), text("done")],
+        );
+        let (h, inputs) = hooked(h, hook("Stop", "", "check"), |_, _| (0, ""));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(inputs.lock().unwrap().len(), 1, "the calling turn's end only");
     }
 
     /// A place the helper cites that the file does not have is said under

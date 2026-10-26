@@ -167,6 +167,7 @@ pub fn run_in_folder(
         board,
         deepseek,
         features,
+        fork: false,
     };
     Ok(run(&turn)?)
 }

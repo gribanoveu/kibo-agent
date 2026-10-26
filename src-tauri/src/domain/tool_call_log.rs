@@ -395,7 +395,7 @@ mod tests {
                 ToolResult::Kube { text: LEAK.into(), summary: "1 object".into() },
             ),
             ToolName::Explore => (
-                Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
+                Some(ToolCall::Explore(ExploreArgs { task: "where is X".into(), fork: false })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
             ),
             ToolName::Skill => (

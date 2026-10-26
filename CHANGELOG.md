@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-26 The agent can fork a helper from the conversation itself rather than a written brief; it starts from the same cached request, only reads, and answers like any other helper
 - 2026-10-26 A helper agent's answer comes back with every file and line it cites checked: places that are not there are named under it, with the files it read
 - 2026-10-26 After a non-trivial change the agent offers a review or a commit as buttons under its answer; a press starts a review subagent whose findings the agent then fixes or dismisses, or sends the request to commit — nothing runs before it
 - 2026-10-26 `/review` runs as a subagent that reads only the diff and the repository, not the chat in which the code was written; its report is a card with Fix on each finding, and `/review send-result-to-agent` hands the findings to the agent instead

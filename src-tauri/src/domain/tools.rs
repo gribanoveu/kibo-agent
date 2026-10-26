@@ -1136,7 +1136,7 @@ pub struct ToolDeps<'a> {
     pub review: Option<std::sync::Arc<crate::domain::review::ReviewDesk>>,
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
-    pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
+    pub explore: Option<&'a dyn Fn(&ExploreArgs) -> Result<ToolResult, ToolError>>,
     /// Asks the model whether text may be kept — a `remember` note, a
     /// `knowledgeWrite`'s documents — under the tool's guard prompt, which
     /// is answered SAVE or REFUSE; `Err` says why not, or why it could not be
@@ -2134,11 +2134,14 @@ pub struct KubeUndoArgs {
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the
-/// conversation, so this is the whole brief.
+/// conversation, so this is the whole brief — unless `fork`, when it starts
+/// from the conversation itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExploreArgs {
     pub task: String,
+    #[serde(default)]
+    pub fork: bool,
 }
 
 /// `remember`: one fact for later conversations in this folder.

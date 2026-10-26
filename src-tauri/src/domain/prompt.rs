@@ -118,6 +118,33 @@ Never reproduce, use, copy, quote or embed an API key, token, password, private 
 
 Stay inside the open folder and the tools you were given. If something needs access you do not have, say so rather than routing around it."#;
 
+/// How an `explore` helper answers, brief or fork: the shape
+/// `domain::explore_answer` checks the places of.
+macro_rules! explore_answer_shape {
+    () => {
+        "Answer in this shape, and nothing around it — no preamble, no offer of more help:
+
+Found:
+- path:line (or path:start-end) — one fact, as it is in the code there. A short excerpt under it only where the exact code matters.
+
+Not settled:
+- what you could not find out, and where you would look next. \"None\" if nothing.
+
+Cite each place as path:line from the repository root, the lines as you read them: the app checks every one against the file before your answer is passed on, and says which are not there."
+    };
+}
+
+/// What a forked `explore` helper reads after the calling conversation: it
+/// has that conversation's prompt and tools — the same start, read from the
+/// provider's cache — so who it is now, and what it may do, is said here.
+pub fn explore_fork_brief(task: &str) -> String {
+    format!(
+        "[A fork of this conversation. You are no longer the agent above: you were sent from here to find something out, and only your final answer goes back, as the result of its explore call. Search and read only — a call that changes files, runs a command, searches the web, plans or asks the user is refused. Do not carry on with the task above.]\n\nFind out: {}\n\n{}",
+        task.trim(),
+        explore_answer_shape!()
+    )
+}
+
 /// What the chosen mode changes about the job.
 ///
 /// Its own message rather than a branch inside [`INSTRUCTIONS`]: three copies
@@ -168,21 +195,16 @@ Report each problem the change introduces with `reportFinding`, placed by quotin
 End with a short answer: what the change does, in a sentence or two; what you checked and found sound; and what you could not settle, with the file and what would settle it. Do not repeat the findings — they are shown beside your answer.",
         // Written for the reader it has: another model, which gets this
         // answer and nothing of how it was found.
-        ConversationMode::Explore => "## This conversation: Explore
+        ConversationMode::Explore => concat!(
+            "## This conversation: Explore
 
 Another agent sent you to find something out in this repository. It sees only your final answer — none of your searches or reads — so the answer has to stand on its own.
 
 Search and read until you can answer, and stop there. You cannot change anything or run anything.
 
-Answer in this shape, and nothing around it — no preamble, no offer of more help:
-
-Found:
-- path:line (or path:start-end) — one fact, as it is in the code there. A short excerpt under it only where the exact code matters.
-
-Not settled:
-- what you could not find out, and where you would look next. \"None\" if nothing.
-
-Cite each place as path:line from the repository root, the lines as you read them: the app checks every one against the file before your answer is passed on, and says which are not there.",
+",
+            explore_answer_shape!()
+        ),
         ConversationMode::Ask => "## This conversation: Ask
 
 Answer the question from the repository, as directly as it deserves — one line if one line is the answer. Read what you need to be sure, and stop there.
