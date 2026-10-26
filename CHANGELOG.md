@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-26 Settings → Usage lists the nine busiest projects and the nine most called tools, not three
 - 2026-10-26 The strip over the message box no longer shows lines added and removed; the Overview and the Changes pane still do
 - 2026-10-26 The agent's Overview, and a chat's context meter in Chat mode, show how many tokens the whole session has spent — every model call of the chat, its helpers, title, knowledge-base checks and summaries included
 - 2026-10-25 The Chat assistant searches and reads the knowledge base while it is on in the Catalog, and asks it who provides and consumes a topic or an endpoint — answering from what agents wrote about your repositories, without writing to it

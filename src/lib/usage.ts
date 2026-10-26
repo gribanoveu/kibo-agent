@@ -102,6 +102,8 @@ export interface Ranked {
 }
 
 const TOP = 3;
+/** Projects and tools: the cards beside each other, a longer list each. */
+const TOP_LISTED = 9;
 
 const parse = (day: string) => {
   const [y, m, d] = day.split("-").map(Number);
@@ -228,8 +230,8 @@ export function usageStats(rows: DailyMetric[], range: UsageRange, today: Date):
     prompts: sum("prompts"),
     toolCalls: sum("toolCalls"),
     hours: Array.from({ length: 24 }, (_, h) => hourly?.get(String(h).padStart(2, "0")) ?? 0),
-    topProjects: ranked("sessions").slice(0, TOP),
-    topTools: ranked("toolCalls").slice(0, TOP),
+    topProjects: ranked("sessions").slice(0, TOP_LISTED),
+    topTools: ranked("toolCalls").slice(0, TOP_LISTED),
   };
 }
 
