@@ -95,23 +95,33 @@ describe("useAgents", () => {
 });
 
 describe("the agent list", () => {
-  test("shows each run, its cost, the newest open with its steps, and Stop only for a running one", () => {
+  test("a line per run: what it was asked, the tool it is calling now or how it ended, Stop only while it runs", () => {
     const stopped: number[] = [];
     render(<AgentList agents={listed} error={null} onStop={(id) => stopped.push(id)} />);
-    expect(screen.getByText("Where is the token refreshed?")).toBeTruthy();
-    expect(screen.getByText("31k tokens · 90% cached")).toBeTruthy();
-    expect(screen.getByText("960 tokens")).toBeTruthy();
-    expect(screen.getByText(/readFile src\/auth\.rs/)).toBeTruthy();
-    expect(screen.queryByText("tests/parser.rs:12")).toBeNull();
+    const rows = screen.getAllByRole("button", { expanded: false });
+    expect(rows.map((row) => row.textContent)).toEqual(["Where is the token refreshed?readFile", "Which tests cover the parser?done"]);
+    // Closed until asked: no brief, steps or cost on screen.
+    expect(screen.queryByText("31k tokens · 90% cached")).toBeNull();
+    expect(screen.queryByText("src/auth.rs")).toBeNull();
 
-    const stops = screen.getAllByText("Stop");
-    expect(stops).toHaveLength(1);
-    fireEvent.click(stops[0]);
+    fireEvent.click(screen.getByLabelText("Stop"));
     expect(stopped).toEqual([2]);
+    expect(screen.getAllByLabelText("Stop")).toHaveLength(1);
+  });
+
+  test("open, the whole brief, what it cost and the tools it called, the last one marked as under way", () => {
+    const brief = "Repository: /work/kibo\nGoal: Where is the token refreshed?\nLook under src/auth.";
+    render(<AgentList agents={[{ ...listed[0], task: brief }, listed[1]]} error={null} onStop={() => {}} />);
+    fireEvent.click(screen.getByText("Where is the token refreshed?"));
+    expect(document.querySelector(".agent-task")?.textContent).toBe(brief);
+    expect(screen.getByText("31k tokens · 90% cached")).toBeTruthy();
+    const steps = [...document.querySelectorAll(".agent-steps li")];
+    expect(steps.map((li) => li.textContent)).toEqual(["greprefresh", "readFilesrc/auth.rs"]);
+    expect(steps.map((li) => li.className)).toEqual(["", "now"]);
 
     fireEvent.click(screen.getByText("Which tests cover the parser?"));
     expect(screen.getByText("tests/parser.rs:12")).toBeTruthy();
-    expect(screen.queryByText(/readFile src\/auth\.rs/)).toBeNull();
+    expect(screen.queryByText("src/auth.rs")).toBeNull();
   });
 
   test("a run asked for from the chat opens once it is listed, and only if it is still that run", () => {
@@ -125,7 +135,7 @@ describe("the agent list", () => {
   test("a number from before a restart is not today's run with that number", () => {
     render(<AgentList agents={listed} error={null} onStop={() => {}} focus={{ id: 1, task: "something asked yesterday" }} />);
     expect(screen.queryByText("tests/parser.rs:12")).toBeNull();
-    expect(screen.getByText(/readFile src\/auth\.rs/)).toBeTruthy();
+    expect(screen.queryAllByRole("button", { expanded: true })).toEqual([]);
   });
 
   test("a failed run says why", () => {
@@ -137,6 +147,7 @@ describe("the agent list", () => {
       />,
     );
     expect(screen.getByText("failed")).toBeTruthy();
+    fireEvent.click(screen.getByText("Which tests cover the parser?"));
     expect(screen.getByText("the helper used up its 60 rounds")).toBeTruthy();
   });
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-26 Helper agents list as one line each — what they were asked and the tool they are calling now; a click opens the whole brief, what it cost, every tool called and the answer
 - 2026-10-26 The Terminal pane closes from an × at the end of its tab strip; the shells keep running
 - 2026-10-26 In Agent mode Overview and Terminal open one under the other, as one panel, while every other pane — Changes, Plan, Files, MCP and the rest — takes the column alone and replaces the one open before it
 - 2026-10-26 Settings → Usage lists the nine busiest projects and the nine most called tools, not three

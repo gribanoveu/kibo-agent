@@ -1,7 +1,7 @@
 .agent-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 1px;
 }
 .agent-list-empty,
 .agent-list-error {
@@ -14,15 +14,13 @@
   color: var(--red);
 }
 
-/* A card per run: the task on top, how it stands and what it cost under it;
-   open, its steps and its answer. The state is the dot's colour. Named
-   `agent-run`, not `agent`: CSS is global, and the chat's `.role.agent` is one. */
+/* A line per run: the state's dot, what it was asked, what it is doing now —
+   the last tool it called — or how it ended. Open, the whole brief, what it
+   cost, the tools it called and its answer. Named `agent-run`, not `agent`:
+   CSS is global, and the chat's `.role.agent` is one. */
 .agent-run {
   --state: var(--text-faint);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel-soft);
-  overflow: hidden;
+  border-radius: var(--radius-sm);
 }
 .agent-run.running {
   --state: var(--green);
@@ -30,47 +28,105 @@
 .agent-run.failed {
   --state: var(--amber);
 }
+.agent-run.open {
+  background: var(--bg-panel-soft);
+}
 .agent-head {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 10px 9px 12px;
-  cursor: pointer;
+  align-items: center;
+  border-radius: var(--radius-sm);
 }
 .agent-head:hover {
   background: var(--bg-hover);
+}
+.agent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
 }
 .agent-dot {
   flex: none;
   width: 7px;
   height: 7px;
-  margin-top: 6px;
   border-radius: 50%;
   background: var(--state);
 }
 .agent-run.running .agent-dot {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent);
 }
-.agent-body {
+.agent-title {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.agent-now {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--state);
+}
+.agent-stop {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  padding: 0;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.agent-stop:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+.agent-chev {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.15s;
+}
+.agent-run.open .agent-chev {
+  transform: rotate(90deg);
+}
+.agent-detail {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
+  padding: 4px 10px 10px 23px;
 }
 .agent-task {
+  max-height: 10em;
+  overflow: auto;
   font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-/* Closed, a long brief keeps to three lines; open, it is all there. */
-.agent-run:not(.open) .agent-task {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .agent-meta {
   display: flex;
@@ -87,51 +143,37 @@
 .agent-state {
   color: var(--state);
 }
-.agent-stop {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-soft);
-  background: var(--bg-panel);
-  color: var(--text-dim);
-  font-family: var(--font-ui);
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-.agent-stop:hover {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
-}
-.agent-chev {
-  flex: none;
-  margin-top: 3px;
-  color: var(--text-faint);
-  transition: transform 0.15s;
-}
-.agent-run.open .agent-chev {
-  transform: rotate(90deg);
-}
-.agent-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 9px 12px 10px;
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-window);
-}
+/* The tools called, a line each, the newest at the bottom and in view. */
 .agent-steps {
   margin: 0;
-  max-height: 16em;
+  padding: 0;
+  list-style: none;
+  max-height: 14em;
   overflow: auto;
-  color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.agent-steps li {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.agent-steps b {
+  flex: none;
+  font-weight: 500;
+  color: var(--text);
+}
+.agent-steps span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The one under way. */
+.agent-steps li.now b {
+  color: var(--green);
 }
 .agent-reason {
   color: var(--amber);

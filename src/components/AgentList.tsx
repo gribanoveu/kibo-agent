@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
-import { type AgentInfo, agentStatus, tokensSpent } from "../lib/agents";
+import { type AgentInfo, agentStatus, briefTitle, tokensSpent } from "../lib/agents";
 import type { AgentFocus } from "../lib/describeTool";
 import "./AgentList.css";
 
@@ -14,11 +14,41 @@ type Props = {
   focus?: AgentFocus | null;
 };
 
-/** The helper agents: what each was asked, what it looked at, what it cost, and what it answered. */
+/** A step as the helper logged it, `readFile src/auth.rs`: the tool, then what it was called on. */
+const splitStep = (step: string) => {
+  const space = step.indexOf(" ");
+  return space < 0 ? { tool: step, on: "" } : { tool: step.slice(0, space), on: step.slice(space + 1) };
+};
+
+/** The tools a run called, oldest first, the one under way marked while it runs; kept scrolled to the newest. */
+function Steps({ steps, running }: { steps: string[]; running: boolean }) {
+  const list = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    const node = list.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [steps.length]);
+  return (
+    <ol className="agent-steps" ref={list}>
+      {steps.map((step, i) => {
+        const { tool, on } = splitStep(step);
+        const now = running && i === steps.length - 1;
+        return (
+          <li key={i} className={now ? "now" : undefined} title={step}>
+            <b>{tool}</b>
+            {on && <span>{on}</span>}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The helper agents, a line each: what it was asked, how far it got. Open, the
+    whole brief, the tools it called — the last one what it is doing now — what
+    it cost, and what it answered. */
 export function AgentList({ agents, error, onStop, focus = null }: Props) {
-  // The newest is the one being watched; others open on a click.
+  // Closed until asked: a click, or a run asked for from the chat.
   const [open, setOpen] = useState<number | null>(null);
-  const shown = open ?? agents[0]?.id ?? null;
   const cards = useRef(new Map<number, HTMLDivElement>());
 
   // Taken once per ask, when the run is in the list — which may be read only
@@ -46,8 +76,10 @@ export function AgentList({ agents, error, onStop, focus = null }: Props) {
       {error && <div className="agent-list-error">{error}</div>}
       {agents.map((a) => {
         const running = a.state.state === "running";
-        const isOpen = shown === a.id;
+        const isOpen = open === a.id;
         const spent = tokensSpent(a.tokens);
+        // What it is doing now: the last tool it called.
+        const now = a.steps[a.steps.length - 1];
         return (
           <div
             key={a.id}
@@ -57,9 +89,33 @@ export function AgentList({ agents, error, onStop, focus = null }: Props) {
             }}
             className={`agent-run ${a.state.state}${isOpen ? " open" : ""}`}
           >
-            <div className="agent-head" onClick={() => setOpen(isOpen ? -1 : a.id)}>
-              <span className="agent-dot" aria-hidden />
-              <div className="agent-body">
+            <div className="agent-head">
+              <button
+                type="button"
+                className="agent-open"
+                aria-expanded={isOpen}
+                title={isOpen ? undefined : a.task}
+                onClick={() => setOpen(isOpen ? null : a.id)}
+              >
+                <span className="agent-dot" aria-hidden />
+                <span className="agent-title">{briefTitle(a.task)}</span>
+                <span className="agent-now">{running ? (now ? splitStep(now).tool : "thinking") : agentStatus(a.state)}</span>
+                <ChevronRight className="agent-chev" size={13} aria-hidden />
+              </button>
+              {running && (
+                <button
+                  type="button"
+                  className="agent-stop"
+                  title="Stop this helper — the agent carries on without its answer"
+                  aria-label="Stop"
+                  onClick={() => onStop(a.id)}
+                >
+                  <Square size={9} fill="currentColor" aria-hidden />
+                </button>
+              )}
+            </div>
+            {isOpen && (
+              <div className="agent-detail">
                 <div className="agent-task">{a.task}</div>
                 <div className="agent-meta">
                   <span className="agent-id">#{a.id}</span>
@@ -69,33 +125,14 @@ export function AgentList({ agents, error, onStop, focus = null }: Props) {
                   </span>
                   {spent && <span>{spent}</span>}
                 </div>
-              </div>
-              {running && (
-                <button
-                  type="button"
-                  className="agent-stop"
-                  title="Stop this helper — the agent carries on without its answer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStop(a.id);
-                  }}
-                >
-                  <Square size={10} fill="currentColor" aria-hidden />
-                  Stop
-                </button>
-              )}
-              <ChevronRight className="agent-chev" size={13} aria-hidden />
-            </div>
-            {isOpen && (
-              <div className="agent-detail">
-                {a.steps.length > 0 && <pre className="agent-steps">{a.steps.join("\n")}</pre>}
+                {a.steps.length > 0 && <Steps steps={a.steps} running={running} />}
+                {running && !a.steps.length && <div className="agent-waiting">Thinking…</div>}
                 {a.state.state === "failed" && <div className="agent-reason">{a.state.reason}</div>}
                 {a.answer && (
                   <div className="agent-answer">
                     <Markdown text={a.answer} streaming={false} />
                   </div>
                 )}
-                {running && !a.steps.length && <div className="agent-waiting">Thinking…</div>}
               </div>
             )}
           </div>
