@@ -57,6 +57,7 @@ import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, setConversationMode } from "./lib/chat";
+import { COMMIT_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary, exportChat } from "./lib/savedChats";
@@ -367,7 +368,7 @@ export default function App() {
     {
       compact: () => void compactNow(),
       fork: () => agent.branch(),
-      review: () => void agent.review(),
+      review: (handed) => void agent.review(handed),
       // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
       analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
@@ -577,6 +578,8 @@ export default function App() {
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
+            // Both are work for the agent to do: a review's findings to fix, a commit.
+            onOffer={conversation.value === "agent" ? (kind) => (kind === "review" ? void agent.review(true) : void send(COMMIT_REQUEST)) : undefined}
           />
           <Composer
             tab={

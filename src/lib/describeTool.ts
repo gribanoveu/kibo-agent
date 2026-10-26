@@ -60,6 +60,8 @@ export const LABELS: Record<string, string> = {
   readTerminal: "Screen",
   runInTerminal: "Terminal",
   reportFinding: "Finding",
+  offer: "Offer",
+  review: "Review",
   explore: "Explore",
   remember: "Memory",
   knowledgeWrite: "Knowledge",
@@ -618,6 +620,10 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     // stands on its own card (`lib/finding.ts`).
     case "reportFinding":
       return { name, arg: str(args.title) ?? "", meta: str(args.path), detail: str(args.body) ?? "" };
+
+    // Likewise an offer: a refused one shows here, a kept one under the answer.
+    case "offer":
+      return { name, arg: str(args.kind) ?? "", detail: str(args.reason) ?? "" };
 
     case "skill": {
       // A skill's files are listed after its instructions, as the model got them.

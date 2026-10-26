@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
+import { HAND_TO_AGENT, typedCommand } from "../lib/slashCommands";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import { useTurnChannel } from "./useTurnChannel";
@@ -299,30 +300,31 @@ export function useAgentTurn({
   );
 
   /**
-   * `/review`: a turn in Review mode over the uncommitted change — the agent
-   * reads and runs what it needs, reports findings, and answers. Otherwise a
-   * turn like `send`'s: steered, stopped, paused and continued the same way,
-   * and the next message can say "fix the first one".
+   * `/review`: a subagent reads the uncommitted change and reports findings —
+   * a card of the user's, or, `handed`, the agent's to go through in the same
+   * turn. Otherwise a turn like `send`'s: stopped, paused and continued the
+   * same way, and the next message can say "fix the first one".
    */
-  const review = useCallback(async () => {
+  const review = useCallback(async (handed = false) => {
+    const typed = handed ? typedCommand("review", HAND_TO_AGENT) : "/review";
     if (turn.status === "running" || turn.status === "awaitingApproval") return;
     setError(null);
     // `/review` is the user's next message after the turn journaled last.
     const answered = journaled.current;
     journaled.current = null;
-    void answered?.then((row) => (row ? nextPromptSent(row, "/review") : undefined)).catch(() => {});
+    void answered?.then((row) => (row ? nextPromptSent(row, typed) : undefined)).catch(() => {});
     unsaved.current = true;
     turnStart.current = turn.blocks.length;
-    setTurn((state) => appendUserMessage(state, "/review", Date.now()));
+    // Whatever was typed, the history has `/review` for the bubble — a branch finds it by that.
+    setTurn((state) => appendUserMessage(state, typed, Date.now(), "/review"));
     keepTodos(dropOpen(todos.current));
 
     const id = `turn-${++turnId.current}`;
-    lastTurn.current = { id, user: "/review" };
+    lastTurn.current = { id, user: typed };
     try {
       await listen(id);
-      // The change is added to the history by the backend, as the message
-      // this bubble stands for; the outcome's history carries it.
-      finish(await reviewStart(id, chatKey.current, history.current, todos.current, planRef.current));
+      // The backend adds the bubble's message and the report to the history.
+      finish(await reviewStart(id, chatKey.current, history.current, todos.current, planRef.current, handed));
     } catch (e) {
       setError(String(e));
       // In the history too: the bubble has to have its message, or every

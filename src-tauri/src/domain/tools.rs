@@ -49,6 +49,8 @@ pub enum ToolName {
     ReadTerminal,
     /// A problem found in a review, placed on the change — review workers only.
     ReportFinding,
+    /// A next step put to the user as a button after the answer; runs nothing.
+    Offer,
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
@@ -140,6 +142,7 @@ impl ToolName {
         ToolName::StopProcess,
         ToolName::ReadTerminal,
         ToolName::ReportFinding,
+        ToolName::Offer,
         ToolName::Explore,
         ToolName::Remember,
         ToolName::KnowledgeWrite,
@@ -197,6 +200,7 @@ impl ToolName {
             ToolName::StopProcess => "stopProcess",
             ToolName::ReadTerminal => "readTerminal",
             ToolName::ReportFinding => "reportFinding",
+            ToolName::Offer => "offer",
             ToolName::Explore => "explore",
             ToolName::Remember => "remember",
             ToolName::KnowledgeWrite => "knowledgeWrite",
@@ -298,6 +302,7 @@ impl ToolName {
             | ToolName::StopProcess
             | ToolName::ReadTerminal
             | ToolName::ReportFinding
+            | ToolName::Offer
             | ToolName::Explore
             | ToolName::Remember
             // The app's own folder, as `remember`; the tree is not touched.
@@ -356,6 +361,7 @@ impl ToolName {
             | ToolName::Todo
             | ToolName::WritePlan
             | ToolName::ReportFinding
+            | ToolName::Offer
             // Change what the model sees or is told next.
             | ToolName::Skill
             | ToolName::ToolSearch
@@ -437,6 +443,8 @@ impl ToolName {
             ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
+            // A button under the answer; nothing outside the chat.
+            ToolName::Offer => true,
             // The cluster, in a chat — no folder to rewind.
             ToolName::KubeList
             | ToolName::KubeGet
@@ -479,6 +487,8 @@ impl ToolName {
             | ToolName::ReadTerminal
             // Checked against a diff in memory.
             | ToolName::ReportFinding
+            // One walk of the working tree, like gitStatus.
+            | ToolName::Offer
             // A scan of the connected servers' tool lists, in memory.
             | ToolName::ToolSearch
             // A small file in the app directory, read and written.
@@ -732,7 +742,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            51,
+            52,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1416,6 +1426,7 @@ pub enum ToolCall {
     StopProcess(ProcessArgs),
     ReadTerminal(ReadTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
+    Offer(OfferArgs),
     Explore(ExploreArgs),
     Remember(RememberArgs),
     KnowledgeWrite(KnowledgeWriteArgs),
@@ -1472,6 +1483,7 @@ impl ToolCall {
             ToolCall::StopProcess(_) => ToolName::StopProcess,
             ToolCall::ReadTerminal(_) => ToolName::ReadTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
+            ToolCall::Offer(_) => ToolName::Offer,
             ToolCall::Explore(_) => ToolName::Explore,
             ToolCall::Remember(_) => ToolName::Remember,
             ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
@@ -1695,6 +1707,8 @@ pub enum ToolResult {
         start_line: u32,
         end_line: u32,
     },
+    /// An offer the user will see after the answer.
+    Offered { kind: OfferKind },
     /// `runCommand` with `background`: it runs on, and this is its number.
     ProcessStarted(crate::domain::background::ProcessInfo),
     /// `runCommand` still running at its timeout: not killed, it runs on as
@@ -1771,6 +1785,16 @@ pub enum ToolResult {
         text: String,
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
+    },
+    /// A review run as a helper over the uncommitted change: what it kept,
+    /// and its closing answer. `handed` when the findings went on to the
+    /// agent to go through, rather than to the user.
+    Reviewed {
+        findings: Vec<crate::domain::review::Finding>,
+        text: String,
+        agent: u32,
+        tokens: crate::domain::agents::AgentTokens,
+        handed: bool,
     },
     /// What a Kubernetes tool read, already shaped for the model — a table,
     /// YAML, a log — and a few words for the row in the transcript.
@@ -2151,6 +2175,24 @@ pub struct PresentArgs {
 #[serde(rename_all = "camelCase")]
 pub struct WritePlanArgs {
     pub content: String,
+}
+
+/// What `offer` can put to the user. Closed: free text would end up as a
+/// button under every answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OfferKind {
+    #[default]
+    Review,
+    Commit,
+}
+
+/// `offer` arguments: what, and why — the user sees both on the button.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferArgs {
+    pub kind: OfferKind,
+    pub reason: String,
 }
 
 /// `skill` arguments: a skill by name, or one of its files.

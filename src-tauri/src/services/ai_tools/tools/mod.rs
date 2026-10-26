@@ -38,6 +38,7 @@ pub mod runbook;
 pub mod list_files;
 pub mod move_path;
 pub mod remember;
+pub mod offer;
 pub mod report_finding;
 pub mod todo;
 pub mod write_file;
@@ -76,6 +77,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Move, move_path::definition),
     (ToolName::WritePlan, write_plan::definition),
     (ToolName::ReportFinding, report_finding::definition),
+    (ToolName::Offer, offer::definition),
     (ToolName::Explore, explore::definition),
     (ToolName::Remember, remember::definition),
     (ToolName::KnowledgeWrite, knowledge::definition),
@@ -161,6 +163,7 @@ pub fn dispatch(
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
+        ToolCall::Offer(args) => offer::offer(folder()?, args),
         ToolCall::Explore(args) => explore::explore(args, deps),
         ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),
@@ -380,6 +383,13 @@ mod definition_tests {
                     severity: Some(crate::domain::review::Severity::High),
                     category: Some(crate::domain::review::Category::Bug),
                     suggestion: Some("y".to_string()),
+                })],
+            ),
+            ToolName::Offer => (
+                r#"{"kind":"commit","reason":"the counter"}"#,
+                vec![ToolCall::Offer(crate::domain::tools::OfferArgs {
+                    kind: crate::domain::tools::OfferKind::Commit,
+                    reason: "the counter".to_string(),
                 })],
             ),
             ToolName::Explore => (

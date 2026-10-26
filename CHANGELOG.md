@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- 2026-10-26 `/review` judges the change on its own: the reviewer reads the diff and the repository, not the chat in which the code was written or its plan
+- 2026-10-26 After a non-trivial change the agent offers a review or a commit as buttons under its answer; a press starts a review subagent whose findings the agent then fixes or dismisses, or sends the request to commit — nothing runs before it
+- 2026-10-26 `/review` runs as a subagent that reads only the diff and the repository, not the chat in which the code was written; its report is a card with Fix on each finding, and `/review send-result-to-agent` hands the findings to the agent instead
 - 2026-10-26 Helper agents list as one line each — what they were asked and the tool they are calling now; a click opens the whole brief, what it cost, every tool called and the answer
 - 2026-10-26 The Terminal pane closes from an × at the end of its tab strip; the shells keep running
 - 2026-10-26 In Agent mode Overview and Terminal open one under the other, as one panel, while every other pane — Changes, Plan, Files, MCP and the rest — takes the column alone and replaces the one open before it

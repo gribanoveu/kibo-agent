@@ -2,8 +2,9 @@
 //! how the change is put to it, what counts as a finding, and when it is told
 //! to wrap up — every rule here is decided without a model.
 //!
-//! The review itself is an ordinary turn in `ConversationMode::Review`: the
-//! agent reads what it needs and runs what proves something. Two things are
+//! The review itself is a helper turn in `ConversationMode::Review`, with a
+//! context of its own (`llm_chat::review`): it reads what it needs and runs
+//! what proves something. Two things are
 //! decided here rather than left to it. What it is sent: secrets, lockfiles,
 //! generated code and prose are left out before anything reaches a model.
 //! And where a finding lands: a model does not give line numbers — it quotes
@@ -16,7 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::domain::llm::{LlmMessage, LlmRole};
+use crate::domain::llm::LlmMessage;
 
 /// One changed file, as the review reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -169,20 +170,13 @@ fn generated(name: &str, dirs: &[&str]) -> bool {
 /// larger change is named past this, and the agent reads what it needs.
 pub const MESSAGE_DIFF_CHARS: usize = 120_000;
 
-/// How a review's message starts: the line its model's context begins at.
-const REVIEW_REQUEST: &str = "Review the uncommitted changes of this repository — the working tree against HEAD.";
-
-/// What a review's model reads of the turn's history: its own message on.
-/// The chat before it — how the change was written, and why its author
-/// thought it right — stays out, so the change is judged on itself. The
-/// history keeps all of it: the conversation goes on after the review.
-///
-/// ponytail: found by the message's first line. A review long enough to be
-/// summarised loses that line; a resume after it finds none and reads the
-/// whole history. A marker kept through summaries if reviews that long turn up.
-pub fn own_context(history: &[LlmMessage]) -> &[LlmMessage] {
-    let own = |m: &LlmMessage| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.starts_with(REVIEW_REQUEST));
-    history.iter().rposition(own).map_or(history, |at| &history[at..])
+/// Why `/review` — and `offer` of a review — has nothing to read: no
+/// change, or `excluded` changed files all left out by `select`.
+pub fn nothing_to_review(excluded: usize) -> String {
+    match excluded {
+        0 => "nothing to review: the working tree matches HEAD".to_string(),
+        n => format!("nothing to review: the {n} changed files are all left out (binary, generated, secrets or documentation)"),
+    }
 }
 
 /// The opening message of a review: the diffs that fit, in path order, the
@@ -190,7 +184,7 @@ pub fn own_context(history: &[LlmMessage]) -> &[LlmMessage] {
 /// language, when the user chose one: nothing the user typed is in a review's
 /// conversation to say it for them.
 pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Option<&str>) -> String {
-    let mut out = format!("{REVIEW_REQUEST}\n\n<changes>\n");
+    let mut out = String::from("Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>\n");
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
     for file in files {
@@ -255,14 +249,20 @@ pub struct FindingArgs {
     pub suggestion: Option<String>,
 }
 
-/// A finding kept, placed on the new side of the file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A finding kept, placed on the new side of the file — all of it, for the
+/// review's report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
+    pub severity: Severity,
     pub category: Category,
     pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 /// Why a finding was refused, worded for the agent that has to fix it.
@@ -323,6 +323,11 @@ impl ReviewDesk {
         &self.files
     }
 
+    /// What was kept, in the order it was reported.
+    pub fn findings(&self) -> Vec<Finding> {
+        self.findings.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// Checks a finding and keeps it: its file is part of the change, its
     /// code is lines the change added, and it is not a second report of one
     /// already kept — the same file, overlapping lines, the same category.
@@ -343,8 +348,11 @@ impl ReviewDesk {
             path: path.to_string(),
             start_line,
             end_line,
+            severity: args.severity.unwrap_or(Severity::Medium),
             category: args.category.unwrap_or(Category::Bug),
             title: args.title.trim().to_string(),
+            body: args.body.trim().to_string(),
+            suggestion: args.suggestion.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from),
         };
         let mut findings = self.findings.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(same) = findings.iter().find(|kept| {
@@ -413,22 +421,6 @@ mod tests {
     /// A file whose diff is `chars` long.
     fn sized(path: &str, chars: usize) -> FileDiff {
         FileDiff { patch: "x".repeat(chars), ..file(path, &[(1, true, "x")]) }
-    }
-
-    /// A review's model starts reading at the latest review's message; with
-    /// none, the whole history is the context.
-    #[test]
-    fn a_review_reads_from_its_own_message_on() {
-        let review = || LlmMessage::user(review_message(&[sized("a.rs", 3)], &[], Some("Russian")));
-        let chat = vec![LlmMessage::user("write the lock"), LlmMessage::assistant("done — it is safe, the lock is held")];
-        assert_eq!(own_context(&chat), &chat[..], "no review: all of it");
-
-        let mut history = chat.clone();
-        history.extend([review(), LlmMessage::assistant("one finding")]);
-        assert_eq!(own_context(&history), &history[2..]);
-
-        history.extend([LlmMessage::user("fix it"), LlmMessage::assistant("fixed"), review()]);
-        assert_eq!(own_context(&history), &history[6..], "the latest review's");
     }
 
     #[test]

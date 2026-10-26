@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { acceptEvent, appendUserMessage, emptyTurn, type Block } from "../lib/chatTurnReducer";
-import { findingOf, type Finding } from "../lib/finding";
-import { FindingCard } from "../components/ReviewCard";
+import { findingOf, reviewOf, type Finding } from "../lib/finding";
+import { FindingCard, ReviewReport } from "../components/ReviewCard";
+import { Transcript } from "../components/ChatPanel";
 
 type Tool = Extract<Block, { kind: "tool" }>;
 
@@ -91,5 +92,69 @@ describe("the review in the transcript", () => {
       kind: "notice",
       text: "The review had spent 10 rounds and ~312k tokens — the agent was asked to wrap up",
     });
+  });
+});
+
+describe("a review a subagent ran", () => {
+  const card = (handed: boolean): Block => ({
+    kind: "tool",
+    id: "review",
+    round: 0,
+    name: "review",
+    arguments: "{}",
+    status: "done",
+    result: {
+      result: "reviewed",
+      findings: [
+        { path: "src/pay.rs", startLine: 11, endLine: 11, severity: "high", category: "bug", title: "Divides by zero", body: "Panics.", suggestion: null },
+      ],
+      text: "One real problem.",
+      agent: 4,
+      tokens: { prompt: 0, cached: 0, completion: 0 },
+      handed,
+    },
+    output: "",
+  });
+
+  test("its report: the findings, what the reviewer said, whose they are", () => {
+    expect(reviewOf(card(false))).toEqual({
+      findings: [{ path: "src/pay.rs", startLine: 11, endLine: 11, severity: "high", category: "bug", title: "Divides by zero", body: "Panics.", suggestion: undefined } as Finding],
+      summary: "One real problem.",
+      agent: 4,
+      handed: false,
+    });
+    expect(reviewOf({ ...(card(false) as Tool), status: "failed", result: undefined, error: "nothing to review" })).toBeNull();
+    expect(reviewOf(call())).toBeNull();
+  });
+
+  /// The report is what the work was for: it stands in the turn, not folded into the line of work.
+  test("stands on its own in the transcript", () => {
+    render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, card(false)] }} onDecide={() => {}} />);
+    expect(screen.getByText("Divides by zero")).toBeTruthy();
+  });
+
+  /// A review that failed is still the turn's one piece of work: its row stands alone, not folded away.
+  test("a failed review stays in sight", () => {
+    const failed = { ...(card(false) as Tool), status: "failed" as const, result: undefined, error: "the review was stopped before it finished" };
+    render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, failed] }} onDecide={() => {}} />);
+    expect(document.querySelector(".tool-run")).toBeNull();
+    expect(document.querySelector(".tools")).toBeTruthy();
+  });
+
+  /// The user's findings carry Fix; the agent's do not — it answers for them itself.
+  test("Fix on the user's findings, not on those handed to the agent", () => {
+    const fixed: string[] = [];
+    const opened: number[] = [];
+    const mine = render(<ReviewReport review={reviewOf(card(false))!} onFix={(t) => fixed.push(t)} onOpenAgent={(a) => opened.push(a.id)} />);
+    expect(screen.getByText("1 finding")).toBeTruthy();
+    expect(screen.getByText("One real problem.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Fix/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+    expect(fixed).toEqual(["Fix the finding from the review: Divides by zero (src/pay.rs:11)"]);
+    expect(opened).toEqual([4]);
+    mine.unmount();
+    render(<ReviewReport review={reviewOf(card(true))!} onFix={(t) => fixed.push(t)} />);
+    expect(screen.getByText(/handed to the agent/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Fix/ })).toBeNull();
   });
 });
