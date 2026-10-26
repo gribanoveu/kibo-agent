@@ -8,7 +8,7 @@ import type { AsideTab } from "../types";
  */
 export type Combo = { code: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean };
 
-export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board";
+export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board" | "MongoDB";
 type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
@@ -61,6 +61,7 @@ export const SHORTCUTS = {
   // Up, down, left, right — the board's keyboard drag takes them in this order.
   cardDragMove: { label: "Move the card you picked up", group: "Board", combos: [{ code: "ArrowUp" }, { code: "ArrowDown" }, { code: "ArrowLeft" }, { code: "ArrowRight" }] },
   cardSave: { label: "Save the card from its note", group: "Board", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  mongoRun: { label: "Run the pipeline, or save the document being edited", group: "MongoDB", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;
