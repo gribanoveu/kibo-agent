@@ -537,13 +537,43 @@ enum Next {
     Paused(Vec<PendingToolCall>),
 }
 
-/// The loop both entry points run.
+/// The loop both entry points run, on the part of the history it is about.
 ///
+/// A review works on its own part: from the review's message on
+/// (`domain::review::own_context`), with no checklist — the chat that wrote
+/// the change, and what it meant to do, stay out of what the model reads,
+/// what clearing and summaries fold, and what the wrap-up looks for. The chat
+/// goes back in front of the history, and its checklist back beside it, on
+/// every way out: the conversation goes on after the review, and a paused one
+/// is cut again when it resumes.
+fn run(
+    turn: &Turn,
+    mut state: State,
+    event_seq: u64,
+    resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
+) -> Result<ChatStreamOutcome, TurnError> {
+    if turn.place.mode() != Some(ConversationMode::Review) {
+        return run_loop(turn, state, event_seq, resume);
+    }
+    let own = state.history.len() - crate::domain::review::own_context(&state.history).len();
+    let own = state.history.split_off(own);
+    let chat = std::mem::replace(&mut state.history, own);
+    let todos = std::mem::take(&mut state.todos);
+    let back = |history: Vec<LlmMessage>| [chat.clone(), history].concat();
+    Ok(match run_loop(turn, state, event_seq, resume)? {
+        ChatStreamOutcome::Done(done) => ChatStreamOutcome::Done(ChatDone { history: back(done.history), todos, ..done }),
+        ChatStreamOutcome::Cancelled(done) => ChatStreamOutcome::Cancelled(ChatDone { history: back(done.history), todos, ..done }),
+        ChatStreamOutcome::PendingApproval(paused) => {
+            ChatStreamOutcome::PendingApproval(PendingApproval { history: back(paused.history), todos, ..paused })
+        }
+    })
+}
+
 /// `resume` carries a round whose calls are already known and already decided;
 /// a fresh round asks the model instead ([`ask_round`]). Everything after that
 /// point is the same code ([`run_calls`]), which is the reason a paused turn
 /// behaves like an ordinary one. How a turn ends is decided here alone.
-fn run(
+fn run_loop(
     turn: &Turn,
     mut state: State,
     event_seq: u64,
@@ -639,7 +669,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
     clear_stale_results(turn, state, &mut pass.seen_results);
     let usage = request_usage(turn, &state.history);
     if compaction::should_compact(usage.total, usage.limit) {
-        let ahead = Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(turn.plan), tail_percent: KEEP_TAIL_PERCENT };
+        let ahead = Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(chat_plan(turn)), tail_percent: KEEP_TAIL_PERCENT };
         match fold(turn, &events, round, &mut state.history, ahead, &mut pass.seen_results) {
             Ok(_) => {}
             // A pass that could not help leaves the history as it was:
@@ -648,7 +678,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
             Err(_) => {}
         }
     }
-    restore_plan(&mut state.history, state.written_plan.as_deref().or(turn.plan));
+    restore_plan(&mut state.history, state.written_plan.as_deref().or(chat_plan(turn)));
     restore_checklist(&mut state.history, &state.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
     events.emit(round, Some(format!("estimate:{round}")), ChatEventPayload::ContextEstimate(request_usage(turn, &state.history)));
@@ -658,7 +688,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         &events,
         round,
         &mut state.history,
-        Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(turn.plan), tail_percent: RETRY_KEEP_TAIL_PERCENT },
+        Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(chat_plan(turn)), tail_percent: RETRY_KEEP_TAIL_PERCENT },
         &mut pass.seen_results,
     )? {
         Some(result) => result,
@@ -1553,6 +1583,16 @@ fn request_messages(turn: &Turn, history: &[LlmMessage]) -> Vec<LlmMessage> {
     messages.extend_from_slice(history);
     messages
 }
+
+/// The plan the chat brings to the turn. None in a review: the plan is how the
+/// change was meant, and a review judges the change without it.
+fn chat_plan<'a>(turn: &Turn<'a>) -> Option<&'a str> {
+    match turn.place.mode() {
+        Some(ConversationMode::Review) => None,
+        _ => turn.plan,
+    }
+}
+
 
 /// The date the prompt gives, with its weekday: "Tuesday, 13 October 2026" —
 /// "remind me on Friday" needs both. The meter asks it too, so what it counts
@@ -5178,6 +5218,98 @@ mod tests {
             assert!(told[0].contains("Bump the version."), "{told:?}");
             assert_requests_list_release(requests);
         });
+    }
+
+    /// A review reads the change, not the chat that wrote it: every request
+    /// starts at the review's message, and neither the chat's plan nor its
+    /// open task gets in — through a pause for approval too. The meter counts
+    /// what is sent, and the chat and its checklist come back on every way
+    /// out, for the conversation that goes on after the review.
+    #[test]
+    fn a_review_reads_only_the_change_and_hands_the_chat_back() {
+        let mut h = harness(
+            "review-clean",
+            vec![asks(vec![wants("c1", "runCommand", r#"{"command":"touch built"}"#)]), text("no findings")],
+        );
+        h.mode = ConversationMode::Review;
+        h.approval = asking();
+        h.plan = Some("# Plan\n\n1. take the lock, it is safe".into());
+        let todos = vec![Task {
+            id: "1".into(),
+            title: "make the counter race-free with the lock".into(),
+            status: crate::domain::tools::TodoStatus::InProgress,
+            note: None,
+        }];
+        let chat = vec![
+            LlmMessage::user("write the counter"),
+            LlmMessage::assistant(format!("Done; it is race-free because of the lock. {}", "x".repeat(20_000))),
+        ];
+        let review = LlmMessage::user(crate::domain::review::review_message(&[], &[], None));
+
+        let outcome = h.run(|turn| stream(turn, [chat.clone(), vec![review]].concat(), todos.clone())).expect("turn");
+        let ChatStreamOutcome::PendingApproval(paused) = outcome else { panic!("expected a pause") };
+        assert_eq!(paused.history[..2], chat[..], "a pause hands the chat back");
+        assert_eq!(paused.todos, todos);
+
+        let approve = vec![ToolCallDecision { id: "c1".into(), approved: true, reason: None }];
+        let outcome = h.run(|turn| resume(turn, paused, approve)).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.history[..2], chat[..], "and so does the end");
+        assert_eq!(done.todos, todos);
+
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let said = |needle: &str| request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
+            assert!(!said("race-free") && !said("write the counter"), "the chat stays out, its task too");
+            assert!(!said("it is safe"), "and so does its plan");
+            assert!(said("Review the uncommitted changes"));
+        }
+        let counted: Vec<usize> = h
+            .events()
+            .iter()
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::ContextEstimate(usage) => Some(usage.conversation),
+                _ => None,
+            })
+            .collect();
+        assert!(!counted.is_empty() && counted.iter().all(|&n| n < 1_000), "{counted:?}");
+    }
+
+    /// A review stopped before it starts still hands back the chat and its
+    /// checklist, as the end and a pause do.
+    #[test]
+    fn a_stopped_review_hands_the_chat_back() {
+        let mut h = harness("review-stopped", vec![]);
+        h.mode = ConversationMode::Review;
+        h.cancel_at_poll(1);
+        let todos = vec![Task { id: "1".into(), title: "count".into(), status: crate::domain::tools::TodoStatus::Pending, note: None }];
+        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done")];
+        let review = LlmMessage::user(crate::domain::review::review_message(&[], &[], None));
+
+        let outcome = h.run(|turn| stream(turn, [chat.clone(), vec![review]].concat(), todos.clone())).expect("turn");
+
+        let ChatStreamOutcome::Cancelled(done) = outcome else { panic!("expected cancelled") };
+        assert_eq!(done.history[..2], chat[..]);
+        assert_eq!(done.todos, todos);
+    }
+
+    /// A second review in a chat is asked to wrap up as well: the first one's
+    /// note is in the chat, not in this review's part.
+    #[test]
+    fn a_second_review_is_asked_to_wrap_up_again() {
+        let mut h = weighing("chat-wrap-up-second", 2);
+        h.mode = ConversationMode::Review;
+        let review = || LlmMessage::user(crate::domain::review::review_message(&[], &[], None));
+        let earlier = vec![
+            review(),
+            LlmMessage::user("[Review budget] earlier"),
+            LlmMessage::assistant("one finding"),
+            LlmMessage::user("fix it"),
+            LlmMessage::assistant("fixed"),
+        ];
+        h.run(|turn| stream(turn, [earlier, vec![review()]].concat(), vec![])).expect("turn");
+        assert_eq!(wrap_ups(&h).len(), 1);
     }
 
     /// A plan written in the turn is the current one from then on: the plan

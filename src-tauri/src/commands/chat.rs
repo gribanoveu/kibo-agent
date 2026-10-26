@@ -677,7 +677,9 @@ pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<Co
 /// against `HEAD`. What is sent is decided here (`domain::review::select`):
 /// the diffs go in as the turn's message, added to `messages`, and the
 /// change stays on `AgentState` for `reportFinding` until the next turn.
-/// Otherwise an ordinary turn — its events, its pauses, its Stop.
+/// The model reads only from that message on — not the chat that wrote the
+/// change — while the history it hands back keeps the chat, which goes on
+/// after it. Otherwise an ordinary turn — its events, its pauses, its Stop.
 #[tauri::command]
 pub async fn review_start<R: Runtime>(
     app: AppHandle<R>,

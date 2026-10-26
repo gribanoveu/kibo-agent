@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::domain::llm::LlmMessage;
+use crate::domain::llm::{LlmMessage, LlmRole};
 
 /// One changed file, as the review reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -169,12 +169,28 @@ fn generated(name: &str, dirs: &[&str]) -> bool {
 /// larger change is named past this, and the agent reads what it needs.
 pub const MESSAGE_DIFF_CHARS: usize = 120_000;
 
+/// How a review's message starts: the line its model's context begins at.
+const REVIEW_REQUEST: &str = "Review the uncommitted changes of this repository — the working tree against HEAD.";
+
+/// What a review's model reads of the turn's history: its own message on.
+/// The chat before it — how the change was written, and why its author
+/// thought it right — stays out, so the change is judged on itself. The
+/// history keeps all of it: the conversation goes on after the review.
+///
+/// ponytail: found by the message's first line. A review long enough to be
+/// summarised loses that line; a resume after it finds none and reads the
+/// whole history. A marker kept through summaries if reviews that long turn up.
+pub fn own_context(history: &[LlmMessage]) -> &[LlmMessage] {
+    let own = |m: &LlmMessage| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.starts_with(REVIEW_REQUEST));
+    history.iter().rposition(own).map_or(history, |at| &history[at..])
+}
+
 /// The opening message of a review: the diffs that fit, in path order, the
 /// rest of the change by name, and what was left out and why — and the reply
 /// language, when the user chose one: nothing the user typed is in a review's
 /// conversation to say it for them.
 pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Option<&str>) -> String {
-    let mut out = String::from("Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>\n");
+    let mut out = format!("{REVIEW_REQUEST}\n\n<changes>\n");
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
     for file in files {
@@ -397,6 +413,22 @@ mod tests {
     /// A file whose diff is `chars` long.
     fn sized(path: &str, chars: usize) -> FileDiff {
         FileDiff { patch: "x".repeat(chars), ..file(path, &[(1, true, "x")]) }
+    }
+
+    /// A review's model starts reading at the latest review's message; with
+    /// none, the whole history is the context.
+    #[test]
+    fn a_review_reads_from_its_own_message_on() {
+        let review = || LlmMessage::user(review_message(&[sized("a.rs", 3)], &[], Some("Russian")));
+        let chat = vec![LlmMessage::user("write the lock"), LlmMessage::assistant("done — it is safe, the lock is held")];
+        assert_eq!(own_context(&chat), &chat[..], "no review: all of it");
+
+        let mut history = chat.clone();
+        history.extend([review(), LlmMessage::assistant("one finding")]);
+        assert_eq!(own_context(&history), &history[2..]);
+
+        history.extend([LlmMessage::user("fix it"), LlmMessage::assistant("fixed"), review()]);
+        assert_eq!(own_context(&history), &history[6..], "the latest review's");
     }
 
     #[test]
