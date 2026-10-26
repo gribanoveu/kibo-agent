@@ -844,10 +844,10 @@ fn run_calls(
     decisions: &[ToolCallDecision],
     round_truncated: bool,
 ) {
-    // `explore` calls asked one after another run side by side when the
-    // round reaches the first of them; the loop then takes their results
-    // in turn, so the history, the log and the loop guard see one call
-    // after another as ever.
+    // Reads asked one after another run side by side when the round
+    // reaches the first of them; the loop then takes their results in turn,
+    // so the history, the log and the loop guard see one call after another
+    // as ever.
     let mut early: HashMap<String, Early> = HashMap::new();
 
     for (at, call) in calls.iter().enumerate() {
@@ -859,7 +859,7 @@ fn run_calls(
             return;
         }
         if !early.contains_key(&call.id) {
-            early.extend(explore_side_by_side(turn, &events, round, &calls[at..], decisions));
+            early.extend(side_by_side(turn, &events, round, &calls[at..], decisions, &state.history));
         }
         let ran = early.remove(&call.id);
         if ran.is_none() {
@@ -880,8 +880,10 @@ fn run_calls(
             _ => parse_tool_call(call)
                 .and_then(|parsed| {
                     logged_args = tool_call_log::redact_args(&parsed);
-                    // Its hook already asked, and it has already run.
+                    // Its hook already asked, and it has already run; what
+                    // it read joins the round's in the order it was asked.
                     if let Some(ran) = ran {
+                        state.reads.merge(ran.reads);
                         return ran.result;
                     }
                     if let Some(reason) = pre_tool_use(turn, &events, round, call) {
@@ -1060,80 +1062,89 @@ pub fn pinned_cluster<'a>(turn: &Turn<'a>) -> Option<PinnedCluster<'a>> {
     }
 }
 
-/// How many helpers run at once. More would be as many streams to one
-/// provider, and a model that asks for ten gets them four at a time.
-// ponytail: fixed batches, not a pool — a slow helper holds its batch back;
-// a pool if rounds with more than four turn out to be common.
-pub const MAX_PARALLEL_EXPLORES: usize = 4;
+/// How many calls run at once. More helpers would be as many streams to one
+/// provider, and a model that asks for ten reads gets them four at a time.
+// ponytail: fixed batches, not a pool — a slow call (a helper, a page) holds
+// its batch back; a pool if rounds with more than four turn out to be common.
+pub const MAX_PARALLEL_CALLS: usize = 4;
 
 /// A call already run, for the round's loop to take in its turn.
 struct Early {
     result: Result<ToolResult, crate::domain::tools::ToolError>,
     started: Instant,
+    /// What it read, for the round to gather when it takes the result.
+    reads: ReadFiles,
 }
 
-/// The `explore` calls `calls` starts with, run side by side when there are
-/// two or more in a row.
+/// The reads `calls` starts with — tools that [`ToolName::runs_alongside`] —
+/// run side by side when there are two or more in a row.
 ///
 /// In a row, and from where the round has got to: a call asked before them
 /// has run, and one asked after them has not — "write the file, then have a
 /// helper check it" must find the file written. Each is shown as started and
 /// asked of the PreToolUse hooks here, in order, before any runs; a refused
-/// one is kept as refused. They read and never write, and each reports to
-/// its own card — its call id — and its own record, so nothing they touch is
-/// shared but the stop button. Anything else, and a lone `explore`, is left
-/// to the loop.
-fn explore_side_by_side(
+/// one is kept as refused. They never write, and each reports to its own card
+/// — its call id — and its own record of what it read; the history they see
+/// is the round's as it stood before them. Anything else, and a lone read, is
+/// left to the loop.
+fn side_by_side(
     turn: &Turn,
     events: &Events,
     round: u32,
     calls: &[LlmToolCall],
     decisions: &[ToolCallDecision],
+    history: &[LlmMessage],
 ) -> HashMap<String, Early> {
     let mut early = HashMap::new();
-    let explores: Vec<(&LlmToolCall, crate::domain::tools::ToolCall)> = calls
+    let reads: Vec<(&LlmToolCall, crate::domain::tools::ToolCall)> = calls
         .iter()
         .map_while(|call| match parse_tool_call(call) {
             _ if decisions.iter().any(|d| d.id == call.id && !d.approved) => None,
-            Ok(parsed @ crate::domain::tools::ToolCall::Explore(_)) => Some((call, parsed)),
+            Ok(parsed) if parsed.name().runs_alongside() => Some((call, parsed)),
             _ => None,
         })
         .collect();
-    if explores.len() < 2 || (turn.cancelled)() {
+    if reads.len() < 2 || (turn.cancelled)() {
         return early;
     }
     let mut runnable = Vec::new();
-    for (call, parsed) in explores {
+    for (call, parsed) in reads {
         report_call(events, round, call);
         let started = Instant::now();
         match pre_tool_use(turn, events, round, call) {
             Some(reason) => {
                 let result = Err(crate::domain::tools::ToolError::BlockedByHook(reason));
-                early.insert(call.id.clone(), Early { result, started });
+                early.insert(call.id.clone(), Early { result, started, reads: ReadFiles::default() });
             }
             None => runnable.push((call, parsed, started)),
         }
     }
-    for batch in runnable.chunks(MAX_PARALLEL_EXPLORES) {
+    for batch in runnable.chunks(MAX_PARALLEL_CALLS) {
         let done: Vec<(String, Early)> = std::thread::scope(|scope| {
             let running: Vec<_> = batch
                 .iter()
                 .map(|(call, parsed, started)| {
                     scope.spawn(move || {
-                        // Neither is touched by `explore`; the round's own
-                        // stay with the loop.
-                        let result = execute_call(turn, round, call, parsed, &[], &mut ReadFiles::default(), &mut Vec::new());
-                        (call.id.clone(), Early { result, started: *started })
+                        // The todo list is not touched by a read; the round's
+                        // own stays with the loop.
+                        let mut reads = ReadFiles::default();
+                        let result = execute_call(turn, round, call, parsed, history, &mut reads, &mut Vec::new());
+                        (call.id.clone(), Early { result, started: *started, reads })
                     })
                 })
                 .collect();
             running
                 .into_iter()
                 .zip(batch)
-                .map(|(handle, (call, _, started))| {
+                .map(|(handle, (call, parsed, started))| {
                     handle.join().unwrap_or_else(|_| {
-                        let result = Err(crate::domain::tools::ToolError::Explore("the helper failed".to_string()));
-                        (call.id.clone(), Early { result, started: *started })
+                        let result = Err(match parsed {
+                            crate::domain::tools::ToolCall::Explore(_) => {
+                                crate::domain::tools::ToolError::Explore("the helper failed".to_string())
+                            }
+                            _ => crate::domain::tools::ToolError::Io(std::io::Error::other("the tool failed")),
+                        });
+                        (call.id.clone(), Early { result, started: *started, reads: ReadFiles::default() })
                     })
                 })
                 .collect()
@@ -5895,7 +5906,7 @@ mod tests {
             // in flight; the timeout is what lets a right-sized batch go.
             let (mut in_flight, _) = self
                 .arrived
-                .wait_timeout_while(in_flight, Duration::from_millis(400), |n| *n <= MAX_PARALLEL_EXPLORES)
+                .wait_timeout_while(in_flight, Duration::from_millis(400), |n| *n <= MAX_PARALLEL_CALLS)
                 .unwrap();
             *in_flight -= 1;
             Ok(ChatStreamResult { text: format!("answer to {task}"), ..Default::default() })
@@ -5976,11 +5987,11 @@ mod tests {
     /// Past the limit they go in batches: never more at once than that.
     #[test]
     fn no_more_helpers_run_at_once_than_the_limit() {
-        let asked = (0..=MAX_PARALLEL_EXPLORES).map(|n| explore(&format!("e{n}"), &format!("T{n}"))).collect();
+        let asked = (0..=MAX_PARALLEL_CALLS).map(|n| explore(&format!("e{n}"), &format!("T{n}"))).collect();
         let (h, provider) = side_by_side("explore-batches", asked);
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        assert_eq!(*provider.most.lock().unwrap(), MAX_PARALLEL_EXPLORES);
-        assert_eq!(provider.helper_tasks.lock().unwrap().len(), MAX_PARALLEL_EXPLORES + 1, "every one ran");
+        assert_eq!(*provider.most.lock().unwrap(), MAX_PARALLEL_CALLS);
+        assert_eq!(provider.helper_tasks.lock().unwrap().len(), MAX_PARALLEL_CALLS + 1, "every one ran");
     }
 
     /// The hooks are asked once for each, before any runs; the one refused
@@ -5999,5 +6010,108 @@ mod tests {
         let results: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).filter_map(|m| m.content.clone()).collect();
         assert_eq!(results[0], "answer to A");
         assert!(results[1].contains("not that one"), "{results:?}");
+    }
+
+    // ------------------------------------------------------ parallel reads
+
+    /// Reads in a row are all started before any answers, and answer in the
+    /// order they were asked; a write ends the batch, and a read after it
+    /// waits for it.
+    #[test]
+    fn reads_in_a_row_start_together_and_answer_in_order() {
+        let h = harness(
+            "reads-parallel",
+            vec![
+                asks(vec![
+                    wants("r1", "readFile", r#"{"path":"a.rs"}"#),
+                    wants("g1", "grep", r#"{"pattern":"fn"}"#),
+                    wants("r2", "readFile", r#"{"path":"b.rs"}"#),
+                    wants("w1", "writeFile", r#"{"path":"c.rs","content":"fn c() {}"}"#),
+                    wants("r3", "readFile", r#"{"path":"c.rs"}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.rs"), "fn a() {}").unwrap();
+        std::fs::write(h.root.join("b.rs"), "fn b() {}").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        let shown = payloads(&h.events());
+        let at = |p: &str| shown.iter().position(|s| s == p).unwrap_or_else(|| panic!("{p}: {shown:?}"));
+        for id in ["r1", "g1", "r2"] {
+            assert!(at(&format!("toolCall:{id}")) < at("toolResult:r1"), "{id} started with the batch: {shown:?}");
+        }
+        assert!(at("toolResult:r2") < at("toolCall:w1"), "the write waits for the batch: {shown:?}");
+        assert!(at("toolResult:w1") < at("toolCall:r3"), "a read after the write waits for it: {shown:?}");
+        let results: Vec<&String> = shown.iter().filter(|s| s.starts_with("toolResult:")).collect();
+        assert_eq!(results, ["toolResult:r1", "toolResult:g1", "toolResult:r2", "toolResult:w1", "toolResult:r3"]);
+
+        let answered = tool_contents(&h.provider.requests()[1]);
+        assert!(answered[0].contains("fn a() {}") && answered[2].contains("fn b() {}"), "{answered:?}");
+        assert!(answered[4].contains("fn c() {}"), "the read after the write sees it: {answered:?}");
+    }
+
+    /// A file read in a batch counts as read for a write in a later round,
+    /// as it would had the reads run one after another.
+    #[test]
+    fn reads_beside_each_other_count_for_a_later_write() {
+        let h = harness(
+            "reads-parallel-then-write",
+            vec![
+                asks(vec![wants("r1", "readFile", r#"{"path":"a.txt"}"#), wants("r2", "readFile", r#"{"path":"b.txt"}"#)]),
+                asks(vec![wants("w1", "writeFile", r#"{"path":"a.txt","content":"new\n"}"#)]),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.txt"), "old\n").unwrap();
+        std::fs::write(h.root.join("b.txt"), "b\n").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        let answered = tool_contents(&h.provider.requests()[2]);
+        assert!(!answered.last().unwrap().starts_with(TOOL_ERROR_PREFIX), "{answered:?}");
+        assert_eq!(std::fs::read_to_string(h.root.join("a.txt")).unwrap(), "new\n");
+    }
+
+    /// Pages go at once, and each is checked against the conversation as it
+    /// stood: an address the user gave is one it may open.
+    #[test]
+    fn pages_are_fetched_at_once_from_the_conversation() {
+        let mut h = harness(
+            "fetch-parallel",
+            vec![
+                asks(vec![
+                    wants("f1", "webFetch", r#"{"url":"https://a.example/x"}"#),
+                    wants("f2", "webFetch", r#"{"url":"https://b.example/y"}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        let gate = Arc::new((Mutex::new((0usize, 0usize)), std::sync::Condvar::new()));
+        let seen = Arc::clone(&gate);
+        h.web = Some(Web {
+            search: Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new())),
+            fetch: Arc::new(move |q: &crate::domain::web_search::PageQuery| {
+                let (lock, arrived) = &*seen;
+                let mut counts = lock.lock().unwrap();
+                counts.0 += 1;
+                counts.1 = counts.1.max(counts.0);
+                arrived.notify_all();
+                let (mut counts, _) = arrived.wait_timeout_while(counts, Duration::from_millis(400), |c| c.0 < 2).unwrap();
+                counts.0 -= 1;
+                Ok(crate::domain::web_search::WebPage {
+                    title: String::new(),
+                    url: q.url.to_string(),
+                    content: format!("page {}", q.url),
+                    truncated: false,
+                })
+            }),
+        });
+        h.run(|turn| stream(turn, vec![LlmMessage::user("read https://a.example/x and https://b.example/y")], vec![]))
+            .expect("turn");
+
+        assert_eq!(gate.0.lock().unwrap().1, 2, "both pages were being read at once");
+        let answered = tool_contents(&h.provider.requests()[1]);
+        assert!(answered[0].contains("page https://a.example/x"), "{answered:?}");
+        assert!(answered[1].contains("page https://b.example/y"), "{answered:?}");
     }
 }

@@ -323,6 +323,74 @@ impl ToolName {
         }
     }
 
+    /// Whether calls of this tool asked in a row may run at once. Only reads
+    /// that leave nothing behind but their answer — and the files they read,
+    /// which the round gathers after them: what one returns cannot change what
+    /// the one beside it would have. No wildcard: a new tool has to be put on
+    /// one side, and left out it would run beside a write.
+    pub fn runs_alongside(self) -> bool {
+        match self {
+            ToolName::ReadFile
+            | ToolName::Grep
+            | ToolName::ListFiles
+            | ToolName::GitDiff
+            | ToolName::GitBlame
+            | ToolName::GitLog
+            | ToolName::GitStatus
+            | ToolName::SemanticSearch
+            | ToolName::Explore
+            | ToolName::KnowledgeSearch
+            | ToolName::KnowledgeRead
+            | ToolName::KnowledgeRelations
+            | ToolName::WebSearch
+            | ToolName::WebFetch
+            | ToolName::DeepseekSearch
+            | ToolName::DeepseekFetch => true,
+            ToolName::WriteFile
+            | ToolName::EditFile
+            | ToolName::Delete
+            | ToolName::Move
+            | ToolName::RunCommand
+            // The turn's own state: its list, its plan, the review's findings
+            // in the order they were reported.
+            | ToolName::Todo
+            | ToolName::WritePlan
+            | ToolName::ReportFinding
+            // Change what the model sees or is told next.
+            | ToolName::Skill
+            | ToolName::ToolSearch
+            // A process or a terminal, read up to where the last read left it.
+            | ToolName::ReadOutput
+            | ToolName::StopProcess
+            | ToolName::ReadTerminal
+            // Kept, after the model checks them.
+            | ToolName::Remember
+            | ToolName::KnowledgeWrite
+            | ToolName::Board
+            | ToolName::Present
+            // The cluster's reads wait on it and have a bench of their own to
+            // show they gain; until then, one at a time.
+            | ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory
+            | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
+            | ToolName::KubeProbe
+            | ToolName::KubeRunbook
+            | ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete
+            | ToolName::Mcp => false,
+        }
+    }
+
     /// Whether a rewind accounts for what a call did: its file changes are
     /// recorded on its block, or it made none a rewind should undo. A call of
     /// any other tool may have changed things that stay — the rewind dialog
@@ -609,6 +677,34 @@ mod tests {
         // Changed since: the slice is all it knows now.
         reads.record("a.rs", "one\nTWO\n", false);
         assert_eq!(reads.check("a.rs", "one\nTWO\n", true), Err(WriteBlocked::ReadInPart));
+    }
+
+    /// Reads gathered from calls that ran at once count as the same reads
+    /// made one after another.
+    #[test]
+    fn merged_reads_count_as_reads_made_in_turn() {
+        let mut round = ReadFiles::default();
+        round.record("a.rs", "one\ntwo\n", true);
+        round.record("c.rs", "old\n", true);
+
+        let mut beside = ReadFiles::default();
+        beside.record("a.rs", "one\ntwo\n", false);
+        beside.record("b.rs", "b\n", true);
+        beside.record("c.rs", "new\n", false);
+        round.merge(beside);
+
+        assert_eq!(round.check("a.rs", "one\ntwo\n", true), Ok(()), "a slice of what was read whole");
+        assert_eq!(round.check("b.rs", "b\n", true), Ok(()), "read only beside");
+        assert_eq!(round.check("c.rs", "new\n", true), Err(WriteBlocked::ReadInPart), "changed since");
+    }
+
+    /// What runs beside another call only reads: nothing that writes, or
+    /// asks before it does, is ever in a batch.
+    #[test]
+    fn what_runs_alongside_never_writes() {
+        for tool in ToolName::ALL.iter().filter(|t| t.runs_alongside()) {
+            assert!(!tool.is_mutating(), "{tool:?}");
+        }
     }
 
     #[test]
@@ -2295,9 +2391,21 @@ impl ReadFiles {
     /// delete — "read it in full" — behind a full read that repeating would
     /// not show again.
     pub fn record(&mut self, path: &str, content: &str, whole: bool) {
-        let hash = hash(content);
-        let known = self.seen.get(path).is_some_and(|seen| seen.whole && seen.hash == hash);
-        self.seen.insert(path.to_string(), FileRead { hash, whole: whole || known });
+        self.keep(path.to_string(), FileRead { hash: hash(content), whole });
+    }
+
+    /// The reads of calls that ran beside each other, each with a record of
+    /// its own, taken in the order they were asked — as if they had run one
+    /// after another.
+    pub fn merge(&mut self, other: ReadFiles) {
+        for (path, read) in other.seen {
+            self.keep(path, read);
+        }
+    }
+
+    fn keep(&mut self, path: String, read: FileRead) {
+        let known = self.seen.get(&path).is_some_and(|seen| seen.whole && seen.hash == read.hash);
+        self.seen.insert(path, FileRead { whole: read.whole || known, ..read });
     }
 
     /// Whether the agent may write `current` at `path`, or why not.
