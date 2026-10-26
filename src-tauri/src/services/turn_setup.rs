@@ -81,6 +81,8 @@ pub struct FolderHandles {
 
 /// What a turn in a folder is, from the window and the agent's state.
 pub struct FolderTurn<'a> {
+    /// The chat the turn's tokens are counted under (`llm_session::resolve_for`).
+    pub chat_id: &'a str,
     pub workspace: &'a Path,
     pub mode: ConversationMode,
     /// A review worker's files and findings; `None` outside a review.
@@ -102,7 +104,7 @@ pub fn run_in_folder(
 ) -> Result<ChatStreamOutcome, TurnSetupError> {
     let workspace = folder.workspace;
     let approval = with_git_aliases(folder.approval, workspace);
-    let session = llm_session::resolve(None)?;
+    let session = llm_session::resolve_for(None, Some(folder.chat_id))?;
     let scope = ToolScope::new(workspace)?;
     let sleep = |d: Duration| std::thread::sleep(d);
     let shell = crate::infra::shells::for_commands();
@@ -206,7 +208,7 @@ pub fn run_in_chat(
     };
     // A role with a folder writes in it without a card (`ChatRole::approval`).
     let approval = chat.role.approval(&chat.approval);
-    let session = llm_session::resolve(None)?;
+    let session = llm_session::resolve_for(None, Some(&chat.chat_id))?;
     // Asked every turn: a cluster that stopped answering, or a login that
     // expired, is what the model most needs to know. The client is kept,
     // so it is two quick requests, not a new login.
@@ -409,6 +411,79 @@ mod tests {
         });
     }
 
+    /// A turn asks through the session it was put together with, so what the
+    /// model spends there — the turn's rounds, its helpers', its checks' —
+    /// counts under the turn's chat, in a folder and in Chat mode alike.
+    #[test]
+    fn what_a_turns_model_spends_counts_under_its_chat() {
+        crate::testing::with_app_dir("turn-setup-spent", || {
+            crate::testing::spending_provider("ok", 10, 2);
+            let ask = |turn_session: &crate::services::llm_session::LlmSession| {
+                let request = crate::domain::llm::ChatRequest { model: "qwen".into(), messages: vec![crate::domain::llm::LlmMessage::user("go")], tools: Vec::new() };
+                turn_session.provider.chat(request).expect("the stub answers");
+            };
+            let done = || {
+                Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
+                    result: Default::default(),
+                    todos: Vec::new(),
+                    history: Vec::new(),
+                    limit_reached: None,
+                }))
+            };
+            let events: ChatEventSink = Arc::new(|_| {});
+            let (no, none, zero) = (|| false, Vec::new, || 0);
+            let dir = temp_dir("turn-setup-spent-root");
+            let folder = FolderTurn {
+                chat_id: "folder-chat",
+                workspace: &dir,
+                mode: ConversationMode::Plan,
+                review: None,
+                approval: ApprovalPolicy::default(),
+                plan: None,
+                events: &events,
+                cancelled: &no,
+                take_steering: &none,
+                notes_typed: &zero,
+            };
+            run_in_folder(folder, FolderHandles::default(), |turn| {
+                ask(turn.session);
+                done()
+            })
+            .unwrap();
+
+            struct NoModel;
+            impl EmbeddingProvider for NoModel {
+                fn embed(&self, _: &[&str]) -> Result<Vec<crate::domain::embeddings::Embedding>, crate::domain::embeddings::EmbeddingError> {
+                    Err(crate::domain::embeddings::EmbeddingError::Invalid("no model in this test".into()))
+                }
+                fn dimensions(&self) -> usize {
+                    2
+                }
+            }
+            let chat = ChatTurnInput {
+                chat_id: "plain-chat".into(),
+                role: ChatRole::Assistant,
+                kube: None,
+                clusters: Arc::new(Clusters::default()),
+                board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
+                embeddings: Arc::new(NoModel),
+                knowledge: None,
+                approval: ApprovalPolicy::default(),
+                events: &events,
+                cancelled: &no,
+            };
+            run_in_chat(chat, |turn| {
+                ask(turn.session);
+                ask(turn.session);
+                done()
+            })
+            .unwrap();
+
+            assert_eq!(crate::testing::chat_tokens("folder-chat"), 12);
+            assert_eq!(crate::testing::chat_tokens("plain-chat"), 24);
+        });
+    }
+
     /// What a folder's turn is handed, seen by `run` before any provider
     /// call: the session the settings name, the folder's git aliases on the
     /// policy, the window's plan and mode, no web without a model — and the
@@ -435,6 +510,7 @@ mod tests {
                 settings.features.insert("board".into(), board_on);
                 crate::infra::settings_store::save(&settings).unwrap();
                 let folder = FolderTurn {
+                    chat_id: "c1",
                     workspace: &dir,
                     mode: ConversationMode::Plan,
                     review: None,

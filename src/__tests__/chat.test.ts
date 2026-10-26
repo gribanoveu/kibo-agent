@@ -56,10 +56,10 @@ describe("command wrappers", () => {
     invokeResult = { status: "done", value: { text: "hi", truncated: false, todos: [] } };
     const messages = [{ role: "user" as const, content: "go" }];
 
-    const outcome = await chat.startChat("turn-1", messages, [], "# Plan");
+    const outcome = await chat.startChat("turn-1", "c1", messages, [], "# Plan");
 
     expect(calls).toEqual([
-      { command: "chat_start", args: { turnId: "turn-1", messages, todos: [], plan: "# Plan" } },
+      { command: "chat_start", args: { turnId: "turn-1", chatId: "c1", messages, todos: [], plan: "# Plan" } },
     ]);
     expect(outcome.status).toBe("done");
   });
@@ -76,12 +76,13 @@ describe("command wrappers", () => {
     };
     invokeResult = { status: "done", value: { text: "", truncated: false, todos: [] } };
 
-    await chat.resumeChat("turn-1", checkpoint, [{ id: "w1", approved: true }], "# Plan");
+    await chat.resumeChat("turn-1", "c1", checkpoint, [{ id: "w1", approved: true }], "# Plan");
 
     // Every field, including the ones this side never reads: dropping one is a
     // reset round ceiling or a write refused for never having read the file.
     expect(calls[0]?.args).toEqual({
       turnId: "turn-1",
+      chatId: "c1",
       checkpoint,
       decisions: [{ id: "w1", approved: true }],
       plan: "# Plan",
@@ -147,18 +148,18 @@ describe("compaction", () => {
     const messages = [{ role: "user" as const, content: "hi" }];
     invokeResult = { history: messages, folded: 3 };
 
-    const shorter = await chat.compactHistory(messages, false, "compact-1");
+    const shorter = await chat.compactHistory(messages, false, "compact-1", "c1");
 
     expect(calls).toEqual([
-      { command: "chat_compact", args: { messages, force: false, turnId: "compact-1" } },
+      { command: "chat_compact", args: { messages, force: false, turnId: "compact-1", chatId: "c1" } },
     ]);
     expect(shorter?.folded).toBe(3);
   });
 
   test("and asking for one outright says so", async () => {
     invokeResult = null;
-    await chat.compactHistory([], true, "compact-2");
-    expect(calls[0].args).toEqual({ messages: [], force: true, turnId: "compact-2" });
+    await chat.compactHistory([], true, "compact-2", "c1");
+    expect(calls[0].args).toEqual({ messages: [], force: true, turnId: "compact-2", chatId: "c1" });
   });
 });
 

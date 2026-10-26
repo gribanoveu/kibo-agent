@@ -10,7 +10,8 @@ export type Metric =
   | "hourTokens"
   | "sessions"
   | "prompts"
-  | "toolCalls";
+  | "toolCalls"
+  | "chatTokens";
 
 export const METRICS: Metric[] = [
   "promptTokens",
@@ -36,6 +37,13 @@ export interface DailyMetric {
 export async function dailyMetrics(metrics: Metric[]): Promise<DailyMetric[]> {
   if (!inTauri()) throw new Error("This needs the desktop app — there is no backend in a plain browser.");
   return invoke<DailyMetric[]>("daily_metrics", { metrics });
+}
+
+/** Every model call `chatId` made, its helpers', title's and summaries' included — the Overview's session total. */
+export async function chatTokens(chatId: string): Promise<number> {
+  // ponytail: reads every chat's rows to sum one; a per-chat SUM command once the table is big enough to notice.
+  const rows = await dailyMetrics(["chatTokens"]);
+  return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
 }
 
 /** `14` is the new chat's strip; Settings offers the other three. */

@@ -93,9 +93,11 @@ export async function plainChatCompact(
   messages: LlmMessage[],
   force: boolean,
   turnId: string,
+  /** What the summary spends is counted under it; `null` before the chat has one. */
+  chatId: string | null,
 ): Promise<{ history: LlmMessage[]; folded: number } | null> {
   requireBackend();
-  return invoke<{ history: LlmMessage[]; folded: number } | null>("plain_chat_compact", { role, kube, messages, force, turnId });
+  return invoke<{ history: LlmMessage[]; folded: number } | null>("plain_chat_compact", { role, kube, messages, force, turnId, chatId });
 }
 
 export async function plainChatCancel(): Promise<void> {

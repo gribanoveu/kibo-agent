@@ -30,10 +30,14 @@ pub enum Metric {
     Prompts,
     /// Tool calls settled, keyed by the tool's name — a helper's included.
     ToolCalls,
+    /// Prompt and completion together, keyed by the chat that spent them —
+    /// its helpers, checks, title and summaries included. Summed over the
+    /// days for the Overview's session total.
+    ChatTokens,
 }
 
 impl Metric {
-    pub const ALL: [Metric; 8] = [
+    pub const ALL: [Metric; 9] = [
         Metric::PromptTokens,
         Metric::CachedTokens,
         Metric::CompletionTokens,
@@ -42,6 +46,7 @@ impl Metric {
         Metric::Sessions,
         Metric::Prompts,
         Metric::ToolCalls,
+        Metric::ChatTokens,
     ];
 
     /// The name stored in the table. Never change one: the rows already
@@ -56,6 +61,7 @@ impl Metric {
             Metric::Sessions => "sessions",
             Metric::Prompts => "prompts",
             Metric::ToolCalls => "toolCalls",
+            Metric::ChatTokens => "chatTokens",
         }
     }
 
@@ -104,7 +110,7 @@ mod tests {
         // Stored names are forever: a rename here would orphan every row.
         assert_eq!(
             Metric::ALL.map(Metric::as_str),
-            ["promptTokens", "cachedTokens", "completionTokens", "modelTokens", "hourTokens", "sessions", "prompts", "toolCalls"]
+            ["promptTokens", "cachedTokens", "completionTokens", "modelTokens", "hourTokens", "sessions", "prompts", "toolCalls", "chatTokens"]
         );
     }
 

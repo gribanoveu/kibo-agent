@@ -186,15 +186,17 @@ export async function onIndexEvent(handler: (event: IndexEvent) => void): Promis
   return listen<IndexEvent>(INDEX_EVENT, ({ payload }) => handler(payload));
 }
 
-/** Starts a turn. `messages` is the whole conversation: the transcript is the caller's. */
+/** Starts a turn. `messages` is the whole conversation: the transcript is the caller's.
+    What it spends is counted under `chatId` (`chatTokens`). */
 export async function startChat(
   turnId: string,
+  chatId: string,
   messages: LlmMessage[],
   todos: Task[] = [],
   plan: string | null = null,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("chat_start", { turnId, messages, todos, plan });
+  return invoke<Outcome>("chat_start", { turnId, chatId, messages, todos, plan });
 }
 
 /**
@@ -207,24 +209,27 @@ export async function compactHistory(
   messages: LlmMessage[],
   force: boolean,
   turnId: string,
+  chatId: string,
 ): Promise<{ history: LlmMessage[]; folded: number } | null> {
   if (!inTauri()) return null;
   return invoke<{ history: LlmMessage[]; folded: number } | null>("chat_compact", {
     messages,
     force,
     turnId,
+    chatId,
   });
 }
 
 /** Continues a paused turn. `checkpoint` goes back exactly as it arrived. */
 export async function resumeChat(
   turnId: string,
+  chatId: string,
   checkpoint: Checkpoint,
   decisions: ToolCallDecision[],
   plan: string | null = null,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("chat_resume", { turnId, checkpoint, decisions, plan });
+  return invoke<Outcome>("chat_resume", { turnId, chatId, checkpoint, decisions, plan });
 }
 
 /** Returns at once; the turn stops at its next checkpoint. */
@@ -394,12 +399,13 @@ export async function previewCalls(calls: PendingToolCall[]): Promise<ToolPrevie
  */
 export async function reviewStart(
   turnId: string,
+  chatId: string,
   messages: LlmMessage[],
   todos: Task[] = [],
   plan: string | null = null,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("review_start", { turnId, messages, todos, plan });
+  return invoke<Outcome>("review_start", { turnId, chatId, messages, todos, plan });
 }
 
 // ---------------------------------------------------------------- rewind
@@ -430,9 +436,9 @@ export async function rewindPreview(changes: FileChange[], chatId?: string): Pro
  * `messages`, from the rewound one on — told as what was tried. `null` when
  * the summary came back empty. One request to the model.
  */
-export async function branchSummary(messages: LlmMessage[]): Promise<LlmMessage | null> {
+export async function branchSummary(messages: LlmMessage[], chatId: string): Promise<LlmMessage | null> {
   requireBackend();
-  return invoke<LlmMessage | null>("chat_branch_summary", { messages });
+  return invoke<LlmMessage | null>("chat_branch_summary", { messages, chatId });
 }
 
 /**

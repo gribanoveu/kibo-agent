@@ -75,7 +75,7 @@ pub async fn chat_save(
 pub async fn chat_generate_title(id: String) -> Result<(), String> {
     // A request to the provider, which would freeze the IPC loop for its duration.
     blocking(move || {
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        let session = llm_session::resolve_for(None, Some(&id)).map_err(|e| e.to_string())?;
         chat_title::name(&session, &id).map(|_| ()).map_err(|e| e.to_string())
     })
     .await
@@ -97,4 +97,21 @@ pub async fn chat_set_archived(id: String, archived: bool) -> Result<(), String>
 #[tauri::command]
 pub async fn chat_delete(id: String) -> Result<(), String> {
     blocking(move || crate::services::plain_chat::delete_chat(&id)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Naming a chat is one of its model calls, counted under it.
+    #[test]
+    fn a_chats_title_counts_under_it() {
+        crate::testing::with_app_dir("chat-title-spent", || {
+            crate::testing::spending_provider("Fix the parser", 20, 3);
+            let blocks = serde_json::json!([{ "kind": "user", "id": "user:0", "text": "fix the parser" }]);
+            chat_store::save("t1", "/repo", &[LlmMessage::user("fix the parser")], &blocks, &[], None, None).unwrap();
+            tauri::async_runtime::block_on(chat_generate_title("t1".into())).unwrap();
+            assert_eq!(crate::testing::chat_tokens("t1"), 23);
+        });
+    }
 }

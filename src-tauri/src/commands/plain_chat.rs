@@ -139,7 +139,7 @@ pub async fn plain_chat_context_usage<R: Runtime>(
 ) -> Result<ContextUsage, String> {
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (session, frame) = chat_frame(&clusters, role, kube.as_ref())?;
+        let (session, frame) = chat_frame(&clusters, role, kube.as_ref(), None)?;
         Ok(context_compaction::usage(&session, frame, &messages))
     })
     .await
@@ -156,11 +156,12 @@ pub async fn plain_chat_compact<R: Runtime>(
     messages: Vec<LlmMessage>,
     force: bool,
     turn_id: String,
+    chat_id: Option<String>,
 ) -> Result<Option<CompactedHistory>, String> {
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     let sink = chat_event_sink(&app, turn_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let (session, frame) = chat_frame(&clusters, role, kube.as_ref())?;
+        let (session, frame) = chat_frame(&clusters, role, kube.as_ref(), chat_id.as_deref())?;
         super::chat::compact(&session, frame, &messages, force, sink)
     })
     .await
@@ -168,8 +169,9 @@ pub async fn plain_chat_compact<R: Runtime>(
 }
 
 /// The provider, and what a chat's request sends in front of the conversation.
-fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>) -> Result<(LlmSession, RequestFrame), String> {
-    let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+/// What the session spends is counted under `chat`, when there is one yet.
+fn chat_frame(clusters: &Clusters, role: ChatRole, kube: Option<&KubePin>, chat: Option<&str>) -> Result<(LlmSession, RequestFrame), String> {
+    let session = llm_session::resolve_for(None, chat).map_err(|e| e.to_string())?;
     let kube = kubeconfigs::setup(kube, clusters).map_err(|e| e.to_string())?;
     let frame = context_compaction::chat_request_frame(role, &kube, &runbooks::merged(runbooks_store::own()),
         session.reply_language,
@@ -234,6 +236,29 @@ pub fn plain_chat_cancel(state: State<'_, Arc<PlainChatState>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Chat-mode compaction is that chat's spending, as the agent's is.
+    #[test]
+    fn a_compaction_counts_under_its_chat() {
+        crate::testing::with_app_dir("plain-compact-spent", || {
+            crate::testing::spending_provider("the earlier part", 40, 6);
+            let app = tauri::test::mock_app();
+            app.manage(Arc::new(Clusters::default()));
+            // Past the default window, so there is an older part to fold.
+            let history = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i} {}", "x".repeat(20_000))) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
+            let compacted = tauri::async_runtime::block_on(plain_chat_compact(
+                app.handle().clone(),
+                ChatRole::Assistant,
+                None,
+                history,
+                true,
+                "t".into(),
+                Some("p8".into()),
+            ));
+            assert!(compacted.expect("compacted").is_some());
+            assert_eq!(crate::testing::chat_tokens("p8"), 46);
+        });
+    }
 
     #[test]
     fn every_role_is_listed_by_its_wire_name() {

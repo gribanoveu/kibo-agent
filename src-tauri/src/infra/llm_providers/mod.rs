@@ -171,6 +171,41 @@ impl StreamLines {
     }
 }
 
+/// A provider on this machine for tests: a thread that answers every request
+/// with `body` as an event stream, on the port it returns. Here, beside the
+/// providers, because it is network code (`data_policy`) — local only.
+#[cfg(test)]
+pub(crate) fn stub_server(body: String) -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            let Ok(mut socket) = socket else { return };
+            // The whole request first: answering before the body is read
+            // breaks the client's write of it.
+            let mut request = Vec::new();
+            let mut chunk = [0; 8192];
+            while let Ok(n @ 1..) = socket.read(&mut chunk) {
+                request.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&request);
+                let Some(end) = text.find("\r\n\r\n") else { continue };
+                let length = text[..end]
+                    .lines()
+                    .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+            let _ = socket.write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}").as_bytes(),
+            );
+        }
+    });
+    port
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

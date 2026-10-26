@@ -227,6 +227,36 @@ describe("room in the window", () => {
     });
     expect(folded).toBe(false);
     expect(called("plain_chat_compact").map((c) => c.args.force)).toEqual([true]);
+    // Its summary is the chat's spending, as the turn's is.
+    expect(called("plain_chat_compact")[0].args.chatId).toBe(called("plain_chat_send")[0].args.chatId);
+  });
+
+  /// On screen, the chat's total is read; and again once Compact now is back,
+  /// which no turn event reports.
+  test("the session's total is read while the chat is shown", async () => {
+    results.plain_chat_send = done;
+    const id = () => called("plain_chat_send")[0]?.args.chatId;
+    results.daily_metrics = () => [{ day: "2026-10-26", metric: "chatTokens", key: id(), value: 70 }];
+    const { result } = renderHook(() => usePlainChat(null, undefined, true));
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    await waitFor(() => expect(result.current.spent).toBe(70));
+    const before = called("daily_metrics").length;
+    await act(async () => {
+      await result.current.compact();
+    });
+    await waitFor(() => expect(called("daily_metrics").length).toBeGreaterThan(before));
+  });
+
+  test("hidden, it is not read", async () => {
+    results.plain_chat_send = done;
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    expect(called("daily_metrics")).toEqual([]);
+    expect(result.current.spent).toBeNull();
   });
 });
 
@@ -419,7 +449,7 @@ describe("rewinding a chat", () => {
   // A saved chat in which the model wrote a page: its call recorded the change.
   const change = { path: "index.html", before: { kind: "absent" }, after: { kind: "stored", hash: "h1" } };
 
-  const opened = async (role: "prototype" | "assistant") => {
+  const opened = async (role: "prototype" | "assistant", shown = false) => {
     results.chat_load = {
       id: "saved",
       role,
@@ -434,13 +464,29 @@ describe("rewinding a chat", () => {
         { kind: "message", id: "m1", round: 1, text: "made it" },
       ],
     };
-    const { result } = renderHook(() => usePlainChat());
+    const { result } = renderHook(() => usePlainChat(null, undefined, shown));
     await act(async () => {
       await result.current.open("saved");
     });
     await waitFor(() => expect(result.current.chatId).toBe("saved"));
     return result;
   };
+
+  /// The summary is the chat's spending, and no turn event says so: the
+  /// total is read again once it is back.
+  test("a rewind with a summary counts under the chat and reads the total again", async () => {
+    const result = await opened("assistant", true);
+    const bubble = result.current.turn.blocks.find((b) => b.kind === "user")!;
+    results.chat_branch_summary = { role: "user", content: "[Summary] tried a page" };
+    results.rewind_apply = [];
+    await waitFor(() => expect(called("daily_metrics").length).toBeGreaterThan(0));
+    const before = called("daily_metrics").length;
+    await act(async () => {
+      await result.current.rewind(bubble.id, true);
+    });
+    expect(called("chat_branch_summary")[0]?.args.chatId).toBe("saved");
+    await waitFor(() => expect(called("daily_metrics").length).toBeGreaterThan(before));
+  });
 
   test("a Prototype chat puts its own folder back, cuts the chat before the message and hands it back", async () => {
     const result = await opened("prototype");

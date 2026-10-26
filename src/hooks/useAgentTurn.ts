@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
@@ -6,6 +6,7 @@ import { useTurnChannel } from "./useTurnChannel";
 import { alwaysAllow, branchSummary, cancelChat, cancelSteer, compactHistory, contextUsage, type ContextUsage, type FileRewind, type LlmMessage, resumeChat, reviewStart, rewindApply, rewindPreview, startChat, steer as steerCommand, type Task, type ToolCallDecision } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
+import { useChatTokens } from "./useChatTokens";
 import { generateChatTitle, loadChat, logNextPrompt, nextPromptSent, saveChat } from "../lib/savedChats";
 import {
   acceptOutcome,
@@ -41,15 +42,24 @@ export function useAgentTurn({
   model,
   onSaved,
   onGiveBack,
+  spentShown = false,
 }: {
   /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
   model?: string;
   onSaved?: () => void;
   /** Queued text that will not be sent after all, for the composer to take back. */
   onGiveBack?: (text: string) => void;
+  /** The session's total is read only while something shows it — the Overview. */
+  spentShown?: boolean;
 } = {}) {
   const [turn, setTurn] = useState<TurnState>(emptyTurn);
   const [chatId, setChatId] = useState<string | null>(null);
+  // The id the chat is saved under — or will be, before its first save: what
+  // its first turn spends is counted under it (`chatTokens`).
+  const chatKey = useRef<string>(crypto.randomUUID());
+  // Said when the chat spent something no turn event reports: a title, a
+  // summary — so the session's total is read again.
+  const [spentTick, spentChanged] = useReducer((n: number) => n + 1, 0);
   const [error, setError] = useState<string | null>(null);
   // What the next request would cost. Not derived from the last turn's usage:
   // that is prompt *and* completion of a request already paid for, while the
@@ -135,13 +145,16 @@ export function useAgentTurn({
   // message is written: the turn's own blocks may hold a call with no result.
   useEffect(() => {
     if (chatId !== null || !unsaved.current || turn.status !== "running") return;
-    const id = crypto.randomUUID();
+    const id = chatKey.current;
     setChatId(id);
     saveChat(id, history.current, turn.blocks.slice(0, turnStart.current + 1), todos.current, planRef.current, branchedFrom.current)
       .then(() => {
         onSaved?.();
         // Beside the turn; a chat the model could not name keeps its first message as its name.
-        generateChatTitle(id).then(() => onSaved?.(), () => {});
+        generateChatTitle(id).then(() => {
+          onSaved?.();
+          spentChanged();
+        }, () => {});
       })
       .catch((e) => setError(String(e)));
   }, [turn.status, turn.blocks, chatId, onSaved]);
@@ -156,7 +169,7 @@ export function useAgentTurn({
 
     const written = writtenPlan(turn.blocks.slice(turnStart.current));
     if (written !== null) keepPlan(written);
-    const id = chatId ?? crypto.randomUUID();
+    const id = chatKey.current;
     setChatId(id);
     if (lastTurn.current) {
       // A journal that cannot be written is not the user's problem.
@@ -180,6 +193,10 @@ export function useAgentTurn({
   // to rest, a chat being opened or cleared — and the first render, where an
   // empty conversation already costs the prompt and the schemas.
   useEffect(refreshContext, [refreshContext, turn.status, chatId]);
+
+  // Each round's usage, a turn coming to rest — its helpers end inside it —
+  // another chat opened, and what `spentChanged` says.
+  const spent = useChatTokens(chatId ?? chatKey.current, spentShown, turn.usage, turn.status, spentTick);
 
   /**
    * Folds the older part of the conversation into a summary, when the backend
@@ -205,7 +222,7 @@ export function useAgentTurn({
     const id = `compact-${++turnId.current}`;
     const end = await channel.watchCompaction(id);
     try {
-      const shorter = await compactHistory(history.current, force, id);
+      const shorter = await compactHistory(history.current, force, id, chatKey.current);
       end(shorter && { folded: shorter.folded });
       if (!shorter) return false;
       history.current = shorter.history;
@@ -221,6 +238,7 @@ export function useAgentTurn({
       return false;
     } finally {
       compacting.current = false;
+      spentChanged();
     }
   }, [turn.status, refreshContext]);
 
@@ -269,7 +287,7 @@ export function useAgentTurn({
       lastTurn.current = { id, user: trimmed };
       try {
         await listen(id);
-        finish(await startChat(id, history.current, todos.current, planRef.current));
+        finish(await startChat(id, chatKey.current, history.current, todos.current, planRef.current));
       } catch (e) {
         setError(String(e));
         // In the transcript, not only in `error`: a turn that fails before its
@@ -304,7 +322,7 @@ export function useAgentTurn({
       await listen(id);
       // The change is added to the history by the backend, as the message
       // this bubble stands for; the outcome's history carries it.
-      finish(await reviewStart(id, history.current, todos.current, planRef.current));
+      finish(await reviewStart(id, chatKey.current, history.current, todos.current, planRef.current));
     } catch (e) {
       setError(String(e));
       // In the history too: the bubble has to have its message, or every
@@ -375,7 +393,7 @@ export function useAgentTurn({
       const id = `turn-${turnId.current}`;
       try {
         for (const tool of always) await alwaysAllow(tool);
-        finish(await resumeChat(id, checkpoint, decisions, planRef.current));
+        finish(await resumeChat(id, chatKey.current, checkpoint, decisions, planRef.current));
       } catch (e) {
         setError(String(e));
         // In the transcript, not only in `error`: a turn that fails before its
@@ -423,6 +441,7 @@ export function useAgentTurn({
       keepPlan(record.plan ?? null);
       branchedFrom.current = record.branchedFrom ?? null;
       unsaved.current = false;
+      chatKey.current = record.id;
       setChatId(record.id);
       setError(null);
       setTurn(restoredTurn(record.blocks));
@@ -445,6 +464,7 @@ export function useAgentTurn({
     keepPlan(null);
     branchedFrom.current = null;
     unsaved.current = false;
+    chatKey.current = crypto.randomUUID();
     setChatId(null);
     setError(null);
     setTurn(emptyTurn());
@@ -493,6 +513,7 @@ export function useAgentTurn({
       // original wrote is not announced again as just written.
       unsaved.current = whole;
       turnStart.current = cut.blocks.length;
+      chatKey.current = crypto.randomUUID();
       setChatId(null);
       setError(null);
       setTurn(
@@ -545,7 +566,8 @@ export function useAgentTurn({
       if (summarize) {
         const before = history.current;
         try {
-          summary = await branchSummary(before.slice(cut.history.length));
+          summary = await branchSummary(before.slice(cut.history.length), chatKey.current);
+          spentChanged();
         } catch (e) {
           setError(String(e));
           return null;
@@ -595,6 +617,7 @@ export function useAgentTurn({
   return {
     turn,
     chatId,
+    spent,
     error,
     // While the turn works, its own figure: the window's history is the one
     // the turn started from.
