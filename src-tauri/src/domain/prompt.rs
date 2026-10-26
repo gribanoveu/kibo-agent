@@ -174,7 +174,15 @@ Another agent sent you to find something out in this repository. It sees only yo
 
 Search and read until you can answer, and stop there. You cannot change anything or run anything.
 
-Answer compactly: what you found, each fact with its file path and line numbers; a short excerpt only where the exact code matters; and what you could not settle. No preamble, and no offer of more help.",
+Answer in this shape, and nothing around it — no preamble, no offer of more help:
+
+Found:
+- path:line (or path:start-end) — one fact, as it is in the code there. A short excerpt under it only where the exact code matters.
+
+Not settled:
+- what you could not find out, and where you would look next. \"None\" if nothing.
+
+Cite each place as path:line from the repository root, the lines as you read them: the app checks every one against the file before your answer is passed on, and says which are not there.",
         ConversationMode::Ask => "## This conversation: Ask
 
 Answer the question from the repository, as directly as it deserves — one line if one line is the answer. Read what you need to be sure, and stop there.

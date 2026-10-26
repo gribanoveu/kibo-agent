@@ -21,6 +21,7 @@ use crate::domain::llm::{ChatRequest, ChatStreamResult, LlmError, LlmMessage, Ll
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, KEEP_TAIL_PERCENT, RETRY_KEEP_TAIL_PERCENT};
 use crate::domain::result_clearing;
+use crate::domain::explore_answer;
 use crate::domain::web_search::Web;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
@@ -1296,8 +1297,29 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         Err(e) => failed(e.to_string()),
     };
     agents.finish(id, state, answer.as_ref().ok().cloned());
-    let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    answer.map(|text| ToolResult::Explored { text, agent: id, tokens }).map_err(ToolError::Explore)
+    let run = agents.get(id);
+    let tokens = run.as_ref().map(|run| run.tokens).unwrap_or_default();
+    let read = run.map(|run| helper_reads(&run.steps)).unwrap_or_default();
+    let lines_of = |path: &str| {
+        let scope = turn.place.scope()?;
+        // Bytes, not text: a file in Latin-1 has its lines all the same.
+        let bytes = std::fs::read(resolve_existing(scope, path).ok()?).ok()?;
+        Some(bytes.iter().filter(|&&b| b == b'\n').count() + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")))
+    };
+    answer
+        .map(|text| ToolResult::Explored { text: explore_answer::checked(&text, &read, lines_of), agent: id, tokens })
+        .map_err(ToolError::Explore)
+}
+
+/// The files a helper opened, once each, from its steps (`explore_step`).
+fn helper_reads(steps: &[String]) -> Vec<String> {
+    let mut read: Vec<String> = Vec::new();
+    for path in steps.iter().filter_map(|step| step.strip_prefix("readFile ")).flat_map(|paths| paths.split(", ")) {
+        if !read.iter().any(|seen| seen == path) {
+            read.push(path.to_string());
+        }
+    }
+    read
 }
 
 /// What a review's bubble stands for in the history, however it was started.
@@ -1391,9 +1413,10 @@ fn run_review(
 /// One line of a helper's progress: the tool, and what it was pointed at.
 fn explore_step(name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
-    let target = ["path", "pattern", "query"]
-        .iter()
-        .find_map(|key| args.get(key).and_then(|v| v.as_str()));
+    let paths = crate::domain::tools::read_paths(&args).join(", ");
+    let target = (!paths.is_empty()).then_some(paths.as_str()).or_else(|| {
+        ["pattern", "query"].iter().find_map(|key| args.get(key).and_then(|v| v.as_str()))
+    });
     match target {
         Some(target) => format!("{name} {target}"),
         None => name.to_string(),
@@ -5795,8 +5818,12 @@ mod tests {
         assert!(!tools.contains(&"explore".to_string()) && !tools.contains(&"writeFile".to_string()), "{tools:?}");
         // The caller was offered it, and gets the answer back and nothing else.
         assert!(tool_names(&requests[0]).contains(&"explore".to_string()));
+        // Its places checked against the files, and what it read named.
         let back = tool_contents(&requests[3]);
-        assert_eq!(back, vec!["X is in a.rs:1".to_string()]);
+        assert_eq!(
+            back,
+            vec!["X is in a.rs:1\n\n[Checked by the app: all 1 cited places exist.]\n[The helper read: a.rs. None of it is in this conversation; read again what you need.]".to_string()]
+        );
         assert!(requests[3].messages.iter().all(|m| !m.content.as_deref().unwrap_or("").contains("SECRET_LINE")));
 
         // What the user sees: the parent's call, with the helper's reads as
@@ -5969,6 +5996,33 @@ mod tests {
         assert!(!helper.contains(&"webSearch".to_string()) && !helper.contains(&"webFetch".to_string()), "{helper:?}");
     }
 
+    /// A place the helper cites that the file does not have is said under
+    /// its answer, for the caller to read itself instead of trusting it.
+    #[test]
+    fn explore_marks_a_place_the_helper_got_wrong() {
+        let h = harness(
+            "explore-wrong-line",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                asks(vec![wants("r1", "readFile", r#"{"path":"a.rs"}"#)]),
+                asks(vec![wants("r2", "readFile", r#"{"paths":["a.rs","b.rs"]}"#)]),
+                text("Found:\n- a.rs:1 — X is set\n- a.rs:40 — X is read\n- b.rs:2 — X is printed\n- src/gone.rs:3 — X is freed"),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\nlet y = x;\n").unwrap();
+        // Not UTF-8, and still a file with lines.
+        std::fs::write(h.root.join("b.rs"), b"// caf\xe9\nprint(x)").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let back = tool_contents(&h.provider.requests()[4]);
+        assert!(
+            back[0].contains("2 of 4 cited places are not there — `a.rs:40` (the file has 2 lines), `src/gone.rs:3` (no such file)."),
+            "{back:?}"
+        );
+        // Read twice, named once; read together, named each.
+        assert!(back[0].ends_with("[The helper read: a.rs, b.rs. None of it is in this conversation; read again what you need.]"), "{back:?}");
+    }
+
     /// A helper cannot send a helper: asked from memory, it is refused.
     #[test]
     fn a_helper_asking_to_explore_is_refused() {
@@ -5987,7 +6041,7 @@ mod tests {
         let refused = tool_contents(&requests[2]);
         assert!(refused[0].contains("`explore` is not available to a helper"), "{refused:?}");
         assert!(!refused[0].contains("the user chose"), "{refused:?}");
-        assert_eq!(tool_contents(&requests[3]), vec!["could not look deeper".to_string()]);
+        assert!(tool_contents(&requests[3])[0].starts_with("could not look deeper\n\n[Checked by the app"));
     }
 
     /// The Stop hooks are the calling turn's: a helper finishing is not the
@@ -6057,7 +6111,9 @@ mod tests {
             ChatEventPayload::ToolResult(r) if r.id == "e1" => r.result,
             _ => None,
         });
-        assert_eq!(card, Some(ToolResult::Explored { text: "X is in a.rs:1".into(), agent: run.id, tokens: spent }));
+        let Some(ToolResult::Explored { text, agent, tokens }) = card else { panic!("{card:?}") };
+        assert_eq!((agent, tokens), (run.id, spent));
+        assert!(text.starts_with("X is in a.rs:1\n\n[Checked by the app"), "{text}");
         assert!(!payloads(&h.events()).contains(&"contextUsage".to_string()), "the helper's usage is not the chat's");
     }
 
@@ -6114,6 +6170,7 @@ mod tests {
         assert_eq!(explore_step("grep", r#"{"pattern":"fn main","path":"src"}"#), "grep src");
         assert_eq!(explore_step("semanticSearch", r#"{"query":"where tokens refresh"}"#), "semanticSearch where tokens refresh");
         assert_eq!(explore_step("gitStatus", "{}"), "gitStatus");
+        assert_eq!(explore_step("readFile", r#"{"paths":["a.rs","b.rs"]}"#), "readFile a.rs, b.rs");
         assert_eq!(explore_step("readFile", "{broken"), "readFile");
     }
 
@@ -6223,8 +6280,8 @@ mod tests {
             .map(|m| (m.tool_call_id.clone().unwrap(), m.content.clone().unwrap()))
             .collect();
         assert_eq!(results.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["e1", "e2", "r1"]);
-        assert_eq!(results[0].1, "answer to A");
-        assert_eq!(results[1].1, "answer to B");
+        assert!(results[0].1.starts_with("answer to A\n\n"), "{:?}", results[0]);
+        assert!(results[1].1.starts_with("answer to B\n\n"), "{:?}", results[1]);
         assert!(results[2].1.contains("fn a() {}"), "{:?}", results[2]);
         // Each card started once, not again when the loop took its result.
         let shown = payloads(&h.events());
@@ -6279,7 +6336,7 @@ mod tests {
         assert_eq!(inputs.lock().unwrap().len(), 2, "asked once each");
         assert_eq!(*provider.helper_tasks.lock().unwrap(), ["A"]);
         let results: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).filter_map(|m| m.content.clone()).collect();
-        assert_eq!(results[0], "answer to A");
+        assert!(results[0].starts_with("answer to A\n\n"), "{results:?}");
         assert!(results[1].contains("not that one"), "{results:?}");
     }
 
