@@ -33,6 +33,9 @@ pub enum SecretPurpose {
     /// An object as it was before the app changed it (`infra::kube_changes`)
     /// — a Secret's backup holds the secrets themselves.
     KubeBackup,
+    /// The MongoDB page's saved connections (`infra::mongo_store`): their
+    /// URIs carry the passwords.
+    MongoConnections,
     /// A second purpose, so the suite can prove the one property that needs
     /// two to exist: that a blob restamped as another purpose and opened as
     /// that purpose still fails. Compiled out of release builds — by the time
@@ -46,6 +49,7 @@ impl SecretPurpose {
         match self {
             SecretPurpose::ProviderApiKey => b"provider-api-key",
             SecretPurpose::KubeBackup => b"kube-backup",
+            SecretPurpose::MongoConnections => b"mongo-connections",
             #[cfg(test)]
             SecretPurpose::Other => b"something-else",
         }

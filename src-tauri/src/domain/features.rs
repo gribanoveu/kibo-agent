@@ -22,6 +22,7 @@ pub enum Feature {
     MeetingNotes,
     VoiceMemory,
     Knowledge,
+    Mongodb,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -37,7 +38,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -99,6 +100,19 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
                 data: Some("knowledge"),
+            },
+            // Its tools for the model are designed (`domain::mongo_tools`) and
+            // not built: until they are `ToolName`s, it has none to list.
+            Feature::Mongodb => Manifest {
+                id: "mongodb",
+                name: "MongoDB",
+                description: "A MongoDB page in the spirit of Compass: your connections, their databases and collections; \
+                    documents found with a filter, a sort and a projection, edited, added and deleted; aggregations; indexes. \
+                    Connection strings are sealed on this computer as the API keys are, and the window never sees a password. \
+                    The model is given nothing yet — tools for it are planned.",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("mongo_connections.enc"),
             },
         }
     }
@@ -167,7 +181,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb"]);
     }
 
     #[test]
@@ -186,6 +200,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::DeepseekSearch), "paid per call, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.

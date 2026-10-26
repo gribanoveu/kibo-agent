@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 /// The provider's client and the agent it is built on, the MCP servers the
 /// user gave a URL (the SDK's client and the module that points it at that
 /// URL), the cluster of a kubeconfig the user added, and the web search the
-/// user turned on — Tavily, or their SearXNG and the pages it finds — and the
-/// catalogs the page lists, asked for their index. Anything
+/// user turned on — Tavily, or their SearXNG and the pages it finds — the
+/// catalogs the page lists, asked for their index, and the MongoDB servers of
+/// the connections the user saved on that page. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[
@@ -26,11 +27,12 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/open_web.rs",
     "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
+    "src/infra/mongo_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.
 const RUST_NETWORK: &[&str] =
-    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::", "use rmcp::", " rmcp::"];
+    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::", "use rmcp::", " rmcp::", "use mongodb::", " mongodb::", "(mongodb::"];
 
 /// And in the window. The CSP in `tauri.conf.json` refuses these at runtime
 /// too; this catches them before anyone has to wonder why a request failed.
