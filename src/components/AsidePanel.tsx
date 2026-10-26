@@ -33,7 +33,7 @@ export function AsidePanel({ tab, dock, ctx, onClose }: Props) {
       )}
 
       <div className="aside-body">
-        <div className="tabpanel">{pane && <pane.Component {...ctx} />}</div>
+        <div className="tabpanel">{pane && <pane.Component {...ctx} onClosePane={onClose} />}</div>
       </div>
     </aside>
   );

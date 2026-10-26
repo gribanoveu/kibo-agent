@@ -37,6 +37,8 @@ import type { AgentFocus } from "../lib/describeTool";
 export type PaneContext = {
   /** On screen right now. A pane asks the backend only while it is. */
   active: boolean;
+  /** Closes the dock the pane is in — for a headless one, which has no heading to close it from. */
+  onClosePane?: () => void;
   workspace: string | null;
   /** The window is in the IDE layout: the Files pane shows the tree. */
   ide: boolean;

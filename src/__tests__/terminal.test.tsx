@@ -190,6 +190,18 @@ describe("TerminalPanel", () => {
     expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
   });
 
+  /// The pane has no heading of its own: the strip's end closes it, and only
+  /// the pane — its shells are not touched.
+  test("hides from the end of its strip, leaving the shells running", async () => {
+    let hidden = 0;
+    render(panel({ onClosePane: () => hidden++ }));
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByLabelText("Hide terminal"));
+    expect(hidden).toBe(1);
+    expect(asked("terminal_close")).toEqual([]);
+  });
+
   test("with no folder open there is nothing to open one in", async () => {
     render(panel({ workspace: null }));
     await settle();

@@ -70,6 +70,11 @@
   width: 24px;
   height: 24px;
 }
+.terminal-hide {
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+}
 .terminal-new:disabled {
   opacity: 0.4;
   cursor: default;
