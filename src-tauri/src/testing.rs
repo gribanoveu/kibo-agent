@@ -65,3 +65,36 @@ pub fn with_app_dir<T>(label: &str, f: impl FnOnce() -> T) -> T {
     crate::infra::master_key::install_working_keychain_for_tests();
     f()
 }
+
+/// Makes `local` the only provider, served by a thread on this machine that
+/// answers every request with `reply` and a usage of `prompt` and `completion`
+/// tokens. Call it inside `with_app_dir`: it writes the settings and the key.
+/// For tests of what a call is counted under — none of them reaches a network.
+pub fn spending_provider(reply: &str, prompt: u32, completion: u32) {
+    let content = serde_json::json!({ "choices": [{ "delta": { "content": reply } }] });
+    let usage = serde_json::json!({
+        "choices": [],
+        "usage": { "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion },
+    });
+    let port = crate::infra::llm_providers::stub_server(format!("data: {content}\n\ndata: {usage}\n\ndata: [DONE]\n\n"));
+    let mut settings = crate::infra::settings_store::load().expect("settings");
+    settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
+        id: "local".into(),
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        model: Some("qwen".into()),
+        ..Default::default()
+    }];
+    crate::infra::settings_store::save(&settings).expect("saves");
+    crate::infra::llm_credentials_store::save_api_key("local", "sk").expect("key");
+}
+
+/// What `chat` has been counted as spending, every day together.
+pub fn chat_tokens(chat: &str) -> u64 {
+    use crate::domain::metrics::Metric;
+    crate::infra::daily_metrics::read(&[Metric::ChatTokens])
+        .expect("metrics")
+        .into_iter()
+        .filter(|row| row.key == chat)
+        .map(|row| row.value)
+        .sum()
+}

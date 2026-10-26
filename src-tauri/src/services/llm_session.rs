@@ -40,6 +40,13 @@ pub struct LlmSession {
 /// then reuses it for every round, and a cache keyed on the configuration is
 /// the thing that later serves a rotated key from a stale entry.
 pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
+    resolve_for(provider_id, None)
+}
+
+/// `resolve`, with what the session spends counted under `chat` as well —
+/// the Overview's total for the open chat. A turn's helpers and checks ask
+/// through the turn's session, so they count with it.
+pub fn resolve_for(provider_id: Option<&str>, chat: Option<&str>) -> Result<LlmSession, LlmError> {
     let settings = settings_store::load().map_err(settings_error)?.llm;
     let config = match provider_id {
         Some(id) => settings
@@ -55,7 +62,7 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
     let model = effective_model(config, provider.as_ref())?;
 
     Ok(LlmSession {
-        provider: Arc::new(Counted(provider, model.clone())),
+        provider: Arc::new(Counted(provider, model.clone(), chat.map(str::to_string))),
         provider_id: config.id.clone(),
         model,
         debug_logging: settings.debug_logging,
@@ -171,14 +178,21 @@ pub fn pin_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
 /// answer says it spent into today's metrics, under the model it asked and
 /// the hour it answered. Here rather than in the turn loop: a chat's title, a
 /// commit message and a compaction summary ask the model too, and every one
-/// of them comes through a resolved session.
-struct Counted(Arc<dyn LlmProvider>, String);
+/// of them comes through a resolved session. The chat, when the session was
+/// resolved for one, gets the total too.
+struct Counted(Arc<dyn LlmProvider>, String, Option<String>);
 
 impl Counted {
     fn count(&self, usage: Option<&crate::domain::llm::ChatUsage>) {
         if let Some(usage) = usage {
             let hour = chrono::Local::now().format("%H").to_string();
-            daily_metrics::record(&crate::domain::metrics::of_usage(&self.1, &hour, usage));
+            let spent = u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+            // One record, one transaction: a day never holds half of an answer.
+            let mut counts = crate::domain::metrics::of_usage(&self.1, &hour, usage).to_vec();
+            if let Some(chat) = &self.2 {
+                counts.push((crate::domain::metrics::Metric::ChatTokens, chat, spent));
+            }
+            daily_metrics::record(&counts);
         }
     }
 }
@@ -507,7 +521,7 @@ mod tests {
     fn every_answer_through_a_session_counts_for_today() {
         with_app_dir("session-counted", || {
             let usage = ChatUsage { prompt_tokens: 100, completion_tokens: 7, total_tokens: 107, cached_tokens: 90 };
-            let counted = Counted(Arc::new(Spends(usage)), "qwen".into());
+            let counted = Counted(Arc::new(Spends(usage)), "qwen".into(), Some("c1".into()));
             let request = || ChatRequest { model: "m".into(), messages: Vec::new(), tools: Vec::new() };
 
             counted.chat(request()).unwrap();
@@ -527,6 +541,11 @@ mod tests {
             );
             let hours = daily_metrics::read(&[Metric::HourTokens]).unwrap();
             assert_eq!(hours.iter().map(|r| r.value).sum::<u64>(), 214, "{hours:?}");
+            assert_eq!(daily_metrics::read(&[Metric::ChatTokens]).unwrap(), [row(Metric::ChatTokens, "c1", 214)]);
+
+            // Resolved for no chat, nothing is kept under one.
+            Counted(Arc::new(Spends(usage)), "qwen".into(), None).chat(request()).unwrap();
+            assert_eq!(daily_metrics::read(&[Metric::ChatTokens]).unwrap(), [row(Metric::ChatTokens, "c1", 214)]);
         });
     }
 }

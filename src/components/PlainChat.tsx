@@ -420,7 +420,7 @@ export function PlainChat({
             )}
             {chat.context && (
               <span className="plain-meter">
-                <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up />
+                <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
             )}
             {running ? (

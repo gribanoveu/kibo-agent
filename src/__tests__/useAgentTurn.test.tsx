@@ -236,8 +236,125 @@ describe("making room before a turn", () => {
 
     expect(folded).toBe(false);
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
-      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/) } },
+      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/), chatId: expect.any(String) } },
     ]);
+  });
+});
+
+describe("the session's tokens", () => {
+  const sentId = () => calls.find((call) => call.command === "chat_start")?.args.chatId;
+  const reads = () => calls.filter((call) => call.command === "daily_metrics").length;
+
+  /// A new chat has no id until its first save, after its first turn has
+  /// started: the turn is sent the id the save then uses, or what it spends
+  /// is counted under nothing the Overview reads.
+  test("a new chat's first turn is counted under the id it is saved with", async () => {
+    results.chat_start = done("ok");
+    results.daily_metrics = () => [
+      { day: "2026-10-26", metric: "chatTokens", key: sentId(), value: 1200 },
+      { day: "2026-10-27", metric: "chatTokens", key: sentId(), value: 34 },
+      { day: "2026-10-27", metric: "chatTokens", key: "another chat", value: 5 },
+    ];
+    const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
+
+    await act(async () => {
+      await result.current.send("hello");
+    });
+
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(typeof sentId()).toBe("string");
+    expect(saved().every((call) => call.args.id === sentId())).toBe(true);
+    await waitFor(() => expect(result.current.spent).toBe(1234));
+  });
+
+  /// Nothing on screen shows it: no read, however much the turn spends.
+  test("while the Overview is hidden the total is not read", async () => {
+    results.chat_start = done("ok");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("hello");
+    });
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(reads()).toBe(0);
+    expect(result.current.spent).toBeNull();
+  });
+
+  /// A summary asked for before the first message belongs to the chat that
+  /// message starts; and since no turn event reports it, the total is read
+  /// again once it is back.
+  test("Compact now counts under the chat and reads the total again", async () => {
+    results.chat_compact = null;
+    results.chat_start = done("ok");
+    const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
+    await waitFor(() => expect(reads()).toBe(1));
+
+    await act(async () => {
+      await result.current.compact(true);
+    });
+    await waitFor(() => expect(reads()).toBe(2));
+
+    await act(async () => {
+      await result.current.send("hello");
+    });
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    const compacted = calls.find((call) => call.command === "chat_compact")?.args.chatId;
+    expect(compacted).toBe(sentId());
+    expect(saved()[0].args.id).toBe(compacted);
+  });
+
+  test("a turn continued after its card goes on under the same chat", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: {
+        history: [],
+        round: 1,
+        budgetUsed: 1,
+        eventSeq: 3,
+        calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }],
+        todos: [],
+        reads: {},
+      },
+    };
+    results.chat_resume = done("written");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("write it");
+    });
+    await act(async () => {
+      await result.current.decide([{ id: "w1", approved: true }]);
+    });
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(calls.find((call) => call.command === "chat_resume")?.args.chatId).toBe(sentId());
+    expect(saved().every((call) => call.args.id === sentId())).toBe(true);
+  });
+
+  /// Two reads in flight, the first landing last: the total drawn is the
+  /// second's, not the smaller one that was already out of date.
+  test("a read that lands after a newer one is dropped", async () => {
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_compact = null;
+    const pending: ((rows: unknown) => void)[] = [];
+    results.daily_metrics = () => new Promise((resolve) => pending.push(resolve));
+    const row = (value: number) => [{ day: "2026-10-26", metric: "chatTokens", key: "kept", value }];
+    const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
+    await act(async () => {
+      await result.current.open("kept");
+    });
+    await waitFor(() => expect(pending.length).toBe(2));
+    await act(async () => {
+      await result.current.compact(true);
+    });
+    await waitFor(() => expect(pending.length).toBe(3));
+
+    await act(async () => {
+      pending[2](row(50));
+    });
+    await waitFor(() => expect(result.current.spent).toBe(50));
+    await act(async () => {
+      pending[1](row(5));
+      pending[0]([]);
+    });
+    expect(result.current.spent).toBe(50);
   });
 });
 
@@ -1094,6 +1211,24 @@ describe("rewinding", () => {
     expect(saved()[0].args).toMatchObject({ id: "kept", messages: [] });
   });
 
+  /// No turn event reports the summary's spending: the total is read again once it is back.
+  test("a summary reads the session's total again", async () => {
+    results.chat_branch_summary = { role: "user", content: "[Summary of a conversation branch]\n\ntried" };
+    results.rewind_apply = [];
+    results.chat_load = record;
+    const reads = () => calls.filter((call) => call.command === "daily_metrics").length;
+    const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
+    await act(async () => {
+      await result.current.open("kept");
+    });
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    await act(async () => {
+      await result.current.rewind("user:1", true);
+    });
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   test("with a summary, the part cut off is told to the model and kept after the conversation", async () => {
     const summary = { role: "user", content: "[Summary of a conversation branch]\n\nb.rs was tried and failed" };
     results.chat_branch_summary = summary;
@@ -1103,7 +1238,7 @@ describe("rewinding", () => {
       await result.current.rewind("user:1", true);
     });
 
-    expect(calls.find((call) => call.command === "chat_branch_summary")?.args).toEqual({ messages: record.messages.slice(2) });
+    expect(calls.find((call) => call.command === "chat_branch_summary")?.args).toEqual({ messages: record.messages.slice(2), chatId: "kept" });
     expect(result.current.draft?.text).toBe("second");
     expect(result.current.turn.blocks.at(-1)).toMatchObject({
       kind: "notice",
@@ -1178,10 +1313,11 @@ describe("reviewing", () => {
       await result.current.review();
     });
     const call = calls.find((c) => c.command === "review_start");
-    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), messages: [], todos: [], plan: null });
+    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), chatId: expect.any(String), messages: [], todos: [], plan: null });
     expect(result.current.turn.status).toBe("done");
     expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
     await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(saved()[0].args.id).toBe(call?.args.chatId);
     expect((saved()[0].args.messages as { content: string }[]).map((m) => m.content)).toEqual([
       "Review the uncommitted changes…",
       "Nothing wrong.",

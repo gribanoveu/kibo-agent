@@ -7,6 +7,7 @@ import { useProcesses } from "../hooks/useProcesses";
 import { useTerminals } from "../hooks/useTerminals";
 import { useTerminalScreen } from "../hooks/useTerminalScreen";
 import { queuePaste } from "../lib/pasteAtPrompt";
+import { shortcutText } from "../lib/shortcuts";
 import { terminalQuote, terminalTitle, type TerminalInfo } from "../lib/terminal";
 import "./TerminalPanel.css";
 import type { AgentFocus } from "../lib/describeTool";
@@ -24,6 +25,8 @@ type Props = {
   onTerminalPasted: () => void;
   /** Puts text into the message being written. */
   onAddToChat: (text: string) => void;
+  /** Hides the pane, as the chat header's Terminal button does; the shells keep running. */
+  onClosePane?: () => void;
 };
 
 /** What the pane shows: one of the user's shells, the agent's background processes, or its helpers. */
@@ -59,7 +62,7 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
  * background processes and helper agents as the last two tabs. Opening the pane gives a shell, as a
  * terminal window does — once per folder, not again after the last is closed.
  */
-export function TerminalPanel({ active, workspace, processFocus, agentFocus, terminalPaste, onTerminalPasted, onAddToChat }: Props) {
+export function TerminalPanel({ active, workspace, processFocus, agentFocus, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
   const { processes, error: processError, stop } = useProcesses(active);
   const { agents, error: agentError, stop: stopAgent } = useAgents(active);
   const shells = useTerminals(active);
@@ -162,6 +165,17 @@ export function TerminalPanel({ active, workspace, processFocus, agentFocus, ter
         >
           Agents{helping > 0 && <span className="terminal-running">{helping}</span>}
         </button>
+        {onClosePane && (
+          <button
+            type="button"
+            className="iconbtn terminal-hide"
+            title={`Hide terminal (${shortcutText("terminal")}) — the shells keep running`}
+            aria-label="Hide terminal"
+            onClick={onClosePane}
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
       {shells.error && <div className="terminal-error">{shells.error}</div>}
       {drawn ? (

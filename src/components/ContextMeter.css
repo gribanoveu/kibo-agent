@@ -127,7 +127,8 @@
   border-radius: 50%;
 }
 /* Not a part of the bar, so not one of its colours: the same dot, hollow. */
-.ctx-dot--cache {
+.ctx-dot--cache,
+.ctx-dot--spent {
   box-sizing: border-box;
   border: 1.5px solid var(--text-faint);
 }

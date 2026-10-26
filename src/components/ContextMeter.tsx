@@ -44,14 +44,16 @@ const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.
 
 /** What the tokens are spent on: the ring's panel, and the Overview pane's. `cache` adds the
     last request's cache hit as a row (the Overview's — the ring says it in a sentence); `children`
-    go under the rows. */
+    go under the rows. `spent` adds what the whole session has cost, every model call of it. */
 export function ContextDetails({
   context,
   cache,
+  spent,
   children,
 }: {
   context: ContextUsage;
   cache?: ChatUsage | null;
+  spent?: number | null;
   children?: ReactNode;
 }) {
   const share = shareOf(context);
@@ -104,6 +106,15 @@ export function ContextDetails({
             <dd>{cache ? cacheShare(cache) : "—"}</dd>
           </div>
         )}
+        {spent !== undefined && (
+          <div title="Every model call of this chat: its turns, helpers, title, checks and summaries">
+            <dt>
+              <i className="ctx-dot ctx-dot--spent" />
+              Session tokens
+            </dt>
+            <dd>{spent === null ? "—" : compact(spent)}</dd>
+          </div>
+        )}
       </dl>
 
       {children}
@@ -119,9 +130,11 @@ type Props = {
   onCompact: () => void;
   /** Opens the panel upwards — for a meter at the bottom of the window. */
   up?: boolean;
+  /** The session's total, as a row — Chat mode's; the agent's is on the Overview. */
+  spent?: number | null;
 };
 
-export function ContextMeter({ context, usage, running, onCompact, up = false }: Props) {
+export function ContextMeter({ context, usage, running, onCompact, up = false, spent }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
 
@@ -169,7 +182,7 @@ export function ContextMeter({ context, usage, running, onCompact, up = false }:
 
       {open && (
         <div className={`ctx-pop${up ? " up" : ""}`} role="dialog" aria-label="Context">
-          <ContextDetails context={context}>
+          <ContextDetails context={context} spent={spent}>
             {context.compactsAt && (
               <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
             )}

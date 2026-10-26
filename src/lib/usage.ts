@@ -10,7 +10,8 @@ export type Metric =
   | "hourTokens"
   | "sessions"
   | "prompts"
-  | "toolCalls";
+  | "toolCalls"
+  | "chatTokens";
 
 export const METRICS: Metric[] = [
   "promptTokens",
@@ -36,6 +37,13 @@ export interface DailyMetric {
 export async function dailyMetrics(metrics: Metric[]): Promise<DailyMetric[]> {
   if (!inTauri()) throw new Error("This needs the desktop app — there is no backend in a plain browser.");
   return invoke<DailyMetric[]>("daily_metrics", { metrics });
+}
+
+/** Every model call `chatId` made, its helpers', title's and summaries' included — the Overview's session total. */
+export async function chatTokens(chatId: string): Promise<number> {
+  // ponytail: reads every chat's rows to sum one; a per-chat SUM command once the table is big enough to notice.
+  const rows = await dailyMetrics(["chatTokens"]);
+  return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
 }
 
 /** `14` is the new chat's strip; Settings offers the other three. */
@@ -94,6 +102,8 @@ export interface Ranked {
 }
 
 const TOP = 3;
+/** Projects and tools: the cards beside each other, a longer list each. */
+const TOP_LISTED = 9;
 
 const parse = (day: string) => {
   const [y, m, d] = day.split("-").map(Number);
@@ -220,8 +230,8 @@ export function usageStats(rows: DailyMetric[], range: UsageRange, today: Date):
     prompts: sum("prompts"),
     toolCalls: sum("toolCalls"),
     hours: Array.from({ length: 24 }, (_, h) => hourly?.get(String(h).padStart(2, "0")) ?? 0),
-    topProjects: ranked("sessions").slice(0, TOP),
-    topTools: ranked("toolCalls").slice(0, TOP),
+    topProjects: ranked("sessions").slice(0, TOP_LISTED),
+    topTools: ranked("toolCalls").slice(0, TOP_LISTED),
   };
 }
 

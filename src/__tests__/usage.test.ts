@@ -96,4 +96,12 @@ describe("usageStats", () => {
     expect(stats.total).toBe(0);
     expect(usageStats(rows, "all", today).favoriteModel).toBe("old");
   });
+  test("lists three models, and nine projects and tools, the busiest first", () => {
+    const many = (metric: DailyMetric["metric"]) =>
+      Array.from({ length: 12 }, (_, i) => row("2026-10-09", metric, i + 1, `${metric}-${i + 1}`));
+    const stats = usageStats([...many("modelTokens"), ...many("sessions"), ...many("toolCalls")], "7", today);
+    expect(stats.topModels.map((m) => m.value)).toEqual([12, 11, 10]);
+    expect(stats.topProjects.map((p) => p.value)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4]);
+    expect(stats.topTools.map((t) => t.value)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4]);
+  });
 });

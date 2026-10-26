@@ -307,6 +307,7 @@ pub async fn chat_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     turn_id: String,
+    chat_id: String,
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     plan: Option<String>,
@@ -317,7 +318,7 @@ pub async fn chat_start<R: Runtime>(
     state.cancel.store(false, Ordering::SeqCst);
     state.begin_turn(None);
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_off_the_event_loop(app, state, turn_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
     .await
@@ -330,12 +331,13 @@ pub async fn chat_resume<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     turn_id: String,
+    chat_id: String,
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_off_the_event_loop(app, state, turn_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
     .await
@@ -388,11 +390,12 @@ pub struct CompactedHistory {
 /// turn's own pass says it: the summary takes seconds, and only this side
 /// knows whether one is being made. The end is what this returns.
 #[tauri::command]
-pub async fn chat_compact(
+pub async fn chat_compact<R: Runtime>(
     messages: Vec<LlmMessage>,
     force: bool,
     turn_id: String,
-    app: AppHandle,
+    chat_id: String,
+    app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
     let frame = next_request_frame(&app, &state);
@@ -400,7 +403,7 @@ pub async fn chat_compact(
     // A summary is an ordinary request to the provider, and a request on the
     // IPC loop freezes every other command for its duration.
     tauri::async_runtime::spawn_blocking(move || {
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
         compact(&session, frame, &messages, force, sink)
     })
     .await
@@ -427,10 +430,10 @@ pub(super) fn compact(
 /// `messages`, from the rewound message on — for the window to add after the
 /// conversation it keeps. `None` when the summary came back empty.
 #[tauri::command]
-pub async fn chat_branch_summary(messages: Vec<LlmMessage>) -> Result<Option<LlmMessage>, String> {
+pub async fn chat_branch_summary(messages: Vec<LlmMessage>, chat_id: String) -> Result<Option<LlmMessage>, String> {
     // A request to the provider: off the IPC loop, as a compaction's.
     tauri::async_runtime::spawn_blocking(move || {
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
         context_compaction::summarize_branch(&session, &messages).map_err(|e| e.to_string())
     })
     .await
@@ -680,6 +683,7 @@ pub async fn review_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     turn_id: String,
+    chat_id: String,
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     plan: Option<String>,
@@ -705,7 +709,7 @@ pub async fn review_start<R: Runtime>(
     )));
     state.cancel.store(false, Ordering::SeqCst);
     state.begin_turn(Some(Arc::new(ReviewDesk::new(kept))));
-    run_off_the_event_loop(app, state, turn_id, plan, move |turn| llm_chat::stream(turn, messages, todos)).await
+    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| llm_chat::stream(turn, messages, todos)).await
 }
 
 /// Assembles a turn and runs it on a blocking thread.
@@ -717,6 +721,7 @@ async fn run_off_the_event_loop<R, F>(
     app: AppHandle<R>,
     state: Arc<AgentState>,
     turn_id: String,
+    chat_id: String,
     plan: Option<String>,
     run: F,
 ) -> Result<ChatStreamOutcome, String>
@@ -756,6 +761,7 @@ where
         let take_steering = || state.steering.take();
         let notes_typed = || state.steering.typed();
         let folder = FolderTurn {
+            chat_id: &chat_id,
             workspace: &workspace,
             mode,
             review,
@@ -779,6 +785,32 @@ mod tests {
     use super::*;
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
+
+    /// So is a compaction's summary, "Compact now" or before a message.
+    #[test]
+    fn a_compaction_counts_under_its_chat() {
+        crate::testing::with_app_dir("chat-compact-spent", || {
+            crate::testing::spending_provider("the earlier part", 40, 6);
+            let app = tauri::test::mock_app();
+            app.manage(state());
+            // Past the default window, so there is an older part to fold.
+            let history = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i} {}", "x".repeat(20_000))) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
+            let compacted = tauri::async_runtime::block_on(chat_compact(history, true, "t".into(), "c8".into(), app.handle().clone(), app.state()));
+            assert!(compacted.expect("compacted").is_some());
+            assert_eq!(crate::testing::chat_tokens("c8"), 46);
+        });
+    }
+
+    /// The summary a rewind asks for is the chat's spending too.
+    #[test]
+    fn a_branch_summary_counts_under_its_chat() {
+        crate::testing::with_app_dir("chat-branch-spent", || {
+            crate::testing::spending_provider("tried the parser", 30, 4);
+            let summary = tauri::async_runtime::block_on(chat_branch_summary(vec![LlmMessage::user("go")], "c9".into()));
+            assert!(summary.expect("summarized").is_some());
+            assert_eq!(crate::testing::chat_tokens("c9"), 34);
+        });
+    }
 
     /// The state is reachable without a running app, which is what keeps these
     /// checks about behaviour rather than about Tauri.

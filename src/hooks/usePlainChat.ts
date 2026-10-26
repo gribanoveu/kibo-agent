@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { branchAt, branchPoints } from "../lib/branch";
 import { branchSummary, rewindApply, rewindPreview, type ContextUsage, type FileRewind, type LlmMessage, type Outcome, type PendingToolCall, type ToolCallDecision } from "../lib/chat";
 import type { Attached } from "./useAttachments";
@@ -19,6 +19,7 @@ import {
 import type { KubePin } from "../lib/kube";
 import { addPrototypeAsset, assetsNote, pointNote, restoreNote, restorePrototype, type Asset, type Pointed } from "../lib/prototype";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
+import { useChatTokens } from "./useChatTokens";
 import { useStoredState } from "./useStoredState";
 import { useTurnChannel } from "./useTurnChannel";
 
@@ -71,7 +72,8 @@ export function chatBlocks(saved: unknown, messages: LlmMessage[]): Block[] {
  *
  * `model` is the one turns run on — `acceptEvent` says when a cache miss came with a switch.
  */
-export function usePlainChat(lastKubeconfig: string | null = null, model?: string) {
+/** `shown`: the chat is on screen, its session's total with it — read only then. */
+export function usePlainChat(lastKubeconfig: string | null = null, model?: string, shown = false) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   // Which chat is open, so the next launch opens it again. Null until the first message is saved.
   const [chatId, setChatId] = useStoredState<string | null>("plain-chat-open", null, isId);
@@ -87,6 +89,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   const [error, setError] = useState<string | null>(null);
   const [context, setContext] = useState<ContextUsage | null>(null);
   const [compacting, setCompacting] = useState(false);
+  // Said when the chat spent something no turn event reports: a title, a summary.
+  const [spentTick, spentChanged] = useReducer((n: number) => n + 1, 0);
+  const spent = useChatTokens(chatId, shown, turn.usage, turn.status, spentTick);
   // The running turn's id on the one event channel, and its listener.
   const turnId = useRef("");
   const channel = useTurnChannel(setTurn, model);
@@ -229,7 +234,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       await plainChatSave(id, role, kube, history.current, asked.blocks);
       void refresh();
       // Beside the turn; a chat the model could not name keeps its first message as its name.
-      if (chatId === null) generateChatTitle(id).then(refresh, () => {});
+      if (chatId === null)
+        generateChatTitle(id).then(() => {
+          void refresh();
+          spentChanged();
+        }, () => {});
       finish(await plainChatSend(turnId.current, id, role, kube, history.current));
     } catch (e) {
       failed(e);
@@ -266,7 +275,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       setCompacting(false);
     };
     try {
-      const shorter = await plainChatCompact(role, kube, history.current, force, id);
+      const shorter = await plainChatCompact(role, kube, history.current, force, id, chatId);
       end(shorter && { folded: shorter.folded });
       if (!shorter) return false;
       history.current = shorter.history;
@@ -277,6 +286,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       end(null);
       setError(String(e));
       return false;
+    } finally {
+      spentChanged();
     }
   };
 
@@ -313,7 +324,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     if (summarize) {
       const before = history.current;
       try {
-        summary = await branchSummary(before.slice(cut.history.length));
+        summary = await branchSummary(before.slice(cut.history.length), chatId);
+        spentChanged();
       } catch (e) {
         setError(String(e));
         return null;
@@ -404,6 +416,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     // While the turn works, its own figure: the window's history is the one
     // the turn started from.
     context: busy ? (turn.estimate ?? context) : context,
+    spent,
     send,
     decide,
     stop,

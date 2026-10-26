@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2026-10-26 Helper agents list as one line each — what they were asked and the tool they are calling now; a click opens the whole brief, what it cost, every tool called and the answer
+- 2026-10-26 The Terminal pane closes from an × at the end of its tab strip; the shells keep running
+- 2026-10-26 In Agent mode Overview and Terminal open one under the other, as one panel, while every other pane — Changes, Plan, Files, MCP and the rest — takes the column alone and replaces the one open before it
+- 2026-10-26 Settings → Usage lists the nine busiest projects and the nine most called tools, not three
+- 2026-10-26 The strip over the message box no longer shows lines added and removed; the Overview and the Changes pane still do
+- 2026-10-26 The agent's Overview, and a chat's context meter in Chat mode, show how many tokens the whole session has spent — every model call of the chat, its helpers, title, knowledge-base checks and summaries included
 - 2026-10-25 The Chat assistant searches and reads the knowledge base while it is on in the Catalog, and asks it who provides and consumes a topic or an endpoint — answering from what agents wrote about your repositories, without writing to it
 - 2026-10-25 Catalog, Meetings and Artifacts open what you pick in a sheet over the page, as Knowledge does, and Escape or a click outside it closes it
 - 2026-10-24 The sidebar keeps the Agent and Chat modes in a group of their own and the pages under Workspace, and shows New chat's key while the pointer is on it

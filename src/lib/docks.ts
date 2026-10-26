@@ -9,16 +9,21 @@ export type Docks = {
   swap?: boolean;
 };
 
+/** One panel in two parts: Overview on top, Terminal under it. Every other pane is a panel of its own. */
+const paired = (pane: AsideTab | null) => pane === "overview" || pane === "terminal";
+
 /**
- * Opens a pane without closing the one already open: on top when the top is
- * free, otherwise under it — the top stays what the user opened first, and a
- * third pane takes the bottom's place. A bottom pane (Terminal) always goes
- * under. One already on screen stays where it is, so it is never drawn twice.
+ * Opens a pane. Overview and Terminal open beside each other, Overview on top
+ * and Terminal under it; any other pane takes the whole column, closing what
+ * was there, and is closed in turn by the next one — Terminal included. One
+ * already on screen stays where it is, so it is never drawn twice. In the IDE
+ * layout a pane takes the top's place and Terminal goes under the file.
  */
 export function openPane(docks: Docks, pane: AsideTab, dock: "right" | "bottom"): Docks {
   if (docks.bottom === pane || (docks.top === pane && !docks.topHidden)) return docks;
-  if (dock === "bottom" || (!docks.topHidden && !docks.swap)) return { ...docks, bottom: pane };
-  return { ...docks, top: pane, topHidden: false };
+  if (dock === "bottom") return { ...docks, bottom: pane, topHidden: docks.topHidden || (!docks.swap && !paired(docks.top)) };
+  if (docks.swap || paired(pane)) return { ...docks, top: pane, topHidden: false, bottom: docks.swap || paired(docks.bottom) ? docks.bottom : null };
+  return { top: pane, topHidden: false, bottom: null };
 }
 
 /** Entering the IDE layout: the tree on top, and under the file only what goes there anyway. */

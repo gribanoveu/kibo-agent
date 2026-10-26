@@ -139,7 +139,7 @@
   flex: none;
 }
 /* A mode is where the work happens, a page something beside it: the modes'
-   icons sit in a tile, the lit one's tinted as its row is. */
+   rows are a little taller, their icons in a box of their own. */
 .mode-switch:not(.sidebar-pages) .mode-opt {
   height: 34px;
   padding: 0 6px;
@@ -151,12 +151,7 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
   color: var(--text-dim);
-}
-.mode-opt.active .mode-tile {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .sidebar-pages-head {
   flex: 0 0 100%;

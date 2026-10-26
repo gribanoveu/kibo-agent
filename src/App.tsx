@@ -129,7 +129,7 @@ export default function App() {
   const llm = useLlmSettings();
   // The model turns run on, for saying a cache miss came with a switch.
   const model = llm.models.current?.label;
-  const plain = usePlainChat(kube.active?.name ?? null, model);
+  const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
@@ -227,6 +227,7 @@ export default function App() {
     model,
     onSaved: history.refresh,
     onGiveBack: giveBack,
+    spentShown: agentMode && shown("overview"),
   });
   const approval = useApprovalMemory(agent.chatId, workspace.path, () =>
     toast.show("Auto is on here — the agent will change files without asking"),
@@ -524,6 +525,7 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
+      spent: agent.spent,
       onOpenProcess: openProcess,
       onOpenAgent: openAgent,
       onOpenPanel: openTab,
@@ -588,8 +590,6 @@ export default function App() {
                 branch={branch}
                 worktreeOf={worktreeOf}
                 index={index}
-                changes={changeTotals}
-                onOpenChanges={() => openTab("changes")}
                 end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={
                   unstarted
