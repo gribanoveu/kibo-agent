@@ -27,6 +27,7 @@ import {
   type ConnectionDraft,
   type DatabaseInfo,
   type FieldChange,
+  type FindPage,
   type FindRequest,
   type IndexView,
   type MongoConnection,
@@ -190,21 +191,37 @@ export function useMongoDocuments(target: MongoTarget | null) {
   const [counting, setCounting] = useState(false);
   // The find kept open for the next page: let go when another replaces it, or the view goes.
   const open = useRef<number | null>(null);
+  // Nothing to tell: a find already gone on the backend is what this asks for.
+  const close = (next: number | null) => void (next !== null && mongoFindClose(next).catch(() => {}));
   const letGo = () => {
-    // Nothing to tell: a find already gone on the backend is what this asks for.
-    if (open.current !== null) void mongoFindClose(open.current).catch(() => {});
+    close(open.current);
     open.current = null;
   };
+  // Which read is the latest: a new find, or the view going, makes the ones before it stale.
+  // What a stale one opened is closed rather than kept.
+  const latest = useRef(0);
+  const readLatest = async (work: () => Promise<FindPage>): Promise<FindPage | undefined> => {
+    const asked = latest.current;
+    const page = await call(async () => {
+      const page = await work();
+      // Closed here: `call` drops a page for a view since left without handing it back.
+      if (asked !== latest.current) close(page.next);
+      return page;
+    });
+    return asked === latest.current ? page : undefined;
+  };
 
+  /** The request is the one shown only once its find came back: a refused one leaves the last in place. */
   const find = useCallback(
     async (next: FindRequest) => {
       if (!target) return;
-      setRequest(next);
-      setTotal(null);
-      const found = await call(() => mongoFind(target, next));
+      latest.current++;
+      const found = await readLatest(() => mongoFind(target, next));
       if (!found) return;
       letGo();
       open.current = found.next;
+      setRequest(next);
+      setTotal(null);
       setRead({ pages: [found.documents], at: 0, next: found.next });
     },
     [key, call],
@@ -215,7 +232,10 @@ export function useMongoDocuments(target: MongoTarget | null) {
     setRequest(EMPTY_FIND);
     setTotal(null);
     if (target) void find(EMPTY_FIND);
-    return letGo;
+    return () => {
+      latest.current++;
+      letGo();
+    };
   }, [key]);
 
   const at = read?.at ?? 0;
@@ -248,7 +268,7 @@ export function useMongoDocuments(target: MongoTarget | null) {
       if (at + 1 < read.pages.length) return setRead({ ...read, at: at + 1 });
       const from = read.next;
       if (from === null) return;
-      const found = await call(() => mongoFindMore(from));
+      const found = await readLatest(() => mongoFindMore(from));
       if (!found) return;
       // `from` was used up by reading it; the backend holds only `found.next` now.
       open.current = found.next;

@@ -50,27 +50,29 @@ export function MongoPage(_: PageContext) {
   const [chosen, setChosen] = useStoredState<string | null>("mongo.connection", null, isId);
   const connection = store.connections.find((c) => c.id === chosen) ?? store.connections[0] ?? null;
   const tree = useMongoTree(connection?.id ?? null);
-  const [tabs, setTabs] = useState<Open[]>([]);
-  const [active, setActive] = useState<string | null>(null);
+  // The tabs belong to the connection they were opened on: another one chosen
+  // shows none from its first render, so no tab of the last one reads from it.
+  const on = connection?.id ?? null;
+  const [opened, setOpened] = useState<{ connection: string | null; tabs: Open[]; active: string | null }>({ connection: null, tabs: [], active: null });
+  const { tabs, active } = opened.connection === on ? opened : { tabs: [], active: null };
+  const setActive = (key: string | null) => setOpened({ connection: on, tabs, active: key });
   const selected = tabs.find((t) => keyOf(t) === active) ?? null;
   const [form, setForm] = useState<Form | null>(null);
   const [creating, setCreating] = useState<{ database: string; collection: string } | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
 
-  useEffect(() => {
-    setTabs([]);
-    setActive(null);
-  }, [connection?.id]);
-
-  const openTab = (open: Open) => {
-    setTabs((all) => (all.some((t) => keyOf(t) === keyOf(open)) ? all : [...all, open]));
-    setActive(keyOf(open));
-  };
-  const closeTab = (open: Open) => {
-    const rest = tabs.filter((t) => keyOf(t) !== keyOf(open));
-    setTabs(rest);
-    if (active === keyOf(open)) setActive(rest.length > 0 ? keyOf(rest[rest.length - 1]) : null);
-  };
+  // From the state as it is by then: both also run after an await.
+  const openTab = (open: Open) =>
+    setOpened((was) => {
+      const all = was.connection === on ? was.tabs : [];
+      return { connection: on, tabs: all.some((t) => keyOf(t) === keyOf(open)) ? all : [...all, open], active: keyOf(open) };
+    });
+  const closeTab = (open: Open) =>
+    setOpened((was) => {
+      const rest = (was.connection === on ? was.tabs : []).filter((t) => keyOf(t) !== keyOf(open));
+      const active = was.connection === on && was.active !== keyOf(open) ? was.active : rest.length > 0 ? keyOf(rest[rest.length - 1]) : null;
+      return { connection: on, tabs: rest, active };
+    });
 
   const createCollection = async () => {
     if (creating && (await tree.createCollection(creating.database.trim(), creating.collection.trim()))) {
@@ -427,17 +429,17 @@ function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps)
 /** A collection's documents: the query bar, a page of results, and the editor. */
 function Documents({ target }: { target: MongoTarget }) {
   const docs = useMongoDocuments(target);
-  const [draft, setDraft] = useState<FindRequest>(docs.request);
+  // The query bar as typed: a find run again — after an edit, a page turned — leaves it as it is.
+  const [draft, setDraft] = useState<QueryRun>(docs.request);
   const [options, setOptions] = useState(false);
   const [editor, setEditor] = useState<{ id?: unknown; text: string } | null>(null);
   const [deleting, setDeleting] = useState<MongoDocument | null>(null);
-  useEffect(() => setDraft(docs.request), [docs.request]);
 
   const [history, setHistory] = useStoredState<QueryRan[]>(`mongo.history.${target.connection}.${target.database}.${target.collection}`, [], isHistory);
   // "30 seconds ago" counts from when the menu opened, not ticking while it is open.
   const [openedAt, setOpenedAt] = useState(Date.now);
   const run = (next: Partial<FindRequest> = {}) => {
-    const request = { ...draft, skip: 0, ...next };
+    const request = { ...draft, skip: 0, limit: docs.request.limit, ...next };
     setHistory((now) => remember(now, request));
     void docs.find(request);
   };
@@ -456,6 +458,8 @@ function Documents({ target }: { target: MongoTarget }) {
   const fields = useMemo(() => knownFields(documents ?? []), [documents]);
   const { skip } = docs;
   const { limit } = docs.request;
+  // A document read with a projection is only part of it: replaced with what is shown, or cloned, the rest would go.
+  const partial = docs.request.projection.trim() !== "";
   /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
   const filterBy: FilterBy = async (path, text, exclude) => {
     const filter = await docs.condition(draft.filter, path, text, exclude);
@@ -570,7 +574,8 @@ function Documents({ target }: { target: MongoTarget }) {
       <div className="mongo-documents" aria-busy={docs.busy}>
         {documents?.map((doc, i) => (
           <DocumentCard
-            key={`${skip}-${i}-${doc.text.length}`}
+            // By its _id: after a find again the cards follow their documents, an edit begun included.
+            key={doc.id !== null ? JSON.stringify(doc.id) : `${skip}-${i}`}
             doc={doc}
             onSave={doc.id !== null ? (changes) => docs.setFields(doc.id, changes) : undefined}
             error={docs.error}
@@ -578,12 +583,16 @@ function Documents({ target }: { target: MongoTarget }) {
             actions={
               doc.id !== null && (
                 <>
-                  <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
-                    <Pencil size={13} />
-                  </button>
-                  <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
-                    <CopyPlus size={13} />
-                  </button>
+                  {!partial && (
+                    <>
+                      <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
+                        <Pencil size={13} />
+                      </button>
+                      <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
+                        <CopyPlus size={13} />
+                      </button>
+                    </>
+                  )}
                   <button type="button" className="mongo-icon-button" title="Delete" aria-label="Delete document" onClick={() => setDeleting(doc)}>
                     <Trash2 size={13} />
                   </button>
@@ -665,6 +674,8 @@ function QueryField({ label, kind, fields, value, placeholder, onChange, onKeyDo
   useLayoutEffect(() => {
     if (!selection.current || !input.current) return;
     input.current.setSelectionRange(...selection.current);
+    // The caret is where it was put, whatever a select event read before the text went in.
+    setCaret(selection.current[1]);
     selection.current = null;
   });
 

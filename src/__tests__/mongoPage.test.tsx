@@ -10,6 +10,10 @@ let connections: MongoConnection[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let refusals: Record<string, string> = {};
 let findNext: number | null = 7;
+// What a find returns; `held` keeps the next one waiting until it is let go.
+let findDocs: unknown[];
+let held: (() => void) | null = null;
+let holdNext = false;
 
 const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
 const DOC = {
@@ -23,6 +27,10 @@ const DOC = {
 };
 
 const BOB = { id: { $oid: "65f0a1b2c3d4e5f6a7b8c9d1" }, text: '{ name: "Bob" }', fields: [["name", value('"Bob"', "String")]] };
+
+/** Documents of one shape: their texts as long as each other's. */
+const named = (n: number, name: string) => ({ id: { $numberInt: String(n) }, text: `{ _id: ${n}, name: "${name}" }`, fields: [["_id", value(String(n), "Int32")], ["name", value(`"${name}"`, "String")]] });
+const [ONE, TWO, SIX] = [named(1, "one"), named(2, "two"), named(6, "six")];
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -49,8 +57,12 @@ mock.module("@tauri-apps/api/core", () => ({
           { name: "orders", kind: "collection" },
           { name: "big_orders", kind: "view" },
         ]);
-      case "mongo_find":
-        return Promise.resolve({ documents: [DOC], next: findNext });
+      case "mongo_find": {
+        const page = { documents: structuredClone(findDocs), next: findNext };
+        if (!holdNext) return Promise.resolve(page);
+        holdNext = false;
+        return new Promise((resolve) => (held = () => resolve(page)));
+      }
       case "mongo_find_more":
         return Promise.resolve({ documents: [BOB], next: null });
       case "mongo_count":
@@ -90,6 +102,9 @@ beforeEach(() => {
   calls = [];
   refusals = {};
   findNext = 7;
+  findDocs = [DOC];
+  held = null;
+  holdNext = false;
   connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017" }];
 });
 
@@ -524,6 +539,113 @@ describe("a collection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close shop.orders" }));
     expect(screen.getAllByRole("tab", { name: /orders/ }).map((t) => t.textContent)).toEqual(["big_orders"]);
     expect(screen.getByRole("tab", { name: "big_orders" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("a find with a projection shows parts of documents: no Edit or Clone, which would write the part back", async () => {
+    await openOrders();
+    expect(screen.getByRole("button", { name: "Edit document" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "{ name: 1 }" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    expect(screen.queryByRole("button", { name: "Edit document" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone document" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete document" })).toBeTruthy();
+    // A field changed alone is still safe: only it is set.
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    expect(screen.getByRole("textbox", { name: "Edit name" })).toBeTruthy();
+  });
+
+  test("an edit begun stays with its document when the list is found again around it", async () => {
+    findDocs = [ONE, TWO, SIX];
+    await openOrders();
+    fireEvent.doubleClick(screen.getByText('"two"'));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit name" }), { target: { value: '"2"' } });
+    // The first one deleted: the rest move up a place.
+    findDocs = [TWO, SIX];
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete document" })[0]);
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    expect(sent("mongo_delete").map((a) => a!.id)).toEqual([ONE.id]);
+    const editing = screen.getByRole("textbox", { name: "Edit name" }).closest("article")!;
+    expect(within(editing).queryByText('"six"')).toBeNull();
+    fireEvent.click(within(editing).getByRole("button", { name: "Save" }));
+    await settle();
+    expect(sent("mongo_set_fields").map((a) => a!.id)).toEqual([TWO.id]);
+  });
+
+  test("a query typed and not run stays typed while the list is found again, and the page size stays chosen", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "20 per page" }));
+    fireEvent.click(screen.getByRole("option", { name: "50 per page" }));
+    await settle();
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
+    fireEvent.change(filter, { target: { value: "{ name: 'A' }" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find again" }));
+    await settle();
+    expect(filter.value).toBe("{ name: 'A' }");
+    expect(sent("mongo_find").at(-1)).toMatchObject({ request: { filter: "", limit: 50 } });
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    expect(sent("mongo_find").at(-1)).toMatchObject({ request: { filter: "{ name: 'A' }", limit: 50 } });
+  });
+
+  test("a refused find leaves the last one in place: what is shown is found again, and counted, by its own filter", async () => {
+    await openOrders();
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
+    fireEvent.change(filter, { target: { value: "{ a: }" } });
+    refusals.mongo_find = "the filter: line 1, column 6: expected a value";
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    expect(filter.value).toBe("{ a: }");
+    delete refusals.mongo_find;
+    fireEvent.click(screen.getByRole("button", { name: "Count" }));
+    await settle();
+    expect(sent("mongo_count").at(-1)).toMatchObject({ filter: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    expect(sent("mongo_find").at(-1)).toMatchObject({ request: { filter: "", skip: 0 } });
+  });
+
+  test("a find that comes back after its tab closed, or after another find, has its cursor closed", async () => {
+    await openOrders();
+    holdNext = true;
+    findNext = 8;
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    // Another find while it waits — Enter is not held back by the busy buttons: the waiting one is stale when it comes.
+    findNext = 9;
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Filter" }), { code: "Enter" });
+    await settle();
+    expect(sent("mongo_find_close")).toEqual([{ next: 7 }]);
+    held!();
+    await settle();
+    expect(sent("mongo_find_close")).toEqual([{ next: 7 }, { next: 8 }]);
+
+    holdNext = true;
+    findNext = 10;
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Close shop.orders" }));
+    await settle();
+    held!();
+    await settle();
+    expect(sent("mongo_find_close")).toEqual([{ next: 7 }, { next: 8 }, { next: 9 }, { next: 10 }]);
+  });
+
+  test("another connection chosen reads nothing of the last one's tabs, and leaves its history alone", async () => {
+    connections = [...connections, { id: "c2", name: "Other", address: "mongodb://other" }];
+    const theirs = [{ filter: "{ b: 2 }", projection: "", sort: "", at: 1 }];
+    localStorage.setItem("mongo.history.c2.shop.orders", JSON.stringify(theirs));
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Other/ }));
+    await settle();
+    const toOther = calls.filter((c) => (c.args?.target as { connection?: string } | undefined)?.connection === "c2");
+    expect(toOther).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("mongo.history.c2.shop.orders")!)).toEqual(theirs);
+    expect(screen.queryByRole("tab", { name: "orders" })).toBeNull();
   });
 
   test("indexes are read when their tab opens, and _id_ cannot be dropped", async () => {
