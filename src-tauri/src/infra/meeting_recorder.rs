@@ -1,4 +1,4 @@
-//! Recording a call: the default microphone and the default output's sound —
+//! Recording a call: the microphone chosen, else the default, and the default output's sound —
 //! cpal's loopback, a Core Audio process tap on macOS 14.6+ and WASAPI loopback
 //! on Windows — into one stereo WAV, L the microphone and R the call, 16 kHz
 //! (`domain::recording`, `docs/36-meeting-notes-research.md`).
@@ -26,7 +26,7 @@ use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample, StreamInstant};
 use sherpa_onnx::LinearResampler;
 
 use crate::domain::meeting::MeetingError;
-use crate::domain::recording::{self, Levels, RecordingState, Source, CHANNELS, HEADER_BYTES, RATE};
+use crate::domain::recording::{self, Levels, Microphone, RecordingState, Source, CHANNELS, HEADER_BYTES, RATE};
 
 /// How often what the devices gave is written, and its levels told: ten a
 /// second at most, the throttle of a source that changes fast (AGENTS.md).
@@ -76,10 +76,11 @@ struct Session {
 }
 
 impl Recorder {
-    /// Records into `path` as `id` from now on, once a device is open; how
-    /// loud each side is goes to `levels` as it records, and an end without
-    /// [`stop`](Self::stop) to `ended`.
-    pub fn start(&self, id: &str, path: &Path, levels: LevelSink, ended: EndSink) -> Result<(), MeetingError> {
+    /// Records into `path` as `id` from now on, once a device is open, from
+    /// `microphone` (a [`Microphone`]'s id) while it is plugged in and the
+    /// default otherwise; how loud each side is goes to `levels` as it
+    /// records, and an end without [`stop`](Self::stop) to `ended`.
+    pub fn start(&self, id: &str, path: &Path, microphone: Option<&str>, levels: LevelSink, ended: EndSink) -> Result<(), MeetingError> {
         {
             let mut slot = self.slot();
             if !matches!(*slot, Slot::Free) {
@@ -90,11 +91,12 @@ impl Recorder {
         let (stop, stopped) = mpsc::channel();
         let (ready, opened) = mpsc::sync_channel(1);
         let (path, path_kept) = (path.to_path_buf(), path.to_path_buf());
+        let chosen = parse_chosen(microphone);
         let (frames, muted, done) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
         let (written, silent, over) = (frames.clone(), muted.clone(), done.clone());
         let thread = std::thread::spawn(move || {
             let host = cpal::default_host();
-            let (file, mic, call) = match open_all(&host, &path, silent) {
+            let (file, mic, call) = match open_all(&host, &path, chosen, silent) {
                 Ok(opened) => opened,
                 Err(e) => {
                     let _ = ready.send(Err(e));
@@ -233,8 +235,9 @@ impl Recorder {
 /// Both sides and the file, once at least one side is open: a call is worth
 /// recording without a microphone, and the other way round. A side that did
 /// not open is tried again each [`CHECK`].
-fn open_all(host: &cpal::Host, path: &Path, muted: Arc<AtomicBool>) -> Result<(WavWriter, Input, Input), MeetingError> {
+fn open_all(host: &cpal::Host, path: &Path, chosen: Option<cpal::DeviceId>, muted: Arc<AtomicBool>) -> Result<(WavWriter, Input, Input), MeetingError> {
     let (mut mic, mut call) = (Input::new(Source::Microphone, muted)?, Input::new(Source::Call, Arc::default())?);
+    mic.chosen = chosen;
     either(mic.connect(host), call.connect(host))?;
     Ok((WavWriter::create(path)?, mic, call))
 }
@@ -405,6 +408,11 @@ impl Track {
 /// One side of the call: its device's stream as it is now, and its track.
 struct Input {
     source: Source,
+    /// The device asked for, opened whenever it is plugged in; the default otherwise.
+    chosen: Option<cpal::DeviceId>,
+    /// Set once `chosen` is there but would not open: the default is used until
+    /// it is unplugged and back.
+    refused: bool,
     /// `None` while no device of its kind opens; tried again each [`CHECK`].
     stream: Option<cpal::Stream>,
     /// The device it is open on, to tell when the system's default moves.
@@ -419,7 +427,7 @@ struct Input {
 impl Input {
     /// `source`'s side, no device open yet.
     fn new(source: Source, muted: Arc<AtomicBool>) -> Result<Self, MeetingError> {
-        Ok(Input { source, stream: None, device: None, broken: Arc::default(), muted, track: Track::new(RATE)? })
+        Ok(Input { source, chosen: None, refused: false, stream: None, device: None, broken: Arc::default(), muted, track: Track::new(RATE)? })
     }
 
     /// `source`'s default device, open and playing.
@@ -430,8 +438,21 @@ impl Input {
         Ok(input)
     }
 
+    /// The chosen device if it opens, else the default.
     fn connect(&mut self, host: &cpal::Host) -> Result<(), MeetingError> {
-        let device = default_device(host, self.source)?;
+        if let Some(device) = self.chosen_device(host) {
+            match self.open_on(&device) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!("meeting recorder: the chosen microphone did not open, the default records instead: {e}");
+                    self.refused = true;
+                }
+            }
+        }
+        self.open_on(&default_device(host, self.source)?)
+    }
+
+    fn open_on(&mut self, device: &cpal::Device) -> Result<(), MeetingError> {
         let config = match self.source {
             Source::Microphone => device.default_input_config(),
             // Loopback: the output device opened for input, in its output format.
@@ -440,17 +461,31 @@ impl Input {
         .map_err(device_error)?;
         self.track.tune(config.sample_rate())?;
         let broken = Arc::new(AtomicBool::new(false));
-        let stream = open(&device, &config, self.track.arrived.clone(), broken.clone(), self.muted.clone())?;
+        let stream = open(device, &config, self.track.arrived.clone(), broken.clone(), self.muted.clone())?;
         stream.play().map_err(device_error)?;
         (self.stream, self.device, self.broken) = (Some(stream), device.id().ok(), broken);
         Ok(())
     }
 
-    /// Opened again on the default when its stream broke, the default moved,
-    /// or it is not open; what the old one gave goes first, at its own rate.
+    /// The device chosen while it is plugged in and has not refused to open.
+    /// One unplugged is forgiven: plugged back, it is tried again.
+    fn chosen_device(&mut self, host: &cpal::Host) -> Option<cpal::Device> {
+        let found = self.chosen.as_ref().and_then(|id| host.device_by_id(id));
+        if found.is_none() {
+            self.refused = false;
+        }
+        found.filter(|_| !self.refused)
+    }
+
+    /// Opened again when its stream broke, the device it should be on moved —
+    /// the default, or the chosen one plugged in or out — or it is not open;
+    /// what the old one gave goes first, at its own rate.
     fn follow(&mut self, host: &cpal::Host, origin: &mut Option<StreamInstant>) {
-        let default = default_device(host, self.source).ok().and_then(|d| d.id().ok());
-        if self.stream.is_some() && default == self.device && !self.broken.load(Ordering::Relaxed) {
+        let wanted = match self.chosen_device(host) {
+            Some(device) => device.id().ok(),
+            None => default_device(host, self.source).ok().and_then(|d| d.id().ok()),
+        };
+        if self.stream.is_some() && wanted == self.device && !self.broken.load(Ordering::Relaxed) {
             return;
         }
         self.stream = None;
@@ -468,6 +503,24 @@ fn default_device(host: &cpal::Host, source: Source) -> Result<cpal::Device, Mee
         Source::Microphone => host.default_input_device().ok_or(MeetingError::NoDevice("microphone")),
         Source::Call => host.default_output_device().ok_or(MeetingError::NoDevice("sound output")),
     }
+}
+
+/// The chosen microphone's id as the settings keep it; one that does not
+/// parse — kept on another system — is none, and the default records.
+fn parse_chosen(microphone: Option<&str>) -> Option<cpal::DeviceId> {
+    microphone.and_then(|m| m.parse().ok())
+}
+
+/// The microphones plugged in, by the system's name, to choose one to record from.
+pub fn microphones() -> Result<Vec<Microphone>, MeetingError> {
+    let devices = cpal::default_host().input_devices().map_err(device_error)?;
+    Ok(devices
+        .filter_map(|d| {
+            let id = d.id().ok()?.to_string();
+            let name = d.description().map(|n| n.name().to_string()).unwrap_or_else(|_| id.clone());
+            Some(Microphone { id, name })
+        })
+        .collect())
 }
 
 fn device_error(e: cpal::Error) -> MeetingError {
@@ -599,6 +652,15 @@ mod tests {
         file.append(&recording::interleave(mic, call, mic.len().max(call.len()))).unwrap();
         file.finish().unwrap();
         path
+    }
+
+    #[test]
+    fn a_chosen_microphone_is_kept_as_its_id_and_one_from_elsewhere_is_the_default() {
+        let id = cpal::DeviceId::new(cpal::default_host().id(), "Built-In:Mic:1");
+        assert_eq!(parse_chosen(Some(&id.to_string())), Some(id));
+        assert_eq!(parse_chosen(Some("nohost:device")), None);
+        assert_eq!(parse_chosen(Some("no colon")), None);
+        assert_eq!(parse_chosen(None), None);
     }
 
     #[test]
@@ -740,10 +802,13 @@ mod tests {
         let recorder = Recorder::default();
         let loudest = Arc::new(Mutex::new(Levels { seconds: 0.0, mic: 0.0, call: 0.0 }));
         let told = loudest.clone();
+        // The first microphone listed, chosen by its id: the way the settings open one.
+        let first = microphones().unwrap().into_iter().next().expect("a microphone");
         recorder
             .start(
                 "live",
                 &path,
+                Some(&first.id),
                 Box::new(move |l| {
                     let mut m = told.lock().unwrap();
                     *m = Levels { seconds: l.seconds, mic: m.mic.max(l.mic), call: m.call.max(l.call) };
@@ -751,7 +816,7 @@ mod tests {
                 Box::new(|e| panic!("ended by itself: {e}")),
             )
             .unwrap();
-        assert_eq!(recorder.start("again", &path, Box::new(|_| {}), Box::new(|_| {})), Err(MeetingError::AlreadyRecording));
+        assert_eq!(recorder.start("again", &path, None, Box::new(|_| {}), Box::new(|_| {})), Err(MeetingError::AlreadyRecording));
         let _ = std::process::Command::new("say").args(["-v", "Milena", "Проверка записи созвона, раз, два, три"]).status();
         std::thread::sleep(Duration::from_millis(300));
         // Muted, the microphone's side is silence however loud it is around it.
@@ -877,7 +942,7 @@ mod tests {
         assert_eq!(recorder.current(), None);
         assert!(!recorder.holds("r"));
         assert_eq!(recorder.mute(true), Err(MeetingError::NotRecording));
-        assert_eq!(recorder.start("again", &temp("recorder-starting"), Box::new(|_| {}), Box::new(|_| {})), Err(MeetingError::AlreadyRecording));
+        assert_eq!(recorder.start("again", &temp("recorder-starting"), None, Box::new(|_| {}), Box::new(|_| {})), Err(MeetingError::AlreadyRecording));
         // Turned off meanwhile: it is not to begin.
         assert_eq!(recorder.stop(), Err(MeetingError::NotRecording));
         assert!(matches!(*recorder.0.lock().unwrap(), Slot::Starting(true)));

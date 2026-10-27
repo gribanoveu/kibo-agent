@@ -228,6 +228,10 @@ pub struct AppSettings {
     /// A recorded call's microphone is denoised when it is transcribed;
     /// `None` is on — see [`AppSettings::meeting_denoise`].
     pub meeting_denoise: Option<bool>,
+    /// The microphone a call is recorded from, by its id
+    /// (`domain::recording::Microphone`); `None`, or one not plugged in, is
+    /// the system's default.
+    pub meeting_microphone: Option<String>,
 }
 
 impl AppSettings {
