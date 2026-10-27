@@ -8,7 +8,7 @@
 //! same functions.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, FieldChange, IndexView, MongoError};
 use crate::infra::mongo_client::{self, CollectionInfo, DatabaseInfo, FindSpec, Found, MongoClients, Place};
@@ -151,10 +151,32 @@ pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str) -> Res
     Ok(mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE)?.iter().map(view).collect())
 }
 
-/// How many went in.
-pub fn insert(clients: &MongoClients, target: &Target, text: &str) -> Result<usize, MongoError> {
+/// What an insert did: how many went in, and — refused part way — why, and the
+/// documents still to go as text for the editor, so trying again does not
+/// insert the first ones twice.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Inserted {
+    pub count: usize,
+    pub refused: Option<String>,
+    pub rest: Option<String>,
+}
+
+pub fn insert(clients: &MongoClients, target: &Target, text: &str) -> Result<Inserted, MongoError> {
     let documents = mongo::parse_documents(text, "the documents")?;
-    mongo_client::insert(&client(clients, &target.connection)?, &target.database, &target.collection, documents)
+    let kept = documents.clone();
+    match mongo_client::insert(&client(clients, &target.connection)?, &target.database, &target.collection, documents) {
+        Ok(count) => Ok(Inserted { count, refused: None, rest: None }),
+        Err(refused @ MongoError::PartlyInserted { inserted, .. }) => Ok(refused_after(kept, inserted, refused.to_string())),
+        Err(error) => Err(error),
+    }
+}
+
+/// The documents from the one refused on, written as they are typed: one alone, or an array.
+fn refused_after(documents: Vec<Map<String, Value>>, inserted: usize, reason: String) -> Inserted {
+    let mut rest: Vec<Value> = documents.into_iter().skip(inserted).map(Value::Object).collect();
+    let rest = if rest.len() == 1 { rest.remove(0) } else { Value::Array(rest) };
+    Inserted { count: inserted, refused: Some(reason), rest: Some(mongo::to_shell(&rest)) }
 }
 
 pub fn replace(clients: &MongoClients, target: &Target, id: Value, text: &str) -> Result<(), MongoError> {
@@ -290,6 +312,15 @@ mod tests {
             let unnamed = Target { collection: " ".into(), ..target.clone() };
             assert!(create_collection(&clients, &unnamed).is_err());
         });
+    }
+
+    #[test]
+    fn an_insert_refused_part_way_leaves_the_rest_to_try_again() {
+        let documents = mongo::parse_documents("[{ name: 'a' }, { name: 'b', n: NumberLong(2) }, { name: 'c' }]", "d").unwrap();
+        let after = refused_after(documents.clone(), 1, "1 of 3 went in".into());
+        assert_eq!((after.count, after.refused.as_deref()), (1, Some("1 of 3 went in")));
+        assert_eq!(after.rest.as_deref(), Some("[\n  {\n    name: \"b\",\n    n: NumberLong(2)\n  },\n  {\n    name: \"c\"\n  }\n]"));
+        assert_eq!(refused_after(documents, 2, String::new()).rest.as_deref(), Some("{\n  name: \"c\"\n}"), "one left is one document");
     }
 
     #[test]

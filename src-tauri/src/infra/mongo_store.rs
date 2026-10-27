@@ -113,6 +113,8 @@ pub fn delete(id: &str) -> Result<(), MongoError> {
     let _held = writing();
     let mut connections = load()?;
     let before = connections.0.len();
+    // Its URI wiped before it leaves the list: `Connections` wipes only the ones still in it.
+    connections.0.iter_mut().filter(|c| c.id == id).for_each(|c| c.uri.zeroize());
     connections.0.retain(|c| c.id != id);
     if connections.0.len() == before {
         return Ok(());

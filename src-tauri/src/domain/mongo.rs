@@ -103,6 +103,10 @@ pub fn validate_uri(uri: &str) -> Result<(), MongoError> {
     if options.is_some_and(|options| options.contains('@')) {
         return Err(MongoError::BadUri("there is an @ after the ? — a ? in the user name or password must be percent-encoded, %3F".into()));
     }
+    // `tlsCertificateKeyFilePassword=pa&ss` would mask only `pa`: an option is a key and a value.
+    if options.is_some_and(|options| options.split('&').any(|option| !option.is_empty() && !option.contains('='))) {
+        return Err(MongoError::BadUri("an option has no = — an & in an option's value must be percent-encoded, %26".into()));
+    }
     let hosts = hosts.split('/').next().unwrap_or_default();
     if hosts.is_empty() {
         return Err(MongoError::BadUri("the connection string names no host".into()));
@@ -874,12 +878,13 @@ mod tests {
         assert!(validate_uri("postgres://localhost").is_err());
         assert!(validate_uri("localhost:27017").is_err());
         // A reserved character in the password, unencoded: the driver would not read it, and the mask would miss it.
-        for uri in ["mongodb://u:pa/ss@h", "mongodb://u:p?ss@h", "mongodb://u:p@ss@h", "mongodb://u:p:ss@h", "mongodb://u/x:p@h", "mongodb://h:", "mongodb://admin:2024?Spring@db.example.com", "mongodb://ad?min:pw@h"] {
+        for uri in ["mongodb://u:pa/ss@h", "mongodb://u:p?ss@h", "mongodb://u:p@ss@h", "mongodb://u:p:ss@h", "mongodb://u/x:p@h", "mongodb://h:", "mongodb://admin:2024?Spring@db.example.com", "mongodb://ad?min:pw@h", "mongodb://h/?tlsCertificateKeyFilePassword=pa&ss"] {
             assert!(matches!(validate_uri(uri), Err(MongoError::BadUri(m)) if m.contains("percent-encode")), "{uri}");
         }
         assert!(validate_uri("mongodb://u:pa%2Fss@h/db?authSource=admin").is_ok());
         assert!(validate_uri("mongodb://[::1]:27017,[::2],h2:27018/?w=1").is_ok());
         assert!(validate_uri("mongodb://u@h").is_ok());
+        assert!(validate_uri("mongodb://h/?").is_ok(), "no options at all");
     }
 
     #[test]

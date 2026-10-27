@@ -91,7 +91,7 @@ pub struct Found {
 /// A client for `uri`, not connected yet: the first call connects. Kept by
 /// nobody — a connection only tested goes when its test is done.
 pub fn open(uri: &SecretString) -> Result<Client, MongoError> {
-    let mut options = ClientOptions::parse(uri.expose_secret()).run().map_err(|e| MongoError::BadUri(e.to_string()))?;
+    let mut options = ClientOptions::parse(uri.expose_secret()).run().map_err(unread)?;
     options.app_name = Some("Kibo Agent".into());
     options.server_selection_timeout = Some(SELECT_TIMEOUT);
     options.connect_timeout = Some(SELECT_TIMEOUT);
@@ -374,6 +374,18 @@ fn cursor_gone(error: &mongodb::error::Error) -> bool {
     matches!(error.kind.as_ref(), mongodb::error::ErrorKind::Command(refused) if refused.code == CURSOR_NOT_FOUND)
 }
 
+/// A connection string the driver could not read. Not in its words: they
+/// repeat the part it stopped at — an option's value, a password's tail.
+fn unread(error: mongodb::error::Error) -> MongoError {
+    match error.kind.as_ref() {
+        mongodb::error::ErrorKind::InvalidArgument { .. } => {
+            MongoError::BadUri("the driver cannot read this connection string — check its hosts and options, and percent-encode / ? # [ ] @ : & in a password or an option's value".into())
+        }
+        // A `mongodb+srv://` lookup that failed names the host, not the password.
+        _ => server(error),
+    }
+}
+
 /// A command the server refused says what it said, not the driver's dump of its reply.
 fn server(error: mongodb::error::Error) -> MongoError {
     match error.kind.as_ref() {
@@ -555,6 +567,14 @@ mod tests {
 
         drop_collection(&client, db, &coll).unwrap();
         assert!(!collections(&client, db).unwrap().iter().any(|c| c.name == coll));
+    }
+
+    #[test]
+    fn a_string_the_driver_cannot_read_is_refused_without_repeating_it() {
+        for uri in ["mongodb://h/?authMechanismProperties=AWS_SESSION_TOKEN=hunter2", "mongodb://h/?tlsCertificateKeyFilePassword=pa&hunter2", "mongodb://u:p/hunter2@h"] {
+            let refused = open(&SecretString::from(uri)).unwrap_err();
+            assert!(matches!(&refused, MongoError::BadUri(m) if !m.contains("hunter2")), "{uri}: {refused}");
+        }
     }
 
     /// Made once per connection, so a call does not open the sealed store;
