@@ -252,6 +252,8 @@ export function useMongoDocuments(target: MongoTarget | null) {
   const change = async (work: (target: MongoTarget) => Promise<unknown>) => {
     if (!target) return false;
     const asked = key;
+    // A find since — typed while this ran, or the view gone — is newer than the one this would repeat.
+    const of = latest.current;
     const refused = { reason: null as string | null };
     const done = await call(() =>
       work(target).then(
@@ -262,6 +264,7 @@ export function useMongoDocuments(target: MongoTarget | null) {
         },
       ),
     );
+    if (of !== latest.current) return !!done;
     await find({ ...request, skip });
     if (refused.reason !== null && asked === current.current) setError(refused.reason);
     return !!done;
@@ -311,7 +314,17 @@ export function useMongoDocuments(target: MongoTarget | null) {
         if (asked === current.current) setCounting(false);
       }
     },
-    insert: (text: string) => change((t) => mongoInsert(t, text)),
+    /** Done, or not with — refused part way — the documents still to go, `null` when none went in. */
+    insert: async (text: string) => {
+      const rest = { text: null as string | null };
+      const done = await change(async (t) => {
+        const inserted = await mongoInsert(t, text);
+        if (inserted.refused === null) return;
+        rest.text = inserted.rest;
+        throw inserted.refused;
+      });
+      return { done, rest: rest.text };
+    },
     replace: (id: unknown, text: string) => change((t) => mongoReplace(t, id, text)),
     setFields: (id: unknown, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
     remove: (id: unknown) => change((t) => mongoDelete(t, id)),

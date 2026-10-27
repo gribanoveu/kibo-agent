@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri } from "./backend";
+import { forgetHistory } from "./mongo";
 
 /** A feature built into the app that the user turns on from the Catalog
     (`domain::features`, docs/33-features.md). Its id is what a page's `feature` names. */
@@ -43,5 +44,8 @@ export async function setFeature(id: string, on: boolean): Promise<FeatureView[]
 /** Only while it is off. The list after it. */
 export async function deleteFeatureData(id: string): Promise<FeatureView[]> {
   requireBackend();
-  return invoke<FeatureView[]>("features_delete_data", { id });
+  const list = await invoke<FeatureView[]>("features_delete_data", { id });
+  // What the MongoDB page keeps in this window's storage goes with its connections.
+  if (id === "mongodb") forgetHistory();
+  return list;
 }

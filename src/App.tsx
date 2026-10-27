@@ -130,6 +130,11 @@ export default function App() {
   useEffect(() => {
     if (onPage && keptPages.includes(onPage) && !kept.includes(onPage.id)) setKept([...kept, onPage.id]);
   }, [onPage]);
+  // A page gone with its feature is not kept: turned on again, it waits to be opened before it mounts.
+  useEffect(() => {
+    const listed = kept.filter((id) => pages.some((one) => one.id === id));
+    if (listed.length !== kept.length) setKept(listed);
+  }, [pages]);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();

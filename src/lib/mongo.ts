@@ -96,10 +96,13 @@ export async function mongoAggregate(target: MongoTarget, pipeline: string): Pro
   return invoke<MongoDocument[]>("mongo_aggregate", { target, pipeline });
 }
 
-/** How many went in: `text` is a document or an array of them. */
-export async function mongoInsert(target: MongoTarget, text: string): Promise<number> {
+/** What an insert did; refused part way, why and the documents still to go, as text. */
+export type Inserted = { count: number; refused: string | null; rest: string | null };
+
+/** `text` is a document or an array of them. */
+export async function mongoInsert(target: MongoTarget, text: string): Promise<Inserted> {
   requireBackend();
-  return invoke<number>("mongo_insert", { target, text });
+  return invoke<Inserted>("mongo_insert", { target, text });
 }
 
 export async function mongoReplace(target: MongoTarget, id: unknown, text: string): Promise<void> {
@@ -168,6 +171,20 @@ export type QueryRun = Pick<FindRequest, "filter" | "projection" | "sort">;
 export type QueryRan = QueryRun & { at: number };
 
 const HISTORY = 10;
+
+/** Where a collection's history is kept in this window's storage. */
+export const historyKey = (target: MongoTarget) => `mongo.history.${target.connection}.${target.database}.${target.collection}`;
+
+/** The histories of a connection deleted, or of every one — filters can hold the values searched for. */
+export function forgetHistory(connection?: string) {
+  const prefix = connection === undefined ? "mongo.history." : `mongo.history.${connection}.`;
+  try {
+    const keys = Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i));
+    for (const key of keys) if (key?.startsWith(prefix)) localStorage.removeItem(key);
+  } catch {
+    // Storage refused: there is nothing it could have kept either.
+  }
+}
 
 /** `history` with `run` on top: the same one again moves up rather than repeating, an empty one is not kept, the oldest past 10 goes. */
 export function remember(history: QueryRan[], run: QueryRun, at = Date.now()): QueryRan[] {

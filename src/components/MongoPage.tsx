@@ -10,7 +10,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
-import { isHistory, newDocument, pageRange, ranAgo, remember, withoutId, type QueryRan, type QueryRun, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
+import { forgetHistory, historyKey, isHistory, newDocument, pageRange, ranAgo, remember, withoutId, type QueryRan, type QueryRun, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
 import { apply, erased, EXAMPLES, knownFields, suggest, typed, type Edit as TextEdit, type KnownField, type QueryKind, type Suggestion } from "../lib/mongoQuery";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
@@ -84,7 +84,10 @@ export function MongoPage(_: PageContext) {
   };
 
   const confirmed = async (c: Confirm) => {
-    if (c.what === "connection" && (await store.remove(c.connection.id))) setForm(null);
+    if (c.what === "connection" && (await store.remove(c.connection.id))) {
+      forgetHistory(c.connection.id);
+      setForm(null);
+    }
     if (c.what === "collection" && (await tree.dropCollection(c.database, c.collection))) closeTab(c);
   };
 
@@ -441,7 +444,7 @@ function Documents({ target }: { target: MongoTarget }) {
   const [editor, setEditor] = useState<{ id?: unknown; text: string } | null>(null);
   const [deleting, setDeleting] = useState<MongoDocument | null>(null);
 
-  const [history, setHistory] = useStoredState<QueryRan[]>(`mongo.history.${target.connection}.${target.database}.${target.collection}`, [], isHistory);
+  const [history, setHistory] = useStoredState<QueryRan[]>(historyKey(target), [], isHistory);
   // "30 seconds ago" counts from when the menu opened, not ticking while it is open.
   const [openedAt, setOpenedAt] = useState(Date.now);
   const run = (next: Partial<FindRequest> = {}) => {
@@ -485,8 +488,11 @@ function Documents({ target }: { target: MongoTarget }) {
   };
   const saveEditor = async () => {
     if (!editor) return;
-    const done = editor.id !== undefined ? await docs.replace(editor.id, editor.text) : await docs.insert(editor.text);
-    if (done) setEditor(null);
+    if (editor.id !== undefined) return void ((await docs.replace(editor.id, editor.text)) && setEditor(null));
+    const inserted = await docs.insert(editor.text);
+    if (inserted.done) setEditor(null);
+    // Refused part way: the ones that went in leave the editor, so trying again does not add them twice.
+    else if (inserted.rest !== null) setEditor({ text: inserted.rest });
   };
   // A dialog's error is its own: it goes when the dialog opens or closes, not onto the list.
   const showEditor = (next: typeof editor) => {

@@ -15,6 +15,9 @@ let findDocs: unknown[];
 let held: (() => void) | null = null;
 let holdNext = false;
 let heldCount: (() => void) | null = null;
+let holding = new Set<string>();
+let holds: Record<string, () => void> = {};
+let inserted: { count: number; refused: string | null; rest: string | null };
 let holdCount = false;
 
 const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
@@ -37,52 +40,60 @@ const [ONE, TWO, SIX] = [named(1, "one"), named(2, "two"), named(6, "six")];
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
-    if (refusals[command]) return Promise.reject(refusals[command]);
-    switch (command) {
-      case "mongo_connections":
-        return Promise.resolve(structuredClone(connections));
-      case "mongo_connection_save": {
-        const draft = args!.draft as { id?: string; name: string; uri?: string };
-        if (draft.id) connections = connections.map((c) => (c.id === draft.id ? { ...c, name: draft.name } : c));
-        else connections = [...connections, { id: `c${connections.length + 1}`, name: draft.name, address: draft.uri!.replace(/:[^:@/]+@/, ":•••@") }];
-        return Promise.resolve(structuredClone(connections));
-      }
-      case "mongo_connection_delete":
-        connections = connections.filter((c) => c.id !== args!.id);
-        return Promise.resolve(structuredClone(connections));
-      case "mongo_connection_test":
-        return Promise.resolve("8.0.4");
-      case "mongo_databases":
-        return Promise.resolve([{ name: "shop", sizeOnDisk: 2_621_440 }]);
-      case "mongo_collections":
-        return Promise.resolve([
-          { name: "orders", kind: "collection" },
-          { name: "big_orders", kind: "view" },
-        ]);
-      case "mongo_find": {
-        const page = { documents: structuredClone(findDocs), next: findNext };
-        if (!holdNext) return Promise.resolve(page);
-        holdNext = false;
-        return new Promise((resolve) => (held = () => resolve(page)));
-      }
-      case "mongo_find_more":
-        return Promise.resolve({ documents: [BOB], next: null });
-      case "mongo_count":
-        if (!holdCount) return Promise.resolve(41);
-        holdCount = false;
-        return new Promise((resolve) => (heldCount = () => resolve(41)));
-      case "mongo_filter_add": {
-        const { filter, path, text, exclude } = args as { filter: string; path: string[]; text: string; exclude: boolean };
-        return Promise.resolve(`${filter || "{}"} + ${path.join(".")}${exclude ? " != " : " = "}${text}`);
-      }
-      case "mongo_indexes":
-        return Promise.resolve([{ name: "_id_", keys: "{ _id: 1 }", unique: false, sparse: false, ttlSeconds: null, partial: null }]);
-      default:
-        return Promise.resolve(null);
-    }
+    // A command held answers once let go, as it would then.
+    if (holding.delete(command)) return new Promise((resolve) => (holds[command] = () => resolve(answer(command, args))));
+    return answer(command, args);
   },
   transformCallback: (callback: unknown) => callback,
 }));
+
+function answer(command: string, args?: Record<string, unknown>): Promise<unknown> {
+  if (refusals[command]) return Promise.reject(refusals[command]);
+  switch (command) {
+    case "mongo_connections":
+      return Promise.resolve(structuredClone(connections));
+    case "mongo_connection_save": {
+      const draft = args!.draft as { id?: string; name: string; uri?: string };
+      if (draft.id) connections = connections.map((c) => (c.id === draft.id ? { ...c, name: draft.name } : c));
+      else connections = [...connections, { id: `c${connections.length + 1}`, name: draft.name, address: draft.uri!.replace(/:[^:@/]+@/, ":•••@") }];
+      return Promise.resolve(structuredClone(connections));
+    }
+    case "mongo_connection_delete":
+      connections = connections.filter((c) => c.id !== args!.id);
+      return Promise.resolve(structuredClone(connections));
+    case "mongo_connection_test":
+      return Promise.resolve("8.0.4");
+    case "mongo_databases":
+      return Promise.resolve([{ name: "shop", sizeOnDisk: 2_621_440 }]);
+    case "mongo_collections":
+      return Promise.resolve([
+        { name: "orders", kind: "collection" },
+        { name: "big_orders", kind: "view" },
+      ]);
+    case "mongo_find": {
+      const page = { documents: structuredClone(findDocs), next: findNext };
+      if (!holdNext) return Promise.resolve(page);
+      holdNext = false;
+      return new Promise((resolve) => (held = () => resolve(page)));
+    }
+    case "mongo_find_more":
+      return Promise.resolve({ documents: [BOB], next: null });
+    case "mongo_count":
+      if (!holdCount) return Promise.resolve(41);
+      holdCount = false;
+      return new Promise((resolve) => (heldCount = () => resolve(41)));
+    case "mongo_filter_add": {
+      const { filter, path, text, exclude } = args as { filter: string; path: string[]; text: string; exclude: boolean };
+      return Promise.resolve(`${filter || "{}"} + ${path.join(".")}${exclude ? " != " : " = "}${text}`);
+    }
+    case "mongo_indexes":
+      return Promise.resolve([{ name: "_id_", keys: "{ _id: 1 }", unique: false, sparse: false, ttlSeconds: null, partial: null }]);
+    case "mongo_insert":
+      return Promise.resolve(inserted);
+    default:
+      return Promise.resolve(null);
+  }
+}
 
 mock.module("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
 
@@ -92,7 +103,7 @@ afterAll(() => {
 });
 
 const { MongoPage } = await import("../components/MongoPage");
-const { isHistory, pageRange, ranAgo, remember, withoutId } = await import("../lib/mongo");
+const { forgetHistory, isHistory, pageRange, ranAgo, remember, withoutId } = await import("../lib/mongo");
 const { IS_MAC } = await import("../lib/shortcuts");
 const MOD = IS_MAC ? { metaKey: true } : { ctrlKey: true };
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -111,6 +122,9 @@ beforeEach(() => {
   holdNext = false;
   heldCount = null;
   holdCount = false;
+  holding = new Set();
+  holds = {};
+  inserted = { count: 1, refused: null, rest: null };
   connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017" }];
 });
 
@@ -677,14 +691,65 @@ describe("a collection", () => {
     errors.mockRestore();
   });
 
-  test("an insert refused part way reads the list again, its reason still in the dialog", async () => {
+  test("an insert refused part way reads the list again, and leaves in the editor only what did not go in", async () => {
     await openOrders();
-    refusals.mongo_insert = "1 of 3 went in before one was refused, and stay in: E11000 duplicate key error (code 11000)";
+    inserted = { count: 1, refused: "1 of 2 went in before one was refused, and stay in: E11000 duplicate key error (code 11000)", rest: '{\n  name: "b"\n}' };
     fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    fireEvent.change(dialog().getByRole("textbox"), { target: { value: "[{ name: 'a' }, { name: 'b' }]" } });
     fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
     await settle();
     expect(sent("mongo_find")).toHaveLength(2);
-    expect(dialog().getByRole("alert").textContent).toContain("1 of 3 went in");
+    expect(dialog().getByRole("alert").textContent).toContain("1 of 2 went in");
+    expect((dialog().getByRole("textbox") as HTMLTextAreaElement).value).toBe('{\n  name: "b"\n}');
+
+    // Refused whole: the text stays as it was, the list read again all the same.
+    inserted = { count: 1, refused: null, rest: null };
+    refusals.mongo_insert = "E11000 duplicate key error (code 11000)";
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    expect((dialog().getByRole("textbox") as HTMLTextAreaElement).value).toBe('{\n  name: "b"\n}');
+    expect(sent("mongo_find")).toHaveLength(3);
+  });
+
+  test("a write that returns after a newer find, or after its tab closed, does not find again", async () => {
+    await openOrders();
+    holding.add("mongo_delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    const filter = screen.getByRole("combobox", { name: "Filter" });
+    fireEvent.change(filter, { target: { value: "{ name: 'B' }" } });
+    fireEvent.keyDown(filter, { code: "Enter" });
+    await settle();
+    holds.mongo_delete();
+    await settle();
+    expect(sent("mongo_find").map((a) => (a!.request as { filter: string }).filter)).toEqual(["", "{ name: 'B' }"]);
+
+    holding.add("mongo_delete");
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Close shop.orders" }));
+    await settle();
+    holds.mongo_delete();
+    await settle();
+    expect(sent("mongo_find")).toHaveLength(2);
+  });
+
+  test("a connection deleted takes its query histories with it, and only its own", async () => {
+    connections = [...connections, { id: "c2", name: "Other", address: "mongodb://other" }];
+    localStorage.setItem("mongo.history.c1.shop.orders", "[]");
+    localStorage.setItem("mongo.history.c2.shop.orders", "[]");
+    page();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Delete “Local”?" })).getByRole("button", { name: "Delete" }));
+    await settle();
+    expect(localStorage.getItem("mongo.history.c1.shop.orders")).toBeNull();
+    expect(localStorage.getItem("mongo.history.c2.shop.orders")).toBe("[]");
+    forgetHistory();
+    expect(localStorage.getItem("mongo.history.c2.shop.orders")).toBeNull();
   });
 
   test("a count that lands after another find is not that find's total", async () => {
