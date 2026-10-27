@@ -97,6 +97,12 @@ export async function mongoSetFields(target: MongoTarget, id: unknown, changes: 
   return invoke<void>("mongo_set_fields", { target, id, changes });
 }
 
+/** `filter` with one more condition: `path` equal to `text`, or with `exclude` not equal; the same field's other value joins it under `$and`. */
+export async function mongoFilterAdd(filter: string, path: string[], text: string, exclude: boolean): Promise<string> {
+  requireBackend();
+  return invoke<string>("mongo_filter_add", { filter, path, text, exclude });
+}
+
 export async function mongoDelete(target: MongoTarget, id: unknown): Promise<void> {
   requireBackend();
   return invoke<void>("mongo_delete", { target, id });

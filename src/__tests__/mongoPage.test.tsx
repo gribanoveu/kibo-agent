@@ -48,6 +48,10 @@ mock.module("@tauri-apps/api/core", () => ({
         ]);
       case "mongo_find":
         return Promise.resolve({ documents: [DOC], total: 41 });
+      case "mongo_filter_add": {
+        const { filter, path, text, exclude } = args as { filter: string; path: string[]; text: string; exclude: boolean };
+        return Promise.resolve(`${filter || "{}"} + ${path.join(".")}${exclude ? " != " : " = "}${text}`);
+      }
       case "mongo_indexes":
         return Promise.resolve([{ name: "_id_", keys: "{ _id: 1 }", unique: false, sparse: false, ttlSeconds: null, partial: null }]);
       default:
@@ -225,6 +229,29 @@ describe("a collection", () => {
     await settle();
     expect(screen.getByRole("textbox", { name: "Edit name" }).closest("article")!.textContent).toContain("name: line 1, column 1: expected a value");
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("a field's + and − add its condition to the filter, which is found only once Find is pressed", async () => {
+    await openOrders();
+    const filter = screen.getByRole("textbox", { name: "Filter" }) as HTMLInputElement;
+    fireEvent.change(filter, { target: { value: "{ a: 1 }" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by name" }));
+    await settle();
+    expect(filter.value).toBe('{ a: 1 } + name = "Ann"');
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    // An array's item by the array's name: any of its items matches.
+    fireEvent.click(screen.getByRole("button", { name: "Filter out tags.n" }));
+    await settle();
+    expect(sent("mongo_filter_add")[1]).toEqual({ filter: '{ a: 1 } + name = "Ann"', path: ["tags", "n"], text: "NumberLong(5)", exclude: true });
+    expect(filter.value).toBe('{ a: 1 } + name = "Ann" + tags.n != NumberLong(5)');
+    expect(sent("mongo_find")).toHaveLength(1);
+
+    refusals.mongo_filter_add = "the filter: line 1, column 3: expected ':'";
+    fireEvent.click(screen.getByRole("button", { name: "Filter by tags" }));
+    await settle();
+    expect(screen.getByText("the filter: line 1, column 3: expected ':'")).toBeTruthy();
+    expect(filter.value).toBe('{ a: 1 } + name = "Ann" + tags.n != NumberLong(5)');
   });
 
   test("a value copies as it would be pasted — a string without its quotes", async () => {

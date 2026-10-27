@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::mongo::{ConnectionDraft, ConnectionView, FieldChange, IndexView};
+use crate::domain::mongo::{add_condition, ConnectionDraft, ConnectionView, FieldChange, IndexView};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, MongoClients};
 use crate::services::mongo::{self, DocumentView, FindPage, FindRequest, Target};
 
@@ -79,6 +79,12 @@ pub async fn mongo_replace(target: Target, id: Value, text: String, clients: Cli
 pub async fn mongo_set_fields(target: Target, id: Value, changes: Vec<FieldChange>, clients: Clients<'_>) -> Result<(), String> {
     let clients = clients.inner().clone();
     blocking(move || mongo::set_fields(&clients, &target, id, &changes)).await
+}
+
+/// The filter with one more condition, from a field on a card: no server, only the text.
+#[tauri::command]
+pub fn mongo_filter_add(filter: String, path: Vec<String>, text: String, exclude: bool) -> Result<String, String> {
+    add_condition(&filter, &path, &text, exclude).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

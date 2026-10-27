@@ -12,6 +12,7 @@ import {
   mongoConnections,
   mongoDatabases,
   mongoDelete,
+  mongoFilterAdd,
   mongoFind,
   mongoIndexCreate,
   mongoIndexDrop,
@@ -211,6 +212,8 @@ export function useMongoDocuments(target: MongoTarget | null) {
     replace: (id: unknown, text: string) => change((t) => mongoReplace(t, id, text)),
     setFields: (id: unknown, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
     remove: (id: unknown) => change((t) => mongoDelete(t, id)),
+    /** The filter with a field's condition added, or `undefined` with the reason in `error`. */
+    condition: (filter: string, path: string[], text: string, exclude: boolean) => call(() => mongoFilterAdd(filter, path, text, exclude)),
   };
 }
 

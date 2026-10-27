@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
@@ -438,6 +438,11 @@ function Documents({ target }: { target: MongoTarget }) {
   };
   const page = docs.page;
   const { skip, limit } = docs.request;
+  /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
+  const filterBy: FilterBy = async (path, text, exclude) => {
+    const filter = await docs.condition(draft.filter, path, text, exclude);
+    if (filter !== undefined) setDraft((now) => ({ ...now, filter }));
+  };
   const saveEditor = async () => {
     if (!editor) return;
     const done = editor.id !== undefined ? await docs.replace(editor.id, editor.text) : await docs.insert(editor.text);
@@ -509,6 +514,7 @@ function Documents({ target }: { target: MongoTarget }) {
             doc={doc}
             onSave={doc.id !== null ? (changes) => docs.setFields(doc.id, changes) : undefined}
             error={docs.error}
+            filterBy={filterBy}
             actions={
               doc.id !== null && (
                 <>
@@ -590,6 +596,9 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** Adds a field's condition to the filter: `path` as a query reads it, an array's index left out so any item matches. */
+type FilterBy = (path: string[], text: string, exclude: boolean) => void;
+
 /** A card being edited: each field opened on it, by its path as JSON, with the text it had and has now. */
 type Drafts = Record<string, { path: string[]; was: string; text: string }>;
 
@@ -608,7 +617,7 @@ type Edit = {
  * With `onSave`, a field double-clicked puts the card in edit mode: more can be
  * opened, and Save sends every change at once.
  */
-function DocumentCard({ doc, actions, onSave, error }: { doc: MongoDocument; actions?: ReactNode; onSave?: (changes: FieldChange[]) => Promise<boolean>; error?: string | null }) {
+function DocumentCard({ doc, actions, onSave, error, filterBy }: { doc: MongoDocument; actions?: ReactNode; onSave?: (changes: FieldChange[]) => Promise<boolean>; error?: string | null; filterBy?: FilterBy }) {
   const [unfolded, setUnfolded] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [drafts, setDrafts] = useState<Drafts | null>(null);
@@ -653,7 +662,7 @@ function DocumentCard({ doc, actions, onSave, error }: { doc: MongoDocument; act
       </header>
       <div className="mongo-document-body">
         {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says; the drafts live here, above it. */}
-        <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} path={[]} edit={edit} />
+        <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} path={[]} where={[]} edit={edit} filterBy={filterBy} />
         {long && (
           <button type="button" className="mongo-unfold" onClick={() => setUnfolded(!unfolded)}>
             {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
@@ -679,13 +688,14 @@ function DocumentCard({ doc, actions, onSave, error }: { doc: MongoDocument; act
   );
 }
 
-type FieldsProps = { entries: [string, Shown][]; open: boolean; path: string[]; edit?: Edit };
+/** `path` is where the entries are, as an update names it; `where`, as a query does — an array's indexes left out. */
+type FieldsProps = { entries: [string, Shown][]; open: boolean; path: string[]; where: string[]; array?: boolean; edit?: Edit; filterBy?: FilterBy };
 
-function Fields({ entries, open, path, edit }: FieldsProps) {
+function Fields({ entries, open, path, where, array, edit, filterBy }: FieldsProps) {
   return (
     <ul className="mongo-tree-fields">
       {entries.map(([name, value]) => (
-        <Field key={name} name={name} value={value} open={open} path={[...path, name]} edit={edit} />
+        <Field key={name} name={name} value={value} open={open} path={[...path, name]} where={array ? where : [...where, name]} edit={edit} filterBy={filterBy} />
       ))}
     </ul>
   );
@@ -696,7 +706,7 @@ function Fields({ entries, open, path, edit }: FieldsProps) {
  * being cut; double-clicked, it opens for editing — and its type at the end of
  * the line; an object or array is a toggle for what is in it.
  */
-function Field({ name, value, open, path, edit }: { name: string; value: Shown; open: boolean; path: string[]; edit?: Edit }) {
+function Field({ name, value, open, path, where, edit, filterBy }: { name: string; value: Shown; open: boolean; path: string[]; where: string[]; edit?: Edit; filterBy?: FilterBy }) {
   const [shown, setShown] = useState(open);
   const [wrapped, setWrapped] = useState(false);
   if (value.kind === "value") {
@@ -705,6 +715,16 @@ function Field({ name, value, open, path, edit }: { name: string; value: Shown; 
     const editable = edit && path[0] !== "_id";
     return (
       <li className="mongo-entry">
+        {filterBy && (
+          <span className="mongo-entry-filter">
+            <button type="button" title="Add to the filter" aria-label={`Filter by ${where.join(".")}`} onClick={() => filterBy(where, value.text, false)}>
+              <Plus size={11} />
+            </button>
+            <button type="button" title="Add to the filter as not equal" aria-label={`Filter out ${where.join(".")}`} onClick={() => filterBy(where, value.text, true)}>
+              <Minus size={11} />
+            </button>
+          </span>
+        )}
         <span className="mongo-entry-key">{name}</span>
         {": "}
         {draft ? (
@@ -749,7 +769,7 @@ function Field({ name, value, open, path, edit }: { name: string; value: Shown; 
         <span className="mongo-entry-key">{name}</span>
         <span className="mongo-entry-type">{value.kind === "object" ? `Object (${value.fields.length})` : `Array (${value.items.length})`}</span>
       </button>
-      {shown && <Fields entries={entries} open={open} path={path} edit={edit} />}
+      {shown && <Fields entries={entries} open={open} path={path} where={where} array={value.kind === "array"} edit={edit} filterBy={filterBy} />}
     </li>
   );
 }

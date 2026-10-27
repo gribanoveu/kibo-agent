@@ -358,8 +358,9 @@
   gap: 2px;
   margin-left: auto;
 }
+/* Room on the left for a top-level field's "+" and "−", which stand out of its gutter. */
 .mongo-document-body {
-  padding: 8px 12px 10px;
+  padding: 8px 12px 10px 20px;
 }
 .mongo-document-editing,
 .mongo-document-editing:hover {
@@ -430,6 +431,43 @@
 }
 .mongo-entry-nest {
   display: block;
+}
+/* A field's "+" and "−" for the filter: in the gutter left of its key, out over the guides while hovered. */
+.mongo-entry:not(.mongo-entry-nest) {
+  position: relative;
+}
+.mongo-entry-filter {
+  position: absolute;
+  top: 0;
+  right: calc(100% - 12px);
+  display: flex;
+  height: 1.7em;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.mongo-entry:hover > .mongo-entry-filter,
+.mongo-entry-filter:has(:focus-visible) {
+  opacity: 1;
+}
+.mongo-entry-filter button {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mongo-entry-filter button:hover {
+  background: var(--bg-panel);
+  color: var(--accent);
 }
 .mongo-entry-key {
   flex: none;

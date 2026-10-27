@@ -200,15 +200,42 @@ pub fn set_fields(changes: &[FieldChange]) -> Result<Map<String, Value>, MongoEr
         if path.first().is_some_and(|key| key == "_id") {
             return Err(MongoError::IdChanged);
         }
-        // A dot or a leading `$` would make `$set` read the path as another one.
-        if path.is_empty() || path.iter().any(|key| key.is_empty() || key.contains('.') || key.starts_with('$')) {
-            return Err(MongoError::WrongShape { what: "a field", expected: "named without a dot or a leading $ to be edited alone — edit the whole document" });
-        }
-        let field = path.join(".");
+        let field = dotted(path).ok_or(MongoError::WrongShape { what: "a field", expected: "named without a dot or a leading $ to be edited alone — edit the whole document" })?;
         let value = parse(text).map_err(|error| MongoError::BadValue { field: field.clone(), error })?;
         set.insert(field, value);
     }
     Ok(Map::from_iter([("$set".to_string(), Value::Object(set))]))
+}
+
+/// `filter` with one more condition, from a field on a card: `path` equal to
+/// `text`, or with `exclude` not equal. The same field with another value
+/// already there stays, the two then under `$and`.
+pub fn add_condition(filter: &str, path: &[String], text: &str, exclude: bool) -> Result<String, MongoError> {
+    let mut filter = parse_document(filter, "the filter")?;
+    let field = dotted(path).ok_or(MongoError::WrongShape { what: "a field", expected: "named without a dot or a leading $ to be searched by" })?;
+    let value = parse(text).map_err(|error| MongoError::BadValue { field: field.clone(), error })?;
+    let condition = if exclude { Value::Object(Map::from_iter([("$ne".to_string(), value)])) } else { value };
+    match filter.get(&field) {
+        None => {
+            filter.insert(field, condition);
+        }
+        Some(was) if *was == condition => {}
+        Some(_) => {
+            let one = Value::Object(Map::from_iter([(field, condition)]));
+            match filter.entry("$and").or_insert_with(|| Value::Array(Vec::new())) {
+                Value::Array(all) if all.contains(&one) => {}
+                Value::Array(all) => all.push(one),
+                _ => return Err(MongoError::WrongShape { what: "the filter's $and", expected: "an array of conditions" }),
+            }
+        }
+    }
+    Ok(to_shell_line(&Value::Object(filter)))
+}
+
+/// A field's keys as one dotted path — or `None` when a key would read as
+/// another path in it: empty, with a dot, or with a leading `$`.
+fn dotted(path: &[String]) -> Option<String> {
+    (!path.is_empty() && !path.iter().any(|key| key.is_empty() || key.contains('.') || key.starts_with('$'))).then(|| path.join("."))
 }
 
 /// One document, or an array of nothing else.
@@ -970,6 +997,23 @@ mod tests {
         }
         let error = set(&[one(&["name"], "'ok'"), one(&["op", "n"], "Bea")]).unwrap_err();
         assert!(error.to_string().starts_with("op.n: line 1, column 1"), "{error}");
+    }
+
+    #[test]
+    fn a_condition_joins_the_filter_and_a_second_value_of_a_field_goes_under_and() {
+        let keys = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+        let add = |filter: &str, path: &[&str], text: &str, exclude: bool| add_condition(filter, &keys(path), text, exclude);
+        assert_eq!(add("", &["name"], "\"Ann\"", false).unwrap(), "{ name: \"Ann\" }");
+        let both = add("{ name: 'Ann' }", &["tags", "n"], "NumberLong(5)", true).unwrap();
+        assert_eq!(both, "{ name: \"Ann\", \"tags.n\": { $ne: NumberLong(5) } }");
+        assert_eq!(add(&both, &["name"], "'Ann'", false).unwrap(), both);
+        let and = add(&both, &["name"], "'Bea'", true).unwrap();
+        assert_eq!(and, "{ name: \"Ann\", \"tags.n\": { $ne: NumberLong(5) }, $and: [ { name: { $ne: \"Bea\" } } ] }");
+        assert_eq!(add(&and, &["name"], "'Bea'", true).unwrap(), and);
+        assert!(matches!(add("{ name: 1, $and: 2 }", &["name"], "3", false), Err(MongoError::WrongShape { what: "the filter's $and", .. })));
+        assert!(matches!(add("{ name", &["name"], "1", false), Err(MongoError::BadInput { what: "the filter", .. })));
+        assert!(matches!(add("", &["a.b"], "1", false), Err(MongoError::WrongShape { what: "a field", .. })));
+        assert!(add("", &["op", "n"], "Bea", false).unwrap_err().to_string().starts_with("op.n: line 1, column 1"));
     }
 
     #[test]
