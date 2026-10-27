@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, CopyPlus, Database, Eye, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, CopyPlus, Database, Eye, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
@@ -15,6 +15,12 @@ import type { PageContext } from "./pages";
 import "./MongoPage.css";
 
 type View = "documents" | "aggregations" | "indexes";
+
+/** A collection open in a tab. */
+type Open = { database: string; collection: string };
+
+/** A database's name has no dot, so this names one collection. */
+const keyOf = (open: Open) => `${open.database}.${open.collection}`;
 
 /** The connection form: a new one, or a saved one changed — its URI is never shown, only typed again. */
 type Form = { id?: string; name: string; uri: string; saved?: string };
@@ -42,25 +48,38 @@ export function MongoPage(_: PageContext) {
   const [chosen, setChosen] = useStoredState<string | null>("mongo.connection", null, isId);
   const connection = store.connections.find((c) => c.id === chosen) ?? store.connections[0] ?? null;
   const tree = useMongoTree(connection?.id ?? null);
-  const [selected, setSelected] = useState<{ database: string; collection: string } | null>(null);
-  const [view, setView] = useState<View>("documents");
+  const [tabs, setTabs] = useState<Open[]>([]);
+  const [active, setActive] = useState<string | null>(null);
+  const selected = tabs.find((t) => keyOf(t) === active) ?? null;
   const [form, setForm] = useState<Form | null>(null);
   const [creating, setCreating] = useState<{ database: string; collection: string } | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
 
-  useEffect(() => setSelected(null), [connection?.id]);
-  const target: MongoTarget | null = connection && selected ? { connection: connection.id, ...selected } : null;
+  useEffect(() => {
+    setTabs([]);
+    setActive(null);
+  }, [connection?.id]);
+
+  const openTab = (open: Open) => {
+    setTabs((all) => (all.some((t) => keyOf(t) === keyOf(open)) ? all : [...all, open]));
+    setActive(keyOf(open));
+  };
+  const closeTab = (open: Open) => {
+    const rest = tabs.filter((t) => keyOf(t) !== keyOf(open));
+    setTabs(rest);
+    if (active === keyOf(open)) setActive(rest.length > 0 ? keyOf(rest[rest.length - 1]) : null);
+  };
 
   const createCollection = async () => {
     if (creating && (await tree.createCollection(creating.database.trim(), creating.collection.trim()))) {
-      setSelected({ database: creating.database.trim(), collection: creating.collection.trim() });
+      openTab({ database: creating.database.trim(), collection: creating.collection.trim() });
       setCreating(null);
     }
   };
 
   const confirmed = async (c: Confirm) => {
     if (c.what === "connection" && (await store.remove(c.connection.id))) setForm(null);
-    if (c.what === "collection" && (await tree.dropCollection(c.database, c.collection))) setSelected(null);
+    if (c.what === "collection" && (await tree.dropCollection(c.database, c.collection))) closeTab(c);
   };
 
   return (
@@ -142,7 +161,7 @@ export function MongoPage(_: PageContext) {
                                 type="button"
                                 className={`mongo-tree-collection${on ? " on" : ""}`}
                                 aria-current={on ? "true" : undefined}
-                                onClick={() => setSelected({ database: db.name, collection: c.name })}
+                                onClick={() => openTab({ database: db.name, collection: c.name })}
                               >
                                 {c.kind === "view" ? <Eye size={13} className="mongo-tree-icon" /> : <Table size={13} className="mongo-tree-icon" />}
                                 <span className="mongo-tree-name">{c.name}</span>
@@ -160,41 +179,32 @@ export function MongoPage(_: PageContext) {
             </ul>
           </nav>
 
-          <section className="mongo-main" aria-label={target ? `${target.database}.${target.collection}` : "Collection"}>
-            {target ? (
-              <>
-                <header className="mongo-main-head">
-                  <h2 className="mongo-namespace">
-                    <span className="mongo-quiet">{target.database}.</span>
-                    {target.collection}
-                  </h2>
-                  <Tabs<View>
-                    label="What to show"
-                    tabs={[
-                      { id: "documents", label: "Documents" },
-                      { id: "aggregations", label: "Aggregations" },
-                      { id: "indexes", label: "Indexes" },
-                    ]}
-                    value={view}
-                    onChange={setView}
-                  />
-                  <Dropdown
-                    label={<MoreHorizontal size={14} aria-label="Collection actions" />}
-                    title="Collection actions"
-                    options={[{ value: "drop", label: "Drop collection…", hint: "Its documents and indexes go with it" }]}
-                    value=""
-                    onPick={() => setConfirm({ what: "collection", ...target })}
-                    below
-                    right
-                  />
-                </header>
-                {view === "documents" && <Documents target={target} />}
-                {view === "aggregations" && <Aggregations target={target} />}
-                {view === "indexes" && <Indexes target={target} />}
-              </>
-            ) : (
-              <p className="mongo-quiet mongo-pick">{tree.databases.length > 0 ? "Pick a collection on the left." : ""}</p>
+          <section className="mongo-main" aria-label={selected ? keyOf(selected) : "Collection"}>
+            {tabs.length > 0 && (
+              <div className="mongo-tabs" role="tablist" aria-label="Open collections">
+                {tabs.map((t) => {
+                  const on = keyOf(t) === active;
+                  return (
+                    <div key={keyOf(t)} className={`mongo-tab${on ? " active" : ""}`} title={keyOf(t)} onAuxClick={(e) => e.button === 1 && closeTab(t)}>
+                      <button type="button" role="tab" aria-selected={on} className="mongo-tab-name" onClick={() => setActive(keyOf(t))}>
+                        {t.collection}
+                      </button>
+                      <button type="button" className="mongo-tab-close" title="Close" aria-label={`Close ${keyOf(t)}`} onClick={() => closeTab(t)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
+            {/* Every open tab stays mounted, so its query and page are there when it comes back. */}
+            {connection &&
+              tabs.map((t) => (
+                <div key={keyOf(t)} hidden={keyOf(t) !== active}>
+                  <Collection target={{ connection: connection.id, ...t }} onDrop={() => setConfirm({ what: "collection", ...t })} />
+                </div>
+              ))}
+            {tabs.length === 0 && <p className="mongo-quiet mongo-pick">{tree.databases.length > 0 ? "Pick a collection on the left." : ""}</p>}
           </section>
         </div>
       )}
@@ -279,6 +289,43 @@ function ConfirmModal<T>({ title, action, subject, onClose, onConfirm, children 
     >
       {children}
     </Modal>
+  );
+}
+
+/** One open collection: its documents, aggregations and indexes. */
+function Collection({ target, onDrop }: { target: MongoTarget; onDrop: () => void }) {
+  const [view, setView] = useState<View>("documents");
+  return (
+    <>
+      <header className="mongo-main-head">
+        <h2 className="mongo-namespace">
+          <span className="mongo-quiet">{target.database}.</span>
+          {target.collection}
+        </h2>
+        <Tabs<View>
+          label="What to show"
+          tabs={[
+            { id: "documents", label: "Documents" },
+            { id: "aggregations", label: "Aggregations" },
+            { id: "indexes", label: "Indexes" },
+          ]}
+          value={view}
+          onChange={setView}
+        />
+        <Dropdown
+          label={<MoreHorizontal size={14} aria-label="Collection actions" />}
+          title="Collection actions"
+          options={[{ value: "drop", label: "Drop collection…", hint: "Its documents and indexes go with it" }]}
+          value=""
+          onPick={onDrop}
+          below
+          right
+        />
+      </header>
+      {view === "documents" && <Documents target={target} />}
+      {view === "aggregations" && <Aggregations target={target} />}
+      {view === "indexes" && <Indexes target={target} />}
+    </>
   );
 }
 

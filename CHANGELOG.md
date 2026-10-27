@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-10-26 Turn on MongoDB in the Catalog to get a MongoDB page: save connections — the connection string sealed on this computer as the API keys are — and browse their databases and collections, find documents with a filter, projection and sort written as in mongosh, edit, clone, insert and delete them, run aggregations, and list, create and drop indexes
+- 2026-10-26 Turn on MongoDB in the Catalog to get a MongoDB page: save connections — the connection string sealed on this computer as the API keys are — and browse their databases and collections, several open at once in tabs, find documents with a filter, projection and sort written as in mongosh, edit, clone, insert and delete them, run aggregations, and list, create and drop indexes
 - 2026-10-26 Helper agents list as one line each — what they were asked and the tool they are calling now; a click opens the whole brief, what it cost, every tool called and the answer
 - 2026-10-26 The Terminal pane closes from an × at the end of its tab strip; the shells keep running
 - 2026-10-26 In Agent mode Overview and Terminal open one under the other, as one panel, while every other pane — Changes, Plan, Files, MCP and the rest — takes the column alone and replaces the one open before it

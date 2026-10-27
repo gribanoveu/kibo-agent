@@ -161,6 +161,68 @@
 .mongo-main {
   min-width: 0;
 }
+/* Open collections, one tab each. */
+.mongo-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mongo-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  max-width: 220px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--text-faint);
+}
+.mongo-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.mongo-tab.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.mongo-tab-name {
+  min-width: 0;
+  padding: 6px 4px 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mongo-tab-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+.mongo-tab:hover .mongo-tab-close,
+.mongo-tab.active .mongo-tab-close,
+.mongo-tab-close:focus-visible {
+  opacity: 1;
+}
+.mongo-tab-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 .mongo-main-head {
   display: flex;
   align-items: center;

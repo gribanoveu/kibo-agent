@@ -194,6 +194,24 @@ describe("a collection", () => {
     expect(sent("mongo_delete")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" }, id: DOC.id }]);
   });
 
+  test("two collections open in tabs, each keeping its own query", async () => {
+    await openOrders();
+    // The other tab's query bar is there too, hidden.
+    const filter = () => screen.getAllByLabelText("Filter").find((el) => !el.closest("[hidden]")) as HTMLInputElement;
+    fireEvent.change(filter(), { target: { value: "{ a: 1 }" } });
+    fireEvent.click(screen.getByRole("button", { name: /big_orders/ }));
+    await settle();
+    expect(screen.getAllByRole("tab", { name: /orders/ }).map((t) => t.textContent)).toEqual(["orders", "big_orders"]);
+    expect(filter().value).toBe("");
+    expect(sent("mongo_find").at(-1)).toMatchObject({ target: { collection: "big_orders" } });
+
+    fireEvent.click(screen.getByRole("tab", { name: "orders" }));
+    expect(filter().value).toBe("{ a: 1 }");
+    fireEvent.click(screen.getByRole("button", { name: "Close shop.orders" }));
+    expect(screen.getAllByRole("tab", { name: /orders/ }).map((t) => t.textContent)).toEqual(["big_orders"]);
+    expect(screen.getByRole("tab", { name: "big_orders" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   test("indexes are read when their tab opens, and _id_ cannot be dropped", async () => {
     await openOrders();
     expect(sent("mongo_indexes")).toEqual([]);
