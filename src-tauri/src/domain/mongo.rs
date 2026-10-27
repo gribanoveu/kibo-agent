@@ -96,12 +96,31 @@ pub fn validate_uri(uri: &str) -> Result<(), MongoError> {
     let Some(rest) = uri.strip_prefix("mongodb://").or_else(|| uri.strip_prefix("mongodb+srv://")) else {
         return Err(MongoError::BadUri("a connection string starts with mongodb:// or mongodb+srv://".into()));
     };
-    let hosts = rest.split(['/', '?']).next().unwrap_or_default();
-    let hosts = hosts.rsplit_once('@').map_or(hosts, |(_, hosts)| hosts);
+    let (user, hosts, _) = parts(rest);
+    let hosts = hosts.split('/').next().unwrap_or_default();
     if hosts.is_empty() {
         return Err(MongoError::BadUri("the connection string names no host".into()));
     }
+    // `u:p?ss@h` is the host `u` on the port `p` to the driver too: what looks like a port is a number.
+    let mut ports = hosts.split(',').filter_map(|host| host.rsplit_once(':')).map(|(_, port)| port).filter(|port| !port.contains(']'));
+    if ports.any(|port| port.is_empty() || !port.chars().all(|c| c.is_ascii_digit())) {
+        return Err(MongoError::BadUri("a host's port is not a number — a ? in the password must be percent-encoded, %3F".into()));
+    }
+    // As the driver reads it: past the user name's first `:`, any of these ends the password early.
+    let (name, password) = user.map_or(("", ""), |user| user.split_once(':').unwrap_or((user, "")));
+    if name.chars().chain(password.chars()).any(|c| "/?#[]@:".contains(c)) {
+        return Err(MongoError::BadUri("the user name or password has / ? # [ ] @ or : in it — percent-encode it, %2F for /".into()));
+    }
     Ok(())
+}
+
+/// After the scheme, split as the driver splits it: the options from the first
+/// `?`, then the user from the last `@` before them — so a password's `/` is
+/// still the password's, wherever the hosts are taken to start.
+fn parts(rest: &str) -> (Option<&str>, &str, Option<&str>) {
+    let (before, options) = rest.split_once('?').map_or((rest, None), |(before, options)| (before, Some(options)));
+    let (user, hosts) = before.rsplit_once('@').map_or((None, before), |(user, hosts)| (Some(user), hosts));
+    (user, hosts, options)
 }
 
 const MASK: &str = "•••";
@@ -114,31 +133,28 @@ pub fn redact_uri(uri: &str) -> String {
         Some((scheme, rest)) => (scheme, rest),
         None => return uri.to_string(),
     };
-    let (authority, tail) = match rest.find(['/', '?']) {
-        Some(at) => rest.split_at(at),
-        None => (rest, ""),
-    };
-    let authority = match authority.rsplit_once('@') {
-        Some((user, hosts)) => match user.split_once(':') {
-            Some((name, _)) => format!("{name}:{MASK}@{hosts}"),
-            None => format!("{user}@{hosts}"),
+    let (user, hosts, options) = parts(rest);
+    let user = match user {
+        Some(user) => match user.split_once(':') {
+            Some((name, _)) => format!("{name}:{MASK}@"),
+            None => format!("{user}@"),
         },
-        None => authority.to_string(),
+        None => String::new(),
     };
-    let tail = match tail.split_once('?') {
-        Some((path, query)) => {
-            let options: Vec<String> = query
+    let options = match options {
+        Some(options) => {
+            let options: Vec<String> = options
                 .split('&')
                 .map(|option| match option.split_once('=') {
                     Some((key, _)) if secret_option(key) => format!("{key}={MASK}"),
                     _ => option.to_string(),
                 })
                 .collect();
-            format!("{path}?{}", options.join("&"))
+            format!("?{}", options.join("&"))
         }
-        None => tail.to_string(),
+        None => String::new(),
     };
-    format!("{scheme}://{authority}{tail}")
+    format!("{scheme}://{user}{hosts}{options}")
 }
 
 fn secret_option(key: &str) -> bool {
@@ -851,6 +867,13 @@ mod tests {
         assert!(validate_uri("mongodb://").is_err());
         assert!(validate_uri("postgres://localhost").is_err());
         assert!(validate_uri("localhost:27017").is_err());
+        // A reserved character in the password, unencoded: the driver would not read it, and the mask would miss it.
+        for uri in ["mongodb://u:pa/ss@h", "mongodb://u:p?ss@h", "mongodb://u:p@ss@h", "mongodb://u:p:ss@h", "mongodb://u/x:p@h", "mongodb://h:"] {
+            assert!(matches!(validate_uri(uri), Err(MongoError::BadUri(m)) if m.contains("percent-encode")), "{uri}");
+        }
+        assert!(validate_uri("mongodb://u:pa%2Fss@h/db?authSource=admin").is_ok());
+        assert!(validate_uri("mongodb://[::1]:27017,[::2],h2:27018/?w=1").is_ok());
+        assert!(validate_uri("mongodb://u@h").is_ok());
     }
 
     #[test]
@@ -865,6 +888,9 @@ mod tests {
         );
         assert_eq!(redact_uri("mongodb://localhost"), "mongodb://localhost");
         assert!(!redact_uri("mongodb://a:hunter2@h?x=1").contains("hunter2"));
+        // The user is taken from the last `@` before the options, as the driver takes it: a `/` in the password stays masked.
+        assert_eq!(redact_uri("mongodb://u:pa/ss@h/db?w=1"), "mongodb://u:•••@h/db?w=1");
+        assert_eq!(redact_uri("mongodb://h/db?w=1&x=@y"), "mongodb://h/db?w=1&x=@y");
     }
 
     #[test]
