@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
@@ -436,8 +436,9 @@ function Documents({ target }: { target: MongoTarget }) {
     e.preventDefault();
     run();
   };
-  const page = docs.page;
-  const { skip, limit } = docs.request;
+  const documents = docs.documents;
+  const { skip } = docs;
+  const { limit } = docs.request;
   /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
   const filterBy: FilterBy = async (path, text, exclude) => {
     const filter = await docs.condition(draft.filter, path, text, exclude);
@@ -477,7 +478,13 @@ function Documents({ target }: { target: MongoTarget }) {
           Insert document
         </button>
         <span className="mongo-spacer" />
-        {page && <span className="mongo-quiet">{pageRange(skip, page.documents.length, page.total)}</span>}
+        {documents && <span className="mongo-quiet">{pageRange(skip, documents.length, docs.total)}</span>}
+        {documents && docs.total === null && (
+          <button type="button" className="btn btn-ghost mongo-count" title="Count every match — on a view, its whole pipeline runs" disabled={docs.counting} onClick={() => void docs.count()}>
+            {docs.counting && <Loader2 size={12} className="mongo-spin" />}
+            {docs.counting ? "Counting…" : "Count"}
+          </button>
+        )}
         <Dropdown
           label={`${limit} per page`}
           title="How many to show"
@@ -487,7 +494,7 @@ function Documents({ target }: { target: MongoTarget }) {
           below
           right
         />
-        <button type="button" className="mongo-icon-button" title="Previous page" aria-label="Previous page" disabled={docs.busy || skip === 0} onClick={() => void docs.find({ ...docs.request, skip: Math.max(0, skip - limit) })}>
+        <button type="button" className="mongo-icon-button" title="Previous page" aria-label="Previous page" disabled={docs.busy || !docs.hasPrevious} onClick={docs.previous}>
           <ChevronLeft size={14} />
         </button>
         <button
@@ -495,20 +502,26 @@ function Documents({ target }: { target: MongoTarget }) {
           className="mongo-icon-button"
           title="Next page"
           aria-label="Next page"
-          disabled={docs.busy || !page || skip + page.documents.length >= page.total}
-          onClick={() => void docs.find({ ...docs.request, skip: skip + limit })}
+          disabled={docs.busy || !docs.hasNext}
+          onClick={() => void docs.next()}
         >
           <ChevronRight size={14} />
         </button>
-        <button type="button" className="mongo-icon-button" title="Find again" aria-label="Find again" disabled={docs.busy} onClick={() => void docs.find(docs.request)}>
-          <RefreshCw size={13} />
+        <button type="button" className="mongo-icon-button" title="Find again" aria-label="Find again" disabled={docs.busy} onClick={() => void docs.find({ ...docs.request, skip })}>
+          <RefreshCw size={13} className={docs.busy ? "mongo-spin" : undefined} />
         </button>
       </div>
 
       {docs.error && !editor && <p className="mongo-error">{docs.error}</p>}
-      {page && page.documents.length === 0 && !docs.error && <p className="mongo-quiet">No documents match.</p>}
-      <div className="mongo-documents">
-        {page?.documents.map((doc, i) => (
+      {!documents && docs.busy && (
+        <p className="mongo-quiet mongo-loading" role="status">
+          <Loader2 size={14} className="mongo-spin" />
+          Loading documents…
+        </p>
+      )}
+      {documents && documents.length === 0 && !docs.error && <p className="mongo-quiet">No documents match.</p>}
+      <div className="mongo-documents" aria-busy={docs.busy}>
+        {documents?.map((doc, i) => (
           <DocumentCard
             key={`${skip}-${i}-${doc.text.length}`}
             doc={doc}

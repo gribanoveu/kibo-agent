@@ -57,6 +57,25 @@ pub async fn mongo_find(target: Target, request: FindRequest, clients: Clients<'
 }
 
 #[tauri::command]
+pub async fn mongo_find_more(next: u64, clients: Clients<'_>) -> Result<FindPage, String> {
+    let clients = clients.inner().clone();
+    blocking(move || mongo::find_more(&clients, next)).await
+}
+
+/// A find the page no longer reads: its cursor closed on the server.
+#[tauri::command]
+pub async fn mongo_find_close(next: u64, clients: Clients<'_>) -> Result<(), String> {
+    let clients = clients.inner().clone();
+    blocking(move || Ok::<_, std::convert::Infallible>(clients.find_close(next))).await
+}
+
+#[tauri::command]
+pub async fn mongo_count(target: Target, filter: String, clients: Clients<'_>) -> Result<u64, String> {
+    let clients = clients.inner().clone();
+    blocking(move || mongo::count(&clients, &target, &filter)).await
+}
+
+#[tauri::command]
 pub async fn mongo_aggregate(target: Target, pipeline: String, clients: Clients<'_>) -> Result<Vec<DocumentView>, String> {
     let clients = clients.inner().clone();
     blocking(move || mongo::aggregate(&clients, &target, &pipeline)).await

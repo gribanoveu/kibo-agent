@@ -661,3 +661,25 @@
     max-height: 260px;
   }
 }
+
+/* While a find runs: the first page waits under a spinner, a later one dims what is shown. */
+.mongo-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mongo-documents[aria-busy="true"] {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.mongo-count {
+  gap: 6px;
+}
+.mongo-spin {
+  animation: mongo-spin 0.9s linear infinite;
+}
+@keyframes mongo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

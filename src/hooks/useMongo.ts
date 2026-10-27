@@ -13,7 +13,10 @@ import {
   mongoDatabases,
   mongoDelete,
   mongoFilterAdd,
+  mongoCount,
   mongoFind,
+  mongoFindClose,
+  mongoFindMore,
   mongoIndexCreate,
   mongoIndexDrop,
   mongoIndexes,
@@ -24,7 +27,6 @@ import {
   type ConnectionDraft,
   type DatabaseInfo,
   type FieldChange,
-  type FindPage,
   type FindRequest,
   type IndexView,
   type MongoConnection,
@@ -170,44 +172,106 @@ export function useMongoTree(connection: string | null) {
   };
 }
 
-/** A collection's documents: the query bar's last find, its page, and changes to them. */
+/**
+ * A collection's documents: the query bar's last find, read a page at a time
+ * from a find the backend keeps open, so the next page goes on where the last
+ * stopped. Pages read are kept — going back asks for nothing. The total is
+ * counted only when asked: on a view it runs the whole pipeline.
+ */
 export function useMongoDocuments(target: MongoTarget | null) {
   const key = keyOf(target);
   const { busy, error, setError, call } = useCalls(key);
+  const current = useRef(key);
+  current.current = key;
+  // `skip` is where the find began; its pages are read from there.
   const [request, setRequest] = useState<FindRequest>(EMPTY_FIND);
-  const [page, setPage] = useState<FindPage | null>(null);
+  const [read, setRead] = useState<{ pages: MongoDocument[][]; at: number; next: number | null } | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [counting, setCounting] = useState(false);
+  // The find kept open for the next page: let go when another replaces it, or the view goes.
+  const open = useRef<number | null>(null);
+  const letGo = () => {
+    // Nothing to tell: a find already gone on the backend is what this asks for.
+    if (open.current !== null) void mongoFindClose(open.current).catch(() => {});
+    open.current = null;
+  };
 
   const find = useCallback(
     async (next: FindRequest) => {
       if (!target) return;
       setRequest(next);
+      setTotal(null);
       const found = await call(() => mongoFind(target, next));
-      if (found) setPage(found);
+      if (!found) return;
+      letGo();
+      open.current = found.next;
+      setRead({ pages: [found.documents], at: 0, next: found.next });
     },
     [key, call],
   );
 
   useEffect(() => {
-    setPage(null);
+    setRead(null);
     setRequest(EMPTY_FIND);
+    setTotal(null);
     if (target) void find(EMPTY_FIND);
+    return letGo;
   }, [key]);
 
-  /** A change, then the same find again: the page shows what is there now. */
+  const at = read?.at ?? 0;
+  /** Where the page shown starts. */
+  const skip = request.skip + at * request.limit;
+
+  /** A change, then the same find again from the page shown: it shows what is there now. */
   const change = async (work: (target: MongoTarget) => Promise<unknown>) => {
     if (!target) return false;
     const done = await call(() => work(target).then(() => true));
-    if (done) await find(request);
+    if (done) await find({ ...request, skip });
     return !!done;
   };
 
   return {
     request,
-    page,
+    /** The page shown, `null` before the first is read. */
+    documents: read?.pages[at] ?? null,
+    skip,
+    hasNext: !!read && (at + 1 < read.pages.length || read.next !== null),
+    hasPrevious: at > 0 || request.skip > 0,
+    total,
+    counting,
     busy,
     error,
     clearError: () => setError(null),
     find,
+    next: async () => {
+      if (!read) return;
+      if (at + 1 < read.pages.length) return setRead({ ...read, at: at + 1 });
+      const from = read.next;
+      if (from === null) return;
+      const found = await call(() => mongoFindMore(from));
+      if (!found) return;
+      // `from` was used up by reading it; the backend holds only `found.next` now.
+      open.current = found.next;
+      setRead((was) => was && { pages: [...was.pages, found.documents], at: was.pages.length, next: found.next });
+    },
+    previous: () => {
+      if (at > 0) return setRead(read && { ...read, at: at - 1 });
+      // Before where the find began: a find of its own from there.
+      if (request.skip > 0) void find({ ...request, skip: Math.max(0, request.skip - request.limit) });
+    },
+    count: async () => {
+      if (!target) return;
+      const asked = key;
+      setCounting(true);
+      try {
+        const counted = await mongoCount(target, request.filter);
+        if (asked === current.current) setTotal(counted);
+      } catch (e) {
+        if (asked === current.current) setError(String(e));
+      } finally {
+        if (asked === current.current) setCounting(false);
+      }
+    },
     insert: (text: string) => change((t) => mongoInsert(t, text)),
     replace: (id: unknown, text: string) => change((t) => mongoReplace(t, id, text)),
     setFields: (id: unknown, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),

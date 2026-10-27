@@ -8,13 +8,13 @@
 //! mongosh text): documents leave as canonical Extended JSON, so every BSON
 //! type keeps its name on the way to the window and back.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use mongodb::bson::{self, Bson, Document};
 use mongodb::options::{ClientOptions, IndexOptions};
-use mongodb::sync::{Client, Collection};
+use mongodb::sync::{Client, Collection, Cursor};
 use mongodb::IndexModel;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
@@ -27,13 +27,53 @@ use crate::domain::mongo::{to_shell_line, IndexView, MongoError};
 const SELECT_TIMEOUT: Duration = Duration::from_secs(6);
 /// What one query may take on the server before it is stopped there.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many finds stay open between pages; past it, the oldest is closed.
+const MAX_OPEN_FINDS: usize = 32;
 
 /// The clients made, one per URI and kept: a client is a pool, and making one
 /// is a handshake (with TLS and SCRAM, several round trips) on every call.
 /// Keyed by the URI's hash, so an edited connection gets a new one.
+///
+/// A find stays open between pages, so the next page goes on where the last
+/// stopped instead of skipping again from the start — on a view, running its
+/// pipeline again.
 #[derive(Default)]
 pub struct MongoClients {
     clients: Mutex<HashMap<String, Client>>,
+    finds: Mutex<OpenFinds>,
+}
+
+/// The finds open, by the number a page reads its next from: a new one per
+/// page, so a page asked for twice is read once.
+#[derive(Default)]
+struct OpenFinds {
+    next: u64,
+    open: BTreeMap<u64, OpenFind>,
+}
+
+/// A find between pages: its cursor, the document read past the last page —
+/// how a page knows another follows — and what opens it again where it was
+/// when the server has let the cursor go, idle for ten minutes.
+struct OpenFind {
+    cursor: Cursor<Document>,
+    ahead: Option<Value>,
+    from: FindFrom,
+    /// Read from the find so far, `ahead` among them.
+    read: u64,
+}
+
+struct FindFrom {
+    uri: SecretString,
+    db: String,
+    collection: String,
+    spec: FindSpec,
+}
+
+/// A page of a find, and where its next page is read from — `None` after the last.
+#[derive(Debug)]
+pub struct Found {
+    pub documents: Vec<Value>,
+    pub next: Option<u64>,
 }
 
 impl MongoClients {
@@ -91,16 +131,67 @@ impl MongoClients {
         Ok(found)
     }
 
-    pub fn find(&self, uri: &SecretString, db: &str, collection: &str, spec: FindSpec) -> Result<Vec<Value>, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let mut find = collection.find(document(spec.filter)?).skip(spec.skip).limit(spec.limit).max_time(QUERY_TIMEOUT);
+    /// The first page of a find, its size `spec.limit`.
+    pub fn find(&self, uri: &SecretString, db: &str, collection: &str, spec: FindSpec) -> Result<Found, MongoError> {
+        let from = FindFrom { uri: uri.clone(), db: db.into(), collection: collection.into(), spec };
+        let cursor = self.cursor(&from, 0)?;
+        self.page(OpenFind { cursor, ahead: None, from, read: 0 })
+    }
+
+    /// The page after the one `next` came with.
+    pub fn find_more(&self, next: u64) -> Result<Found, MongoError> {
+        let open = self.finds.lock().unwrap_or_else(|e| e.into_inner()).open.remove(&next).ok_or(MongoError::FindClosed)?;
+        self.page(open)
+    }
+
+    /// Dropped, the cursor is closed on the server too.
+    pub fn find_close(&self, next: u64) {
+        self.finds.lock().unwrap_or_else(|e| e.into_inner()).open.remove(&next);
+    }
+
+    /// `from`'s find, past what was read of it.
+    fn cursor(&self, from: &FindFrom, read: u64) -> Result<Cursor<Document>, MongoError> {
+        let spec = &from.spec;
+        let batch = u32::try_from(spec.limit + 1).unwrap_or(u32::MAX);
+        let collection = self.collection(&from.uri, &from.db, &from.collection)?;
+        let mut find = collection.find(document(spec.filter.clone())?).skip(spec.skip + read).batch_size(batch).max_time(QUERY_TIMEOUT);
         if !spec.projection.is_empty() {
-            find = find.projection(document(spec.projection)?);
+            find = find.projection(document(spec.projection.clone())?);
         }
         if !spec.sort.is_empty() {
-            find = find.sort(document(spec.sort)?);
+            find = find.sort(document(spec.sort.clone())?);
         }
-        find.run().map_err(server)?.map(|doc| doc.map(canonical).map_err(server)).collect()
+        find.run().map_err(server)
+    }
+
+    /// The next `limit` documents, and one read past them: kept open when there is one.
+    fn page(&self, mut open: OpenFind) -> Result<Found, MongoError> {
+        let limit = open.from.spec.limit;
+        let mut documents: Vec<Value> = open.ahead.take().into_iter().collect();
+        while documents.len() <= limit {
+            let next = match open.cursor.next() {
+                Some(Err(error)) if cursor_gone(&error) => {
+                    open.cursor = self.cursor(&open.from, open.read)?;
+                    open.cursor.next()
+                }
+                next => next,
+            };
+            let Some(doc) = next else { break };
+            documents.push(canonical(doc.map_err(server)?));
+            open.read += 1;
+        }
+        if documents.len() <= limit {
+            return Ok(Found { documents, next: None });
+        }
+        open.ahead = documents.pop();
+        let mut finds = self.finds.lock().unwrap_or_else(|e| e.into_inner());
+        let next = finds.next;
+        finds.next += 1;
+        finds.open.insert(next, open);
+        while finds.open.len() > MAX_OPEN_FINDS {
+            finds.open.pop_first();
+        }
+        Ok(Found { documents, next: Some(next) })
     }
 
     /// Every match counted, or — with no filter — the collection's own count
@@ -228,11 +319,26 @@ pub struct FindSpec {
     pub projection: Map<String, Value>,
     pub sort: Map<String, Value>,
     pub skip: u64,
-    pub limit: i64,
+    /// A page's size.
+    pub limit: usize,
 }
 
+/// MaxTimeMSExpired: the server stopped the query at its `max_time`.
+const MAX_TIME_EXPIRED: i32 = 50;
+/// CursorNotFound: the server let an idle cursor go.
+const CURSOR_NOT_FOUND: i32 = 43;
+
+fn cursor_gone(error: &mongodb::error::Error) -> bool {
+    matches!(error.kind.as_ref(), mongodb::error::ErrorKind::Command(refused) if refused.code == CURSOR_NOT_FOUND)
+}
+
+/// A command the server refused says what it said, not the driver's dump of its reply.
 fn server(error: mongodb::error::Error) -> MongoError {
-    MongoError::Server(error.to_string())
+    match error.kind.as_ref() {
+        mongodb::error::ErrorKind::Command(refused) if refused.code == MAX_TIME_EXPIRED => MongoError::TimedOut,
+        mongodb::error::ErrorKind::Command(refused) => MongoError::Server(format!("{} ({})", refused.message, refused.code_name)),
+        _ => MongoError::Server(error.to_string()),
+    }
 }
 
 fn bson_of(value: Value) -> Result<Bson, MongoError> {
@@ -313,10 +419,10 @@ mod tests {
         assert_eq!(clients.count(&uri, db, &coll, parse_document("{ name: /^[ab]$/ }", "f").unwrap()).unwrap(), 2);
 
         let spec = FindSpec { sort: parse_document("{ _id: -1 }", "s").unwrap(), projection: parse_document("{ name: 1 }", "p").unwrap(), limit: 2, skip: 0, ..Default::default() };
-        let found = clients.find(&uri, db, &coll, spec).unwrap();
+        let found = clients.find(&uri, db, &coll, spec).unwrap().documents;
         assert_eq!(found, vec![json!({ "_id": { "$numberInt": "3" }, "name": "c" }), json!({ "_id": { "$numberInt": "2" }, "name": "b" })]);
 
-        let first = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 1 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap();
+        let first = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 1 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
         assert_eq!(first[0]["n"], json!({ "$numberLong": "5" }), "an Int64 comes back as one");
 
         clients.replace(&uri, db, &coll, json!(1), parse_document("{ _id: 1, name: 'z' }", "d").unwrap()).unwrap();
@@ -326,7 +432,7 @@ mod tests {
         };
         clients.update(&uri, db, &coll, json!(3), one(&["tags"], "['x', 'y']")).unwrap();
         clients.update(&uri, db, &coll, json!(3), one(&["tags", "1"], "NumberLong(7)")).unwrap();
-        let third = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap();
+        let third = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
         assert_eq!(third[0]["tags"], json!(["x", { "$numberLong": "7" }]), "one item of an array set, its type kept");
         assert!(matches!(clients.update(&uri, db, &coll, json!(99), one(&["name"], "'q'")), Err(MongoError::Gone)));
         let grouped = clients.aggregate(&uri, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10).unwrap();
@@ -343,6 +449,51 @@ mod tests {
         clients.delete(&uri, db, &coll, json!(2)).unwrap();
         assert!(matches!(clients.delete(&uri, db, &coll, json!(2)), Err(MongoError::Gone)));
         assert!(matches!(clients.replace(&uri, db, &coll, json!(2), Map::new()), Err(MongoError::Gone)));
+
+        // A view lists as one and is found like a collection; counting what takes too long stops as `TimedOut`.
+        let view = format!("{coll}_view");
+        clients.client(&uri).unwrap().database(db).create_collection(&view).view_on(coll.clone()).pipeline([bson::doc! { "$match": { "name": { "$exists": true } } }]).run().unwrap();
+        assert!(clients.collections(&uri, db).unwrap().iter().any(|c| c.name == view && c.kind == "view"));
+        assert_eq!(clients.find(&uri, db, &view, FindSpec { limit: 5, ..Default::default() }).unwrap().documents.len(), 2);
+        assert_eq!(clients.count(&uri, db, &view, Map::new()).unwrap(), 2);
+        let slow = document(parse_document("{ $expr: { $function: { body: 'function() { sleep(1000); return true; }', args: [], lang: 'js' } } }", "f").unwrap()).unwrap();
+        let client = clients.client(&uri).unwrap();
+        let stopped = client.database(db).collection::<Document>(&view).count_documents(slow).max_time(Duration::from_millis(300)).run().unwrap_err();
+        assert!(matches!(server(stopped), MongoError::TimedOut));
+        assert!(matches!(clients.find(&uri, db, &view, FindSpec { filter: parse_document("{ $nope: 1 }", "f").unwrap(), limit: 1, ..Default::default() }), Err(MongoError::Server(m)) if m.ends_with("(BadValue)") && !m.contains("RawDocumentBuf")));
+        clients.drop_collection(&uri, db, &view).unwrap();
+
+        // Pages read on from where the last stopped, and on again when the server let the cursor go.
+        let more = (10..15).map(|id| format!("{{ _id: {id}, name: 'p' }}")).collect::<Vec<_>>().join(", ");
+        clients.insert(&uri, db, &coll, crate::domain::mongo::parse_documents(&format!("[{more}]"), "d").unwrap()).unwrap();
+        let by_id = |limit: usize| FindSpec { sort: parse_document("{ _id: 1 }", "s").unwrap(), projection: parse_document("{ _id: 1 }", "p").unwrap(), limit, ..Default::default() };
+        let ids = |found: &Found| found.documents.iter().map(|d| d["_id"]["$numberInt"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let first = clients.find(&uri, db, &coll, by_id(3)).unwrap();
+        assert_eq!(ids(&first), ["1", "3", "10"]);
+        let idle: Vec<Document> = client
+            .database("admin")
+            .aggregate([bson::doc! { "$currentOp": { "idleCursors": true } }, bson::doc! { "$match": { "type": "idleCursor", "ns": format!("{db}.{coll}") } }])
+            .run()
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let cursors: Vec<i64> = idle.iter().map(|op| op.get_document("cursor").unwrap().get_i64("cursorId").unwrap()).collect();
+        assert!(!cursors.is_empty());
+        client.database(db).run_command(bson::doc! { "killCursors": &coll, "cursors": cursors }).run().unwrap();
+        let second = clients.find_more(first.next.unwrap()).unwrap();
+        assert_eq!(ids(&second), ["11", "12", "13"]);
+        assert!(matches!(clients.find_more(first.next.unwrap()), Err(MongoError::FindClosed)), "a page is read once");
+        let last = clients.find_more(second.next.unwrap()).unwrap();
+        assert_eq!((ids(&last), last.next), (vec!["14".to_string()], None));
+        let whole = clients.find(&uri, db, &coll, by_id(7)).unwrap();
+        assert_eq!((whole.documents.len(), whole.next), (7, None), "a page just full is the last");
+        let open = clients.find(&uri, db, &coll, by_id(3)).unwrap().next.unwrap();
+        clients.find_close(open);
+        assert!(matches!(clients.find_more(open), Err(MongoError::FindClosed)));
+        let oldest = clients.find(&uri, db, &coll, by_id(1)).unwrap().next.unwrap();
+        let newest = (0..MAX_OPEN_FINDS).map(|_| clients.find(&uri, db, &coll, by_id(1)).unwrap().next.unwrap()).last().unwrap();
+        assert!(matches!(clients.find_more(oldest), Err(MongoError::FindClosed)), "past the limit, the oldest find is closed");
+        assert_eq!(ids(&clients.find_more(newest).unwrap()), ["3"]);
 
         clients.drop_collection(&uri, db, &coll).unwrap();
         assert!(!clients.collections(&uri, db).unwrap().iter().any(|c| c.name == coll));

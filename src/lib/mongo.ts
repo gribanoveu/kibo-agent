@@ -29,7 +29,8 @@ export type Shown =
 /** A document as mongosh shows it, and field by field; `id` is its `_id` as the backend gave it, sent back as is. */
 export type MongoDocument = { id: unknown | null; text: string; fields: [string, Shown][] };
 
-export type FindPage = { documents: MongoDocument[]; total: number };
+/** A page of a find; `next` is where the page after it is read from, `null` after the last. */
+export type FindPage = { documents: MongoDocument[]; next: number | null };
 
 export type IndexView = { name: string; keys: string; unique: boolean; sparse: boolean; ttlSeconds: number | null; partial: string | null };
 
@@ -70,6 +71,24 @@ export async function mongoCollections(connection: string, database: string): Pr
 export async function mongoFind(target: MongoTarget, request: FindRequest): Promise<FindPage> {
   requireBackend();
   return invoke<FindPage>("mongo_find", { target, request });
+}
+
+/** The page after the one `next` came with: the find goes on where it stopped. */
+export async function mongoFindMore(next: number): Promise<FindPage> {
+  requireBackend();
+  return invoke<FindPage>("mongo_find_more", { next });
+}
+
+/** A find no longer read: its cursor closed on the server. */
+export async function mongoFindClose(next: number): Promise<void> {
+  requireBackend();
+  return invoke<void>("mongo_find_close", { next });
+}
+
+/** Every document the filter matches — asked for, since on a view it runs the whole pipeline. */
+export async function mongoCount(target: MongoTarget, filter: string): Promise<number> {
+  requireBackend();
+  return invoke<number>("mongo_count", { target, filter });
 }
 
 export async function mongoAggregate(target: MongoTarget, pipeline: string): Promise<MongoDocument[]> {
@@ -135,10 +154,11 @@ export async function mongoCollectionDrop(target: MongoTarget): Promise<void> {
   return invoke<void>("mongo_collection_drop", { target });
 }
 
-/** `21–40 of 1,234`: where a page of a find is. */
-export function pageRange(skip: number, shown: number, total: number): string {
-  if (shown === 0) return `0 of ${total.toLocaleString("en-US")}`;
-  return `${(skip + 1).toLocaleString("en-US")}–${(skip + shown).toLocaleString("en-US")} of ${total.toLocaleString("en-US")}`;
+/** `21–40 of 1,234`: where a page of a find is; without a total, only the range. */
+export function pageRange(skip: number, shown: number, total: number | null): string {
+  const of = total === null ? "" : ` of ${total.toLocaleString("en-US")}`;
+  if (shown === 0) return `0${of}`;
+  return `${(skip + 1).toLocaleString("en-US")}–${(skip + shown).toLocaleString("en-US")}${of}`;
 }
 
 /** A document's text without its `_id` line: what "Clone" starts from, so the copy gets an `_id` of its own. */

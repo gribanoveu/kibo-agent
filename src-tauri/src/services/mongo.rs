@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, FieldChange, IndexView, MongoError};
-use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, FindSpec, MongoClients};
+use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, FindSpec, Found, MongoClients};
 use crate::infra::mongo_store;
 
 /// Most documents a page of a find shows.
@@ -56,8 +56,9 @@ pub struct DocumentView {
 #[serde(rename_all = "camelCase")]
 pub struct FindPage {
     pub documents: Vec<DocumentView>,
-    /// Every match, not only this page's.
-    pub total: u64,
+    /// Where the next page is read from (`find_more`) — `None` after the last.
+    /// No total: on a view, counting runs its whole pipeline; `count` asks for it.
+    pub next: Option<u64>,
 }
 
 pub fn connections() -> Result<Vec<ConnectionView>, MongoError> {
@@ -114,17 +115,29 @@ pub fn collections(clients: &MongoClients, connection: &str, database: &str) -> 
 
 pub fn find(clients: &MongoClients, target: &Target, request: &FindRequest) -> Result<FindPage, MongoError> {
     let uri = mongo_store::uri(&target.connection)?;
-    let filter = mongo::parse_document(&request.filter, "the filter")?;
     let spec = FindSpec {
-        filter: filter.clone(),
+        filter: mongo::parse_document(&request.filter, "the filter")?,
         projection: mongo::parse_document(&request.projection, "the projection")?,
         sort: mongo::parse_document(&request.sort, "the sort")?,
         skip: request.skip,
-        limit: request.limit.clamp(1, MAX_PAGE),
+        limit: request.limit.clamp(1, MAX_PAGE) as usize,
     };
-    let documents = clients.find(&uri, &target.database, &target.collection, spec)?;
-    let total = clients.count(&uri, &target.database, &target.collection, filter)?;
-    Ok(FindPage { documents: documents.iter().map(view).collect(), total })
+    Ok(page(clients.find(&uri, &target.database, &target.collection, spec)?))
+}
+
+/// The page after the one that came with `next`.
+pub fn find_more(clients: &MongoClients, next: u64) -> Result<FindPage, MongoError> {
+    Ok(page(clients.find_more(next)?))
+}
+
+/// Every document the filter matches.
+pub fn count(clients: &MongoClients, target: &Target, filter: &str) -> Result<u64, MongoError> {
+    let uri = mongo_store::uri(&target.connection)?;
+    clients.count(&uri, &target.database, &target.collection, mongo::parse_document(filter, "the filter")?)
+}
+
+fn page(found: Found) -> FindPage {
+    FindPage { documents: found.documents.iter().map(view).collect(), next: found.next }
 }
 
 pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str) -> Result<Vec<DocumentView>, MongoError> {

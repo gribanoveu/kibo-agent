@@ -79,6 +79,10 @@ pub enum MongoError {
     IdChanged,
     #[error("no document has that _id any more — it was deleted or changed elsewhere")]
     Gone,
+    #[error("the server stopped it at its time limit — a narrower filter, or an index for it, is faster")]
+    TimedOut,
+    #[error("these results are closed — find again")]
+    FindClosed,
     #[error("{0}")]
     Server(String),
     #[error("{0}")]
