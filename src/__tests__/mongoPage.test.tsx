@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { MongoConnection } from "../lib/mongo";
 
@@ -63,8 +63,6 @@ mock.module("@tauri-apps/api/core", () => ({
         const page = { documents: structuredClone(findDocs), next: findNext };
         if (!holdNext) return Promise.resolve(page);
         holdNext = false;
-  heldCount = null;
-  holdCount = false;
         return new Promise((resolve) => (held = () => resolve(page)));
       }
       case "mongo_find_more":
@@ -549,7 +547,7 @@ describe("a collection", () => {
     expect(screen.getByRole("tab", { name: "big_orders" }).getAttribute("aria-selected")).toBe("true");
   });
 
-  test("a find with a projection shows parts of documents: no Edit or Clone, which would write the part back", async () => {
+  test("a find with a projection shows parts of documents: nothing that writes by what is shown", async () => {
     await openOrders();
     expect(screen.getByRole("button", { name: "Edit document" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Options" }));
@@ -558,7 +556,8 @@ describe("a collection", () => {
     await settle();
     expect(screen.queryByRole("button", { name: "Edit document" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Clone document" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Delete document" })).toBeTruthy();
+    // Nor Delete: a projection can compute the _id too, `{ _id: "$parentId" }`.
+    expect(screen.queryByRole("button", { name: "Delete document" })).toBeNull();
     // Nor a field changed alone: a projection reshapes what is shown — `$slice`, `$elemMatch`,
     // a computed field — so a path on the card is not the one in the document.
     fireEvent.doubleClick(screen.getByText('"Ann"'));
@@ -664,6 +663,28 @@ describe("a collection", () => {
     await settle();
     expect(screen.getByRole("tab", { name: "orders" })).toBeTruthy();
     expect(sent("mongo_databases")).toHaveLength(2);
+  });
+
+  test("a view's document seen twice on a page is two cards, kept apart", async () => {
+    findDocs = [ONE, ONE, TWO];
+    const errors = spyOn(console, "error");
+    await openOrders();
+    findDocs = [ONE, TWO, ONE];
+    fireEvent.click(screen.getByRole("button", { name: "Find again" }));
+    await settle();
+    expect(screen.getAllByText('"one"')).toHaveLength(2);
+    expect(errors.mock.calls.filter((call) => String(call[0]).includes("same key"))).toEqual([]);
+    errors.mockRestore();
+  });
+
+  test("an insert refused part way reads the list again, its reason still in the dialog", async () => {
+    await openOrders();
+    refusals.mongo_insert = "1 of 3 went in before one was refused, and stay in: E11000 duplicate key error (code 11000)";
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    expect(sent("mongo_find")).toHaveLength(2);
+    expect(dialog().getByRole("alert").textContent).toContain("1 of 3 went in");
   });
 
   test("a count that lands after another find is not that find's total", async () => {

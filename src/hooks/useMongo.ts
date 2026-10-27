@@ -244,11 +244,26 @@ export function useMongoDocuments(target: MongoTarget | null) {
   /** Where the page shown starts. */
   const skip = request.skip + at * request.limit;
 
-  /** A change, then the same find again from the page shown: it shows what is there now. */
+  /**
+   * A change, then the same find again from the page shown, refused or not:
+   * an insert stops at the first document it cannot take, the ones before it in.
+   * A refusal's reason stays shown over the find's.
+   */
   const change = async (work: (target: MongoTarget) => Promise<unknown>) => {
     if (!target) return false;
-    const done = await call(() => work(target).then(() => true));
-    if (done) await find({ ...request, skip });
+    const asked = key;
+    const refused = { reason: null as string | null };
+    const done = await call(() =>
+      work(target).then(
+        () => true,
+        (e: unknown) => {
+          refused.reason = String(e);
+          throw e;
+        },
+      ),
+    );
+    await find({ ...request, skip });
+    if (refused.reason !== null && asked === current.current) setError(refused.reason);
     return !!done;
   };
 

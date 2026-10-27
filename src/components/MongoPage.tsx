@@ -466,6 +466,18 @@ function Documents({ target }: { target: MongoTarget }) {
   const { limit } = docs.request;
   // A document read with a projection is only part of it, maybe reshaped: replaced with what is shown, or cloned, the rest would go.
   const partial = docs.request.projection.trim() !== "";
+  // By _id, so after a find again the cards follow their documents, an edit begun included; one seen
+  // again on the page (a view's `$unwind`, a projection's computed _id) by how many times.
+  const cardKeys = useMemo(() => {
+    const seen = new Map<string, number>();
+    return (documents ?? []).map((doc, i) => {
+      if (doc.id === null) return `${skip}-${i}`;
+      const id = JSON.stringify(doc.id);
+      const times = seen.get(id) ?? 0;
+      seen.set(id, times + 1);
+      return times === 0 ? id : `${id}#${times}`;
+    });
+  }, [documents, skip]);
   /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
   const filterBy: FilterBy = async (path, text, exclude) => {
     const filter = await docs.condition(draft.filter, path, text, exclude);
@@ -580,26 +592,23 @@ function Documents({ target }: { target: MongoTarget }) {
       <div className="mongo-documents" aria-busy={docs.busy}>
         {documents?.map((doc, i) => (
           <DocumentCard
-            // By its _id: after a find again the cards follow their documents, an edit begun included.
-            key={doc.id !== null ? JSON.stringify(doc.id) : `${skip}-${i}`}
+            key={cardKeys[i]}
             doc={doc}
             // Not under a projection: it reshapes what is shown — `$slice`, `$elemMatch`, a computed field — so a path on the card is not one in the document.
             onSave={doc.id !== null && !partial ? (changes) => docs.setFields(doc.id, changes) : undefined}
             error={docs.error}
             filterBy={filterBy}
             actions={
-              doc.id !== null && (
+              // Nor any action by its _id: a projection can compute that too, `{ _id: "$parentId" }`.
+              doc.id !== null &&
+              !partial && (
                 <>
-                  {!partial && (
-                    <>
-                      <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
-                        <Pencil size={13} />
-                      </button>
-                      <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
-                        <CopyPlus size={13} />
-                      </button>
-                    </>
-                  )}
+                  <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
+                    <Pencil size={13} />
+                  </button>
+                  <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
+                    <CopyPlus size={13} />
+                  </button>
                   <button type="button" className="mongo-icon-button" title="Delete" aria-label="Delete document" onClick={() => setDeleting(doc)}>
                     <Trash2 size={13} />
                   </button>
