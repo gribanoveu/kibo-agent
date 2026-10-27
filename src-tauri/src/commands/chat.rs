@@ -66,11 +66,6 @@ pub struct AgentState {
     /// by the caller at the one moment it is easiest to forget. Not persisted
     /// — a mode is a decision about this conversation, not about the app.
     mode: Mutex<ConversationMode>,
-    /// The change `/review` is reviewing, while its turn lasts — a pause for
-    /// approval and the resume included, since `reportFinding` checks every
-    /// finding against it. Set by `review_start`, cleared by `chat_start`:
-    /// while it is here the turn runs in Review mode, whatever the chip says.
-    review: Mutex<Option<Arc<ReviewDesk>>>,
     /// The running turn's signals for the next-prompt journal. Resident
     /// because a turn outlives one command: what came before a pause for
     /// approval still counts after the resume.
@@ -104,21 +99,7 @@ impl AgentState {
     // journal one row, never the turn.
 
     /// A fresh turn, in the mode it starts in. A resume is not one.
-    /// The mode a turn runs in, and the change under review when it is one:
-    /// Review while a review's change is here, whatever the chip says.
-    fn turn_mode(&self) -> (ConversationMode, Option<Arc<ReviewDesk>>) {
-        match self.review.lock().ok().and_then(|review| review.clone()) {
-            Some(desk) => (ConversationMode::Review, Some(desk)),
-            None => (self.mode(), None),
-        }
-    }
-
-    /// A new turn: a review's when `review` is the change under review,
-    /// otherwise an ordinary one — which is what ends a review's Review mode.
-    fn begin_turn(&self, review: Option<Arc<ReviewDesk>>) {
-        if let Ok(mut current) = self.review.lock() {
-            *current = review;
-        }
+    fn begin_turn(&self) {
         if let Ok(mut features) = self.next_prompt.lock() {
             *features = TurnFeatures::new(self.mode());
         }
@@ -316,7 +297,7 @@ pub async fn chat_start<R: Runtime>(
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn(None);
+    state.begin_turn();
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
     run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
@@ -673,11 +654,11 @@ pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<Co
     Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
 }
 
-/// `/review`: a turn in Review mode over the open folder's working tree
-/// against `HEAD`. What is sent is decided here (`domain::review::select`):
-/// the diffs go in as the turn's message, added to `messages`, and the
-/// change stays on `AgentState` for `reportFinding` until the next turn.
-/// Otherwise an ordinary turn — its events, its pauses, its Stop.
+/// `/review`: the open folder's working tree against `HEAD`, read by a
+/// helper with a context of its own (`llm_chat::review`). What it reads is
+/// decided here (`domain::review::select`). `handed`: its findings go on to
+/// the agent in the same turn, which runs in the chip's mode — what pressing
+/// the agent's offer of a review means; otherwise the report is the user's.
 #[tauri::command]
 pub async fn review_start<R: Runtime>(
     app: AppHandle<R>,
@@ -687,6 +668,7 @@ pub async fn review_start<R: Runtime>(
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     plan: Option<String>,
+    handed: bool,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     let workspace = state.workspace()?;
@@ -696,20 +678,16 @@ pub async fn review_start<R: Runtime>(
         .map_err(|e| e.to_string())?;
     let (kept, excluded) = crate::domain::review::select(files);
     if kept.is_empty() {
-        return Err(match excluded.len() {
-            0 => "nothing to review: the working tree matches HEAD".to_string(),
-            n => format!("nothing to review: the {n} changed files are all left out (binary, generated, secrets or documentation)"),
-        });
+        return Err(crate::domain::review::nothing_to_review(excluded.len()));
     }
-    let mut messages = messages;
-    messages.push(LlmMessage::user(crate::domain::review::review_message(
-        &kept,
-        &excluded,
-        llm_session::reply_language(),
-    )));
+    let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
+    let desk = Arc::new(ReviewDesk::new(kept));
     state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn(Some(Arc::new(ReviewDesk::new(kept))));
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| llm_chat::stream(turn, messages, todos)).await
+    state.begin_turn();
+    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+        llm_chat::review(turn, messages, todos, &brief, desk, handed)
+    })
+    .await
 }
 
 /// Assembles a turn and runs it on a blocking thread.
@@ -731,7 +709,7 @@ where
 {
     let workspace = state.workspace()?;
     let approval = state.approval()?;
-    let (mode, review) = state.turn_mode();
+    let mode = state.mode();
     let handles = FolderHandles {
         search: searcher_of(&app),
         knowledge: knowledge_searcher_of(&app),
@@ -764,7 +742,6 @@ where
             chat_id: &chat_id,
             workspace: &workspace,
             mode,
-            review,
             approval,
             plan: plan.as_deref(),
             events: &events,
@@ -833,7 +810,7 @@ mod tests {
     #[test]
     fn the_next_prompt_journal_takes_a_finished_turn_once_and_only_by_its_id() {
         let state = state();
-        state.begin_turn(None);
+        state.begin_turn();
         next_prompt_turn(&state, "turn-2", &[said("ok")]);
 
         assert!(state.take_finished("turn-1").is_none());
@@ -846,10 +823,10 @@ mod tests {
     #[test]
     fn a_new_turn_starts_the_next_prompt_signals_afresh() {
         let state = state();
-        state.begin_turn(None);
+        state.begin_turn();
         next_prompt_turn(&state, "turn-1", &[said("first")]);
         *state.mode.lock().unwrap() = ConversationMode::Plan;
-        state.begin_turn(None);
+        state.begin_turn();
         next_prompt_turn(&state, "turn-2", &[said("second")]);
 
         let input = state.take_finished("turn-2").expect("journaled").model_input("u", "");
@@ -957,19 +934,6 @@ mod tests {
         let policy = state.approval().unwrap();
         assert!(!policy.requires_approval(ToolName::WriteFile, true));
         assert!(policy.requires_approval(ToolName::Delete, true));
-    }
-
-    /// A review's turn runs in Review mode — its resume too — and the next
-    /// message's turn in the chip's mode again.
-    #[test]
-    fn a_review_runs_in_review_mode_until_the_next_turn_starts() {
-        let state = state();
-        *state.mode.lock().unwrap() = ConversationMode::Ask;
-        assert!(matches!(state.turn_mode(), (ConversationMode::Ask, None)));
-        state.begin_turn(Some(Arc::new(ReviewDesk::new(Vec::new()))));
-        assert!(matches!(state.turn_mode(), (ConversationMode::Review, Some(_))), "and so on resume");
-        state.begin_turn(None);
-        assert!(matches!(state.turn_mode(), (ConversationMode::Ask, None)));
     }
 
     #[test]

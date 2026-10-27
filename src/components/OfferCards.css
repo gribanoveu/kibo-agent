@@ -1,0 +1,81 @@
+/* The agent's offered next steps, under its answer: one card per step, the
+   chat's width, each sending its step when pressed. */
+.offer-cards {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.offer-cards-caption {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.offer-card {
+  --tint: var(--accent);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+.offer-card.commit {
+  --tint: var(--green);
+}
+.offer-card:hover {
+  border-color: color-mix(in srgb, var(--tint) 45%, var(--border-soft));
+  background: color-mix(in srgb, var(--tint) 5%, var(--bg-panel));
+}
+.offer-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.offer-card-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  color: var(--tint);
+}
+.offer-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.offer-card-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.offer-card-reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.offer-card-reason::first-letter {
+  text-transform: uppercase;
+}
+.offer-card-send {
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.offer-card:hover .offer-card-send,
+.offer-card:focus-visible .offer-card-send {
+  opacity: 1;
+  color: var(--tint);
+}

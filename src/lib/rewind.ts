@@ -37,6 +37,8 @@ const ACCOUNTED = new Set([
   "present",
   "skill",
   "writePlan",
+  // A button under the answer.
+  "offer",
   "readOutput",
   "stopProcess",
   "readTerminal",

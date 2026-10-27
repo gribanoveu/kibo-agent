@@ -26,6 +26,7 @@ import {
   Pencil,
   Download,
   Search,
+  SearchCheck,
   Settings,
   ShieldAlert,
   ShipWheel,
@@ -37,8 +38,10 @@ import {
   Library,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
-import { FindingCard } from "./ReviewCard";
-import { findingOf } from "../lib/finding";
+import { FindingCard, ReviewReport } from "./ReviewCard";
+import { findingOf, reviewOf } from "../lib/finding";
+import { offerOf, offersOf, type OfferKind } from "../lib/offer";
+import { OfferCards } from "./OfferCards";
 import { presentedOf } from "../lib/prototype";
 import { PresentedCard, RestoredCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
@@ -87,6 +90,8 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   "Knowledge doc": Library,
   "Knowledge links": Library,
   Plan: ScrollText,
+  Offer: SearchCheck,
+  Review: SearchCheck,
   Explore: Telescope,
   Board: SquareKanban,
   Prototype: AppWindow,
@@ -572,13 +577,17 @@ type Run = { kind: "run"; id: string; blocks: Block[] };
  * An agent's calls and thinking between two things it said, folded into one
  * line — the answer is what the reader came for, the work behind it is a click
  * away. Approvals stay out: they wait for an answer and must be seen. So do a
- * review's findings: they are what the work was for.
+ * review's findings: they are what the work was for. An offer is drawn after
+ * the answer, not here.
  */
 function fold(blocks: Block[]): (Block | Run)[] {
   const out: (Block | Run)[] = [];
   for (const block of blocks) {
+    if (offerOf(block)) continue;
     const last = out[out.length - 1];
-    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || presentedOf(block)) {
+    // A review stands alone while it runs and when it failed too: it is the turn.
+    const review = block.kind === "tool" && block.name === "review";
+    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || review || presentedOf(block)) {
       out.push(block);
     } else if (last?.kind === "run") {
       last.blocks.push(block);
@@ -694,6 +703,8 @@ type Props = {
   onRewind?: (bubbleId: string) => void;
   /** Puts a request to fix a review's finding into the message box. */
   onFix?: (text: string) => void;
+  /** Sends what an offer under the last answer offered, as the user's message. */
+  onOffer?: (kind: OfferKind) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
   onAnswerQuestion?: (id: string, answer: McpAnswer) => void;
   /** The window's title bar, where the header is drawn when there is one. */
@@ -713,6 +724,7 @@ type TranscriptProps = Pick<
   | "onBranch"
   | "onRewind"
   | "onFix"
+  | "onOffer"
   | "onAnswerQuestion"
   | "checklist"
 > & {
@@ -745,11 +757,16 @@ export function Transcript({
   onBranch,
   onRewind,
   onFix,
+  onOffer,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
 }: TranscriptProps) {
   const groups = group(turn.blocks);
+  // Under a finished answer only, gathered from the whole last turn — a notice
+  // after the answer does not hide them — and gone once the user says more.
+  const lastAsked = turn.blocks.map((block) => block.kind).lastIndexOf("user");
+  const offers = onOffer && turn.status === "done" ? offersOf(turn.blocks.slice(lastAsked + 1)) : [];
   // The one answer still arriving: the last block of a running turn.
   const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
   return (
@@ -794,6 +811,7 @@ export function Transcript({
           )}
         </div>
       ))}
+      {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
@@ -833,6 +851,7 @@ export function ChatPanel({
   onBranch,
   onRewind,
   onFix,
+  onOffer,
   onAnswerQuestion,
   headSlot = null,
 }: Props) {
@@ -957,6 +976,7 @@ export function ChatPanel({
               onRewind={onRewind}
               onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
+              onOffer={onOffer}
               checklist={checklist}
             />
             {planReady && (
@@ -1124,6 +1144,9 @@ function renderBlock(
       // A review's finding is the work's result, not a step of it.
       const finding = findingOf(block);
       if (finding) return <FindingCard key={block.id} finding={finding} onOpenFile={onOpenFile} onFix={onFix} />;
+      // So is a review's report, the subagent's whole answer.
+      const review = reviewOf(block);
+      if (review) return <ReviewReport key={block.id} review={review} onOpenFile={onOpenFile} onFix={onFix} onOpenAgent={onOpenAgent} />;
       // So is a page put in front of the user.
       const presented = presentedOf(block);
       if (presented) return <PresentedCard key={block.id} page={presented} onOpen={onOpenVersion} />;

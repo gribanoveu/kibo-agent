@@ -2,8 +2,9 @@
 //! how the change is put to it, what counts as a finding, and when it is told
 //! to wrap up — every rule here is decided without a model.
 //!
-//! The review itself is an ordinary turn in `ConversationMode::Review`: the
-//! agent reads what it needs and runs what proves something. Two things are
+//! The review itself is a helper turn in `ConversationMode::Review`, with a
+//! context of its own (`llm_chat::review`): it reads what it needs and runs
+//! what proves something. Two things are
 //! decided here rather than left to it. What it is sent: secrets, lockfiles,
 //! generated code and prose are left out before anything reaches a model.
 //! And where a finding lands: a model does not give line numbers — it quotes
@@ -169,6 +170,15 @@ fn generated(name: &str, dirs: &[&str]) -> bool {
 /// larger change is named past this, and the agent reads what it needs.
 pub const MESSAGE_DIFF_CHARS: usize = 120_000;
 
+/// Why `/review` — and `offer` of a review — has nothing to read: no
+/// change, or `excluded` changed files all left out by `select`.
+pub fn nothing_to_review(excluded: usize) -> String {
+    match excluded {
+        0 => "nothing to review: the working tree matches HEAD".to_string(),
+        n => format!("nothing to review: the {n} changed files are all left out (binary, generated, secrets or documentation)"),
+    }
+}
+
 /// The opening message of a review: the diffs that fit, in path order, the
 /// rest of the change by name, and what was left out and why — and the reply
 /// language, when the user chose one: nothing the user typed is in a review's
@@ -239,14 +249,20 @@ pub struct FindingArgs {
     pub suggestion: Option<String>,
 }
 
-/// A finding kept, placed on the new side of the file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A finding kept, placed on the new side of the file — all of it, for the
+/// review's report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
+    pub severity: Severity,
     pub category: Category,
     pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 /// Why a finding was refused, worded for the agent that has to fix it.
@@ -307,6 +323,11 @@ impl ReviewDesk {
         &self.files
     }
 
+    /// What was kept, in the order it was reported.
+    pub fn findings(&self) -> Vec<Finding> {
+        self.findings.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// Checks a finding and keeps it: its file is part of the change, its
     /// code is lines the change added, and it is not a second report of one
     /// already kept — the same file, overlapping lines, the same category.
@@ -327,8 +348,11 @@ impl ReviewDesk {
             path: path.to_string(),
             start_line,
             end_line,
+            severity: args.severity.unwrap_or(Severity::Medium),
             category: args.category.unwrap_or(Category::Bug),
             title: args.title.trim().to_string(),
+            body: args.body.trim().to_string(),
+            suggestion: args.suggestion.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from),
         };
         let mut findings = self.findings.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(same) = findings.iter().find(|kept| {

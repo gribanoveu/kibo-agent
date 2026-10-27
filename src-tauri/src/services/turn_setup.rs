@@ -22,7 +22,6 @@ use crate::domain::hooks::{Hooks, HooksConfigError};
 use crate::domain::kube::{KubeApi, KubePin, KubeSetup};
 use crate::domain::llm::LlmError;
 use crate::domain::mcp::McpTools;
-use crate::domain::review::ReviewDesk;
 use crate::domain::settings::{SettingsError, WebSearchPlace};
 use crate::domain::terminal::UserTerminals;
 use crate::domain::tool_call_log::ToolCallLogEntry;
@@ -85,8 +84,6 @@ pub struct FolderTurn<'a> {
     pub chat_id: &'a str,
     pub workspace: &'a Path,
     pub mode: ConversationMode,
-    /// A review worker's files and findings; `None` outside a review.
-    pub review: Option<Arc<ReviewDesk>>,
     pub approval: ApprovalPolicy,
     pub plan: Option<&'a str>,
     pub events: &'a ChatEventSink,
@@ -164,12 +161,13 @@ pub fn run_in_folder(
         hooks: &hooks,
         processes: app.processes,
         terminals: app.terminals,
-        review: folder.review,
+        review: None,
         agents: app.agents,
         questions: app.questions,
         board,
         deepseek,
         features,
+        fork: false,
     };
     Ok(run(&turn)?)
 }
@@ -437,7 +435,6 @@ mod tests {
                 chat_id: "folder-chat",
                 workspace: &dir,
                 mode: ConversationMode::Plan,
-                review: None,
                 approval: ApprovalPolicy::default(),
                 plan: None,
                 events: &events,
@@ -513,7 +510,6 @@ mod tests {
                     chat_id: "c1",
                     workspace: &dir,
                     mode: ConversationMode::Plan,
-                    review: None,
                     approval: ApprovalPolicy::default(),
                     plan: Some("the plan"),
                     events: &events,

@@ -114,6 +114,8 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::RunCommand,
                 ToolName::StopProcess,
                 ToolName::WritePlan,
+                // A next step put to the user, not taken (`docs/43-single-loop.md`, Ш6).
+                ToolName::Offer,
                 // Agent only: nothing says a foreign tool changes nothing.
                 ToolName::Mcp,
                 // Where the MCP tools are, so is the way to the deferred ones.

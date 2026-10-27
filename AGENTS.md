@@ -66,7 +66,8 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 | Place | Held by |
 |---|---|
 | `ToolName` variant and its row in `ToolName::ALL` (`domain/tools.rs`) | test `all_is_complete` (the count) |
-| `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees` on `ToolName` | compiler — exhaustive `match`, no wildcard |
+| `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees`, `runs_alongside` on `ToolName` | compiler — exhaustive `match`, no wildcard; test `what_runs_alongside_never_writes` |
+| `loads_up_front` on `ToolName` — a wildcard on purpose: an unlisted tool, a new one included, waits for `toolSearch` in Agent mode and costs a request nothing until found; list it only if it is needed from the first step or the prompt names it | test `what_waits_for_tool_search_is_these` |
 | `ToolCall` / `ToolResult` variants, a module under `services/ai_tools/tools/`, its arm in `dispatch`, its text in `model_text.rs` | compiler |
 | its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
 | its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |

@@ -53,17 +53,13 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "semanticSearch".to_string(),
         description: format!(
-            "Find code by what it does or what it is called, when you do not already know the file. \
-Declarations named in the query come first; the rest is ranked by meaning and by shared words together. \
-Each match gives the path, the line range readFile takes, the enclosing declaration's name, and the start of its text. \
-Write the query as a sentence about the behaviour, and include any function, type or file names you know or can justify from the user's words. \
-Write it in the language of what you search — for code usually English, even when the user asked in another: \
-a Russian question about English code matches far worse. \
-Unsure how the code puts it, add other wordings in queries: one call searches them all. \
-Put the identifiers you expect the code to use in fts (sendNotification, RetryPolicy), not the words of the question. \
-Documentation is left out unless you set includeDocs. \
-If meta.hint is present, follow it. Use grep instead when you need every occurrence of an exact string. \
-Returns at most {MAX_TOP_K} matches."
+            "Find code by what it does or what it is called, when you do not know the file. \
+Candidates are found by declared names, meaning and shared words, then read against the query and put best first. \
+Each match gives the path, the line range for readFile, the enclosing declaration and the start of its text. \
+Write the query as a sentence about the behaviour, with any names you know, in the language of the code — usually English, \
+even when the user asked in another: a Russian question about English code matches far worse. \
+Identifiers you expect the code to use go in fts, other wordings in queries. If meta.hint is present, follow it. \
+For every occurrence of an exact string, use grep. At most {MAX_TOP_K} matches."
         ),
         parameters: serde_json::json!({
             "type": "object",
@@ -75,13 +71,13 @@ Returns at most {MAX_TOP_K} matches."
                 "fts": {
                     "type": ["array", "null"],
                     "items": { "type": "string" },
-                    "description": "Words that must match as text, when they are not just the query's own — identifiers, error messages, config keys. Leave out filler and guesses: a wrong word here costs ranking."
+                    "description": "Identifiers, error messages or config keys that must match as text (sendNotification, RetryPolicy). No filler or guesses: a wrong word costs ranking."
                 },
                 "queries": {
                     "type": ["array", "null"],
                     "items": { "type": "string" },
                     "maxItems": MAX_QUERIES - 1,
-                    "description": format!("Up to {} more wordings of the same question, searched together with query — the English of a question asked in another language, or the way the code might phrase it.", MAX_QUERIES - 1)
+                    "description": format!("Up to {} more wordings, searched with query — the English of a question asked in another language, or how the code might put it.", MAX_QUERIES - 1)
                 },
                 "topK": {
                     "type": ["integer", "null"],
@@ -90,7 +86,7 @@ Returns at most {MAX_TOP_K} matches."
                 },
                 "preview": {
                     "type": ["boolean", "null"],
-                    "description": "Longer text for every match. Leave unset unless you must compare several candidates verbatim; readFile reads one precisely."
+                    "description": "Longer text for every match, only to compare candidates verbatim; readFile reads one precisely."
                 },
                 "glob": {
                     "type": ["string", "null"],
@@ -102,7 +98,7 @@ Returns at most {MAX_TOP_K} matches."
                 },
                 "includeDocs": {
                     "type": ["boolean", "null"],
-                    "description": "Search documentation too — docs folders, README, Markdown, AsciiDoc. Off by default, so code is not buried under prose that shares its words. Set it when the question is about documentation, design or how-to, or when meta.hint says documentation matches were left out. When no code matches at all, documentation comes back without it, and meta.hint says so."
+                    "description": "Search documentation too (docs folders, README, Markdown, AsciiDoc); off by default, so prose does not bury code. Set it for a question about documentation or design, or when meta.hint says documentation was left out."
                 }
             },
             "required": ["query"]
@@ -166,8 +162,8 @@ mod tests {
     #[test]
     fn the_model_is_told_to_search_in_the_language_of_the_code() {
         let description = definition().description;
-        assert!(description.contains("for code usually English, even when the user asked in another"), "{description}");
-        assert!(description.contains("identifiers you expect the code to use in fts"), "{description}");
+        assert!(description.contains("in the language of the code — usually English, even when the user asked in another"), "{description}");
+        assert!(description.contains("Identifiers you expect the code to use go in fts"), "{description}");
     }
 
     /// The other wordings go to the search with the query, first in line.

@@ -21,6 +21,7 @@ use crate::domain::llm::{ChatRequest, ChatStreamResult, LlmError, LlmMessage, Ll
 use crate::domain::llm_retry::{MAX_ATTEMPTS, retry_delay};
 use crate::domain::compaction::{self, KEEP_TAIL_PERCENT, RETRY_KEEP_TAIL_PERCENT};
 use crate::domain::result_clearing;
+use crate::domain::explore_answer;
 use crate::domain::web_search::Web;
 use crate::domain::loop_guard::{self, Loop, LoopGuard, Settled};
 use crate::domain::chat_role::ChatRole;
@@ -241,6 +242,10 @@ pub struct Turn<'a> {
     /// The features the user has on, read once a turn: a tool of one that is
     /// off is neither offered nor run (`domain::features`).
     pub features: crate::domain::features::Features,
+    /// A forked `explore` helper: the calling turn's prompt and tools, so its
+    /// start is read from the provider's cache, and of the tools only what
+    /// Explore mode offers runs (`preflight`).
+    pub fork: bool,
 }
 
 
@@ -721,9 +726,10 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         // Only a turn that is really ending asks its Stop hooks; they
         // run every time — one may be a notification — but past the
         // cap a refusal no longer keeps the turn going.
-        // A helper's answer is not the turn ending: that is the
-        // calling turn's, and its Stop hooks run then.
-        let refused = if waiting.is_empty() && turn.place.mode() != Some(ConversationMode::Explore) {
+        // A helper's answer — research, a review — is not the turn
+        // ending: that is the calling turn's, and its Stop hooks run then.
+        let helper = turn.fork || matches!(turn.place.mode(), Some(ConversationMode::Explore | ConversationMode::Review));
+        let refused = if waiting.is_empty() && !helper {
             let fields = serde_json::json!({ "stop_hook_active": pass.stop_blocks > 0 });
             match fire_hook(turn, &events, round, HookEvent::Stop, None, fields) {
                 Some(_) if pass.stop_blocks >= MAX_STOP_BLOCKS => {
@@ -844,10 +850,10 @@ fn run_calls(
     decisions: &[ToolCallDecision],
     round_truncated: bool,
 ) {
-    // `explore` calls asked one after another run side by side when the
-    // round reaches the first of them; the loop then takes their results
-    // in turn, so the history, the log and the loop guard see one call
-    // after another as ever.
+    // Reads asked one after another run side by side when the round
+    // reaches the first of them; the loop then takes their results in turn,
+    // so the history, the log and the loop guard see one call after another
+    // as ever.
     let mut early: HashMap<String, Early> = HashMap::new();
 
     for (at, call) in calls.iter().enumerate() {
@@ -859,7 +865,7 @@ fn run_calls(
             return;
         }
         if !early.contains_key(&call.id) {
-            early.extend(explore_side_by_side(turn, &events, round, &calls[at..], decisions));
+            early.extend(side_by_side(turn, &events, round, &calls[at..], decisions, &state.history));
         }
         let ran = early.remove(&call.id);
         if ran.is_none() {
@@ -880,8 +886,10 @@ fn run_calls(
             _ => parse_tool_call(call)
                 .and_then(|parsed| {
                     logged_args = tool_call_log::redact_args(&parsed);
-                    // Its hook already asked, and it has already run.
+                    // Its hook already asked, and it has already run; what
+                    // it read joins the round's in the order it was asked.
                     if let Some(ran) = ran {
+                        state.reads.merge(ran.reads);
                         return ran.result;
                     }
                     if let Some(reason) = pre_tool_use(turn, &events, round, call) {
@@ -987,13 +995,13 @@ fn execute_call(
     // Built per call, because the id is what pairs a line of output with the
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
-    let explore = |task: &str| run_explore(turn, task, &output);
+    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
         shell: turn.shell.clone(),
         output: Some(output.clone()),
-        search: turn.search.clone(),
+        search: turn.search.clone().map(|search| crate::services::search_rerank::reranking(search, Arc::new(turn.session.clone()))),
         knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
@@ -1016,6 +1024,10 @@ fn execute_call(
         deepseek: turn.deepseek.clone(),
         history,
         board: turn.board.clone(),
+        waiting: match turn.place {
+            Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
+            Place::Chat { .. } => Vec::new(),
+        },
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1030,7 +1042,33 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
         return Err(crate::domain::tools::ToolError::FeatureOff { tool: call.name.clone(), feature: feature.to_string() });
     }
     match turn.place {
-        Place::Folder { scope, mode, .. } => preflight_tool_call(scope, mode, reads, call),
+        Place::Folder { scope, mode, .. } => {
+            // A fork is offered its parent's tools for the parent's cache,
+            // and runs only what an `explore` helper would: the folder, not
+            // the web — several run side by side, and the credits are the user's.
+            // Before the mode's own gate, so a write is told it is not for a
+            // fork, not that it needs a read first.
+            let reads_only = |tool: ToolName| {
+                conversation_mode::offers(ConversationMode::Explore, tool)
+                    && !tool.is_web()
+                    && !matches!(tool, ToolName::DeepseekSearch | ToolName::DeepseekFetch)
+            };
+            if turn.fork && !ToolName::from_wire_name(&call.name).is_some_and(reads_only) {
+                return Err(crate::domain::tools::ToolError::Command(format!(
+                    "`{}` is not for a fork, which only searches and reads. Answer from what you can read",
+                    call.name
+                )));
+            }
+            preflight_tool_call(scope, mode, reads, call)?;
+            // A review runs as a helper, with nobody to answer a card: what
+            // would ask is refused rather than paused on.
+            if mode == ConversationMode::Review && needs_approval(turn, call).0 {
+                return Err(crate::domain::tools::ToolError::Command(
+                    "this needs the user's approval, and a review runs on its own with nobody to ask. Leave it, and say in your answer what it would have settled".to_string(),
+                ));
+            }
+            Ok(())
+        }
         Place::Chat { role, scope, .. } => {
             let parsed = preflight_chat_call(role, call)?;
             if let Some(scope) = scope {
@@ -1060,80 +1098,89 @@ pub fn pinned_cluster<'a>(turn: &Turn<'a>) -> Option<PinnedCluster<'a>> {
     }
 }
 
-/// How many helpers run at once. More would be as many streams to one
-/// provider, and a model that asks for ten gets them four at a time.
-// ponytail: fixed batches, not a pool — a slow helper holds its batch back;
-// a pool if rounds with more than four turn out to be common.
-pub const MAX_PARALLEL_EXPLORES: usize = 4;
+/// How many calls run at once. More helpers would be as many streams to one
+/// provider, and a model that asks for ten reads gets them four at a time.
+// ponytail: fixed batches, not a pool — a slow call (a helper, a page) holds
+// its batch back; a pool if rounds with more than four turn out to be common.
+pub const MAX_PARALLEL_CALLS: usize = 4;
 
 /// A call already run, for the round's loop to take in its turn.
 struct Early {
     result: Result<ToolResult, crate::domain::tools::ToolError>,
     started: Instant,
+    /// What it read, for the round to gather when it takes the result.
+    reads: ReadFiles,
 }
 
-/// The `explore` calls `calls` starts with, run side by side when there are
-/// two or more in a row.
+/// The reads `calls` starts with — tools that [`ToolName::runs_alongside`] —
+/// run side by side when there are two or more in a row.
 ///
 /// In a row, and from where the round has got to: a call asked before them
 /// has run, and one asked after them has not — "write the file, then have a
 /// helper check it" must find the file written. Each is shown as started and
 /// asked of the PreToolUse hooks here, in order, before any runs; a refused
-/// one is kept as refused. They read and never write, and each reports to
-/// its own card — its call id — and its own record, so nothing they touch is
-/// shared but the stop button. Anything else, and a lone `explore`, is left
-/// to the loop.
-fn explore_side_by_side(
+/// one is kept as refused. They never write, and each reports to its own card
+/// — its call id — and its own record of what it read; the history they see
+/// is the round's as it stood before them. Anything else, and a lone read, is
+/// left to the loop.
+fn side_by_side(
     turn: &Turn,
     events: &Events,
     round: u32,
     calls: &[LlmToolCall],
     decisions: &[ToolCallDecision],
+    history: &[LlmMessage],
 ) -> HashMap<String, Early> {
     let mut early = HashMap::new();
-    let explores: Vec<(&LlmToolCall, crate::domain::tools::ToolCall)> = calls
+    let reads: Vec<(&LlmToolCall, crate::domain::tools::ToolCall)> = calls
         .iter()
         .map_while(|call| match parse_tool_call(call) {
             _ if decisions.iter().any(|d| d.id == call.id && !d.approved) => None,
-            Ok(parsed @ crate::domain::tools::ToolCall::Explore(_)) => Some((call, parsed)),
+            Ok(parsed) if parsed.name().runs_alongside() => Some((call, parsed)),
             _ => None,
         })
         .collect();
-    if explores.len() < 2 || (turn.cancelled)() {
+    if reads.len() < 2 || (turn.cancelled)() {
         return early;
     }
     let mut runnable = Vec::new();
-    for (call, parsed) in explores {
+    for (call, parsed) in reads {
         report_call(events, round, call);
         let started = Instant::now();
         match pre_tool_use(turn, events, round, call) {
             Some(reason) => {
                 let result = Err(crate::domain::tools::ToolError::BlockedByHook(reason));
-                early.insert(call.id.clone(), Early { result, started });
+                early.insert(call.id.clone(), Early { result, started, reads: ReadFiles::default() });
             }
             None => runnable.push((call, parsed, started)),
         }
     }
-    for batch in runnable.chunks(MAX_PARALLEL_EXPLORES) {
+    for batch in runnable.chunks(MAX_PARALLEL_CALLS) {
         let done: Vec<(String, Early)> = std::thread::scope(|scope| {
             let running: Vec<_> = batch
                 .iter()
                 .map(|(call, parsed, started)| {
                     scope.spawn(move || {
-                        // Neither is touched by `explore`; the round's own
-                        // stay with the loop.
-                        let result = execute_call(turn, round, call, parsed, &[], &mut ReadFiles::default(), &mut Vec::new());
-                        (call.id.clone(), Early { result, started: *started })
+                        // The todo list is not touched by a read; the round's
+                        // own stays with the loop.
+                        let mut reads = ReadFiles::default();
+                        let result = execute_call(turn, round, call, parsed, history, &mut reads, &mut Vec::new());
+                        (call.id.clone(), Early { result, started: *started, reads })
                     })
                 })
                 .collect();
             running
                 .into_iter()
                 .zip(batch)
-                .map(|(handle, (call, _, started))| {
+                .map(|(handle, (call, parsed, started))| {
                     handle.join().unwrap_or_else(|_| {
-                        let result = Err(crate::domain::tools::ToolError::Explore("the helper failed".to_string()));
-                        (call.id.clone(), Early { result, started: *started })
+                        let result = Err(match parsed {
+                            crate::domain::tools::ToolCall::Explore(_) => {
+                                crate::domain::tools::ToolError::Explore("the helper failed".to_string())
+                            }
+                            _ => crate::domain::tools::ToolError::Io(std::io::Error::other("the tool failed")),
+                        });
+                        (call.id.clone(), Early { result, started: *started, reads: ReadFiles::default() })
                     })
                 })
                 .collect()
@@ -1160,28 +1207,41 @@ fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Result<(), Stri
     memory_verdict(&reply.content.unwrap_or_default())
 }
 
-/// `explore`: `task` as a turn of its own in `ConversationMode::Explore`,
-/// from an empty history, returning its closing answer.
+/// A helper: `brief` as a turn of its own in `mode`, from an empty history —
+/// `explore`'s research, `/review`'s review.
 ///
 /// It shares what the calling turn has — the model, the folder, the stop
-/// button, the hooks, the log — and nothing of its conversation. Of its
-/// events only the calls go out, as lines of the calling card's output, and
-/// its usage goes to its record: its text is the result, and its tokens are
-/// not this chat's context.
+/// button, the hooks, the log — and nothing of its conversation: no history,
+/// no plan, no checklist. Of its events only the calls go out, as lines of
+/// the calling card's output, and its usage goes to its record: its text is
+/// the result, and its tokens are not this chat's context.
 ///
-/// Recorded in the Agents tab from start to end, and stopped from there too:
-/// a helper the user stops is an error the calling turn reads and carries on
-/// from, while the chat's own Stop ends both.
+/// Recorded in the Agents tab from start to end, and stopped from there too;
+/// the caller says how it ended (`Agents::finish`). The chat's own Stop ends
+/// both.
 ///
-/// Nothing it is offered asks for approval, so it never pauses; if it did,
-/// there would be no card to answer, and it ends as an error instead.
-fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolResult, crate::domain::tools::ToolError> {
-    use crate::domain::agents::AgentState;
-    use crate::domain::tools::ToolError;
+/// `fork`: the conversation so far comes before `brief`, and the helper is
+/// the calling turn's place, MCP tools and features — what its prompt and
+/// tool list are made of — so its requests start as the calling turn's last
+/// one did.
+fn run_helper(
+    turn: &Turn,
+    brief: &str,
+    fork: Option<&[LlmMessage]>,
+    mode: ConversationMode,
+    review: Option<Arc<crate::domain::review::ReviewDesk>>,
+    approval: &ApprovalPolicy,
+    progress: &CommandSink,
+) -> Result<(Arc<crate::domain::agents::Agents>, u32, Result<ChatStreamOutcome, TurnError>), crate::domain::tools::ToolError> {
+    // Offered only in a folder; the chat's preflight refuses it first.
+    let Some(scope) = turn.place.scope() else {
+        let tool = if mode == ConversationMode::Review { "review" } else { "explore" };
+        return Err(crate::domain::tools::ToolError::NoFolder(tool.to_string()));
+    };
     // A throwaway record where the app keeps none, so a run is counted the
     // same way either way.
     let agents = turn.agents.clone().unwrap_or_default();
-    let id = agents.start(task);
+    let id = agents.start(brief);
     let events: ChatEventSink = {
         let agents = Arc::clone(&agents);
         let progress = progress.clone();
@@ -1198,19 +1258,29 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
             _ => {}
         })
     };
-    // Offered only in a folder; the chat's preflight refuses it first.
-    let Some(scope) = turn.place.scope() else {
-        return Err(ToolError::NoFolder("explore".to_string()));
-    };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
     let no_steering = Vec::new;
+    let (mode, web, mcp, features, messages) = match fork {
+        // A fork does not search the web either: offered for the cache, refused when called.
+        Some(history) => {
+            let web = match turn.place {
+                Place::Folder { web, .. } => web,
+                Place::Chat { .. } => None,
+            };
+            let mut messages = history.to_vec();
+            messages.push(LlmMessage::user(prompt::explore_fork_brief(brief)));
+            (turn.place.mode().unwrap_or(mode), web, turn.mcp, turn.features.clone(), messages)
+        }
+        // A helper reads; no feature of the user's is for it. Several run side
+        // by side, and each searching the web would multiply the queries — and
+        // Tavily's credits.
+        None => (mode, None, &McpTools::default(), Features::default(), vec![LlmMessage::user(brief)]),
+    };
     let helper = Turn {
         events: &events,
         session: turn.session,
-        // A helper reads the folder. Several run side by side, and each
-        // searching the web would multiply the queries — and Tavily's credits.
-        place: Place::Folder { scope, mode: ConversationMode::Explore, web: None },
-        approval: &ApprovalPolicy::default(),
+        place: Place::Folder { scope, mode, web },
+        approval,
         cancelled: &stopped,
         sleep: turn.sleep,
         shell: turn.shell,
@@ -1226,21 +1296,50 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         log_call: turn.log_call,
         plan: None,
         worktree_of: turn.worktree_of,
-        mcp: &McpTools::default(),
+        mcp,
         hooks: turn.hooks,
         // The calling turn's to report when they end.
         processes: None,
         terminals: turn.terminals.clone(),
-        review: None,
+        review,
         agents: None,
         questions: None,
         board: None,
         deepseek: None,
-        // A helper reads; no feature of the user's is for it.
-        features: Features::default(),
+        features,
+        fork: fork.is_some(),
     };
+    let outcome = stream(&helper, messages, Vec::new());
+    Ok((agents, id, outcome))
+}
+
+/// `explore`: `task` as a helper in `ConversationMode::Explore`, returning
+/// its closing answer. A helper the user stops is an error the calling turn
+/// reads and carries on from.
+///
+/// Nothing it is offered asks for approval, so it never pauses; if it did,
+/// there would be no card to answer, and it ends as an error instead.
+///
+/// A fork starts from `history` as it was before the reply that called it:
+/// what the calling turn's last request sent, so the provider has it cached,
+/// and no call of that reply left without its result.
+fn run_explore(
+    turn: &Turn,
+    args: &crate::domain::tools::ExploreArgs,
+    history: &[LlmMessage],
+    progress: &CommandSink,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    use crate::domain::agents::AgentState;
+    use crate::domain::tools::ToolError;
+    let task = args.task.as_str();
+    let before_reply = history.iter().rposition(|m| m.role == LlmRole::Assistant && !m.tool_calls.is_empty()).unwrap_or(history.len());
+    let fork = args.fork.then(|| &history[..before_reply]);
+    if let Some(start) = fork {
+        fork_can_start(turn, start, &history[before_reply..])?;
+    }
+    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress)?;
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
-    let (state, answer) = match stream(&helper, vec![LlmMessage::user(task)], Vec::new()) {
+    let (state, answer) = match outcome {
         Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), .. })) => failed(format!(
             "the helper used up its {rounds} rounds without answering. Give it a narrower task, or look yourself."
         )),
@@ -1257,16 +1356,167 @@ fn run_explore(turn: &Turn, task: &str, progress: &CommandSink) -> Result<ToolRe
         Err(e) => failed(e.to_string()),
     };
     agents.finish(id, state, answer.as_ref().ok().cloned());
+    let run = agents.get(id);
+    let tokens = run.as_ref().map(|run| run.tokens).unwrap_or_default();
+    let read = run.map(|run| helper_reads(&run.steps)).unwrap_or_default();
+    let lines_of = |path: &str| {
+        let scope = turn.place.scope()?;
+        // Bytes, not text: a file in Latin-1 has its lines all the same.
+        let bytes = std::fs::read(resolve_existing(scope, path).ok()?).ok()?;
+        Some(bytes.iter().filter(|&&b| b == b'\n').count() + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")))
+    };
+    answer
+        .map(|text| ToolResult::Explored { text: explore_answer::checked(&text, &read, lines_of), agent: id, tokens })
+        .map_err(ToolError::Explore)
+}
+
+/// Whether a fork may start from `start`, the conversation before the reply
+/// that asked for it; `reply` is that reply and what of it has run.
+///
+/// Not after a change in the same reply: the fork would read the folder as
+/// its conversation last saw it. And not from a conversation already half
+/// way to where old results are cleared: the fork's own reads would push its
+/// requests past it, and the clearing would cut into the conversation it was
+/// started for — and into the cached start that made it cheap.
+/// ponytail: half the trigger is a guess; a fork that reads more than the
+/// rest still clears into its start. A floor under `result_clearing::plan`
+/// is the way past.
+fn fork_can_start(turn: &Turn, start: &[LlmMessage], reply: &[LlmMessage]) -> Result<(), crate::domain::tools::ToolError> {
+    use crate::domain::tools::ToolError;
+    let ran = |id: &str| reply.iter().any(|m| m.tool_call_id.as_deref() == Some(id));
+    let changed: Vec<&str> = reply
+        .first()
+        .map(|asked| asked.tool_calls.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|call| ran(&call.id) && ToolName::from_wire_name(&call.name).is_some_and(ToolName::is_mutating))
+        .map(|call| call.name.as_str())
+        .collect();
+    if !changed.is_empty() {
+        return Err(ToolError::Explore(format!(
+            "a fork starts from before this reply, and `{}` in it has already run, so it would read the folder as it was. Give the helper a brief instead (no fork), or fork in a reply of its own",
+            changed.join("`, `")
+        )));
+    }
+    let usage = request_usage(turn, start);
+    let trigger = usage
+        .limit
+        .map(|limit| u64::from(limit) * result_clearing::TRIGGER_PERCENT / 100)
+        .unwrap_or(result_clearing::FALLBACK_TRIGGER_TOKENS as u64);
+    if usage.total as u64 * 2 >= trigger {
+        return Err(ToolError::Explore(
+            "this conversation is too long to fork: the helper's reading would clear what it was forked for. Give it a brief instead (no fork)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The files a helper opened, once each, from its steps (`explore_step`).
+fn helper_reads(steps: &[String]) -> Vec<String> {
+    let mut read: Vec<String> = Vec::new();
+    for path in steps.iter().filter_map(|step| step.strip_prefix("readFile ")).flat_map(|paths| paths.split(", ")) {
+        if !read.iter().any(|seen| seen == path) {
+            read.push(path.to_string());
+        }
+    }
+    read
+}
+
+/// What a review's bubble stands for in the history, however it was started.
+const REVIEW_MESSAGE: &str = "/review";
+
+/// `/review`: the uncommitted change (`desk`, its opening message `brief`)
+/// read by a helper in Review mode, with a context of its own — not the chat
+/// that wrote the change, nor its plan or checklist. Its report is a card in
+/// the turn, and the history keeps it for the conversation that goes on.
+///
+/// `handed`: the findings go on to the agent in the same turn, to fix or
+/// dismiss each — what pressing the agent's offer of a review means.
+/// Otherwise they are the user's, and the turn ends with the report.
+pub fn review(
+    turn: &Turn,
+    history: Vec<LlmMessage>,
+    todos: Vec<Task>,
+    brief: &str,
+    desk: Arc<crate::domain::review::ReviewDesk>,
+    handed: bool,
+) -> Result<ChatStreamOutcome, TurnError> {
+    // As at any turn's start: a note queued after the last one is not this one's.
+    let _ = (turn.take_steering)();
+    let events = Events::new(turn.events, 0);
+    // Its own id: the window finds a card by id across the whole chat, and a
+    // second review would otherwise land on the first one's.
+    let id = format!("review-{}", uuid::Uuid::new_v4());
+    let call = LlmToolCall { id: id.clone(), name: "review".to_string(), arguments: "{}".to_string() };
+    report_call(&events, 0, &call);
+    let progress = command_output_sink(turn.events, 0, &id);
+    let reviewed = run_review(turn, brief, desk, handed, &progress);
+    match &reviewed {
+        Ok(result) => report_result(&events, 0, &id, Some(result), None, Vec::new()),
+        Err(e) => report_result(&events, 0, &id, None, Some(&e.to_string()), Vec::new()),
+    }
+    // `/review` on every way out: it is the bubble's message, which a branch
+    // or a rewind finds the bubble by.
+    let mut state = State { history, round: 0, budget_used: 0, todos, reads: ReadFiles::default(), written_plan: None };
+    state.history.push(LlmMessage::user(REVIEW_MESSAGE));
+    if (turn.cancelled)() {
+        return Ok(ChatStreamOutcome::Cancelled(ended(state, ChatStreamResult::default())));
+    }
+    let report = match reviewed {
+        Ok(result) => for_model(&result),
+        Err(e) => {
+            state.history.push(LlmMessage::assistant(format!("[The review failed: {e}]")));
+            return Ok(ChatStreamOutcome::Done(ended(state, ChatStreamResult::default())));
+        }
+    };
+    if !handed {
+        state.history.push(LlmMessage::assistant(report));
+        return Ok(ChatStreamOutcome::Done(ended(state, ChatStreamResult::default())));
+    }
+    state.history.push(LlmMessage::user(format!(
+        "[A review of the uncommitted change, by a helper that saw none of this conversation:]\n\n{report}\n\n\
+         Go through each finding: fix it if it is real, dismiss it if it is not, and say in your answer which you fixed, which you dismissed, and why."
+    )));
+    run(turn, state, events.last_seq(), None)
+}
+
+/// The review helper: Review mode over `desk`, under the chat's approval —
+/// what would ask is refused (`preflight`), since a helper has no card. Its
+/// findings are what `reportFinding` kept, whatever became of its answer.
+fn run_review(
+    turn: &Turn,
+    brief: &str,
+    desk: Arc<crate::domain::review::ReviewDesk>,
+    handed: bool,
+    progress: &CommandSink,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    use crate::domain::agents::AgentState;
+    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
+    let (state, text) = match outcome {
+        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => {
+            (AgentState::Done, Ok(format!("{}\n\n(The review ran out of rounds before it finished.)", done.result.text.trim())))
+        }
+        Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Ok(done.result.text)),
+        Ok(ChatStreamOutcome::Cancelled(_)) => (AgentState::Stopped, Err("the review was stopped before it finished".to_string())),
+        Ok(ChatStreamOutcome::PendingApproval(_)) => {
+            let reason = "the review asked for a call that needs approval".to_string();
+            (AgentState::Failed { reason: reason.clone() }, Err(reason))
+        }
+        Err(e) => (AgentState::Failed { reason: e.to_string() }, Err(e.to_string())),
+    };
+    agents.finish(id, state, text.as_ref().ok().cloned());
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    answer.map(|text| ToolResult::Explored { text, agent: id, tokens }).map_err(ToolError::Explore)
+    text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), agent: id, tokens, handed })
+        .map_err(crate::domain::tools::ToolError::Command)
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.
 fn explore_step(name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
-    let target = ["path", "pattern", "query"]
-        .iter()
-        .find_map(|key| args.get(key).and_then(|v| v.as_str()));
+    let paths = crate::domain::tools::read_paths(&args).join(", ");
+    let target = (!paths.is_empty()).then_some(paths.as_str()).or_else(|| {
+        ["pattern", "query"].iter().find_map(|key| args.get(key).and_then(|v| v.as_str()))
+    });
     match target {
         Some(target) => format!("{name} {target}"),
         None => name.to_string(),
@@ -1470,6 +1720,8 @@ fn fold(
 /// `web`: whether the agent's web search is on — off, `webSearch` and
 /// `webFetch` are left out, as in a chat.
 /// `features`: the ones the user has on — a tool of one that is off is left out.
+/// The app's own tools wait for `toolSearch` as a deferred server's do: one
+/// not `loads_up_front` is declared once a search in `history` found it.
 pub(crate) fn tool_definitions_for(
     mode: ConversationMode,
     mcp: &McpTools,
@@ -1477,16 +1729,41 @@ pub(crate) fn tool_definitions_for(
     web: bool,
     features: &Features,
 ) -> Vec<LlmToolDefinition> {
+    let loaded = crate::domain::mcp::loaded_tools(history);
+    let waiting = waiting_tools(mode, web, features);
+    let searched = mcp.has_deferred() || !waiting.is_empty();
     tool_definitions()
         .into_iter()
-        .chain(mcp.definitions(&crate::domain::mcp::loaded_tools(history)))
+        .filter(|definition| loaded.contains(&definition.name) || !waiting.iter().any(|w| w.name == definition.name))
+        .chain(mcp.definitions(&loaded))
         .filter(|definition| {
             ToolName::from_wire_name(&definition.name).is_some_and(|tool| {
-                conversation_mode::offers(mode, tool)
-                    && (tool != ToolName::ToolSearch || mcp.has_deferred())
-                    && (web || !tool.is_web())
-                    && features.offers(tool)
+                offered_here(mode, web, features, tool) && (tool != ToolName::ToolSearch || searched)
             })
+        })
+        .map(|definition| match ToolName::from_wire_name(&definition.name) {
+            Some(ToolName::ToolSearch) => crate::services::ai_tools::tools::tool_search::definition_for(&waiting, mcp.has_deferred()),
+            _ => definition,
+        })
+        .collect()
+}
+
+/// Whether `mode` offers `tool` with the web and the features as they are.
+fn offered_here(mode: ConversationMode, web: bool, features: &Features, tool: ToolName) -> bool {
+    conversation_mode::offers(mode, tool) && (web || !tool.is_web()) && features.offers(tool)
+}
+
+/// The app's own tools this turn offers but does not declare until
+/// `toolSearch` finds them — none where there is no `toolSearch`.
+pub(crate) fn waiting_tools(mode: ConversationMode, web: bool, features: &Features) -> Vec<LlmToolDefinition> {
+    if !offered_here(mode, web, features, ToolName::ToolSearch) {
+        return Vec::new();
+    }
+    tool_definitions()
+        .into_iter()
+        .filter(|definition| {
+            ToolName::from_wire_name(&definition.name)
+                .is_some_and(|tool| !tool.loads_up_front() && offered_here(mode, web, features, tool))
         })
         .collect()
 }
@@ -2284,6 +2561,7 @@ mod tests {
                 board: None,
                 deepseek: None,
                 features: self.features.clone(),
+                fork: false,
             };
             f(&turn)
         }
@@ -4117,7 +4395,9 @@ mod tests {
             let mut h = harness("loop-board", vec![text("hi")]);
             h.features = features;
             h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-            h.provider.requests()[0].tools.iter().any(|t| t.name == "board")
+            // Waiting for `toolSearch`, which says so.
+            let tools = &h.provider.requests()[0].tools;
+            tools.iter().any(|t| t.name == "board" || (t.name == "toolSearch" && t.description.contains("`board`")))
         };
         assert!(!offered(Features::default()));
         assert!(offered(Features::all()));
@@ -4134,8 +4414,11 @@ mod tests {
         // Every built-in one but a review's own, the features' — the board,
         // DeepSeek's two, the knowledge base's four — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
-        // is connected — so neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 11 - ChatRole::Kubernetes.tools().len());
+        // is connected. Those waiting for `toolSearch` are found with it.
+        let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
+        assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
+        // And `toolSearch`, which is there for them.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 11 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -4599,9 +4882,33 @@ mod tests {
         assert!(result("s1").starts_with("No tool matched"), "{}", result("s1"));
         assert!(result("m1").contains("mcp__tracker__purge") && !result("m1").contains("purge got"), "{}", result("m1"));
 
+        // A server with nothing waiting: the search is the app's own tools', and says nothing of servers.
         let plain = with_server(harness("mcp-no-search", vec![text("hi")]), 3);
         plain.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        assert!(plain.provider.requests()[0].tools.iter().all(|t| t.name != "toolSearch"));
+        let search = plain.provider.requests()[0].tools.iter().find(|t| t.name == "toolSearch").cloned().expect("offered");
+        assert!(!search.description.contains("MCP") && search.description.contains("`gitBlame`"), "{}", search.description);
+    }
+
+    /// The app's rarer tools wait for `toolSearch` in Agent mode, and one it
+    /// found is declared from the next step on; where there is no search —
+    /// Plan mode — they are declared as ever.
+    #[test]
+    fn a_waiting_tool_is_declared_once_the_search_found_it() {
+        let h = harness(
+            "builtin-search",
+            vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"blame"}"#)]), text("done")],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = h.provider.requests();
+        assert!(!tool_names(&requests[0]).contains(&"gitBlame".to_string()));
+        assert!(tool_names(&requests[1]).contains(&"gitBlame".to_string()), "{:?}", tool_names(&requests[1]));
+        assert!(!tool_names(&requests[1]).contains(&"move".to_string()), "only what was found");
+
+        let mut plan = harness("builtin-plan", vec![text("hi")]);
+        plan.mode = ConversationMode::Plan;
+        plan.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let tools = tool_names(&plan.provider.requests()[0]);
+        assert!(tools.contains(&"gitBlame".to_string()) && !tools.contains(&"toolSearch".to_string()), "{tools:?}");
     }
 
     /// The agent searches only when Settings gave it a search: off, neither
@@ -5116,7 +5423,8 @@ mod tests {
         assert!(told[0].contains("\n-one\n+uno\n"), "{}", told[0]);
     }
 
-    /// The turn hands the tool the folder's search; without it the model gets
+    /// The turn hands the tool the folder's search, with the model's
+    /// reordering on top (`search_rerank`); without it the model gets
     /// "unavailable" and a pointer to grep.
     #[test]
     fn a_turn_searches_through_the_search_it_was_given() {
@@ -5126,15 +5434,16 @@ mod tests {
             vec![asks(vec![wants("s1", "semanticSearch", r#"{"query":"where sync lives"}"#)]), text("found it")],
         );
         h.search = Some(Arc::new(|_: &[&str], _: Option<&[String]>, _: usize, _: &crate::domain::code_search::SearchFilter| {
+            let at = |path: &str| CodeMatch {
+                path: path.into(),
+                start_line: 1,
+                end_line: 2,
+                name: None,
+                text: "fn sync() {}".into(),
+                source: MatchSource::Lexical,
+            };
             Ok(CodeSearchResult {
-                matches: vec![CodeMatch {
-                    path: "src/sync.rs".into(),
-                    start_line: 1,
-                    end_line: 2,
-                    name: None,
-                    text: "fn sync() {}".into(),
-                    source: MatchSource::Lexical,
-                }],
+                matches: vec![at("src/sync.rs"), at("src/other.rs")],
                 meta: SearchMeta { tiers_used: vec![MatchSource::Lexical], weak: false, hint: None },
             })
         }));
@@ -5143,6 +5452,9 @@ mod tests {
 
         let told = tool_contents(h.provider.requests().last().unwrap());
         assert!(told[0].contains("src/sync.rs"), "{told:?}");
+        let ranked = h.provider.summaries.lock().unwrap();
+        let shown = ranked.iter().find_map(|r| r.messages.get(1)?.content.clone()).unwrap_or_default();
+        assert!(shown.starts_with("Question: where sync lives") && shown.contains("[2] src/other.rs"), "{shown}");
     }
 
     /// The catalog the turn was given is what every request lists, and what
@@ -5390,6 +5702,24 @@ mod tests {
         assert!(chunks.iter().all(|(id, _)| id == "c1"), "tagged by call");
         let text: String = chunks.iter().map(|(_, chunk)| chunk.clone()).collect();
         assert!(text.contains("working") && text.contains("trouble"), "{text}");
+    }
+
+    /// An offer runs nothing, so it asks nothing: the turn ends with the
+    /// answer, not on an approval card — in any approval mode.
+    #[test]
+    fn an_offer_asks_nothing_and_the_turn_ends() {
+        let mut h = harness(
+            "offer-no-approval",
+            vec![asks(vec![wants("o1", "offer", r#"{"kind":"commit","reason":"the counter"}"#)]), text("done")],
+        );
+        h.approval = asking();
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "x").unwrap();
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("write the counter")], vec![])).expect("turn");
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        assert!(tool_contents(&h.provider.requests()[1]).iter().any(|c| c.starts_with("Offered")));
     }
 
     /// A command line is not a tool name: `ls` and `rm -rf /` are the same
@@ -5650,8 +5980,12 @@ mod tests {
         assert!(!tools.contains(&"explore".to_string()) && !tools.contains(&"writeFile".to_string()), "{tools:?}");
         // The caller was offered it, and gets the answer back and nothing else.
         assert!(tool_names(&requests[0]).contains(&"explore".to_string()));
+        // Its places checked against the files, and what it read named.
         let back = tool_contents(&requests[3]);
-        assert_eq!(back, vec!["X is in a.rs:1".to_string()]);
+        assert_eq!(
+            back,
+            vec!["X is in a.rs:1\n\n[Checked by the app: all 1 cited places exist.]\n[The helper read: a.rs. None of it is in this conversation; read again what you need.]".to_string()]
+        );
         assert!(requests[3].messages.iter().all(|m| !m.content.as_deref().unwrap_or("").contains("SECRET_LINE")));
 
         // What the user sees: the parent's call, with the helper's reads as
@@ -5671,6 +6005,143 @@ mod tests {
         assert!(events.iter().all(|e| !matches!(&e.event, ChatEventPayload::Delta { delta } if delta.contains("X is in"))));
     }
 
+    /// The change `/review` reads: `a.rs`, its line 7 added.
+    fn review_desk() -> (String, Arc<crate::domain::review::ReviewDesk>) {
+        use crate::domain::review::{FileDiff, FileStatus, NewLine, ReviewDesk};
+        let file = FileDiff {
+            path: "a.rs".into(),
+            status: FileStatus::Modified,
+            binary: false,
+            patch: "@@ -6,0 +7 @@\n+let x = y / 0;".into(),
+            lines: vec![NewLine { hunk: 0, number: 7, added: true, text: "let x = y / 0;".into() }],
+        };
+        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &[], None);
+        (brief, Arc::new(ReviewDesk::new(vec![file])))
+    }
+
+    fn found(id: &str) -> Step {
+        asks(vec![wants(
+            id,
+            "reportFinding",
+            r#"{"path":"a.rs","existingCode":"let x = y / 0;","title":"Divides by zero","body":"Panics on every call.","severity":"high","category":"bug"}"#,
+        )])
+    }
+
+    /// `/review` run by the user: a helper reads the change and nothing of the
+    /// chat — not what was said, its plan or its checklist — and its findings
+    /// are a card and the user's. The agent is not asked; the history keeps
+    /// the report for what the user says next.
+    #[test]
+    fn a_review_is_a_helper_and_its_report_is_the_users() {
+        let mut h = harness("review-helper", vec![found("f1"), text("One real problem.")]);
+        h.plan = Some("# Plan\n\n1. it is safe".into());
+        let agents = Arc::new(crate::domain::agents::Agents::default());
+        h.agents = Some(Arc::clone(&agents));
+        let (brief, desk) = review_desk();
+        let todos = vec![Task { id: "1".into(), title: "make it race-free".into(), status: crate::domain::tools::TodoStatus::InProgress, note: None }];
+        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done, it is safe")];
+
+        let outcome = h.run(|turn| review(turn, chat.clone(), todos.clone(), &brief, desk, false)).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2, "the helper's two rounds, and no agent turn");
+        for request in &requests {
+            let said = |needle: &str| request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
+            assert!(!said("write the counter") && !said("it is safe") && !said("race-free"), "nothing of the chat");
+            assert!(said("This conversation: Review"));
+        }
+        assert_eq!(done.history[..2], chat[..]);
+        assert_eq!(done.todos, todos);
+        let kept = done.history[2..].iter().map(|m| (m.role, m.content.clone().unwrap_or_default())).collect::<Vec<_>>();
+        assert_eq!(kept[0], (LlmRole::User, "/review".to_string()));
+        assert!(kept[1].0 == LlmRole::Assistant && kept[1].1.contains("a.rs:7 — Divides by zero") && kept[1].1.contains("One real problem."), "{kept:?}");
+
+        let card = h.events().into_iter().find_map(|e| match e.event {
+            ChatEventPayload::ToolResult(r) if r.id.starts_with("review-") => r.result,
+            _ => None,
+        });
+        let Some(ToolResult::Reviewed { findings, text, agent, handed, .. }) = card else { panic!("expected a review card") };
+        assert_eq!((findings.len(), findings[0].start_line, text.as_str(), handed), (1, 7, "One real problem.", false));
+        assert_eq!(findings[0].severity, crate::domain::review::Severity::High);
+        assert!(kept[1].1.contains("[high] a.rs:7"), "{kept:?}");
+        assert_eq!(agents.list()[0].id, agent);
+        assert_eq!(agents.list()[0].state, crate::domain::agents::AgentState::Done);
+    }
+
+    /// Pressing the agent's offer: the same review, and then the agent goes
+    /// through the findings in the same turn — the chat back in front of it.
+    #[test]
+    fn a_handed_review_goes_on_to_the_agent_with_its_findings() {
+        let h = harness("review-handed", vec![found("f1"), text("One real problem."), text("Fixed the division.")]);
+        let (brief, desk) = review_desk();
+        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done")];
+
+        let outcome = h.run(|turn| review(turn, chat.clone(), vec![], &brief, desk, true)).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Fixed the division.");
+        let agent = &h.provider.requests()[2];
+        let said = |needle: &str| agent.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
+        assert!(said("write the counter") && said("a.rs:7 — Divides by zero") && said("fix it if it is real"));
+        assert!(!said("This conversation: Review"), "the agent's own mode");
+        // The bubble's `/review`, which branches find it by, then the hand-off.
+        let asked: Vec<_> = done.history.iter().filter(|m| m.role == LlmRole::User).map(|m| m.content.clone().unwrap_or_default()).collect();
+        assert_eq!(asked[1], "/review");
+        assert!(asked[2].starts_with("[A review of the uncommitted change"), "{asked:?}");
+    }
+
+    /// Each review is a card of its own, so a second one in the chat does not
+    /// land on the first; a stopped one still leaves the bubble's message.
+    #[test]
+    fn each_review_has_its_own_card_and_leaves_its_message() {
+        let h = harness("review-twice", vec![text("Nothing."), text("Nothing again.")]);
+        let (brief, desk) = review_desk();
+        h.run(|turn| review(turn, vec![], vec![], &brief, Arc::clone(&desk), false)).expect("turn");
+        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let ids: Vec<String> = h.events().into_iter().filter_map(|e| match e.event {
+            ChatEventPayload::ToolCall(call) if call.name == "review" => Some(call.id),
+            _ => None,
+        }).collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+
+        let h = harness("review-stopped", vec![]);
+        h.cancel_at_poll(1);
+        let (brief, desk) = review_desk();
+        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let ChatStreamOutcome::Cancelled(done) = outcome else { panic!("expected cancelled") };
+        assert_eq!(done.history.last().and_then(|m| m.content.as_deref()), Some("/review"));
+    }
+
+    /// The Stop hooks are the turn's: a review helper finishing is not it.
+    #[test]
+    fn a_review_finishing_does_not_run_the_stop_hooks() {
+        let (h, inputs) = hooked(harness("review-stop", vec![text("Nothing.")]), hook("Stop", "", "check"), |_, _| (0, ""));
+        let (brief, desk) = review_desk();
+        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        assert!(inputs.lock().unwrap().is_empty());
+    }
+
+    /// A reviewer's command that would ask is refused, not paused on: the
+    /// helper has no card, and the review carries on.
+    #[test]
+    fn a_review_command_that_would_ask_is_refused() {
+        let mut h = harness(
+            "review-asks",
+            vec![asks(vec![wants("c1", "runCommand", r#"{"command":"touch built"}"#)]), text("Could not build.")],
+        );
+        h.approval = asking();
+        let (brief, desk) = review_desk();
+
+        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        let back = tool_contents(&h.provider.requests()[1]);
+        assert!(back[0].contains("nobody to ask"), "{back:?}");
+        assert!(!h.root.join("built").exists());
+    }
+
     /// The agent may search the web; its helpers may not — several run side
     /// by side, and each searching would multiply the queries and the credits.
     #[test]
@@ -5685,6 +6156,140 @@ mod tests {
         assert!(tool_names(&requests[0]).contains(&"webSearch".to_string()), "the agent has it");
         let helper = tool_names(&requests[1]);
         assert!(!helper.contains(&"webSearch".to_string()) && !helper.contains(&"webFetch".to_string()), "{helper:?}");
+    }
+
+    /// A fork's requests start as the calling turn's last one did — the same
+    /// prompt, conversation and tools, which the provider has cached — and
+    /// then say what to find out. Offered the agent's tools, it runs only
+    /// what an explore helper would.
+    #[test]
+    fn explore_fork_starts_where_the_caller_was_and_only_reads() {
+        let mut h = harness(
+            "explore-fork",
+            vec![
+                asks(vec![wants("r0", "readFile", r#"{"path":"a.rs"}"#)]),
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]),
+                asks(vec![
+                    wants("s1", "webSearch", r#"{"query":"X"}"#),
+                    wants("w1", "writeFile", r#"{"path":"b.rs","content":"x"}"#),
+                    wants("r1", "readFile", r#"{"path":"a.rs"}"#),
+                ]),
+                text("Found:\n- a.rs:1 — X is set"),
+                text("done"),
+            ],
+        );
+        h.web = Some(Web::search_only(Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new()))));
+        h.features = Features::all();
+        let h = with_server(h, 1);
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        // Forked in the second round, after a read: its start is that round's request.
+        let requests = h.provider.requests();
+        let (caller, fork) = (&requests[1], &requests[2]);
+        assert_eq!(fork.messages[..caller.messages.len()], caller.messages[..]);
+        assert_eq!(fork.messages.len(), caller.messages.len() + 1);
+        let brief = fork.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.starts_with("[A fork of this conversation.") && brief.contains("Find out: where is X"), "{brief}");
+        assert_eq!(fork.tools, caller.tools);
+        assert!(tool_names(fork).iter().any(|t| t == "deepseekSearch") && tool_names(fork).iter().any(|t| t.contains("tracker")), "{:?}", tool_names(fork));
+
+        let back = tool_contents(&requests[3]).join("\n");
+        assert!(back.contains("`webSearch` is not for a fork") && back.contains("`writeFile` is not for a fork"), "{back}");
+        assert!(back.contains("let x = 1;"), "{back}");
+        assert!(!h.root.join("b.rs").exists());
+        assert!(tool_contents(&requests[4]).last().unwrap().starts_with("Found:\n- a.rs:1 — X is set\n\n[Checked by the app: all 1"));
+    }
+
+    /// A fork starts before its reply: after a write in that reply, it
+    /// would read the folder as it was.
+    #[test]
+    fn explore_fork_after_a_change_in_the_same_reply_is_refused() {
+        let h = harness(
+            "explore-fork-stale",
+            vec![
+                asks(vec![
+                    wants("w1", "writeFile", r#"{"path":"b.rs","content":"x"}"#),
+                    wants("e1", "explore", r#"{"task":"where is X","fork":true}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2, "no helper ran");
+        let back = tool_contents(&requests[1]);
+        assert!(back[1].contains("`writeFile` in it has already run"), "{back:?}");
+
+        // What ran before it and changed nothing is no reason.
+        let h = harness(
+            "explore-fork-after-todo",
+            vec![
+                asks(vec![
+                    wants("t1", "todo", r#"{"op":"write","tasks":["look"]}"#),
+                    wants("e1", "explore", r#"{"task":"where is X","fork":true}"#),
+                ]),
+                text("Not settled: None"),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(h.provider.requests().len(), 3, "the fork ran");
+    }
+
+    /// Half way to where old results are cleared, a fork's own reading would
+    /// clear what it was forked for: a brief is asked for instead.
+    #[test]
+    fn explore_fork_from_a_long_conversation_is_refused() {
+        let mut h = harness(
+            "explore-fork-long",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]), text("done")],
+        );
+        h.session.context_limit = Some(100_000);
+        let long = "word ".repeat(36_000);
+        h.run(|turn| stream(turn, vec![LlmMessage::user(&long)], vec![])).expect("turn");
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 2, "no helper ran");
+        assert!(tool_contents(&requests[1])[0].contains("too long to fork"), "{:?}", tool_contents(&requests[1]));
+    }
+
+    /// The Stop hooks are the calling turn's, fork or not.
+    #[test]
+    fn explore_fork_finishing_does_not_run_the_stop_hooks() {
+        let h = harness(
+            "explore-fork-stop",
+            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X","fork":true}"#)]), text("Not settled: all of it"), text("done")],
+        );
+        let (h, inputs) = hooked(h, hook("Stop", "", "check"), |_, _| (0, ""));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        assert_eq!(inputs.lock().unwrap().len(), 1, "the calling turn's end only");
+    }
+
+    /// A place the helper cites that the file does not have is said under
+    /// its answer, for the caller to read itself instead of trusting it.
+    #[test]
+    fn explore_marks_a_place_the_helper_got_wrong() {
+        let h = harness(
+            "explore-wrong-line",
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                asks(vec![wants("r1", "readFile", r#"{"path":"a.rs"}"#)]),
+                asks(vec![wants("r2", "readFile", r#"{"paths":["a.rs","b.rs"]}"#)]),
+                text("Found:\n- a.rs:1 — X is set\n- a.rs:40 — X is read\n- b.rs:2 — X is printed\n- src/gone.rs:3 — X is freed"),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\nlet y = x;\n").unwrap();
+        // Not UTF-8, and still a file with lines.
+        std::fs::write(h.root.join("b.rs"), b"// caf\xe9\nprint(x)").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let back = tool_contents(&h.provider.requests()[4]);
+        assert!(
+            back[0].contains("2 of 4 cited places are not there — `a.rs:40` (the file has 2 lines), `src/gone.rs:3` (no such file)."),
+            "{back:?}"
+        );
+        // Read twice, named once; read together, named each.
+        assert!(back[0].ends_with("[The helper read: a.rs, b.rs. None of it is in this conversation; read again what you need.]"), "{back:?}");
     }
 
     /// A helper cannot send a helper: asked from memory, it is refused.
@@ -5705,7 +6310,7 @@ mod tests {
         let refused = tool_contents(&requests[2]);
         assert!(refused[0].contains("`explore` is not available to a helper"), "{refused:?}");
         assert!(!refused[0].contains("the user chose"), "{refused:?}");
-        assert_eq!(tool_contents(&requests[3]), vec!["could not look deeper".to_string()]);
+        assert!(tool_contents(&requests[3])[0].starts_with("could not look deeper\n\n[Checked by the app"));
     }
 
     /// The Stop hooks are the calling turn's: a helper finishing is not the
@@ -5775,7 +6380,9 @@ mod tests {
             ChatEventPayload::ToolResult(r) if r.id == "e1" => r.result,
             _ => None,
         });
-        assert_eq!(card, Some(ToolResult::Explored { text: "X is in a.rs:1".into(), agent: run.id, tokens: spent }));
+        let Some(ToolResult::Explored { text, agent, tokens }) = card else { panic!("{card:?}") };
+        assert_eq!((agent, tokens), (run.id, spent));
+        assert!(text.starts_with("X is in a.rs:1\n\n[Checked by the app"), "{text}");
         assert!(!payloads(&h.events()).contains(&"contextUsage".to_string()), "the helper's usage is not the chat's");
     }
 
@@ -5832,6 +6439,7 @@ mod tests {
         assert_eq!(explore_step("grep", r#"{"pattern":"fn main","path":"src"}"#), "grep src");
         assert_eq!(explore_step("semanticSearch", r#"{"query":"where tokens refresh"}"#), "semanticSearch where tokens refresh");
         assert_eq!(explore_step("gitStatus", "{}"), "gitStatus");
+        assert_eq!(explore_step("readFile", r#"{"paths":["a.rs","b.rs"]}"#), "readFile a.rs, b.rs");
         assert_eq!(explore_step("readFile", "{broken"), "readFile");
     }
 
@@ -5895,7 +6503,7 @@ mod tests {
             // in flight; the timeout is what lets a right-sized batch go.
             let (mut in_flight, _) = self
                 .arrived
-                .wait_timeout_while(in_flight, Duration::from_millis(400), |n| *n <= MAX_PARALLEL_EXPLORES)
+                .wait_timeout_while(in_flight, Duration::from_millis(400), |n| *n <= MAX_PARALLEL_CALLS)
                 .unwrap();
             *in_flight -= 1;
             Ok(ChatStreamResult { text: format!("answer to {task}"), ..Default::default() })
@@ -5941,8 +6549,8 @@ mod tests {
             .map(|m| (m.tool_call_id.clone().unwrap(), m.content.clone().unwrap()))
             .collect();
         assert_eq!(results.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["e1", "e2", "r1"]);
-        assert_eq!(results[0].1, "answer to A");
-        assert_eq!(results[1].1, "answer to B");
+        assert!(results[0].1.starts_with("answer to A\n\n"), "{:?}", results[0]);
+        assert!(results[1].1.starts_with("answer to B\n\n"), "{:?}", results[1]);
         assert!(results[2].1.contains("fn a() {}"), "{:?}", results[2]);
         // Each card started once, not again when the loop took its result.
         let shown = payloads(&h.events());
@@ -5976,11 +6584,11 @@ mod tests {
     /// Past the limit they go in batches: never more at once than that.
     #[test]
     fn no_more_helpers_run_at_once_than_the_limit() {
-        let asked = (0..=MAX_PARALLEL_EXPLORES).map(|n| explore(&format!("e{n}"), &format!("T{n}"))).collect();
+        let asked = (0..=MAX_PARALLEL_CALLS).map(|n| explore(&format!("e{n}"), &format!("T{n}"))).collect();
         let (h, provider) = side_by_side("explore-batches", asked);
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        assert_eq!(*provider.most.lock().unwrap(), MAX_PARALLEL_EXPLORES);
-        assert_eq!(provider.helper_tasks.lock().unwrap().len(), MAX_PARALLEL_EXPLORES + 1, "every one ran");
+        assert_eq!(*provider.most.lock().unwrap(), MAX_PARALLEL_CALLS);
+        assert_eq!(provider.helper_tasks.lock().unwrap().len(), MAX_PARALLEL_CALLS + 1, "every one ran");
     }
 
     /// The hooks are asked once for each, before any runs; the one refused
@@ -5997,7 +6605,110 @@ mod tests {
         assert_eq!(inputs.lock().unwrap().len(), 2, "asked once each");
         assert_eq!(*provider.helper_tasks.lock().unwrap(), ["A"]);
         let results: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).filter_map(|m| m.content.clone()).collect();
-        assert_eq!(results[0], "answer to A");
+        assert!(results[0].starts_with("answer to A\n\n"), "{results:?}");
         assert!(results[1].contains("not that one"), "{results:?}");
+    }
+
+    // ------------------------------------------------------ parallel reads
+
+    /// Reads in a row are all started before any answers, and answer in the
+    /// order they were asked; a write ends the batch, and a read after it
+    /// waits for it.
+    #[test]
+    fn reads_in_a_row_start_together_and_answer_in_order() {
+        let h = harness(
+            "reads-parallel",
+            vec![
+                asks(vec![
+                    wants("r1", "readFile", r#"{"path":"a.rs"}"#),
+                    wants("g1", "grep", r#"{"pattern":"fn"}"#),
+                    wants("r2", "readFile", r#"{"path":"b.rs"}"#),
+                    wants("w1", "writeFile", r#"{"path":"c.rs","content":"fn c() {}"}"#),
+                    wants("r3", "readFile", r#"{"path":"c.rs"}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.rs"), "fn a() {}").unwrap();
+        std::fs::write(h.root.join("b.rs"), "fn b() {}").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        let shown = payloads(&h.events());
+        let at = |p: &str| shown.iter().position(|s| s == p).unwrap_or_else(|| panic!("{p}: {shown:?}"));
+        for id in ["r1", "g1", "r2"] {
+            assert!(at(&format!("toolCall:{id}")) < at("toolResult:r1"), "{id} started with the batch: {shown:?}");
+        }
+        assert!(at("toolResult:r2") < at("toolCall:w1"), "the write waits for the batch: {shown:?}");
+        assert!(at("toolResult:w1") < at("toolCall:r3"), "a read after the write waits for it: {shown:?}");
+        let results: Vec<&String> = shown.iter().filter(|s| s.starts_with("toolResult:")).collect();
+        assert_eq!(results, ["toolResult:r1", "toolResult:g1", "toolResult:r2", "toolResult:w1", "toolResult:r3"]);
+
+        let answered = tool_contents(&h.provider.requests()[1]);
+        assert!(answered[0].contains("fn a() {}") && answered[2].contains("fn b() {}"), "{answered:?}");
+        assert!(answered[4].contains("fn c() {}"), "the read after the write sees it: {answered:?}");
+    }
+
+    /// A file read in a batch counts as read for a write in a later round,
+    /// as it would had the reads run one after another.
+    #[test]
+    fn reads_beside_each_other_count_for_a_later_write() {
+        let h = harness(
+            "reads-parallel-then-write",
+            vec![
+                asks(vec![wants("r1", "readFile", r#"{"path":"a.txt"}"#), wants("r2", "readFile", r#"{"path":"b.txt"}"#)]),
+                asks(vec![wants("w1", "writeFile", r#"{"path":"a.txt","content":"new\n"}"#)]),
+                text("done"),
+            ],
+        );
+        std::fs::write(h.root.join("a.txt"), "old\n").unwrap();
+        std::fs::write(h.root.join("b.txt"), "b\n").unwrap();
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+
+        let answered = tool_contents(&h.provider.requests()[2]);
+        assert!(!answered.last().unwrap().starts_with(TOOL_ERROR_PREFIX), "{answered:?}");
+        assert_eq!(std::fs::read_to_string(h.root.join("a.txt")).unwrap(), "new\n");
+    }
+
+    /// Pages go at once, and each is checked against the conversation as it
+    /// stood: an address the user gave is one it may open.
+    #[test]
+    fn pages_are_fetched_at_once_from_the_conversation() {
+        let mut h = harness(
+            "fetch-parallel",
+            vec![
+                asks(vec![
+                    wants("f1", "webFetch", r#"{"url":"https://a.example/x"}"#),
+                    wants("f2", "webFetch", r#"{"url":"https://b.example/y"}"#),
+                ]),
+                text("done"),
+            ],
+        );
+        let gate = Arc::new((Mutex::new((0usize, 0usize)), std::sync::Condvar::new()));
+        let seen = Arc::clone(&gate);
+        h.web = Some(Web {
+            search: Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new())),
+            fetch: Arc::new(move |q: &crate::domain::web_search::PageQuery| {
+                let (lock, arrived) = &*seen;
+                let mut counts = lock.lock().unwrap();
+                counts.0 += 1;
+                counts.1 = counts.1.max(counts.0);
+                arrived.notify_all();
+                let (mut counts, _) = arrived.wait_timeout_while(counts, Duration::from_millis(400), |c| c.0 < 2).unwrap();
+                counts.0 -= 1;
+                Ok(crate::domain::web_search::WebPage {
+                    title: String::new(),
+                    url: q.url.to_string(),
+                    content: format!("page {}", q.url),
+                    truncated: false,
+                })
+            }),
+        });
+        h.run(|turn| stream(turn, vec![LlmMessage::user("read https://a.example/x and https://b.example/y")], vec![]))
+            .expect("turn");
+
+        assert_eq!(gate.0.lock().unwrap().1, 2, "both pages were being read at once");
+        let answered = tool_contents(&h.provider.requests()[1]);
+        assert!(answered[0].contains("page https://a.example/x"), "{answered:?}");
+        assert!(answered[1].contains("page https://b.example/y"), "{answered:?}");
     }
 }

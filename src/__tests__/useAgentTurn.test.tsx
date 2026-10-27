@@ -1104,6 +1104,18 @@ describe("the next-prompt journal", () => {
     expect(journal()[2]).toMatchObject({ command: "next_prompt_log", args: { user: "/review" } });
   });
 
+  /// Pressing the agent's offer: the same review, its findings for the agent — and the bubble says so.
+  test("a review handed to the agent says so and asks the backend for it", async () => {
+    results.review_start = done("reviewed");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.review(true);
+    });
+    expect(calls.find((c) => c.command === "review_start")?.args).toMatchObject({ handed: true });
+    // The history has `/review` for it, which a branch finds the bubble by.
+    expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review send-result-to-agent", sent: "/review" });
+  });
+
   /// What is typed into another chat is not an answer to this one.
   test("a new chat leaves the last turn unanswered", async () => {
     results.chat_start = done("ok");
@@ -1313,7 +1325,7 @@ describe("reviewing", () => {
       await result.current.review();
     });
     const call = calls.find((c) => c.command === "review_start");
-    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), chatId: expect.any(String), messages: [], todos: [], plan: null });
+    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), chatId: expect.any(String), messages: [], todos: [], plan: null, handed: false });
     expect(result.current.turn.status).toBe("done");
     expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
     await waitFor(() => expect(saved()).toHaveLength(1));

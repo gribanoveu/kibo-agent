@@ -1,5 +1,5 @@
-import { Wrench } from "lucide-react";
-import type { Finding } from "../lib/finding";
+import { Bot, SearchCheck, Wrench } from "lucide-react";
+import type { Finding, Review } from "../lib/finding";
 import "./ReviewCard.css";
 
 type Props = {
@@ -51,5 +51,62 @@ export function FindingCard({ finding, onOpenFile, onFix }: Props) {
       </p>
       {finding.suggestion && <pre className="review-suggestion">{finding.suggestion}</pre>}
     </div>
+  );
+}
+
+/**
+ * A review a subagent ran, as one card: what it found, each finding with
+ * Fix when they are the user's — not when they went on to the agent, which
+ * answers for them itself — and what the reviewer said.
+ */
+export function ReviewReport({
+  review,
+  onOpenFile,
+  onFix,
+  onOpenAgent,
+}: {
+  review: Review;
+  onOpenFile?: (link: string) => void;
+  onFix?: (text: string) => void;
+  onOpenAgent?: (agent: { id: number; task: string }) => void;
+}) {
+  const count = review.findings.length;
+  return (
+    <section className="review-report" aria-label="Review">
+      <div className="review-report-head">
+        <span className="review-report-icon">
+          <SearchCheck size={14} />
+        </span>
+        <span className="review-report-title">Review</span>
+        <span className="review-report-meta">
+          {count === 0 ? "no findings" : count === 1 ? "1 finding" : `${count} findings`}
+          {review.handed && " · handed to the agent"}
+        </span>
+        {onOpenAgent && (
+          <button
+            type="button"
+            className="review-fix"
+            title="Open the subagent in the Agents tab"
+            onClick={() => onOpenAgent({ id: review.agent, task: "Review the uncommitted changes" })}
+          >
+            <Bot size={12} />
+            Subagent
+          </button>
+        )}
+      </div>
+      {review.summary && (
+        <p className="review-report-summary">
+          <Prose text={review.summary} />
+        </p>
+      )}
+      {review.findings.map((finding) => (
+        <FindingCard
+          key={`${finding.path}:${finding.startLine}:${finding.title}`}
+          finding={finding}
+          onOpenFile={onOpenFile}
+          onFix={review.handed ? undefined : onFix}
+        />
+      ))}
+    </section>
   );
 }

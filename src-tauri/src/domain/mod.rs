@@ -14,6 +14,7 @@ pub mod loop_guard;
 pub mod rewind;
 pub mod runbooks;
 pub mod review;
+pub mod explore_answer;
 pub mod next_prompt;
 pub mod conversation_mode;
 pub mod chat_role;

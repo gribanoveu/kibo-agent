@@ -105,6 +105,7 @@ pub fn for_model(result: &ToolResult) -> String {
             format!("Noted at {path}:{start_line}.")
         }
         ToolResult::FindingNoted { path, start_line, end_line } => format!("Noted at {path}:{start_line}-{end_line}."),
+        ToolResult::Offered { .. } => "Offered: the user sees it as a button after your answer. Do not ask about it in the answer.".to_string(),
         ToolResult::ProcessOutput(output) => process_output(output),
         // Ended by itself before the call: saying only "exited with code 0"
         // leaves open whether this call stopped it.
@@ -129,6 +130,7 @@ pub fn for_model(result: &ToolResult) -> String {
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
+        ToolResult::Reviewed { findings, text, .. } => reviewed(findings, text),
         ToolResult::Kube { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
@@ -637,6 +639,28 @@ fn skill(name: &str, instructions: &str, files: &[String], from: &str) -> String
     let mut out = format!("Skill {name}{from}:\n{}", instructions.trim_end());
     if !files.is_empty() {
         out.push_str(&format!("\n\nFiles in this skill (read one with skill and its path):\n- {}", files.join("\n- ")));
+    }
+    out
+}
+
+/// A review's report as the conversation keeps it: each finding where it
+/// is, then what the reviewer said.
+fn reviewed(findings: &[crate::domain::review::Finding], answer: &str) -> String {
+    let mut out = match findings.len() {
+        0 => "The review reported no findings.\n".to_string(),
+        1 => "The review reported 1 finding:\n".to_string(),
+        n => format!("The review reported {n} findings:\n"),
+    };
+    for (at, f) in findings.iter().enumerate() {
+        let lines = if f.start_line == f.end_line { f.start_line.to_string() } else { format!("{}-{}", f.start_line, f.end_line) };
+        let severity = serde_json::to_value(f.severity).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
+        out.push_str(&format!("\n{}. [{severity}] {}:{lines} — {}\n{}\n", at + 1, f.path, f.title, f.body));
+        if let Some(suggestion) = &f.suggestion {
+            out.push_str(&format!("Suggested:\n{suggestion}\n"));
+        }
+    }
+    if !answer.trim().is_empty() {
+        out.push_str(&format!("\nThe reviewer's summary:\n{}", answer.trim()));
     }
     out
 }
