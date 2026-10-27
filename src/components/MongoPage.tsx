@@ -200,7 +200,7 @@ export function MongoPage(_: PageContext) {
             {/* Every open tab stays mounted, so its query and page are there when it comes back. */}
             {connection &&
               tabs.map((t) => (
-                <div key={keyOf(t)} hidden={keyOf(t) !== active}>
+                <div key={keyOf(t)} className="mongo-open" hidden={keyOf(t) !== active}>
                   <Collection target={{ connection: connection.id, ...t }} onDrop={() => setConfirm({ what: "collection", ...t })} />
                 </div>
               ))}
