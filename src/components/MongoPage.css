@@ -328,30 +328,55 @@
 .mongo-documents > * {
   flex: none;
 }
+/* A document: a head with its size and actions, then its fields. */
 .mongo-document {
-  position: relative;
-  padding: 10px 12px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
+  transition: border-color 0.12s;
 }
 .mongo-document:hover {
   border-color: var(--border);
 }
-.mongo-document-actions {
-  position: absolute;
-  top: 6px;
-  right: 6px;
+.mongo-document-head {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-sm);
+}
+.mongo-document-count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.mongo-document-actions {
+  display: flex;
+  flex: none;
   gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel-soft);
+  margin-left: auto;
+}
+.mongo-document-body {
+  padding: 8px 12px 10px;
+}
+
+/* What shows only under the pointer or the keyboard: a card's actions, a value's copy. */
+.mongo-document-actions,
+.mongo-copy {
   opacity: 0;
+  transition: opacity 0.12s;
 }
 .mongo-document:hover .mongo-document-actions,
-.mongo-document:focus-within .mongo-document-actions {
+.mongo-document:focus-within .mongo-document-actions,
+.mongo-entry:hover > .mongo-copy,
+.mongo-copy:focus-visible {
   opacity: 1;
+}
+.mongo-copy {
+  width: 20px;
+  height: 20px;
 }
 .mongo-document-text {
   margin: 0;
@@ -361,20 +386,27 @@
   line-height: 1.5;
   white-space: pre;
 }
-/* A document field by field, as Compass draws it: each field leaves a gutter
-   for a toggle, and that gutter is all a nested field is indented by. */
+/* Fields a line each. Each leaves a gutter for a toggle; what nests hangs
+   from a guide under its parent's toggle and is indented by one gutter. */
 .mongo-tree-fields {
   margin: 0;
   padding: 0;
   list-style: none;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  line-height: 1.6;
+  line-height: 1.7;
+}
+.mongo-tree-fields .mongo-tree-fields {
+  margin-left: -8px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
 }
 .mongo-entry {
   display: flex;
+  align-items: flex-start;
   min-width: 0;
   padding-left: 14px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   white-space: pre;
 }
@@ -382,21 +414,34 @@
   display: block;
 }
 .mongo-entry-key {
+  flex: none;
   font-weight: 600;
 }
 .mongo-entry-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: default;
+}
+.mongo-entry-wrapped {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 /* The type ends the line, so the eye runs down one column for it. */
 .mongo-entry-type {
   flex: none;
-  margin-left: auto;
-  padding-left: 16px;
+  margin: 0 2px 0 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
   font-family: var(--font-ui);
   font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.mongo-entry > .mongo-copy,
+.mongo-entry-toggle > .mongo-entry-type {
+  margin-left: auto;
 }
 .mongo-entry:not(.mongo-entry-nest):hover,
 .mongo-entry-toggle:hover {
@@ -410,6 +455,7 @@
   text-align: left;
   padding: 0;
   border: none;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;

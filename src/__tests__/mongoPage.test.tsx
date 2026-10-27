@@ -140,7 +140,7 @@ describe("a collection", () => {
     expect(screen.getByText("2.5 MB")).toBeTruthy();
     expect(screen.getByText("view")).toBeTruthy();
     expect(sent("mongo_find")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" }, request: { filter: "", projection: "", sort: "", skip: 0, limit: 20 } }]);
-    expect(screen.getByText('"Ann"').nextElementSibling?.textContent).toBe("String");
+    expect(within(screen.getByText('"Ann"').closest("li")!).getByText("String")).toBeTruthy();
     expect(screen.getByText("1–1 of 41")).toBeTruthy();
   });
 
@@ -158,6 +158,16 @@ describe("a collection", () => {
     expect(screen.getByText("NumberLong(5)")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
     expect(screen.queryByText('"vip"')).toBeNull();
+  });
+
+  test("a value copies as it would be pasted — a string without its quotes", async () => {
+    const copied: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } });
+    await openOrders();
+    expect(screen.getByText("3 fields")).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy name" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy _id" })));
+    expect(copied).toEqual(["Ann", 'ObjectId("65f0a1b2c3d4e5f6a7b8c9d0")']);
   });
 
   test("a filter is found with Enter, and the next page skips what was shown", async () => {

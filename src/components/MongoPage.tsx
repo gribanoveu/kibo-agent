@@ -576,30 +576,50 @@ function QueryField({ label, value, placeholder, onChange, onKeyDown }: { label:
   );
 }
 
-/** A document as Compass draws it — a field to a line, what nests closed until opened — with its actions on the corner. */
+/** A value as one would paste it: a string without its quotes. */
+const plain = (value: { text: string; bson: string }) => (value.bson === "String" ? (JSON.parse(value.text) as string) : value.text);
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const { copied, copy } = useCopied();
+  return (
+    <button type="button" className="mongo-icon-button mongo-copy" title="Copy" aria-label={label} onClick={() => copy(text)}>
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+/**
+ * A document: a head with its size and actions, then a field to a line — what
+ * nests closed until opened, along a guide — each with its type at the end.
+ */
 function DocumentCard({ doc, actions }: { doc: MongoDocument; actions?: ReactNode }) {
-  const long = doc.fields.length > FOLDED_FIELDS;
   const [unfolded, setUnfolded] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const { copied, copy } = useCopied();
+  const long = doc.fields.length > FOLDED_FIELDS;
   return (
     <article className="mongo-document">
-      <div className="mongo-document-actions">
-        <button type="button" className="mongo-icon-button" title={expanded ? "Collapse all" : "Expand all"} aria-label={expanded ? "Collapse all" : "Expand all"} onClick={() => setExpanded(!expanded)}>
-          {expanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
-        </button>
-        <button type="button" className="mongo-icon-button" title="Copy" aria-label="Copy document" onClick={() => copy(doc.text)}>
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-        </button>
-        {actions}
+      <header className="mongo-document-head">
+        <span className="mongo-document-count">{doc.fields.length === 1 ? "1 field" : `${doc.fields.length} fields`}</span>
+        <div className="mongo-document-actions">
+          <button type="button" className="mongo-icon-button" title={expanded ? "Collapse all" : "Expand all"} aria-label={expanded ? "Collapse all" : "Expand all"} onClick={() => setExpanded(!expanded)}>
+            {expanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+          </button>
+          <button type="button" className="mongo-icon-button" title="Copy" aria-label="Copy document" onClick={() => copy(doc.text)}>
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+          {actions}
+        </div>
+      </header>
+      <div className="mongo-document-body">
+        {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says. */}
+        <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} />
+        {long && (
+          <button type="button" className="mongo-unfold" onClick={() => setUnfolded(!unfolded)}>
+            {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
+          </button>
+        )}
       </div>
-      {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says. */}
-      <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} />
-      {long && (
-        <button type="button" className="mongo-unfold" onClick={() => setUnfolded(!unfolded)}>
-          {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
-        </button>
-      )}
     </article>
   );
 }
@@ -614,15 +634,27 @@ function Fields({ entries, open }: { entries: [string, Shown][]; open: boolean }
   );
 }
 
-/** One field: its key in bold, its value, its type at the end of the line — an object or array a toggle for what is in it. */
+/**
+ * One field: its key in bold, its value — clicked, a long one wraps instead of
+ * being cut — and its type at the end of the line; an object or array is a
+ * toggle for what is in it.
+ */
 function Field({ name, value, open }: { name: string; value: Shown; open: boolean }) {
   const [shown, setShown] = useState(open);
+  const [wrapped, setWrapped] = useState(false);
   if (value.kind === "value") {
     return (
       <li className="mongo-entry">
         <span className="mongo-entry-key">{name}</span>
         {": "}
-        <span className={`mongo-entry-value mongo-bson-${value.bson}`}>{value.text}</span>
+        <span
+          className={`mongo-entry-value mongo-bson-${value.bson}${wrapped ? " mongo-entry-wrapped" : ""}`}
+          // A drag that selects text ends in a click too; that one is a copy, not a toggle.
+          onClick={() => !window.getSelection()?.toString() && setWrapped(!wrapped)}
+        >
+          {value.text}
+        </span>
+        <CopyButton text={plain(value)} label={`Copy ${name}`} />
         <span className="mongo-entry-type">{value.bson}</span>
       </li>
     );
