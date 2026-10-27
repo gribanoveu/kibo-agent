@@ -8,7 +8,8 @@ import { Tabs } from "./Tabs";
 import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
-import { diskSize, pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type MongoDocument, type MongoTarget } from "../lib/mongo";
+import { sizeLabel } from "../lib/prototype";
+import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type MongoDocument, type MongoTarget } from "../lib/mongo";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./MongoPage.css";
@@ -57,10 +58,7 @@ export function MongoPage(_: PageContext) {
     }
   };
 
-  const confirmed = async () => {
-    if (!confirm) return;
-    const c = confirm;
-    setConfirm(null);
+  const confirmed = async (c: Confirm) => {
     if (c.what === "connection" && (await store.remove(c.connection.id))) setForm(null);
     if (c.what === "collection" && (await tree.dropCollection(c.database, c.collection))) setSelected(null);
   };
@@ -132,7 +130,7 @@ export function MongoPage(_: PageContext) {
                       {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                       <Database size={13} className="mongo-tree-icon" />
                       <span className="mongo-tree-name">{db.name}</span>
-                      <span className="mongo-quiet">{diskSize(db.sizeOnDisk)}</span>
+                      <span className="mongo-quiet">{sizeLabel(db.sizeOnDisk)}</span>
                     </button>
                     {open && (
                       <ul className="mongo-tree-list" aria-label={`Collections of ${db.name}`}>
@@ -238,27 +236,49 @@ export function MongoPage(_: PageContext) {
         {tree.error && <p className="mongo-error">{tree.error}</p>}
       </Modal>
 
-      <Modal
+      <ConfirmModal
         title={confirm?.what === "connection" ? `Delete “${confirm.connection.name}”?` : confirm?.what === "collection" ? `Drop ${confirm.database}.${confirm.collection}?` : ""}
-        open={confirm !== null}
+        action={confirm?.what === "collection" ? "Drop" : "Delete"}
+        subject={confirm}
         onClose={() => setConfirm(null)}
-        footer={
-          <>
-            <button type="button" className="btn btn-ghost" onClick={() => setConfirm(null)}>
-              Cancel
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => void confirmed()}>
-              {confirm?.what === "collection" ? "Drop" : "Delete"}
-            </button>
-          </>
-        }
+        onConfirm={(c) => void confirmed(c)}
       >
         <p className="mongo-confirm">
           {confirm?.what === "connection" && `Forgets the connection and its saved connection string. Nothing on the server changes.`}
           {confirm?.what === "collection" && `Deletes every document of ${confirm.collection} and its indexes, on the server. This cannot be undone.`}
         </p>
-      </Modal>
+      </ConfirmModal>
     </Page>
+  );
+}
+
+/** A step that cannot be taken back: open while `subject` is set; Cancel, or the one button that takes it. */
+function ConfirmModal<T>({ title, action, subject, onClose, onConfirm, children }: { title: string; action: string; subject: T | null; onClose: () => void; onConfirm: (subject: T) => void; children: ReactNode }) {
+  return (
+    <Modal
+      title={title}
+      open={subject !== null}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              onClose();
+              if (subject !== null) onConfirm(subject);
+            }}
+          >
+            {action}
+          </button>
+        </>
+      }
+    >
+      {children}
+    </Modal>
   );
 }
 
@@ -493,31 +513,9 @@ function Documents({ target }: { target: MongoTarget }) {
         />
         {docs.error && <p className="mongo-error">{docs.error}</p>}
       </Modal>
-      <Modal
-        title="Delete this document?"
-        open={deleting !== null}
-        onClose={() => setDeleting(null)}
-        footer={
-          <>
-            <button type="button" className="btn btn-ghost" onClick={() => setDeleting(null)}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                const doc = deleting;
-                setDeleting(null);
-                if (doc) void docs.remove(doc.id);
-              }}
-            >
-              Delete
-            </button>
-          </>
-        }
-      >
+      <ConfirmModal title="Delete this document?" action="Delete" subject={deleting} onClose={() => setDeleting(null)} onConfirm={(doc) => void docs.remove(doc.id)}>
         <pre className="mongo-document-text mongo-mono mongo-confirm-doc">{deleting?.text.split("\n").slice(0, 8).join("\n")}</pre>
-      </Modal>
+      </ConfirmModal>
     </div>
   );
 }
@@ -601,7 +599,7 @@ function Aggregations({ target }: { target: MongoTarget }) {
 
 /** A collection's indexes; one made with its keys, one dropped after asking. */
 function Indexes({ target }: { target: MongoTarget }) {
-  const indexes = useMongoIndexes(target, true);
+  const indexes = useMongoIndexes(target);
   const [making, setMaking] = useState<{ keys: string; name: string; unique: boolean } | null>(null);
   const [dropping, setDropping] = useState<IndexView | null>(null);
   const make = async () => {
@@ -677,33 +675,11 @@ function Indexes({ target }: { target: MongoTarget }) {
         </label>
         {indexes.error && <p className="mongo-error">{indexes.error}</p>}
       </Modal>
-      <Modal
-        title={`Drop index “${dropping?.name ?? ""}”?`}
-        open={dropping !== null}
-        onClose={() => setDropping(null)}
-        footer={
-          <>
-            <button type="button" className="btn btn-ghost" onClick={() => setDropping(null)}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                const index = dropping;
-                setDropping(null);
-                if (index) void indexes.drop(index.name);
-              }}
-            >
-              Drop
-            </button>
-          </>
-        }
-      >
+      <ConfirmModal title={`Drop index “${dropping?.name ?? ""}”?`} action="Drop" subject={dropping} onClose={() => setDropping(null)} onConfirm={(index) => void indexes.drop(index.name)}>
         <p className="mongo-confirm">
           Queries that used <code className="mongo-mono">{dropping?.keys}</code> read the whole collection after it{dropping?.unique ? ", and duplicates are no longer refused" : ""}.
         </p>
-      </Modal>
+      </ConfirmModal>
     </div>
   );
 }

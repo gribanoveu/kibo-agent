@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, MongoError};
+use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, IndexView, MongoError};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, FindSpec, MongoClients};
 use crate::infra::mongo_store;
 
@@ -56,18 +56,6 @@ pub struct FindPage {
     pub documents: Vec<DocumentView>,
     /// Every match, not only this page's.
     pub total: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexView {
-    pub name: String,
-    /// `{ name: 1, at: -1 }`
-    pub keys: String,
-    pub unique: bool,
-    pub sparse: bool,
-    pub ttl_seconds: Option<u64>,
-    pub partial: Option<String>,
 }
 
 pub fn connections() -> Result<Vec<ConnectionView>, MongoError> {
@@ -164,18 +152,7 @@ pub fn delete(clients: &MongoClients, target: &Target, id: Value) -> Result<(), 
 }
 
 pub fn indexes(clients: &MongoClients, target: &Target) -> Result<Vec<IndexView>, MongoError> {
-    let found = clients.indexes(&mongo_store::uri(&target.connection)?, &target.database, &target.collection)?;
-    Ok(found
-        .into_iter()
-        .map(|index| IndexView {
-            name: index.name,
-            keys: mongo::to_shell_line(&index.keys),
-            unique: index.unique,
-            sparse: index.sparse,
-            ttl_seconds: index.expire_after_seconds,
-            partial: index.partial.as_ref().map(mongo::to_shell_line),
-        })
-        .collect())
+    clients.indexes(&mongo_store::uri(&target.connection)?, &target.database, &target.collection)
 }
 
 /// The new index's name.

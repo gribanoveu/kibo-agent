@@ -56,7 +56,7 @@ afterAll(() => {
 });
 
 const { MongoPage } = await import("../components/MongoPage");
-const { diskSize, pageRange, withoutId } = await import("../lib/mongo");
+const { pageRange, withoutId } = await import("../lib/mongo");
 const { IS_MAC } = await import("../lib/shortcuts");
 const MOD = IS_MAC ? { metaKey: true } : { ctrlKey: true };
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -207,9 +207,6 @@ describe("a collection", () => {
 
 describe("helpers", () => {
   test("sizes, ranges and a clone's text", () => {
-    expect(diskSize(512)).toBe("512 B");
-    expect(diskSize(2_621_440)).toBe("2.5 MB");
-    expect(diskSize(50 * 1024 ** 3)).toBe("50 GB");
     expect(pageRange(20, 20, 1234)).toBe("21–40 of 1,234");
     expect(pageRange(0, 0, 0)).toBe("0 of 0");
     expect(withoutId('{\n  _id: 1,\n  a: 2\n}')).toBe("{\n  a: 2\n}");

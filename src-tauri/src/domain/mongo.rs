@@ -38,6 +38,19 @@ impl From<&Connection> for ConnectionView {
     }
 }
 
+/// An index as the page lists it, its keys and partial filter as mongosh
+/// writes them on one line: `{ name: 1, at: -1 }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexView {
+    pub name: String,
+    pub keys: String,
+    pub unique: bool,
+    pub sparse: bool,
+    pub ttl_seconds: Option<u64>,
+    pub partial: Option<String>,
+}
+
 /// What the form sends. No `uri` on an edit keeps the saved one — the window
 /// never had it to send back.
 #[derive(Debug, Clone, Deserialize)]
@@ -68,12 +81,6 @@ pub enum MongoError {
     Server(String),
     #[error("{0}")]
     Store(String),
-}
-
-impl From<MongoError> for String {
-    fn from(error: MongoError) -> Self {
-        error.to_string()
-    }
 }
 
 /// A `mongodb://` or `mongodb+srv://` URI with a host. The driver checks the
@@ -156,30 +163,30 @@ pub fn parse_document(text: &str, what: &'static str) -> Result<Map<String, Valu
 
 /// Documents to insert: one, or an array of them.
 pub fn parse_documents(text: &str, what: &'static str) -> Result<Vec<Map<String, Value>>, MongoError> {
-    let shape = MongoError::WrongShape { what, expected: "a document { … } or an array of them [ { … }, … ]" };
-    match parse(text).map_err(|error| MongoError::BadInput { what, error })? {
-        Value::Object(map) => Ok(vec![map]),
-        Value::Array(items) if !items.is_empty() => {
-            items.into_iter().map(|item| if let Value::Object(map) = item { Ok(map) } else { Err(MongoError::WrongShape { what, expected: "an array of documents" }) }).collect()
-        }
-        _ => Err(shape),
+    const EXPECTED: &str = "a document { … } or an array of them [ { … }, … ]";
+    let documents = parse_list(text, what, EXPECTED)?;
+    if documents.is_empty() {
+        return Err(MongoError::WrongShape { what, expected: EXPECTED });
     }
+    Ok(documents)
 }
 
 /// An aggregation pipeline: an array of stages, or one stage alone. Nothing
 /// typed is the empty pipeline, which returns the collection.
 pub fn parse_pipeline(text: &str) -> Result<Vec<Map<String, Value>>, MongoError> {
-    const WHAT: &str = "the pipeline";
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    match parse(text).map_err(|error| MongoError::BadInput { what: WHAT, error })? {
-        Value::Object(stage) => Ok(vec![stage]),
-        Value::Array(stages) => stages
-            .into_iter()
-            .map(|stage| if let Value::Object(map) = stage { Ok(map) } else { Err(MongoError::WrongShape { what: WHAT, expected: "an array of stages, [ { $match: … }, … ]" }) })
-            .collect(),
-        _ => Err(MongoError::WrongShape { what: WHAT, expected: "an array of stages, [ { $match: … }, … ]" }),
+    parse_list(text, "the pipeline", "an array of stages, [ { $match: … }, … ]")
+}
+
+/// One document, or an array of nothing else.
+fn parse_list(text: &str, what: &'static str, expected: &'static str) -> Result<Vec<Map<String, Value>>, MongoError> {
+    let shape = || MongoError::WrongShape { what, expected };
+    match parse(text).map_err(|error| MongoError::BadInput { what, error })? {
+        Value::Object(map) => Ok(vec![map]),
+        Value::Array(items) => items.into_iter().map(|item| if let Value::Object(map) = item { Ok(map) } else { Err(shape()) }).collect(),
+        _ => Err(shape()),
     }
 }
 
@@ -241,26 +248,35 @@ impl Parser {
         }
     }
 
-    fn object(&mut self) -> Result<Value, ParseError> {
-        self.at += 1;
-        let mut map = Map::new();
+    /// Comma-separated items up to `close`, a trailing comma allowed; the
+    /// opening bracket is already behind.
+    fn items(&mut self, close: char, mut item: impl FnMut(&mut Self) -> Result<(), ParseError>) -> Result<(), ParseError> {
         loop {
             self.skip_space();
-            if self.peek() == Some('}') {
+            if self.peek() == Some(close) {
                 self.at += 1;
-                return Ok(Value::Object(map));
+                return Ok(());
             }
-            let key = self.key()?;
-            self.expect(':')?;
-            let value = self.value()?;
-            map.insert(key, value);
+            item(self)?;
             self.skip_space();
             match self.peek() {
                 Some(',') => self.at += 1,
-                Some('}') => {}
-                _ => return Err(self.error("expected ',' or '}'")),
+                Some(c) if c == close => {}
+                _ => return Err(self.error(format!("expected ',' or '{close}'"))),
             }
         }
+    }
+
+    fn object(&mut self) -> Result<Value, ParseError> {
+        self.at += 1;
+        let mut map = Map::new();
+        self.items('}', |p| {
+            let key = p.key()?;
+            p.expect(':')?;
+            map.insert(key, p.value()?);
+            Ok(())
+        })?;
+        Ok(Value::Object(map))
     }
 
     fn key(&mut self) -> Result<String, ParseError> {
@@ -280,20 +296,11 @@ impl Parser {
     fn array(&mut self) -> Result<Value, ParseError> {
         self.at += 1;
         let mut items = Vec::new();
-        loop {
-            self.skip_space();
-            if self.peek() == Some(']') {
-                self.at += 1;
-                return Ok(Value::Array(items));
-            }
-            items.push(self.value()?);
-            self.skip_space();
-            match self.peek() {
-                Some(',') => self.at += 1,
-                Some(']') => {}
-                _ => return Err(self.error("expected ',' or ']'")),
-            }
-        }
+        self.items(']', |p| {
+            items.push(p.value()?);
+            Ok(())
+        })?;
+        Ok(Value::Array(items))
     }
 
     fn string(&mut self, quote: char) -> Result<String, ParseError> {
@@ -421,21 +428,11 @@ impl Parser {
         }
         self.at += 1;
         let mut args = Vec::new();
-        loop {
-            self.skip_space();
-            if self.peek() == Some(')') {
-                self.at += 1;
-                break;
-            }
-            args.push(self.value()?);
-            self.skip_space();
-            match self.peek() {
-                Some(',') => self.at += 1,
-                Some(')') => {}
-                _ => return Err(self.error("expected ',' or ')'")),
-            }
-        }
-        self.call(&name, args).map_err(|Mistake(message)| {
+        self.items(')', |p| {
+            args.push(p.value()?);
+            Ok(())
+        })?;
+        self.call(&name, args).map_err(|message| {
             self.at = start;
             self.error(message)
         })
@@ -449,7 +446,8 @@ impl Parser {
         self.chars[start..self.at].iter().collect()
     }
 
-    fn call(&self, name: &str, args: Vec<Value>) -> Result<Value, Mistake> {
+    /// What was wrong with the arguments, if anything; [`Parser::word`] adds where.
+    fn call(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
         let one_string = |what: &str| match args.as_slice() {
             [Value::String(s)] => Ok(s.clone()),
             _ => Err(format!("{name} takes {what} in quotes")),
@@ -498,8 +496,7 @@ impl Parser {
                 if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Err("UUID takes 32 hex digits, dashes allowed".into());
                 }
-                let dashed = format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]).to_ascii_lowercase();
-                Ok(serde_json::json!({ "$uuid": dashed }))
+                Ok(serde_json::json!({ "$uuid": dashed(&hex.to_ascii_lowercase()) }))
             }
             "BinData" => match args.as_slice() {
                 [Value::Number(subtype), Value::String(base64)] => {
@@ -526,28 +523,13 @@ impl Parser {
     }
 }
 
-/// What was wrong with a constructor's arguments; [`Parser::word`] adds where.
-struct Mistake(String);
-
-impl From<String> for Mistake {
-    fn from(message: String) -> Self {
-        Self(message)
-    }
-}
-
-impl From<&str> for Mistake {
-    fn from(message: &str) -> Self {
-        Self(message.to_string())
-    }
-}
-
 fn key_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')
 }
 
 /// `2024-05-01`, `2024-05-01T10:00:00`, `2024-05-01T10:00:00.5+03:00`: what
 /// mongosh's `ISODate` takes. Without a zone it is UTC, as there.
-fn iso_millis(text: &str) -> Result<i64, Mistake> {
+fn iso_millis(text: &str) -> Result<i64, String> {
     use chrono::{DateTime, NaiveDate, NaiveDateTime};
     let text = text.trim();
     if let Ok(at) = DateTime::parse_from_rfc3339(text) {
@@ -702,8 +684,12 @@ fn uuid_of(base64: &str) -> Option<String> {
     if bytes.len() != 16 {
         return None;
     }
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Some(format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32]))
+    Some(dashed(&bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+}
+
+/// 32 hex digits as `8-4-4-4-12`.
+fn dashed(hex: &str) -> String {
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
 }
 
 fn quoted(text: &str) -> String {

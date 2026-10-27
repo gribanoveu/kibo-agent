@@ -14,13 +14,13 @@ use std::time::Duration;
 
 use mongodb::bson::{self, Bson, Document};
 use mongodb::options::{ClientOptions, IndexOptions};
-use mongodb::sync::Client;
+use mongodb::sync::{Client, Collection};
 use mongodb::IndexModel;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::domain::mongo::MongoError;
+use crate::domain::mongo::{to_shell_line, IndexView, MongoError};
 
 /// How long a server may take to be found: a wrong host says so in seconds,
 /// not in the driver's thirty.
@@ -49,6 +49,10 @@ impl MongoClients {
         let client = Client::with_options(options).map_err(server)?;
         self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(key, client.clone());
         Ok(client)
+    }
+
+    fn collection(&self, uri: &SecretString, db: &str, name: &str) -> Result<Collection<Document>, MongoError> {
+        Ok(self.client(uri)?.database(db).collection(name))
     }
 
     /// The server's version: that the URI reaches it and the login holds.
@@ -88,7 +92,7 @@ impl MongoClients {
     }
 
     pub fn find(&self, uri: &SecretString, db: &str, collection: &str, spec: FindSpec) -> Result<Vec<Value>, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let mut find = collection.find(document(spec.filter)?).skip(spec.skip).limit(spec.limit).max_time(QUERY_TIMEOUT);
         if !spec.projection.is_empty() {
             find = find.projection(document(spec.projection)?);
@@ -102,7 +106,7 @@ impl MongoClients {
     /// Every match counted, or — with no filter — the collection's own count
     /// from its metadata, which does not read it.
     pub fn count(&self, uri: &SecretString, db: &str, collection: &str, filter: Map<String, Value>) -> Result<u64, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         if filter.is_empty() {
             return collection.estimated_document_count().max_time(QUERY_TIMEOUT).run().map_err(server);
         }
@@ -111,21 +115,21 @@ impl MongoClients {
 
     /// The first `cap` results: a pipeline can return the whole collection.
     pub fn aggregate(&self, uri: &SecretString, db: &str, collection: &str, pipeline: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let stages = pipeline.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
         collection.aggregate(stages).max_time(QUERY_TIMEOUT).run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
     }
 
     /// How many went in.
     pub fn insert(&self, uri: &SecretString, db: &str, collection: &str, documents: Vec<Map<String, Value>>) -> Result<usize, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let documents = documents.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
         Ok(collection.insert_many(documents).run().map_err(server)?.inserted_ids.len())
     }
 
     /// The document with `id` replaced by `replacement`.
     pub fn replace(&self, uri: &SecretString, db: &str, collection: &str, id: Value, replacement: Map<String, Value>) -> Result<(), MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let id = bson_of(id)?;
         let replacement = document(replacement)?;
         // Without one it keeps its own; with another, `replace_one` would fail
@@ -141,7 +145,7 @@ impl MongoClients {
     }
 
     pub fn delete(&self, uri: &SecretString, db: &str, collection: &str, id: Value) -> Result<(), MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let deleted = collection.delete_one(bson::doc! { "_id": bson_of(id)? }).run().map_err(server)?;
         if deleted.deleted_count == 0 {
             return Err(MongoError::Gone);
@@ -149,8 +153,8 @@ impl MongoClients {
         Ok(())
     }
 
-    pub fn indexes(&self, uri: &SecretString, db: &str, collection: &str) -> Result<Vec<IndexInfo>, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+    pub fn indexes(&self, uri: &SecretString, db: &str, collection: &str) -> Result<Vec<IndexView>, MongoError> {
+        let collection = self.collection(uri, db, collection)?;
         collection
             .list_indexes()
             .run()
@@ -158,13 +162,13 @@ impl MongoClients {
             .map(|index| {
                 let index = index.map_err(server)?;
                 let options = index.options.unwrap_or_default();
-                Ok(IndexInfo {
+                Ok(IndexView {
                     name: options.name.unwrap_or_default(),
-                    keys: canonical(index.keys),
+                    keys: to_shell_line(&canonical(index.keys)),
                     unique: options.unique.unwrap_or(false),
                     sparse: options.sparse.unwrap_or(false),
-                    expire_after_seconds: options.expire_after.map(|d| d.as_secs()),
-                    partial: options.partial_filter_expression.map(canonical),
+                    ttl_seconds: options.expire_after.map(|d| d.as_secs()),
+                    partial: options.partial_filter_expression.map(|filter| to_shell_line(&canonical(filter))),
                 })
             })
             .collect()
@@ -172,14 +176,14 @@ impl MongoClients {
 
     /// The index's name, the server's if none was given.
     pub fn create_index(&self, uri: &SecretString, db: &str, collection: &str, keys: Map<String, Value>, unique: bool, name: Option<String>) -> Result<String, MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         let options = IndexOptions::builder().unique(unique.then_some(true)).name(name).build();
         let model = IndexModel::builder().keys(document(keys)?).options(options).build();
         Ok(collection.create_index(model).run().map_err(server)?.index_name)
     }
 
     pub fn drop_index(&self, uri: &SecretString, db: &str, collection: &str, name: &str) -> Result<(), MongoError> {
-        let collection = self.client(uri)?.database(db).collection::<Document>(collection);
+        let collection = self.collection(uri, db, collection)?;
         collection.drop_index(name).run().map_err(server)
     }
 
@@ -189,7 +193,7 @@ impl MongoClients {
     }
 
     pub fn drop_collection(&self, uri: &SecretString, db: &str, collection: &str) -> Result<(), MongoError> {
-        self.client(uri)?.database(db).collection::<Document>(collection).drop().run().map_err(server)
+        self.collection(uri, db, collection)?.drop().run().map_err(server)
     }
 }
 
@@ -215,17 +219,6 @@ pub struct FindSpec {
     pub sort: Map<String, Value>,
     pub skip: u64,
     pub limit: i64,
-}
-
-/// An index as listed, its keys and filter in canonical Extended JSON.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexInfo {
-    pub name: String,
-    pub keys: Value,
-    pub unique: bool,
-    pub sparse: bool,
-    pub expire_after_seconds: Option<u64>,
-    pub partial: Option<Value>,
 }
 
 fn server(error: mongodb::error::Error) -> MongoError {
@@ -326,7 +319,7 @@ mod tests {
         let indexes = clients.indexes(&uri, db, &coll).unwrap();
         let made = indexes.iter().find(|i| i.name == name).unwrap();
         assert!(made.unique);
-        assert_eq!(made.keys, json!({ "name": { "$numberInt": "1" } }));
+        assert_eq!(made.keys, "{ name: 1 }");
         clients.drop_index(&uri, db, &coll, &name).unwrap();
 
         clients.delete(&uri, db, &coll, json!(2)).unwrap();

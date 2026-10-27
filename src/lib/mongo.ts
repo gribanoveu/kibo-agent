@@ -114,19 +114,6 @@ export async function mongoCollectionDrop(target: MongoTarget): Promise<void> {
   return invoke<void>("mongo_collection_drop", { target });
 }
 
-/** `1.2 MB`: a database's size on disk. */
-export function diskSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
-}
-
 /** `21–40 of 1,234`: where a page of a find is. */
 export function pageRange(skip: number, shown: number, total: number): string {
   if (shown === 0) return `0 of ${total.toLocaleString("en-US")}`;

@@ -8,9 +8,9 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::mongo::{ConnectionDraft, ConnectionView};
+use crate::domain::mongo::{ConnectionDraft, ConnectionView, IndexView};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, MongoClients};
-use crate::services::mongo::{self, DocumentView, FindPage, FindRequest, IndexView, Target};
+use crate::services::mongo::{self, DocumentView, FindPage, FindRequest, Target};
 
 use super::blocking;
 

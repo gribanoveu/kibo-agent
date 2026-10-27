@@ -72,33 +72,24 @@ function useCalls(key: string) {
 export function useMongoConnections() {
   const { value: connections, setValue, error, setError } = useLiveRead(mongoConnections, unchanging, [] as MongoConnection[]);
 
-  const change = async (work: () => Promise<MongoConnection[]>) => {
+  /** The list after it, or `null` with the reason in `error`. */
+  const change = async (work: () => Promise<MongoConnection[]>): Promise<MongoConnection[] | null> => {
     try {
-      setValue(await work());
+      const list = await work();
+      setValue(list);
       setError(null);
-      return true;
+      return list;
     } catch (e) {
       setError(String(e));
-      return false;
+      return null;
     }
   };
 
   return {
     connections,
     error,
-    /** The list after it, or `null` with the reason in `error`. */
-    save: async (draft: ConnectionDraft): Promise<MongoConnection[] | null> => {
-      try {
-        const list = await mongoConnectionSave(draft);
-        setValue(list);
-        setError(null);
-        return list;
-      } catch (e) {
-        setError(String(e));
-        return null;
-      }
-    },
-    remove: (id: string) => change(() => mongoConnectionDelete(id)),
+    save: (draft: ConnectionDraft) => change(() => mongoConnectionSave(draft)),
+    remove: async (id: string) => (await change(() => mongoConnectionDelete(id))) !== null,
     clearError: () => setError(null),
     /** The server's version, or why it could not be reached. */
     test: async (draft: ConnectionDraft): Promise<{ ok: true; version: string } | { ok: false; error: string }> => {
@@ -238,8 +229,8 @@ export function useMongoAggregation(target: MongoTarget | null) {
   };
 }
 
-/** A collection's indexes, read while `on` — the tab is showing. */
-export function useMongoIndexes(target: MongoTarget | null, on: boolean) {
+/** A collection's indexes, read while the tab is showing. */
+export function useMongoIndexes(target: MongoTarget | null) {
   const key = keyOf(target);
   const { busy, error, call } = useCalls(key);
   const [indexes, setIndexes] = useState<IndexView[]>([]);
@@ -252,8 +243,8 @@ export function useMongoIndexes(target: MongoTarget | null, on: boolean) {
 
   useEffect(() => {
     setIndexes([]);
-    if (on) void load();
-  }, [key, on]);
+    void load();
+  }, [key]);
 
   return {
     indexes,
