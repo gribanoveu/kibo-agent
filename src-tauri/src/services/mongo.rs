@@ -4,14 +4,14 @@
 //! and the driver gets both — the window never sees a URI, and the driver
 //! never sees the window's text.
 //!
-//! The model's tools, when they come (`domain::mongo_tools`), go through these
+//! The model's tools, when they come (`docs/43-mongodb.md`), go through these
 //! same functions.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, FieldChange, IndexView, MongoError};
-use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, FindSpec, Found, MongoClients};
+use crate::infra::mongo_client::{self, CollectionInfo, DatabaseInfo, FindSpec, Found, MongoClients, Place};
 use crate::infra::mongo_store;
 
 /// Most documents a page of a find shows.
@@ -66,8 +66,8 @@ pub fn connections() -> Result<Vec<ConnectionView>, MongoError> {
 }
 
 /// A new connection, or a saved one changed: its name, and its URI when one
-/// was typed. The list after it.
-pub fn save_connection(draft: ConnectionDraft) -> Result<Vec<ConnectionView>, MongoError> {
+/// was typed — then its client is made again from it. The list after it.
+pub fn save_connection(clients: &MongoClients, draft: ConnectionDraft) -> Result<Vec<ConnectionView>, MongoError> {
     let name = draft.name.trim();
     if name.is_empty() {
         return Err(MongoError::NoName);
@@ -78,43 +78,48 @@ pub fn save_connection(draft: ConnectionDraft) -> Result<Vec<ConnectionView>, Mo
         (id, Some(uri)) => {
             mongo::validate_uri(uri)?;
             let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            mongo_store::put(Connection { id, name: name.to_string(), uri: uri.to_string() })?;
+            mongo_store::put(Connection { id: id.clone(), name: name.to_string(), uri: uri.to_string() })?;
+            clients.forget(&id);
         }
         (None, None) => return Err(MongoError::BadUri("a new connection needs its connection string".into())),
     }
     mongo_store::list()
 }
 
-pub fn delete_connection(id: &str) -> Result<Vec<ConnectionView>, MongoError> {
+pub fn delete_connection(clients: &MongoClients, id: &str) -> Result<Vec<ConnectionView>, MongoError> {
     mongo_store::delete(id)?;
+    clients.forget(id);
     mongo_store::list()
 }
 
-/// The server's version — with the URI typed in the form, or the saved one
-/// when none was typed.
+/// The server's version — with the URI typed in the form, on a client made
+/// for the test alone and gone after it, or with the saved one when none was typed.
 pub fn test_connection(clients: &MongoClients, draft: ConnectionDraft) -> Result<String, MongoError> {
     let typed = draft.uri.as_deref().map(str::trim).filter(|uri| !uri.is_empty());
-    let uri = match (typed, draft.id) {
+    match (typed, draft.id) {
         (Some(uri), _) => {
             mongo::validate_uri(uri)?;
-            secrecy::SecretString::from(uri)
+            mongo_client::ping(&mongo_client::open(&secrecy::SecretString::from(uri))?)
         }
-        (None, Some(id)) => mongo_store::uri(&id)?,
-        (None, None) => return Err(MongoError::BadUri("type a connection string to test".into())),
-    };
-    clients.ping(&uri)
+        (None, Some(id)) => mongo_client::ping(&client(clients, &id)?),
+        (None, None) => Err(MongoError::BadUri("type a connection string to test".into())),
+    }
+}
+
+/// The saved connection's client: its URI read from the sealed store only the first time.
+fn client(clients: &MongoClients, connection: &str) -> Result<mongo_client::Client, MongoError> {
+    clients.client(connection, || mongo_store::uri(connection))
 }
 
 pub fn databases(clients: &MongoClients, connection: &str) -> Result<Vec<DatabaseInfo>, MongoError> {
-    clients.databases(&mongo_store::uri(connection)?)
+    mongo_client::databases(&client(clients, connection)?)
 }
 
 pub fn collections(clients: &MongoClients, connection: &str, database: &str) -> Result<Vec<CollectionInfo>, MongoError> {
-    clients.collections(&mongo_store::uri(connection)?, database)
+    mongo_client::collections(&client(clients, connection)?, database)
 }
 
 pub fn find(clients: &MongoClients, target: &Target, request: &FindRequest) -> Result<FindPage, MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
     let spec = FindSpec {
         filter: mongo::parse_document(&request.filter, "the filter")?,
         projection: mongo::parse_document(&request.projection, "the projection")?,
@@ -122,7 +127,8 @@ pub fn find(clients: &MongoClients, target: &Target, request: &FindRequest) -> R
         skip: request.skip,
         limit: request.limit.clamp(1, MAX_PAGE) as usize,
     };
-    Ok(page(clients.find(&uri, &target.database, &target.collection, spec)?))
+    let client = client(clients, &target.connection)?;
+    Ok(page(clients.find(Place { connection: &target.connection, client: &client }, &target.database, &target.collection, spec)?))
 }
 
 /// The page after the one that came with `next`.
@@ -132,8 +138,8 @@ pub fn find_more(clients: &MongoClients, next: u64) -> Result<FindPage, MongoErr
 
 /// Every document the filter matches.
 pub fn count(clients: &MongoClients, target: &Target, filter: &str) -> Result<u64, MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
-    clients.count(&uri, &target.database, &target.collection, mongo::parse_document(filter, "the filter")?)
+    let filter = mongo::parse_document(filter, "the filter")?;
+    mongo_client::count(&client(clients, &target.connection)?, &target.database, &target.collection, filter)
 }
 
 fn page(found: Found) -> FindPage {
@@ -141,53 +147,49 @@ fn page(found: Found) -> FindPage {
 }
 
 pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str) -> Result<Vec<DocumentView>, MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
     let stages = mongo::parse_pipeline(pipeline)?;
-    Ok(clients.aggregate(&uri, &target.database, &target.collection, stages, MAX_AGGREGATE)?.iter().map(view).collect())
+    Ok(mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE)?.iter().map(view).collect())
 }
 
 /// How many went in.
 pub fn insert(clients: &MongoClients, target: &Target, text: &str) -> Result<usize, MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
     let documents = mongo::parse_documents(text, "the documents")?;
-    clients.insert(&uri, &target.database, &target.collection, documents)
+    mongo_client::insert(&client(clients, &target.connection)?, &target.database, &target.collection, documents)
 }
 
 pub fn replace(clients: &MongoClients, target: &Target, id: Value, text: &str) -> Result<(), MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
     let replacement = mongo::parse_document(text, "the document")?;
     if replacement.is_empty() {
         return Err(MongoError::WrongShape { what: "the document", expected: "a document with its fields — delete it to remove it" });
     }
-    clients.replace(&uri, &target.database, &target.collection, id, replacement)
+    mongo_client::replace(&client(clients, &target.connection)?, &target.database, &target.collection, id, replacement)
 }
 
 pub fn set_fields(clients: &MongoClients, target: &Target, id: Value, changes: &[FieldChange]) -> Result<(), MongoError> {
     let update = mongo::set_fields(changes)?;
-    clients.update(&mongo_store::uri(&target.connection)?, &target.database, &target.collection, id, update)
+    mongo_client::update(&client(clients, &target.connection)?, &target.database, &target.collection, id, update)
 }
 
 pub fn delete(clients: &MongoClients, target: &Target, id: Value) -> Result<(), MongoError> {
-    clients.delete(&mongo_store::uri(&target.connection)?, &target.database, &target.collection, id)
+    mongo_client::delete(&client(clients, &target.connection)?, &target.database, &target.collection, id)
 }
 
 pub fn indexes(clients: &MongoClients, target: &Target) -> Result<Vec<IndexView>, MongoError> {
-    clients.indexes(&mongo_store::uri(&target.connection)?, &target.database, &target.collection)
+    mongo_client::indexes(&client(clients, &target.connection)?, &target.database, &target.collection)
 }
 
 /// The new index's name.
 pub fn create_index(clients: &MongoClients, target: &Target, keys: &str, unique: bool, name: Option<String>) -> Result<String, MongoError> {
-    let uri = mongo_store::uri(&target.connection)?;
     let keys = mongo::parse_document(keys, "the keys")?;
     if keys.is_empty() {
         return Err(MongoError::WrongShape { what: "the keys", expected: "a field and its order, { name: 1 }" });
     }
     let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
-    clients.create_index(&uri, &target.database, &target.collection, keys, unique, name)
+    mongo_client::create_index(&client(clients, &target.connection)?, &target.database, &target.collection, keys, unique, name)
 }
 
 pub fn drop_index(clients: &MongoClients, target: &Target, name: &str) -> Result<(), MongoError> {
-    clients.drop_index(&mongo_store::uri(&target.connection)?, &target.database, &target.collection, name)
+    mongo_client::drop_index(&client(clients, &target.connection)?, &target.database, &target.collection, name)
 }
 
 /// In a database not there yet, it makes that too: MongoDB has no empty database.
@@ -196,11 +198,11 @@ pub fn create_collection(clients: &MongoClients, target: &Target) -> Result<(), 
     if database.is_empty() || collection.is_empty() {
         return Err(MongoError::WrongShape { what: "a new collection", expected: "named, in a named database" });
     }
-    clients.create_collection(&mongo_store::uri(&target.connection)?, database, collection)
+    mongo_client::create_collection(&client(clients, &target.connection)?, database, collection)
 }
 
 pub fn drop_collection(clients: &MongoClients, target: &Target) -> Result<(), MongoError> {
-    clients.drop_collection(&mongo_store::uri(&target.connection)?, &target.database, &target.collection)
+    mongo_client::drop_collection(&client(clients, &target.connection)?, &target.database, &target.collection)
 }
 
 fn view(document: &Value) -> DocumentView {
@@ -224,28 +226,42 @@ mod tests {
     #[test]
     fn a_connection_is_added_renamed_given_a_new_uri_and_deleted() {
         with_app_dir("mongo-service-connections", || {
-            let list = save_connection(draft(None, " Local ", Some(" mongodb://u:pw@localhost "))).unwrap();
+            let clients = MongoClients::default();
+            let list = save_connection(&clients, draft(None, " Local ", Some(" mongodb://u:pw@localhost "))).unwrap();
             assert_eq!(list.len(), 1);
             let id = list[0].id.clone();
             assert_eq!((list[0].name.as_str(), list[0].address.as_str()), ("Local", "mongodb://u:•••@localhost"));
+            // Whether its client is kept: one made again would ask for the URI.
+            let kept = || clients.client(&id, || Err(MongoError::NoName)).is_ok();
+            client(&clients, &id).unwrap();
+            assert!(kept());
 
-            // An edit with the URI left empty keeps it.
-            let list = save_connection(draft(Some(&id), "Dev", Some("  "))).unwrap();
+            // An edit with the URI left empty keeps it, and the client made from it.
+            let list = save_connection(&clients, draft(Some(&id), "Dev", Some("  "))).unwrap();
             assert_eq!((list[0].name.as_str(), list[0].address.as_str()), ("Dev", "mongodb://u:•••@localhost"));
-            let list = save_connection(draft(Some(&id), "Dev", Some("mongodb+srv://c.example.net"))).unwrap();
+            assert!(kept());
+            let list = save_connection(&clients, draft(Some(&id), "Dev", Some("mongodb+srv://c.example.net"))).unwrap();
             assert_eq!((list.len(), list[0].address.as_str()), (1, "mongodb+srv://c.example.net"));
+            assert!(!kept(), "a new URI, a new client");
 
-            assert!(delete_connection(&id).unwrap().is_empty());
+            // Back to a host the test does not look up, its client made again.
+            save_connection(&clients, draft(Some(&id), "Dev", Some("mongodb://h2"))).unwrap();
+            client(&clients, &id).unwrap();
+            let other = save_connection(&clients, draft(None, "Other", Some("mongodb://h"))).unwrap()[1].id.clone();
+            client(&clients, &other).unwrap();
+            assert_eq!(delete_connection(&clients, &id).unwrap().len(), 1);
+            assert!(!kept(), "a deleted connection's client goes");
+            assert!(clients.client(&other, || Err(MongoError::NoName)).is_ok(), "the others' stay");
         });
     }
 
     #[test]
     fn a_draft_without_what_it_needs_is_refused_before_anything_is_saved() {
         with_app_dir("mongo-service-refused", || {
-            assert!(matches!(save_connection(draft(None, " ", Some("mongodb://h"))), Err(MongoError::NoName)));
-            assert!(matches!(save_connection(draft(None, "A", None)), Err(MongoError::BadUri(_))));
-            assert!(matches!(save_connection(draft(None, "A", Some("http://h"))), Err(MongoError::BadUri(_))));
-            assert!(matches!(save_connection(draft(Some("gone"), "A", None)), Err(MongoError::NoConnection(_))));
+            assert!(matches!(save_connection(&MongoClients::default(), draft(None, " ", Some("mongodb://h"))), Err(MongoError::NoName)));
+            assert!(matches!(save_connection(&MongoClients::default(), draft(None, "A", None)), Err(MongoError::BadUri(_))));
+            assert!(matches!(save_connection(&MongoClients::default(), draft(None, "A", Some("http://h"))), Err(MongoError::BadUri(_))));
+            assert!(matches!(save_connection(&MongoClients::default(), draft(Some("gone"), "A", None)), Err(MongoError::NoConnection(_))));
             assert!(connections().unwrap().is_empty());
             let clients = MongoClients::default();
             assert!(matches!(test_connection(&clients, draft(None, "", None)), Err(MongoError::BadUri(_))));
@@ -259,7 +275,7 @@ mod tests {
     #[test]
     fn a_bad_query_is_refused_with_its_place_before_the_server_is_asked() {
         with_app_dir("mongo-service-query", || {
-            let id = save_connection(draft(None, "A", Some("mongodb://127.0.0.1:1"))).unwrap()[0].id.clone();
+            let id = save_connection(&MongoClients::default(), draft(None, "A", Some("mongodb://127.0.0.1:1"))).unwrap()[0].id.clone();
             let target = Target { connection: id, database: "d".into(), collection: "c".into() };
             let clients = MongoClients::default();
             let request = FindRequest { filter: "{ a: }".into(), ..Default::default() };

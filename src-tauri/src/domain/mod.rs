@@ -43,7 +43,6 @@ pub mod agents;
 pub mod board;
 pub mod meeting;
 pub mod mongo;
-pub mod mongo_tools;
 pub mod voices;
 pub mod recording;
 pub mod features;

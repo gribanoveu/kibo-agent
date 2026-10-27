@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use mongodb::bson::{self, Bson, Document};
 use mongodb::options::{ClientOptions, IndexOptions};
-use mongodb::sync::{Client, Collection, Cursor};
+pub use mongodb::sync::Client;
+use mongodb::sync::{Collection, Cursor};
 use mongodb::IndexModel;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
@@ -30,13 +31,17 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many finds stay open between pages; past it, the oldest is closed.
 const MAX_OPEN_FINDS: usize = 32;
 
-/// The clients made, one per URI and kept: a client is a pool, and making one
-/// is a handshake (with TLS and SCRAM, several round trips) on every call.
-/// Keyed by the URI's hash, so an edited connection gets a new one.
+/// The clients made, one per saved connection and kept: a client is a pool,
+/// and making one is a handshake (with TLS and SCRAM, several round trips) on
+/// every call. Kept by the connection's id, so a call does not open the sealed
+/// store to find its URI; a connection changed or deleted is [`forget`]-ten,
+/// and its pool and monitors go with it.
 ///
 /// A find stays open between pages, so the next page goes on where the last
 /// stopped instead of skipping again from the start — on a view, running its
 /// pipeline again.
+///
+/// [`forget`]: MongoClients::forget
 #[derive(Default)]
 pub struct MongoClients {
     clients: Mutex<HashMap<String, Client>>,
@@ -62,8 +67,15 @@ struct OpenFind {
     read: u64,
 }
 
+/// Where a find runs: the client, and the connection it was made for.
+pub struct Place<'a> {
+    pub connection: &'a str,
+    pub client: &'a Client,
+}
+
 struct FindFrom {
-    uri: SecretString,
+    connection: String,
+    client: Client,
     db: String,
     collection: String,
     spec: FindSpec,
@@ -76,65 +88,49 @@ pub struct Found {
     pub next: Option<u64>,
 }
 
+/// A client for `uri`, not connected yet: the first call connects. Kept by
+/// nobody — a connection only tested goes when its test is done.
+pub fn open(uri: &SecretString) -> Result<Client, MongoError> {
+    let mut options = ClientOptions::parse(uri.expose_secret()).run().map_err(|e| MongoError::BadUri(e.to_string()))?;
+    options.app_name = Some("Kibo Agent".into());
+    options.server_selection_timeout = Some(SELECT_TIMEOUT);
+    options.connect_timeout = Some(SELECT_TIMEOUT);
+    Client::with_options(options).map_err(server)
+}
+
 impl MongoClients {
-    fn client(&self, uri: &SecretString) -> Result<Client, MongoError> {
-        let key = blake3::hash(uri.expose_secret().as_bytes()).to_hex().to_string();
-        if let Some(client) = self.clients.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+    /// The saved connection's client, made from `uri` the first time.
+    ///
+    /// The lock is held while it is made, so a connection changed meanwhile
+    /// is forgotten after the old client went in, never before.
+    // ponytail: one lock for every connection — a slow `mongodb+srv://` lookup holds up the others' first call; per-connection slots if that shows.
+    pub fn client(&self, connection: &str, uri: impl FnOnce() -> Result<SecretString, MongoError>) -> Result<Client, MongoError> {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(client) = clients.get(connection) {
             return Ok(client.clone());
         }
-        let mut options = ClientOptions::parse(uri.expose_secret()).run().map_err(|e| MongoError::BadUri(e.to_string()))?;
-        options.app_name = Some("Kibo Agent".into());
-        options.server_selection_timeout = Some(SELECT_TIMEOUT);
-        options.connect_timeout = Some(SELECT_TIMEOUT);
-        let client = Client::with_options(options).map_err(server)?;
-        self.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(key, client.clone());
+        let client = open(&uri()?)?;
+        clients.insert(connection.to_string(), client.clone());
         Ok(client)
     }
 
-    fn collection(&self, uri: &SecretString, db: &str, name: &str) -> Result<Collection<Document>, MongoError> {
-        Ok(self.client(uri)?.database(db).collection(name))
+    /// A connection changed or deleted: its client and its finds let go, made
+    /// again from the saved URI on the next call.
+    pub fn forget(&self, connection: &str) {
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).remove(connection);
+        self.finds.lock().unwrap_or_else(|e| e.into_inner()).open.retain(|_, find| find.from.connection != connection);
     }
 
-    /// The server's version: that the URI reaches it and the login holds.
-    pub fn ping(&self, uri: &SecretString) -> Result<String, MongoError> {
-        let client = self.client(uri)?;
-        let info = client.database("admin").run_command(bson::doc! { "buildInfo": 1 }).run().map_err(server)?;
-        Ok(info.get_str("version").unwrap_or("unknown").to_string())
-    }
-
-    pub fn databases(&self, uri: &SecretString) -> Result<Vec<DatabaseInfo>, MongoError> {
-        let client = self.client(uri)?;
-        let specs = client.list_databases().run().map_err(server)?;
-        Ok(specs.into_iter().map(|spec| DatabaseInfo { name: spec.name, size_on_disk: spec.size_on_disk }).collect())
-    }
-
-    pub fn collections(&self, uri: &SecretString, db: &str) -> Result<Vec<CollectionInfo>, MongoError> {
-        let client = self.client(uri)?;
-        let mut found: Vec<CollectionInfo> = client
-            .database(db)
-            .list_collections()
-            .run()
-            .map_err(server)?
-            .map(|spec| {
-                spec.map(|spec| CollectionInfo {
-                    kind: match spec.collection_type {
-                        mongodb::results::CollectionType::View => "view",
-                        mongodb::results::CollectionType::Timeseries => "timeseries",
-                        _ => "collection",
-                    },
-                    name: spec.name,
-                })
-            })
-            .collect::<Result<_, _>>()
-            .map_err(server)?;
-        found.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(found)
+    /// Every connection deleted at once — the feature's data.
+    pub fn forget_all(&self) {
+        self.clients.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.finds.lock().unwrap_or_else(|e| e.into_inner()).open.clear();
     }
 
     /// The first page of a find, its size `spec.limit`.
-    pub fn find(&self, uri: &SecretString, db: &str, collection: &str, spec: FindSpec) -> Result<Found, MongoError> {
-        let from = FindFrom { uri: uri.clone(), db: db.into(), collection: collection.into(), spec };
-        let cursor = self.cursor(&from, 0)?;
+    pub fn find(&self, place: Place, db: &str, collection: &str, spec: FindSpec) -> Result<Found, MongoError> {
+        let from = FindFrom { connection: place.connection.into(), client: place.client.clone(), db: db.into(), collection: collection.into(), spec };
+        let cursor = cursor(&from, 0)?;
         self.page(OpenFind { cursor, ahead: None, from, read: 0 })
     }
 
@@ -149,21 +145,6 @@ impl MongoClients {
         self.finds.lock().unwrap_or_else(|e| e.into_inner()).open.remove(&next);
     }
 
-    /// `from`'s find, past what was read of it.
-    fn cursor(&self, from: &FindFrom, read: u64) -> Result<Cursor<Document>, MongoError> {
-        let spec = &from.spec;
-        let batch = u32::try_from(spec.limit + 1).unwrap_or(u32::MAX);
-        let collection = self.collection(&from.uri, &from.db, &from.collection)?;
-        let mut find = collection.find(document(spec.filter.clone())?).skip(spec.skip + read).batch_size(batch).max_time(QUERY_TIMEOUT);
-        if !spec.projection.is_empty() {
-            find = find.projection(document(spec.projection.clone())?);
-        }
-        if !spec.sort.is_empty() {
-            find = find.sort(document(spec.sort.clone())?);
-        }
-        find.run().map_err(server)
-    }
-
     /// The next `limit` documents, and one read past them: kept open when there is one.
     fn page(&self, mut open: OpenFind) -> Result<Found, MongoError> {
         let limit = open.from.spec.limit;
@@ -171,7 +152,7 @@ impl MongoClients {
         while documents.len() <= limit {
             let next = match open.cursor.next() {
                 Some(Err(error)) if cursor_gone(&error) => {
-                    open.cursor = self.cursor(&open.from, open.read)?;
+                    open.cursor = cursor(&open.from, open.read)?;
                     open.cursor.next()
                 }
                 next => next,
@@ -193,109 +174,153 @@ impl MongoClients {
         }
         Ok(Found { documents, next: Some(next) })
     }
+}
 
-    /// Every match counted, or — with no filter — the collection's own count
-    /// from its metadata, which does not read it.
-    pub fn count(&self, uri: &SecretString, db: &str, collection: &str, filter: Map<String, Value>) -> Result<u64, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        if filter.is_empty() {
-            return collection.estimated_document_count().max_time(QUERY_TIMEOUT).run().map_err(server);
-        }
-        collection.count_documents(document(filter)?).max_time(QUERY_TIMEOUT).run().map_err(server)
+/// `from`'s find, past what was read of it.
+fn cursor(from: &FindFrom, read: u64) -> Result<Cursor<Document>, MongoError> {
+    let spec = &from.spec;
+    let batch = u32::try_from(spec.limit + 1).unwrap_or(u32::MAX);
+    let collection = from.client.database(&from.db).collection::<Document>(&from.collection);
+    let mut find = collection.find(document(spec.filter.clone())?).skip(spec.skip + read).batch_size(batch).max_time(QUERY_TIMEOUT);
+    if !spec.projection.is_empty() {
+        find = find.projection(document(spec.projection.clone())?);
     }
-
-    /// The first `cap` results: a pipeline can return the whole collection.
-    pub fn aggregate(&self, uri: &SecretString, db: &str, collection: &str, pipeline: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let stages = pipeline.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
-        collection.aggregate(stages).max_time(QUERY_TIMEOUT).run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
+    if !spec.sort.is_empty() {
+        find = find.sort(document(spec.sort.clone())?);
     }
+    find.run().map_err(server)
+}
 
-    /// How many went in.
-    pub fn insert(&self, uri: &SecretString, db: &str, collection: &str, documents: Vec<Map<String, Value>>) -> Result<usize, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let documents = documents.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
-        Ok(collection.insert_many(documents).run().map_err(server)?.inserted_ids.len())
-    }
+fn collection(client: &Client, db: &str, name: &str) -> Collection<Document> {
+    client.database(db).collection(name)
+}
 
-    /// The document with `id` replaced by `replacement`.
-    pub fn replace(&self, uri: &SecretString, db: &str, collection: &str, id: Value, replacement: Map<String, Value>) -> Result<(), MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let id = bson_of(id)?;
-        let replacement = document(replacement)?;
-        // Without one it keeps its own; with another, `replace_one` would fail
-        // on the server with a message about an immutable field.
-        if replacement.get("_id").is_some_and(|given| *given != id) {
-            return Err(MongoError::IdChanged);
-        }
-        let replaced = collection.replace_one(bson::doc! { "_id": id }, replacement).run().map_err(server)?;
-        if replaced.matched_count == 0 {
-            return Err(MongoError::Gone);
-        }
-        Ok(())
-    }
+/// The server's version: that the URI reaches it and the login holds.
+pub fn ping(client: &Client) -> Result<String, MongoError> {
+    let info = client.database("admin").run_command(bson::doc! { "buildInfo": 1 }).run().map_err(server)?;
+    Ok(info.get_str("version").unwrap_or("unknown").to_string())
+}
 
-    /// The document with `id` changed by `update`, an operator document — `{ $set: … }`.
-    pub fn update(&self, uri: &SecretString, db: &str, collection: &str, id: Value, update: Map<String, Value>) -> Result<(), MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let updated = collection.update_one(bson::doc! { "_id": bson_of(id)? }, document(update)?).run().map_err(server)?;
-        if updated.matched_count == 0 {
-            return Err(MongoError::Gone);
-        }
-        Ok(())
-    }
+pub fn databases(client: &Client) -> Result<Vec<DatabaseInfo>, MongoError> {
+    let specs = client.list_databases().run().map_err(server)?;
+    Ok(specs.into_iter().map(|spec| DatabaseInfo { name: spec.name, size_on_disk: spec.size_on_disk }).collect())
+}
 
-    pub fn delete(&self, uri: &SecretString, db: &str, collection: &str, id: Value) -> Result<(), MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let deleted = collection.delete_one(bson::doc! { "_id": bson_of(id)? }).run().map_err(server)?;
-        if deleted.deleted_count == 0 {
-            return Err(MongoError::Gone);
-        }
-        Ok(())
-    }
-
-    pub fn indexes(&self, uri: &SecretString, db: &str, collection: &str) -> Result<Vec<IndexView>, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        collection
-            .list_indexes()
-            .run()
-            .map_err(server)?
-            .map(|index| {
-                let index = index.map_err(server)?;
-                let options = index.options.unwrap_or_default();
-                Ok(IndexView {
-                    name: options.name.unwrap_or_default(),
-                    keys: to_shell_line(&canonical(index.keys)),
-                    unique: options.unique.unwrap_or(false),
-                    sparse: options.sparse.unwrap_or(false),
-                    ttl_seconds: options.expire_after.map(|d| d.as_secs()),
-                    partial: options.partial_filter_expression.map(|filter| to_shell_line(&canonical(filter))),
-                })
+pub fn collections(client: &Client, db: &str) -> Result<Vec<CollectionInfo>, MongoError> {
+    let mut found: Vec<CollectionInfo> = client
+        .database(db)
+        .list_collections()
+        .run()
+        .map_err(server)?
+        .map(|spec| {
+            spec.map(|spec| CollectionInfo {
+                kind: match spec.collection_type {
+                    mongodb::results::CollectionType::View => "view",
+                    mongodb::results::CollectionType::Timeseries => "timeseries",
+                    _ => "collection",
+                },
+                name: spec.name,
             })
-            .collect()
-    }
+        })
+        .collect::<Result<_, _>>()
+        .map_err(server)?;
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(found)
+}
 
-    /// The index's name, the server's if none was given.
-    pub fn create_index(&self, uri: &SecretString, db: &str, collection: &str, keys: Map<String, Value>, unique: bool, name: Option<String>) -> Result<String, MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        let options = IndexOptions::builder().unique(unique.then_some(true)).name(name).build();
-        let model = IndexModel::builder().keys(document(keys)?).options(options).build();
-        Ok(collection.create_index(model).run().map_err(server)?.index_name)
+/// Every match counted, or — with no filter — the collection's own count
+/// from its metadata, which does not read it.
+pub fn count(client: &Client, db: &str, name: &str, filter: Map<String, Value>) -> Result<u64, MongoError> {
+    let collection = collection(client, db, name);
+    if filter.is_empty() {
+        return collection.estimated_document_count().max_time(QUERY_TIMEOUT).run().map_err(server);
     }
+    collection.count_documents(document(filter)?).max_time(QUERY_TIMEOUT).run().map_err(server)
+}
 
-    pub fn drop_index(&self, uri: &SecretString, db: &str, collection: &str, name: &str) -> Result<(), MongoError> {
-        let collection = self.collection(uri, db, collection)?;
-        collection.drop_index(name).run().map_err(server)
-    }
+/// The first `cap` results: a pipeline can return the whole collection.
+pub fn aggregate(client: &Client, db: &str, name: &str, pipeline: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError> {
+    let stages = pipeline.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
+    collection(client, db, name).aggregate(stages).max_time(QUERY_TIMEOUT).run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
+}
 
-    /// In a database not there yet, it makes the database too.
-    pub fn create_collection(&self, uri: &SecretString, db: &str, collection: &str) -> Result<(), MongoError> {
-        self.client(uri)?.database(db).create_collection(collection).run().map_err(server)
-    }
+/// How many went in.
+pub fn insert(client: &Client, db: &str, name: &str, documents: Vec<Map<String, Value>>) -> Result<usize, MongoError> {
+    let documents = documents.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
+    Ok(collection(client, db, name).insert_many(documents).run().map_err(server)?.inserted_ids.len())
+}
 
-    pub fn drop_collection(&self, uri: &SecretString, db: &str, collection: &str) -> Result<(), MongoError> {
-        self.collection(uri, db, collection)?.drop().run().map_err(server)
+/// The document with `id` replaced by `replacement`.
+pub fn replace(client: &Client, db: &str, name: &str, id: Value, replacement: Map<String, Value>) -> Result<(), MongoError> {
+    let id = bson_of(id)?;
+    let replacement = document(replacement)?;
+    // Without one it keeps its own; with another, `replace_one` would fail
+    // on the server with a message about an immutable field.
+    if replacement.get("_id").is_some_and(|given| *given != id) {
+        return Err(MongoError::IdChanged);
     }
+    let replaced = collection(client, db, name).replace_one(bson::doc! { "_id": id }, replacement).run().map_err(server)?;
+    if replaced.matched_count == 0 {
+        return Err(MongoError::Gone);
+    }
+    Ok(())
+}
+
+/// The document with `id` changed by `update`, an operator document — `{ $set: … }`.
+pub fn update(client: &Client, db: &str, name: &str, id: Value, update: Map<String, Value>) -> Result<(), MongoError> {
+    let updated = collection(client, db, name).update_one(bson::doc! { "_id": bson_of(id)? }, document(update)?).run().map_err(server)?;
+    if updated.matched_count == 0 {
+        return Err(MongoError::Gone);
+    }
+    Ok(())
+}
+
+pub fn delete(client: &Client, db: &str, name: &str, id: Value) -> Result<(), MongoError> {
+    let deleted = collection(client, db, name).delete_one(bson::doc! { "_id": bson_of(id)? }).run().map_err(server)?;
+    if deleted.deleted_count == 0 {
+        return Err(MongoError::Gone);
+    }
+    Ok(())
+}
+
+pub fn indexes(client: &Client, db: &str, name: &str) -> Result<Vec<IndexView>, MongoError> {
+    collection(client, db, name)
+        .list_indexes()
+        .run()
+        .map_err(server)?
+        .map(|index| {
+            let index = index.map_err(server)?;
+            let options = index.options.unwrap_or_default();
+            Ok(IndexView {
+                name: options.name.unwrap_or_default(),
+                keys: to_shell_line(&canonical(index.keys)),
+                unique: options.unique.unwrap_or(false),
+                sparse: options.sparse.unwrap_or(false),
+                ttl_seconds: options.expire_after.map(|d| d.as_secs()),
+                partial: options.partial_filter_expression.map(|filter| to_shell_line(&canonical(filter))),
+            })
+        })
+        .collect()
+}
+
+/// The index's name, the server's if none was given.
+pub fn create_index(client: &Client, db: &str, name: &str, keys: Map<String, Value>, unique: bool, index: Option<String>) -> Result<String, MongoError> {
+    let options = IndexOptions::builder().unique(unique.then_some(true)).name(index).build();
+    let model = IndexModel::builder().keys(document(keys)?).options(options).build();
+    Ok(collection(client, db, name).create_index(model).run().map_err(server)?.index_name)
+}
+
+pub fn drop_index(client: &Client, db: &str, name: &str, index: &str) -> Result<(), MongoError> {
+    collection(client, db, name).drop_index(index).run().map_err(server)
+}
+
+/// In a database not there yet, it makes the database too.
+pub fn create_collection(client: &Client, db: &str, name: &str) -> Result<(), MongoError> {
+    client.database(db).create_collection(name).run().map_err(server)
+}
+
+pub fn drop_collection(client: &Client, db: &str, name: &str) -> Result<(), MongoError> {
+    collection(client, db, name).drop().run().map_err(server)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -404,71 +429,72 @@ mod tests {
     fn live_server() {
         let uri = SecretString::from(std::env::var("KIBO_MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".into()));
         let clients = MongoClients::default();
+        let client = clients.client("live", || Ok(uri.clone())).unwrap();
+        let place = || Place { connection: "live", client: &client };
         let db = "kibo_live_test";
         let coll = format!("c{}", std::process::id());
-        let version = clients.ping(&uri).unwrap();
+        let version = ping(&client).unwrap();
         assert!(!version.is_empty());
 
-        clients.create_collection(&uri, db, &coll).unwrap();
-        assert!(clients.collections(&uri, db).unwrap().iter().any(|c| c.name == coll && c.kind == "collection"));
-        assert!(clients.databases(&uri).unwrap().iter().any(|d| d.name == db));
+        create_collection(&client, db, &coll).unwrap();
+        assert!(collections(&client, db).unwrap().iter().any(|c| c.name == coll && c.kind == "collection"));
+        assert!(databases(&client).unwrap().iter().any(|d| d.name == db));
 
         let docs = crate::domain::mongo::parse_documents("[{ _id: 1, n: NumberLong(5), name: 'a' }, { _id: 2, name: 'b' }, { _id: 3, name: 'c' }]", "the documents").unwrap();
-        assert_eq!(clients.insert(&uri, db, &coll, docs).unwrap(), 3);
-        assert_eq!(clients.count(&uri, db, &coll, Map::new()).unwrap(), 3);
-        assert_eq!(clients.count(&uri, db, &coll, parse_document("{ name: /^[ab]$/ }", "f").unwrap()).unwrap(), 2);
+        assert_eq!(insert(&client, db, &coll, docs).unwrap(), 3);
+        assert_eq!(count(&client, db, &coll, Map::new()).unwrap(), 3);
+        assert_eq!(count(&client, db, &coll, parse_document("{ name: /^[ab]$/ }", "f").unwrap()).unwrap(), 2);
 
         let spec = FindSpec { sort: parse_document("{ _id: -1 }", "s").unwrap(), projection: parse_document("{ name: 1 }", "p").unwrap(), limit: 2, skip: 0, ..Default::default() };
-        let found = clients.find(&uri, db, &coll, spec).unwrap().documents;
+        let found = clients.find(place(), db, &coll, spec).unwrap().documents;
         assert_eq!(found, vec![json!({ "_id": { "$numberInt": "3" }, "name": "c" }), json!({ "_id": { "$numberInt": "2" }, "name": "b" })]);
 
-        let first = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 1 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
+        let first = clients.find(place(), db, &coll, FindSpec { filter: parse_document("{ _id: 1 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
         assert_eq!(first[0]["n"], json!({ "$numberLong": "5" }), "an Int64 comes back as one");
 
-        clients.replace(&uri, db, &coll, json!(1), parse_document("{ _id: 1, name: 'z' }", "d").unwrap()).unwrap();
-        assert!(matches!(clients.replace(&uri, db, &coll, json!(1), parse_document("{ _id: 9 }", "d").unwrap()), Err(MongoError::IdChanged)));
+        replace(&client, db, &coll, json!(1), parse_document("{ _id: 1, name: 'z' }", "d").unwrap()).unwrap();
+        assert!(matches!(replace(&client, db, &coll, json!(1), parse_document("{ _id: 9 }", "d").unwrap()), Err(MongoError::IdChanged)));
         let one = |keys: &[&str], text: &str| {
             crate::domain::mongo::set_fields(&[crate::domain::mongo::FieldChange { path: keys.iter().map(|k| k.to_string()).collect(), text: text.into() }]).unwrap()
         };
-        clients.update(&uri, db, &coll, json!(3), one(&["tags"], "['x', 'y']")).unwrap();
-        clients.update(&uri, db, &coll, json!(3), one(&["tags", "1"], "NumberLong(7)")).unwrap();
-        let third = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
+        update(&client, db, &coll, json!(3), one(&["tags"], "['x', 'y']")).unwrap();
+        update(&client, db, &coll, json!(3), one(&["tags", "1"], "NumberLong(7)")).unwrap();
+        let third = clients.find(place(), db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
         assert_eq!(third[0]["tags"], json!(["x", { "$numberLong": "7" }]), "one item of an array set, its type kept");
-        assert!(matches!(clients.update(&uri, db, &coll, json!(99), one(&["name"], "'q'")), Err(MongoError::Gone)));
-        let grouped = clients.aggregate(&uri, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10).unwrap();
+        assert!(matches!(update(&client, db, &coll, json!(99), one(&["name"], "'q'")), Err(MongoError::Gone)));
+        let grouped = aggregate(&client, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10).unwrap();
         assert_eq!(grouped, vec![json!({ "name": "z" })]);
-        assert_eq!(clients.aggregate(&uri, db, &coll, Vec::new(), 2).unwrap().len(), 2, "capped");
+        assert_eq!(aggregate(&client, db, &coll, Vec::new(), 2).unwrap().len(), 2, "capped");
 
-        let name = clients.create_index(&uri, db, &coll, parse_document("{ name: 1 }", "k").unwrap(), true, None).unwrap();
-        let indexes = clients.indexes(&uri, db, &coll).unwrap();
+        let name = create_index(&client, db, &coll, parse_document("{ name: 1 }", "k").unwrap(), true, None).unwrap();
+        let indexes = indexes(&client, db, &coll).unwrap();
         let made = indexes.iter().find(|i| i.name == name).unwrap();
         assert!(made.unique);
         assert_eq!(made.keys, "{ name: 1 }");
-        clients.drop_index(&uri, db, &coll, &name).unwrap();
+        drop_index(&client, db, &coll, &name).unwrap();
 
-        clients.delete(&uri, db, &coll, json!(2)).unwrap();
-        assert!(matches!(clients.delete(&uri, db, &coll, json!(2)), Err(MongoError::Gone)));
-        assert!(matches!(clients.replace(&uri, db, &coll, json!(2), Map::new()), Err(MongoError::Gone)));
+        delete(&client, db, &coll, json!(2)).unwrap();
+        assert!(matches!(delete(&client, db, &coll, json!(2)), Err(MongoError::Gone)));
+        assert!(matches!(replace(&client, db, &coll, json!(2), Map::new()), Err(MongoError::Gone)));
 
         // A view lists as one and is found like a collection; counting what takes too long stops as `TimedOut`.
         let view = format!("{coll}_view");
-        clients.client(&uri).unwrap().database(db).create_collection(&view).view_on(coll.clone()).pipeline([bson::doc! { "$match": { "name": { "$exists": true } } }]).run().unwrap();
-        assert!(clients.collections(&uri, db).unwrap().iter().any(|c| c.name == view && c.kind == "view"));
-        assert_eq!(clients.find(&uri, db, &view, FindSpec { limit: 5, ..Default::default() }).unwrap().documents.len(), 2);
-        assert_eq!(clients.count(&uri, db, &view, Map::new()).unwrap(), 2);
+        client.database(db).create_collection(&view).view_on(coll.clone()).pipeline([bson::doc! { "$match": { "name": { "$exists": true } } }]).run().unwrap();
+        assert!(collections(&client, db).unwrap().iter().any(|c| c.name == view && c.kind == "view"));
+        assert_eq!(clients.find(place(), db, &view, FindSpec { limit: 5, ..Default::default() }).unwrap().documents.len(), 2);
+        assert_eq!(count(&client, db, &view, Map::new()).unwrap(), 2);
         let slow = document(parse_document("{ $expr: { $function: { body: 'function() { sleep(1000); return true; }', args: [], lang: 'js' } } }", "f").unwrap()).unwrap();
-        let client = clients.client(&uri).unwrap();
         let stopped = client.database(db).collection::<Document>(&view).count_documents(slow).max_time(Duration::from_millis(300)).run().unwrap_err();
         assert!(matches!(server(stopped), MongoError::TimedOut));
-        assert!(matches!(clients.find(&uri, db, &view, FindSpec { filter: parse_document("{ $nope: 1 }", "f").unwrap(), limit: 1, ..Default::default() }), Err(MongoError::Server(m)) if m.ends_with("(BadValue)") && !m.contains("RawDocumentBuf")));
-        clients.drop_collection(&uri, db, &view).unwrap();
+        assert!(matches!(clients.find(place(), db, &view, FindSpec { filter: parse_document("{ $nope: 1 }", "f").unwrap(), limit: 1, ..Default::default() }), Err(MongoError::Server(m)) if m.ends_with("(BadValue)") && !m.contains("RawDocumentBuf")));
+        drop_collection(&client, db, &view).unwrap();
 
         // Pages read on from where the last stopped, and on again when the server let the cursor go.
         let more = (10..15).map(|id| format!("{{ _id: {id}, name: 'p' }}")).collect::<Vec<_>>().join(", ");
-        clients.insert(&uri, db, &coll, crate::domain::mongo::parse_documents(&format!("[{more}]"), "d").unwrap()).unwrap();
+        insert(&client, db, &coll, crate::domain::mongo::parse_documents(&format!("[{more}]"), "d").unwrap()).unwrap();
         let by_id = |limit: usize| FindSpec { sort: parse_document("{ _id: 1 }", "s").unwrap(), projection: parse_document("{ _id: 1 }", "p").unwrap(), limit, ..Default::default() };
         let ids = |found: &Found| found.documents.iter().map(|d| d["_id"]["$numberInt"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        let first = clients.find(&uri, db, &coll, by_id(3)).unwrap();
+        let first = clients.find(place(), db, &coll, by_id(3)).unwrap();
         assert_eq!(ids(&first), ["1", "3", "10"]);
         let idle: Vec<Document> = client
             .database("admin")
@@ -485,25 +511,52 @@ mod tests {
         assert!(matches!(clients.find_more(first.next.unwrap()), Err(MongoError::FindClosed)), "a page is read once");
         let last = clients.find_more(second.next.unwrap()).unwrap();
         assert_eq!((ids(&last), last.next), (vec!["14".to_string()], None));
-        let whole = clients.find(&uri, db, &coll, by_id(7)).unwrap();
+        let whole = clients.find(place(), db, &coll, by_id(7)).unwrap();
         assert_eq!((whole.documents.len(), whole.next), (7, None), "a page just full is the last");
-        let open = clients.find(&uri, db, &coll, by_id(3)).unwrap().next.unwrap();
+        let open = clients.find(place(), db, &coll, by_id(3)).unwrap().next.unwrap();
         clients.find_close(open);
         assert!(matches!(clients.find_more(open), Err(MongoError::FindClosed)));
-        let oldest = clients.find(&uri, db, &coll, by_id(1)).unwrap().next.unwrap();
-        let newest = (0..MAX_OPEN_FINDS).map(|_| clients.find(&uri, db, &coll, by_id(1)).unwrap().next.unwrap()).last().unwrap();
+        let oldest = clients.find(place(), db, &coll, by_id(1)).unwrap().next.unwrap();
+        let newest = (0..MAX_OPEN_FINDS).map(|_| clients.find(place(), db, &coll, by_id(1)).unwrap().next.unwrap()).last().unwrap();
         assert!(matches!(clients.find_more(oldest), Err(MongoError::FindClosed)), "past the limit, the oldest find is closed");
         assert_eq!(ids(&clients.find_more(newest).unwrap()), ["3"]);
 
-        clients.drop_collection(&uri, db, &coll).unwrap();
-        assert!(!clients.collections(&uri, db).unwrap().iter().any(|c| c.name == coll));
+        // A connection forgotten takes its finds with it; another's stay.
+        let other = super::open(&uri).unwrap();
+        let mine = clients.find(place(), db, &coll, by_id(1)).unwrap().next.unwrap();
+        let theirs = clients.find(Place { connection: "other", client: &other }, db, &coll, by_id(1)).unwrap().next.unwrap();
+        clients.forget("live");
+        assert!(matches!(clients.find_more(mine), Err(MongoError::FindClosed)));
+        assert_eq!(ids(&clients.find_more(theirs).unwrap()), ["3"]);
+
+        drop_collection(&client, db, &coll).unwrap();
+        assert!(!collections(&client, db).unwrap().iter().any(|c| c.name == coll));
+    }
+
+    /// Made once per connection, so a call does not open the sealed store;
+    /// made again from the saved URI once the connection changed.
+    #[test]
+    fn a_client_is_kept_per_connection_until_forgotten() {
+        let clients = MongoClients::default();
+        let uri = || Ok(SecretString::from("mongodb://127.0.0.1:1"));
+        let unread = || Err(MongoError::NoName);
+        clients.client("a", uri).unwrap();
+        clients.client("b", uri).unwrap();
+        assert!(clients.client("a", unread).is_ok(), "kept: the URI is not read again");
+        clients.forget("a");
+        assert!(clients.client("a", unread).is_err(), "forgotten: read again");
+        assert!(clients.client("b", unread).is_ok(), "the others stay");
+        clients.forget_all();
+        assert!(clients.client("b", unread).is_err());
+        assert!(matches!(clients.client("c", || Ok(SecretString::from("mongodb://"))), Err(MongoError::BadUri(_))));
+        assert!(clients.client("c", unread).is_err(), "a URI that did not open is not kept");
     }
 
     #[test]
     #[ignore = "waits for the server selection timeout"]
     fn an_unreachable_server_says_so_in_seconds() {
         let started = std::time::Instant::now();
-        let error = MongoClients::default().ping(&SecretString::from("mongodb://127.0.0.1:1")).unwrap_err();
+        let error = ping(&open(&SecretString::from("mongodb://127.0.0.1:1")).unwrap()).unwrap_err();
         assert!(started.elapsed() < SELECT_TIMEOUT * 2, "{:?}", started.elapsed());
         assert!(matches!(error, MongoError::Server(_)), "{error}");
     }

@@ -22,13 +22,15 @@ pub async fn mongo_connections() -> Result<Vec<ConnectionView>, String> {
 }
 
 #[tauri::command]
-pub async fn mongo_connection_save(draft: ConnectionDraft) -> Result<Vec<ConnectionView>, String> {
-    blocking(move || mongo::save_connection(draft)).await
+pub async fn mongo_connection_save(draft: ConnectionDraft, clients: Clients<'_>) -> Result<Vec<ConnectionView>, String> {
+    let clients = clients.inner().clone();
+    blocking(move || mongo::save_connection(&clients, draft)).await
 }
 
 #[tauri::command]
-pub async fn mongo_connection_delete(id: String) -> Result<Vec<ConnectionView>, String> {
-    blocking(move || mongo::delete_connection(&id)).await
+pub async fn mongo_connection_delete(id: String, clients: Clients<'_>) -> Result<Vec<ConnectionView>, String> {
+    let clients = clients.inner().clone();
+    blocking(move || mongo::delete_connection(&clients, &id)).await
 }
 
 /// The server's version.

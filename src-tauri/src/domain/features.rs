@@ -101,7 +101,7 @@ impl Feature {
                 tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
                 data: Some("knowledge"),
             },
-            // Its tools for the model are designed (`domain::mongo_tools`) and
+            // Its tools for the model are designed (`docs/43-mongodb.md`) and
             // not built: until they are `ToolName`s, it has none to list.
             Feature::Mongodb => Manifest {
                 id: "mongodb",

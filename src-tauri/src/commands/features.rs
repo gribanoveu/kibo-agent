@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::domain::features::Feature;
+use crate::infra::mongo_client::MongoClients;
 use crate::services::features::{self, FeatureView};
 use crate::services::meeting_notes::MeetingNotes;
 
@@ -29,8 +31,12 @@ pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Resu
 }
 
 #[tauri::command]
-pub fn features_delete_data(id: String) -> Result<Vec<FeatureView>, String> {
+pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
     features::delete_data(&id)?;
+    // Its clients were made from the connections just deleted.
+    if id == Feature::Mongodb.manifest().id {
+        mongo.forget_all();
+    }
     Ok(features::list())
 }
 

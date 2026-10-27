@@ -409,10 +409,18 @@ impl Parser {
             match self.peek() {
                 None | Some('\n') => return Err(self.error("the /regex/ is not closed")),
                 Some('/') => break,
-                Some('\\') if self.chars.get(self.at + 1) == Some(&'/') => {
-                    pattern.push('/');
-                    self.at += 2;
-                }
+                // An escape is two characters, so `\\` before the closing `/` does not escape it.
+                Some('\\') => match self.chars.get(self.at + 1) {
+                    None | Some('\n') => return Err(self.error("the /regex/ is not closed")),
+                    Some('/') => {
+                        pattern.push('/');
+                        self.at += 2;
+                    }
+                    Some(&escaped) => {
+                        pattern.extend(['\\', escaped]);
+                        self.at += 2;
+                    }
+                },
                 Some(c) => {
                     pattern.push(c);
                     self.at += 1;
@@ -781,7 +789,7 @@ fn special(map: &Map<String, Value>) -> Option<(&'static str, String)> {
         "$regularExpression" => {
             let pattern = inner.get("pattern").and_then(Value::as_str)?;
             let options = inner.get("options").and_then(Value::as_str)?;
-            ("RegExp", format!("/{}/{options}", pattern.replace('/', "\\/")))
+            ("RegExp", format!("/{}/{options}", escape_slashes(pattern)))
         }
         "$timestamp" => ("Timestamp", format!("Timestamp({{ t: {}, i: {} }})", inner.get("t")?, inner.get("i")?)),
         "$minKey" => ("MinKey", "MinKey()".into()),
@@ -789,6 +797,20 @@ fn special(map: &Map<String, Value>) -> Option<(&'static str, String)> {
         "$undefined" => ("Undefined", "undefined".into()),
         _ => return None,
     })
+}
+
+/// A pattern between `/…/`: a `/` escaped unless it already is.
+fn escape_slashes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut escaped = false;
+    for c in pattern.chars() {
+        if c == '/' && !escaped {
+            out.push('\\');
+        }
+        out.push(c);
+        escaped = c == '\\' && !escaped;
+    }
+    out
 }
 
 /// Sixteen bytes in base64 as a dashed UUID.
@@ -873,6 +895,9 @@ mod tests {
         assert_eq!(parse("Timestamp(1700000000, 2)").unwrap(), json!({ "$timestamp": { "t": 1700000000u64, "i": 2 } }));
         assert_eq!(parse("Timestamp({ t: 1, i: 2 })").unwrap(), json!({ "$timestamp": { "t": 1, "i": 2 } }));
         assert_eq!(parse("/^ann\\/b/mi").unwrap(), json!({ "$regularExpression": { "pattern": "^ann/b", "options": "im" } }));
+        assert_eq!(parse(r"/a\\/").unwrap(), json!({ "$regularExpression": { "pattern": r"a\\", "options": "" } }), "an escaped backslash does not escape the closing slash");
+        assert_eq!(parse(r"/\d+\./").unwrap(), json!({ "$regularExpression": { "pattern": r"\d+\.", "options": "" } }));
+        assert!(parse(r"/a\").is_err());
         assert_eq!(parse("[MinKey(), MaxKey(), undefined, -Infinity, NaN]").unwrap(), json!([{ "$minKey": 1 }, { "$maxKey": 1 }, { "$undefined": true }, { "$numberDouble": "-Infinity" }, { "$numberDouble": "NaN" }]));
     }
 
@@ -980,6 +1005,15 @@ mod tests {
         assert_eq!(back["big"].as_f64(), Some(1e300));
         assert_eq!(back["at"], json!({ "$date": { "$numberLong": "1714557600123" } }));
         assert_eq!(back["oid"], json!({ "$oid": "65f0a1b2c3d4e5f6a7b8c9d0" }));
+        // A pattern as the server keeps it, written and read back unchanged: a document holding one can be saved.
+        for pattern in ["a/b", r"a\\", r"a\\/b", r"^\d+\.\w", ""] {
+            let regex = json!({ "$regularExpression": { "pattern": pattern, "options": "i" } });
+            assert_eq!(parse(&to_shell(&regex)).unwrap(), regex, "{pattern}");
+        }
+        // A slash the server keeps escaped is not escaped again: it reads back as the same regex.
+        let kept = json!({ "$regularExpression": { "pattern": r"a\/b", "options": "" } });
+        assert_eq!(to_shell(&kept), r"/a\/b/");
+        assert!(parse(&to_shell(&kept)).is_ok());
     }
 
     #[test]
