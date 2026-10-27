@@ -490,7 +490,8 @@ function Documents({ target }: { target: MongoTarget }) {
     if (!editor) return;
     if (editor.id !== undefined) return void ((await docs.replace(editor.id, editor.text)) && setEditor(null));
     const inserted = await docs.insert(editor.text);
-    if (inserted.done) setEditor(null);
+    // All in, though the write concern was not met: nothing is left to insert, and the reason stays on the list.
+    if (inserted.done || inserted.rest === "") setEditor(null);
     // Refused part way: the ones that went in leave the editor, so trying again does not add them twice.
     else if (inserted.rest !== null) setEditor({ text: inserted.rest });
   };

@@ -212,19 +212,25 @@ export function useMongoDocuments(target: MongoTarget | null) {
     return asked === latest.current ? page : undefined;
   };
 
+  // Finds the user ran, and the view going: a write's own find again is not one, so another write's still runs.
+  const ran = useRef(0);
   /** The request is the one shown only once its find came back: a refused one leaves the last in place. Whether it did. */
+  const findAgain = async (next: FindRequest) => {
+    if (!target) return false;
+    latest.current++;
+    const found = await readLatest(() => mongoFind(target, next));
+    if (!found) return false;
+    letGo();
+    open.current = found.next;
+    setRequest(next);
+    setTotal(null);
+    setRead({ pages: [found.documents], at: 0, next: found.next });
+    return true;
+  };
   const find = useCallback(
-    async (next: FindRequest) => {
-      if (!target) return false;
-      latest.current++;
-      const found = await readLatest(() => mongoFind(target, next));
-      if (!found) return false;
-      letGo();
-      open.current = found.next;
-      setRequest(next);
-      setTotal(null);
-      setRead({ pages: [found.documents], at: 0, next: found.next });
-      return true;
+    (next: FindRequest) => {
+      ran.current++;
+      return findAgain(next);
     },
     [key, call],
   );
@@ -236,6 +242,7 @@ export function useMongoDocuments(target: MongoTarget | null) {
     if (target) void find(EMPTY_FIND);
     return () => {
       latest.current++;
+      ran.current++;
       letGo();
     };
   }, [key]);
@@ -253,7 +260,7 @@ export function useMongoDocuments(target: MongoTarget | null) {
     if (!target) return false;
     const asked = key;
     // A find since — typed while this ran, or the view gone — is newer than the one this would repeat.
-    const of = latest.current;
+    const of = ran.current;
     const refused = { reason: null as string | null };
     const done = await call(() =>
       work(target).then(
@@ -264,8 +271,8 @@ export function useMongoDocuments(target: MongoTarget | null) {
         },
       ),
     );
-    if (of !== latest.current) return !!done;
-    await find({ ...request, skip });
+    if (of !== ran.current) return !!done;
+    await findAgain({ ...request, skip });
     if (refused.reason !== null && asked === current.current) setError(refused.reason);
     return !!done;
   };
@@ -314,13 +321,16 @@ export function useMongoDocuments(target: MongoTarget | null) {
         if (asked === current.current) setCounting(false);
       }
     },
-    /** Done, or not with — refused part way — the documents still to go, `null` when none went in. */
+    /**
+     * Done, or not with the documents still to go: refused part way, the ones not in;
+     * all in but unconfirmed, `""`; `null` when none went in.
+     */
     insert: async (text: string) => {
       const rest = { text: null as string | null };
       const done = await change(async (t) => {
         const inserted = await mongoInsert(t, text);
         if (inserted.refused === null) return;
-        rest.text = inserted.rest;
+        rest.text = inserted.rest ?? "";
         throw inserted.refused;
       });
       return { done, rest: rest.text };

@@ -736,6 +736,36 @@ describe("a collection", () => {
     expect(sent("mongo_find")).toHaveLength(2);
   });
 
+  test("two writes in flight each find again", async () => {
+    await openOrders();
+    holding.add("mongo_delete");
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete document" })[0]);
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    const first = holds.mongo_delete;
+    holding.add("mongo_delete");
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete document" })[0]);
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    first();
+    await settle();
+    // The first one's find again is not one the user ran: the second, which returns after it, finds again too.
+    holds.mongo_delete();
+    await settle();
+    expect(sent("mongo_find")).toHaveLength(3);
+  });
+
+  test("an insert all in but not confirmed closes the editor and says so", async () => {
+    await openOrders();
+    inserted = { count: 2, refused: "2 went in, but the write concern was not met — they may not be on every member yet: w", rest: null };
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    fireEvent.change(dialog().getByRole("textbox"), { target: { value: "[{ name: 'a' }, { name: 'b' }]" } });
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(screen.queryByRole("alert")?.textContent).toContain("2 went in, but");
+  });
+
   test("a connection deleted takes its query histories with it, and only its own", async () => {
     connections = [...connections, { id: "c2", name: "Other", address: "mongodb://other" }];
     localStorage.setItem("mongo.history.c1.shop.orders", "[]");
