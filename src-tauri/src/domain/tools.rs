@@ -252,6 +252,66 @@ impl ToolName {
     /// write whatever its arguments. It stops holding at `runCommand`, where
     /// `ls` and `rm -rf /` are the same tool — which is why the gate takes the
     /// verdict as an argument instead of calling this itself.
+    /// Declared in every request where `toolSearch` is offered, rather than
+    /// found with it first (`docs/43-single-loop.md`, Ш9). The wildcard is the
+    /// point: a tool not listed here — a new one too — costs a request nothing
+    /// until the model asks for it. Listed are the tools of first need, those
+    /// the prompt sends the model to by name (`remember`, `knowledgeRelations`),
+    /// `toolSearch` itself, and the role and MCP placeholders, which never wait.
+    pub fn loads_up_front(self) -> bool {
+        matches!(
+            self,
+            ToolName::ReadFile
+                | ToolName::Grep
+                | ToolName::ListFiles
+                | ToolName::WriteFile
+                | ToolName::EditFile
+                | ToolName::Delete
+                | ToolName::Todo
+                | ToolName::GitDiff
+                | ToolName::GitLog
+                | ToolName::RunCommand
+                | ToolName::GitStatus
+                | ToolName::SemanticSearch
+                | ToolName::Skill
+                | ToolName::WritePlan
+                | ToolName::ReadOutput
+                | ToolName::StopProcess
+                | ToolName::ReportFinding
+                | ToolName::Offer
+                | ToolName::Explore
+                | ToolName::Remember
+                | ToolName::KnowledgeWrite
+                | ToolName::KnowledgeSearch
+                | ToolName::KnowledgeRead
+                | ToolName::KnowledgeRelations
+                | ToolName::KubeList
+                | ToolName::KubeGet
+                | ToolName::KubeEvents
+                | ToolName::KubeLogs
+                | ToolName::KubeTop
+                | ToolName::KubeFieldHistory
+                | ToolName::KubeDiagnose
+                | ToolName::KubeWaitRollout
+                | ToolName::KubeProbe
+                | ToolName::KubeRunbook
+                | ToolName::KubeScale
+                | ToolName::KubeUndo
+                | ToolName::KubeSuspend
+                | ToolName::KubeRolloutRestart
+                | ToolName::KubeRolloutUndo
+                | ToolName::KubeApply
+                | ToolName::KubeDelete
+                | ToolName::WebSearch
+                | ToolName::WebFetch
+                | ToolName::DeepseekSearch
+                | ToolName::DeepseekFetch
+                | ToolName::Present
+                | ToolName::ToolSearch
+                | ToolName::Mcp
+        )
+    }
+
     /// The tools that reach the web — offered together, or not at all.
     pub fn is_web(self) -> bool {
         matches!(self, ToolName::WebSearch | ToolName::WebFetch)
@@ -738,6 +798,15 @@ mod tests {
 
     /// Adding a variant without listing it in `ALL` would silently shrink every
     /// other test in this file to a subset of the enum.
+    /// A tool waits for `toolSearch` unless it is listed — a new one too.
+    /// These are the ones that wait today; a tool added to them by being new
+    /// shows up here, for whoever added it to decide.
+    #[test]
+    fn what_waits_for_tool_search_is_these() {
+        let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board]);
+    }
+
     #[test]
     fn all_is_complete() {
         assert_eq!(
@@ -1158,6 +1227,8 @@ pub struct ToolDeps<'a> {
     pub history: &'a [crate::domain::llm::LlmMessage],
     /// The board `board` keeps cards on; `None` where there is none.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The app's own tools this turn offers through `toolSearch` only.
+    pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user

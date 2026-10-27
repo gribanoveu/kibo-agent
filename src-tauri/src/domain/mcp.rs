@@ -835,39 +835,52 @@ impl McpTools {
     /// Words, not meaning: the model writes the query knowing it is searching
     /// names and descriptions, and a server's own words are what it can use.
     pub fn search(&self, query: &str, limit: usize) -> Vec<&McpToolEntry> {
-        let query = query.trim().to_lowercase();
-        let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+        self.scored(query).into_iter().take(limit).map(|(_, entry)| entry).collect()
+    }
+
+    /// [`McpTools::search`] with each tool's [`match_score`], best first and
+    /// none that scored nothing — for ranking these among other tools.
+    pub fn scored(&self, query: &str) -> Vec<(usize, &McpToolEntry)> {
         let mut scored: Vec<(usize, &McpToolEntry)> = self
             .entries
             .iter()
             .filter(|entry| entry.deferred)
             .map(|entry| {
-                let name = format!("{} {}", entry.wire_name, entry.tool.name).to_lowercase();
                 let about = format!(
                     "{} {} {}",
                     entry.tool.title.as_deref().unwrap_or_default(),
                     entry.tool.description,
                     entry.server
-                )
-                .to_lowercase();
-                let exact = query == entry.tool.name.to_lowercase() || query == entry.wire_name.to_lowercase();
-                let score = usize::from(exact) * 1000
-                    + words.iter().map(|w| 3 * usize::from(name.contains(w)) + usize::from(about.contains(w))).sum::<usize>();
-                (score, entry)
+                );
+                (match_score(query, &[&entry.wire_name, &entry.tool.name], &about), entry)
             })
             .filter(|(score, _)| *score > 0)
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.wire_name.cmp(&b.1.wire_name)));
-        scored.into_iter().take(limit).map(|(_, entry)| entry).collect()
+        scored
     }
 }
 
-/// The MCP tools `toolSearch` has found so far in this conversation: every
-/// `mcp__…` name in its results. Read from the history rather than kept
-/// beside it, so a rewound or branched chat has exactly what its own history
-/// found, and a history whose search was folded into a summary searches
-/// again. Only a deferred tool's name changes anything: [`McpTools::definitions`]
-/// declares no name it does not have.
+/// How well a tool answers `toolSearch`'s query: a word of the query found
+/// in one of its `names` counts three times one found in `about`, and a
+/// query that is one of its names whole puts it first. Words, not meaning:
+/// the model writes the query knowing it searches names and descriptions.
+pub fn match_score(query: &str, names: &[&str], about: &str) -> usize {
+    let query = query.trim().to_lowercase();
+    let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let name = names.join(" ").to_lowercase();
+    let about = about.to_lowercase();
+    let exact = names.iter().any(|n| query == n.to_lowercase());
+    usize::from(exact) * 1000 + words.iter().map(|w| 3 * usize::from(name.contains(w)) + usize::from(about.contains(w))).sum::<usize>()
+}
+
+/// The tools `toolSearch` has found so far in this conversation: every
+/// `mcp__…` name in its results, and every name in backticks — how a result
+/// lists the app's own (`model_text::found_tools`). Read from the history
+/// rather than kept beside it, so a rewound or branched chat has exactly what
+/// its own history found, and a history whose search was folded into a
+/// summary searches again. Only a waiting tool's name changes anything: what
+/// declares the tools declares no name it does not have.
 pub fn loaded_tools(history: &[LlmMessage]) -> HashSet<String> {
     let searches: HashSet<&str> = history
         .iter()
@@ -879,9 +892,14 @@ pub fn loaded_tools(history: &[LlmMessage]) -> HashSet<String> {
         .iter()
         .filter(|message| message.tool_call_id.as_deref().is_some_and(|id| searches.contains(id)))
         .filter_map(|message| message.content.as_deref())
-        .flat_map(|text| text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')))
-        .filter(|word| word.starts_with(crate::domain::tools::MCP_PREFIX))
-        .map(str::to_string)
+        .flat_map(|text| {
+            let mcp = text
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                .filter(|word| word.starts_with(crate::domain::tools::MCP_PREFIX));
+            // Between the odd and even backticks.
+            let quoted = text.split('`').skip(1).step_by(2);
+            mcp.chain(quoted).map(str::to_string).collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -1299,6 +1317,9 @@ mod tests {
         let mut gh = exposed("gh", &["a_report", "issue_get", "a_get_file", "get_file"], Some(Exposure::Deferred), &[]);
         gh.tools[0].description = "Each issue, in one report".into();
         gh.tools[1].description = "Reads one".into();
+        // Every word of the query in its name and its description too: the whole name still wins.
+        gh.tools[2].description = "Get one file".into();
+        gh.tools[3].description = "Reads a path".into();
         let tools = McpTools::new(vec![gh]);
         let first = |query: &str| tools.search(query, 5)[0].tool.name.clone();
         assert_eq!(first("issue"), "issue_get", "the name's word, over the description's");
@@ -1318,12 +1339,12 @@ mod tests {
         };
         let history = [
             calls(&[("s1", TOOL_SEARCH), ("r1", "readFile")]),
-            LlmMessage::tool_result("s1", "Found:\n- `mcp__gh__get_file` (gh): reads\n- mcp__gh__list-issues: lists"),
-            LlmMessage::tool_result("r1", "mcp__gh__from_a_file"),
+            LlmMessage::tool_result("s1", "Found:\n- `mcp__gh__get_file` (gh): reads\n- mcp__gh__list-issues: lists\n- `gitBlame` (built-in): who changed a line"),
+            LlmMessage::tool_result("r1", "mcp__gh__from_a_file `move`"),
             LlmMessage::user("call mcp__gh__typed_by_user"),
         ];
         let loaded = loaded_tools(&history);
-        assert_eq!(loaded, ["mcp__gh__get_file", "mcp__gh__list-issues"].map(String::from).into());
+        assert_eq!(loaded, ["mcp__gh__get_file", "mcp__gh__list-issues", "gitBlame"].map(String::from).into());
         assert!(loaded_tools(&history[1..]).is_empty(), "a result without its call is not a search's");
     }
 

@@ -1024,6 +1024,10 @@ fn execute_call(
         deepseek: turn.deepseek.clone(),
         history,
         board: turn.board.clone(),
+        waiting: match turn.place {
+            Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
+            Place::Chat { .. } => Vec::new(),
+        },
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1716,6 +1720,8 @@ fn fold(
 /// `web`: whether the agent's web search is on — off, `webSearch` and
 /// `webFetch` are left out, as in a chat.
 /// `features`: the ones the user has on — a tool of one that is off is left out.
+/// The app's own tools wait for `toolSearch` as a deferred server's do: one
+/// not `loads_up_front` is declared once a search in `history` found it.
 pub(crate) fn tool_definitions_for(
     mode: ConversationMode,
     mcp: &McpTools,
@@ -1723,16 +1729,41 @@ pub(crate) fn tool_definitions_for(
     web: bool,
     features: &Features,
 ) -> Vec<LlmToolDefinition> {
+    let loaded = crate::domain::mcp::loaded_tools(history);
+    let waiting = waiting_tools(mode, web, features);
+    let searched = mcp.has_deferred() || !waiting.is_empty();
     tool_definitions()
         .into_iter()
-        .chain(mcp.definitions(&crate::domain::mcp::loaded_tools(history)))
+        .filter(|definition| loaded.contains(&definition.name) || !waiting.iter().any(|w| w.name == definition.name))
+        .chain(mcp.definitions(&loaded))
         .filter(|definition| {
             ToolName::from_wire_name(&definition.name).is_some_and(|tool| {
-                conversation_mode::offers(mode, tool)
-                    && (tool != ToolName::ToolSearch || mcp.has_deferred())
-                    && (web || !tool.is_web())
-                    && features.offers(tool)
+                offered_here(mode, web, features, tool) && (tool != ToolName::ToolSearch || searched)
             })
+        })
+        .map(|definition| match ToolName::from_wire_name(&definition.name) {
+            Some(ToolName::ToolSearch) => crate::services::ai_tools::tools::tool_search::definition_for(&waiting, mcp.has_deferred()),
+            _ => definition,
+        })
+        .collect()
+}
+
+/// Whether `mode` offers `tool` with the web and the features as they are.
+fn offered_here(mode: ConversationMode, web: bool, features: &Features, tool: ToolName) -> bool {
+    conversation_mode::offers(mode, tool) && (web || !tool.is_web()) && features.offers(tool)
+}
+
+/// The app's own tools this turn offers but does not declare until
+/// `toolSearch` finds them — none where there is no `toolSearch`.
+pub(crate) fn waiting_tools(mode: ConversationMode, web: bool, features: &Features) -> Vec<LlmToolDefinition> {
+    if !offered_here(mode, web, features, ToolName::ToolSearch) {
+        return Vec::new();
+    }
+    tool_definitions()
+        .into_iter()
+        .filter(|definition| {
+            ToolName::from_wire_name(&definition.name)
+                .is_some_and(|tool| !tool.loads_up_front() && offered_here(mode, web, features, tool))
         })
         .collect()
 }
@@ -4364,7 +4395,9 @@ mod tests {
             let mut h = harness("loop-board", vec![text("hi")]);
             h.features = features;
             h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-            h.provider.requests()[0].tools.iter().any(|t| t.name == "board")
+            // Waiting for `toolSearch`, which says so.
+            let tools = &h.provider.requests()[0].tools;
+            tools.iter().any(|t| t.name == "board" || (t.name == "toolSearch" && t.description.contains("`board`")))
         };
         assert!(!offered(Features::default()));
         assert!(offered(Features::all()));
@@ -4381,8 +4414,11 @@ mod tests {
         // Every built-in one but a review's own, the features' — the board,
         // DeepSeek's two, the knowledge base's four — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
-        // is connected — so neither is `toolSearch`, with nothing to find.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 11 - ChatRole::Kubernetes.tools().len());
+        // is connected. Those waiting for `toolSearch` are found with it.
+        let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
+        assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
+        // And `toolSearch`, which is there for them.
+        assert_eq!(offered.len(), ToolName::ALL.len() - 11 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -4846,9 +4882,33 @@ mod tests {
         assert!(result("s1").starts_with("No tool matched"), "{}", result("s1"));
         assert!(result("m1").contains("mcp__tracker__purge") && !result("m1").contains("purge got"), "{}", result("m1"));
 
+        // A server with nothing waiting: the search is the app's own tools', and says nothing of servers.
         let plain = with_server(harness("mcp-no-search", vec![text("hi")]), 3);
         plain.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        assert!(plain.provider.requests()[0].tools.iter().all(|t| t.name != "toolSearch"));
+        let search = plain.provider.requests()[0].tools.iter().find(|t| t.name == "toolSearch").cloned().expect("offered");
+        assert!(!search.description.contains("MCP") && search.description.contains("`gitBlame`"), "{}", search.description);
+    }
+
+    /// The app's rarer tools wait for `toolSearch` in Agent mode, and one it
+    /// found is declared from the next step on; where there is no search —
+    /// Plan mode — they are declared as ever.
+    #[test]
+    fn a_waiting_tool_is_declared_once_the_search_found_it() {
+        let h = harness(
+            "builtin-search",
+            vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"blame"}"#)]), text("done")],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = h.provider.requests();
+        assert!(!tool_names(&requests[0]).contains(&"gitBlame".to_string()));
+        assert!(tool_names(&requests[1]).contains(&"gitBlame".to_string()), "{:?}", tool_names(&requests[1]));
+        assert!(!tool_names(&requests[1]).contains(&"move".to_string()), "only what was found");
+
+        let mut plan = harness("builtin-plan", vec![text("hi")]);
+        plan.mode = ConversationMode::Plan;
+        plan.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let tools = tool_names(&plan.provider.requests()[0]);
+        assert!(tools.contains(&"gitBlame".to_string()) && !tools.contains(&"toolSearch".to_string()), "{tools:?}");
     }
 
     /// The agent searches only when Settings gave it a search: off, neither
@@ -6127,7 +6187,7 @@ mod tests {
         let brief = fork.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
         assert!(brief.starts_with("[A fork of this conversation.") && brief.contains("Find out: where is X"), "{brief}");
         assert_eq!(fork.tools, caller.tools);
-        assert!(tool_names(fork).iter().any(|t| t == "board") && tool_names(fork).iter().any(|t| t.contains("tracker")), "{:?}", tool_names(fork));
+        assert!(tool_names(fork).iter().any(|t| t == "deepseekSearch") && tool_names(fork).iter().any(|t| t.contains("tracker")), "{:?}", tool_names(fork));
 
         let back = tool_contents(&requests[3]).join("\n");
         assert!(back.contains("`webSearch` is not for a fork") && back.contains("`writeFile` is not for a fork"), "{back}");
