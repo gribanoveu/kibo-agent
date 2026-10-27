@@ -20,8 +20,14 @@ export type MongoTarget = { connection: string; database: string; collection: st
 
 export type FindRequest = { filter: string; projection: string; sort: string; skip: number; limit: number };
 
-/** A document as mongosh shows it; `id` is its `_id` as the backend gave it, sent back as is. */
-export type MongoDocument = { id: unknown | null; text: string };
+/** A value as the card draws it: what nests folds, the rest is its mongosh text and BSON type (`domain::mongo::Shown`). */
+export type Shown =
+  | { kind: "object"; fields: [string, Shown][] }
+  | { kind: "array"; items: Shown[] }
+  | { kind: "value"; text: string; bson: string };
+
+/** A document as mongosh shows it, and field by field; `id` is its `_id` as the backend gave it, sent back as is. */
+export type MongoDocument = { id: unknown | null; text: string; fields: [string, Shown][] };
 
 export type FindPage = { documents: MongoDocument[]; total: number };
 

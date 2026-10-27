@@ -10,7 +10,16 @@ let connections: MongoConnection[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let refusals: Record<string, string> = {};
 
-const DOC = { id: { $oid: "65f0a1b2c3d4e5f6a7b8c9d0" }, text: '{\n  _id: ObjectId("65f0a1b2c3d4e5f6a7b8c9d0"),\n  name: "Ann"\n}' };
+const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
+const DOC = {
+  id: { $oid: "65f0a1b2c3d4e5f6a7b8c9d0" },
+  text: '{\n  _id: ObjectId("65f0a1b2c3d4e5f6a7b8c9d0"),\n  name: "Ann"\n}',
+  fields: [
+    ["_id", value('ObjectId("65f0a1b2c3d4e5f6a7b8c9d0")', "ObjectId")],
+    ["name", value('"Ann"', "String")],
+    ["tags", { kind: "array", items: [value('"vip"', "String"), { kind: "object", fields: [["n", value("NumberLong(5)", "Int64")]] }] }],
+  ],
+};
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -131,8 +140,24 @@ describe("a collection", () => {
     expect(screen.getByText("2.5 MB")).toBeTruthy();
     expect(screen.getByText("view")).toBeTruthy();
     expect(sent("mongo_find")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" }, request: { filter: "", projection: "", sort: "", skip: 0, limit: 20 } }]);
-    expect(screen.getByText(/name: "Ann"/)).toBeTruthy();
+    expect(screen.getByText('"Ann"').nextElementSibling?.textContent).toBe("String");
     expect(screen.getByText("1–1 of 41")).toBeTruthy();
+  });
+
+  test("a document's fields are a line each, what nests closed until opened or all expanded", async () => {
+    await openOrders();
+    const tags = screen.getByRole("button", { name: /tags.*Array \(2\)/ });
+    expect(tags.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText('"vip"')).toBeNull();
+    fireEvent.click(tags);
+    expect(screen.getByText('"vip"')).toBeTruthy();
+    fireEvent.click(tags);
+    expect(screen.queryByText('"vip"')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(screen.getByText('"vip"')).toBeTruthy();
+    expect(screen.getByText("NumberLong(5)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(screen.queryByText('"vip"')).toBeNull();
   });
 
   test("a filter is found with Enter, and the next page skips what was shown", async () => {

@@ -48,6 +48,8 @@ pub struct DocumentView {
     pub id: Option<Value>,
     /// As mongosh shows it, and as the editor takes it back.
     pub text: String,
+    /// Field by field, as the card draws it.
+    pub fields: Vec<(String, mongo::Shown)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -184,7 +186,11 @@ pub fn drop_collection(clients: &MongoClients, target: &Target) -> Result<(), Mo
 }
 
 fn view(document: &Value) -> DocumentView {
-    DocumentView { id: document.get("_id").cloned(), text: mongo::to_shell(document) }
+    DocumentView {
+        id: document.get("_id").cloned(),
+        text: mongo::to_shell(document),
+        fields: document.as_object().map(mongo::fields).unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]

@@ -361,6 +361,89 @@
   line-height: 1.5;
   white-space: pre;
 }
+/* A document field by field, as Compass draws it: each field leaves a gutter
+   for a toggle, and that gutter is all a nested field is indented by. */
+.mongo-tree-fields {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.mongo-entry {
+  display: flex;
+  min-width: 0;
+  padding-left: 14px;
+  color: var(--text);
+  white-space: pre;
+}
+.mongo-entry-nest {
+  display: block;
+}
+.mongo-entry-key {
+  font-weight: 600;
+}
+.mongo-entry-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The type ends the line, so the eye runs down one column for it. */
+.mongo-entry-type {
+  flex: none;
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+.mongo-entry:not(.mongo-entry-nest):hover,
+.mongo-entry-toggle:hover {
+  background: var(--bg-hover);
+}
+.mongo-entry-toggle {
+  display: flex;
+  align-items: center;
+  width: calc(100% + 14px);
+  margin-left: -14px;
+  text-align: left;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+  cursor: pointer;
+}
+.mongo-entry-toggle svg {
+  width: 14px;
+  color: var(--text-faint);
+  transition: transform 0.12s;
+}
+.mongo-entry-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.mongo-bson-String {
+  color: var(--green);
+}
+.mongo-bson-ObjectId {
+  color: var(--red);
+}
+.mongo-bson-Date,
+.mongo-bson-Int32,
+.mongo-bson-Int64,
+.mongo-bson-Double,
+.mongo-bson-Decimal128,
+.mongo-bson-Number {
+  color: var(--purple);
+}
+.mongo-bson-Boolean,
+.mongo-bson-Null,
+.mongo-bson-Undefined {
+  color: var(--amber);
+}
+
 .mongo-confirm-doc {
   padding: 10px 12px;
   border-radius: var(--radius-md);

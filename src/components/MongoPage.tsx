@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, CopyPlus, Database, Eye, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
@@ -9,7 +9,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
-import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type MongoDocument, type MongoTarget } from "../lib/mongo";
+import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./MongoPage.css";
@@ -32,8 +32,8 @@ const isId = (value: unknown): value is string | null => value === null || typeo
 
 const LIMITS = [10, 20, 50, 100];
 
-/** Documents past this many lines are folded until asked for. */
-const FOLDED_LINES = 14;
+/** Documents past this many fields are folded until asked for. */
+const FOLDED_FIELDS = 14;
 
 /**
  * MongoDB, in the spirit of Compass but only what is used every day
@@ -576,27 +576,67 @@ function QueryField({ label, value, placeholder, onChange, onKeyDown }: { label:
   );
 }
 
-/** A document as mongosh shows it, folded past a few lines, with its actions on the corner. */
+/** A document as Compass draws it — a field to a line, what nests closed until opened — with its actions on the corner. */
 function DocumentCard({ doc, actions }: { doc: MongoDocument; actions?: ReactNode }) {
-  const lines = doc.text.split("\n");
-  const long = lines.length > FOLDED_LINES;
+  const long = doc.fields.length > FOLDED_FIELDS;
   const [unfolded, setUnfolded] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const { copied, copy } = useCopied();
   return (
     <article className="mongo-document">
       <div className="mongo-document-actions">
+        <button type="button" className="mongo-icon-button" title={expanded ? "Collapse all" : "Expand all"} aria-label={expanded ? "Collapse all" : "Expand all"} onClick={() => setExpanded(!expanded)}>
+          {expanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+        </button>
         <button type="button" className="mongo-icon-button" title="Copy" aria-label="Copy document" onClick={() => copy(doc.text)}>
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
         {actions}
       </div>
-      <pre className="mongo-document-text mongo-mono">{long && !unfolded ? lines.slice(0, FOLDED_LINES).join("\n") : doc.text}</pre>
+      {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says. */}
+      <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} />
       {long && (
         <button type="button" className="mongo-unfold" onClick={() => setUnfolded(!unfolded)}>
-          {unfolded ? "Show less" : `Show all ${lines.length} lines`}
+          {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
         </button>
       )}
     </article>
+  );
+}
+
+function Fields({ entries, open }: { entries: [string, Shown][]; open: boolean }) {
+  return (
+    <ul className="mongo-tree-fields">
+      {entries.map(([name, value]) => (
+        <Field key={name} name={name} value={value} open={open} />
+      ))}
+    </ul>
+  );
+}
+
+/** One field: its key in bold, its value, its type at the end of the line — an object or array a toggle for what is in it. */
+function Field({ name, value, open }: { name: string; value: Shown; open: boolean }) {
+  const [shown, setShown] = useState(open);
+  if (value.kind === "value") {
+    return (
+      <li className="mongo-entry">
+        <span className="mongo-entry-key">{name}</span>
+        {": "}
+        <span className={`mongo-entry-value mongo-bson-${value.bson}`}>{value.text}</span>
+        <span className="mongo-entry-type">{value.bson}</span>
+      </li>
+    );
+  }
+  const entries: [string, Shown][] = value.kind === "object" ? value.fields : value.items.map((item, i) => [String(i), item]);
+  return (
+    <li className="mongo-entry mongo-entry-nest">
+      <button type="button" className="mongo-entry-toggle" aria-expanded={shown} onClick={() => setShown(!shown)}>
+        <ChevronRight size={12} />
+        <span className="mongo-entry-key">{name}</span>
+        <span className="mongo-entry-type">{value.kind === "object" ? `Object (${value.fields.length})` : `Array (${value.items.length})`}</span>
+      </button>
+      {shown && <Fields entries={entries} open={open} />}
+    </li>
   );
 }
 

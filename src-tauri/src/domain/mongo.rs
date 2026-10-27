@@ -610,7 +610,7 @@ fn write_shell(value: &Value, depth: Option<usize>, out: &mut String) {
             close(out, ']');
         }
         Value::Object(map) => {
-            if let Some(special) = special(map) {
+            if let Some((_, special)) = special(map) {
                 out.push_str(&special);
                 return;
             }
@@ -631,19 +631,55 @@ fn write_shell(value: &Value, depth: Option<usize>, out: &mut String) {
     }
 }
 
-/// A BSON type that Extended JSON wraps in `{ "$…": … }`, as its constructor.
-fn special(map: &Map<String, Value>) -> Option<String> {
+/// A value as the page draws it, a field to a line: what nests folds, the
+/// rest is its mongosh text with its BSON type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Shown {
+    Object { fields: Vec<(String, Shown)> },
+    Array { items: Vec<Shown> },
+    Value { text: String, bson: &'static str },
+}
+
+/// A document's fields, each as [`Shown`]; an empty object or array is a value, `{}` or `[]`.
+pub fn fields(map: &Map<String, Value>) -> Vec<(String, Shown)> {
+    map.iter().map(|(key, item)| (key.clone(), shown(item))).collect()
+}
+
+fn shown(value: &Value) -> Shown {
+    match value {
+        Value::Array(items) if !items.is_empty() => Shown::Array { items: items.iter().map(shown).collect() },
+        Value::Object(map) if !map.is_empty() => match special(map) {
+            Some((bson, text)) => Shown::Value { text, bson },
+            None => Shown::Object { fields: fields(map) },
+        },
+        _ => Shown::Value {
+            text: to_shell_line(value),
+            bson: match value {
+                Value::Null => "Null",
+                Value::Bool(_) => "Boolean",
+                Value::Number(_) => "Number",
+                Value::String(_) => "String",
+                Value::Array(_) => "Array",
+                Value::Object(_) => "Object",
+            },
+        },
+    }
+}
+
+/// A BSON type that Extended JSON wraps in `{ "$…": … }`: its name and its constructor.
+fn special(map: &Map<String, Value>) -> Option<(&'static str, String)> {
     if map.len() != 1 {
         return None;
     }
     let (tag, inner) = map.iter().next()?;
     let text = |v: &Value| v.as_str().map(str::to_string);
     Some(match tag.as_str() {
-        "$oid" => format!("ObjectId({})", quoted(&text(inner)?)),
-        "$numberInt" => text(inner)?,
-        "$numberLong" => format!("NumberLong({})", text(inner)?),
-        "$numberDouble" => text(inner)?,
-        "$numberDecimal" => format!("NumberDecimal({})", quoted(&text(inner)?)),
+        "$oid" => ("ObjectId", format!("ObjectId({})", quoted(&text(inner)?))),
+        "$numberInt" => ("Int32", text(inner)?),
+        "$numberLong" => ("Int64", format!("NumberLong({})", text(inner)?)),
+        "$numberDouble" => ("Double", text(inner)?),
+        "$numberDecimal" => ("Decimal128", format!("NumberDecimal({})", quoted(&text(inner)?))),
         "$date" => {
             let millis: i64 = match inner {
                 Value::Object(m) => m.get("$numberLong").and_then(Value::as_str)?.parse().ok()?,
@@ -651,28 +687,29 @@ fn special(map: &Map<String, Value>) -> Option<String> {
                 Value::Number(n) => n.as_i64()?,
                 _ => return None,
             };
-            match chrono::DateTime::from_timestamp_millis(millis) {
+            let text = match chrono::DateTime::from_timestamp_millis(millis) {
                 Some(at) => format!("ISODate({})", quoted(&at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())),
                 None => format!("Date({millis})"),
-            }
+            };
+            ("Date", text)
         }
         "$binary" => {
             let base64 = inner.get("base64").and_then(Value::as_str)?;
             let subtype = inner.get("subType").and_then(Value::as_str)?;
             match (subtype, uuid_of(base64)) {
-                ("04", Some(uuid)) => format!("UUID({})", quoted(&uuid)),
-                _ => format!("BinData({}, {})", u8::from_str_radix(subtype, 16).ok()?, quoted(base64)),
+                ("04", Some(uuid)) => ("UUID", format!("UUID({})", quoted(&uuid))),
+                _ => ("Binary", format!("BinData({}, {})", u8::from_str_radix(subtype, 16).ok()?, quoted(base64))),
             }
         }
         "$regularExpression" => {
             let pattern = inner.get("pattern").and_then(Value::as_str)?;
             let options = inner.get("options").and_then(Value::as_str)?;
-            format!("/{}/{options}", pattern.replace('/', "\\/"))
+            ("RegExp", format!("/{}/{options}", pattern.replace('/', "\\/")))
         }
-        "$timestamp" => format!("Timestamp({{ t: {}, i: {} }})", inner.get("t")?, inner.get("i")?),
-        "$minKey" => "MinKey()".into(),
-        "$maxKey" => "MaxKey()".into(),
-        "$undefined" => "undefined".into(),
+        "$timestamp" => ("Timestamp", format!("Timestamp({{ t: {}, i: {} }})", inner.get("t")?, inner.get("i")?)),
+        "$minKey" => ("MinKey", "MinKey()".into()),
+        "$maxKey" => ("MaxKey", "MaxKey()".into()),
+        "$undefined" => ("Undefined", "undefined".into()),
         _ => return None,
     })
 }
@@ -872,6 +909,33 @@ mod tests {
     fn one_line_for_an_index() {
         assert_eq!(to_shell_line(&json!({ "name": { "$numberInt": "1" }, "at": { "$numberInt": "-1" } })), "{ name: 1, at: -1 }");
         assert_eq!(to_shell_line(&json!({ "a": [1, { "b": "x" }], "e": {} })), "{ a: [ 1, { b: \"x\" } ], e: {} }");
+    }
+
+    #[test]
+    fn fields_fold_what_nests_and_name_the_rest() {
+        let doc = json!({
+            "_id": { "$oid": "65f0a1b2c3d4e5f6a7b8c9d0" },
+            "n": { "$numberLong": "5" },
+            "ok": true,
+            "tags": ["a", null],
+            "op": { "at": { "$date": { "$numberLong": "0" } } },
+            "none": [],
+            "empty": {},
+        });
+        let shown = serde_json::to_value(fields(doc.as_object().unwrap())).unwrap();
+        let value = |text: &str, bson: &str| json!({ "kind": "value", "text": text, "bson": bson });
+        assert_eq!(
+            shown,
+            json!([
+                ["_id", value("ObjectId(\"65f0a1b2c3d4e5f6a7b8c9d0\")", "ObjectId")],
+                ["n", value("NumberLong(5)", "Int64")],
+                ["ok", value("true", "Boolean")],
+                ["tags", { "kind": "array", "items": [value("\"a\"", "String"), value("null", "Null")] }],
+                ["op", { "kind": "object", "fields": [["at", value("ISODate(\"1970-01-01T00:00:00.000Z\")", "Date")]] }],
+                ["none", value("[]", "Array")],
+                ["empty", value("{}", "Object")],
+            ])
+        );
     }
 
     #[test]
