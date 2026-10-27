@@ -36,6 +36,9 @@ export type PageDef = {
   dock: boolean;
   /** The feature it belongs to (`lib/features.ts`): listed only while that is on. */
   feature?: string;
+  /** Stays mounted once opened, hidden while away, so the work on it survives a visit elsewhere.
+      Only for a page that listens to nothing: a hidden one would go on listening. */
+  keep?: boolean;
   Component: (ctx: PageContext) => ReactNode;
 };
 
@@ -50,7 +53,7 @@ export const PAGES = [
   { id: "board", label: "Board", title: "Board — what the Assistant keeps for later", icon: SquareKanban, dock: false, feature: "board", Component: BoardPage },
   { id: "meetings", label: "Meetings", title: "Meetings — a call's recording made into notes", icon: AudioLines, dock: false, feature: "meeting-notes", Component: MeetingsPage },
   { id: "knowledge", label: "Knowledge", title: "Knowledge — what agents wrote about repositories", icon: Library, dock: false, feature: "knowledge", Component: KnowledgePage },
-  { id: "mongodb", label: "MongoDB", title: "MongoDB — your servers' databases, collections and documents", icon: Database, dock: false, feature: "mongodb", Component: MongoPage },
+  { id: "mongodb", label: "MongoDB", title: "MongoDB — your servers' databases, collections and documents", icon: Database, dock: false, feature: "mongodb", keep: true, Component: MongoPage },
   { id: "artifacts", label: "Artifacts", title: "Artifacts — meetings and prototypes, as folders", icon: FolderOpen, dock: false, Component: ArtifactsPage },
 ] as const satisfies readonly PageDef[];
 

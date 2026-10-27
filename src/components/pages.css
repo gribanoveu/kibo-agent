@@ -3,3 +3,8 @@
 .window.on-page .file-viewer {
   display: none;
 }
+
+/* A kept page (`keep` in pages.tsx) lays out as if unwrapped while shown; `hidden` hides it. */
+.page-kept:not([hidden]) {
+  display: contents;
+}

@@ -7,8 +7,10 @@ type Props = {
   /** Files left, the file in the middle, the chat right — or the chat first, the rest right of it. */
   ide: boolean;
   chat: ReactElement;
-  /** A sidebar page (pages.tsx), drawn in the chat's place; the chat and the file stay mounted under it. */
+  /** A sidebar page (pages.tsx), drawn in the chat's place; the chat and the file stay mounted under it.
+      It also holds the kept pages, hidden, while none is shown. */
   page: ReactElement | null;
+  pageShown: boolean;
   /** The file viewer, when a file is open. */
   viewer: ReactElement | null;
   /** The pane from the header's button; hidden by the window's class rather than unmounted. */
@@ -25,7 +27,7 @@ type Props = {
  * layout: switching moves the chat rather than drawing it anew, so a draft
  * survives it.
  */
-export function Columns({ ide, chat, page, viewer, top, topShown, bottom, panels }: Props) {
+export function Columns({ ide, chat, page, pageShown, viewer, top, topShown, bottom, panels }: Props) {
   const bottomHandle = (
     <PanelResizeHandle
       axis="y"
@@ -65,11 +67,12 @@ export function Columns({ ide, chat, page, viewer, top, topShown, bottom, panels
         onResizeEnd={(size) => panels.endResize("chat", size)}
       />,
       chat,
+      page,
     ];
   return [
     chat,
     page,
-    !page && viewer && (
+    !pageShown && viewer && (
       <PanelResizeHandle
         key="viewer-handle"
         invert

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { Composer } from "./components/Composer";
@@ -124,6 +124,12 @@ export default function App() {
   const features = useFeatures();
   const pages = pagesShown(features.isOn);
   const onPage = ide ? null : (pages.find((one) => one.id === page) ?? null);
+  // The `keep` pages opened so far, mounted from then on; a feature turned off drops its page.
+  const [kept, setKept] = useState<PageId[]>([]);
+  const keptPages = pages.filter((one) => kept.includes(one.id) || (one === onPage && "keep" in one && one.keep));
+  useEffect(() => {
+    if (onPage && keptPages.includes(onPage) && !kept.includes(onPage.id)) setKept([...kept, onPage.id]);
+  }, [onPage]);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -708,6 +714,24 @@ export default function App() {
   const bottomPane = bottomShown && (
     <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
   );
+  const renderPage = (one: (typeof pages)[number]) => (
+    <one.Component
+      openPane={openTab}
+      item={one === onPage ? pageItem : undefined}
+      openPage={(next, item) => {
+        setPageItem(item);
+        setPage(next);
+      }}
+      openChat={(id) => {
+        setPage(null);
+        setMode("chat");
+        void plain.open(id).then((opened) => opened || toast.show(STAY));
+      }}
+      removeChat={plain.remove}
+      chats={plain.chats}
+    />
+  );
+
   return (
     <div
       className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
@@ -788,25 +812,18 @@ export default function App() {
         <Columns
           ide={ide}
           chat={chat}
+          pageShown={onPage !== null}
           page={
-            onPage && (
-              <onPage.Component
-                key="page"
-                openPane={openTab}
-                item={pageItem}
-                openPage={(next, item) => {
-                  setPageItem(item);
-                  setPage(next);
-                }}
-                openChat={(id) => {
-                  setPage(null);
-                  setMode("chat");
-                  void plain.open(id).then((opened) => opened || toast.show(STAY));
-                }}
-                removeChat={plain.remove}
-                chats={plain.chats}
-              />
-            )
+            onPage || keptPages.length > 0 ? (
+              <Fragment key="page">
+                {keptPages.map((one) => (
+                  <div key={one.id} className="page-kept" hidden={one !== onPage}>
+                    {renderPage(one)}
+                  </div>
+                ))}
+                {onPage && !keptPages.includes(onPage) && renderPage(onPage)}
+              </Fragment>
+            ) : null
           }
           viewer={fileViewer}
           top={topPane}
