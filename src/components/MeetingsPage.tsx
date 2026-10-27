@@ -6,6 +6,7 @@ import { Page, PageSheet } from "./Page";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { Switch } from "./Switch";
+import { Dropdown } from "./Dropdown";
 import { useMeetings, type Job } from "../hooks/useMeetings";
 import { sizeLabel } from "../lib/prototype";
 import { useCopied } from "../hooks/useCopied";
@@ -24,6 +25,7 @@ import {
   type Meeting,
   type MeetingDocument,
   type MeetingInfo,
+  type Microphone,
   type Recording,
   type RecordingAccess,
   type RecordingInfo,
@@ -108,8 +110,12 @@ export function MeetingsPage({ item }: PageContext) {
           <RecordingOptions
             autoProcess={meetings.autoProcess}
             denoise={meetings.denoise}
+            microphone={meetings.microphone}
+            microphones={meetings.microphones}
             onAutoProcess={() => void meetings.toggleAutoProcess()}
             onDenoise={() => void meetings.toggleDenoise()}
+            onOpen={meetings.readMicrophones}
+            onMicrophone={(id) => void meetings.pickMicrophone(id)}
           />
         )}
         {!openId && (
@@ -270,17 +276,28 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
   );
 }
 
-/** The recording's two settings, set once and left: behind a gear beside Record, not on the page. */
+/** The menu's value for the system's default microphone: no id is empty. */
+const DEFAULT_MIC = "";
+
+/** The recording's settings, set once and left: behind a gear beside Record, not on the page. */
 function RecordingOptions({
   autoProcess,
   denoise,
+  microphone,
+  microphones,
   onAutoProcess,
   onDenoise,
+  onOpen,
+  onMicrophone,
 }: {
   autoProcess: boolean;
   denoise: boolean;
+  microphone: string | null;
+  microphones: Microphone[] | null;
   onAutoProcess: () => void;
   onDenoise: () => void;
+  onOpen: () => void;
+  onMicrophone: (id: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -307,12 +324,32 @@ function RecordingOptions({
         aria-label="Recording settings"
         title="Recording settings"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) onOpen();
+          setOpen(!open);
+        }}
       >
         <Settings2 size={14} />
       </button>
       {open && (
         <div className="meetings-options" role="dialog" aria-label="Recording settings">
+          <div className="meetings-mic" title="Your side of the call, from the next recording on; while the one chosen is unplugged or will not open, the system's default records instead">
+            <Mic size={14} />
+            <Dropdown
+              below
+              label={micLabel(microphone, microphones)}
+              heading="Record from"
+              value={microphone ?? DEFAULT_MIC}
+              onPick={(id) => onMicrophone(id === DEFAULT_MIC ? null : id)}
+              options={[
+                { value: DEFAULT_MIC, label: "System default" },
+                ...(microphones ?? []).map((m) => ({ value: m.id, label: m.name })),
+                ...(microphone !== null && !microphones?.some((m) => m.id === microphone)
+                  ? [{ value: microphone, label: micLabel(microphone, microphones) }]
+                  : []),
+              ]}
+            />
+          </div>
           <label className="meetings-auto" title="A recording is made into a meeting as soon as you press Stop">
             <Switch label="Transcribe when a recording stops" on={autoProcess} onChange={onAutoProcess} />
             Transcribe when a recording stops
@@ -325,6 +362,13 @@ function RecordingOptions({
       )}
     </div>
   );
+}
+
+/** The trigger's words for the microphone chosen; one not plugged in now says so, once the list is read. */
+function micLabel(microphone: string | null, microphones: Microphone[] | null): string {
+  if (microphone === null) return "System default microphone";
+  if (microphones === null) return "Chosen microphone";
+  return microphones.find((m) => m.id === microphone)?.name ?? "Chosen microphone, not plugged in";
 }
 
 /** What a recording not yet transcribed is called in the list. */

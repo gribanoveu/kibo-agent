@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-27 Choose which microphone a call is recorded from in the Meetings page's recording settings; the choice is kept, and while that microphone is unplugged the system's default records instead
 - 2026-10-27 Semantic search puts the right code first far more often: the active model reads the index's first 30 results against the query and reorders them, at the cost of a few seconds a search
 - 2026-10-27 In Agent mode rarely used tools (move, blame, the terminal reader, the board) and every new one wait behind `toolSearch` instead of filling each request; the agent finds and uses them when a task needs them
 - 2026-10-26 The agent can fork a helper from the conversation itself rather than a written brief; it starts from the same cached request, only reads, and answers like any other helper

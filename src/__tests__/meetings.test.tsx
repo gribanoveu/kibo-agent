@@ -16,6 +16,11 @@ let recordings: { id: string; created: string; seconds: number }[] = [];
 let recordingNow: { id: string; seconds: number; muted: boolean } | null = null;
 let autoOn = false;
 let denoiseOn = true;
+let microphone: string | null = null;
+let microphones = [
+  { id: "coreaudio:built-in", name: "MacBook Microphone" },
+  { id: "coreaudio:usb", name: "USB Headset" },
+];
 let finishRecording: (result: { id?: string; error?: string }) => void = () => {};
 let finishDocument: () => void = () => {};
 let access: Record<string, string> = { microphone: "granted", call: "granted" };
@@ -52,6 +57,12 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "meeting_denoise_get") return Promise.resolve(denoiseOn);
     if (command === "meeting_denoise_set") {
       denoiseOn = Boolean(args!.on);
+      return Promise.resolve(null);
+    }
+    if (command === "meeting_microphones") return Promise.resolve(structuredClone(microphones));
+    if (command === "meeting_microphone_get") return Promise.resolve(microphone);
+    if (command === "meeting_microphone_set") {
+      microphone = (args!.id as string | null) ?? null;
       return Promise.resolve(null);
     }
     if (command === "meeting_auto_process_set") {
@@ -160,6 +171,11 @@ beforeEach(() => {
   recordingNow = null;
   autoOn = false;
   denoiseOn = true;
+  microphone = null;
+  microphones = [
+    { id: "coreaudio:built-in", name: "MacBook Microphone" },
+    { id: "coreaudio:usb", name: "USB Headset" },
+  ];
   access = { microphone: "granted", call: "granted" };
 });
 
@@ -563,6 +579,7 @@ describe("the meetings page", () => {
     const toggle = () => screen.getByRole("switch", { name: "Reduce noise on my side before transcribing" });
     const gear = () => screen.getByRole("button", { name: "Recording settings" });
     fireEvent.click(gear());
+    await settle();
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle());
     await settle();
@@ -574,6 +591,7 @@ describe("the meetings page", () => {
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     expect(screen.queryByRole("switch")).toBeNull();
     fireEvent.click(gear());
+    await settle();
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("switch")).toBeNull();
 
@@ -581,7 +599,34 @@ describe("the meetings page", () => {
     render(<MeetingsPage openPane={() => {}} />);
     await settle();
     fireEvent.click(gear());
+    await settle();
     expect(toggle().getAttribute("aria-checked")).toBe("false");
+  });
+
+  test("the microphone recorded from is chosen in the settings and kept; one unplugged says so", async () => {
+    render(<MeetingsPage openPane={() => {}} />);
+    await settle();
+    const gear = () => screen.getByRole("button", { name: "Recording settings" });
+    fireEvent.click(gear());
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /System default microphone/ }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["System default", "MacBook Microphone", "USB Headset"]);
+    fireEvent.click(screen.getByRole("option", { name: /USB Headset/ }));
+    await settle();
+    expect(microphone).toBe("coreaudio:usb");
+    expect(screen.getByRole("button", { name: /USB Headset/ })).toBeTruthy();
+
+    // Unplugged, it stays chosen and says so; the default is a pick away.
+    cleanup();
+    microphones = microphones.filter((m) => m.id !== "coreaudio:usb");
+    render(<MeetingsPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(gear());
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /not plugged in/ }));
+    fireEvent.click(screen.getByRole("option", { name: /System default/ }));
+    await settle();
+    expect(microphone).toBeNull();
   });
 
   test("a page opened while a call is recorded shows it; a silent call says to check the permission", async () => {
