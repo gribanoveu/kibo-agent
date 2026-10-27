@@ -85,6 +85,8 @@ pub enum MongoError {
     FindClosed,
     #[error("{inserted} of {total} went in before one was refused, and stay in: {reason}")]
     PartlyInserted { inserted: usize, total: usize, reason: String },
+    #[error("{inserted} went in, but the write concern was not met — they may not be on every member yet: {reason}")]
+    Unconfirmed { inserted: usize, reason: String },
     #[error("{0}")]
     Server(String),
     #[error("{0}")]

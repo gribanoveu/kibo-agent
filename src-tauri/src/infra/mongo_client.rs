@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use mongodb::bson::{self, Bson, Document};
-use mongodb::options::{ClientOptions, IndexOptions};
+use mongodb::options::{ClientOptions, ConnectionString, IndexOptions};
 pub use mongodb::sync::Client;
 use mongodb::sync::{Collection, Cursor};
 use mongodb::IndexModel;
@@ -86,6 +86,11 @@ struct FindFrom {
 pub struct Found {
     pub documents: Vec<Value>,
     pub next: Option<u64>,
+}
+
+/// `uri` as the driver reads it, with nothing connected or looked up.
+pub fn check(uri: &SecretString) -> Result<(), MongoError> {
+    ConnectionString::parse(uri.expose_secret()).map(drop).map_err(unread)
 }
 
 /// A client for `uri`, not connected yet: the first call connects. Kept by
@@ -244,9 +249,9 @@ pub fn aggregate(client: &Client, db: &str, name: &str, pipeline: Vec<Map<String
     collection(client, db, name).aggregate(stages).max_time(QUERY_TIMEOUT).run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
 }
 
-/// How many went in.
 /// How many went in. In order, stopping at the first the server refuses: the
-/// ones before it are in, which the error says.
+/// ones before it are in, which the error says. All in but the write concern
+/// not met, they stay in, and the error says that.
 pub fn insert(client: &Client, db: &str, name: &str, documents: Vec<Map<String, Value>>) -> Result<usize, MongoError> {
     let documents = documents.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
     let total = documents.len();
@@ -261,6 +266,9 @@ pub fn insert(client: &Client, db: &str, name: &str, documents: Vec<Map<String, 
                     0 => MongoError::Server(reason),
                     inserted => MongoError::PartlyInserted { inserted, total, reason },
                 }
+            }
+            mongodb::error::ErrorKind::InsertMany(mongodb::error::InsertManyError { write_concern_error: Some(concern), .. }) => {
+                MongoError::Unconfirmed { inserted: total, reason: format!("{} ({})", concern.message, concern.code_name) }
             }
             _ => server(error),
         }),
@@ -391,6 +399,10 @@ fn server(error: mongodb::error::Error) -> MongoError {
     match error.kind.as_ref() {
         mongodb::error::ErrorKind::Command(refused) if refused.code == MAX_TIME_EXPIRED => MongoError::TimedOut,
         mongodb::error::ErrorKind::Command(refused) => MongoError::Server(format!("{} ({})", refused.message, refused.code_name)),
+        mongodb::error::ErrorKind::Write(mongodb::error::WriteFailure::WriteConcernError(unmet)) => MongoError::Server(format!("the write concern was not met: {} ({})", unmet.message, unmet.code_name)),
+        mongodb::error::ErrorKind::Write(mongodb::error::WriteFailure::WriteError(refused)) => {
+            MongoError::Server(format!("{} ({})", refused.message, refused.code_name.clone().unwrap_or_else(|| format!("code {}", refused.code))))
+        }
         _ => MongoError::Server(error.to_string()),
     }
 }
@@ -449,6 +461,26 @@ mod tests {
     #[test]
     fn a_wrapper_with_a_bad_value_is_refused_not_stored_as_text() {
         assert!(document(parse_document("{ d: NumberDecimal('abc') }", "the document").unwrap()).is_err());
+    }
+
+    /// A one-member replica set at `KIBO_MONGO_RS_URI` (default port 27018), asked
+    /// for two members: the documents go in and the write concern is not met.
+    #[test]
+    #[ignore = "needs a one-member replica set — set KIBO_MONGO_RS_URI"]
+    fn live_server_unconfirmed() {
+        let uri = std::env::var("KIBO_MONGO_RS_URI").unwrap_or_else(|_| "mongodb://localhost:27018/?directConnection=true".into());
+        let client = open(&SecretString::from(format!("{uri}{}w=2&wtimeoutMS=500", if uri.contains('?') { '&' } else { '?' }))).unwrap();
+        let (db, coll) = ("kibo_live_test", format!("w{}", std::process::id()));
+        let docs = crate::domain::mongo::parse_documents("[{ _id: 1 }, { _id: 2 }]", "d").unwrap();
+        let unconfirmed = insert(&client, db, &coll, docs);
+        assert!(matches!(&unconfirmed, Err(MongoError::Unconfirmed { inserted: 2, reason }) if reason.contains("UnsatisfiableWriteConcern")), "{unconfirmed:?}");
+        assert_eq!(count(&client, db, &coll, Map::new()).unwrap(), 2, "they stay in");
+        // Any other write: what the server said, not the driver's dump of its reply.
+        let unmet = drop_collection(&client, db, &coll);
+        assert!(matches!(&unmet, Err(MongoError::Server(m)) if m == "the write concern was not met: Not enough data-bearing nodes (UnsatisfiableWriteConcern)"), "{unmet:?}");
+        let gone = delete(&client, db, &coll, json!(1));
+        assert!(matches!(&gone, Err(MongoError::Server(m)) if m.starts_with("the write concern was not met")), "{gone:?}");
+        drop_collection(&open(&SecretString::from(uri)).unwrap(), db, &coll).unwrap();
     }
 
     /// A real server, at `KIBO_MONGO_URI` (default `mongodb://localhost:27017`):
@@ -571,10 +603,13 @@ mod tests {
 
     #[test]
     fn a_string_the_driver_cannot_read_is_refused_without_repeating_it() {
-        for uri in ["mongodb://h/?authMechanismProperties=AWS_SESSION_TOKEN=hunter2", "mongodb://h/?tlsCertificateKeyFilePassword=pa&hunter2", "mongodb://u:p/hunter2@h"] {
+        for uri in ["mongodb://h/?authMechanismProperties=AWS_SESSION_TOKEN=hunter2", "mongodb://h/?tlsCertificateKeyFilePassword=pa&hunter2", "mongodb://u:p/hunter2@h", "mongodb://h/?tlsCertificateKeyFilePassword=pa&hunter2=x"] {
             let refused = open(&SecretString::from(uri)).unwrap_err();
             assert!(matches!(&refused, MongoError::BadUri(m) if !m.contains("hunter2")), "{uri}: {refused}");
+            let refused = check(&SecretString::from(uri)).unwrap_err();
+            assert!(matches!(&refused, MongoError::BadUri(m) if !m.contains("hunter2")), "{uri}: {refused}");
         }
+        assert!(check(&SecretString::from("mongodb+srv://c.example.net/?w=1")).is_ok(), "read, not looked up");
     }
 
     /// Made once per connection, so a call does not open the sealed store;

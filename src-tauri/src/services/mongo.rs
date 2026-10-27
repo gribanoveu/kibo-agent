@@ -77,6 +77,8 @@ pub fn save_connection(clients: &MongoClients, draft: ConnectionDraft) -> Result
         (Some(id), None) => mongo_store::rename(&id, name)?,
         (id, Some(uri)) => {
             mongo::validate_uri(uri)?;
+            // Read once as the driver reads it: an option it does not know is a value's tail, which the mask would show.
+            mongo_client::check(&secrecy::SecretString::from(uri))?;
             let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             mongo_store::put(Connection { id: id.clone(), name: name.to_string(), uri: uri.to_string() })?;
             clients.forget(&id);
@@ -153,7 +155,7 @@ pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str) -> Res
 
 /// What an insert did: how many went in, and — refused part way — why, and the
 /// documents still to go as text for the editor, so trying again does not
-/// insert the first ones twice.
+/// insert the first ones twice. All in but unconfirmed: why, and nothing to go.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Inserted {
@@ -165,9 +167,15 @@ pub struct Inserted {
 pub fn insert(clients: &MongoClients, target: &Target, text: &str) -> Result<Inserted, MongoError> {
     let documents = mongo::parse_documents(text, "the documents")?;
     let kept = documents.clone();
-    match mongo_client::insert(&client(clients, &target.connection)?, &target.database, &target.collection, documents) {
+    outcome(mongo_client::insert(&client(clients, &target.connection)?, &target.database, &target.collection, documents), kept)
+}
+
+/// A refusal after some went in is not a failure of the call: the window is told what is in, and what is still to go.
+fn outcome(inserted: Result<usize, MongoError>, kept: Vec<Map<String, Value>>) -> Result<Inserted, MongoError> {
+    match inserted {
         Ok(count) => Ok(Inserted { count, refused: None, rest: None }),
         Err(refused @ MongoError::PartlyInserted { inserted, .. }) => Ok(refused_after(kept, inserted, refused.to_string())),
+        Err(unconfirmed @ MongoError::Unconfirmed { inserted, .. }) => Ok(Inserted { count: inserted, refused: Some(unconfirmed.to_string()), rest: None }),
         Err(error) => Err(error),
     }
 }
@@ -283,6 +291,8 @@ mod tests {
             assert!(matches!(save_connection(&MongoClients::default(), draft(None, " ", Some("mongodb://h"))), Err(MongoError::NoName)));
             assert!(matches!(save_connection(&MongoClients::default(), draft(None, "A", None)), Err(MongoError::BadUri(_))));
             assert!(matches!(save_connection(&MongoClients::default(), draft(None, "A", Some("http://h"))), Err(MongoError::BadUri(_))));
+            let password_cut = save_connection(&MongoClients::default(), draft(None, "A", Some("mongodb://h/?tlsCertificateKeyFilePassword=pa&hunter2=x")));
+            assert!(matches!(&password_cut, Err(MongoError::BadUri(m)) if !m.contains("hunter2")), "{password_cut:?}");
             assert!(matches!(save_connection(&MongoClients::default(), draft(Some("gone"), "A", None)), Err(MongoError::NoConnection(_))));
             assert!(connections().unwrap().is_empty());
             let clients = MongoClients::default();
@@ -317,10 +327,16 @@ mod tests {
     #[test]
     fn an_insert_refused_part_way_leaves_the_rest_to_try_again() {
         let documents = mongo::parse_documents("[{ name: 'a' }, { name: 'b', n: NumberLong(2) }, { name: 'c' }]", "d").unwrap();
-        let after = refused_after(documents.clone(), 1, "1 of 3 went in".into());
-        assert_eq!((after.count, after.refused.as_deref()), (1, Some("1 of 3 went in")));
+        let after = outcome(Err(MongoError::PartlyInserted { inserted: 1, total: 3, reason: "dup".into() }), documents.clone()).unwrap();
+        assert_eq!((after.count, after.refused.as_deref()), (1, Some("1 of 3 went in before one was refused, and stay in: dup")));
         assert_eq!(after.rest.as_deref(), Some("[\n  {\n    name: \"b\",\n    n: NumberLong(2)\n  },\n  {\n    name: \"c\"\n  }\n]"));
         assert_eq!(refused_after(documents, 2, String::new()).rest.as_deref(), Some("{\n  name: \"c\"\n}"), "one left is one document");
+        // All in, the write concern not met: they stay in, and nothing is left to insert again.
+        let unconfirmed = outcome(Err(MongoError::Unconfirmed { inserted: 3, reason: "w".into() }), Vec::new()).unwrap();
+        assert_eq!((unconfirmed.count, unconfirmed.rest), (3, None));
+        assert!(unconfirmed.refused.is_some_and(|m| m.starts_with("3 went in, but")));
+        assert!(matches!(outcome(Err(MongoError::Gone), Vec::new()), Err(MongoError::Gone)), "none went in: the call failed");
+        assert_eq!(outcome(Ok(2), Vec::new()).unwrap(), Inserted { count: 2, refused: None, rest: None });
     }
 
     #[test]
