@@ -83,6 +83,8 @@ pub enum MongoError {
     TimedOut,
     #[error("these results are closed — find again")]
     FindClosed,
+    #[error("{inserted} of {total} went in before one was refused, and stay in: {reason}")]
+    PartlyInserted { inserted: usize, total: usize, reason: String },
     #[error("{0}")]
     Server(String),
     #[error("{0}")]
@@ -96,7 +98,11 @@ pub fn validate_uri(uri: &str) -> Result<(), MongoError> {
     let Some(rest) = uri.strip_prefix("mongodb://").or_else(|| uri.strip_prefix("mongodb+srv://")) else {
         return Err(MongoError::BadUri("a connection string starts with mongodb:// or mongodb+srv://".into()));
     };
-    let (user, hosts, _) = parts(rest);
+    let (user, hosts, options) = parts(rest);
+    // `admin:2024?Spring@h` is the host `admin:2024` and options `Spring@h` to the driver: an `@` past the `?` is a `?` in the user's part.
+    if options.is_some_and(|options| options.contains('@')) {
+        return Err(MongoError::BadUri("there is an @ after the ? — a ? in the user name or password must be percent-encoded, %3F".into()));
+    }
     let hosts = hosts.split('/').next().unwrap_or_default();
     if hosts.is_empty() {
         return Err(MongoError::BadUri("the connection string names no host".into()));
@@ -868,7 +874,7 @@ mod tests {
         assert!(validate_uri("postgres://localhost").is_err());
         assert!(validate_uri("localhost:27017").is_err());
         // A reserved character in the password, unencoded: the driver would not read it, and the mask would miss it.
-        for uri in ["mongodb://u:pa/ss@h", "mongodb://u:p?ss@h", "mongodb://u:p@ss@h", "mongodb://u:p:ss@h", "mongodb://u/x:p@h", "mongodb://h:"] {
+        for uri in ["mongodb://u:pa/ss@h", "mongodb://u:p?ss@h", "mongodb://u:p@ss@h", "mongodb://u:p:ss@h", "mongodb://u/x:p@h", "mongodb://h:", "mongodb://admin:2024?Spring@db.example.com", "mongodb://ad?min:pw@h"] {
             assert!(matches!(validate_uri(uri), Err(MongoError::BadUri(m)) if m.contains("percent-encode")), "{uri}");
         }
         assert!(validate_uri("mongodb://u:pa%2Fss@h/db?authSource=admin").is_ok());

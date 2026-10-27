@@ -245,9 +245,26 @@ pub fn aggregate(client: &Client, db: &str, name: &str, pipeline: Vec<Map<String
 }
 
 /// How many went in.
+/// How many went in. In order, stopping at the first the server refuses: the
+/// ones before it are in, which the error says.
 pub fn insert(client: &Client, db: &str, name: &str, documents: Vec<Map<String, Value>>) -> Result<usize, MongoError> {
     let documents = documents.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
-    Ok(collection(client, db, name).insert_many(documents).run().map_err(server)?.inserted_ids.len())
+    let total = documents.len();
+    match collection(client, db, name).insert_many(documents).run() {
+        Ok(inserted) => Ok(inserted.inserted_ids.len()),
+        Err(error) => Err(match error.kind.as_ref() {
+            mongodb::error::ErrorKind::InsertMany(mongodb::error::InsertManyError { write_errors: Some(refused), .. }) if !refused.is_empty() => {
+                let first = &refused[0];
+                // A write error comes with its code, its name seldom.
+                let reason = format!("{} ({})", first.message, first.code_name.clone().unwrap_or_else(|| format!("code {}", first.code)));
+                match first.index {
+                    0 => MongoError::Server(reason),
+                    inserted => MongoError::PartlyInserted { inserted, total, reason },
+                }
+            }
+            _ => server(error),
+        }),
+    }
 }
 
 /// The document with `id` replaced by `replacement`.
@@ -443,6 +460,13 @@ mod tests {
         let docs = crate::domain::mongo::parse_documents("[{ _id: 1, n: NumberLong(5), name: 'a' }, { _id: 2, name: 'b' }, { _id: 3, name: 'c' }]", "the documents").unwrap();
         assert_eq!(insert(&client, db, &coll, docs).unwrap(), 3);
         assert_eq!(count(&client, db, &coll, Map::new()).unwrap(), 3);
+        // In order, up to the first refused: what went in before it is said, not a dump of the reply.
+        let partly = crate::domain::mongo::parse_documents("[{ _id: 20 }, { _id: 1 }, { _id: 21 }]", "d").unwrap();
+        let refused = insert(&client, db, &coll, partly);
+        assert!(matches!(&refused, Err(MongoError::PartlyInserted { inserted: 1, total: 3, reason }) if reason.ends_with("(code 11000)")), "{refused:?}");
+        let first = crate::domain::mongo::parse_documents("[{ _id: 1 }]", "d").unwrap();
+        assert!(matches!(insert(&client, db, &coll, first), Err(MongoError::Server(m)) if m.starts_with("E11000") && m.ends_with("(code 11000)")));
+        delete(&client, db, &coll, json!(20)).unwrap();
         assert_eq!(count(&client, db, &coll, parse_document("{ name: /^[ab]$/ }", "f").unwrap()).unwrap(), 2);
 
         let spec = FindSpec { sort: parse_document("{ _id: -1 }", "s").unwrap(), projection: parse_document("{ name: 1 }", "p").unwrap(), limit: 2, skip: 0, ..Default::default() };

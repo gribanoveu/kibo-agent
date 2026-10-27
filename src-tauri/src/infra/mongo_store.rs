@@ -89,7 +89,11 @@ pub fn put(connection: Connection) -> Result<(), MongoError> {
     let _held = writing();
     let mut connections = load()?;
     match connections.0.iter_mut().find(|c| c.id == connection.id) {
-        Some(saved) => *saved = connection,
+        Some(saved) => {
+            // The URI it had goes too: `Connections` wipes only the ones still in the list.
+            saved.uri.zeroize();
+            *saved = connection;
+        }
         None => connections.0.push(connection),
     }
     save(&connections)
