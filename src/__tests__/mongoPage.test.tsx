@@ -248,7 +248,7 @@ describe("a collection", () => {
 
   test("a field's + and − add its condition to the filter, which is found only once Find is pressed", async () => {
     await openOrders();
-    const filter = screen.getByRole("textbox", { name: "Filter" }) as HTMLInputElement;
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
     fireEvent.change(filter, { target: { value: "{ a: 1 }" } });
     fireEvent.click(screen.getByRole("button", { name: "Filter by name" }));
     await settle();
@@ -277,6 +277,50 @@ describe("a collection", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy name" })));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy _id" })));
     expect(copied).toEqual(["Ann", 'ObjectId("65f0a1b2c3d4e5f6a7b8c9d0")']);
+  });
+
+  test("the filter helps: brackets close, the documents' fields are suggested, Tab or Enter takes one", async () => {
+    await openOrders();
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
+    filter.focus();
+    fireEvent.keyDown(filter, { key: "{", code: "BracketLeft" });
+    expect(filter.value).toBe("{}");
+    expect(filter.selectionStart).toBe(1);
+    fireEvent.keyDown(filter, { key: "Backspace", code: "Backspace" });
+    expect(filter.value).toBe("");
+
+    fireEvent.change(filter, { target: { value: "{ na" } });
+    const list = screen.getByRole("listbox", { name: "Suggestions for the filter" });
+    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual(["nameStringTab"]);
+    expect(filter.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(filter, { key: "Tab", code: "Tab" });
+    expect(filter.value).toBe('{ name: ""');
+    expect(filter.selectionStart).toBe(9);
+    expect(screen.queryByRole("listbox", { name: "Suggestions for the filter" })).toBeNull();
+
+    // Escape closes the list; Enter then finds instead of picking.
+    fireEvent.change(filter, { target: { value: "{ ta" } });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["tagsArrayTab", "tags.nInt64"]);
+    fireEvent.keyDown(filter, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("listbox", { name: "Suggestions for the filter" })).toBeNull();
+    fireEvent.keyDown(filter, { key: "Enter", code: "Enter" });
+    await settle();
+    expect(sent("mongo_find").at(-1)).toMatchObject({ request: { filter: "{ ta" } });
+
+    // With the list open, Enter takes the suggestion and finds nothing.
+    fireEvent.change(filter, { target: { value: "{ $exi" } });
+    fireEvent.keyDown(filter, { key: "Enter", code: "Enter" });
+    expect(filter.value).toBe("{ $exists: true");
+    expect(sent("mongo_find")).toHaveLength(2);
+  });
+
+  test("an example picked replaces the filter, its field selected to type over", async () => {
+    await openOrders();
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
+    fireEvent.click(screen.getAllByRole("button", { name: "Examples" })[0]);
+    fireEvent.click(screen.getByRole("option", { name: /Not equal to/ }));
+    expect(filter.value).toBe('{ field: { $ne: "value" } }');
+    expect([filter.selectionStart, filter.selectionEnd]).toEqual([2, 7]);
   });
 
   test("a filter is found with Enter, and the next page skips what was shown", async () => {

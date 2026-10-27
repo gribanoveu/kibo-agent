@@ -62,6 +62,10 @@ export const SHORTCUTS = {
   cardDragMove: { label: "Move the card you picked up", group: "Board", combos: [{ code: "ArrowUp" }, { code: "ArrowDown" }, { code: "ArrowLeft" }, { code: "ArrowRight" }] },
   cardSave: { label: "Save the card from its note", group: "Board", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
   mongoRun: { label: "Run the pipeline, or save the document being edited", group: "MongoDB", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  mongoSuggestNext: { label: "Next suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowDown" }] },
+  mongoSuggestPrev: { label: "Previous suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowUp" }] },
+  mongoSuggestPick: { label: "Use the suggestion picked in a query field", group: "MongoDB", combos: [{ code: "Tab" }, { code: "Enter" }, { code: "NumpadEnter" }] },
+  mongoPairErase: { label: "Erase an empty pair of brackets or quotes in a query field", group: "MongoDB", combos: [{ code: "Backspace" }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

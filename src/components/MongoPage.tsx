@@ -1,5 +1,5 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Lightbulb, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
@@ -10,6 +10,7 @@ import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIn
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
 import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
+import { apply, erased, EXAMPLES, knownFields, suggest, typed, type Edit as TextEdit, type KnownField, type QueryKind, type Suggestion } from "../lib/mongoQuery";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./MongoPage.css";
@@ -437,6 +438,7 @@ function Documents({ target }: { target: MongoTarget }) {
     run();
   };
   const documents = docs.documents;
+  const fields = useMemo(() => knownFields(documents ?? []), [documents]);
   const { skip } = docs;
   const { limit } = docs.request;
   /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
@@ -453,7 +455,7 @@ function Documents({ target }: { target: MongoTarget }) {
   return (
     <div className="mongo-view">
       <div className="mongo-query">
-        <QueryField label="Filter" value={draft.filter} placeholder="{ field: 'value' }" onChange={(filter) => setDraft({ ...draft, filter })} onKeyDown={onEnter} />
+        <QueryField label="Filter" kind="filter" fields={fields} value={draft.filter} placeholder="{ field: 'value' }" onChange={(filter) => setDraft((now) => ({ ...now, filter }))} onKeyDown={onEnter} />
         <button type="button" className="btn btn-ghost" aria-expanded={options} onClick={() => setOptions(!options)}>
           Options
           {options ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -467,8 +469,8 @@ function Documents({ target }: { target: MongoTarget }) {
       </div>
       {options && (
         <div className="mongo-query mongo-query-options">
-          <QueryField label="Project" value={draft.projection} placeholder="{ field: 1 }" onChange={(projection) => setDraft({ ...draft, projection })} onKeyDown={onEnter} />
-          <QueryField label="Sort" value={draft.sort} placeholder="{ field: -1 }" onChange={(sort) => setDraft({ ...draft, sort })} onKeyDown={onEnter} />
+          <QueryField label="Project" kind="projection" fields={fields} value={draft.projection} placeholder="{ field: 1 }" onChange={(projection) => setDraft((now) => ({ ...now, projection }))} onKeyDown={onEnter} />
+          <QueryField label="Sort" kind="sort" fields={fields} value={draft.sort} placeholder="{ field: -1 }" onChange={(sort) => setDraft((now) => ({ ...now, sort }))} onKeyDown={onEnter} />
         </div>
       )}
 
@@ -588,12 +590,139 @@ function Documents({ target }: { target: MongoTarget }) {
   );
 }
 
-function QueryField({ label, value, placeholder, onChange, onKeyDown }: { label: string; value: string; placeholder: string; onChange: (value: string) => void; onKeyDown: (e: KeyboardEvent) => void }) {
+type QueryFieldProps = {
+  label: string;
+  kind: QueryKind;
+  /** The fields of the documents shown, suggested as a key is typed. */
+  fields: KnownField[];
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onKeyDown: (e: KeyboardEvent) => void;
+};
+
+/**
+ * A query typed in mongosh's syntax, helped: brackets and quotes close
+ * themselves, a key being typed gets the documents' fields — or, after `$`,
+ * the operators — in a list under it, and examples are a click away.
+ */
+function QueryField({ label, kind, fields, value, placeholder, onChange, onKeyDown }: QueryFieldProps) {
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  // Where the caret is while the field has focus; `null` keeps the list closed.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  // The selection an edit leaves, set once React has put its text in.
+  const selection = useRef<[number, number] | null>(null);
+  useLayoutEffect(() => {
+    if (!selection.current || !input.current) return;
+    input.current.setSelectionRange(...selection.current);
+    selection.current = null;
+  });
+
+  const shown = caret === null || dismissed ? null : suggest(value, caret, fields, kind);
+  const edit = (next: TextEdit) => {
+    selection.current = [next.start, next.end];
+    onChange(next.text);
+    setCaret(next.end);
+    setActive(0);
+    setDismissed(false);
+  };
+  const pick = (suggestion: Suggestion) => shown && edit(apply(value, shown, suggestion.insert));
+
+  const keyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (shown) {
+      const moves = matches(e, "mongoSuggestNext") ? 1 : matches(e, "mongoSuggestPrev") ? -1 : 0;
+      if (moves) {
+        e.preventDefault();
+        return setActive((active + moves + shown.items.length) % shown.items.length);
+      }
+      if (matches(e, "mongoSuggestPick")) {
+        e.preventDefault();
+        return void pick(shown.items[Math.min(active, shown.items.length - 1)]);
+      }
+      if (matches(e, "close")) {
+        e.stopPropagation();
+        return setDismissed(true);
+      }
+    }
+    // An opener typed brings its closer; Backspace between the two takes both.
+    const { selectionStart: start, selectionEnd: end } = e.currentTarget;
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey && start !== null && end !== null;
+    const paired = !plain ? null : matches(e, "mongoPairErase") ? erased(value, start, end) : e.key.length === 1 ? typed(value, start, end, e.key) : null;
+    if (paired) {
+      e.preventDefault();
+      return edit(paired);
+    }
+    onKeyDown(e);
+  };
+
   return (
-    <label className="mongo-query-field">
-      <span>{label}</span>
-      <input className="mongo-mono" spellCheck={false} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
-    </label>
+    <div className="mongo-query-field">
+      <label htmlFor={id}>{label}</label>
+      <input
+        ref={input}
+        id={id}
+        className="mongo-mono"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={!!shown}
+        aria-controls={shown ? `${id}-list` : undefined}
+        aria-activedescendant={shown ? `${id}-${Math.min(active, shown.items.length - 1)}` : undefined}
+        autoComplete="off"
+        spellCheck={false}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setCaret(e.target.selectionStart);
+          setActive(0);
+          setDismissed(false);
+        }}
+        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+        onBlur={() => setCaret(null)}
+        onKeyDown={keyDown}
+      />
+      <Dropdown
+        label={<Lightbulb size={12} />}
+        title="Examples"
+        heading={`Start the ${label.toLowerCase()} from an example`}
+        options={EXAMPLES[kind].map((example) => ({ value: example.label, hint: example.text }))}
+        value=""
+        onPick={(picked) => {
+          const text = EXAMPLES[kind].find((example) => example.label === picked)?.text ?? "";
+          const at = text.indexOf("field");
+          selection.current = at < 0 ? [text.length, text.length] : [at, at + "field".length];
+          onChange(text);
+          input.current?.focus();
+        }}
+        below
+        right
+      />
+      {shown && (
+        <div className="mongo-suggest" role="listbox" id={`${id}-list`} aria-label={`Suggestions for the ${label.toLowerCase()}`}>
+          {shown.items.map((item, i) => (
+            <div
+              key={item.label}
+              id={`${id}-${i}`}
+              role="option"
+              aria-selected={i === active}
+              className={`mongo-suggest-item${i === active ? " active" : ""}`}
+              // Picked without taking the focus from the field.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                pick(item);
+              }}
+            >
+              <span className="mongo-mono">{item.label}</span>
+              <span className="mongo-suggest-detail">{item.detail}</span>
+              {i === 0 && i === active && <kbd className="mongo-suggest-key">Tab</kbd>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
