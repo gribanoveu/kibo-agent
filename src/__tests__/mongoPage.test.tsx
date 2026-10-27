@@ -160,6 +160,73 @@ describe("a collection", () => {
     expect(screen.queryByText('"vip"')).toBeNull();
   });
 
+  test("a field double-clicked puts the card in edit mode; Save sends what changed, all at once", async () => {
+    await openOrders();
+    fireEvent.doubleClick(screen.getByText('ObjectId("65f0a1b2c3d4e5f6a7b8c9d0")'));
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    const name = screen.getByRole("textbox", { name: "Edit name" }) as HTMLInputElement;
+    expect(name.value).toBe('"Ann"');
+    expect(screen.getByText("Double-click a field to change it")).toBeTruthy();
+    fireEvent.change(name, { target: { value: '"Bea"' } });
+
+    // Opened under a toggle that "Expand all" remounts: the draft above stays.
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect((screen.getByRole("textbox", { name: "Edit name" }) as HTMLInputElement).value).toBe('"Bea"');
+    fireEvent.doubleClick(screen.getByText("NumberLong(5)"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit tags.1.n" }), { target: { value: "NumberLong(6)" } });
+    fireEvent.doubleClick(screen.getByText('"vip"'));
+    expect(screen.getByText("2 fields changed")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle();
+    expect(sent("mongo_set_fields")).toEqual([
+      {
+        target: { connection: "c1", database: "shop", collection: "orders" },
+        id: DOC.id,
+        changes: [
+          { path: ["tags", "1", "n"], text: "NumberLong(6)" },
+          { path: ["name"], text: '"Bea"' },
+        ],
+      },
+    ]);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(sent("mongo_find")).toHaveLength(2);
+  });
+
+  test("Cancel or Escape leaves edit mode with nothing sent, and Enter saves", async () => {
+    await openOrders();
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit name" }), { target: { value: '"Bea"' } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("textbox", { name: "Edit name" })).toBeNull();
+    expect(screen.getByText('"Ann"')).toBeTruthy();
+
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit name" }), { code: "Escape" });
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(sent("mongo_set_fields")).toEqual([]);
+
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    const name = screen.getByRole("textbox", { name: "Edit name" });
+    fireEvent.change(name, { target: { value: '"Cy"' } });
+    fireEvent.keyDown(name, { code: "Enter" });
+    await settle();
+    expect(sent("mongo_set_fields")).toHaveLength(1);
+  });
+
+  test("a save the server refuses stays in edit mode with the reason on the card", async () => {
+    refusals.mongo_set_fields = "name: line 1, column 1: expected a value";
+    await openOrders();
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit name" }), { target: { value: "Bea" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle();
+    expect(screen.getByRole("textbox", { name: "Edit name" }).closest("article")!.textContent).toContain("name: line 1, column 1: expected a value");
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
   test("a value copies as it would be pasted — a string without its quotes", async () => {
     const copied: string[] = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } });

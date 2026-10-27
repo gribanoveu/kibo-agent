@@ -18,9 +18,11 @@ import {
   mongoIndexes,
   mongoInsert,
   mongoReplace,
+  mongoSetFields,
   type CollectionInfo,
   type ConnectionDraft,
   type DatabaseInfo,
+  type FieldChange,
   type FindPage,
   type FindRequest,
   type IndexView,
@@ -207,6 +209,7 @@ export function useMongoDocuments(target: MongoTarget | null) {
     find,
     insert: (text: string) => change((t) => mongoInsert(t, text)),
     replace: (id: unknown, text: string) => change((t) => mongoReplace(t, id, text)),
+    setFields: (id: unknown, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
     remove: (id: unknown) => change((t) => mongoDelete(t, id)),
   };
 }

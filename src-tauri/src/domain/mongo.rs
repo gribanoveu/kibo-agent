@@ -73,6 +73,8 @@ pub enum MongoError {
     BadInput { what: &'static str, error: ParseError },
     #[error("{what} must be {expected}")]
     WrongShape { what: &'static str, expected: &'static str },
+    #[error("{field}: {error}")]
+    BadValue { field: String, error: ParseError },
     #[error("the _id cannot change — insert a copy and delete this one instead")]
     IdChanged,
     #[error("no document has that _id any more — it was deleted or changed elsewhere")]
@@ -178,6 +180,35 @@ pub fn parse_pipeline(text: &str) -> Result<Vec<Map<String, Value>>, MongoError>
         return Ok(Vec::new());
     }
     parse_list(text, "the pipeline", "an array of stages, [ { $match: … }, … ]")
+}
+
+/// One field changed on a card: `path` is its keys from the document down, an
+/// array's item by its index; `text` its new value, as mongosh writes it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FieldChange {
+    pub path: Vec<String>,
+    pub text: String,
+}
+
+/// The update that sets every field `changes` names: `{ $set: { "a.0.b": … } }`.
+pub fn set_fields(changes: &[FieldChange]) -> Result<Map<String, Value>, MongoError> {
+    if changes.is_empty() {
+        return Err(MongoError::WrongShape { what: "the change", expected: "at least one field" });
+    }
+    let mut set = Map::new();
+    for FieldChange { path, text } in changes {
+        if path.first().is_some_and(|key| key == "_id") {
+            return Err(MongoError::IdChanged);
+        }
+        // A dot or a leading `$` would make `$set` read the path as another one.
+        if path.is_empty() || path.iter().any(|key| key.is_empty() || key.contains('.') || key.starts_with('$')) {
+            return Err(MongoError::WrongShape { what: "a field", expected: "named without a dot or a leading $ to be edited alone — edit the whole document" });
+        }
+        let field = path.join(".");
+        let value = parse(text).map_err(|error| MongoError::BadValue { field: field.clone(), error })?;
+        set.insert(field, value);
+    }
+    Ok(Map::from_iter([("$set".to_string(), Value::Object(set))]))
 }
 
 /// One document, or an array of nothing else.
@@ -432,7 +463,7 @@ impl Parser {
             args.push(p.value()?);
             Ok(())
         })?;
-        self.call(&name, args).map_err(|message| {
+        self.call(&name, args).map_err(|Mistake(message)| {
             self.at = start;
             self.error(message)
         })
@@ -447,7 +478,7 @@ impl Parser {
     }
 
     /// What was wrong with the arguments, if anything; [`Parser::word`] adds where.
-    fn call(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn call(&self, name: &str, args: Vec<Value>) -> Result<Value, Mistake> {
         let one_string = |what: &str| match args.as_slice() {
             [Value::String(s)] => Ok(s.clone()),
             _ => Err(format!("{name} takes {what} in quotes")),
@@ -523,13 +554,28 @@ impl Parser {
     }
 }
 
+/// What was wrong with a constructor's arguments; [Parser::word] adds where.
+struct Mistake(String);
+
+impl From<String> for Mistake {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+impl From<&str> for Mistake {
+    fn from(message: &str) -> Self {
+        Self(message.to_string())
+    }
+}
+
 fn key_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '-')
 }
 
 /// `2024-05-01`, `2024-05-01T10:00:00`, `2024-05-01T10:00:00.5+03:00`: what
 /// mongosh's `ISODate` takes. Without a zone it is UTC, as there.
-fn iso_millis(text: &str) -> Result<i64, String> {
+fn iso_millis(text: &str) -> Result<i64, Mistake> {
     use chrono::{DateTime, NaiveDate, NaiveDateTime};
     let text = text.trim();
     if let Ok(at) = DateTime::parse_from_rfc3339(text) {
@@ -909,6 +955,21 @@ mod tests {
     fn one_line_for_an_index() {
         assert_eq!(to_shell_line(&json!({ "name": { "$numberInt": "1" }, "at": { "$numberInt": "-1" } })), "{ name: 1, at: -1 }");
         assert_eq!(to_shell_line(&json!({ "a": [1, { "b": "x" }], "e": {} })), "{ a: [ 1, { b: \"x\" } ], e: {} }");
+    }
+
+    #[test]
+    fn fields_are_set_by_their_paths_with_the_types_they_were_written_in() {
+        let one = |keys: &[&str], text: &str| FieldChange { path: keys.iter().map(|key| key.to_string()).collect(), text: text.into() };
+        let set = |changes: &[FieldChange]| set_fields(changes).map(Value::Object);
+        assert_eq!(set(&[one(&["op", "tags", "0"], "NumberLong(5)"), one(&["name"], "'Bea'")]).unwrap(), json!({ "$set": { "op.tags.0": { "$numberLong": "5" }, "name": "Bea" } }));
+        assert!(matches!(set(&[]), Err(MongoError::WrongShape { what: "the change", .. })));
+        assert!(matches!(set(&[one(&["name"], "1"), one(&["_id"], "1")]), Err(MongoError::IdChanged)));
+        assert!(matches!(set(&[one(&["_id", "part"], "1")]), Err(MongoError::IdChanged)));
+        for keys in [&[][..], &["a.b"], &["$inc"], &["op", ""]] {
+            assert!(matches!(set(&[one(keys, "1")]), Err(MongoError::WrongShape { what: "a field", .. })), "{keys:?}");
+        }
+        let error = set(&[one(&["name"], "'ok'"), one(&["op", "n"], "Bea")]).unwrap_err();
+        assert!(error.to_string().starts_with("op.n: line 1, column 1"), "{error}");
     }
 
     #[test]

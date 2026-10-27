@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, IndexView, MongoError};
+use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, FieldChange, IndexView, MongoError};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, FindSpec, MongoClients};
 use crate::infra::mongo_store;
 
@@ -147,6 +147,11 @@ pub fn replace(clients: &MongoClients, target: &Target, id: Value, text: &str) -
         return Err(MongoError::WrongShape { what: "the document", expected: "a document with its fields — delete it to remove it" });
     }
     clients.replace(&uri, &target.database, &target.collection, id, replacement)
+}
+
+pub fn set_fields(clients: &MongoClients, target: &Target, id: Value, changes: &[FieldChange]) -> Result<(), MongoError> {
+    let update = mongo::set_fields(changes)?;
+    clients.update(&mongo_store::uri(&target.connection)?, &target.database, &target.collection, id, update)
 }
 
 pub fn delete(clients: &MongoClients, target: &Target, id: Value) -> Result<(), MongoError> {

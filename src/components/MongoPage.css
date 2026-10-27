@@ -361,6 +361,24 @@
 .mongo-document-body {
   padding: 8px 12px 10px;
 }
+.mongo-document-editing,
+.mongo-document-editing:hover {
+  border-color: var(--accent);
+}
+/* Edit mode's end: what changed, or why it was not saved, then Cancel and Save. */
+.mongo-document-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.mongo-document-foot > :first-child {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
 
 /* What shows only under the pointer or the keyboard: a card's actions, a value's copy. */
 .mongo-document-actions,
@@ -422,6 +440,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: default;
+}
+.mongo-entry-input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.mongo-entry-input:focus,
+.mongo-entry-changed {
+  border-color: var(--accent);
 }
 .mongo-entry-wrapped {
   white-space: pre-wrap;

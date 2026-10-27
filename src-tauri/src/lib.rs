@@ -406,6 +406,7 @@ pub fn run() {
             commands::mongo::mongo_aggregate,
             commands::mongo::mongo_insert,
             commands::mongo::mongo_replace,
+            commands::mongo::mongo_set_fields,
             commands::mongo::mongo_delete,
             commands::mongo::mongo_indexes,
             commands::mongo::mongo_index_create,

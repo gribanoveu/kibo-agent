@@ -88,6 +88,15 @@ export async function mongoReplace(target: MongoTarget, id: unknown, text: strin
   return invoke<void>("mongo_replace", { target, id, text });
 }
 
+/** One field changed: `path` its keys from the document down, an array's item by its index; `text` written as in mongosh. */
+export type FieldChange = { path: string[]; text: string };
+
+/** Sets the fields changed on a card, all in one update. */
+export async function mongoSetFields(target: MongoTarget, id: unknown, changes: FieldChange[]): Promise<void> {
+  requireBackend();
+  return invoke<void>("mongo_set_fields", { target, id, changes });
+}
+
 export async function mongoDelete(target: MongoTarget, id: unknown): Promise<void> {
   requireBackend();
   return invoke<void>("mongo_delete", { target, id });

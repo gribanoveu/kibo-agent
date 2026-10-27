@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::mongo::{ConnectionDraft, ConnectionView, IndexView};
+use crate::domain::mongo::{ConnectionDraft, ConnectionView, FieldChange, IndexView};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, MongoClients};
 use crate::services::mongo::{self, DocumentView, FindPage, FindRequest, Target};
 
@@ -73,6 +73,12 @@ pub async fn mongo_insert(target: Target, text: String, clients: Clients<'_>) ->
 pub async fn mongo_replace(target: Target, id: Value, text: String, clients: Clients<'_>) -> Result<(), String> {
     let clients = clients.inner().clone();
     blocking(move || mongo::replace(&clients, &target, id, &text)).await
+}
+
+#[tauri::command]
+pub async fn mongo_set_fields(target: Target, id: Value, changes: Vec<FieldChange>, clients: Clients<'_>) -> Result<(), String> {
+    let clients = clients.inner().clone();
+    blocking(move || mongo::set_fields(&clients, &target, id, &changes)).await
 }
 
 #[tauri::command]

@@ -9,7 +9,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
-import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
+import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
 import "./MongoPage.css";
@@ -507,6 +507,8 @@ function Documents({ target }: { target: MongoTarget }) {
           <DocumentCard
             key={`${skip}-${i}-${doc.text.length}`}
             doc={doc}
+            onSave={doc.id !== null ? (changes) => docs.setFields(doc.id, changes) : undefined}
+            error={docs.error}
             actions={
               doc.id !== null && (
                 <>
@@ -588,17 +590,55 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** A card being edited: each field opened on it, by its path as JSON, with the text it had and has now. */
+type Drafts = Record<string, { path: string[]; was: string; text: string }>;
+
+/** What a field on a card being edited reaches: its draft, and the card's open, change, save and cancel. */
+type Edit = {
+  drafts: Drafts | null;
+  open: (path: string[], text: string) => void;
+  change: (path: string[], text: string) => void;
+  save: () => void;
+  cancel: () => void;
+};
+
 /**
  * A document: a head with its size and actions, then a field to a line — what
  * nests closed until opened, along a guide — each with its type at the end.
+ * With `onSave`, a field double-clicked puts the card in edit mode: more can be
+ * opened, and Save sends every change at once.
  */
-function DocumentCard({ doc, actions }: { doc: MongoDocument; actions?: ReactNode }) {
+function DocumentCard({ doc, actions, onSave, error }: { doc: MongoDocument; actions?: ReactNode; onSave?: (changes: FieldChange[]) => Promise<boolean>; error?: string | null }) {
   const [unfolded, setUnfolded] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [drafts, setDrafts] = useState<Drafts | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
   const { copied, copy } = useCopied();
   const long = doc.fields.length > FOLDED_FIELDS;
+  const changed = Object.values(drafts ?? {}).filter((draft) => draft.text !== draft.was);
+  const cancel = () => {
+    setDrafts(null);
+    setFailed(false);
+  };
+  const save = async () => {
+    if (!onSave || saving) return;
+    if (changed.length === 0) return cancel();
+    setSaving(true);
+    const saved = await onSave(changed.map(({ path, text }) => ({ path, text })));
+    setSaving(false);
+    setFailed(!saved);
+    if (saved) setDrafts(null);
+  };
+  const edit: Edit | undefined = onSave && {
+    drafts,
+    open: (path, text) => setDrafts((all) => ({ [JSON.stringify(path)]: { path, was: text, text }, ...all })),
+    change: (path, text) => setDrafts((all) => all && { ...all, [JSON.stringify(path)]: { ...all[JSON.stringify(path)], text } }),
+    save: () => void save(),
+    cancel,
+  };
   return (
-    <article className="mongo-document">
+    <article className={`mongo-document${drafts ? " mongo-document-editing" : ""}`}>
       <header className="mongo-document-head">
         <span className="mongo-document-count">{doc.fields.length === 1 ? "1 field" : `${doc.fields.length} fields`}</span>
         <div className="mongo-document-actions">
@@ -612,23 +652,40 @@ function DocumentCard({ doc, actions }: { doc: MongoDocument; actions?: ReactNod
         </div>
       </header>
       <div className="mongo-document-body">
-        {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says. */}
-        <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} />
+        {/* Remounted on "Expand all" / "Collapse all", so every field starts as it says; the drafts live here, above it. */}
+        <Fields key={String(expanded)} entries={long && !unfolded ? doc.fields.slice(0, FOLDED_FIELDS) : doc.fields} open={expanded} path={[]} edit={edit} />
         {long && (
           <button type="button" className="mongo-unfold" onClick={() => setUnfolded(!unfolded)}>
             {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
           </button>
         )}
       </div>
+      {drafts && (
+        <footer className="mongo-document-foot">
+          {failed && error ? (
+            <span className="mongo-error">{error}</span>
+          ) : (
+            <span className="mongo-quiet">{changed.length === 0 ? "Double-click a field to change it" : changed.length === 1 ? "1 field changed" : `${changed.length} fields changed`}</span>
+          )}
+          <button type="button" className="btn btn-ghost" onClick={cancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void save()}>
+            Save
+          </button>
+        </footer>
+      )}
     </article>
   );
 }
 
-function Fields({ entries, open }: { entries: [string, Shown][]; open: boolean }) {
+type FieldsProps = { entries: [string, Shown][]; open: boolean; path: string[]; edit?: Edit };
+
+function Fields({ entries, open, path, edit }: FieldsProps) {
   return (
     <ul className="mongo-tree-fields">
       {entries.map(([name, value]) => (
-        <Field key={name} name={name} value={value} open={open} />
+        <Field key={name} name={name} value={value} open={open} path={[...path, name]} edit={edit} />
       ))}
     </ul>
   );
@@ -636,24 +693,49 @@ function Fields({ entries, open }: { entries: [string, Shown][]; open: boolean }
 
 /**
  * One field: its key in bold, its value — clicked, a long one wraps instead of
- * being cut — and its type at the end of the line; an object or array is a
- * toggle for what is in it.
+ * being cut; double-clicked, it opens for editing — and its type at the end of
+ * the line; an object or array is a toggle for what is in it.
  */
-function Field({ name, value, open }: { name: string; value: Shown; open: boolean }) {
+function Field({ name, value, open, path, edit }: { name: string; value: Shown; open: boolean; path: string[]; edit?: Edit }) {
   const [shown, setShown] = useState(open);
   const [wrapped, setWrapped] = useState(false);
   if (value.kind === "value") {
+    const draft = edit?.drafts?.[JSON.stringify(path)];
+    // The _id never changes in place: the server refuses, and the backend before it.
+    const editable = edit && path[0] !== "_id";
     return (
       <li className="mongo-entry">
         <span className="mongo-entry-key">{name}</span>
         {": "}
-        <span
-          className={`mongo-entry-value mongo-bson-${value.bson}${wrapped ? " mongo-entry-wrapped" : ""}`}
-          // A drag that selects text ends in a click too; that one is a copy, not a toggle.
-          onClick={() => !window.getSelection()?.toString() && setWrapped(!wrapped)}
-        >
-          {value.text}
-        </span>
+        {draft ? (
+          <input
+            className={`mongo-entry-input${draft.text !== draft.was ? " mongo-entry-changed" : ""}`}
+            aria-label={`Edit ${path.join(".")}`}
+            autoFocus
+            spellCheck={false}
+            value={draft.text}
+            onChange={(e) => edit!.change(path, e.target.value)}
+            onKeyDown={(e) => {
+              if (matches(e, "accept")) {
+                e.preventDefault();
+                edit!.save();
+              } else if (matches(e, "close")) {
+                e.stopPropagation();
+                edit!.cancel();
+              }
+            }}
+          />
+        ) : (
+          <span
+            className={`mongo-entry-value mongo-bson-${value.bson}${wrapped ? " mongo-entry-wrapped" : ""}`}
+            title={editable ? "Double-click to edit" : undefined}
+            // A drag that selects text ends in a click too; that one is a copy, not a toggle.
+            onClick={() => !window.getSelection()?.toString() && setWrapped(!wrapped)}
+            onDoubleClick={editable ? () => edit.open(path, value.text) : undefined}
+          >
+            {value.text}
+          </span>
+        )}
         <CopyButton text={plain(value)} label={`Copy ${name}`} />
         <span className="mongo-entry-type">{value.bson}</span>
       </li>
@@ -667,7 +749,7 @@ function Field({ name, value, open }: { name: string; value: Shown; open: boolea
         <span className="mongo-entry-key">{name}</span>
         <span className="mongo-entry-type">{value.kind === "object" ? `Object (${value.fields.length})` : `Array (${value.items.length})`}</span>
       </button>
-      {shown && <Fields entries={entries} open={open} />}
+      {shown && <Fields entries={entries} open={open} path={path} edit={edit} />}
     </li>
   );
 }

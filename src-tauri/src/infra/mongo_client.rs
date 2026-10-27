@@ -144,6 +144,16 @@ impl MongoClients {
         Ok(())
     }
 
+    /// The document with `id` changed by `update`, an operator document — `{ $set: … }`.
+    pub fn update(&self, uri: &SecretString, db: &str, collection: &str, id: Value, update: Map<String, Value>) -> Result<(), MongoError> {
+        let collection = self.collection(uri, db, collection)?;
+        let updated = collection.update_one(bson::doc! { "_id": bson_of(id)? }, document(update)?).run().map_err(server)?;
+        if updated.matched_count == 0 {
+            return Err(MongoError::Gone);
+        }
+        Ok(())
+    }
+
     pub fn delete(&self, uri: &SecretString, db: &str, collection: &str, id: Value) -> Result<(), MongoError> {
         let collection = self.collection(uri, db, collection)?;
         let deleted = collection.delete_one(bson::doc! { "_id": bson_of(id)? }).run().map_err(server)?;
@@ -311,6 +321,14 @@ mod tests {
 
         clients.replace(&uri, db, &coll, json!(1), parse_document("{ _id: 1, name: 'z' }", "d").unwrap()).unwrap();
         assert!(matches!(clients.replace(&uri, db, &coll, json!(1), parse_document("{ _id: 9 }", "d").unwrap()), Err(MongoError::IdChanged)));
+        let one = |keys: &[&str], text: &str| {
+            crate::domain::mongo::set_fields(&[crate::domain::mongo::FieldChange { path: keys.iter().map(|k| k.to_string()).collect(), text: text.into() }]).unwrap()
+        };
+        clients.update(&uri, db, &coll, json!(3), one(&["tags"], "['x', 'y']")).unwrap();
+        clients.update(&uri, db, &coll, json!(3), one(&["tags", "1"], "NumberLong(7)")).unwrap();
+        let third = clients.find(&uri, db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap();
+        assert_eq!(third[0]["tags"], json!(["x", { "$numberLong": "7" }]), "one item of an array set, its type kept");
+        assert!(matches!(clients.update(&uri, db, &coll, json!(99), one(&["name"], "'q'")), Err(MongoError::Gone)));
         let grouped = clients.aggregate(&uri, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10).unwrap();
         assert_eq!(grouped, vec![json!({ "name": "z" })]);
         assert_eq!(clients.aggregate(&uri, db, &coll, Vec::new(), 2).unwrap().len(), 2, "capped");
