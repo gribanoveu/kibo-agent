@@ -13,6 +13,7 @@ use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, 
 use crate::domain::settings::{ProviderConfig, ReplyLanguage, SettingsError, TurnLimits, DEFAULT_CONTEXT_LIMIT};
 use crate::infra::{daily_metrics, llm_credentials_store, llm_providers, settings_store};
 
+#[derive(Clone)]
 pub struct LlmSession {
     pub provider: Arc<dyn LlmProvider>,
     /// Kept for the debug log and, later, rate-limit accounting: both are

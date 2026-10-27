@@ -54,7 +54,7 @@ pub(super) fn definition() -> LlmToolDefinition {
         name: "semanticSearch".to_string(),
         description: format!(
             "Find code by what it does or what it is called, when you do not know the file. \
-Declarations named in the query come first; the rest is ranked by meaning and shared words. \
+Candidates are found by declared names, meaning and shared words, then read against the query and put best first. \
 Each match gives the path, the line range for readFile, the enclosing declaration and the start of its text. \
 Write the query as a sentence about the behaviour, with any names you know, in the language of the code — usually English, \
 even when the user asked in another: a Russian question about English code matches far worse. \

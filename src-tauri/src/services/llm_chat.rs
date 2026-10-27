@@ -1001,7 +1001,7 @@ fn execute_call(
     let deps = ToolDeps {
         shell: turn.shell.clone(),
         output: Some(output.clone()),
-        search: turn.search.clone(),
+        search: turn.search.clone().map(|search| crate::services::search_rerank::reranking(search, Arc::new(turn.session.clone()))),
         knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
@@ -5423,7 +5423,8 @@ mod tests {
         assert!(told[0].contains("\n-one\n+uno\n"), "{}", told[0]);
     }
 
-    /// The turn hands the tool the folder's search; without it the model gets
+    /// The turn hands the tool the folder's search, with the model's
+    /// reordering on top (`search_rerank`); without it the model gets
     /// "unavailable" and a pointer to grep.
     #[test]
     fn a_turn_searches_through_the_search_it_was_given() {
@@ -5433,15 +5434,16 @@ mod tests {
             vec![asks(vec![wants("s1", "semanticSearch", r#"{"query":"where sync lives"}"#)]), text("found it")],
         );
         h.search = Some(Arc::new(|_: &[&str], _: Option<&[String]>, _: usize, _: &crate::domain::code_search::SearchFilter| {
+            let at = |path: &str| CodeMatch {
+                path: path.into(),
+                start_line: 1,
+                end_line: 2,
+                name: None,
+                text: "fn sync() {}".into(),
+                source: MatchSource::Lexical,
+            };
             Ok(CodeSearchResult {
-                matches: vec![CodeMatch {
-                    path: "src/sync.rs".into(),
-                    start_line: 1,
-                    end_line: 2,
-                    name: None,
-                    text: "fn sync() {}".into(),
-                    source: MatchSource::Lexical,
-                }],
+                matches: vec![at("src/sync.rs"), at("src/other.rs")],
                 meta: SearchMeta { tiers_used: vec![MatchSource::Lexical], weak: false, hint: None },
             })
         }));
@@ -5450,6 +5452,9 @@ mod tests {
 
         let told = tool_contents(h.provider.requests().last().unwrap());
         assert!(told[0].contains("src/sync.rs"), "{told:?}");
+        let ranked = h.provider.summaries.lock().unwrap();
+        let shown = ranked.iter().find_map(|r| r.messages.get(1)?.content.clone()).unwrap_or_default();
+        assert!(shown.starts_with("Question: where sync lives") && shown.contains("[2] src/other.rs"), "{shown}");
     }
 
     /// The catalog the turn was given is what every request lists, and what
