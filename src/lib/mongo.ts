@@ -161,6 +161,16 @@ export function pageRange(skip: number, shown: number, total: number | null): st
   return `${(skip + 1).toLocaleString("en-US")}–${(skip + shown).toLocaleString("en-US")}${of}`;
 }
 
+/** A new ObjectId's hex, as the server makes one: the time in seconds, then eight random bytes. */
+export function newObjectId(now = Date.now()): string {
+  const time = Math.floor(now / 1000).toString(16).padStart(8, "0");
+  const random = Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return time + random;
+}
+
+/** What "Insert document" starts from: an `_id` made, and a line for the first field. */
+export const newDocument = (id = newObjectId()) => `{\n  _id: ObjectId("${id}"),\n  \n}`;
+
 /** A document's text without its `_id` line: what "Clone" starts from, so the copy gets an `_id` of its own. */
 export function withoutId(text: string): string {
   return text

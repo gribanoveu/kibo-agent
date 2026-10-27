@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Lightbulb, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
+import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
 import { Page } from "./Page";
 import { Switch } from "./Switch";
@@ -9,7 +10,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
-import { pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
+import { newDocument, pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
 import { apply, erased, EXAMPLES, knownFields, suggest, typed, type Edit as TextEdit, type KnownField, type QueryKind, type Suggestion } from "../lib/mongoQuery";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
@@ -300,7 +301,8 @@ function Collection({ target, onDrop }: { target: MongoTarget; onDrop: () => voi
     <>
       <header className="mongo-main-head">
         <h2 className="mongo-namespace">
-          <span className="mongo-quiet">{target.database}.</span>
+          <span className="mongo-namespace-database">{target.database}</span>
+          <ChevronRight size={14} className="mongo-namespace-gap" aria-label="›" />
           {target.collection}
         </h2>
         <Tabs<View>
@@ -451,6 +453,11 @@ function Documents({ target }: { target: MongoTarget }) {
     const done = editor.id !== undefined ? await docs.replace(editor.id, editor.text) : await docs.insert(editor.text);
     if (done) setEditor(null);
   };
+  // A dialog's error is its own: it goes when the dialog opens or closes, not onto the list.
+  const showEditor = (next: typeof editor) => {
+    docs.clearError();
+    setEditor(next);
+  };
 
   return (
     <div className="mongo-view">
@@ -475,7 +482,7 @@ function Documents({ target }: { target: MongoTarget }) {
       )}
 
       <div className="mongo-toolbar">
-        <button type="button" className="btn btn-ghost" onClick={() => setEditor({ text: "{\n  \n}" })}>
+        <button type="button" className="btn btn-ghost" onClick={() => showEditor({ text: newDocument() })}>
           <Plus size={14} />
           Insert document
         </button>
@@ -514,7 +521,7 @@ function Documents({ target }: { target: MongoTarget }) {
         </button>
       </div>
 
-      {docs.error && !editor && <p className="mongo-error">{docs.error}</p>}
+      {docs.error && !editor && <ErrorNote message={docs.error} onClose={docs.clearError} />}
       {!documents && docs.busy && (
         <p className="mongo-quiet mongo-loading" role="status">
           <Loader2 size={14} className="mongo-spin" />
@@ -533,10 +540,10 @@ function Documents({ target }: { target: MongoTarget }) {
             actions={
               doc.id !== null && (
                 <>
-                  <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => setEditor({ id: doc.id, text: doc.text })}>
+                  <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
                     <Pencil size={13} />
                   </button>
-                  <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => setEditor({ text: withoutId(doc.text) })}>
+                  <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
                     <CopyPlus size={13} />
                   </button>
                   <button type="button" className="mongo-icon-button" title="Delete" aria-label="Delete document" onClick={() => setDeleting(doc)}>
@@ -552,11 +559,11 @@ function Documents({ target }: { target: MongoTarget }) {
       <Modal
         title={editor?.id !== undefined ? "Edit document" : "Insert document"}
         open={editor !== null}
-        onClose={() => setEditor(null)}
+        onClose={() => showEditor(null)}
         wide
         footer={
           <>
-            <button type="button" className="btn btn-ghost" onClick={() => setEditor(null)}>
+            <button type="button" className="btn btn-ghost" onClick={() => showEditor(null)}>
               Cancel
             </button>
             <button type="button" className="btn btn-primary" disabled={docs.busy} onClick={() => void saveEditor()}>
@@ -581,7 +588,7 @@ function Documents({ target }: { target: MongoTarget }) {
             void saveEditor();
           }}
         />
-        {docs.error && <p className="mongo-error">{docs.error}</p>}
+        {docs.error && <ErrorNote message={docs.error} onClose={docs.clearError} />}
       </Modal>
       <ConfirmModal title="Delete this document?" action="Delete" subject={deleting} onClose={() => setDeleting(null)} onConfirm={(doc) => void docs.remove(doc.id)}>
         <pre className="mongo-document-text mongo-mono mongo-confirm-doc">{deleting?.text.split("\n").slice(0, 8).join("\n")}</pre>
@@ -829,11 +836,6 @@ function DocumentCard({ doc, actions, onSave, error, filterBy }: { doc: MongoDoc
           <button type="button" className="mongo-icon-button" title="Copy" aria-label="Copy document" onClick={() => copy(doc.text)}>
             {copied ? <Check size={13} /> : <Copy size={13} />}
           </button>
-          {edit && (
-            <button type="button" className="mongo-icon-button" title="Add field" aria-label="Add field" onClick={() => edit.add([], false, 0)}>
-              <Plus size={13} />
-            </button>
-          )}
           {actions}
         </div>
       </header>
@@ -845,13 +847,19 @@ function DocumentCard({ doc, actions, onSave, error, filterBy }: { doc: MongoDoc
             {unfolded ? "Show less" : `Show ${doc.fields.length - FOLDED_FIELDS} more fields`}
           </button>
         )}
+        {edit && drafts && (
+          <button type="button" className="mongo-add-field" onClick={() => edit.add([], false, 0)}>
+            <Plus size={12} />
+            Add field
+          </button>
+        )}
       </div>
       {drafts && (
         <footer className="mongo-document-foot">
           {failed && error ? (
             <span className="mongo-error">{error}</span>
           ) : (
-            <span className="mongo-quiet">{changed.length === 0 ? "Double-click a field to change it" : changed.length === 1 ? "1 field changed" : `${changed.length} fields changed`}</span>
+            <span className="mongo-quiet">{changed.length === 0 ? "Double-click a value to change it; + on an object or array adds to it" : changed.length === 1 ? "1 field changed" : `${changed.length} fields changed`}</span>
           )}
           <button type="button" className="btn btn-ghost" onClick={cancel}>
             Cancel
@@ -939,7 +947,7 @@ function Field({ name, value, open, path, where, edit, filterBy }: { name: strin
     const editable = edit && path[0] !== "_id";
     return (
       <li className="mongo-entry">
-        {filterBy && (
+        {filterBy && !edit?.drafts && (
           <span className="mongo-entry-filter">
             <button type="button" title="Add to the filter" aria-label={`Filter by ${where.join(".")}`} onClick={() => filterBy(where, value.text, false)}>
               <Plus size={11} />
@@ -989,7 +997,7 @@ function Field({ name, value, open, path, where, edit, filterBy }: { name: strin
   return (
     <li className="mongo-entry mongo-entry-nest">
       <div className="mongo-entry-head">
-        {edit && (
+        {edit?.drafts && (
           <span className="mongo-entry-filter">
             <button
               type="button"
@@ -1067,20 +1075,24 @@ function Indexes({ target }: { target: MongoTarget }) {
   const make = async () => {
     if (making && (await indexes.create(making.keys, making.unique, making.name))) setMaking(null);
   };
+  const showMaking = (next: typeof making) => {
+    indexes.clearError();
+    setMaking(next);
+  };
   const properties = (index: IndexView) =>
     [index.unique && "unique", index.sparse && "sparse", index.ttlSeconds !== null && `TTL ${index.ttlSeconds}s`, index.partial && `partial ${index.partial}`].filter(Boolean).join(" · ");
 
   return (
     <div className="mongo-view">
       <div className="mongo-toolbar">
-        <button type="button" className="btn btn-ghost" onClick={() => setMaking({ keys: "{ field: 1 }", name: "", unique: false })}>
+        <button type="button" className="btn btn-ghost" onClick={() => showMaking({ keys: "{ field: 1 }", name: "", unique: false })}>
           <Plus size={14} />
           Create index
         </button>
         <span className="mongo-spacer" />
         <span className="mongo-quiet">{indexes.indexes.length > 0 && `${indexes.indexes.length} ${indexes.indexes.length === 1 ? "index" : "indexes"}`}</span>
       </div>
-      {indexes.error && !making && <p className="mongo-error">{indexes.error}</p>}
+      {indexes.error && !making && <ErrorNote message={indexes.error} onClose={indexes.clearError} />}
       <table className="mongo-indexes">
         <thead>
           <tr>
@@ -1111,10 +1123,10 @@ function Indexes({ target }: { target: MongoTarget }) {
       <Modal
         title="Create index"
         open={making !== null}
-        onClose={() => setMaking(null)}
+        onClose={() => showMaking(null)}
         footer={
           <>
-            <button type="button" className="btn btn-ghost" onClick={() => setMaking(null)}>
+            <button type="button" className="btn btn-ghost" onClick={() => showMaking(null)}>
               Cancel
             </button>
             <button type="button" className="btn btn-primary" disabled={indexes.busy} onClick={() => void make()}>
@@ -1135,7 +1147,7 @@ function Indexes({ target }: { target: MongoTarget }) {
           <Switch label="Unique" on={making?.unique ?? false} onChange={(unique) => making && setMaking({ ...making, unique })} />
           Unique — no two documents with the same keys
         </label>
-        {indexes.error && <p className="mongo-error">{indexes.error}</p>}
+        {indexes.error && <ErrorNote message={indexes.error} onClose={indexes.clearError} />}
       </Modal>
       <ConfirmModal title={`Drop index “${dropping?.name ?? ""}”?`} action="Drop" subject={dropping} onClose={() => setDropping(null)} onConfirm={(index) => void indexes.drop(index.name)}>
         <p className="mongo-confirm">

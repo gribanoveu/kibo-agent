@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
-import { AudioLines, Calendar, CircleAlert, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
+import { AudioLines, Calendar, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
 import { Page, PageSheet } from "./Page";
 import { Markdown } from "./Markdown";
+import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
 import { Switch } from "./Switch";
 import { useMeetings, type Job } from "../hooks/useMeetings";
@@ -136,7 +137,7 @@ export function MeetingsPage({ item }: PageContext) {
     <Page title="Meetings" bar={bar} sheet={panel}>
       {openId && <audio {...player.audio} />}
       {!openId && access.access && <AccessNotes access={access.access} onAllow={(source) => void access.allow(source)} />}
-      {access.error && <ErrorNote message={access.error} onClose={access.clearError} />}
+      {access.error && <ErrorNote className="meetings-error" message={access.error} onClose={access.clearError} />}
       {meetings.recording && (
         <RecorderCard
           recording={meetings.recording}
@@ -146,7 +147,7 @@ export function MeetingsPage({ item }: PageContext) {
         />
       )}
       {job && <JobCard job={job} title={titleOf(job, meetings.list)} onStop={meetings.stop} />}
-      {meetings.error && <ErrorNote message={meetings.error} onClose={meetings.clearError} />}
+      {meetings.error && <ErrorNote className="meetings-error" message={meetings.error} onClose={meetings.clearError} />}
       {openId === null ? (
         <MeetingList
           list={meetings.list}
@@ -205,21 +206,6 @@ export function MeetingsPage({ item }: PageContext) {
         </p>
       </Modal>
     </Page>
-  );
-}
-
-/** What failed, said until it is closed — or until the next try clears it. */
-function ErrorNote({ message, onClose }: { message: string; onClose: () => void }) {
-  return (
-    <div className="meetings-error" role="alert">
-      <span className="meetings-error-icon" aria-hidden>
-        <CircleAlert size={16} />
-      </span>
-      <p className="meetings-error-text">{message}</p>
-      <button type="button" className="meetings-error-close" aria-label="Close" title="Close" onClick={onClose}>
-        <X size={14} />
-      </button>
-    </div>
   );
 }
 
@@ -979,7 +965,7 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
   const [forgetting, setForgetting] = useState<VoiceInfo | null>(null);
   return (
     <PageSheet icon={Users} title="Voices" label="Voices" onClose={onClose}>
-      {error && <ErrorNote message={error} onClose={clearError} />}
+      {error && <ErrorNote className="meetings-error" message={error} onClose={clearError} />}
       {voices.length === 0 ? (
         <p className="meetings-empty">
           No voices yet. Name a speaker who said 20 seconds and 20 words or more in a meeting, in phrases rather than single words, and the next one knows them by voice.

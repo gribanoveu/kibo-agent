@@ -257,6 +257,14 @@
   font-size: var(--fs-lg);
   font-weight: 600;
 }
+.mongo-namespace-database {
+  color: var(--text-faint);
+}
+.mongo-namespace-gap {
+  margin: 0 4px;
+  color: var(--text-faint);
+  vertical-align: -2px;
+}
 .mongo-pick {
   margin-top: 12px;
 }
@@ -635,6 +643,25 @@
   font-family: inherit;
   font-size: var(--fs-sm);
   cursor: pointer;
+}
+/* Ends a card being edited: a field of the document's own, where the guides' + cannot reach. */
+.mongo-add-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 6px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.mongo-add-field:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .mongo-indexes {

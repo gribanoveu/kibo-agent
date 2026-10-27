@@ -187,7 +187,7 @@ describe("a collection", () => {
     fireEvent.doubleClick(screen.getByText('"Ann"'));
     const name = screen.getByRole("textbox", { name: "Edit name" }) as HTMLInputElement;
     expect(name.value).toBe('"Ann"');
-    expect(screen.getByText("Double-click a field to change it")).toBeTruthy();
+    expect(screen.getByText("Double-click a value to change it; + on an object or array adds to it")).toBeTruthy();
     fireEvent.change(name, { target: { value: '"Bea"' } });
 
     // Opened under a toggle that "Expand all" remounts: the draft above stays.
@@ -216,6 +216,11 @@ describe("a collection", () => {
 
   test("fields and items added go out with the changes: a new name, or the index after the array's last", async () => {
     await openOrders();
+    // Adding is editing: outside it a value's + is the filter's, and nothing adds.
+    expect(screen.queryByRole("button", { name: "Add item to tags" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
+    fireEvent.doubleClick(screen.getByText('"Ann"'));
+    expect(screen.queryByRole("button", { name: "Filter by name" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add item to tags" }));
     fireEvent.change(screen.getByRole("textbox", { name: "New item of tags" }), { target: { value: '"x"' } });
     fireEvent.click(screen.getByRole("button", { name: "Add item to tags" }));
@@ -432,6 +437,35 @@ describe("a collection", () => {
     fireEvent.click(dialog().getByRole("button", { name: "Replace" }));
     await settle();
     expect(dialog().getByText(/the _id cannot change/)).toBeTruthy();
+  });
+
+  test("an insert starts with an _id made now, a fresh one each time", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    const text = (dialog().getByRole("textbox") as HTMLTextAreaElement).value;
+    const id = /^\{\n {2}_id: ObjectId\("([0-9a-f]{24})"\),\n {2}\n\}$/.exec(text)?.[1];
+    expect(id).toBeTruthy();
+    expect(Math.abs(parseInt(id!.slice(0, 8), 16) - Date.now() / 1000)).toBeLessThan(5);
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    expect((dialog().getByRole("textbox") as HTMLTextAreaElement).value).not.toBe(text);
+  });
+
+  test("a refused insert says why in the dialog, closed with its ×, and leaves with the dialog", async () => {
+    refusals.mongo_insert = "E11000 duplicate key error (DuplicateKey)";
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    expect(dialog().getByRole("alert").textContent).toContain("E11000 duplicate key error");
+    fireEvent.click(within(dialog().getByRole("alert")).getByRole("button", { name: "Close" }));
+    expect(dialog().queryByRole("alert")).toBeNull();
+
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("a clone starts without the _id, and is inserted", async () => {

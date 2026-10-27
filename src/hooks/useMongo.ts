@@ -302,7 +302,7 @@ export function useMongoAggregation(target: MongoTarget | null) {
 /** A collection's indexes, read while the tab is showing. */
 export function useMongoIndexes(target: MongoTarget | null) {
   const key = keyOf(target);
-  const { busy, error, call } = useCalls(key);
+  const { busy, error, setError, call } = useCalls(key);
   const [indexes, setIndexes] = useState<IndexView[]>([]);
 
   const load = useCallback(async () => {
@@ -320,6 +320,7 @@ export function useMongoIndexes(target: MongoTarget | null) {
     indexes,
     busy,
     error,
+    clearError: () => setError(null),
     create: async (keys: string, unique: boolean, name: string) => {
       if (!target) return false;
       const made = await call(() => mongoIndexCreate(target, keys, unique, name.trim() || null));
