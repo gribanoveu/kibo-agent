@@ -7,9 +7,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
 
 use crate::domain::meeting::{JobState, Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
-use crate::domain::recording::{Access, RecordingAccess, RecordingInfo, RecordingState, Source};
+use crate::domain::recording::{Access, Microphone, RecordingAccess, RecordingInfo, RecordingState, Source};
 use crate::domain::voices::VoiceInfo;
-use crate::infra::{meeting_audio, meeting_store, recording_access, settings_store, speech};
+use crate::infra::{meeting_audio, meeting_recorder, meeting_store, recording_access, settings_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
 
 use super::blocking;
@@ -174,6 +174,23 @@ pub fn meeting_denoise_get() -> bool {
 #[tauri::command]
 pub fn meeting_denoise_set(on: bool) -> Result<(), String> {
     settings_store::update(|s| s.meeting_denoise = Some(on)).map_err(|e| e.to_string())
+}
+
+/// The microphones plugged in, to choose one to record from.
+#[tauri::command]
+pub async fn meeting_microphones() -> Result<Vec<Microphone>, String> {
+    blocking(|| meeting_recorder::microphones().map_err(|e| e.to_string())).await
+}
+
+/// The microphone a call is recorded from, by its id; `None` is the system's default.
+#[tauri::command]
+pub fn meeting_microphone_get() -> Option<String> {
+    settings_store::load().unwrap_or_default().meeting_microphone
+}
+
+#[tauri::command]
+pub fn meeting_microphone_set(id: Option<String>) -> Result<(), String> {
+    settings_store::update(|s| s.meeting_microphone = id).map_err(|e| e.to_string())
 }
 
 /// Whether a recording stopped is transcribed at once.

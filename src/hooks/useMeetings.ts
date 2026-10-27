@@ -6,6 +6,9 @@ import {
   meetingAutoProcessSet,
   meetingDenoiseGet,
   meetingDenoiseSet,
+  meetingMicrophoneGet,
+  meetingMicrophoneSet,
+  meetingMicrophones,
   meetingDelete,
   meetingDeleteDocument,
   meetingGet,
@@ -27,6 +30,7 @@ import {
   type Meeting,
   type MeetingInfo,
   type MeetingJob,
+  type Microphone,
   type Recording,
   type RecordingInfo,
 } from "../lib/meeting";
@@ -52,6 +56,9 @@ export function useMeetings(first?: string) {
   const [recording, setRecording] = useState<Recording | null>(null);
   const [autoProcess, setAutoProcess] = useState(false);
   const [denoise, setDenoise] = useState(true);
+  // The microphone recorded from, `null` the system's default; the ones plugged in, read when the settings open — `null` until then.
+  const [microphone, setMicrophone] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<Microphone[] | null>(null);
   // Recordings to transcribe once the job running now ends, in order.
   const [queued, setQueued] = useState<string[]>([]);
   // The recording the job running now transcribes: the job is named after the meeting it makes, not the recording.
@@ -84,6 +91,7 @@ export function useMeetings(first?: string) {
   useEffect(() => void readList(), []);
   useEffect(() => void meetingAutoProcessGet().then(setAutoProcess, (e) => setError(String(e))), []);
   useEffect(() => void meetingDenoiseGet().then(setDenoise, (e) => setError(String(e))), []);
+  useEffect(() => void meetingMicrophoneGet().then(setMicrophone, (e) => setError(String(e))), []);
   useEffect(() => readOpen(openId), [openId]);
 
   // How many jobs were seen to end: a snapshot asked for before the last one
@@ -243,6 +251,18 @@ export function useMeetings(first?: string) {
   const toggleAutoProcess = () => flip(autoProcess, setAutoProcess, meetingAutoProcessSet);
   const toggleDenoise = () => flip(denoise, setDenoise, meetingDenoiseSet);
 
+  const readMicrophones = () => void meetingMicrophones().then(setMicrophones, (e) => setError(String(e)));
+  const pickMicrophone = async (id: string | null) => {
+    const was = microphone;
+    setMicrophone(id);
+    try {
+      await meetingMicrophoneSet(id);
+    } catch (e) {
+      setMicrophone((now) => (now === id ? was : now));
+      setError(String(e));
+    }
+  };
+
   // A switch shown flipped at once, put back if saving it fails.
   async function flip(now: boolean, show: (on: boolean) => void, save: (on: boolean) => Promise<void>) {
     show(!now);
@@ -311,6 +331,8 @@ export function useMeetings(first?: string) {
     transcribing,
     autoProcess,
     denoise,
+    microphone,
+    microphones,
     record,
     stopRecording,
     mute,
@@ -318,6 +340,8 @@ export function useMeetings(first?: string) {
     removeRecording,
     toggleAutoProcess,
     toggleDenoise,
+    readMicrophones,
+    pickMicrophone,
     stop,
     rename,
     remove,
