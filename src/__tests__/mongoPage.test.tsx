@@ -76,7 +76,7 @@ afterAll(() => {
 });
 
 const { MongoPage } = await import("../components/MongoPage");
-const { pageRange, withoutId } = await import("../lib/mongo");
+const { isHistory, pageRange, ranAgo, remember, withoutId } = await import("../lib/mongo");
 const { IS_MAC } = await import("../lib/shortcuts");
 const MOD = IS_MAC ? { metaKey: true } : { ctrlKey: true };
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -358,6 +358,28 @@ describe("a collection", () => {
     expect([filter.selectionStart, filter.selectionEnd]).toEqual([2, 7]);
   });
 
+  test("a query run is kept in the collection's history, and picked from it runs again", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(screen.getByText("No queries run yet")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    const filter = screen.getByRole("combobox", { name: "Filter" }) as HTMLInputElement;
+    fireEvent.change(filter, { target: { value: "{ name: 'Ann' }" } });
+    fireEvent.keyDown(filter, { code: "Enter" });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(filter.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    // Under the query, when it ran, counted as the menu opened.
+    fireEvent.click(screen.getByRole("option", { name: "{ name: 'Ann' } now" }));
+    await settle();
+    expect(filter.value).toBe("{ name: 'Ann' }");
+    expect(sent("mongo_find")).toHaveLength(3);
+    expect(sent("mongo_find").at(-1)).toMatchObject({ request: { filter: "{ name: 'Ann' }", skip: 0 } });
+  });
+
   test("a filter is found with Enter, and the next page skips what was shown", async () => {
     await openOrders();
     const filter = screen.getByLabelText("Filter");
@@ -525,5 +547,37 @@ describe("helpers", () => {
     expect(withoutId('{\n  a: 2,\n  _id: 1\n}')).toBe("{\n  a: 2\n}");
     // An `_id` that is a document of its own is left for the user to change.
     expect(withoutId('{\n  _id: {\n    k: 1\n  },\n  a: 2\n}')).toBe('{\n  _id: {\n    k: 1\n  },\n  a: 2\n}');
+  });
+
+  test("a query history: newest on top with when it ran, no repeats, nothing empty, ten at most", () => {
+    const q = (filter: string, sort = "", at = 1) => ({ filter, projection: "", sort, at });
+    expect(remember([], q("  "), 5)).toEqual([]);
+    expect(remember([q("{ a: 1 }")], q(" { b: 1 } "), 5)).toEqual([q("{ b: 1 }", "", 5), q("{ a: 1 }")]);
+    // Run again, it moves up with its new time.
+    expect(remember([q("{ b: 1 }"), q("{ a: 1 }")], q("{ a: 1 }"), 7)).toEqual([q("{ a: 1 }", "", 7), q("{ b: 1 }")]);
+    // A sort alone is a query; the same filter with another sort is another one.
+    expect(remember([q("{ a: 1 }")], q("{ a: 1 }", "{ a: -1 }"))).toHaveLength(2);
+    const full = Array.from({ length: 10 }, (_, i) => q(`{ n: ${i} }`));
+    const next = remember(full, q("{ n: 99 }"), 1);
+    expect(next).toHaveLength(10);
+    expect(next[0]).toEqual(q("{ n: 99 }"));
+    expect(next[9]).toEqual(q("{ n: 8 }"));
+    expect(isHistory([q("x")])).toBe(true);
+    // Kept by a build that did not note the time: not read.
+    expect(isHistory([{ filter: "x", projection: "", sort: "" }])).toBe(false);
+    expect(isHistory("x")).toBe(false);
+  });
+
+  test("when a query ran, said as people say it", () => {
+    const now = 1_000_000_000;
+    expect(ranAgo(now, now)).toBe("now");
+    expect(ranAgo(now + 500, now)).toBe("now");
+    expect(ranAgo(now - 30_000, now)).toBe("30 seconds ago");
+    expect(ranAgo(now - 59_000, now)).toBe("59 seconds ago");
+    expect(ranAgo(now - 60_000, now)).toBe("1 minute ago");
+    expect(ranAgo(now - 5 * 60_000, now)).toBe("5 minutes ago");
+    expect(ranAgo(now - 2 * 3_600_000, now)).toBe("2 hours ago");
+    expect(ranAgo(now - 86_400_000, now)).toBe("yesterday");
+    expect(ranAgo(now - 3 * 86_400_000, now)).toBe("3 days ago");
   });
 });

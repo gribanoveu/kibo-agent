@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, Lightbulb, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, CopyPlus, Database, Eye, History, Lightbulb, Loader2, Minus, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Settings2, Table, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
@@ -10,7 +10,7 @@ import { useCopied } from "../hooks/useCopied";
 import { useMongoAggregation, useMongoConnections, useMongoDocuments, useMongoIndexes, useMongoTree } from "../hooks/useMongo";
 import { useStoredState } from "../hooks/useStoredState";
 import { sizeLabel } from "../lib/prototype";
-import { newDocument, pageRange, withoutId, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
+import { isHistory, newDocument, pageRange, ranAgo, remember, withoutId, type QueryRan, type QueryRun, type FindRequest, type IndexView, type MongoConnection, type FieldChange, type MongoDocument, type MongoTarget, type Shown } from "../lib/mongo";
 import { apply, erased, EXAMPLES, knownFields, suggest, typed, type Edit as TextEdit, type KnownField, type QueryKind, type Suggestion } from "../lib/mongoQuery";
 import { matches } from "../lib/shortcuts";
 import type { PageContext } from "./pages";
@@ -433,7 +433,20 @@ function Documents({ target }: { target: MongoTarget }) {
   const [deleting, setDeleting] = useState<MongoDocument | null>(null);
   useEffect(() => setDraft(docs.request), [docs.request]);
 
-  const run = (next: Partial<FindRequest> = {}) => void docs.find({ ...draft, skip: 0, ...next });
+  const [history, setHistory] = useStoredState<QueryRan[]>(`mongo.history.${target.connection}.${target.database}.${target.collection}`, [], isHistory);
+  // "30 seconds ago" counts from when the menu opened, not ticking while it is open.
+  const [openedAt, setOpenedAt] = useState(Date.now);
+  const run = (next: Partial<FindRequest> = {}) => {
+    const request = { ...draft, skip: 0, ...next };
+    setHistory((now) => remember(now, request));
+    void docs.find(request);
+  };
+  const runAgain = ({ filter, projection, sort }: QueryRan) => {
+    const query: QueryRun = { filter, projection, sort };
+    setDraft((now) => ({ ...now, ...query }));
+    if (query.projection || query.sort) setOptions(true);
+    run(query);
+  };
   const onEnter = (e: KeyboardEvent) => {
     if (!matches(e, "accept")) return;
     e.preventDefault();
@@ -462,7 +475,32 @@ function Documents({ target }: { target: MongoTarget }) {
   return (
     <div className="mongo-view">
       <div className="mongo-query">
-        <QueryField label="Filter" kind="filter" fields={fields} value={draft.filter} placeholder="{ field: 'value' }" onChange={(filter) => setDraft((now) => ({ ...now, filter }))} onKeyDown={onEnter} />
+        <QueryField
+          label="Filter"
+          kind="filter"
+          fields={fields}
+          value={draft.filter}
+          placeholder="{ field: 'value' }"
+          onChange={(filter) => setDraft((now) => ({ ...now, filter }))}
+          onKeyDown={onEnter}
+          lead={
+            <Dropdown
+              label={<History size={14} />}
+              title="History"
+              heading="Queries run in this collection"
+              emptyLabel="No queries run yet"
+              onOpen={() => setOpenedAt(Date.now())}
+              below
+              options={history.map((query, i) => ({
+                value: String(i),
+                label: query.filter || "{}",
+                hint: [ranAgo(query.at, openedAt), query.projection && `project ${query.projection}`, query.sort && `sort ${query.sort}`].filter(Boolean).join(" · "),
+              }))}
+              value=""
+              onPick={(value) => runAgain(history[Number(value)])}
+            />
+          }
+        />
         <button type="button" className="btn btn-ghost" aria-expanded={options} onClick={() => setOptions(!options)}>
           Options
           {options ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -606,6 +644,8 @@ type QueryFieldProps = {
   placeholder: string;
   onChange: (value: string) => void;
   onKeyDown: (e: KeyboardEvent) => void;
+  /** A control between the label and the text, behind a line of its own. */
+  lead?: ReactNode;
 };
 
 /**
@@ -613,7 +653,7 @@ type QueryFieldProps = {
  * themselves, a key being typed gets the documents' fields — or, after `$`,
  * the operators — in a list under it, and examples are a click away.
  */
-function QueryField({ label, kind, fields, value, placeholder, onChange, onKeyDown }: QueryFieldProps) {
+function QueryField({ label, kind, fields, value, placeholder, onChange, onKeyDown, lead }: QueryFieldProps) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
   // Where the caret is while the field has focus; `null` keeps the list closed.
@@ -668,6 +708,7 @@ function QueryField({ label, kind, fields, value, placeholder, onChange, onKeyDo
   return (
     <div className="mongo-query-field">
       <label htmlFor={id}>{label}</label>
+      {lead && <span className="mongo-query-lead">{lead}</span>}
       <input
         ref={input}
         id={id}

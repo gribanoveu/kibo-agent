@@ -321,6 +321,18 @@
 .mongo-query-field > .dropdown-wrap {
   margin-right: 4px;
 }
+.mongo-query-lead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 4px;
+  border-right: 1px solid var(--border-soft);
+}
+/* An icon for a label sits on the text's baseline otherwise, above the middle. */
+.mongo-query-field .chip-label {
+  display: flex;
+}
 .mongo-suggest {
   position: absolute;
   top: calc(100% + 4px);

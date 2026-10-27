@@ -161,6 +161,38 @@ export function pageRange(skip: number, shown: number, total: number | null): st
   return `${(skip + 1).toLocaleString("en-US")}–${(skip + shown).toLocaleString("en-US")}${of}`;
 }
 
+/** A find as the query bar ran it. */
+export type QueryRun = Pick<FindRequest, "filter" | "projection" | "sort">;
+
+/** What the history keeps: the query and when it last ran, in ms. */
+export type QueryRan = QueryRun & { at: number };
+
+const HISTORY = 10;
+
+/** `history` with `run` on top: the same one again moves up rather than repeating, an empty one is not kept, the oldest past 10 goes. */
+export function remember(history: QueryRan[], run: QueryRun, at = Date.now()): QueryRan[] {
+  const query: QueryRan = { filter: run.filter.trim(), projection: run.projection.trim(), sort: run.sort.trim(), at };
+  if (!query.filter && !query.projection && !query.sort) return history;
+  const same = (one: QueryRan) => one.filter === query.filter && one.projection === query.projection && one.sort === query.sort;
+  return [query, ...history.filter((one) => !same(one))].slice(0, HISTORY);
+}
+
+/** What storage gave back, if it is a history this build reads. */
+export const isHistory = (value: unknown): value is QueryRan[] =>
+  Array.isArray(value) &&
+  value.every((one) => typeof one === "object" && one !== null && ["filter", "projection", "sort"].every((key) => typeof (one as Record<string, unknown>)[key] === "string") && typeof (one as Record<string, unknown>).at === "number");
+
+const RELATIVE = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" });
+
+/** `30 seconds ago`, `5 minutes ago`, `yesterday`: how long before `now` a query ran. */
+export function ranAgo(at: number, now: number): string {
+  const seconds = Math.round((at - now) / 1000);
+  if (seconds > -60) return RELATIVE.format(Math.min(seconds, 0), "second");
+  if (seconds > -3600) return RELATIVE.format(Math.round(seconds / 60), "minute");
+  if (seconds > -86400) return RELATIVE.format(Math.round(seconds / 3600), "hour");
+  return RELATIVE.format(Math.round(seconds / 86400), "day");
+}
+
 /** A new ObjectId's hex, as the server makes one: the time in seconds, then eight random bytes. */
 export function newObjectId(now = Date.now()): string {
   const time = Math.floor(now / 1000).toString(16).padStart(8, "0");
