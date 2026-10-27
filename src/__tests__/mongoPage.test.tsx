@@ -214,6 +214,36 @@ describe("a collection", () => {
     expect(sent("mongo_find")).toHaveLength(2);
   });
 
+  test("fields and items added go out with the changes: a new name, or the index after the array's last", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Add item to tags" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "New item of tags" }), { target: { value: '"x"' } });
+    fireEvent.click(screen.getByRole("button", { name: "Add item to tags" }));
+    const items = screen.getAllByRole("textbox", { name: "New item of tags" });
+    expect(items.map((item) => item.closest("li")!.querySelector(".mongo-entry-key")!.textContent)).toEqual(["2", "3"]);
+    fireEvent.change(items[1], { target: { value: "7" } });
+    // A removed one leaves no gap: the next takes its index.
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove the new item of tags" })[0]);
+    expect(screen.getByRole("textbox", { name: "New item of tags" }).closest("li")!.querySelector(".mongo-entry-key")!.textContent).toBe("2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add field to tags.1" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "New field name in tags.1" }), { target: { value: "m" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "New field value in tags.1" }), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add field" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "New field name in the document" }), { target: { value: "note" } });
+    const note = screen.getByRole("textbox", { name: "New field value in the document" });
+    fireEvent.change(note, { target: { value: '"hi"' } });
+    expect(screen.getByText("3 fields changed")).toBeTruthy();
+    fireEvent.keyDown(note, { code: "Enter" });
+    await settle();
+    expect(sent("mongo_set_fields")[0]!.changes).toEqual([
+      { path: ["tags", "2"], text: "7" },
+      { path: ["tags", "1", "m"], text: "1" },
+      { path: ["note"], text: '"hi"' },
+    ]);
+    expect(screen.queryByRole("textbox", { name: "New item of tags" })).toBeNull();
+  });
+
   test("Cancel or Escape leaves edit mode with nothing sent, and Enter saves", async () => {
     await openOrders();
     fireEvent.doubleClick(screen.getByText('"Ann"'));

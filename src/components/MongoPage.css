@@ -483,7 +483,8 @@
   display: block;
 }
 /* A field's "+" and "−" for the filter: in the gutter left of its key, out over the guides while hovered. */
-.mongo-entry:not(.mongo-entry-nest) {
+.mongo-entry:not(.mongo-entry-nest),
+.mongo-entry-head {
   position: relative;
 }
 .mongo-entry-filter {
@@ -498,7 +499,12 @@
   opacity: 0;
   transition: opacity 0.12s;
 }
+/* An object's or array's "+" goes left of its chevron, which already takes the gutter. */
+.mongo-entry-head > .mongo-entry-filter {
+  right: calc(100% + 14px);
+}
 .mongo-entry:hover > .mongo-entry-filter,
+.mongo-entry-head:hover > .mongo-entry-filter,
 .mongo-entry-filter:has(:focus-visible) {
   opacity: 1;
 }
@@ -540,6 +546,9 @@
   color: var(--text);
   font: inherit;
   outline: none;
+}
+.mongo-entry-input.mongo-entry-name {
+  flex: 0 1 16ch;
 }
 .mongo-entry-input:focus,
 .mongo-entry-changed {

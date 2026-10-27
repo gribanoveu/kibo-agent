@@ -744,14 +744,30 @@ type FilterBy = (path: string[], text: string, exclude: boolean) => void;
 /** A card being edited: each field opened on it, by its path as JSON, with the text it had and has now. */
 type Drafts = Record<string, { path: string[]; was: string; text: string }>;
 
-/** What a field on a card being edited reaches: its draft, and the card's open, change, save and cancel. */
+/**
+ * A field or item added on a card being edited, into the object or array at
+ * `parent`. An item goes after the `from` the array had, in the order added:
+ * `$set` on the index past the end appends, as on a new name it adds a field.
+ */
+type Added = { id: number; parent: string[]; array: boolean; from: number; name: string; text: string };
+
+/** What a field on a card being edited reaches: its draft, and the card's open, change, add, save and cancel. */
 type Edit = {
   drafts: Drafts | null;
+  added: Added[];
   open: (path: string[], text: string) => void;
   change: (path: string[], text: string) => void;
+  add: (parent: string[], array: boolean, from: number) => void;
+  changeAdded: (id: number, change: Partial<Pick<Added, "name" | "text">>) => void;
+  drop: (id: number) => void;
   save: () => void;
   cancel: () => void;
 };
+
+const sameParent = (a: string[], b: string[]) => a.length === b.length && a.every((key, i) => key === b[i]);
+
+/** Where an added one goes: its name, or for an item the index after those added before it. */
+const addedKey = (one: Added, all: Added[]) => (one.array ? String(one.from + all.filter((a) => a.array && sameParent(a.parent, one.parent)).indexOf(one)) : one.name);
 
 /**
  * A document: a head with its size and actions, then a field to a line — what
@@ -763,28 +779,42 @@ function DocumentCard({ doc, actions, onSave, error, filterBy }: { doc: MongoDoc
   const [unfolded, setUnfolded] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [drafts, setDrafts] = useState<Drafts | null>(null);
+  const [added, setAdded] = useState<Added[]>([]);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const { copied, copy } = useCopied();
   const long = doc.fields.length > FOLDED_FIELDS;
-  const changed = Object.values(drafts ?? {}).filter((draft) => draft.text !== draft.was);
+  const changed: FieldChange[] = [
+    ...Object.values(drafts ?? {})
+      .filter((draft) => draft.text !== draft.was)
+      .map(({ path, text }) => ({ path, text })),
+    ...added.map((one) => ({ path: [...one.parent, addedKey(one, added)], text: one.text })),
+  ];
   const cancel = () => {
     setDrafts(null);
+    setAdded([]);
     setFailed(false);
   };
   const save = async () => {
     if (!onSave || saving) return;
     if (changed.length === 0) return cancel();
     setSaving(true);
-    const saved = await onSave(changed.map(({ path, text }) => ({ path, text })));
+    const saved = await onSave(changed);
     setSaving(false);
     setFailed(!saved);
-    if (saved) setDrafts(null);
+    if (saved) cancel();
   };
   const edit: Edit | undefined = onSave && {
     drafts,
+    added,
     open: (path, text) => setDrafts((all) => ({ [JSON.stringify(path)]: { path, was: text, text }, ...all })),
     change: (path, text) => setDrafts((all) => all && { ...all, [JSON.stringify(path)]: { ...all[JSON.stringify(path)], text } }),
+    add: (parent, array, from) => {
+      setDrafts((all) => all ?? {});
+      setAdded((all) => [...all, { id: (all[all.length - 1]?.id ?? 0) + 1, parent, array, from, name: "", text: "" }]);
+    },
+    changeAdded: (id, change) => setAdded((all) => all.map((one) => (one.id === id ? { ...one, ...change } : one))),
+    drop: (id) => setAdded((all) => all.filter((one) => one.id !== id)),
     save: () => void save(),
     cancel,
   };
@@ -799,6 +829,11 @@ function DocumentCard({ doc, actions, onSave, error, filterBy }: { doc: MongoDoc
           <button type="button" className="mongo-icon-button" title="Copy" aria-label="Copy document" onClick={() => copy(doc.text)}>
             {copied ? <Check size={13} /> : <Copy size={13} />}
           </button>
+          {edit && (
+            <button type="button" className="mongo-icon-button" title="Add field" aria-label="Add field" onClick={() => edit.add([], false, 0)}>
+              <Plus size={13} />
+            </button>
+          )}
           {actions}
         </div>
       </header>
@@ -839,7 +874,54 @@ function Fields({ entries, open, path, where, array, edit, filterBy }: FieldsPro
       {entries.map(([name, value]) => (
         <Field key={name} name={name} value={value} open={open} path={[...path, name]} where={array ? where : [...where, name]} edit={edit} filterBy={filterBy} />
       ))}
+      {edit?.added.filter((one) => sameParent(one.parent, path)).map((one) => <AddedField key={one.id} one={one} edit={edit} />)}
     </ul>
+  );
+}
+
+/** A field or item added while editing: a name and a value, or for an item its index and a value. */
+function AddedField({ one, edit }: { one: Added; edit: Edit }) {
+  const into = one.parent.join(".") || "the document";
+  const keyDown = (e: KeyboardEvent) => {
+    if (matches(e, "accept")) {
+      e.preventDefault();
+      edit.save();
+    } else if (matches(e, "close")) {
+      e.stopPropagation();
+      edit.cancel();
+    }
+  };
+  return (
+    <li className="mongo-entry">
+      {one.array ? (
+        <span className="mongo-entry-key">{addedKey(one, edit.added)}</span>
+      ) : (
+        <input
+          className="mongo-entry-input mongo-entry-name"
+          aria-label={`New field name in ${into}`}
+          placeholder="name"
+          autoFocus
+          spellCheck={false}
+          value={one.name}
+          onChange={(e) => edit.changeAdded(one.id, { name: e.target.value })}
+          onKeyDown={keyDown}
+        />
+      )}
+      {": "}
+      <input
+        className="mongo-entry-input"
+        aria-label={one.array ? `New item of ${into}` : `New field value in ${into}`}
+        placeholder={'"text", 5, { a: 1 }, []'}
+        autoFocus={one.array}
+        spellCheck={false}
+        value={one.text}
+        onChange={(e) => edit.changeAdded(one.id, { text: e.target.value })}
+        onKeyDown={keyDown}
+      />
+      <button type="button" className="mongo-icon-button mongo-entry-drop" title="Remove" aria-label={one.array ? `Remove the new item of ${into}` : `Remove the new field in ${into}`} onClick={() => edit.drop(one.id)}>
+        <X size={12} />
+      </button>
+    </li>
   );
 }
 
@@ -906,11 +988,28 @@ function Field({ name, value, open, path, where, edit, filterBy }: { name: strin
   const entries: [string, Shown][] = value.kind === "object" ? value.fields : value.items.map((item, i) => [String(i), item]);
   return (
     <li className="mongo-entry mongo-entry-nest">
-      <button type="button" className="mongo-entry-toggle" aria-expanded={shown} onClick={() => setShown(!shown)}>
-        <ChevronRight size={12} />
-        <span className="mongo-entry-key">{name}</span>
-        <span className="mongo-entry-type">{value.kind === "object" ? `Object (${value.fields.length})` : `Array (${value.items.length})`}</span>
-      </button>
+      <div className="mongo-entry-head">
+        {edit && (
+          <span className="mongo-entry-filter">
+            <button
+              type="button"
+              title={value.kind === "array" ? "Add an item" : "Add a field"}
+              aria-label={`${value.kind === "array" ? "Add item to" : "Add field to"} ${path.join(".")}`}
+              onClick={() => {
+                setShown(true);
+                edit.add(path, value.kind === "array", value.kind === "array" ? value.items.length : 0);
+              }}
+            >
+              <Plus size={11} />
+            </button>
+          </span>
+        )}
+        <button type="button" className="mongo-entry-toggle" aria-expanded={shown} onClick={() => setShown(!shown)}>
+          <ChevronRight size={12} />
+          <span className="mongo-entry-key">{name}</span>
+          <span className="mongo-entry-type">{value.kind === "object" ? `Object (${value.fields.length})` : `Array (${value.items.length})`}</span>
+        </button>
+      </div>
       {shown && <Fields entries={entries} open={open} path={path} where={where} array={value.kind === "array"} edit={edit} filterBy={filterBy} />}
     </li>
   );
