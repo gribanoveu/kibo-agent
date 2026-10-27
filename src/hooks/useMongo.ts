@@ -109,8 +109,9 @@ export function useMongoConnections() {
 }
 
 /** A connection's databases, and the collections of those opened. */
-export function useMongoTree(connection: string | null) {
-  const { busy, error, call } = useCalls(connection ?? "");
+/** `server` changes when the connection, kept by its id, was given another URI. */
+export function useMongoTree(connection: string | null, server = 0) {
+  const { busy, error, call } = useCalls(connection === null ? "" : `${connection}#${server}`);
   const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
   const [collections, setCollections] = useState<Record<string, CollectionInfo[]>>({});
   const [open, setOpen] = useState<string[]>([]);
@@ -140,7 +141,7 @@ export function useMongoTree(connection: string | null) {
     setCollections({});
     setOpen([]);
     void refresh([]);
-  }, [connection]);
+  }, [connection, server]);
 
   return {
     databases,
@@ -211,18 +212,19 @@ export function useMongoDocuments(target: MongoTarget | null) {
     return asked === latest.current ? page : undefined;
   };
 
-  /** The request is the one shown only once its find came back: a refused one leaves the last in place. */
+  /** The request is the one shown only once its find came back: a refused one leaves the last in place. Whether it did. */
   const find = useCallback(
     async (next: FindRequest) => {
-      if (!target) return;
+      if (!target) return false;
       latest.current++;
       const found = await readLatest(() => mongoFind(target, next));
-      if (!found) return;
+      if (!found) return false;
       letGo();
       open.current = found.next;
       setRequest(next);
       setTotal(null);
       setRead({ pages: [found.documents], at: 0, next: found.next });
+      return true;
     },
     [key, call],
   );
@@ -282,12 +284,14 @@ export function useMongoDocuments(target: MongoTarget | null) {
     count: async () => {
       if (!target) return;
       const asked = key;
+      // A count of the find shown: one run since makes it another find's.
+      const of = latest.current;
       setCounting(true);
       try {
         const counted = await mongoCount(target, request.filter);
-        if (asked === current.current) setTotal(counted);
+        if (of === latest.current) setTotal(counted);
       } catch (e) {
-        if (asked === current.current) setError(String(e));
+        if (of === latest.current) setError(String(e));
       } finally {
         if (asked === current.current) setCounting(false);
       }

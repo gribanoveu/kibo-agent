@@ -14,6 +14,8 @@ let findNext: number | null = 7;
 let findDocs: unknown[];
 let held: (() => void) | null = null;
 let holdNext = false;
+let heldCount: (() => void) | null = null;
+let holdCount = false;
 
 const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
 const DOC = {
@@ -61,12 +63,16 @@ mock.module("@tauri-apps/api/core", () => ({
         const page = { documents: structuredClone(findDocs), next: findNext };
         if (!holdNext) return Promise.resolve(page);
         holdNext = false;
+  heldCount = null;
+  holdCount = false;
         return new Promise((resolve) => (held = () => resolve(page)));
       }
       case "mongo_find_more":
         return Promise.resolve({ documents: [BOB], next: null });
       case "mongo_count":
-        return Promise.resolve(41);
+        if (!holdCount) return Promise.resolve(41);
+        holdCount = false;
+        return new Promise((resolve) => (heldCount = () => resolve(41)));
       case "mongo_filter_add": {
         const { filter, path, text, exclude } = args as { filter: string; path: string[]; text: string; exclude: boolean };
         return Promise.resolve(`${filter || "{}"} + ${path.join(".")}${exclude ? " != " : " = "}${text}`);
@@ -105,6 +111,8 @@ beforeEach(() => {
   findDocs = [DOC];
   held = null;
   holdNext = false;
+  heldCount = null;
+  holdCount = false;
   connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017" }];
 });
 
@@ -551,9 +559,10 @@ describe("a collection", () => {
     expect(screen.queryByRole("button", { name: "Edit document" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Clone document" })).toBeNull();
     expect(screen.getByRole("button", { name: "Delete document" })).toBeTruthy();
-    // A field changed alone is still safe: only it is set.
+    // Nor a field changed alone: a projection reshapes what is shown — `$slice`, `$elemMatch`,
+    // a computed field — so a path on the card is not the one in the document.
     fireEvent.doubleClick(screen.getByText('"Ann"'));
-    expect(screen.getByRole("textbox", { name: "Edit name" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Edit name" })).toBeNull();
   });
 
   test("an edit begun stays with its document when the list is found again around it", async () => {
@@ -632,6 +641,53 @@ describe("a collection", () => {
     held!();
     await settle();
     expect(sent("mongo_find_close")).toEqual([{ next: 7 }, { next: 8 }, { next: 9 }, { next: 10 }]);
+  });
+
+  test("a saved connection given a new URI is another server: its tabs close and its databases are read again", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(dialog().getByLabelText(/Connection string/), { target: { value: "mongodb://elsewhere" } });
+    fireEvent.click(dialog().getByRole("button", { name: "Save" }));
+    await settle();
+    expect(screen.queryByRole("tab", { name: "orders" })).toBeNull();
+    expect(sent("mongo_find_close")).toEqual([{ next: 7 }]);
+    expect(sent("mongo_databases")).toHaveLength(2);
+
+    // A new name alone is the same server: nothing is read again.
+    fireEvent.click(screen.getByRole("button", { name: /shop/ }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "orders" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(dialog().getByLabelText("Name"), { target: { value: "Laptop" } });
+    fireEvent.click(dialog().getByRole("button", { name: "Save" }));
+    await settle();
+    expect(screen.getByRole("tab", { name: "orders" })).toBeTruthy();
+    expect(sent("mongo_databases")).toHaveLength(2);
+  });
+
+  test("a count that lands after another find is not that find's total", async () => {
+    await openOrders();
+    holdCount = true;
+    fireEvent.click(screen.getByRole("button", { name: "Count" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    await settle();
+    heldCount!();
+    await settle();
+    expect(screen.queryByText(/of 41/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Count" })).toBeTruthy();
+  });
+
+  test("a query refused is not kept in the history", async () => {
+    await openOrders();
+    refusals.mongo_find = "the filter: line 1, column 6: expected a value";
+    const filter = screen.getByRole("combobox", { name: "Filter" });
+    fireEvent.change(filter, { target: { value: "{ a: }" } });
+    fireEvent.keyDown(filter, { code: "Enter" });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(screen.getByText("No queries run yet")).toBeTruthy();
   });
 
   test("another connection chosen reads nothing of the last one's tabs, and leaves its history alone", async () => {

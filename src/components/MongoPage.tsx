@@ -49,10 +49,12 @@ export function MongoPage(_: PageContext) {
   const store = useMongoConnections();
   const [chosen, setChosen] = useStoredState<string | null>("mongo.connection", null, isId);
   const connection = store.connections.find((c) => c.id === chosen) ?? store.connections[0] ?? null;
-  const tree = useMongoTree(connection?.id ?? null);
+  // Bumped when a saved connection gets a new URI: same id, another server — what was read from the last one goes.
+  const [server, setServer] = useState(0);
+  const tree = useMongoTree(connection?.id ?? null, server);
   // The tabs belong to the connection they were opened on: another one chosen
   // shows none from its first render, so no tab of the last one reads from it.
-  const on = connection?.id ?? null;
+  const on = connection ? `${connection.id}#${server}` : null;
   const [opened, setOpened] = useState<{ connection: string | null; tabs: Open[]; active: string | null }>({ connection: null, tabs: [], active: null });
   const { tabs, active } = opened.connection === on ? opened : { tabs: [], active: null };
   const setActive = (key: string | null) => setOpened({ connection: on, tabs, active: key });
@@ -213,7 +215,10 @@ export function MongoPage(_: PageContext) {
         </div>
       )}
 
-      <ConnectionForm form={form} onChange={setForm} store={store} onSaved={(id) => setChosen(id)} onDelete={(c) => setConfirm({ what: "connection", connection: c })} />
+      <ConnectionForm form={form} onChange={setForm} store={store} onSaved={(id, moved) => {
+          setChosen(id);
+          if (moved) setServer((n) => n + 1);
+        }} onDelete={(c) => setConfirm({ what: "connection", connection: c })} />
 
       <Modal
         title="New collection"
@@ -338,7 +343,8 @@ type FormProps = {
   form: Form | null;
   onChange: (form: Form | null) => void;
   store: ReturnType<typeof useMongoConnections>;
-  onSaved: (id: string) => void;
+  /** `moved`: a saved connection now goes to another server. */
+  onSaved: (id: string, moved: boolean) => void;
   onDelete: (connection: MongoConnection) => void;
 };
 
@@ -365,7 +371,7 @@ function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps)
     const before = new Set(store.connections.map((c) => c.id));
     const list = await store.save(draft);
     if (!list) return;
-    onSaved(form.id ?? list.find((c) => !before.has(c.id))?.id ?? list[list.length - 1].id);
+    onSaved(form.id ?? list.find((c) => !before.has(c.id))?.id ?? list[list.length - 1].id, editing && draft.uri !== undefined);
     onChange(null);
   };
   const saved = store.connections.find((c) => c.id === form.id);
@@ -440,8 +446,8 @@ function Documents({ target }: { target: MongoTarget }) {
   const [openedAt, setOpenedAt] = useState(Date.now);
   const run = (next: Partial<FindRequest> = {}) => {
     const request = { ...draft, skip: 0, limit: docs.request.limit, ...next };
-    setHistory((now) => remember(now, request));
-    void docs.find(request);
+    // Kept once it ran: a query refused is not one to run again.
+    void docs.find(request).then((ran) => ran && setHistory((now) => remember(now, request)));
   };
   const runAgain = ({ filter, projection, sort }: QueryRan) => {
     const query: QueryRun = { filter, projection, sort };
@@ -458,7 +464,7 @@ function Documents({ target }: { target: MongoTarget }) {
   const fields = useMemo(() => knownFields(documents ?? []), [documents]);
   const { skip } = docs;
   const { limit } = docs.request;
-  // A document read with a projection is only part of it: replaced with what is shown, or cloned, the rest would go.
+  // A document read with a projection is only part of it, maybe reshaped: replaced with what is shown, or cloned, the rest would go.
   const partial = docs.request.projection.trim() !== "";
   /** A field's "+" or "−": the filter gets its condition, found once Find is pressed. */
   const filterBy: FilterBy = async (path, text, exclude) => {
@@ -577,7 +583,8 @@ function Documents({ target }: { target: MongoTarget }) {
             // By its _id: after a find again the cards follow their documents, an edit begun included.
             key={doc.id !== null ? JSON.stringify(doc.id) : `${skip}-${i}`}
             doc={doc}
-            onSave={doc.id !== null ? (changes) => docs.setFields(doc.id, changes) : undefined}
+            // Not under a projection: it reshapes what is shown — `$slice`, `$elemMatch`, a computed field — so a path on the card is not one in the document.
+            onSave={doc.id !== null && !partial ? (changes) => docs.setFields(doc.id, changes) : undefined}
             error={docs.error}
             filterBy={filterBy}
             actions={
