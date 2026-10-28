@@ -376,7 +376,7 @@ const isLayout = (v: unknown): v is Layout => v === "stacked" || v === "side";
  * Neither side closes: the request keeps its tabs and a couple of lines of
  * body, the response its tabs and a few lines — under it, or beside it.
  */
-const PANE_MIN = { stacked: 160, side: 360 };
+const PANE_MIN = { stacked: 160, side: 400 };
 const RESPONSE_MIN = { stacked: 160, side: 320 };
 const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
 

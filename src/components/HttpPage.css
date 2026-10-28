@@ -422,11 +422,12 @@
   min-height: 160px;
   max-height: 45%;
 }
-/* Side by side, each keeps room for its tabs; narrower still, a row wraps
-   rather than running under the other side. */
+/* Side by side, each keeps room for its tabs in one row — the request's,
+   the eye included, are 350px; only a window too narrow for both wraps a
+   row, rather than running it under the other side. */
 .http-split.side > .http-request-pane {
   flex: 0 1 50%;
-  min-width: min(360px, 55%);
+  min-width: min(400px, 55%);
   padding-right: 12px;
 }
 .http-split.side > .http-response {
