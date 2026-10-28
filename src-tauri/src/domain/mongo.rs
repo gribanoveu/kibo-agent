@@ -435,12 +435,22 @@ impl Parser {
                         'r' => out.push('\r'),
                         'b' => out.push('\u{8}'),
                         'f' => out.push('\u{c}'),
-                        'u' => {
-                            let hex: String = self.chars.get(self.at..self.at + 4).map(|h| h.iter().collect()).unwrap_or_default();
-                            let code = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).ok_or_else(|| self.error("expected four hex digits after \\u"))?;
-                            self.at += 4;
+                        'v' => out.push('\u{b}'),
+                        '0' if !self.peek().is_some_and(|c| c.is_ascii_digit()) => out.push('\0'),
+                        '0'..='9' => return Err(self.error("an octal escape is not read — write \\u0001 for code 1")),
+                        'x' => {
+                            let code = self.hex(2).and_then(char::from_u32).ok_or_else(|| self.error("expected two hex digits after \\x"))?;
                             out.push(code);
                         }
+                        'u' => out.push(self.unicode()?),
+                        // A line ended with a backslash goes on on the next.
+                        '\n' => {}
+                        '\r' => {
+                            if self.peek() == Some('\n') {
+                                self.at += 1;
+                            }
+                        }
+                        // As JavaScript reads it: \' \" \\ \/ and any other are the character itself.
                         other => out.push(other),
                     }
                 }
@@ -450,6 +460,44 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// `n` hex digits, taken only when all are there.
+    fn hex(&mut self, n: usize) -> Option<u32> {
+        let digits: String = self.chars.get(self.at..self.at + n)?.iter().collect();
+        let code = digits.chars().all(|c| c.is_ascii_hexdigit()).then(|| u32::from_str_radix(&digits, 16).ok()).flatten()?;
+        self.at += n;
+        Some(code)
+    }
+
+    /// After `\u`: four hex digits, or any number in braces — and a surrogate
+    /// pair, as JSON writes an emoji, is the one character.
+    fn unicode(&mut self) -> Result<char, ParseError> {
+        let code = if self.peek() == Some('{') {
+            self.at += 1;
+            let start = self.at;
+            while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+                self.at += 1;
+            }
+            let digits: String = self.chars[start..self.at].iter().collect();
+            let code = u32::from_str_radix(&digits, 16).ok().filter(|_| self.peek() == Some('}'));
+            self.at += 1;
+            code.ok_or_else(|| self.error("expected hex digits and } after \\u{"))?
+        } else {
+            self.hex(4).ok_or_else(|| self.error("expected four hex digits after \\u"))?
+        };
+        if (0xD800..0xDC00).contains(&code) && self.chars.get(self.at..self.at + 2) == Some(&['\\', 'u']) {
+            let at = self.at;
+            self.at += 2;
+            match self.hex(4) {
+                Some(low @ 0xDC00..0xE000) => return Ok(char::from_u32(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)).unwrap_or(char::REPLACEMENT_CHARACTER)),
+                _ => self.at = at,
+            }
+        }
+        char::from_u32(code).ok_or_else(|| match code {
+            0xD800..0xE000 => self.error(format!("\\u{code:04X} is half of a pair — its other half is missing")),
+            _ => self.error(format!("\\u{{{code:X}}} is past the last character, 10FFFF")),
+        })
     }
 
     fn regex(&mut self) -> Result<Value, ParseError> {
@@ -1075,6 +1123,44 @@ mod tests {
         let kept = json!({ "$regularExpression": { "pattern": r"a\/b", "options": "" } });
         assert_eq!(to_shell(&kept), r"/a\/b/");
         assert!(parse(&to_shell(&kept)).is_ok());
+    }
+
+    #[test]
+    fn escapes_read_as_javascript_reads_them() {
+        let read = |text: &str| parse(text).map(|v| v.as_str().map(String::from)).unwrap_or_else(|e| panic!("{text}: {e}"));
+        for (text, wanted) in [
+            (r"'\x41\x7e'", "A~"),
+            (r"'\v\0x'", "\u{b}\u{0}x"),
+            (r"'\u00e9\u{1F600}\u{41}'", "é😀A"),
+            // As JSON writes an emoji: a surrogate pair is one character.
+            (r#""\ud83d\ude00""#, "😀"),
+            (r#""\uD83D\uDE00!""#, "😀!"),
+            (r#"'\'\"\\\/\q'"#, "'\"\\/q"),
+            ("'a\\\nb\\\r\nc'", "abc"),
+        ] {
+            assert_eq!(read(text).as_deref(), Some(wanted), "{text}");
+        }
+        for (text, why) in [
+            (r"'\x4'", "two hex digits after \\x"),
+            (r"'\xZZ'", "two hex digits after \\x"),
+            (r"'\x+1'", "two hex digits after \\x"),
+            (r"'\u+041'", "four hex digits after \\u"),
+            (r"'\u12'", "four hex digits after \\u"),
+            (r"'\u{}'", "hex digits and } after \\u{"),
+            (r"'\u{41'", "hex digits and } after \\u{"),
+            (r"'\u{110000}'", "\\u{110000} is past the last character"),
+            (r"'\ud83d'", "\\uD83D is half of a pair"),
+            (r"'\ud83d\u0041'", "\\uD83D is half of a pair"),
+            (r"'\ude00'", "\\uDE00 is half of a pair"),
+            (r"'\1'", "an octal escape"),
+            (r"'\01'", "an octal escape"),
+        ] {
+            let refused = parse(text).unwrap_err();
+            assert!(refused.message.contains(why), "{text}: {refused}");
+        }
+        // What is written reads back as itself.
+        let odd = "\u{0}\u{b}\u{8}é😀\\'\"";
+        assert_eq!(parse(&to_shell(&json!(odd))).unwrap(), json!(odd));
     }
 
     #[test]
