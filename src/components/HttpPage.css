@@ -646,10 +646,12 @@
   margin: 0;
   border-radius: 0;
 }
-/* The body fills the request's area, as tall as it is dragged. */
+/* The body fills the request's area, as tall as it is dragged, and as short:
+   its text scrolls inside, the area around it never does — scrolled, the
+   box slid under the tabs with its top border gone. */
 .http-code-box-input {
   flex: 1;
-  min-height: 140px;
+  min-height: 60px;
 }
 .http-code-box-input:focus-within {
   border-color: var(--accent);
