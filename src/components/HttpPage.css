@@ -615,6 +615,7 @@
   flex-direction: column;
   margin-top: 6px;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
 }
@@ -626,7 +627,6 @@
 .http-code-box-input {
   min-height: 140px;
   max-height: 320px;
-  border: 1px solid var(--border);
 }
 .http-code-box-input:focus-within {
   border-color: var(--accent);
