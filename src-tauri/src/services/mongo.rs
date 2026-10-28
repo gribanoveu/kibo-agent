@@ -1,10 +1,10 @@
-//! The MongoDB page's use cases (`docs/43-mongodb.md`): a connection saved,
+//! The MongoDB page's use cases (`docs/44-mongodb.md`): a connection saved,
 //! tested and forgotten; a collection browsed, queried and edited. The page's
 //! text is read here (`domain::mongo`), the URI comes from the sealed store,
 //! and the driver gets both — the window never sees a URI, and the driver
 //! never sees the window's text.
 //!
-//! The model's tools, when they come (`docs/43-mongodb.md`), go through these
+//! The model's tools, when they come (`docs/44-mongodb.md`), go through these
 //! same functions.
 
 use serde::{Deserialize, Serialize};

@@ -393,9 +393,10 @@ export async function previewCalls(calls: PendingToolCall[]): Promise<ToolPrevie
 // ---------------------------------------------------------------- review
 
 /**
- * `/review`: a turn in Review mode over the working tree against HEAD. The
- * backend adds the change to `messages` as the turn's message, so the
- * outcome's history carries it; otherwise it is `startChat`.
+ * `/review`: the working tree against HEAD, read by a subagent with a context
+ * of its own; its report is a card, and the outcome's history carries it.
+ * `handed`: the findings go on to the agent in the same turn, to fix or
+ * dismiss. Otherwise it is `startChat`.
  */
 export async function reviewStart(
   turnId: string,
@@ -403,9 +404,10 @@ export async function reviewStart(
   messages: LlmMessage[],
   todos: Task[] = [],
   plan: string | null = null,
+  handed = false,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("review_start", { turnId, chatId, messages, todos, plan });
+  return invoke<Outcome>("review_start", { turnId, chatId, messages, todos, plan, handed });
 }
 
 // ---------------------------------------------------------------- rewind

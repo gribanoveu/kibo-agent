@@ -7,6 +7,11 @@
 //! cargo test --release search_bench -- --ignored --nocapture
 //! ```
 //!
+//! `SEARCH_BENCH_RERANK=1` also has a model reorder the first
+//! `search_rerank::POOL` of each list, as `semanticSearch` does, and prints
+//! how that ranks beside the index's own order. The provider is the agent
+//! bench's (`AGENT_BENCH_*`).
+//!
 //! `bench/search-queries.json` holds the questions; a repository missing from
 //! disk is skipped. `SEARCH_BENCH_MODELS` adds models beside the bundled one,
 //! as `name=dir,name=dir` — each an int8 Model2Vec directory of the bundled
@@ -24,12 +29,13 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::domain::chunk_index::ChunkBuildOptions;
-use crate::domain::code_search::SearchFilter;
+use crate::domain::code_search::{CodeMatch, SearchFilter};
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
 use crate::domain::workspace_index::IndexEventSink;
 use crate::infra::local_embeddings::{DEFAULT_IDLE_UNLOAD, DIMENSIONS, LocalEmbeddings, bundled_model_dir};
 use crate::services::code_search;
 use crate::services::index_sync::RepoIndexer;
+use crate::services::search_rerank;
 
 #[derive(Deserialize)]
 struct Bench {
@@ -191,12 +197,7 @@ fn ask_as(
             println!("      {:?} {}:{} {}", m.source, m.path, m.start_line, m.name.as_deref().unwrap_or(""));
         }
     }
-    let file = result.matches.iter().position(|m| query.expect.iter().any(|e| e.file(&m.path))).map(|i| i + 1);
-    let decl = result
-        .matches
-        .iter()
-        .position(|m| query.expect.iter().any(|e| e.declaration(&m.path, m.name.as_deref())))
-        .map(|i| i + 1);
+    let (file, decl) = ranks(query, &result.matches);
 
     let meaning = indexer.search_meaning(&query.q, 20).ok().filter(|hits| !hits.is_empty()).map(|hits| {
         let top = hits[0].1;
@@ -207,6 +208,24 @@ fn ask_as(
         (first.map(|(r, _)| r), top, first.map(|(_, s)| s))
     });
     (file, decl, meaning, spent, weak)
+}
+
+/// The tool's own list for the question, longest it gives, the bench's files left out.
+fn pool(indexer: &RepoIndexer, query: &Query) -> Vec<CodeMatch> {
+    let filter = SearchFilter { include_docs: query.answer == "docs", ..SearchFilter::default() };
+    let mut result = code_search::search_many(indexer, &[&query.q], None, code_search::MAX_TOP_K, &filter).unwrap();
+    result.matches.retain(|m| !is_bench(&m.path));
+    result.matches
+}
+
+/// Where the first answer's file and declaration are in `matches`.
+fn ranks(query: &Query, matches: &[CodeMatch]) -> (Rank, Rank) {
+    let file = matches.iter().position(|m| query.expect.iter().any(|e| e.file(&m.path))).map(|i| i + 1);
+    let decl = matches
+        .iter()
+        .position(|m| query.expect.iter().any(|e| e.declaration(&m.path, m.name.as_deref())))
+        .map(|i| i + 1);
+    (file, decl)
 }
 
 /// A question's answer as a key: its acceptable files, in order.
@@ -223,9 +242,15 @@ fn search_bench() {
     let bench: Bench =
         serde_json::from_str(&std::fs::read_to_string(manifest.join("bench/search-queries.json")).unwrap()).unwrap();
 
+    let reranker = std::env::var_os("SEARCH_BENCH_RERANK").map(|_| super::agent_bench::session());
     for (model, provider) in models() {
         println!("\n=== {model}");
         let mut all = Tally::default();
+        // Questions whose answer's file is within the first 10, 20, 30 and 50:
+        // the most a reranker over that many could find.
+        let mut within = [0usize; 4];
+        let mut rerank: std::collections::BTreeMap<String, Tally> = Default::default();
+        let mut rerank_time = Duration::ZERO;
         let mut by_lang: std::collections::BTreeMap<String, Tally> = Default::default();
         // Questions without an answer that were called weak, of how many;
         // and questions with one that were, wrongly.
@@ -276,6 +301,26 @@ fn search_bench() {
                     continue;
                 }
                 false_weak += usize::from(weak);
+                let pool = pool(&indexer, query);
+                let (in_pool, _) = ranks(query, &pool);
+                for (count, depth) in within.iter_mut().zip([10, 20, 30, 50]) {
+                    *count += usize::from(in_pool.is_some_and(|r| r <= depth));
+                }
+                // Over the model the tool ships with, not the words-only one.
+                if let Some(session) = reranker.as_ref().filter(|_| model != "bm25") {
+                    let started = Instant::now();
+                    let order = search_rerank::rerank(session, &[&query.q], pool.clone());
+                    rerank_time += started.elapsed();
+                    let (r_file, r_decl) = ranks(query, &order[..order.len().min(10)]);
+                    for key in ["all".to_string(), query.lang.clone()] {
+                        rerank.entry(format!("rerank: {key}")).or_default().add(r_file, r_decl);
+                    }
+                    if !query.answer.is_empty() {
+                        rerank.entry(format!("rerank: answer: {}", query.answer)).or_default().add(r_file, r_decl);
+                    }
+                    let show = |r: Rank| r.map_or("-".to_string(), |r| r.to_string());
+                    println!("    rerank file#{} -> #{}", show(file), show(r_file));
+                }
                 tally.add(file, decl);
                 all.add(file, decl);
                 by_lang.entry(query.lang.clone()).or_default().add(file, decl);
@@ -334,6 +379,13 @@ fn search_bench() {
             println!("{}", tally.row(lang));
         }
         println!("{}", all.row(&format!("ALL {model}")));
+        println!("pool: the answer's file within 10 / 20 / 30 / 50: {} / {} / {} / {} of {}", within[0], within[1], within[2], within[3], all.n);
+        for (key, tally) in &rerank {
+            println!("{}", tally.row(key));
+        }
+        if reranker.is_some() {
+            println!("rerank: {:.1} s a question", rerank_time.as_secs_f64() / all.n.max(1) as f64);
+        }
         println!("weak: {none_weak} of {none_total} without an answer, {false_weak} of {} with one", all.n);
     }
 }

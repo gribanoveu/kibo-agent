@@ -102,7 +102,7 @@ nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 cpal = "0.18.2"
 # Free space on the disk the app keeps its files on (the Artifacts page).
 fs4 = { version = "1.1.0", default-features = false }
-# The MongoDB page (`docs/43-mongodb.md`): the official driver, its blocking API
+# The MongoDB page (`docs/44-mongodb.md`): the official driver, its blocking API
 # (`sync`) since every call here runs on `spawn_blocking`. Its TLS is rustls on
 # ring, as `kube`'s is; `mongodb+srv://` needs its DNS resolver (a default).
 mongodb = { version = "3.9.1", features = ["sync"] }

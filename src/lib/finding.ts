@@ -40,3 +40,28 @@ export function findingOf(block: Block): Finding | null {
     suggestion: text("suggestion") || undefined,
   };
 }
+
+/** A review run as a subagent: what it kept, what it said, and whose findings they are. */
+export type Review = {
+  findings: Finding[];
+  summary: string;
+  /** Its record in the Agents tab. */
+  agent: number;
+  /** The findings went on to the agent to go through, not to the user. */
+  handed: boolean;
+};
+
+/** The report a settled `/review` card holds; `null` for any other block, or a review that failed. */
+export function reviewOf(block: Block): Review | null {
+  if (block.kind !== "tool" || block.name !== "review") return null;
+  const result = block.result as
+    | { result?: string; findings?: (Finding & { suggestion?: string | null })[]; text?: string; agent?: number; handed?: boolean }
+    | undefined;
+  if (result?.result !== "reviewed") return null;
+  return {
+    findings: (result.findings ?? []).map((f) => ({ ...f, suggestion: f.suggestion || undefined })),
+    summary: (result.text ?? "").trim(),
+    agent: result.agent ?? 0,
+    handed: result.handed === true,
+  };
+}

@@ -24,6 +24,8 @@ dist-ssr
 *.sw?
 
 .claude/*
+# Project skills are shared; the rest of .claude/ is per machine.
+!.claude/skills/
 .vscode/*
 # Prototype preview (docs/31): the libraries, built by scripts/build-prototype-libs.ts
 # before `dev` and `build`; the folder itself stays, as a bundle resource must exist.

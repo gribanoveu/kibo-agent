@@ -336,6 +336,11 @@ mod tests {
                 Some(ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs { id: "tax-api/events".into(), section: None })),
                 ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into(), stale: false },
             ),
+            // The reason is the model's own words, shown on the button.
+            ToolName::Offer => (
+                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Review, reason: "the lock".into() })),
+                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Review },
+            ),
             ToolName::ReportFinding => (
                 None,
                 ToolResult::FindingNoted { path: path(), start_line: 3, end_line: 4 },
@@ -390,7 +395,7 @@ mod tests {
                 ToolResult::Kube { text: LEAK.into(), summary: "1 object".into() },
             ),
             ToolName::Explore => (
-                Some(ToolCall::Explore(ExploreArgs { task: "where is X".into() })),
+                Some(ToolCall::Explore(ExploreArgs { task: "where is X".into(), fork: false })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
             ),
             ToolName::Skill => (

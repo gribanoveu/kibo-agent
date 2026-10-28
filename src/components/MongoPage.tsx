@@ -40,7 +40,7 @@ const FOLDED_FIELDS = 14;
 
 /**
  * MongoDB, in the spirit of Compass but only what is used every day
- * (docs/43-mongodb.md): a saved connection's databases and collections on the
+ * (docs/44-mongodb.md): a saved connection's databases and collections on the
  * left; on the right a collection's documents — found with a filter, a sort
  * and a projection, edited, added, deleted — its aggregations and its indexes.
  * Query text is mongosh's. Connection strings are sealed in the backend; this

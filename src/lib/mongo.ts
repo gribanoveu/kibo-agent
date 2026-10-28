@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri, requireBackend } from "./backend";
 
-// The MongoDB page (docs/43-mongodb.md): saved connections, and what is in
+// The MongoDB page (docs/44-mongodb.md): saved connections, and what is in
 // their servers. Mirrors `domain::mongo` and `services::mongo`. Query text is
 // mongosh's — `{ age: { $gt: 30 } }`, `ObjectId('…')` — read by the backend.
 

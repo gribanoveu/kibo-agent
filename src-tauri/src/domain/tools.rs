@@ -49,6 +49,8 @@ pub enum ToolName {
     ReadTerminal,
     /// A problem found in a review, placed on the change — review workers only.
     ReportFinding,
+    /// A next step put to the user as a button after the answer; runs nothing.
+    Offer,
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
@@ -140,6 +142,7 @@ impl ToolName {
         ToolName::StopProcess,
         ToolName::ReadTerminal,
         ToolName::ReportFinding,
+        ToolName::Offer,
         ToolName::Explore,
         ToolName::Remember,
         ToolName::KnowledgeWrite,
@@ -197,6 +200,7 @@ impl ToolName {
             ToolName::StopProcess => "stopProcess",
             ToolName::ReadTerminal => "readTerminal",
             ToolName::ReportFinding => "reportFinding",
+            ToolName::Offer => "offer",
             ToolName::Explore => "explore",
             ToolName::Remember => "remember",
             ToolName::KnowledgeWrite => "knowledgeWrite",
@@ -248,6 +252,66 @@ impl ToolName {
     /// write whatever its arguments. It stops holding at `runCommand`, where
     /// `ls` and `rm -rf /` are the same tool — which is why the gate takes the
     /// verdict as an argument instead of calling this itself.
+    /// Declared in every request where `toolSearch` is offered, rather than
+    /// found with it first (`docs/43-single-loop.md`, Ш9). The wildcard is the
+    /// point: a tool not listed here — a new one too — costs a request nothing
+    /// until the model asks for it. Listed are the tools of first need, those
+    /// the prompt sends the model to by name (`remember`, `knowledgeRelations`),
+    /// `toolSearch` itself, and the role and MCP placeholders, which never wait.
+    pub fn loads_up_front(self) -> bool {
+        matches!(
+            self,
+            ToolName::ReadFile
+                | ToolName::Grep
+                | ToolName::ListFiles
+                | ToolName::WriteFile
+                | ToolName::EditFile
+                | ToolName::Delete
+                | ToolName::Todo
+                | ToolName::GitDiff
+                | ToolName::GitLog
+                | ToolName::RunCommand
+                | ToolName::GitStatus
+                | ToolName::SemanticSearch
+                | ToolName::Skill
+                | ToolName::WritePlan
+                | ToolName::ReadOutput
+                | ToolName::StopProcess
+                | ToolName::ReportFinding
+                | ToolName::Offer
+                | ToolName::Explore
+                | ToolName::Remember
+                | ToolName::KnowledgeWrite
+                | ToolName::KnowledgeSearch
+                | ToolName::KnowledgeRead
+                | ToolName::KnowledgeRelations
+                | ToolName::KubeList
+                | ToolName::KubeGet
+                | ToolName::KubeEvents
+                | ToolName::KubeLogs
+                | ToolName::KubeTop
+                | ToolName::KubeFieldHistory
+                | ToolName::KubeDiagnose
+                | ToolName::KubeWaitRollout
+                | ToolName::KubeProbe
+                | ToolName::KubeRunbook
+                | ToolName::KubeScale
+                | ToolName::KubeUndo
+                | ToolName::KubeSuspend
+                | ToolName::KubeRolloutRestart
+                | ToolName::KubeRolloutUndo
+                | ToolName::KubeApply
+                | ToolName::KubeDelete
+                | ToolName::WebSearch
+                | ToolName::WebFetch
+                | ToolName::DeepseekSearch
+                | ToolName::DeepseekFetch
+                | ToolName::Present
+                | ToolName::ToolSearch
+                | ToolName::Mcp
+        )
+    }
+
     /// The tools that reach the web — offered together, or not at all.
     pub fn is_web(self) -> bool {
         matches!(self, ToolName::WebSearch | ToolName::WebFetch)
@@ -298,6 +362,7 @@ impl ToolName {
             | ToolName::StopProcess
             | ToolName::ReadTerminal
             | ToolName::ReportFinding
+            | ToolName::Offer
             | ToolName::Explore
             | ToolName::Remember
             // The app's own folder, as `remember`; the tree is not touched.
@@ -320,6 +385,75 @@ impl ToolName {
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
+        }
+    }
+
+    /// Whether calls of this tool asked in a row may run at once. Only reads
+    /// that leave nothing behind but their answer — and the files they read,
+    /// which the round gathers after them: what one returns cannot change what
+    /// the one beside it would have. No wildcard: a new tool has to be put on
+    /// one side, and left out it would run beside a write.
+    pub fn runs_alongside(self) -> bool {
+        match self {
+            ToolName::ReadFile
+            | ToolName::Grep
+            | ToolName::ListFiles
+            | ToolName::GitDiff
+            | ToolName::GitBlame
+            | ToolName::GitLog
+            | ToolName::GitStatus
+            | ToolName::SemanticSearch
+            | ToolName::Explore
+            | ToolName::KnowledgeSearch
+            | ToolName::KnowledgeRead
+            | ToolName::KnowledgeRelations
+            | ToolName::WebSearch
+            | ToolName::WebFetch
+            | ToolName::DeepseekSearch
+            | ToolName::DeepseekFetch => true,
+            ToolName::WriteFile
+            | ToolName::EditFile
+            | ToolName::Delete
+            | ToolName::Move
+            | ToolName::RunCommand
+            // The turn's own state: its list, its plan, the review's findings
+            // in the order they were reported.
+            | ToolName::Todo
+            | ToolName::WritePlan
+            | ToolName::ReportFinding
+            | ToolName::Offer
+            // Change what the model sees or is told next.
+            | ToolName::Skill
+            | ToolName::ToolSearch
+            // A process or a terminal, read up to where the last read left it.
+            | ToolName::ReadOutput
+            | ToolName::StopProcess
+            | ToolName::ReadTerminal
+            // Kept, after the model checks them.
+            | ToolName::Remember
+            | ToolName::KnowledgeWrite
+            | ToolName::Board
+            | ToolName::Present
+            // The cluster's reads wait on it and have a bench of their own to
+            // show they gain; until then, one at a time.
+            | ToolName::KubeList
+            | ToolName::KubeGet
+            | ToolName::KubeEvents
+            | ToolName::KubeLogs
+            | ToolName::KubeTop
+            | ToolName::KubeFieldHistory
+            | ToolName::KubeDiagnose
+            | ToolName::KubeWaitRollout
+            | ToolName::KubeProbe
+            | ToolName::KubeRunbook
+            | ToolName::KubeScale
+            | ToolName::KubeUndo
+            | ToolName::KubeSuspend
+            | ToolName::KubeRolloutRestart
+            | ToolName::KubeRolloutUndo
+            | ToolName::KubeApply
+            | ToolName::KubeDelete
+            | ToolName::Mcp => false,
         }
     }
 
@@ -369,6 +503,8 @@ impl ToolName {
             ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
+            // A button under the answer; nothing outside the chat.
+            ToolName::Offer => true,
             // The cluster, in a chat — no folder to rewind.
             ToolName::KubeList
             | ToolName::KubeGet
@@ -411,6 +547,8 @@ impl ToolName {
             | ToolName::ReadTerminal
             // Checked against a diff in memory.
             | ToolName::ReportFinding
+            // One walk of the working tree, like gitStatus.
+            | ToolName::Offer
             // A scan of the connected servers' tool lists, in memory.
             | ToolName::ToolSearch
             // A small file in the app directory, read and written.
@@ -611,6 +749,34 @@ mod tests {
         assert_eq!(reads.check("a.rs", "one\nTWO\n", true), Err(WriteBlocked::ReadInPart));
     }
 
+    /// Reads gathered from calls that ran at once count as the same reads
+    /// made one after another.
+    #[test]
+    fn merged_reads_count_as_reads_made_in_turn() {
+        let mut round = ReadFiles::default();
+        round.record("a.rs", "one\ntwo\n", true);
+        round.record("c.rs", "old\n", true);
+
+        let mut beside = ReadFiles::default();
+        beside.record("a.rs", "one\ntwo\n", false);
+        beside.record("b.rs", "b\n", true);
+        beside.record("c.rs", "new\n", false);
+        round.merge(beside);
+
+        assert_eq!(round.check("a.rs", "one\ntwo\n", true), Ok(()), "a slice of what was read whole");
+        assert_eq!(round.check("b.rs", "b\n", true), Ok(()), "read only beside");
+        assert_eq!(round.check("c.rs", "new\n", true), Err(WriteBlocked::ReadInPart), "changed since");
+    }
+
+    /// What runs beside another call only reads: nothing that writes, or
+    /// asks before it does, is ever in a batch.
+    #[test]
+    fn what_runs_alongside_never_writes() {
+        for tool in ToolName::ALL.iter().filter(|t| t.runs_alongside()) {
+            assert!(!tool.is_mutating(), "{tool:?}");
+        }
+    }
+
     #[test]
     fn reads_survive_the_trip_through_javascript() {
         fn as_js(value: serde_json::Value) -> serde_json::Value {
@@ -632,11 +798,20 @@ mod tests {
 
     /// Adding a variant without listing it in `ALL` would silently shrink every
     /// other test in this file to a subset of the enum.
+    /// A tool waits for `toolSearch` unless it is listed — a new one too.
+    /// These are the ones that wait today; a tool added to them by being new
+    /// shows up here, for whoever added it to decide.
+    #[test]
+    fn what_waits_for_tool_search_is_these() {
+        let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board]);
+    }
+
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            51,
+            52,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1030,7 +1205,7 @@ pub struct ToolDeps<'a> {
     pub review: Option<std::sync::Arc<crate::domain::review::ReviewDesk>>,
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
-    pub explore: Option<&'a dyn Fn(&str) -> Result<ToolResult, ToolError>>,
+    pub explore: Option<&'a dyn Fn(&ExploreArgs) -> Result<ToolResult, ToolError>>,
     /// Asks the model whether text may be kept — a `remember` note, a
     /// `knowledgeWrite`'s documents — under the tool's guard prompt, which
     /// is answered SAVE or REFUSE; `Err` says why not, or why it could not be
@@ -1052,6 +1227,8 @@ pub struct ToolDeps<'a> {
     pub history: &'a [crate::domain::llm::LlmMessage],
     /// The board `board` keeps cards on; `None` where there is none.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The app's own tools this turn offers through `toolSearch` only.
+    pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -1320,6 +1497,7 @@ pub enum ToolCall {
     StopProcess(ProcessArgs),
     ReadTerminal(ReadTerminalArgs),
     ReportFinding(crate::domain::review::FindingArgs),
+    Offer(OfferArgs),
     Explore(ExploreArgs),
     Remember(RememberArgs),
     KnowledgeWrite(KnowledgeWriteArgs),
@@ -1376,6 +1554,7 @@ impl ToolCall {
             ToolCall::StopProcess(_) => ToolName::StopProcess,
             ToolCall::ReadTerminal(_) => ToolName::ReadTerminal,
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
+            ToolCall::Offer(_) => ToolName::Offer,
             ToolCall::Explore(_) => ToolName::Explore,
             ToolCall::Remember(_) => ToolName::Remember,
             ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
@@ -1599,6 +1778,8 @@ pub enum ToolResult {
         start_line: u32,
         end_line: u32,
     },
+    /// An offer the user will see after the answer.
+    Offered { kind: OfferKind },
     /// `runCommand` with `background`: it runs on, and this is its number.
     ProcessStarted(crate::domain::background::ProcessInfo),
     /// `runCommand` still running at its timeout: not killed, it runs on as
@@ -1675,6 +1856,16 @@ pub enum ToolResult {
         text: String,
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
+    },
+    /// A review run as a helper over the uncommitted change: what it kept,
+    /// and its closing answer. `handed` when the findings went on to the
+    /// agent to go through, rather than to the user.
+    Reviewed {
+        findings: Vec<crate::domain::review::Finding>,
+        text: String,
+        agent: u32,
+        tokens: crate::domain::agents::AgentTokens,
+        handed: bool,
     },
     /// What a Kubernetes tool read, already shaped for the model — a table,
     /// YAML, a log — and a few words for the row in the transcript.
@@ -2014,11 +2205,14 @@ pub struct KubeUndoArgs {
 }
 
 /// `explore`: what to find out. The helper sees nothing else of the
-/// conversation, so this is the whole brief.
+/// conversation, so this is the whole brief — unless `fork`, when it starts
+/// from the conversation itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExploreArgs {
     pub task: String,
+    #[serde(default)]
+    pub fork: bool,
 }
 
 /// `remember`: one fact for later conversations in this folder.
@@ -2055,6 +2249,24 @@ pub struct PresentArgs {
 #[serde(rename_all = "camelCase")]
 pub struct WritePlanArgs {
     pub content: String,
+}
+
+/// What `offer` can put to the user. Closed: free text would end up as a
+/// button under every answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OfferKind {
+    #[default]
+    Review,
+    Commit,
+}
+
+/// `offer` arguments: what, and why — the user sees both on the button.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferArgs {
+    pub kind: OfferKind,
+    pub reason: String,
 }
 
 /// `skill` arguments: a skill by name, or one of its files.
@@ -2295,9 +2507,21 @@ impl ReadFiles {
     /// delete — "read it in full" — behind a full read that repeating would
     /// not show again.
     pub fn record(&mut self, path: &str, content: &str, whole: bool) {
-        let hash = hash(content);
-        let known = self.seen.get(path).is_some_and(|seen| seen.whole && seen.hash == hash);
-        self.seen.insert(path.to_string(), FileRead { hash, whole: whole || known });
+        self.keep(path.to_string(), FileRead { hash: hash(content), whole });
+    }
+
+    /// The reads of calls that ran beside each other, each with a record of
+    /// its own, taken in the order they were asked — as if they had run one
+    /// after another.
+    pub fn merge(&mut self, other: ReadFiles) {
+        for (path, read) in other.seen {
+            self.keep(path, read);
+        }
+    }
+
+    fn keep(&mut self, path: String, read: FileRead) {
+        let known = self.seen.get(&path).is_some_and(|seen| seen.whole && seen.hash == read.hash);
+        self.seen.insert(path, FileRead { whole: read.whole || known, ..read });
     }
 
     /// Whether the agent may write `current` at `path`, or why not.

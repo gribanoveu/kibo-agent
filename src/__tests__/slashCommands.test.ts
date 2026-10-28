@@ -257,7 +257,7 @@ describe("the app's own commands", () => {
   const actions = {
     compact: () => ran.push("compact"),
     fork: () => ran.push("fork"),
-    review: () => ran.push("review"),
+    review: (handed: boolean) => ran.push(handed ? "review:handed" : "review"),
     init: (args: string) => ran.push(`init:${args}`),
     analyze: (args: string) => ran.push(`analyze:${args}`),
     trust: () => ran.push("trust"),
@@ -288,5 +288,15 @@ describe("the app's own commands", () => {
     ran.length = 0;
     for (const command of builtInCommands(ready, actions)) command.run("docs only");
     expect(ran).toEqual(["compact", "fork", "review", "init:docs only", "analyze:docs only", "trust"]);
+  });
+
+  /// `/review send-result-to-agent` hands the findings to the agent; anything else leaves them to the user.
+  test("review hands its findings to the agent only when told to", () => {
+    ran.length = 0;
+    const review = builtInCommands(ready, actions).find((c) => c.name === "review")!;
+    review.run(" send-result-to-agent ");
+    review.run("");
+    expect(ran).toEqual(["review:handed", "review"]);
+    expect(review.argumentHint).toBe("[send-result-to-agent]");
   });
 });

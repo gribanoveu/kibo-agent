@@ -1,4 +1,4 @@
-//! The MongoDB page (`docs/43-mongodb.md`): what a connection is, what crosses
+//! The MongoDB page (`docs/44-mongodb.md`): what a connection is, what crosses
 //! to the window about it, and the query text the user types.
 //!
 //! The text is mongosh's, not strict JSON: keys unquoted, strings in either

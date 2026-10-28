@@ -318,6 +318,14 @@
   background: color-mix(in srgb, var(--amber) 14%, transparent);
   color: var(--amber);
 }
+/* The microphone recorded from: its icon and the menu. */
+.meetings-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
 /* A recording setting: a switch and its words, either one toggles it. */
 .meetings-auto {
   display: inline-flex;

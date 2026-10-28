@@ -44,10 +44,16 @@ pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool, featu
     // A server's instructions are in the prompt and are the server's cost.
     let said = prompt::mcp_block(ctx.mcp_servers).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
     // Before the conversation: a deferred tool its `toolSearch` found is not
-    // counted. `toolSearch` is there for the servers, and is theirs.
+    // counted. `toolSearch` is the servers' while any has tools waiting, and
+    // the app's own otherwise.
+    let servers_search = mcp.has_deferred();
     let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[], web, features)
         .into_iter()
-        .partition(|definition| matches!(ToolName::from_wire_name(&definition.name), Some(ToolName::Mcp | ToolName::ToolSearch)));
+        .partition(|definition| match ToolName::from_wire_name(&definition.name) {
+            Some(ToolName::Mcp) => true,
+            Some(ToolName::ToolSearch) => servers_search,
+            _ => false,
+        });
     RequestFrame {
         instructions: system.saturating_sub(skills).saturating_sub(said),
         skills,
@@ -300,7 +306,8 @@ mod tests {
         }]);
         let waiting = frame_with(ConversationMode::Agent, &[], &[], &deferred);
         assert!(waiting.mcp > 0 && waiting.mcp < with_server.mcp, "the search and the list, not the schema: {waiting:?}");
-        assert_eq!(waiting.tools, base.tools, "the search is the servers' cost");
+        // Without a server's tools waiting the search is the app's own; with them, theirs.
+        assert!(waiting.tools < base.tools, "the search is the servers' cost: {waiting:?} {base:?}");
 
         let plan = frame_with(ConversationMode::Plan, &[], &[], &server());
         assert_eq!(plan.mcp, 0, "Plan offers no server's tools");

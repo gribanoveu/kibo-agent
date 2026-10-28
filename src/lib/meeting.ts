@@ -40,6 +40,9 @@ export type MeetingDocument = { topic: string; text: string };
 /** A voice the voice memory knows (`domain::voices`), and in how many meetings it was named. */
 export type VoiceInfo = { id: string; name: string; meetings: number };
 
+/** A microphone a call can be recorded from; `id` is what the settings keep. */
+export type Microphone = { id: string; name: string };
+
 /** The user's name for a speaker, or `Speaker N` from 1 — as the notes call whoever is not named. */
 export const speakerName = (meeting: Meeting, speaker: number) => meeting.names?.[speaker] ?? `Speaker ${speaker + 1}`;
 
@@ -291,6 +294,23 @@ export async function meetingDenoiseGet(): Promise<boolean> {
 export async function meetingDenoiseSet(on: boolean): Promise<void> {
   requireBackend();
   return invoke("meeting_denoise_set", { on });
+}
+
+/** The microphones plugged in. */
+export async function meetingMicrophones(): Promise<Microphone[]> {
+  if (!inTauri()) return [];
+  return invoke<Microphone[]>("meeting_microphones");
+}
+
+/** The microphone a call is recorded from; `null` is the system's default. */
+export async function meetingMicrophoneGet(): Promise<string | null> {
+  if (!inTauri()) return null;
+  return invoke<string | null>("meeting_microphone_get");
+}
+
+export async function meetingMicrophoneSet(id: string | null): Promise<void> {
+  requireBackend();
+  return invoke("meeting_microphone_set", { id });
 }
 
 /** Whether a recording is transcribed as soon as it is stopped. */

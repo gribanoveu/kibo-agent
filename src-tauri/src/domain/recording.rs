@@ -32,6 +32,14 @@ pub struct RecordingInfo {
     pub seconds: f32,
 }
 
+/// A microphone a call can be recorded from, for the page to choose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Microphone {
+    /// The system's id for it, kept in the settings as it is.
+    pub id: String,
+    pub name: String,
+}
+
 /// What a recording needs the system's leave for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

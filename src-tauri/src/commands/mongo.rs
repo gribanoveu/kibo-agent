@@ -1,4 +1,4 @@
-//! The MongoDB page (`docs/43-mongodb.md`), through `services::mongo`. No
+//! The MongoDB page (`docs/44-mongodb.md`), through `services::mongo`. No
 //! channel of its own: only the page changes what it shows, and each change
 //! answers with what it changed — the list of connections after a save, a
 //! count after an insert — or the page reads again.

@@ -1,4 +1,4 @@
-//! The MongoDB page's one way to a server (`docs/43-mongodb.md`): the
+//! The MongoDB page's one way to a server (`docs/44-mongodb.md`): the
 //! official driver's blocking API, every call already off the main thread
 //! (`commands::blocking`). The only module that opens a connection to one —
 //! `data_policy::NETWORK_ALLOWED` names it, and the driver's paths anywhere

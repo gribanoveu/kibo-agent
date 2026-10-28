@@ -122,7 +122,7 @@ impl MeetingNotes {
         }
     }
 
-    /// The call recorded from now on — the microphone and what the computer
+    /// The call recorded from now on — the microphone chosen and what the computer
     /// plays — into `meetings/recordings/<id>.wav`; its id. Only while Meeting
     /// notes is on. How long and how loud it is goes to `sink` as it records,
     /// and an end without a Stop.
@@ -133,7 +133,8 @@ impl MeetingNotes {
         let levels = Box::new(move |l: recording::Levels| told(MeetingEvent::Recording { id: named.clone(), seconds: l.seconds, mic: l.mic, call: l.call }));
         let (told, named) = (sink.clone(), id.clone());
         let ended = Box::new(move |e: MeetingError| told(MeetingEvent::RecordingEnded { id: named, error: e.to_string() }));
-        self.recorder.start(&id, &meeting_store::recording(&id)?, levels, ended)?;
+        let microphone = settings_store::load().unwrap_or_default().meeting_microphone;
+        self.recorder.start(&id, &meeting_store::recording(&id)?, microphone.as_deref(), levels, ended)?;
         Ok(id)
     }
 

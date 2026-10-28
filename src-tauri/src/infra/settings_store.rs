@@ -95,6 +95,7 @@ mod tests {
             features: [("board".to_string(), true)].into(),
             meeting_auto_process: true,
             meeting_denoise: Some(false),
+            meeting_microphone: Some("coreaudio:BuiltInMicrophoneDevice".to_string()),
             folder_trust: {
                 let mut trust = crate::domain::settings::FolderTrust::default();
                 trust.set(std::path::Path::new("/repo"), true);

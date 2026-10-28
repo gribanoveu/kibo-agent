@@ -204,13 +204,16 @@ export type BuiltInState = {
 export type BuiltInActions = {
   compact: () => void;
   fork: () => void;
-  review: () => void;
+  review: (handed: boolean) => void;
   init: (args: string) => void;
   analyze: (args: string) => void;
   trust: () => void;
 };
 
 const NOT_NOW = "Not while a turn is running";
+
+/** `/review`'s argument that hands the findings to the agent to go through, rather than to the user. */
+export const HAND_TO_AGENT = "send-result-to-agent";
 
 /** The app's own `/` commands, each with why it cannot run now when it cannot. */
 export function builtInCommands(state: BuiltInState, run: BuiltInActions): SlashCommand[] {
@@ -237,9 +240,10 @@ export function builtInCommands(state: BuiltInState, run: BuiltInActions): Slash
     },
     {
       name: "review",
-      hint: "Review the uncommitted changes for bugs, and list what it finds",
+      hint: "Review the uncommitted changes for bugs in a subagent, and list what it finds",
+      argumentHint: `[${HAND_TO_AGENT}]`,
       unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : undefined,
-      run: () => run.review(),
+      run: (args) => run.review(args.trim() === HAND_TO_AGENT),
     },
     {
       name: "init",
