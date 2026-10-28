@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { asHttpText, cutForHistory, effectiveAuth, HISTORY_BODY_LIMIT, preview, queryOf, resolveRequest, scope, toCurl, variablesIn, withQuery, type Collection, type Environment } from "../lib/httpClient";
+import {
+  addRequest,
+  asHttpText,
+  cutForHistory,
+  effectiveAuth,
+  findRequest,
+  HISTORY_BODY_LIMIT,
+  POSTMAN_SCHEMA,
+  preview,
+  queryOf,
+  removeNode,
+  renameNode,
+  requestsUnder,
+  resolveRequest,
+  scope,
+  toCurl,
+  toPostman,
+  variablesIn,
+  withQuery,
+  type Collection,
+  type Environment,
+  type HttpRequest,
+} from "../lib/httpClient";
 
 const env: Environment = {
   id: "t",
@@ -138,5 +160,67 @@ describe("http client rules", () => {
     ]);
     expect(withQuery(url, [{ key: "status", value: "new" }, { key: "flag", value: "", disabled: true }])).toBe("{{baseUrl}}/o?status=new");
     expect(withQuery(url, [])).toBe("{{baseUrl}}/o");
+  });
+
+  test("a node is renamed, added to or removed at any depth, with what it holds", () => {
+    const fresh: HttpRequest = { id: "n", name: "New", method: "GET", url: "", headers: [], auth: { type: "inherit" }, body: { mode: "none" }, scripts: {} };
+    const tree = [collection, { ...collection, id: "c2", name: "Other", items: [] }];
+    expect(renameNode(tree, "c", "Renamed")[0].name).toBe("Renamed");
+    expect(findRequest(renameNode(tree, "r1", "deep"), "r1")?.request.name).toBe("deep");
+    expect(findRequest(renameNode(tree, "f", "Folder"), "r1")?.path).toEqual(["API", "Folder"]);
+    expect(findRequest(addRequest(tree, "f", fresh), "n")?.path).toEqual(["API", "Keys"]);
+    expect(findRequest(addRequest(tree, "c2", fresh), "n")?.collection.id).toBe("c2");
+    expect(addRequest(tree, "r2", fresh)).toEqual(tree);
+    expect(requestsUnder(tree, "c")).toEqual(["r1", "r2", "r3"]);
+    expect(requestsUnder(tree, "f")).toEqual(["r1"]);
+    expect(requestsUnder(tree, "r3")).toEqual(["r3"]);
+    expect(requestsUnder(tree, "c2")).toEqual([]);
+    expect(findRequest(removeNode(tree, "f"), "r1")).toBeNull();
+    expect(findRequest(removeNode(tree, "f"), "r2")).not.toBeNull();
+    expect(removeNode(tree, "c").map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  test("a collection goes out as a Postman v2.1 file: auth, body, scripts and variables in Postman's shapes", () => {
+    const withMore: Collection = {
+      ...collection,
+      scripts: { prerequest: "a();\nb();", test: " " },
+      items: [
+        ...collection.items,
+        {
+          kind: "request",
+          id: "r4",
+          name: "post",
+          method: "POST",
+          url: "{{baseUrl}}/o",
+          headers: [{ key: "X-Off", value: "1", disabled: true }],
+          auth: { type: "basic", username: "u", password: "p" },
+          body: { mode: "raw", language: "json", raw: "{}" },
+          scripts: { test: "pm.test();" },
+        },
+      ],
+    };
+    const text = toPostman(withMore);
+    expect(text).toContain('\n\t"info"');
+    const file = JSON.parse(text);
+    expect(file.info).toEqual({ _postman_id: "c", name: "API", schema: POSTMAN_SCHEMA });
+    expect(file.auth).toEqual({ type: "bearer", bearer: [{ key: "token", value: "{{token}}", type: "string" }] });
+    expect(file.event).toEqual([{ listen: "prerequest", script: { type: "text/javascript", exec: ["a();", "b();"] } }]);
+    expect(file.variable).toEqual([
+      { key: "baseUrl", value: "http://collection" },
+      { key: "id", value: "42" },
+    ]);
+    const [folder, inherit, , post] = file.item;
+    expect(folder.item[0].name).toBe("a");
+    expect(folder.auth.apikey).toContainEqual({ key: "in", value: "header", type: "string" });
+    expect(inherit.request.auth).toBeUndefined();
+    expect(inherit.request.body).toBeUndefined();
+    expect(post.request).toEqual({
+      auth: { type: "basic", basic: [{ key: "username", value: "u", type: "string" }, { key: "password", value: "p", type: "string" }] },
+      method: "POST",
+      header: [{ key: "X-Off", value: "1", disabled: true }],
+      body: { mode: "raw", raw: "{}", options: { raw: { language: "json" } } },
+      url: "{{baseUrl}}/o",
+    });
+    expect(post.event[0].listen).toBe("test");
   });
 });

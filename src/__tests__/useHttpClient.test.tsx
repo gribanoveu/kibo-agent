@@ -50,4 +50,23 @@ describe("the HTTP page's state across a restart", () => {
     expect(again.result.current.sent.refund).toBeUndefined();
     expect(again.result.current.sent.health?.response?.status).toBe(200);
   });
+
+  test("a new request opens in a tab; a deleted folder takes its requests' tabs and answers with it", async () => {
+    const page = renderHook(() => useHttpClient());
+    act(() => page.result.current.send("create-order"));
+    await waitFor(() => expect(page.result.current.sent["create-order"]?.response).toBeDefined(), { timeout: 2000 });
+    let id = "";
+    act(() => {
+      id = page.result.current.newRequest("orders");
+    });
+    expect(page.result.current.active).toBe(id);
+    act(() => page.result.current.setActive("create-order"));
+    act(() => page.result.current.remove("orders-folder"));
+    expect(page.result.current.tabs).toEqual([id]);
+    expect(page.result.current.active).toBe(id);
+    expect(page.result.current.sent["create-order"]?.response).toBeUndefined();
+    act(() => page.result.current.rename(id, "Ping"));
+    expect(page.result.current.collections[0].items.map((i) => i.name)).toEqual(["Health", "Ping"]);
+  });
 });
+

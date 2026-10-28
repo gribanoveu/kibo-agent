@@ -17,6 +17,7 @@ import {
   Loader2,
   Lock,
   LockOpen,
+  MoreHorizontal,
   Plus,
   Rows2,
   Send,
@@ -29,14 +30,16 @@ import {
 import { Page, PageSheet } from "./Page";
 import { CodeEditor } from "./CodeEditor";
 import { Dropdown } from "./Dropdown";
+import { Modal } from "./Modal";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
-import { shortcutText } from "../lib/shortcuts";
+import { matches, shortcutText } from "../lib/shortcuts";
 import {
   AGENT_ACCESS,
+  requestsUnder,
   METHODS,
   asHttpText,
   SECRET_MASK,
@@ -83,6 +86,51 @@ export function HttpPage() {
     });
 
   useShortcuts({ httpSend: () => http.active && http.send(http.active) });
+
+  // A collection, folder or request being renamed or deleted — a new one is named straight away.
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; name: string; what: string } | null>(null);
+  const rename = () => {
+    if (!renaming?.name.trim()) return;
+    http.rename(renaming.id, renaming.name.trim());
+    setRenaming(null);
+  };
+  const remove = () => {
+    if (!deleting) return;
+    http.remove(deleting.id);
+    setDeleting(null);
+  };
+  const reveal = (id: string) => setExpanded((s) => new Set(s).add(id));
+  const newCollection = () => {
+    const id = http.newCollection();
+    reveal(id);
+    setRenaming({ id, name: "New collection" });
+  };
+  const newRequest = (parent: string) => {
+    reveal(parent);
+    setRenaming({ id: http.newRequest(parent), name: "New request" });
+  };
+  const menu = (node: TreeNode): Action[] => {
+    const requests = requestsUnder(http.collections, node.id).length;
+    const holds = `with ${requests === 1 ? "its request" : `its ${requests} requests`}`;
+    return [
+      ...(node.kind === "request" ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
+      { value: "rename", label: "Rename…", run: () => setRenaming({ id: node.id, name: node.name }) },
+      ...(node.kind === "collection"
+        ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => http.exportCollection(node.id) }]
+        : []),
+      {
+        value: "delete",
+        label: "Delete…",
+        run: () =>
+          setDeleting({
+            id: node.id,
+            name: node.name,
+            what: node.kind === "request" ? "Deletes the request and its last response." : `Deletes the ${node.kind} ${requests > 0 ? holds : "— there is nothing in it"}.`,
+          }),
+      },
+    ];
+  };
 
   const editingEnv = sheet?.kind === "environment" ? (http.environments.find((e) => e.id === sheet.id) ?? null) : null;
   const openTab = http.active ? findRequest(http.collections, http.active) : null;
@@ -160,13 +208,13 @@ export function HttpPage() {
             <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import">
               <Upload size={14} />
             </button>
-            <button type="button" className="http-icon-button" title="New collection" aria-label="New collection">
+            <button type="button" className="http-icon-button" title="New collection" aria-label="New collection" onClick={newCollection}>
               <Plus size={14} />
             </button>
           </div>
           <ul className="http-tree-list">
             {http.collections.map((c) => (
-              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} />
+              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} />
             ))}
           </ul>
         </nav>
@@ -214,6 +262,53 @@ export function HttpPage() {
           )}
         </section>
       </div>
+      <Modal
+        title="Rename"
+        open={renaming !== null}
+        onClose={() => setRenaming(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setRenaming(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!renaming?.name.trim()} onClick={rename}>
+              Rename
+            </button>
+          </>
+        }
+      >
+        <input
+          className="http-rename"
+          // Focused with the name selected, as a new name replaces it more often than not.
+          ref={(input) => input?.select()}
+          value={renaming?.name ?? ""}
+          aria-label="New name"
+          onChange={(e) => renaming && setRenaming({ ...renaming, name: e.target.value })}
+          // A form field's Enter, as in every settings form here — not a shortcut.
+          onKeyDown={(e) => {
+            if (!matches(e, "accept")) return;
+            e.preventDefault();
+            rename();
+          }}
+        />
+      </Modal>
+      <Modal
+        title={`Delete “${deleting?.name ?? ""}”?`}
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setDeleting(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={remove}>
+              Delete
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">{deleting?.what}</p>
+      </Modal>
     </Page>
   );
 }
@@ -222,19 +317,44 @@ function MethodBadge({ method }: { method: HttpMethod }) {
   return <span className={`http-method http-method-${method.toLowerCase()}`}>{method === "DELETE" ? "DEL" : method === "OPTIONS" ? "OPT" : method}</span>;
 }
 
-type TreeProps = { expanded: Set<string>; toggle: (id: string) => void; active: string | null; open: (id: string) => void };
+type TreeNode = { id: string; name: string; kind: "collection" | "folder" | "request" };
+type Action = { value: string; label: string; hint?: string; run: () => void };
+type TreeProps = { expanded: Set<string>; toggle: (id: string) => void; active: string | null; open: (id: string) => void; menu: (node: TreeNode) => Action[] };
+
+/** A row of the tree, and beside it what can be done to it. */
+function TreeRow({ node, menu, children }: { node: TreeNode; menu: TreeProps["menu"]; children: ReactNode }) {
+  const actions = menu(node);
+  return (
+    <div className="http-tree-item">
+      {children}
+      <span className="http-tree-menu">
+        <Dropdown
+          label={<MoreHorizontal size={14} aria-label={`Actions for ${node.name}`} />}
+          title={`Actions for ${node.name}`}
+          options={actions.map(({ value, label, hint }) => ({ value, label, hint }))}
+          value=""
+          onPick={(value) => actions.find((a) => a.value === value)?.run()}
+          below
+          right
+        />
+      </span>
+    </div>
+  );
+}
 
 function CollectionNode({ collection, ...tree }: { collection: Collection } & TreeProps) {
   const isOpen = tree.expanded.has(collection.id);
   return (
     <li>
-      <button type="button" className="http-tree-row http-tree-collection" aria-expanded={isOpen} onClick={() => tree.toggle(collection.id)}>
-        {isOpen ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
-        <Layers size={13} className="http-tree-icon" />
-        <span className="http-tree-name">{collection.name}</span>
-        {hasScripts(collection.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
-      </button>
-      {isOpen && <Items items={collection.items} {...tree} />}
+      <TreeRow node={{ id: collection.id, name: collection.name, kind: "collection" }} menu={tree.menu}>
+        <button type="button" className="http-tree-row http-tree-collection" aria-expanded={isOpen} onClick={() => tree.toggle(collection.id)}>
+          {isOpen ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
+          <Layers size={13} className="http-tree-icon" />
+          <span className="http-tree-name">{collection.name}</span>
+          {hasScripts(collection.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
+        </button>
+      </TreeRow>
+      {isOpen && (collection.items.length > 0 ? <Items items={collection.items} {...tree} /> : <p className="http-quiet http-tree-empty">No requests yet</p>)}
     </li>
   );
 }
@@ -245,19 +365,23 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
       {items.map((item) =>
         item.kind === "folder" ? (
           <li key={item.id}>
-            <button type="button" className="http-tree-row" aria-expanded={tree.expanded.has(item.id)} onClick={() => tree.toggle(item.id)}>
-              {tree.expanded.has(item.id) ? <FolderOpen size={13} className="http-tree-icon" /> : <Folder size={13} className="http-tree-icon" />}
-              <span className="http-tree-name">{item.name}</span>
-            </button>
+            <TreeRow node={{ id: item.id, name: item.name, kind: "folder" }} menu={tree.menu}>
+              <button type="button" className="http-tree-row" aria-expanded={tree.expanded.has(item.id)} onClick={() => tree.toggle(item.id)}>
+                {tree.expanded.has(item.id) ? <FolderOpen size={13} className="http-tree-icon" /> : <Folder size={13} className="http-tree-icon" />}
+                <span className="http-tree-name">{item.name}</span>
+              </button>
+            </TreeRow>
             {tree.expanded.has(item.id) && <Items items={item.items} {...tree} />}
           </li>
         ) : (
           <li key={item.id}>
-            <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} onClick={() => tree.open(item.id)}>
-              <MethodBadge method={item.method} />
-              <span className="http-tree-name">{item.name}</span>
-              {hasScripts(item.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
-            </button>
+            <TreeRow node={{ id: item.id, name: item.name, kind: "request" }} menu={tree.menu}>
+              <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} onClick={() => tree.open(item.id)}>
+                <MethodBadge method={item.method} />
+                <span className="http-tree-name">{item.name}</span>
+                {hasScripts(item.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
+              </button>
+            </TreeRow>
           </li>
         ),
       )}

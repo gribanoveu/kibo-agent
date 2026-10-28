@@ -147,11 +147,60 @@
   text-align: left;
   cursor: pointer;
 }
-.http-tree-row:hover {
+/* A row and its menu: the menu shows on hover, and stays while it is open. Its
+   place is kept and it is lower than the row, so a hover moves nothing. */
+.http-tree-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+.http-tree-item:hover {
   background: var(--bg-hover);
 }
-.http-tree-row.on {
+.http-tree-item:has(.http-tree-row.on) {
   background: var(--bg-active);
+}
+.http-tree-menu {
+  display: flex;
+  flex: none;
+  visibility: hidden;
+}
+.http-tree-item:hover .http-tree-menu,
+.http-tree-item:focus-within .http-tree-menu,
+.http-tree-menu:has(.chip.open) {
+  visibility: visible;
+}
+.http-tree-menu .chip {
+  padding: 2px 6px;
+}
+.http-tree-menu .chip-chev {
+  display: none;
+}
+.http-tree-empty {
+  margin: 2px 0 4px 34px;
+  font-size: var(--fs-xs);
+}
+.http-rename {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+.http-rename:focus {
+  border-color: var(--accent);
+}
+.http-confirm {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
 }
 .http-tree-collection {
   font-weight: 500;
@@ -197,6 +246,12 @@
 }
 .http-code-box-log {
   max-height: 280px;
+}
+.http-history-row:hover {
+  background: var(--bg-hover);
+}
+.http-history-row.on {
+  background: var(--bg-active);
 }
 .http-history-row .http-tree-name {
   color: var(--text-dim);

@@ -1,9 +1,15 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { safeName } from "../lib/dialog";
 import {
+  addRequest,
   cutForHistory,
   findRequest,
+  removeNode,
+  renameNode,
   replaceRequest,
+  requestsUnder,
   resolveRequest,
+  toPostman,
   type Collection,
   type Environment,
   type HistoryEntry,
@@ -73,6 +79,55 @@ export function useHttpClient() {
 
   const edit = useCallback((request: HttpRequest) => setCollections((c) => replaceRequest(c, request)), []);
 
+  /** A new, empty collection; its id, to name it. */
+  const newCollection = useCallback(() => {
+    const id = crypto.randomUUID();
+    setCollections((c) => [...c, { id, name: "New collection", auth: { type: "noauth" }, variables: [], items: [], scripts: {} }]);
+    return id;
+  }, []);
+
+  /** A new GET in a collection or folder, open in a tab; its id, to name it. */
+  const newRequest = useCallback(
+    (parent: string) => {
+      const id = crypto.randomUUID();
+      const request: HttpRequest = { id, name: "New request", method: "GET", url: "", headers: [], auth: { type: "inherit" }, body: { mode: "none" }, scripts: {} };
+      setCollections((c) => addRequest(c, parent, request));
+      open(id);
+      return id;
+    },
+    [open],
+  );
+
+  const rename = useCallback((id: string, name: string) => setCollections((c) => renameNode(c, id, name)), []);
+
+  /** A collection, folder or request gone — its requests' tabs and last answers with it. */
+  const remove = useCallback(
+    (id: string) => {
+      const gone = new Set(requestsUnder(collections, id));
+      const left = tabs.filter((t) => !gone.has(t));
+      setCollections((c) => removeNode(c, id));
+      setTabs(left);
+      if (active && gone.has(active)) setActive(left[0] ?? null);
+      setSaved((s) => Object.fromEntries(Object.entries(s).filter(([request]) => !gone.has(request))));
+    },
+    [collections, tabs, active, setTabs, setActive, setSaved],
+  );
+
+  // ponytail: a download from the window, to Downloads — HC-2 asks where with the
+  // save dialog and the backend writes the stored file.
+  const exportCollection = useCallback(
+    (id: string) => {
+      const collection = collections.find((c) => c.id === id);
+      if (!collection) return;
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([toPostman(collection)], { type: "application/json" }));
+      link.download = safeName(collection.name, "postman_collection.json");
+      link.click();
+      URL.revokeObjectURL(link.href);
+    },
+    [collections],
+  );
+
   const send = useCallback(
     (id: string) => {
       const found = findRequest(collections, id);
@@ -120,7 +175,7 @@ export function useHttpClient() {
   const saveEnvironment = useCallback((next: Environment) => setEnvironments((all) => all.map((e) => (e.id === next.id ? next : e))), []);
 
   return useMemo(
-    () => ({ collections, environments, environment, setEnvironmentId, history, tabs, active, setActive, open, close, edit, send, sent, saveEnvironment }),
-    [collections, environments, environment, history, tabs, active, setActive, open, close, edit, send, sent, saveEnvironment],
+    () => ({ collections, environments, environment, setEnvironmentId, history, tabs, active, setActive, open, close, edit, newCollection, newRequest, rename, remove, exportCollection, send, sent, saveEnvironment }),
+    [collections, environments, environment, history, tabs, active, setActive, open, close, edit, newCollection, newRequest, rename, remove, exportCollection, send, sent, saveEnvironment],
   );
 }

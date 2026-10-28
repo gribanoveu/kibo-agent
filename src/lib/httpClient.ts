@@ -273,17 +273,129 @@ export function findRequest(collections: Collection[], id: string): { collection
   return null;
 }
 
+/** The items with the one called `id` changed, at any depth — or dropped, when `change` gives null. */
+function changeItem(items: Item[], id: string, change: (item: Item) => Item | null): Item[] {
+  return items.flatMap((item) => {
+    if (item.id === id) {
+      const next = change(item);
+      return next ? [next] : [];
+    }
+    return item.kind === "folder" ? [{ ...item, items: changeItem(item.items, id, change) }] : [item];
+  });
+}
+
 /** `request` put back in its place in the tree. */
 export function replaceRequest(collections: Collection[], request: HttpRequest): Collection[] {
-  const swap = (items: Item[]): Item[] =>
-    items.map((item) =>
-      item.kind === "request" && item.id === request.id
-        ? { kind: "request", ...request }
-        : item.kind === "folder"
-          ? { ...item, items: swap(item.items) }
-          : item,
-    );
-  return collections.map((c) => ({ ...c, items: swap(c.items) }));
+  return collections.map((c) => ({ ...c, items: changeItem(c.items, request.id, () => ({ kind: "request", ...request })) }));
+}
+
+/** A collection, folder or request under a new name. */
+export function renameNode(collections: Collection[], id: string, name: string): Collection[] {
+  return collections.map((c) => (c.id === id ? { ...c, name } : { ...c, items: changeItem(c.items, id, (item) => ({ ...item, name })) }));
+}
+
+/** A collection, folder or request gone, with everything under it. */
+export function removeNode(collections: Collection[], id: string): Collection[] {
+  return collections.filter((c) => c.id !== id).map((c) => ({ ...c, items: changeItem(c.items, id, () => null) }));
+}
+
+/** `request` added last in the collection or folder called `parent`. */
+export function addRequest(collections: Collection[], parent: string, request: HttpRequest): Collection[] {
+  const item: Item = { kind: "request", ...request };
+  return collections.map((c) =>
+    c.id === parent
+      ? { ...c, items: [...c.items, item] }
+      : { ...c, items: changeItem(c.items, parent, (folder) => (folder.kind === "folder" ? { ...folder, items: [...folder.items, item] } : folder)) },
+  );
+}
+
+/** The requests a collection, folder or request holds — what closes with it. */
+export function requestsUnder(collections: Collection[], id: string): string[] {
+  const all = (items: Item[]): string[] => items.flatMap((item) => (item.kind === "request" ? [item.id] : all(item.items)));
+  const find = (items: Item[]): string[] | null => {
+    for (const item of items) {
+      if (item.id === id) return all([item]);
+      const found = item.kind === "folder" ? find(item.items) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const c of collections) {
+    const found = c.id === id ? all(c.items) : find(c.items);
+    if (found) return found;
+  }
+  return [];
+}
+
+export const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
+
+type PostmanPair = { key: string; value: string; disabled?: boolean; type?: string };
+
+const pairs = (rows: Pair[]): PostmanPair[] => rows.map(({ key, value, disabled }) => (disabled ? { key, value, disabled } : { key, value }));
+const strings = (rows: [string, string][]): PostmanPair[] => rows.map(([key, value]) => ({ key, value, type: "string" }));
+
+function postmanAuth(auth: Auth): object | undefined {
+  switch (auth.type) {
+    case "inherit":
+      return undefined;
+    case "noauth":
+      return { type: "noauth" };
+    case "bearer":
+      return { type: "bearer", bearer: strings([["token", auth.token]]) };
+    case "basic":
+      return { type: "basic", basic: strings([["username", auth.username], ["password", auth.password]]) };
+    case "apikey":
+      return { type: "apikey", apikey: strings([["key", auth.key], ["value", auth.value], ["in", auth.in]]) };
+    case "other":
+      return { type: auth.name };
+  }
+}
+
+function postmanBody(body: Body): object | undefined {
+  switch (body.mode) {
+    case "none":
+    case "other":
+      return undefined;
+    case "raw":
+      return { mode: "raw", raw: body.raw, options: { raw: { language: body.language } } };
+    case "urlencoded":
+      return { mode: "urlencoded", urlencoded: pairs(body.fields) };
+  }
+}
+
+function postmanEvents(scripts: Scripts): object[] | undefined {
+  const events = (["prerequest", "test"] as const)
+    .filter((listen) => scripts[listen]?.trim())
+    .map((listen) => ({ listen, script: { type: "text/javascript", exec: (scripts[listen] ?? "").split("\n") } }));
+  return events.length > 0 ? events : undefined;
+}
+
+function postmanItem(item: Item): object {
+  if (item.kind === "folder") return { id: item.id, name: item.name, item: item.items.map(postmanItem), auth: postmanAuth(item.auth) };
+  return {
+    id: item.id,
+    name: item.name,
+    event: postmanEvents(item.scripts),
+    request: { auth: postmanAuth(item.auth), method: item.method, header: pairs(item.headers), body: postmanBody(item.body), url: item.url },
+  };
+}
+
+/**
+ * The collection as a Postman v2.1 file — what Postman's Import takes, indented with
+ * tabs as Postman writes it. Built from what the page holds, so a body or auth it
+ * keeps but does not edit (`other`) goes out as its type alone.
+ */
+// ponytail: built from the page's model on sample data; HC-2 hands out the stored
+// file as is, `extra` and all, and this goes.
+export function toPostman(collection: Collection): string {
+  const file = {
+    info: { _postman_id: collection.id, name: collection.name, schema: POSTMAN_SCHEMA },
+    item: collection.items.map(postmanItem),
+    auth: postmanAuth(collection.auth),
+    event: postmanEvents(collection.scripts),
+    variable: collection.variables.length > 0 ? pairs(collection.variables) : undefined,
+  };
+  return JSON.stringify(file, null, "\t");
 }
 
 export const hasScripts = (s: Scripts) => Boolean(s.prerequest?.trim() || s.test?.trim());
