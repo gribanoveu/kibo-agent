@@ -106,7 +106,10 @@ export function Sidebar({
   const [filter, setFilter] = useState<Filter>("active");
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
+  useShortcuts({
+    // In an editor that can be written in, ⌘/ comments the lines out instead.
+    shortcuts: () => (document.activeElement?.matches('.cm-content:not([aria-readonly="true"])') ? false : setShortcutsOpen((v) => !v)),
+  });
   const [aboutOpen, setAboutOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {

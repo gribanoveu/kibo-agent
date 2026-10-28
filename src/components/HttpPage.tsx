@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Trash2,
   Upload,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { Page, PageSheet } from "./Page";
@@ -36,6 +37,7 @@ import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
+import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
 import {
   AGENT_ACCESS,
@@ -85,7 +87,11 @@ export function HttpPage() {
       return next;
     });
 
-  useShortcuts({ httpSend: () => http.active && http.send(http.active) });
+  useShortcuts({
+    httpSend: () => {
+      if (http.active) http.send(http.active);
+    },
+  });
 
   // A collection, folder or request being renamed or deleted — a new one is named straight away.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
@@ -809,6 +815,17 @@ function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => voi
         {body.mode === "raw" && (
           <>
             <span className="http-spacer" />
+            {body.language !== "text" && (
+              <button
+                type="button"
+                className="http-icon-button"
+                title={`Beautify the ${body.language.toUpperCase()} — numbers, {{variables}} and comments stay as written`}
+                aria-label="Beautify"
+                onClick={() => onChange({ ...body, raw: body.language === "json" ? formatJson(body.raw) : formatXml(body.raw) })}
+              >
+                <WandSparkles size={14} />
+              </button>
+            )}
             <Dropdown
               below
               right
@@ -882,6 +899,8 @@ function receivedAt(at: number): string {
 function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
   const [tab, setTab] = useState<ResTab>("body");
   const response = sent?.response;
+  const body = response && pretty(response.body, response.contentType);
+  const { copied, copy } = useCopied();
   const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
   const tabs: [ResTab, string, ReactNode][] = [
     ["body", "Response", null],
@@ -911,6 +930,11 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
             {[response && `${response.ms} ms`, response && sizeLabel(response.bytes), receivedAt(sent.at), sent.environment].filter(Boolean).join(" · ")}
           </span>
         )}
+        {body !== undefined && (
+          <button type="button" className="http-icon-button" title={copied ? "Copied" : "Copy the response's body"} aria-label="Copy the response's body" onClick={() => copy(body)}>
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+        )}
         {response && (
           <button type="button" className="http-icon-button" title="Save the response to a file" aria-label="Save the response">
             <Download size={13} />
@@ -924,7 +948,7 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
         {response && tab === "body" &&
           (response.body ? (
             <div className="http-code-box http-code-box-fill">
-              <CodeEditor text={pretty(response.body, response.contentType)} language={/json/.test(response.contentType) ? "json" : /xml/.test(response.contentType) ? "xml" : "text"} label="Response body" />
+              <CodeEditor text={body ?? ""} language={/json/.test(response.contentType) ? "json" : /xml/.test(response.contentType) ? "xml" : "text"} label="Response body" />
             </div>
           ) : (
             <p className="http-quiet">No body.</p>

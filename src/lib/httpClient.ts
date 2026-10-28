@@ -3,6 +3,8 @@
 // rest of a real file stays on the backend, untouched (decision 2). No command
 // exists yet: the page runs on the sample in `httpDemo.ts` until HC-3.
 
+import { formatJson, formatXml, stripJsonComments } from "./formatText";
+
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
 export const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -185,7 +187,8 @@ export function resolveRequest(collection: Collection, request: HttpRequest, env
 
   let body: string | null = null;
   if (request.body.mode === "raw") {
-    body = fill(request.body.raw);
+    // Comments go first, as Postman sends a JSON body: a variable in a part commented out is not missing.
+    body = fill(request.body.language === "json" ? stripJsonComments(request.body.raw) : request.body.raw);
     const type = { json: "application/json", text: "text/plain", xml: "application/xml" }[request.body.language];
     if (!hasHeader(headers, "Content-Type")) headers.push({ key: "Content-Type", value: type });
   }
@@ -414,12 +417,9 @@ export function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** JSON with indents when it parses, the text as it came when it does not. */
+/** A body by its type: JSON and XML re-indented, with every digit and comment kept; anything else as it came. */
 export function pretty(body: string, contentType: string): string {
-  if (!/json/i.test(contentType)) return body;
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2);
-  } catch {
-    return body;
-  }
+  if (/json/i.test(contentType)) return formatJson(body);
+  if (/xml/i.test(contentType)) return formatXml(body);
+  return body;
 }

@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
+import { HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { closeSearchPanel, findNext, findPrevious, openSearchPanel, search } from "@codemirror/search";
 import { tags as t } from "@lezer/highlight";
@@ -57,6 +57,23 @@ export const searchKeys: KeyBinding = {
           : matches(e, "close") && closeSearchPanel(view),
 };
 
+// ⌘/ by the registry too: by the key's place, so it works on a Russian layout, where it types a dot.
+export const commentKeys: KeyBinding = { any: (view, e) => matches(e, "comment") && toggleComment(view) };
+
+/**
+ * JSON as Postman reads a body: `//` and `/* *\/` comments allowed, and ⌘/ writes
+ * them. The legacy mode, because the Lezer grammar knows no comments.
+ */
+const jsonWithComments = LanguageDescription.of({
+  name: "JSON",
+  alias: ["json"],
+  load: async () => {
+    const { json } = await import("@codemirror/legacy-modes/mode/javascript");
+    const commentTokens = { line: "//", block: { open: "/*", close: "*/" } };
+    return new LanguageSupport(StreamLanguage.define({ ...json, languageData: { ...json.languageData, commentTokens } }));
+  },
+});
+
 /** Lit while text is selected — `editorTheme` drops the cursor line's fill then. */
 export const selectingClass = EditorView.editorAttributes.compute(["selection"], (state): Record<string, string> =>
   state.selection.ranges.every((range) => range.empty) ? {} : { class: "cm-selecting" },
@@ -99,7 +116,7 @@ export function CodeEditor({ text, language, onChange, numbered = true, label }:
           drawSelection(),
           highlightActiveLine(),
           selectingClass,
-          keymap.of([searchKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          keymap.of([searchKeys, commentKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           search({ top: true }),
           syntax.of([]),
           syntaxHighlighting(editorColours),
@@ -129,7 +146,7 @@ export function CodeEditor({ text, language, onChange, numbered = true, label }:
   useEffect(() => {
     const editor = view.current;
     let live = true;
-    const found = LanguageDescription.matchLanguageName(languages, language, false);
+    const found = LanguageDescription.matchLanguageName([jsonWithComments, ...languages], language, false);
     if (!found) editor?.dispatch({ effects: syntax.reconfigure([]) });
     else
       found

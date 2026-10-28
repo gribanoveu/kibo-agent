@@ -7,6 +7,7 @@ import {
   findRequest,
   HISTORY_BODY_LIMIT,
   POSTMAN_SCHEMA,
+  pretty,
   preview,
   queryOf,
   removeNode,
@@ -100,6 +101,32 @@ describe("http client rules", () => {
       missing: [],
       notes: [],
     });
+  });
+
+  test("a JSON body leaves without its comments, and a variable in one is not missing; a text body keeps them", () => {
+    const raw = '{\n  // "debug": {{debug}},\n  "url": "http://x/{{id}}" /* why */\n}';
+    const request = {
+      id: "r2",
+      name: "b",
+      method: "POST" as const,
+      url: "{{baseUrl}}/o",
+      headers: [],
+      auth: { type: "noauth" as const },
+      body: { mode: "raw" as const, language: "json" as const, raw },
+      scripts: {},
+    };
+    const json = resolveRequest(collection, request, env);
+    expect(json.body).toBe('{\n  "url": "http://x/42" \n}');
+    expect(json.missing).toEqual([]);
+    const text = resolveRequest(collection, { ...request, body: { ...request.body, language: "text" as const } }, env);
+    expect(text.body).toContain("// ");
+    expect(text.missing).toEqual(["debug"]);
+  });
+
+  test("a response keeps every digit; XML is indented, text left as it came", () => {
+    expect(pretty('{"amount":1250.00,"id":12345678901234567890}', "application/json")).toBe('{\n  "amount": 1250.00,\n  "id": 12345678901234567890\n}');
+    expect(pretty("<a><b>1</b></a>", "application/xml; charset=utf-8")).toBe("<a>\n  <b>1</b>\n</a>");
+    expect(pretty("{ a }", "text/plain")).toBe("{ a }");
   });
 
   test("the cURL names a secret instead of carrying it, and quotes what the shell would split", () => {

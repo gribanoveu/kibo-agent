@@ -10,7 +10,7 @@ import { unifiedMergeView } from "@codemirror/merge";
 import { asciidoc } from "codemirror-asciidoc";
 import { languageOf } from "../lib/highlight";
 import { sameText } from "../hooks/useOpenFiles";
-import { editorColours, editorTheme, searchKeys, selectingClass } from "./CodeEditor";
+import { commentKeys, editorColours, editorTheme, searchKeys, selectingClass } from "./CodeEditor";
 import { matches } from "../lib/shortcuts";
 import "./FileEditor.css";
 
@@ -123,7 +123,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave, original }: Pro
           drawSelection(),
           highlightActiveLine(),
           selectingClass,
-          keymap.of([searchKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          keymap.of([searchKeys, commentKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           search({ top: true }),
           syntax.of(own ?? []),
           syntaxHighlighting(editorColours),
