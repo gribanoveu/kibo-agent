@@ -22,6 +22,7 @@ pub enum Feature {
     MeetingNotes,
     VoiceMemory,
     Knowledge,
+    HttpClient,
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -37,7 +38,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::HttpClient];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -99,6 +100,16 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
                 data: Some("knowledge"),
+            },
+            Feature::HttpClient => Manifest {
+                id: "http-client",
+                name: "HTTP client",
+                description: "An HTTP page for trying an API: requests in collections kept in the Postman format, \
+                    environments with their variables, the response beside the request. Not finished — the page's look \
+                    with sample data, nothing is sent yet (docs/45-http-client.md).",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("http"),
             },
         }
     }
@@ -167,7 +178,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "http-client"]);
     }
 
     #[test]
