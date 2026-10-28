@@ -87,4 +87,26 @@ describe("the HTTP page's state across a restart", () => {
     expect(page.result.current.sent.refund?.notSent).toContain("oauth2 auth");
     expect(page.result.current.sent.refund?.busy).toBe(false);
   });
+
+  test("the history keeps the last 200 sends, the newest first", async () => {
+    const old = Array.from({ length: 200 }, (_, i) => ({ id: `old${i}`, at: i, method: "GET", url: "/", status: 200, ms: 1, environment: "local" }));
+    localStorage.setItem("http.history", JSON.stringify(old));
+    const page = renderHook(() => useHttpClient());
+    act(() => page.result.current.send("health"));
+    await waitFor(() => expect(page.result.current.history[0].requestId).toBe("health"), { timeout: 2000 });
+    expect(page.result.current.history.length).toBe(200);
+    expect(page.result.current.history.at(-1)?.id).toBe("old198");
+  });
+
+  test("closing the open tab opens the one before it, or after it when it was first", () => {
+    const page = renderHook(() => useHttpClient());
+    act(() => page.result.current.open("health"));
+    expect(page.result.current.tabs).toEqual(["create-order", "list-orders", "health"]);
+    act(() => page.result.current.close("health"));
+    expect(page.result.current.active).toBe("list-orders");
+    act(() => page.result.current.setActive("create-order"));
+    act(() => page.result.current.close("create-order"));
+    expect(page.result.current.active).toBe("list-orders");
+  });
 });
+
