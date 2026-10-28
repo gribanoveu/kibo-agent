@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory, toggleComment } from "@codemirror/commands";
 import {
   codeFolding,
   foldGutter,
@@ -107,6 +107,8 @@ export const selectingClass = EditorView.editorAttributes.compute(["selection"],
 const syntax = new Compartment();
 const writable = new Compartment();
 const extra = new Compartment();
+const named = new Compartment();
+const labelled = (label?: string) => (label ? EditorView.contentAttributes.of({ "aria-label": label }) : []);
 const readOnlyUnless = (onChange: ((text: string) => void) | undefined) => EditorState.readOnly.of(!onChange);
 
 type Props = {
@@ -155,7 +157,7 @@ export function CodeEditor({ text, language, onChange, numbered = true, label, e
           EditorView.lineWrapping,
           writable.of(readOnlyUnless(onChange)),
           extra.of(extensions ?? []),
-          label ? EditorView.contentAttributes.of({ "aria-label": label }) : [],
+          named.of(labelled(label)),
           EditorView.updateListener.of((update) => {
             // Only what the user typed; a text put in from outside is not an edit.
             if (!update.docChanged || update.transactions.every((tr) => tr.annotation(Transaction.remote))) return;
@@ -180,6 +182,10 @@ export function CodeEditor({ text, language, onChange, numbered = true, label, e
   }, [extensions]);
 
   useEffect(() => {
+    view.current?.dispatch({ effects: named.reconfigure(labelled(label)) });
+  }, [label]);
+
+  useEffect(() => {
     const editor = view.current;
     let live = true;
     const found = LanguageDescription.matchLanguageName([jsonWithComments, ...languages], language, false);
@@ -198,9 +204,11 @@ export function CodeEditor({ text, language, onChange, numbered = true, label, e
   useEffect(() => {
     const editor = view.current;
     if (!editor || text === editor.state.doc.toString()) return;
+    // Written over from outside, an editable text — Beautify — is undone as an edit is;
+    // a read-only one, a response or another script, has nothing to undo.
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: text },
-      annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)],
+      annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(latest.current !== undefined), isolateHistory.of("full")],
     });
   }, [text]);
 

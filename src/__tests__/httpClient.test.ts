@@ -21,6 +21,8 @@ import {
   variableParts,
   variableValue,
   variablesIn,
+  withParams,
+  paramsOf,
   withQuery,
   type Collection,
   type Environment,
@@ -209,6 +211,29 @@ describe("http client rules", () => {
     ]);
     expect(withQuery(url, [{ key: "status", value: "new" }, { key: "flag", value: "", disabled: true }])).toBe("{{baseUrl}}/o?status=new");
     expect(withQuery(url, [])).toBe("{{baseUrl}}/o");
+  });
+
+  test("a parameter turned off stays in Params, out of the address, and comes back when turned on", () => {
+    const request: HttpRequest = { id: "p", name: "p", method: "GET", url: "/o?a=1&b=2", headers: [], auth: { type: "noauth" }, body: { mode: "none" }, scripts: {} };
+    const off = withParams(request, [{ key: "a", value: "1" }, { key: "b", value: "2", disabled: true }]);
+    expect(off.url).toBe("/o?a=1");
+    expect(paramsOf(off)).toEqual([{ key: "a", value: "1" }, { key: "b", value: "2", disabled: true }]);
+    const on = withParams(off, [{ key: "a", value: "1" }, { key: "b", value: "2" }]);
+    expect(on.url).toBe("/o?a=1&b=2");
+    expect(on.paramsOff).toBeUndefined();
+    expect(withQuery("/o", [{ key: "", value: "x" }])).toBe("/o?=x");
+  });
+
+  test("the cURL keeps the method curl would change, and Basic with a named secret goes as -u", () => {
+    const base = { id: "c", name: "c", url: "/o", headers: [], auth: { type: "noauth" as const }, scripts: {} };
+    const get = toCurl(resolveRequest(collection, { ...base, method: "GET", body: { mode: "raw", language: "json", raw: "{}" } }, env, "name"));
+    expect(get.startsWith("curl -X GET ")).toBe(true);
+    const post = toCurl(resolveRequest(collection, { ...base, method: "POST", body: { mode: "raw", language: "json", raw: "{}" } }, env, "name"));
+    expect(post.startsWith("curl '")).toBe(true);
+    expect(toCurl(resolveRequest(collection, { ...base, method: "HEAD", body: { mode: "none" } }, env, "name")).startsWith("curl -I ")).toBe(true);
+    const basic = toCurl(resolveRequest(collection, { ...base, method: "GET", auth: { type: "basic", username: "me", password: "{{token}}" }, body: { mode: "none" } }, env, "name"));
+    expect(basic).toContain("-u 'me:{{token}}'");
+    expect(basic).not.toContain("Authorization");
   });
 
   test("a node is renamed, added to or removed at any depth, with what it holds", () => {

@@ -34,6 +34,8 @@ export type HttpRequest = {
   name: string;
   method: HttpMethod;
   url: string;
+  /** Query parameters turned off in Params: kept beside the address, out of it, as Postman keeps `disabled` ones. */
+  paramsOff?: Pair[];
   headers: Pair[];
   auth: Auth;
   body: Body;
@@ -238,9 +240,16 @@ const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /** The request as a cURL command — a secret by its `{{name}}`, so the copy carries no token. */
 export function toCurl(r: Resolved): string {
-  const lines = [`curl${r.method === "GET" ? "" : ` -X ${r.method}`} ${quote(r.url)}`];
-  for (const h of r.headers) lines.push(`-H ${quote(`${h.key}: ${h.value}`)}`);
-  if (r.body !== null && r.body !== "") lines.push(`--data-raw ${quote(r.body)}`);
+  const body = r.body !== null && r.body !== "";
+  // curl's own method is GET, or POST with a body; HEAD is `-I`, as `-X HEAD` waits for a body that never comes.
+  const method = r.method === "HEAD" ? " -I" : r.method === (body ? "POST" : "GET") ? "" : ` -X ${r.method}`;
+  const lines = [`curl${method} ${quote(r.url)}`];
+  for (const h of r.headers) {
+    // Basic with a secret by its name is not encoded (base64 has no colon): curl encodes it once filled in.
+    const basic = /^authorization$/i.test(h.key) ? /^Basic (.*:.*)$/.exec(h.value) : null;
+    lines.push(basic ? `-u ${quote(basic[1])}` : `-H ${quote(`${h.key}: ${h.value}`)}`);
+  }
+  if (body) lines.push(`--data-raw ${quote(r.body!)}`);
   return lines.join(" \\\n  ");
 }
 
@@ -263,10 +272,21 @@ export function withQuery(url: string, params: Pair[]): string {
   const at = url.indexOf("?");
   const base = at < 0 ? url : url.slice(0, at);
   const query = params
-    .filter(({ key, disabled }) => !disabled && key !== "")
+    .filter(({ key, value, disabled }) => !disabled && (key !== "" || value !== ""))
     .map((p) => (p.value === "" ? p.key : `${p.key}=${p.value}`))
     .join("&");
   return query ? `${base}?${query}` : base;
+}
+
+/** The Params tab's rows: the address's query, then the parameters turned off. */
+export function paramsOf(request: HttpRequest): Pair[] {
+  return [...queryOf(request.url), ...(request.paramsOff ?? []).map((p) => ({ ...p, disabled: true }))];
+}
+
+/** The Params tab writing back: a row on goes in the address, a row off beside it — so it can be turned on again. */
+export function withParams(request: HttpRequest, rows: Pair[]): HttpRequest {
+  const off = rows.filter((r) => r.disabled).map(({ key, value }) => ({ key, value }));
+  return { ...request, url: withQuery(request.url, rows), paramsOff: off.length > 0 ? off : undefined };
 }
 
 /** Where a request's auth comes from when it says "inherit": the nearest folder, then the collection. */
@@ -417,8 +437,9 @@ function postmanItem(item: Item): object {
  * tabs as Postman writes it. Built from what the page holds, so a body or auth it
  * keeps but does not edit (`other`) goes out as its type alone.
  */
-// ponytail: built from the page's model on sample data; HC-2 hands out the stored
-// file as is, `extra` and all, and this goes.
+// ponytail: built from the page's model on sample data, the address as a string — a
+// parameter turned off in Params is not in it. HC-2 hands out the stored file as is,
+// `extra` and all, and this goes.
 export function toPostman(collection: Collection): string {
   const file = {
     info: { _postman_id: collection.id, name: collection.name, schema: POSTMAN_SCHEMA },

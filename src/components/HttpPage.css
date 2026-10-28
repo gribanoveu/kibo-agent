@@ -402,7 +402,7 @@
    two differ by more than their colour. */
 .http-var,
 .code-editor .cm-variable {
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--purple) 14%, transparent);
 }
 .http-var,
@@ -617,6 +617,12 @@
 .http-pairs tr.off td input:not([type="checkbox"]) {
   color: var(--text-faint);
   text-decoration: line-through;
+}
+/* A row turned off is not sent: its variables are neither found nor missing. */
+.http-pairs tr.off .http-var {
+  color: inherit;
+  background: none;
+  text-decoration: none;
 }
 .http-pairs-read td {
   padding: 5px 6px;

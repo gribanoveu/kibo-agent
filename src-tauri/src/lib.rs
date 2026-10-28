@@ -230,6 +230,7 @@ pub fn run() {
             commands::prototype::prototype_assets,
             commands::prototype::prototype_asset_add,
             commands::prototype::prototype_asset_remove,
+            commands::http::http_export,
             commands::artifacts::artifact_list,
             commands::artifacts::artifact_free_space,
             commands::artifacts::artifact_files,

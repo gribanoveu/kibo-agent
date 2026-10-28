@@ -50,8 +50,8 @@ import {
   effectiveAuth,
   findRequest,
   hasScripts,
+  paramsOf,
   pretty,
-  queryOf,
   resolveRequest,
   scope,
   shownValues,
@@ -61,7 +61,7 @@ import {
   VARIABLE,
   variableParts,
   variableValue,
-  withQuery,
+  withParams,
   type Auth,
   type Body,
   type Collection,
@@ -94,15 +94,18 @@ export function HttpPage() {
       return next;
     });
 
-  useShortcuts({
-    httpSend: () => {
-      if (http.active) http.send(http.active);
-    },
-  });
-
   // A collection, folder or request being renamed or deleted — a new one is named straight away.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string; what: string } | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  useShortcuts({
+    // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
+    httpSend: () => {
+      if (renaming || deleting || failed || sheet || !http.active) return false;
+      http.send(http.active);
+    },
+  });
   const rename = () => {
     if (!renaming?.name.trim()) return;
     http.rename(renaming.id, renaming.name.trim());
@@ -124,13 +127,17 @@ export function HttpPage() {
     setRenaming({ id: http.newRequest(parent), name: "New request" });
   };
   const menu = (node: TreeNode): Action[] => {
-    const requests = requestsUnder(http.collections, node.id).length;
-    const holds = `with ${requests === 1 ? "its request" : `its ${requests} requests`}`;
+    // Counted when Delete is picked, not for every row on every render.
+    const holds = () => {
+      const requests = requestsUnder(http.collections, node.id).length;
+      if (requests === 0) return "— there is nothing in it";
+      return `with ${requests === 1 ? "its request" : `its ${requests} requests`}`;
+    };
     return [
       ...(node.kind === "request" ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
       { value: "rename", label: "Rename…", run: () => setRenaming({ id: node.id, name: node.name }) },
       ...(node.kind === "collection"
-        ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => http.exportCollection(node.id) }]
+        ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
         : []),
       {
         value: "delete",
@@ -139,7 +146,7 @@ export function HttpPage() {
           setDeleting({
             id: node.id,
             name: node.name,
-            what: node.kind === "request" ? "Deletes the request and its last response." : `Deletes the ${node.kind} ${requests > 0 ? holds : "— there is nothing in it"}.`,
+            what: node.kind === "request" ? "Deletes the request and its last response." : `Deletes the ${node.kind} ${holds()}.`,
           }),
       },
     ];
@@ -205,6 +212,8 @@ export function HttpPage() {
           <PageSheet icon={History} title="History" label="Every request sent" onClose={() => setSheet(null)}>
             <HistoryList
               entries={http.history}
+              // A request deleted since keeps its history, with nothing to open.
+              canOpen={(id) => findRequest(http.collections, id) !== null}
               onOpen={(id) => {
                 http.open(id);
                 setSheet(null);
@@ -218,6 +227,7 @@ export function HttpPage() {
         <nav className="http-tree" aria-label="Collections">
           <div className="http-tree-head">
             <span>Collections</span>
+            {/* TODO(HC-2): no action yet — the file is read and kept by the backend's import. */}
             <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import">
               <Upload size={14} />
             </button>
@@ -292,8 +302,7 @@ export function HttpPage() {
       >
         <input
           className="http-rename"
-          // Focused with the name selected, as a new name replaces it more often than not.
-          ref={(input) => input?.select()}
+          ref={selectAll}
           value={renaming?.name ?? ""}
           aria-label="New name"
           onChange={(e) => renaming && setRenaming({ ...renaming, name: e.target.value })}
@@ -322,9 +331,25 @@ export function HttpPage() {
       >
         <p className="http-confirm">{deleting?.what}</p>
       </Modal>
+      <Modal
+        title="Not done"
+        open={failed !== null}
+        onClose={() => setFailed(null)}
+        footer={
+          <button type="button" className="btn btn-primary" onClick={() => setFailed(null)}>
+            OK
+          </button>
+        }
+      >
+        <p className="http-confirm">{failed}</p>
+      </Modal>
     </Page>
   );
 }
+
+// Focused with the name selected, as a new name replaces it more often than not. Outside
+// the component: a new function each render would be called again, and select again.
+const selectAll = (input: HTMLInputElement | null) => input?.select();
 
 function MethodBadge({ method }: { method: HttpMethod }) {
   return <span className={`http-method http-method-${method.toLowerCase()}`}>{method === "DELETE" ? "DEL" : method === "OPTIONS" ? "OPT" : method}</span>;
@@ -419,19 +444,22 @@ function ago(at: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
-function HistoryList({ entries, onOpen }: { entries: HistoryEntry[]; onOpen: (requestId: string) => void }) {
+/** Opening a send's request from the history, if it is still there. */
+type Opening = { canOpen: (requestId: string) => boolean; onOpen: (requestId: string) => void };
+
+function HistoryList({ entries, ...opening }: { entries: HistoryEntry[] } & Opening) {
   const [shown, setShown] = useState<string | null>(null);
   if (entries.length === 0) return <p className="http-quiet">Nothing sent yet.</p>;
   return (
     <ul className="http-history">
       {entries.map((h) => (
-        <HistoryRow key={h.id} entry={h} expanded={shown === h.id} onToggle={() => setShown(shown === h.id ? null : h.id)} onOpen={onOpen} />
+        <HistoryRow key={h.id} entry={h} expanded={shown === h.id} onToggle={() => setShown(shown === h.id ? null : h.id)} {...opening} />
       ))}
     </ul>
   );
 }
 
-function HistoryRow({ entry, expanded, onToggle, onOpen }: { entry: HistoryEntry; expanded: boolean; onToggle: () => void; onOpen: (requestId: string) => void }) {
+function HistoryRow({ entry, expanded, onToggle, ...opening }: { entry: HistoryEntry; expanded: boolean; onToggle: () => void } & Opening) {
   const path = entry.url.replace(/^\{\{baseUrl\}\}/, "");
   return (
     <li>
@@ -454,14 +482,16 @@ function HistoryRow({ entry, expanded, onToggle, onOpen }: { entry: HistoryEntry
         )}
         <span className="http-quiet">{ago(entry.at)}</span>
       </button>
-      {expanded && <Exchange entry={entry} onOpen={onOpen} />}
+      {expanded && <Exchange entry={entry} {...opening} />}
     </li>
   );
 }
 
 /** One send in full: the request as it left, a secret masked, and what came back. */
-function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: string) => void }) {
+function Exchange({ entry, canOpen, onOpen }: { entry: HistoryEntry } & Opening) {
   const { request, response } = entry;
+  const body = useMemo(() => (response?.body ? pretty(response.body, response.contentType) : null), [response]);
+  const requestId = entry.requestId && canOpen(entry.requestId) ? entry.requestId : null;
   return (
     <div className="http-exchange">
       <div className="http-exchange-head">
@@ -471,8 +501,8 @@ function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: 
           {entry.agent && ` · the agent, in “${entry.agent.chat}”`}
         </span>
         <span className="http-spacer" />
-        {entry.requestId && (
-          <button type="button" className="http-bar-button" onClick={() => onOpen(entry.requestId!)}>
+        {requestId && (
+          <button type="button" className="http-bar-button" onClick={() => onOpen(requestId)}>
             Open request
           </button>
         )}
@@ -495,7 +525,7 @@ function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: 
       {response ? (
         <div className="http-code-box http-code-box-log">
           <CodeEditor
-            text={asHttpText(`HTTP/1.1 ${response.status} ${response.statusText}`, response.headers, response.body && pretty(response.body, response.contentType))}
+            text={asHttpText(`HTTP/1.1 ${response.status} ${response.statusText}`, response.headers, body)}
             language="http"
             numbered={false}
             label="Response"
@@ -526,7 +556,6 @@ const PANE_MIN = { stacked: 160, side: 400 };
 const RESPONSE_MIN = { stacked: 160, side: 320 };
 const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
 
-/** The address on top; under it what is written and what came back, one under the other or side by side. */
 /** What a variable is said to be on hover: its value, or that nothing in scope has it. */
 const variableTitle = (name: string, value: string | null) => (value === null ? `{{${name}}} is not set in the environment or the collection` : `{{${name}}} = ${value}`);
 
@@ -663,7 +692,7 @@ function RequestView({
   const marks = useMemo(() => variableMarks(values), [valuesKey]);
   const { copied, copy } = useCopied();
   const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
-  const params = queryOf(request.url);
+  const params = paramsOf(request);
   const set = (patch: Partial<HttpRequest>) => onEdit({ ...request, ...patch });
   const count = (n: number) => (n > 0 ? <span className="http-count">{n}</span> : null);
   const scripts = hasScripts(request.scripts) || hasScripts(collection.scripts);
@@ -686,6 +715,7 @@ function RequestView({
           values={values}
           value={request.url}
           onChange={(e) => set({ url: e.target.value })}
+          // TODO(HC-4): a pasted curl command is not read yet — the parser comes with HC-1.
           placeholder="{{baseUrl}}/path — or paste a curl command"
         />
         <button
@@ -708,7 +738,7 @@ function RequestView({
           <div className="http-subtabs" role="tablist" aria-label="Request">
             {(
               [
-                ["params", "Params", count(params.length)],
+                ["params", "Params", count(params.filter((p) => !p.disabled).length)],
                 ["headers", "Headers", count(request.headers.filter((h) => !h.disabled).length)],
                 ["auth", "Auth", null],
                 ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
@@ -733,7 +763,7 @@ function RequestView({
           </div>
 
           <div className={`http-editor${(tab === "body" && request.body.mode === "raw") || tab === "scripts" || tab === "preview" ? " fills" : ""}`}>
-            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" values={values} onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
+            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" values={values} onChange={(rows) => onEdit(withParams(request, rows))} />}
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
             {tab === "body" && <BodyEditor body={request.body} values={values} marks={marks} onChange={(body) => set({ body })} />}
@@ -1016,7 +1046,7 @@ function receivedAt(at: number): string {
 function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
   const [tab, setTab] = useState<ResTab>("body");
   const response = sent?.response;
-  const body = response && pretty(response.body, response.contentType);
+  const body = useMemo(() => response && pretty(response.body, response.contentType), [response]);
   const { copied, copy } = useCopied();
   const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
   const tabs: [ResTab, string, ReactNode][] = [
@@ -1052,6 +1082,7 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
             {copied ? <Check size={13} /> : <Copy size={13} />}
           </button>
         )}
+        {/* TODO(out of plan): no action — saving a response to a file is outside docs/45-http-client.md. */}
         {response && (
           <button type="button" className="http-icon-button" title="Save the response to a file" aria-label="Save the response">
             <Download size={13} />
@@ -1073,8 +1104,9 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
         {response && tab === "headers" && (
           <table className="http-pairs http-pairs-read">
             <tbody>
-              {response.headers.map((h) => (
-                <tr key={h.key}>
+              {response.headers.map((h, i) => (
+                // By place: a header can come more than once (`Set-Cookie`).
+                <tr key={i}>
                   <td className="http-mono">{h.key}</td>
                   <td className="http-mono">{h.value}</td>
                 </tr>
@@ -1087,8 +1119,8 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
             <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>
           ) : (
             <ul className="http-tests">
-              {response.tests.map((t) => (
-                <li key={t.name} className={t.passed ? "pass" : "fail"}>
+              {response.tests.map((t, i) => (
+                <li key={i} className={t.passed ? "pass" : "fail"}>
                   <span className="http-test-mark">{t.passed ? "PASS" : "FAIL"}</span>
                   {t.name}
                   {t.error && <span className="http-quiet"> — {t.error}</span>}
@@ -1184,6 +1216,7 @@ function EnvironmentForm({ environment, onSave }: { environment: Environment; on
 
       <p className="http-quiet">Sealed on this computer under the app's master key, as the API keys are. A secret's value is never shown again — leave it empty to keep it.</p>
       <div className="http-actions">
+        {/* TODO(HC-2): no action yet — the backend writes the environment, its secrets empty. */}
         <button type="button" className="http-bar-button" title="As a Postman environment file — secrets empty">
           <Download size={13} />
           Export

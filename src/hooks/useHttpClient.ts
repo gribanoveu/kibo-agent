@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { safeName } from "../lib/dialog";
+import { pickSavePath } from "../lib/dialog";
+import { exportHttpFile } from "../lib/httpCommands";
 import {
   addRequest,
   cutForHistory,
+  effectiveAuth,
   findRequest,
   removeNode,
   renameNode,
@@ -58,23 +60,23 @@ export function useHttpClient() {
 
   const environment = environments.find((e) => e.id === environmentId) ?? null;
 
+  // Only a request there is: a deleted one's id, from the history, opens nothing.
   const open = useCallback(
     (id: string) => {
+      if (!findRequest(collections, id)) return;
       setTabs((t) => (t.includes(id) ? t : [...t, id]));
       setActive(id);
     },
-    [setTabs, setActive],
+    [collections, setTabs, setActive],
   );
 
   const close = useCallback(
     (id: string) => {
-      setTabs((t) => {
-        const next = t.filter((x) => x !== id);
-        if (active === id) setActive(next[t.indexOf(id) - 1] ?? next[0] ?? null);
-        return next;
-      });
+      const next = tabs.filter((x) => x !== id);
+      setTabs(next);
+      if (active === id) setActive(next[tabs.indexOf(id) - 1] ?? next[0] ?? null);
     },
-    [active, setTabs, setActive],
+    [tabs, active, setTabs, setActive],
   );
 
   const edit = useCallback((request: HttpRequest) => setCollections((c) => replaceRequest(c, request)), []);
@@ -92,38 +94,45 @@ export function useHttpClient() {
       const id = crypto.randomUUID();
       const request: HttpRequest = { id, name: "New request", method: "GET", url: "", headers: [], auth: { type: "inherit" }, body: { mode: "none" }, scripts: {} };
       setCollections((c) => addRequest(c, parent, request));
-      open(id);
+      // Not through `open`: it checks the collections this render holds, which do not have it yet.
+      setTabs((t) => [...t, id]);
+      setActive(id);
       return id;
     },
-    [open],
+    [setTabs, setActive],
   );
 
   const rename = useCallback((id: string, name: string) => setCollections((c) => renameNode(c, id, name)), []);
 
-  /** A collection, folder or request gone — its requests' tabs and last answers with it. */
+  /**
+   * A collection, folder or request gone — its requests' tabs and last answers with it.
+   * A send still out is dropped: its answer has no request to go to.
+   */
   const remove = useCallback(
     (id: string) => {
       const gone = new Set(requestsUnder(collections, id));
       const left = tabs.filter((t) => !gone.has(t));
+      const keep = <T,>(all: Record<string, T>) => Object.fromEntries(Object.entries(all).filter(([request]) => !gone.has(request)));
       setCollections((c) => removeNode(c, id));
       setTabs(left);
       if (active && gone.has(active)) setActive(left[0] ?? null);
-      setSaved((s) => Object.fromEntries(Object.entries(s).filter(([request]) => !gone.has(request))));
+      setSaved(keep);
+      setBusy(keep);
+      setNotSent(keep);
+      for (const request of gone) delete latest.current[request];
     },
     [collections, tabs, active, setTabs, setActive, setSaved],
   );
 
-  // ponytail: a download from the window, to Downloads — HC-2 asks where with the
-  // save dialog and the backend writes the stored file.
+  /** The collection as a Postman file, where the save dialog says; false when cancelled. Throws what the write said. */
   const exportCollection = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const collection = collections.find((c) => c.id === id);
-      if (!collection) return;
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(new Blob([toPostman(collection)], { type: "application/json" }));
-      link.download = safeName(collection.name, "postman_collection.json");
-      link.click();
-      URL.revokeObjectURL(link.href);
+      if (!collection) return false;
+      const dest = await pickSavePath(`${collection.name}.postman_collection`, "json");
+      if (!dest) return false;
+      await exportHttpFile(dest, toPostman(collection));
+      return true;
     },
     [collections],
   );
@@ -139,6 +148,8 @@ export function useHttpClient() {
       const refuse = (why: string) => setNotSent((n) => ({ ...n, [id]: why }));
       if (out.missing.length > 0) return refuse(`No variable ${out.missing.map((m) => `{{${m}}}`).join(", ")} in ${environment?.name ?? "the collection"} — nothing was sent.`);
       if (request.body.mode === "other") return refuse(`A ${request.body.name} body is kept from Postman but not sent yet — it comes with HC-6.`);
+      const auth = effectiveAuth(collection, id)?.auth;
+      if (auth?.type === "other") return refuse(`${auth.name} auth is kept from Postman but not sent yet — it comes with HC-6. Pick another type to send it.`);
       const ticket = (latest.current[id] ?? 0) + 1;
       latest.current[id] = ticket;
       setNotSent(({ [id]: _, ...rest }) => rest);
@@ -146,11 +157,12 @@ export function useHttpClient() {
       const response = demoResponse(request, out.url);
       const where = environment?.name ?? "";
       window.setTimeout(() => {
+        // A later send, or the request deleted meanwhile.
         if (latest.current[id] !== ticket) return;
         setBusy((b) => ({ ...b, [id]: false }));
         setSaved((s) => ({ ...s, [id]: { at: Date.now(), environment: where, response } }));
         const entry: HistoryEntry = {
-          id: `h${Date.now()}`,
+          id: crypto.randomUUID(),
           at: Date.now(),
           method: request.method,
           url: request.url,

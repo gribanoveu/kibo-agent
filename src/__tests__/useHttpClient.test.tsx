@@ -68,5 +68,23 @@ describe("the HTTP page's state across a restart", () => {
     act(() => page.result.current.rename(id, "Ping"));
     expect(page.result.current.collections[0].items.map((i) => i.name)).toEqual(["Health", "Ping"]);
   });
-});
 
+  test("a request deleted while its send is out gets no answer, and its id opens nothing", async () => {
+    const page = renderHook(() => useHttpClient());
+    act(() => page.result.current.send("health"));
+    act(() => page.result.current.remove("health"));
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(page.result.current.sent.health).toBeUndefined();
+    act(() => page.result.current.open("health"));
+    expect(page.result.current.tabs).not.toContain("health");
+  });
+
+  test("a request whose auth is kept from Postman is not sent", () => {
+    const page = renderHook(() => useHttpClient());
+    act(() => page.result.current.setEnvironmentId("prod"));
+    act(() => page.result.current.edit({ ...page.result.current.collections[1].items[1], url: "{{baseUrl}}/v2/payments" } as never));
+    act(() => page.result.current.send("refund"));
+    expect(page.result.current.sent.refund?.notSent).toContain("oauth2 auth");
+    expect(page.result.current.sent.refund?.busy).toBe(false);
+  });
+});

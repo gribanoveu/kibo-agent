@@ -43,6 +43,26 @@ describe("formatting a body", () => {
     );
   });
 
+  test("a comment on a line of its own after a value with no comma keeps its line", () => {
+    const text = '{\n  "a": 1\n  // "b": 2\n}\n/* tail */';
+    const once = formatJson(text);
+    expect(once).toBe('{\n  "a": 1\n  // "b": 2\n}\n/* tail */');
+    expect(formatJson(once)).toBe(once);
+  });
+
+  test("a large body is formatted in time linear in its size", () => {
+    const text = JSON.stringify(Array.from({ length: 8000 }, (_, i) => ({ id: i, name: `item ${i}`, tags: ["a", "b"] })));
+    const started = performance.now();
+    const out = formatJson(text);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(out.split("\n").length).toBeGreaterThan(8000 * 7);
+    const commented = `// a\n${text.replaceAll("},", "}, /* c */")}`;
+    const at = performance.now();
+    stripJsonComments(commented);
+    formatJson(commented);
+    expect(performance.now() - at).toBeLessThan(500);
+  });
+
   test("formatted twice is formatted once; what is not an object or array comes back as it was", () => {
     const once = formatJson('{"a":[1,{"b":2}], // c\n"d":3}');
     expect(formatJson(once)).toBe(once);
