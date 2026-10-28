@@ -11,42 +11,62 @@ import {
   type HttpResponse,
 } from "../lib/httpClient";
 import { DEMO_COLLECTIONS, DEMO_ENVIRONMENTS, DEMO_HISTORY, demoResponse } from "../lib/httpDemo";
+import { useStoredState } from "./useStoredState";
 
-export type Sent = { busy: boolean; response?: HttpResponse; error?: string };
+/** What a request last got back — a response, or the error that took its place — and when and where. */
+export type Saved = { at: number; environment: string; response?: HttpResponse; error?: string };
+/** A request's state on the page: its last answer, whether it is out now, and a refusal before sending. */
+export type Sent = Partial<Saved> & { busy: boolean; notSent?: string };
+
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+const isActive = (v: unknown): v is string | null => v === null || typeof v === "string";
+const isSaved = (v: unknown): v is Record<string, Saved> =>
+  typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v).every((s) => typeof s === "object" && s !== null && typeof (s as Saved).at === "number");
 
 /**
  * The HTTP page's state: collections, environments, the requests open in
  * tabs, what each got back, the history. Held here until the backend has it
  * (HC-2, HC-3) — then these become reads of its commands, and `send` an
  * invoke whose answer is shown only if it is still the latest.
+ *
+ * The open tabs and each request's last answer outlive a restart
+ * (docs/45-http-client.md, decision 4).
  */
 export function useHttpClient() {
   const [collections, setCollections] = useState<Collection[]>(DEMO_COLLECTIONS);
   const [environments, setEnvironments] = useState<Environment[]>(DEMO_ENVIRONMENTS);
   const [environmentId, setEnvironmentId] = useState<string>("local");
   const [history, setHistory] = useState<HistoryEntry[]>(DEMO_HISTORY);
-  const [tabs, setTabs] = useState<string[]>(["create-order", "list-orders"]);
-  const [active, setActive] = useState<string | null>("create-order");
-  const [sent, setSent] = useState<Record<string, Sent>>({});
+  const [tabs, setTabs] = useStoredState<string[]>("http.tabs", ["create-order", "list-orders"], isStrings);
+  const [active, setActive] = useStoredState<string | null>("http.active", "create-order", isActive);
+  // ponytail: the window's storage, in plain text, for the sample stand — the
+  // plan keeps them sealed on the backend (`responses/<id>.enc`, HC-2), which
+  // replaces this.
+  const [saved, setSaved] = useStoredState<Record<string, Saved>>("http.responses", {}, isSaved);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [notSent, setNotSent] = useState<Record<string, string>>({});
   // A send per request: a second press while the first is out wins, and the first's answer is dropped.
   const latest = useRef<Record<string, number>>({});
 
   const environment = environments.find((e) => e.id === environmentId) ?? null;
 
-  const open = useCallback((id: string) => {
-    setTabs((t) => (t.includes(id) ? t : [...t, id]));
-    setActive(id);
-  }, []);
+  const open = useCallback(
+    (id: string) => {
+      setTabs((t) => (t.includes(id) ? t : [...t, id]));
+      setActive(id);
+    },
+    [setTabs, setActive],
+  );
 
   const close = useCallback(
     (id: string) => {
       setTabs((t) => {
         const next = t.filter((x) => x !== id);
-        if (active === id) setActive(next[next.indexOf(id) - 1] ?? next[0] ?? null);
+        if (active === id) setActive(next[t.indexOf(id) - 1] ?? next[0] ?? null);
         return next;
       });
     },
-    [active],
+    [active, setTabs, setActive],
   );
 
   const edit = useCallback((request: HttpRequest) => setCollections((c) => replaceRequest(c, request)), []);
@@ -58,29 +78,37 @@ export function useHttpClient() {
       const { request, collection } = found;
       const vars = scope(collection, environment);
       const url = preview(request.url, vars);
-      const fail = (error: string) => setSent((s) => ({ ...s, [id]: { busy: false, error } }));
-      if (url.missing.length > 0) return fail(`No variable ${url.missing.map((m) => `{{${m}}}`).join(", ")} in ${environment?.name ?? "the collection"} — nothing was sent.`);
-      if (request.body.mode === "other") return fail(`A ${request.body.name} body is kept from Postman but not sent yet — it comes with HC-6.`);
+      // Refused before sending: nothing came back, so the last answer stays.
+      const refuse = (why: string) => setNotSent((n) => ({ ...n, [id]: why }));
+      if (url.missing.length > 0) return refuse(`No variable ${url.missing.map((m) => `{{${m}}}`).join(", ")} in ${environment?.name ?? "the collection"} — nothing was sent.`);
+      if (request.body.mode === "other") return refuse(`A ${request.body.name} body is kept from Postman but not sent yet — it comes with HC-6.`);
       const ticket = (latest.current[id] ?? 0) + 1;
       latest.current[id] = ticket;
-      setSent((s) => ({ ...s, [id]: { ...s[id], busy: true, error: undefined } }));
+      setNotSent(({ [id]: _, ...rest }) => rest);
+      setBusy((b) => ({ ...b, [id]: true }));
       const response = demoResponse(request, url.text);
+      const where = environment?.name ?? "";
       window.setTimeout(() => {
         if (latest.current[id] !== ticket) return;
-        setSent((s) => ({ ...s, [id]: { busy: false, response } }));
-        setHistory((h) => [
-          { id: `h${Date.now()}`, at: Date.now(), method: request.method, url: request.url, status: response.status, ms: response.ms, environment: environment?.name ?? "" },
-          ...h,
-        ].slice(0, 200));
+        setBusy((b) => ({ ...b, [id]: false }));
+        setSaved((s) => ({ ...s, [id]: { at: Date.now(), environment: where, response } }));
+        setHistory((h) =>
+          [{ id: `h${Date.now()}`, at: Date.now(), method: request.method, url: request.url, status: response.status, ms: response.ms, environment: where }, ...h].slice(0, 200),
+        );
       }, response.ms + 250);
     },
-    [collections, environment],
+    [collections, environment, setSaved],
   );
+
+  const sent = useMemo(() => {
+    const ids = new Set([...Object.keys(saved), ...Object.keys(busy), ...Object.keys(notSent)]);
+    return Object.fromEntries([...ids].map((id) => [id, { ...saved[id], busy: busy[id] ?? false, notSent: notSent[id] } satisfies Sent]));
+  }, [saved, busy, notSent]);
 
   const saveEnvironment = useCallback((next: Environment) => setEnvironments((all) => all.map((e) => (e.id === next.id ? next : e))), []);
 
   return useMemo(
     () => ({ collections, environments, environment, setEnvironmentId, history, tabs, active, setActive, open, close, edit, send, sent, saveEnvironment }),
-    [collections, environments, environment, history, tabs, active, open, close, edit, send, sent, saveEnvironment],
+    [collections, environments, environment, history, tabs, active, setActive, open, close, edit, send, sent, saveEnvironment],
   );
 }

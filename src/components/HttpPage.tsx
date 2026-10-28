@@ -550,6 +550,13 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
 
 type ResTab = "body" | "headers" | "tests";
 
+/** `14:32` today, `27 Oct 14:32` before. */
+function receivedAt(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
 function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
   const [tab, setTab] = useState<ResTab>("body");
   const response = sent?.response;
@@ -567,6 +574,12 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
           </>
         )}
         {sent?.busy && <Loader2 size={13} className="http-spin" />}
+        {sent?.at !== undefined && (
+          <span className="http-quiet" title={new Date(sent.at).toLocaleString()}>
+            received {receivedAt(sent.at)}
+            {sent.environment && ` · ${sent.environment}`}
+          </span>
+        )}
         <span className="http-spacer" />
         {response && (
           <div className="http-subtabs http-subtabs-small" role="tablist" aria-label="Response">
@@ -581,8 +594,9 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
           </div>
         )}
       </div>
+      {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
       {sent?.error && <p className="http-error">{sent.error}</p>}
-      {!sent && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
+      {!response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
       {response && tab === "body" && (response.body ? <Code source={pretty(response.body, response.contentType)} lang={/json/.test(response.contentType) ? "json" : "text"} /> : <p className="http-quiet">No body.</p>)}
       {response && tab === "headers" && (
         <table className="http-pairs http-pairs-read">
