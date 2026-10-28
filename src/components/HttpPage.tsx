@@ -58,9 +58,10 @@ import {
 import "./HttpPage.css";
 
 /**
- * The HTTP page (docs/45-http-client.md): collections and the history on the
- * left, the open requests on the right with their responses under them, the
- * environment at the top. Runs on sample data until the backend has commands.
+ * The HTTP page (docs/45-http-client.md): collections on the left, the open
+ * requests on the right — what is written on top, what came back under it —
+ * the environment and every send's history in the bar. Runs on sample data
+ * until the backend has commands.
  */
 export function HttpPage() {
   const http = useHttpClient();
@@ -103,18 +104,20 @@ export function HttpPage() {
             value={http.environment?.id ?? ""}
             onPick={http.setEnvironmentId}
           />
-          <button type="button" className="http-bar-button" data-sheet-opener onClick={() => http.environment && setSheet({ kind: "environment", id: http.environment.id })}>
-            <Settings2 size={13} />
-            Environments
+          <button
+            type="button"
+            className="http-icon-button"
+            data-sheet-opener
+            title={`Edit ${http.environment?.name ?? "the environment"}`}
+            aria-label="Edit the environment"
+            onClick={() => http.environment && setSheet({ kind: "environment", id: http.environment.id })}
+          >
+            <Settings2 size={14} />
           </button>
+          <span className="http-spacer" />
           <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
             <History size={13} />
             History
-          </button>
-          <span className="http-spacer" />
-          <button type="button" className="http-bar-button" title="A Postman collection, environment or globals file (v2.1)">
-            <Upload size={13} />
-            Import
           </button>
         </>
       }
@@ -140,6 +143,9 @@ export function HttpPage() {
         <nav className="http-tree" aria-label="Collections">
           <div className="http-tree-head">
             <span>Collections</span>
+            <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import">
+              <Upload size={14} />
+            </button>
             <button type="button" className="http-icon-button" title="New collection" aria-label="New collection">
               <Plus size={14} />
             </button>
@@ -159,7 +165,14 @@ export function HttpPage() {
               const on = id === http.active;
               return (
                 <div key={id} className={`http-tab${on ? " on" : ""}`}>
-                  <button type="button" role="tab" aria-selected={on} className="http-tab-name" onClick={() => http.setActive(id)}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    className="http-tab-name"
+                    title={[...found.path, found.request.name].join(" › ")}
+                    onClick={() => http.setActive(id)}
+                  >
                     <MethodBadge method={found.request.method} />
                     {found.request.name}
                     {http.sent[id]?.busy && <Loader2 size={11} className="http-spin" />}
@@ -176,7 +189,6 @@ export function HttpPage() {
               key={openTab.request.id}
               collection={openTab.collection}
               request={openTab.request}
-              path={openTab.path}
               environment={http.environment}
               sent={http.sent[openTab.request.id]}
               history={http.history.filter((h) => h.requestId === openTab.request.id)}
@@ -284,12 +296,12 @@ function HistoryRow({ entry, onOpen }: { entry: HistoryEntry; onOpen?: (requestI
   );
 }
 
-type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview" | "history";
+type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview";
 
+/** What is written on top, what came back under it. */
 function RequestView({
   collection,
   request,
-  path,
   environment,
   sent,
   history,
@@ -298,7 +310,6 @@ function RequestView({
 }: {
   collection: Collection;
   request: HttpRequest;
-  path: string[];
   environment: Environment | null;
   sent: Sent | undefined;
   history: HistoryEntry[];
@@ -316,16 +327,6 @@ function RequestView({
 
   return (
     <div className="http-request">
-      <div className="http-crumbs">
-        {path.map((p) => (
-          <span key={p}>
-            {p}
-            <ChevronRight size={12} />
-          </span>
-        ))}
-        <strong>{request.name}</strong>
-      </div>
-
       <div className={`http-url-row${missing ? " missing" : ""}`} title={missing}>
         <Dropdown
           below
@@ -345,12 +346,12 @@ function RequestView({
         />
         <button
           type="button"
-          className="http-copy"
-          title="Copy as cURL — secrets as their {{name}}, never their value"
+          className="http-icon-button"
+          title={copied ? "Copied" : "Copy as cURL — secrets as their {{name}}, never their value"}
+          aria-label="Copy as cURL"
           onClick={() => copy(toCurl(resolveRequest(collection, request, environment, "name")))}
         >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          {copied ? "Copied" : "cURL"}
+          {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
         <button type="button" className="http-send" title={`Send (${shortcutText("httpSend")})`} disabled={sent?.busy} onClick={onSend}>
           {sent?.busy ? <Loader2 size={14} className="http-spin" /> : <Send size={14} />}
@@ -367,10 +368,17 @@ function RequestView({
             ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
             ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
             ["preview", "Preview", missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
-            ["history", "History", count(history.length)],
           ] as [Tab, string, ReactNode][]
         ).map(([id, label, extra]) => (
-          <button key={id} type="button" role="tab" aria-selected={tab === id} className={`http-subtab${tab === id ? " on" : ""}`} onClick={() => setTab(id)}>
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={`http-subtab${tab === id ? " on" : ""}${id === "preview" ? " http-subtab-aside" : ""}`}
+            title={id === "preview" ? "The request as it will leave, variables and auth filled in" : undefined}
+            onClick={() => setTab(id)}
+          >
             {label}
             {extra}
           </button>
@@ -384,10 +392,9 @@ function RequestView({
         {tab === "body" && <BodyEditor body={request.body} onChange={(body) => set({ body })} />}
         {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
         {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
-        {tab === "history" && <HistoryList entries={history} />}
       </div>
 
-      <ResponseView sent={sent} scripts={scripts} />
+      <ResponseView sent={sent} scripts={scripts} history={history} />
     </div>
   );
 }
@@ -406,7 +413,6 @@ function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolv
         </p>
       ))}
       <Code source={text} lang="http" />
-      <p className="http-quiet">Postman scripts are not in it yet — they run before sending from HC-5.</p>
     </div>
   );
 }
@@ -514,7 +520,6 @@ function AuthEditor({ auth, inherited, onChange }: { auth: Auth; inherited: { au
           <Field label="Value" value={auth.value} onChange={(value) => onChange({ ...auth, value })} />
         </>
       )}
-      <p className="http-quiet">Use a variable for a secret — {"{{token}}"} — and keep its value in the environment, sealed on this computer.</p>
     </div>
   );
 }
@@ -590,7 +595,7 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
     <div className="http-form">
       <p className="http-note">
         <FileCode2 size={13} />
-        Postman scripts run in the order Postman runs them, once you trust this collection — with HC-5. Until then the request goes without them.
+        Not run yet — the request goes without them until HC-5.
       </p>
       {blocks.length === 0 && <p className="http-quiet">No scripts on this request or above it.</p>}
       {blocks.map((b) => (
@@ -603,7 +608,7 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
   );
 }
 
-type ResTab = "body" | "headers" | "tests";
+type ResTab = "body" | "headers" | "tests" | "history";
 
 /** `14:32` today, `27 Oct 14:32` before. */
 function receivedAt(at: number): string {
@@ -612,73 +617,78 @@ function receivedAt(at: number): string {
   return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
 }
 
-function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
+function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scripts: boolean; history: HistoryEntry[] }) {
   const [tab, setTab] = useState<ResTab>("body");
   const response = sent?.response;
+  const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
+  const tabs: [ResTab, string, ReactNode][] = [
+    ["body", "Response", null],
+    ["headers", "Headers", count(response?.headers.length)],
+    ["tests", "Tests", response?.tests.length ? <span className="http-count">{`${response.tests.filter((x) => x.passed).length}/${response.tests.length}`}</span> : null],
+    ["history", "History", count(history.length)],
+  ];
   return (
     <section className="http-response" aria-label="Response" aria-busy={sent?.busy}>
       <div className="http-response-head">
-        <span className="http-response-title">Response</span>
-        {response && (
-          <>
-            <span className={`http-status http-tone-${statusTone(response.status)}`}>
-              {response.status} {response.statusText}
-            </span>
-            <span className="http-quiet">{response.ms} ms</span>
-            <span className="http-quiet">{sizeLabel(response.bytes)}</span>
-          </>
-        )}
+        <div className="http-subtabs" role="tablist" aria-label="Response">
+          {tabs.map(([id, label, extra]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className={`http-subtab${tab === id ? " on" : ""}`} onClick={() => setTab(id)}>
+              {label}
+              {extra}
+            </button>
+          ))}
+        </div>
+        <span className="http-spacer" />
         {sent?.busy && <Loader2 size={13} className="http-spin" />}
-        {sent?.at !== undefined && (
-          <span className="http-quiet" title={new Date(sent.at).toLocaleString()}>
-            received {receivedAt(sent.at)}
-            {sent.environment && ` · ${sent.environment}`}
+        {response && (
+          <span className={`http-status http-tone-${statusTone(response.status)}`}>
+            {response.status} {response.statusText}
           </span>
         )}
-        <span className="http-spacer" />
+        {sent?.at !== undefined && (
+          <span className="http-quiet http-response-meta" title={`Received ${new Date(sent.at).toLocaleString()}${sent.environment ? ` from ${sent.environment}` : ""}`}>
+            {[response && `${response.ms} ms`, response && sizeLabel(response.bytes), receivedAt(sent.at), sent.environment].filter(Boolean).join(" · ")}
+          </span>
+        )}
         {response && (
-          <div className="http-subtabs http-subtabs-small" role="tablist" aria-label="Response">
-            {(["body", "headers", "tests"] as ResTab[]).map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} className={`http-subtab${tab === t ? " on" : ""}`} onClick={() => setTab(t)}>
-                {t === "body" ? "Body" : t === "headers" ? `Headers ${response.headers.length}` : `Tests ${response.tests.filter((x) => x.passed).length}/${response.tests.length}`}
-              </button>
-            ))}
-            <button type="button" className="http-icon-button" title="Save the response to a file" aria-label="Save the response">
-              <Download size={13} />
-            </button>
-          </div>
+          <button type="button" className="http-icon-button" title="Save the response to a file" aria-label="Save the response">
+            <Download size={13} />
+          </button>
         )}
       </div>
-      {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
-      {sent?.error && <p className="http-error">{sent.error}</p>}
-      {!response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
-      {response && tab === "body" && (response.body ? <Code source={pretty(response.body, response.contentType)} lang={/json/.test(response.contentType) ? "json" : "text"} /> : <p className="http-quiet">No body.</p>)}
-      {response && tab === "headers" && (
-        <table className="http-pairs http-pairs-read">
-          <tbody>
-            {response.headers.map((h) => (
-              <tr key={h.key}>
-                <td className="http-mono">{h.key}</td>
-                <td className="http-mono">{h.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {response && tab === "tests" &&
-        (response.tests.length === 0 ? (
-          <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>
-        ) : (
-          <ul className="http-tests">
-            {response.tests.map((t) => (
-              <li key={t.name} className={t.passed ? "pass" : "fail"}>
-                <span className="http-test-mark">{t.passed ? "PASS" : "FAIL"}</span>
-                {t.name}
-                {t.error && <span className="http-quiet"> — {t.error}</span>}
-              </li>
-            ))}
-          </ul>
-        ))}
+      <div className="http-response-body">
+        {tab !== "history" && sent?.notSent && <p className="http-error">{sent.notSent}</p>}
+        {tab !== "history" && sent?.error && <p className="http-error">{sent.error}</p>}
+        {tab !== "history" && !response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
+        {tab === "history" && <HistoryList entries={history} />}
+        {response && tab === "body" && (response.body ? <Code source={pretty(response.body, response.contentType)} lang={/json/.test(response.contentType) ? "json" : "text"} /> : <p className="http-quiet">No body.</p>)}
+        {response && tab === "headers" && (
+          <table className="http-pairs http-pairs-read">
+            <tbody>
+              {response.headers.map((h) => (
+                <tr key={h.key}>
+                  <td className="http-mono">{h.key}</td>
+                  <td className="http-mono">{h.value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {response && tab === "tests" &&
+          (response.tests.length === 0 ? (
+            <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>
+          ) : (
+            <ul className="http-tests">
+              {response.tests.map((t) => (
+                <li key={t.name} className={t.passed ? "pass" : "fail"}>
+                  <span className="http-test-mark">{t.passed ? "PASS" : "FAIL"}</span>
+                  {t.name}
+                  {t.error && <span className="http-quiet"> — {t.error}</span>}
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
     </section>
   );
 }

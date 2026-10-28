@@ -237,17 +237,17 @@
   flex: none;
   gap: 2px;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border-soft);
+  overflow-y: hidden;
+  scrollbar-width: none;
+  box-shadow: inset 0 -1px 0 var(--border-soft);
 }
 .http-tab {
   display: flex;
   align-items: center;
   flex: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
 }
 .http-tab.on {
-  border-bottom-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .http-tab-name {
   display: inline-flex;
@@ -288,24 +288,6 @@
   flex-direction: column;
   min-height: 0;
   padding-top: 12px;
-}
-.http-crumbs {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
-  margin-bottom: 8px;
-  color: var(--text-faint);
-  font-size: var(--fs-sm);
-}
-.http-crumbs span {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.http-crumbs strong {
-  color: var(--text);
-  font-weight: 500;
 }
 
 .http-url-row {
@@ -352,33 +334,12 @@
   opacity: 0.6;
   cursor: default;
 }
-.http-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-.http-copy:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
 
 .http-subtabs {
   display: flex;
   align-items: center;
   gap: 2px;
   margin-top: 12px;
-}
-.http-subtabs-small {
-  margin-top: 0;
 }
 .http-subtab {
   display: inline-flex;
@@ -395,6 +356,9 @@
 }
 .http-subtab:hover {
   color: var(--text);
+}
+.http-subtab-aside {
+  margin-left: auto;
 }
 .http-subtab.on {
   background: var(--bg-active);
@@ -589,16 +553,29 @@
 .http-response-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
   min-height: 30px;
 }
-.http-response-title {
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.http-response-head .http-subtabs {
+  flex: none;
+  margin-top: 0;
+}
+.http-response-head .http-status {
+  flex: none;
+}
+.http-response-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.http-response-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 6px;
 }
 .http-status {
   padding: 1px 8px;
