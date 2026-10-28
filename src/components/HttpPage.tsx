@@ -7,6 +7,7 @@ import {
   Columns2,
   Copy,
   Download,
+  Eye,
   FileCode2,
   Folder,
   FolderOpen,
@@ -466,8 +467,8 @@ function RequestView({
                 ["auth", "Auth", null],
                 ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
                 ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
-                ["preview", "Preview", missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
-              ] as [Tab, string, ReactNode][]
+                ["preview", <Eye size={15} />, missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
+              ] as [Tab, ReactNode, ReactNode][]
             ).map(([id, label, extra]) => (
               <button
                 key={id}
@@ -475,7 +476,8 @@ function RequestView({
                 role="tab"
                 aria-selected={tab === id}
                 className={`http-subtab${tab === id ? " on" : ""}${id === "preview" ? " http-subtab-aside" : ""}`}
-                title={id === "preview" ? "The request as it will leave, variables and auth filled in" : undefined}
+                title={id === "preview" ? "Preview — the request as it will leave, variables and auth filled in" : undefined}
+                aria-label={id === "preview" ? "Preview" : undefined}
                 onClick={() => setTab(id)}
               >
                 {label}
