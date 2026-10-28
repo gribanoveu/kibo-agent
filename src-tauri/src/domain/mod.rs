@@ -46,6 +46,8 @@ pub mod meeting;
 pub mod voices;
 pub mod recording;
 pub mod features;
+pub mod http_client;
+pub mod postman;
 pub mod provider_balance;
 pub mod background;
 pub mod terminal;

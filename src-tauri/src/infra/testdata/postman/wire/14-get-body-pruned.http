@@ -1,0 +1,9 @@
+GET /prune/get HTTP/1.1
+User-Agent: PostmanRuntime/7.56.2
+Accept: */*
+Cache-Control: no-cache
+Postman-Token: fcd71144-c661-453c-aaeb-910cab6f3846
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+
