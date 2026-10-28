@@ -1,0 +1,8 @@
+GET /api/protected/resource HTTP/1.1
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: a3325838-5150-4564-95c9-e3ec1c842e88
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+

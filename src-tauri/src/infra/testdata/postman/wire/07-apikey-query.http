@@ -1,0 +1,8 @@
+GET /api/apikey-query?api_key=my-secret-key HTTP/1.1
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: 6873bb6d-4ced-40a9-b94e-66bd22dbbd5c
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+
