@@ -96,6 +96,8 @@ function answer(command: string, args?: Record<string, unknown>): Promise<unknow
       if (stage && !writes) return Promise.resolve({ documents: [], writes: stage });
       return Promise.resolve({ documents: stage ? [] : structuredClone(findDocs), writes: null });
     }
+    case "mongo_index_create":
+      return Promise.resolve((args as { name: string | null }).name ?? "made_1");
     case "mongo_insert":
       return Promise.resolve(inserted);
     default:
@@ -873,6 +875,61 @@ describe("a collection", () => {
     await settle();
     expect(sent("mongo_aggregate").at(-1)).toMatchObject({ pipeline: "[{ $out: 'copy' }]", writes: true });
     expect(screen.getByText("0 results")).toBeTruthy();
+  });
+
+  test("an index is made with its keys, name and uniqueness; a refused one keeps the dialog with the reason", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("tab", { name: "Indexes" }));
+    await settle();
+    const make = (keys: string, name: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "Create index" }));
+      fireEvent.change(dialog().getByLabelText(/Keys/), { target: { value: keys } });
+      fireEvent.change(dialog().getByLabelText(/Name/), { target: { value: name } });
+    };
+    make("{ name: 1 }", " by_name ");
+    fireEvent.click(dialog().getByRole("switch", { name: "Unique" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Create" }));
+    await settle();
+    const orders = { connection: "c1", database: "shop", collection: "orders" };
+    expect(sent("mongo_index_create")).toEqual([{ target: orders, keys: "{ name: 1 }", unique: true, name: "by_name" }]);
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(sent("mongo_indexes")).toHaveLength(2);
+
+    refusals.mongo_index_create = "Index already exists with a different name";
+    make("{ age: -1 }", "  ");
+    fireEvent.click(dialog().getByRole("button", { name: "Create" }));
+    await settle();
+    expect(sent("mongo_index_create").at(-1)).toEqual({ target: orders, keys: "{ age: -1 }", unique: false, name: null });
+    expect(dialog().getByText("Index already exists with a different name")).toBeTruthy();
+    expect(sent("mongo_indexes")).toHaveLength(2);
+  });
+
+  test("a new collection is made where it is named, trimmed, and opens in a tab; a refused one keeps the dialog", async () => {
+    await openOrders();
+    const databasesRead = sent("mongo_databases").length;
+    const make = (database: string, collection: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "New collection" }));
+      fireEvent.change(dialog().getByLabelText(/Database/), { target: { value: database } });
+      fireEvent.change(dialog().getByLabelText("Collection"), { target: { value: collection } });
+    };
+    make("shop", " ");
+    expect((dialog().getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+
+    make(" archive ", " items ");
+    fireEvent.click(dialog().getByRole("button", { name: "Create" }));
+    await settle();
+    expect(sent("mongo_collection_create")).toEqual([{ target: { connection: "c1", database: "archive", collection: "items" } }]);
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(screen.getByRole("tab", { name: "items" }).getAttribute("aria-selected")).toBe("true");
+    expect(sent("mongo_databases").length).toBe(databasesRead + 1);
+
+    refusals.mongo_collection_create = "Collection archive.items already exists";
+    make("archive", "items");
+    fireEvent.click(dialog().getByRole("button", { name: "Create" }));
+    await settle();
+    expect(dialog().getByText("Collection archive.items already exists")).toBeTruthy();
+    expect(screen.getAllByRole("tab", { name: "items" })).toHaveLength(1);
   });
 
   test("an index is dropped only after asking, the one asked about, and the list read again", async () => {
