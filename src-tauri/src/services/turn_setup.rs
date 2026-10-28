@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::domain::agents::Agents;
 use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
+use crate::domain::mongo::MongoServers;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::embeddings::EmbeddingProvider;
@@ -76,6 +77,7 @@ pub struct FolderHandles {
     pub questions: Option<Arc<McpQuestions>>,
     pub terminals: Option<Arc<dyn UserTerminals>>,
     pub board: Option<Arc<dyn TaskBoard>>,
+    pub mongo: Option<Arc<dyn MongoServers>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
@@ -131,6 +133,7 @@ pub fn run_in_folder(
     };
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
+    let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
     // A base that cannot be read costs the prompt its block; the tools say why when called.
     let knowledge_overview = match features.is_on(Feature::Knowledge) {
         true => crate::services::knowledge::overview(workspace).ok(),
@@ -165,6 +168,7 @@ pub fn run_in_folder(
         agents: app.agents,
         questions: app.questions,
         board,
+        mongo,
         deepseek,
         features,
         fork: false,
@@ -181,6 +185,8 @@ pub struct ChatTurnInput<'a> {
     pub kube: Option<KubePin>,
     pub clusters: Arc<Clusters>,
     pub board: Arc<dyn TaskBoard>,
+    /// The MongoDB servers; `None` where the app has none.
+    pub mongo: Option<Arc<dyn MongoServers>>,
     pub embeddings: Arc<dyn EmbeddingProvider>,
     /// The knowledge base's search; `None` where the app has none.
     pub knowledge: Option<CodeSearchFn>,
@@ -225,6 +231,7 @@ pub fn run_in_chat(
     let web = web_search::web_for(WebSearchPlace::Chat, &chat.embeddings)?;
     let features = features::enabled();
     let board = Some(chat.board).filter(|_| features.is_on(Feature::Board));
+    let mongo = chat.mongo.filter(|_| features.is_on(Feature::Mongodb));
     let deepseek = web_search::deepseek_for(&features, &chat.embeddings);
     let knowledge = chat.knowledge.filter(|_| features.is_on(Feature::Knowledge));
     let turn = plain_chat::ChatTurn {
@@ -241,6 +248,7 @@ pub fn run_in_chat(
         cancelled: chat.cancelled,
         log_call: &log_call,
         board,
+        mongo,
         deepseek,
         knowledge,
         features,
@@ -279,10 +287,10 @@ mod tests {
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
 
-    /// A chat's turn is given the board and the knowledge base's search only
-    /// while their features are on, as the agent's is.
+    /// A chat's turn is given the board, the knowledge base's search and
+    /// MongoDB only while their features are on, as the agent's is.
     #[test]
-    fn a_chat_turn_gets_the_board_and_the_knowledge_base_only_while_they_are_on() {
+    fn a_chat_turn_gets_the_board_the_knowledge_base_and_mongodb_only_while_they_are_on() {
         crate::testing::with_app_dir("turn-setup-chat", || {
             let mut settings = crate::infra::settings_store::load().unwrap();
             settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
@@ -310,6 +318,7 @@ mod tests {
                 crate::infra::settings_store::update(|s| {
                     s.features.insert("board".into(), on);
                     s.features.insert("knowledge".into(), on);
+                    s.features.insert("mongodb".into(), on);
                 })
                 .unwrap();
                 let chat = ChatTurnInput {
@@ -318,6 +327,7 @@ mod tests {
                     kube: None,
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
+                    mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))),
                     embeddings: Arc::new(NoModel),
                     knowledge: Some(search.clone()),
                     approval: ApprovalPolicy::default(),
@@ -326,7 +336,7 @@ mod tests {
                 };
                 let mut seen = None;
                 run_in_chat(chat, |turn| {
-                    seen = Some((turn.board.is_some(), turn.knowledge.is_some()));
+                    seen = Some((turn.board.is_some(), turn.knowledge.is_some(), turn.mongo.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -337,8 +347,8 @@ mod tests {
                 .unwrap();
                 seen.expect("run was called")
             };
-            assert_eq!(handed(false), (false, false));
-            assert_eq!(handed(true), (true, true));
+            assert_eq!(handed(false), (false, false, false));
+            assert_eq!(handed(true), (true, true, true));
         });
     }
 
@@ -377,6 +387,7 @@ mod tests {
                     kube: None,
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
+                    mongo: None,
                     embeddings: Arc::new(NoModel),
                     knowledge: None,
                     approval: ApprovalPolicy::default(),
@@ -463,6 +474,7 @@ mod tests {
                 kube: None,
                 clusters: Arc::new(Clusters::default()),
                 board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
+                mongo: None,
                 embeddings: Arc::new(NoModel),
                 knowledge: None,
                 approval: ApprovalPolicy::default(),
@@ -502,9 +514,10 @@ mod tests {
 
             let events: ChatEventSink = Arc::new(|_| {});
             let (no, none, zero) = (|| false, Vec::new, || 0);
-            let turn = |board_on: bool| {
+            let turn = |on: bool| {
                 let mut settings = crate::infra::settings_store::load().unwrap();
-                settings.features.insert("board".into(), board_on);
+                settings.features.insert("board".into(), on);
+                settings.features.insert("mongodb".into(), on);
                 crate::infra::settings_store::save(&settings).unwrap();
                 let folder = FolderTurn {
                     chat_id: "c1",
@@ -519,12 +532,12 @@ mod tests {
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
-                run_in_folder(folder, FolderHandles { board: Some(board), ..Default::default() }, |turn| {
+                run_in_folder(folder, FolderHandles { board: Some(board), mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))), ..Default::default() }, |turn| {
                     assert_eq!(turn.session.provider_id, "local");
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
                     assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Plan, web: None, .. }));
-                    seen = Some(turn.board.is_some());
+                    seen = Some((turn.board.is_some(), turn.mongo.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -534,8 +547,8 @@ mod tests {
                 })
                 .map(|_| seen.expect("run was called"))
             };
-            assert!(!turn(false).unwrap(), "the board is off until its feature is");
-            assert!(turn(true).unwrap());
+            assert_eq!(turn(false).unwrap(), (false, false), "the board and MongoDB are off until their features are");
+            assert_eq!(turn(true).unwrap(), (true, true));
 
             std::fs::write(crate::infra::hooks::path().unwrap(), "{ not json").unwrap();
             let refused = turn(true).expect_err("hooks that do not parse").to_string();

@@ -255,6 +255,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         cancelled: &cancelled,
         log_call: &log_call,
         board: None,
+        mongo: None,
         deepseek: None,
         knowledge: None,
         features: Default::default(),

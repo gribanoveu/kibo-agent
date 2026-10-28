@@ -18,10 +18,9 @@ pub use mongodb::sync::Client;
 use mongodb::sync::{Collection, Cursor};
 use mongodb::IndexModel;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::domain::mongo::{to_shell_line, IndexView, MongoError};
+use crate::domain::mongo::{to_shell_line, CollectionInfo, DatabaseInfo, FindSpec, IndexView, MongoError};
 
 /// How long a server may take to be found: a wrong host says so in seconds,
 /// not in the driver's thirty.
@@ -351,31 +350,6 @@ pub fn create_collection(client: &Client, db: &str, name: &str) -> Result<(), Mo
 
 pub fn drop_collection(client: &Client, db: &str, name: &str) -> Result<(), MongoError> {
     collection(client, db, name).drop().run().map_err(server)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DatabaseInfo {
-    pub name: String,
-    pub size_on_disk: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CollectionInfo {
-    pub name: String,
-    /// `collection`, `view` or `timeseries`.
-    pub kind: &'static str,
-}
-
-/// A find, its parts already read from the page's text.
-#[derive(Debug, Clone, Default)]
-pub struct FindSpec {
-    pub filter: Map<String, Value>,
-    pub projection: Map<String, Value>,
-    pub sort: Map<String, Value>,
-    pub skip: u64,
-    /// A page's size.
-    pub limit: usize,
 }
 
 /// MaxTimeMSExpired: the server stopped the query at its `max_time`.

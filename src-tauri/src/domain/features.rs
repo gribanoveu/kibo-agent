@@ -101,17 +101,16 @@ impl Feature {
                 tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
                 data: Some("knowledge"),
             },
-            // Its tools for the model are designed (`docs/44-mongodb.md`) and
-            // not built: until they are `ToolName`s, it has none to list.
             Feature::Mongodb => Manifest {
                 id: "mongodb",
                 name: "MongoDB",
                 description: "A MongoDB page in the spirit of Compass: your connections, their databases and collections; \
                     documents found with a filter, a sort and a projection, edited, added and deleted; aggregations; indexes. \
                     Connection strings are sealed on this computer as the API keys are, and the window never sees a password. \
-                    The model is given nothing yet — tools for it are planned.",
+                    The agent reads the connections you open to it — finds a collection by its name, looks at its fields, \
+                    finds, counts and aggregates — and writes nothing.",
                 enabled_by_default: false,
-                tools: &[],
+                tools: &[ToolName::Mongo],
                 data: Some("mongo_connections.enc"),
             },
         }

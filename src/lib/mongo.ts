@@ -5,11 +5,11 @@ import { inTauri, requireBackend } from "./backend";
 // their servers. Mirrors `domain::mongo` and `services::mongo`. Query text is
 // mongosh's — `{ age: { $gt: 30 } }`, `ObjectId('…')` — read by the backend.
 
-/** A saved connection: never its URI, only where it goes, the password masked. */
-export type MongoConnection = { id: string; name: string; address: string };
+/** A saved connection: never its URI, only where it goes, the password masked. `agent`: open to the agent's `mongo` tool. */
+export type MongoConnection = { id: string; name: string; address: string; agent: boolean };
 
 /** What the form sends. No `uri` on an edit keeps the saved one. */
-export type ConnectionDraft = { id?: string; name: string; uri?: string };
+export type ConnectionDraft = { id?: string; name: string; uri?: string; agent: boolean };
 
 export type DatabaseInfo = { name: string; sizeOnDisk: number };
 

@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::mongo::{add_condition, ConnectionDraft, ConnectionView, FieldChange, IndexView};
-use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, MongoClients};
+use crate::domain::mongo::{add_condition, CollectionInfo, ConnectionDraft, ConnectionView, DatabaseInfo, FieldChange, IndexView};
+use crate::infra::mongo_client::MongoClients;
 use crate::services::mongo::{self, Aggregated, FindPage, FindRequest, Inserted, Target};
 
 use super::blocking;

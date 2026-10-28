@@ -10,23 +10,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::domain::mongo::{self, Connection, ConnectionDraft, ConnectionView, FieldChange, IndexView, MongoError};
-use crate::infra::mongo_client::{self, CollectionInfo, DatabaseInfo, FindSpec, Found, MongoClients, Place};
+use std::sync::Arc;
+
+use crate::domain::mongo::{self, CollectionInfo, Connection, ConnectionDraft, ConnectionView, DatabaseInfo, FieldChange, FindSpec, IndexView, MongoError, MongoServers};
+pub use crate::domain::mongo::Target;
+use crate::infra::mongo_client::{self, Found, MongoClients, Place};
 use crate::infra::mongo_store;
 
 /// Most documents a page of a find shows.
 pub const MAX_PAGE: i64 = 500;
 /// Most results an aggregation shows: a pipeline may return the collection.
 pub const MAX_AGGREGATE: usize = 200;
-
-/// A collection, by the connection it is reached through.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Target {
-    pub connection: String,
-    pub database: String,
-    pub collection: String,
-}
 
 /// The page's query bar as typed.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -76,13 +70,13 @@ pub fn save_connection(clients: &MongoClients, draft: ConnectionDraft) -> Result
     }
     let uri = draft.uri.as_deref().map(str::trim).filter(|uri| !uri.is_empty());
     match (draft.id, uri) {
-        (Some(id), None) => mongo_store::rename(&id, name)?,
+        (Some(id), None) => mongo_store::update(&id, name, draft.agent)?,
         (id, Some(uri)) => {
             mongo::validate_uri(uri)?;
             // Read once as the driver reads it: an option it does not know is a value's tail, which the mask would show.
             mongo_client::check(&secrecy::SecretString::from(uri))?;
             let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            mongo_store::put(Connection { id: id.clone(), name: name.to_string(), uri: uri.to_string() })?;
+            mongo_store::put(Connection { id: id.clone(), name: name.to_string(), uri: uri.to_string(), agent: draft.agent })?;
             clients.forget(&id);
         }
         (None, None) => return Err(MongoError::BadUri("a new connection needs its connection string".into())),
@@ -257,6 +251,48 @@ pub fn drop_collection(clients: &MongoClients, target: &Target) -> Result<(), Mo
     mongo_client::drop_collection(&client(clients, &target.connection)?, &target.database, &target.collection)
 }
 
+/// The agent's way to the servers (`docs/44-mongodb.md`, M-8): the page's own
+/// reads, over the same clients. Which connections it may use, and that a
+/// pipeline writes nowhere, the tool has checked.
+pub struct Servers(pub Arc<MongoClients>);
+
+impl MongoServers for Servers {
+    fn connections(&self) -> Result<Vec<ConnectionView>, MongoError> {
+        connections()
+    }
+
+    fn databases(&self, connection: &str) -> Result<Vec<DatabaseInfo>, MongoError> {
+        databases(&self.0, connection)
+    }
+
+    fn collections(&self, connection: &str, database: &str) -> Result<Vec<CollectionInfo>, MongoError> {
+        collections(&self.0, connection, database)
+    }
+
+    /// Closed once read: the model asks again with a narrower filter, not for the next page.
+    // ponytail: through the page's table of open finds, so for that moment it holds one more — with 32 open, the page's oldest goes; a cursor of its own if that is ever seen.
+    fn find(&self, target: &Target, spec: FindSpec) -> Result<Vec<Value>, MongoError> {
+        let client = client(&self.0, &target.connection)?;
+        let found = self.0.find(Place { connection: &target.connection, client: &client }, &target.database, &target.collection, spec)?;
+        if let Some(next) = found.next {
+            self.0.find_close(next);
+        }
+        Ok(found.documents)
+    }
+
+    fn count(&self, target: &Target, filter: Map<String, Value>) -> Result<u64, MongoError> {
+        mongo_client::count(&client(&self.0, &target.connection)?, &target.database, &target.collection, filter)
+    }
+
+    fn aggregate(&self, target: &Target, stages: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError> {
+        mongo_client::aggregate(&client(&self.0, &target.connection)?, &target.database, &target.collection, stages, cap, true)
+    }
+
+    fn indexes(&self, target: &Target) -> Result<Vec<IndexView>, MongoError> {
+        indexes(&self.0, target)
+    }
+}
+
 fn view(document: &Value) -> DocumentView {
     DocumentView {
         id: document.get("_id").map(Value::to_string),
@@ -272,7 +308,7 @@ mod tests {
     use serde_json::json;
 
     fn draft(id: Option<&str>, name: &str, uri: Option<&str>) -> ConnectionDraft {
-        ConnectionDraft { id: id.map(str::to_string), name: name.into(), uri: uri.map(str::to_string) }
+        ConnectionDraft { id: id.map(str::to_string), name: name.into(), uri: uri.map(str::to_string), agent: false }
     }
 
     #[test]
@@ -304,6 +340,19 @@ mod tests {
             assert_eq!(delete_connection(&clients, &id).unwrap().len(), 1);
             assert!(!kept(), "a deleted connection's client goes");
             assert!(clients.client(&other, || Err(MongoError::NoName)).is_ok(), "the others' stay");
+        });
+    }
+
+    #[test]
+    fn the_agent_box_is_saved_with_a_new_uri_and_without_one() {
+        with_app_dir("mongo-service-agent", || {
+            let clients = MongoClients::default();
+            let open = |id: Option<&str>, uri: Option<&str>| ConnectionDraft { agent: true, ..draft(id, "Local", uri) };
+            let id = save_connection(&clients, open(None, Some("mongodb://h"))).unwrap()[0].id.clone();
+            assert!(connections().unwrap()[0].agent);
+            assert!(!save_connection(&clients, draft(Some(&id), "Local", None)).unwrap()[0].agent, "unticked with the URI kept");
+            assert!(save_connection(&clients, open(Some(&id), None)).unwrap()[0].agent, "ticked with the URI kept");
+            assert!(!save_connection(&clients, draft(Some(&id), "Local", Some("mongodb://h2"))).unwrap()[0].agent, "unticked with a new URI");
         });
     }
 
@@ -376,5 +425,32 @@ mod tests {
         assert!(matches!(id_of("{ not json"), Err(MongoError::Server(m)) if m.starts_with("not an _id")));
         assert_eq!(shown.text, "{\n  _id: ObjectId(\"65f0a1b2c3d4e5f6a7b8c9d0\"),\n  n: NumberLong(7)\n}");
         assert_eq!(view(&json!({ "total": 3 })).id, None);
+    }
+
+    /// The agent's reads on a real server, at `KIBO_MONGO_URI` as
+    /// `infra::mongo_client`'s: a find leaves nothing open, a sample comes back.
+    #[test]
+    #[ignore = "needs a MongoDB server — set KIBO_MONGO_URI"]
+    fn live_server_for_the_agent() {
+        with_app_dir("mongo-service-live", || {
+            let uri = std::env::var("KIBO_MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".into());
+            let clients = Arc::new(MongoClients::default());
+            let id = save_connection(&clients, ConnectionDraft { agent: true, ..draft(None, "Live", Some(&uri)) }).unwrap()[0].id.clone();
+            let servers = Servers(clients.clone());
+            let collection = format!("agent_{}", uuid::Uuid::new_v4().simple());
+            let target = Target { connection: id.clone(), database: "kibo_live_test".into(), collection: collection.clone() };
+            insert(&clients, &target, "[{ n: 1 }, { n: 2 }, { n: 3 }]").unwrap();
+
+            let sort = mongo::parse_document("{ n: 1 }", "s").unwrap();
+            let found = servers.find(&target, FindSpec { sort, limit: 2, ..Default::default() }).unwrap();
+            assert_eq!(found.len(), 2);
+            assert!(matches!(clients.find_more(0), Err(MongoError::FindClosed)), "nothing left open");
+            assert_eq!(servers.count(&target, Map::new()).unwrap(), 3);
+            let sample = Map::from_iter([("$sample".to_string(), json!({ "size": 100 }))]);
+            assert_eq!(servers.aggregate(&target, vec![sample], 100).unwrap().len(), 3);
+            assert!(servers.collections(&id, "kibo_live_test").unwrap().iter().any(|c| c.name == collection));
+            assert!(servers.connections().unwrap()[0].agent);
+            drop_collection(&clients, &target).unwrap();
+        });
     }
 }

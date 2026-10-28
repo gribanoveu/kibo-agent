@@ -33,6 +33,7 @@ pub mod explore;
 pub mod git;
 pub mod grep;
 pub mod knowledge;
+pub mod mongo;
 pub mod cluster;
 pub mod runbook;
 pub mod list_files;
@@ -112,6 +113,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekSearch, deepseek::search_definition),
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
+    (ToolName::Mongo, mongo::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -179,6 +181,7 @@ pub fn dispatch(
         ToolCall::DeepseekSearch(args) => deepseek::deepseek_search(args, deps),
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
+        ToolCall::Mongo(args) => mongo::mongo(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -602,6 +605,21 @@ mod definition_tests {
                     id: Some("c1".into()),
                     column: Some(crate::domain::board::Column::Done),
                     due: None,
+                })],
+            ),
+            ToolName::Mongo => (
+                r#"{"op":"collections"}"#,
+                vec![ToolCall::Mongo(crate::domain::tools::MongoArgs {
+                    op: crate::domain::tools::MongoOp::Find,
+                    connection: Some("Local".into()),
+                    database: Some("shop".into()),
+                    collection: Some("orders".into()),
+                    name: Some("ord".into()),
+                    filter: Some("{ paid: true }".into()),
+                    projection: Some("{ total: 1 }".into()),
+                    sort: Some("{ at: -1 }".into()),
+                    pipeline: Some("[{ $limit: 1 }]".into()),
+                    limit: Some(5),
                 })],
             ),
             ToolName::Present => (

@@ -136,7 +136,7 @@ beforeEach(() => {
   indexList = [ID_INDEX];
   holds = {};
   inserted = { count: 1, refused: null, rest: null };
-  connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017" }];
+  connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017", agent: true }];
 });
 
 const openOrders = async () => {
@@ -162,7 +162,7 @@ describe("connections", () => {
     fireEvent.click(dialog().getByRole("button", { name: "Save" }));
     await settle();
 
-    expect(sent("mongo_connection_save")).toEqual([{ draft: { id: undefined, name: "Prod", uri: "mongodb://admin:secret@db:27017" } }]);
+    expect(sent("mongo_connection_save")).toEqual([{ draft: { id: undefined, name: "Prod", uri: "mongodb://admin:secret@db:27017", agent: false } }]);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: /Prod/ }).getAttribute("title")).toBe("mongodb://admin:•••@db:27017");
     expect(sent("mongo_databases")).toContainEqual({ connection: "c1" });
@@ -200,7 +200,19 @@ describe("connections", () => {
     fireEvent.change(dialog().getByLabelText("Name"), { target: { value: "Laptop" } });
     fireEvent.click(dialog().getByRole("button", { name: "Save" }));
     await settle();
-    expect(sent("mongo_connection_save")).toEqual([{ draft: { id: "c1", name: "Laptop", uri: undefined } }]);
+    expect(sent("mongo_connection_save")).toEqual([{ draft: { id: "c1", name: "Laptop", uri: undefined, agent: true } }]);
+  });
+
+  test("the agent switch shows what was saved, and its change is sent", async () => {
+    page();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const open = dialog().getByRole("switch", { name: "Open to the agent" });
+    expect(open.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(open);
+    fireEvent.click(dialog().getByRole("button", { name: "Save" }));
+    await settle();
+    expect(sent("mongo_connection_save")).toEqual([{ draft: { id: "c1", name: "Local", uri: undefined, agent: false } }]);
   });
 
   test("deleting one asks first", async () => {

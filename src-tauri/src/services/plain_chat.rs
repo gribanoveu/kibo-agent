@@ -46,6 +46,8 @@ pub struct ChatTurn<'a> {
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
     /// The board the Assistant's `board` keeps cards on.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The MongoDB servers `mongo` reads, while that feature is on.
+    pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
     /// The knowledge base's search, for a role that reads it, while that feature is on.
@@ -144,6 +146,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         agents: None,
         questions: None,
         board: chat.board.clone(),
+        mongo: chat.mongo.clone(),
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
@@ -217,6 +220,7 @@ mod tests {
         approval: ApprovalPolicy,
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
         board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
+        mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
         features: crate::domain::features::Features,
         knowledge: Option<crate::domain::tools::CodeSearchFn>,
     }
@@ -243,6 +247,7 @@ mod tests {
             approval: ApprovalPolicy::default(),
             seen: Arc::default(),
             board: None,
+            mongo: None,
             features: Default::default(),
             knowledge: None,
         }
@@ -268,6 +273,7 @@ mod tests {
                 cancelled: &stop,
                 log_call: &log,
                 board: self.board.clone(),
+                mongo: self.mongo.clone(),
                 knowledge: self.knowledge.clone(),
                 deepseek: None,
                 features: self.features.clone(),

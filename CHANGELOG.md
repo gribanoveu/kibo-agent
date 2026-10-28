@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-28 Let the agent read your MongoDB: turn on "Open to the agent" for a connection on the MongoDB page, and in any mode — and in the assistant chat — the agent finds a collection by its name, looks at its fields, finds, counts and aggregates documents and lists indexes; it writes nothing, and fields named like passwords or tokens reach it as `<redacted>`
 - 2026-10-27 Choose which microphone a call is recorded from in the Meetings page's recording settings; the choice is kept, and while that microphone is unplugged the system's default records instead
 - 2026-10-27 Semantic search puts the right code first far more often: the active model reads the index's first 30 results against the query and reorders them, at the cost of a few seconds a search
 - 2026-10-27 In Agent mode rarely used tools (move, blame, the terminal reader, the board) and every new one wait behind `toolSearch` instead of filling each request; the agent finds and uses them when a task needs them

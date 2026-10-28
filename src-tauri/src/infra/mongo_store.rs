@@ -99,12 +99,13 @@ pub fn put(connection: Connection) -> Result<(), MongoError> {
     save(&connections)
 }
 
-/// A new name for a saved connection, its URI kept.
-pub fn rename(id: &str, name: &str) -> Result<(), MongoError> {
+/// A new name and agent box for a saved connection, its URI kept.
+pub fn update(id: &str, name: &str, agent: bool) -> Result<(), MongoError> {
     let _held = writing();
     let mut connections = load()?;
     let saved = connections.0.iter_mut().find(|c| c.id == id).ok_or_else(|| MongoError::NoConnection(id.to_string()))?;
     saved.name = name.to_string();
+    saved.agent = agent;
     save(&connections)
 }
 
@@ -129,7 +130,7 @@ mod tests {
     use secrecy::ExposeSecret;
 
     fn connection(id: &str, uri: &str) -> Connection {
-        Connection { id: id.into(), name: format!("name {id}"), uri: uri.into() }
+        Connection { id: id.into(), name: format!("name {id}"), uri: uri.into(), agent: false }
     }
 
     /// "Delete data" in the Catalog removes this file.
@@ -155,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn a_put_replaces_by_id_and_a_rename_keeps_the_uri() {
+    fn a_put_replaces_by_id_and_an_update_keeps_the_uri() {
         with_app_dir("mongo-store-replace", || {
             put(connection("a", "mongodb://h1")).unwrap();
             put(connection("b", "mongodb://h2")).unwrap();
@@ -163,10 +164,10 @@ mod tests {
             assert_eq!(uri("a").unwrap().expose_secret(), "mongodb://h3");
             assert_eq!(list().unwrap().len(), 2);
 
-            rename("a", "Prod").unwrap();
-            assert_eq!(list().unwrap()[0].name, "Prod");
+            update("a", "Prod", true).unwrap();
+            assert_eq!((list().unwrap()[0].name.as_str(), list().unwrap()[0].agent), ("Prod", true));
             assert_eq!(uri("a").unwrap().expose_secret(), "mongodb://h3");
-            assert!(rename("zzz", "x").is_err());
+            assert!(update("zzz", "x", false).is_err());
         });
     }
 
@@ -190,6 +191,19 @@ mod tests {
             delete("a").unwrap();
             delete("a").unwrap();
             assert_eq!(list().unwrap().iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["b"]);
+        });
+    }
+
+    /// A file sealed before the agent's box existed opens, every connection closed to the agent.
+    #[test]
+    fn a_file_from_before_the_agent_box_opens_with_it_off() {
+        with_app_dir("mongo-store-old", || {
+            put(connection("a", "mongodb://h")).unwrap();
+            let key = master_key::resolve().unwrap();
+            let old = secret_store::seal(&key, PURPOSE, br#"[{"id":"a","name":"Old","uri":"mongodb://h"}]"#).unwrap();
+            std::fs::write(path().unwrap(), old).unwrap();
+            let list = list().unwrap();
+            assert_eq!((list[0].name.as_str(), list[0].agent), ("Old", false));
         });
     }
 

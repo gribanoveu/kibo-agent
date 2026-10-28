@@ -83,6 +83,9 @@ fn base_tools() -> HashSet<ToolName> {
         // The same through DeepSeek, while the user has that feature on.
         ToolName::DeepseekSearch,
         ToolName::DeepseekFetch,
+        // The MongoDB connections the user opened to the agent, read, while
+        // the feature is on: a question about data is asked beside the code.
+        ToolName::Mongo,
     ]
     .into_iter()
     .collect()

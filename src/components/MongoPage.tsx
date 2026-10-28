@@ -25,7 +25,7 @@ type Open = { database: string; collection: string };
 const keyOf = (open: Open) => `${open.database}.${open.collection}`;
 
 /** The connection form: a new one, or a saved one changed — its URI is never shown, only typed again. */
-type Form = { id?: string; name: string; uri: string; saved?: string };
+type Form = { id?: string; name: string; uri: string; agent: boolean; saved?: string };
 
 /** A step that cannot be taken back, asked about first. */
 // A collection to drop names its connection: the one asked about, whatever is chosen when Drop is pressed.
@@ -118,12 +118,12 @@ export function MongoPage(_: PageContext) {
               below
             />
             {connection && (
-              <button type="button" className="btn btn-ghost" title="Change this connection" onClick={() => setForm({ id: connection.id, name: connection.name, uri: "", saved: connection.address })}>
+              <button type="button" className="btn btn-ghost" title="Change this connection" onClick={() => setForm({ id: connection.id, name: connection.name, uri: "", agent: connection.agent, saved: connection.address })}>
                 <Settings2 size={14} />
                 Edit
               </button>
             )}
-            <button type="button" className="btn btn-ghost" onClick={() => setForm({ name: "", uri: "" })}>
+            <button type="button" className="btn btn-ghost" onClick={() => setForm({ name: "", uri: "", agent: false })}>
               <Plus size={14} />
               Connection
             </button>
@@ -136,7 +136,7 @@ export function MongoPage(_: PageContext) {
         <div className="mongo-welcome">
           <Database size={28} className="mongo-welcome-icon" />
           <p>No connections yet. Add one with its connection string — it is sealed on this computer as the API keys are, and this window never sees the password again.</p>
-          <button type="button" className="btn btn-primary" onClick={() => setForm({ name: "", uri: "" })}>
+          <button type="button" className="btn btn-primary" onClick={() => setForm({ name: "", uri: "", agent: false })}>
             <Plus size={14} />
             Add connection
           </button>
@@ -369,7 +369,7 @@ function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps)
   }, [form?.id, form === null]);
 
   if (!form) return null;
-  const draft = { id: form.id, name: form.name, uri: form.uri.trim() || undefined };
+  const draft = { id: form.id, name: form.name, uri: form.uri.trim() || undefined, agent: form.agent };
   const editing = form.id !== undefined;
 
   const test = async () => {
@@ -439,6 +439,10 @@ function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps)
         />
       </label>
       <p className="mongo-quiet">Sealed on this computer under the app's master key, as the API keys are. Only the host and the user name are shown again.</p>
+      <label className="mongo-switch-row">
+        <Switch label="Open to the agent" on={form.agent} onChange={(agent) => onChange({ ...form, agent })} />
+        Open to the agent — it may find collections here and read them, never write
+      </label>
       {tested && <p className={tested.ok ? "mongo-ok" : "mongo-error"}>{tested.text}</p>}
       {store.error && <p className="mongo-error">{store.error}</p>}
     </Modal>

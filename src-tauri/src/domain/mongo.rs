@@ -20,6 +20,10 @@ pub struct Connection {
     pub id: String,
     pub name: String,
     pub uri: String,
+    /// Open to the agent's `mongo` tool; off until the user ticks it. A file
+    /// sealed before the box existed reads as off.
+    #[serde(default)]
+    pub agent: bool,
 }
 
 /// A connection as the window sees it: never the URI, only where it goes.
@@ -30,11 +34,12 @@ pub struct ConnectionView {
     pub name: String,
     /// The URI with its password and token-like options masked.
     pub address: String,
+    pub agent: bool,
 }
 
 impl From<&Connection> for ConnectionView {
     fn from(connection: &Connection) -> Self {
-        Self { id: connection.id.clone(), name: connection.name.clone(), address: redact_uri(&connection.uri) }
+        Self { id: connection.id.clone(), name: connection.name.clone(), address: redact_uri(&connection.uri), agent: connection.agent }
     }
 }
 
@@ -51,6 +56,152 @@ pub struct IndexView {
     pub partial: Option<String>,
 }
 
+/// A collection, by the connection it is reached through.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Target {
+    pub connection: String,
+    pub database: String,
+    pub collection: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseInfo {
+    pub name: String,
+    pub size_on_disk: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CollectionInfo {
+    pub name: String,
+    /// `collection`, `view` or `timeseries`.
+    pub kind: &'static str,
+}
+
+/// A find, its parts already read from the page's text.
+#[derive(Debug, Clone, Default)]
+pub struct FindSpec {
+    pub filter: Map<String, Value>,
+    pub projection: Map<String, Value>,
+    pub sort: Map<String, Value>,
+    pub skip: u64,
+    /// A page's size.
+    pub limit: usize,
+}
+
+/// The servers as the agent's `mongo` tool reads them (`docs/44-mongodb.md`,
+/// M-8): saved connections by id, and what is in them. Reads only; which
+/// connections the agent may use is the tool's to decide, from `agent`.
+/// `services::mongo::Servers` over the app's clients; a test's own in memory.
+pub trait MongoServers: Send + Sync {
+    fn connections(&self) -> Result<Vec<ConnectionView>, MongoError>;
+    fn databases(&self, connection: &str) -> Result<Vec<DatabaseInfo>, MongoError>;
+    fn collections(&self, connection: &str, database: &str) -> Result<Vec<CollectionInfo>, MongoError>;
+    /// The first `spec.limit` documents, nothing left open after them.
+    fn find(&self, target: &Target, spec: FindSpec) -> Result<Vec<Value>, MongoError>;
+    fn count(&self, target: &Target, filter: Map<String, Value>) -> Result<u64, MongoError>;
+    /// The first `cap` results of a pipeline that writes nowhere.
+    fn aggregate(&self, target: &Target, stages: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError>;
+    fn indexes(&self, target: &Target) -> Result<Vec<IndexView>, MongoError>;
+}
+
+/// A document as the model may see it: the value of a field named like a
+/// credential (`password`, `apiKey`, `refresh_token`…) is [`REDACTED`],
+/// wherever it nests, and in a string a URL's password or a `password=…` too.
+/// A wide heuristic, as Kubernetes' is: a `tokens_used` goes as well.
+// ponytail: by the field's name, so a query that renames it (`$project: { p: '$password' }`,
+// `$objectToArray`) shows the value — the model has to ask for that; redact by value if it does.
+pub fn redact_document(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                match secret_field(key) {
+                    true => *field = Value::String(super::kube_view::REDACTED.into()),
+                    false => redact_document(field),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_document),
+        Value::String(text) => *text = super::kube_view::redact_text(text),
+        _ => {}
+    }
+}
+
+fn secret_field(key: &str) -> bool {
+    let key = key.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
+    ["password", "passwd", "secret", "token", "apikey", "credential", "privatekey"].iter().any(|word| key.contains(word))
+}
+
+/// One field of a sample: its path — nested fields with dots, as a filter
+/// names them, an array's documents' fields under the array's — and in how
+/// many documents each BSON type was found there, most first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldTypes {
+    pub path: String,
+    pub types: Vec<(&'static str, usize)>,
+}
+
+/// The fields of `documents`, in the order they were first met.
+pub fn schema(documents: &[Value]) -> Vec<FieldTypes> {
+    let mut fields: Vec<FieldTypes> = Vec::new();
+    for document in documents {
+        let mut seen = Vec::new();
+        if let Value::Object(map) = document {
+            walk_fields("", map, &mut seen);
+        }
+        for (path, bson) in seen {
+            let at = match fields.iter().position(|f| f.path == path) {
+                Some(at) => at,
+                None => {
+                    fields.push(FieldTypes { path, types: Vec::new() });
+                    fields.len() - 1
+                }
+            };
+            match fields[at].types.iter_mut().find(|(name, _)| *name == bson) {
+                Some((_, count)) => *count += 1,
+                None => fields[at].types.push((bson, 1)),
+            }
+        }
+    }
+    for field in &mut fields {
+        field.types.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
+    }
+    fields
+}
+
+/// Each path and type in one document, once: an array's documents name the
+/// same field many times over.
+fn walk_fields(prefix: &str, map: &Map<String, Value>, seen: &mut Vec<(String, &'static str)>) {
+    for (key, value) in map {
+        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let found = (path.clone(), bson_type(value));
+        if !seen.contains(&found) {
+            seen.push(found);
+        }
+        let nested: Vec<&Map<String, Value>> = match value {
+            Value::Object(inner) => vec![inner],
+            Value::Array(items) => items.iter().filter_map(Value::as_object).collect(),
+            _ => Vec::new(),
+        };
+        for inner in nested.into_iter().filter(|inner| special(inner).is_none()) {
+            walk_fields(&path, inner, seen);
+        }
+    }
+}
+
+/// A value's BSON type, by the name the page shows it with.
+fn bson_type(value: &Value) -> &'static str {
+    match value {
+        Value::Object(map) => special(map).map_or("Object", |(bson, _)| bson),
+        Value::Array(_) => "Array",
+        Value::Null => "Null",
+        Value::Bool(_) => "Boolean",
+        Value::Number(_) => "Number",
+        Value::String(_) => "String",
+    }
+}
+
 /// What the form sends. No `uri` on an edit keeps the saved one — the window
 /// never had it to send back.
 #[derive(Debug, Clone, Deserialize)]
@@ -59,6 +210,8 @@ pub struct ConnectionDraft {
     pub id: Option<String>,
     pub name: String,
     pub uri: Option<String>,
+    #[serde(default)]
+    pub agent: bool,
 }
 
 #[derive(Debug, Error)]
@@ -91,6 +244,15 @@ pub enum MongoError {
     Server(String),
     #[error("{0}")]
     Store(String),
+    /// The agent's tool, with no saved connection ticked "Open to the agent".
+    #[error("no MongoDB connection is open to the agent — the user opens one on the MongoDB page: edit it and turn on \"Open to the agent\"")]
+    NoneOpen,
+    #[error("no connection named \"{name}\" is open to the agent — open to it: {open}")]
+    NotOpen { name: String, open: String },
+    #[error("{count} connections open to the agent are named \"{name}\" — ask the user to rename one on the MongoDB page")]
+    SameName { name: String, count: usize },
+    #[error("this pipeline writes with {0}, and the agent only reads — leave the stage out")]
+    Writes(&'static str),
 }
 
 /// A `mongodb://` or `mongodb+srv://` URI with a host. The driver checks the
@@ -1261,7 +1423,7 @@ mod tests {
 
     #[test]
     fn a_view_carries_no_password() {
-        let connection = Connection { id: "c1".into(), name: "Prod".into(), uri: "mongodb://root:pw@h".into() };
+        let connection = Connection { id: "c1".into(), name: "Prod".into(), uri: "mongodb://root:pw@h".into(), agent: false };
         let view = ConnectionView::from(&connection);
         assert_eq!(view.address, "mongodb://root:•••@h");
         assert!(!serde_json::to_string(&view).unwrap().contains("pw@"));
