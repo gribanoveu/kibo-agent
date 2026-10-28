@@ -1,4 +1,6 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { Decoration, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
+import type { Extension } from "@codemirror/state";
 import {
   Bot,
   ChevronDown,
@@ -51,9 +53,14 @@ import {
   pretty,
   queryOf,
   resolveRequest,
+  scope,
+  shownValues,
   sizeLabel,
   statusTone,
   toCurl,
+  VARIABLE,
+  variableParts,
+  variableValue,
   withQuery,
   type Auth,
   type Body,
@@ -520,6 +527,100 @@ const RESPONSE_MIN = { stacked: 160, side: 320 };
 const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
 
 /** The address on top; under it what is written and what came back, one under the other or side by side. */
+/** What a variable is said to be on hover: its value, or that nothing in scope has it. */
+const variableTitle = (name: string, value: string | null) => (value === null ? `{{${name}}} is not set in the environment or the collection` : `{{${name}}} = ${value}`);
+
+/** `{{variables}}` in an editor, found or not, their value on hover. */
+function variableMarks(values: ReadonlyMap<string, string>): Extension {
+  const decorator = new MatchDecorator({
+    regexp: new RegExp(VARIABLE.source, "g"),
+    decoration: (m) => {
+      const value = variableValue(m[1], values);
+      return Decoration.mark({ class: value === null ? "cm-variable missing" : "cm-variable", attributes: { title: variableTitle(m[1], value) } });
+    },
+  });
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = decorator.createDeco(view);
+      }
+      update(update: ViewUpdate) {
+        this.decorations = decorator.updateDeco(update, this.decorations);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+}
+
+/**
+ * A text field whose `{{variables}}` are drawn found or not. A field cannot
+ * colour part of its text, so while it holds a variable its own text is made
+ * invisible and drawn again over it — the caret, the selection and the
+ * field's look stay the field's. The value of each is on the field's hover.
+ */
+function VarInput({ values, value, className, ...field }: InputHTMLAttributes<HTMLInputElement> & { value: string; values: ReadonlyMap<string, string> }) {
+  const input = useRef<HTMLInputElement>(null);
+  const over = useRef<HTMLSpanElement>(null);
+  const parts = variableParts(value, values);
+  const marked = parts.some((part) => part.variable);
+  // The drawn text sits where the field's would: its font, padding and border, and where it is scrolled to.
+  const follow = () => {
+    if (input.current && over.current) over.current.scrollLeft = input.current.scrollLeft;
+  };
+  useLayoutEffect(() => {
+    if (!input.current || !over.current) return;
+    const s = getComputedStyle(input.current);
+    Object.assign(over.current.style, {
+      fontFamily: s.fontFamily,
+      fontSize: s.fontSize,
+      fontWeight: s.fontWeight,
+      letterSpacing: s.letterSpacing,
+      color: s.color,
+      textDecorationLine: s.textDecorationLine,
+      paddingTop: s.paddingTop,
+      paddingRight: s.paddingRight,
+      paddingBottom: s.paddingBottom,
+      paddingLeft: s.paddingLeft,
+      borderTopWidth: s.borderTopWidth,
+      borderRightWidth: s.borderRightWidth,
+      borderBottomWidth: s.borderBottomWidth,
+      borderLeftWidth: s.borderLeftWidth,
+    });
+    follow();
+  });
+  const title = parts.flatMap((part) => (part.variable ? [variableTitle(part.variable.name, part.variable.value)] : [])).join("\n");
+  return (
+    <span className="http-var-field">
+      <input
+        {...field}
+        ref={input}
+        value={value}
+        title={title || field.title}
+        className={`${className ?? ""}${marked ? " http-var-hidden" : ""}`}
+        onScroll={follow}
+        onSelect={follow}
+        onKeyUp={follow}
+      />
+      {marked && (
+        <span ref={over} className="http-var-over" aria-hidden="true">
+          <span className="http-var-line">
+            {parts.map((part, i) =>
+              part.variable ? (
+                <span key={i} className={`http-var${part.variable.value === null ? " missing" : ""}`}>
+                  {part.text}
+                </span>
+              ) : (
+                part.text
+              ),
+            )}
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 function RequestView({
   collection,
   request,
@@ -555,6 +656,11 @@ function RequestView({
   };
   const size = stacked ? (height === null ? undefined : { height, maxHeight: "none" }) : width === null ? undefined : { width, flexBasis: "auto" };
   const resolved = useMemo(() => resolveRequest(collection, request, environment), [collection, request, environment]);
+  const values = useMemo(() => shownValues(scope(collection, environment)), [collection, environment]);
+  const valuesKey = JSON.stringify([...values]);
+  // Keyed by what the values say, not by the map: typing makes a new map of the same values,
+  // and new marks would have the editors draw every variable again.
+  const marks = useMemo(() => variableMarks(values), [valuesKey]);
   const { copied, copy } = useCopied();
   const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
   const params = queryOf(request.url);
@@ -573,10 +679,11 @@ function RequestView({
           value={request.method}
           onPick={(m) => set({ method: m as HttpMethod })}
         />
-        <input
+        <VarInput
           className="http-url http-mono"
           aria-label="Address"
           spellCheck={false}
+          values={values}
           value={request.url}
           onChange={(e) => set({ url: e.target.value })}
           placeholder="{{baseUrl}}/path — or paste a curl command"
@@ -626,12 +733,12 @@ function RequestView({
           </div>
 
           <div className={`http-editor${(tab === "body" && request.body.mode === "raw") || tab === "scripts" || tab === "preview" ? " fills" : ""}`}>
-            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
-            {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
-            {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
-            {tab === "body" && <BodyEditor body={request.body} onChange={(body) => set({ body })} />}
+            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" values={values} onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
+            {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
+            {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
+            {tab === "body" && <BodyEditor body={request.body} values={values} marks={marks} onChange={(body) => set({ body })} />}
             {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
-            {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
+            {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
         </div>
         <PanelResizeHandle
@@ -647,7 +754,7 @@ function RequestView({
 }
 
 /** The request as it will leave — what Send sends, a secret masked. */
-function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolveRequest>; missing?: string }) {
+function PreviewView({ resolved, missing, marks }: { resolved: ReturnType<typeof resolveRequest>; missing?: string; marks: Extension }) {
   // The body as written, not reformatted: a preview that pretty-prints shows `1250` for the `1250.00` sent.
   const text = asHttpText(`${resolved.method} ${resolved.url}`, resolved.headers, resolved.body);
   return (
@@ -660,13 +767,13 @@ function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolv
         </p>
       ))}
       <div className="http-code-box http-code-box-fill">
-        <CodeEditor text={text} language="http" numbered={false} label="The request as it will leave" />
+        <CodeEditor text={text} language="http" numbered={false} label="The request as it will leave" extensions={marks} />
       </div>
     </div>
   );
 }
 
-function PairsTable({ rows, keyLabel, onChange }: { rows: Pair[]; keyLabel: string; onChange: (rows: Pair[]) => void }) {
+function PairsTable({ rows, keyLabel, values, onChange }: { rows: Pair[]; keyLabel: string; values: ReadonlyMap<string, string>; onChange: (rows: Pair[]) => void }) {
   // The last row is always empty: typing into it adds one.
   const shown = [...rows, { key: "", value: "" }];
   const put = (i: number, patch: Partial<Pair>) => {
@@ -690,10 +797,10 @@ function PairsTable({ rows, keyLabel, onChange }: { rows: Pair[]; keyLabel: stri
             <tr key={i} className={r.disabled ? "off" : ""}>
               <td>{!last && <input type="checkbox" aria-label={`Send ${r.key}`} checked={!r.disabled} onChange={(e) => put(i, { disabled: !e.target.checked })} />}</td>
               <td>
-                <input className="http-mono" aria-label={keyLabel} spellCheck={false} value={r.key} placeholder={last ? `New ${keyLabel.toLowerCase()}` : ""} onChange={(e) => put(i, { key: e.target.value })} />
+                <VarInput className="http-mono" aria-label={keyLabel} spellCheck={false} values={values} value={r.key} placeholder={last ? `New ${keyLabel.toLowerCase()}` : ""} onChange={(e) => put(i, { key: e.target.value })} />
               </td>
               <td>
-                <input className="http-mono" aria-label="Value" spellCheck={false} value={r.value} onChange={(e) => put(i, { value: e.target.value })} />
+                <VarInput className="http-mono" aria-label="Value" spellCheck={false} values={values} value={r.value} onChange={(e) => put(i, { value: e.target.value })} />
               </td>
               <td>
                 {!last && (
@@ -733,7 +840,17 @@ function authLine(auth: Auth): string {
   }
 }
 
-function AuthEditor({ auth, inherited, onChange }: { auth: Auth; inherited: { auth: Auth; from: string } | null; onChange: (a: Auth) => void }) {
+function AuthEditor({
+  auth,
+  inherited,
+  values,
+  onChange,
+}: {
+  auth: Auth;
+  inherited: { auth: Auth; from: string } | null;
+  values: ReadonlyMap<string, string>;
+  onChange: (a: Auth) => void;
+}) {
   const pick = (type: string) => {
     if (type === "bearer") onChange({ type, token: "{{token}}" });
     else if (type === "basic") onChange({ type, username: "", password: "" });
@@ -756,28 +873,28 @@ function AuthEditor({ auth, inherited, onChange }: { auth: Auth; inherited: { au
           {inherited.auth.type === "other" && " — not sent yet, comes with HC-6"}
         </p>
       )}
-      {auth.type === "bearer" && <Field label="Token" value={auth.token} onChange={(token) => onChange({ ...auth, token })} />}
+      {auth.type === "bearer" && <Field label="Token" values={values} value={auth.token} onChange={(token) => onChange({ ...auth, token })} />}
       {auth.type === "basic" && (
         <>
-          <Field label="Username" value={auth.username} onChange={(username) => onChange({ ...auth, username })} />
-          <Field label="Password" value={auth.password} onChange={(password) => onChange({ ...auth, password })} />
+          <Field label="Username" values={values} value={auth.username} onChange={(username) => onChange({ ...auth, username })} />
+          <Field label="Password" values={values} value={auth.password} onChange={(password) => onChange({ ...auth, password })} />
         </>
       )}
       {auth.type === "apikey" && (
         <>
-          <Field label="Key" value={auth.key} onChange={(key) => onChange({ ...auth, key })} />
-          <Field label="Value" value={auth.value} onChange={(value) => onChange({ ...auth, value })} />
+          <Field label="Key" values={values} value={auth.key} onChange={(key) => onChange({ ...auth, key })} />
+          <Field label="Value" values={values} value={auth.value} onChange={(value) => onChange({ ...auth, value })} />
         </>
       )}
     </div>
   );
 }
 
-function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function Field({ label, value, values, onChange }: { label: string; value: string; values: ReadonlyMap<string, string>; onChange: (v: string) => void }) {
   return (
     <label className="http-field-row">
       <span className="http-label">{label}</span>
-      <input className="http-input http-mono" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} />
+      <VarInput className="http-input http-mono" spellCheck={false} values={values} value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
@@ -788,7 +905,7 @@ const BODY_MODES = [
   { value: "urlencoded", label: "x-www-form-urlencoded" },
 ];
 
-function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => void }) {
+function BodyEditor({ body, values, marks, onChange }: { body: Body; values: ReadonlyMap<string, string>; marks: Extension; onChange: (b: Body) => void }) {
   if (body.mode === "other")
     return (
       <p className="http-kept">
@@ -840,10 +957,10 @@ function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => voi
       {body.mode === "none" && <p className="http-quiet">This request sends no body.</p>}
       {body.mode === "raw" && (
         <div className="http-code-box http-code-box-input">
-          <CodeEditor text={body.raw} language={body.language} label="Body" onChange={(raw) => onChange({ ...body, raw })} />
+          <CodeEditor text={body.raw} language={body.language} label="Body" extensions={marks} onChange={(raw) => onChange({ ...body, raw })} />
         </div>
       )}
-      {body.mode === "urlencoded" && <PairsTable rows={body.fields} keyLabel="Field" onChange={(fields) => onChange({ ...body, fields })} />}
+      {body.mode === "urlencoded" && <PairsTable rows={body.fields} keyLabel="Field" values={values} onChange={(fields) => onChange({ ...body, fields })} />}
     </div>
   );
 }

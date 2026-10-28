@@ -126,6 +126,35 @@ export function scope(collection: Collection | null, environment: Environment | 
   return out;
 }
 
+/** Each variable in scope by the value the page may show: a secret masked. */
+export function shownValues(vars: Map<string, EnvVariable>): Map<string, string> {
+  return new Map([...vars].map(([key, v]) => [key, v.secret ? SECRET_MASK : v.value]));
+}
+
+/** `{{name}}`, as Postman writes a variable: the name is group 1. */
+export const VARIABLE = /\{\{\s*([^{}\s]+)\s*\}\}/g;
+
+/** What `{{name}}` stands for: its value, Postman's dynamic `{{$…}}` made as it is sent — or null, found nowhere. */
+export function variableValue(name: string, values: ReadonlyMap<string, string>): string | null {
+  if (name.startsWith("$")) return "made as the request is sent";
+  return values.get(name) ?? null;
+}
+
+export type TextPart = { text: string; variable?: { name: string; value: string | null } };
+
+/** `text` cut at its variables, each with what it stands for — for drawing them found or not. */
+export function variableParts(text: string, values: ReadonlyMap<string, string>): TextPart[] {
+  const parts: TextPart[] = [];
+  let at = 0;
+  for (const m of text.matchAll(VARIABLE)) {
+    if (m.index > at) parts.push({ text: text.slice(at, m.index) });
+    parts.push({ text: m[0], variable: { name: m[1], value: variableValue(m[1], values) } });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at) });
+  return parts;
+}
+
 /** How a secret is written where it is shown: masked on the page, its `{{name}}` in a copied cURL. */
 export type SecretAs = "mask" | "name";
 

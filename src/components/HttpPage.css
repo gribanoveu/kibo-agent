@@ -367,6 +367,61 @@
   padding-top: 12px;
 }
 
+/* A field with {{variables}} in it: its own text invisible, drawn again over
+   it with each variable coloured — found, or set nowhere. */
+.http-var-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.http-var-field > input {
+  flex: 1;
+  min-width: 0;
+}
+.http-var-hidden {
+  -webkit-text-fill-color: transparent;
+}
+.http-var-over {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-style: solid;
+  border-color: transparent;
+  pointer-events: none;
+}
+.http-var-line {
+  flex: none;
+  white-space: pre;
+}
+/* Purple: the one colour no other text here takes — the accent is orange, a JSON
+   string green, a number red. Set nowhere, it is red and underlined, so the
+   two differ by more than their colour. */
+.http-var,
+.code-editor .cm-variable {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--purple) 14%, transparent);
+}
+.http-var,
+.code-editor .cm-variable,
+.code-editor .cm-variable * {
+  color: var(--purple);
+}
+.http-var.missing,
+.code-editor .cm-variable.missing {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  text-decoration: underline wavy;
+  text-decoration-skip-ink: none;
+}
+.http-var.missing,
+.code-editor .cm-variable.missing,
+.code-editor .cm-variable.missing * {
+  color: var(--red);
+}
+
 .http-url-row {
   display: flex;
   align-items: center;

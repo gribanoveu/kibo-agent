@@ -15,8 +15,11 @@ import {
   requestsUnder,
   resolveRequest,
   scope,
+  shownValues,
   toCurl,
   toPostman,
+  variableParts,
+  variableValue,
   variablesIn,
   withQuery,
   type Collection,
@@ -121,6 +124,25 @@ describe("http client rules", () => {
     const text = resolveRequest(collection, { ...request, body: { ...request.body, language: "text" as const } }, env);
     expect(text.body).toContain("// ");
     expect(text.missing).toEqual(["debug"]);
+  });
+
+  test("a text is cut at its variables, each found in scope, made when sent, or set nowhere", () => {
+    const values = shownValues(scope(collection, env));
+    expect(values.get("token")).toBe("•••");
+    expect(values.get("baseUrl")).toBe("https://api.test");
+    expect(variableParts("{{baseUrl}}/o/{{ id }}?t={{$guid}}&x={{nope}}!", values)).toEqual([
+      { text: "{{baseUrl}}", variable: { name: "baseUrl", value: "https://api.test" } },
+      { text: "/o/" },
+      { text: "{{ id }}", variable: { name: "id", value: "42" } },
+      { text: "?t=" },
+      { text: "{{$guid}}", variable: { name: "$guid", value: "made as the request is sent" } },
+      { text: "&x=" },
+      { text: "{{nope}}", variable: { name: "nope", value: null } },
+      { text: "!" },
+    ]);
+    expect(variableParts("no variables {here}", values)).toEqual([{ text: "no variables {here}" }]);
+    expect(variableParts("", values)).toEqual([]);
+    expect(variableValue("old", values)).toBeNull();
   });
 
   test("a response keeps every digit; XML is indented, text left as it came", () => {

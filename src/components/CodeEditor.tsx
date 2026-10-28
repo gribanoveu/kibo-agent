@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Compartment, EditorState, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
 import {
@@ -106,6 +106,7 @@ export const selectingClass = EditorView.editorAttributes.compute(["selection"],
 
 const syntax = new Compartment();
 const writable = new Compartment();
+const extra = new Compartment();
 const readOnlyUnless = (onChange: ((text: string) => void) | undefined) => EditorState.readOnly.of(!onChange);
 
 type Props = {
@@ -117,6 +118,8 @@ type Props = {
   /** Line numbers in the gutter. */
   numbered?: boolean;
   label?: string;
+  /** What the caller draws over the text — the HTTP page's `{{variables}}`. Kept the same object while it means the same. */
+  extensions?: Extension;
 };
 
 /**
@@ -124,7 +127,7 @@ type Props = {
  * select and copy from, ⌘F inside it. `FileEditor` is the same editor with a
  * file's saving around it.
  */
-export function CodeEditor({ text, language, onChange, numbered = true, label }: Props) {
+export function CodeEditor({ text, language, onChange, numbered = true, label, extensions }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const latest = useRef(onChange);
@@ -151,6 +154,7 @@ export function CodeEditor({ text, language, onChange, numbered = true, label }:
           editorTheme,
           EditorView.lineWrapping,
           writable.of(readOnlyUnless(onChange)),
+          extra.of(extensions ?? []),
           label ? EditorView.contentAttributes.of({ "aria-label": label }) : [],
           EditorView.updateListener.of((update) => {
             // Only what the user typed; a text put in from outside is not an edit.
@@ -170,6 +174,10 @@ export function CodeEditor({ text, language, onChange, numbered = true, label }:
   useEffect(() => {
     view.current?.dispatch({ effects: writable.reconfigure(readOnlyUnless(onChange)) });
   }, [!onChange]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: extra.reconfigure(extensions ?? []) });
+  }, [extensions]);
 
   useEffect(() => {
     const editor = view.current;
