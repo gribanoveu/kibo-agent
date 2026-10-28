@@ -19,6 +19,24 @@ describe("the HTTP page's state across a restart", () => {
     expect(again.result.current.sent.health).toMatchObject({ busy: false, at: kept.at, environment: "local", response: kept.response });
   });
 
+  test("a send goes into the history with its request and response, a secret masked, and the history comes back", async () => {
+    const first = renderHook(() => useHttpClient());
+    const before = first.result.current.history.length;
+    act(() => first.result.current.setEnvironmentId("test"));
+    act(() => first.result.current.send("create-order"));
+    await waitFor(() => expect(first.result.current.history.length).toBe(before + 1), { timeout: 2000 });
+    const entry = first.result.current.history[0];
+    expect(entry.request?.url).toBe("https://orders.test.corp.example/v1/orders");
+    expect(entry.request?.headers).toContainEqual({ key: "Authorization", value: "Bearer •••" });
+    expect(entry.request?.body).toContain('"customerId": "cus_19"');
+    expect(entry.response?.status).toBe(201);
+    expect(entry.response?.body).toContain("ord_8Kp4");
+    first.unmount();
+
+    const again = renderHook(() => useHttpClient());
+    expect(again.result.current.history[0]).toEqual(entry);
+  });
+
   test("a refusal before sending is not kept, and leaves the last response in place", async () => {
     const page = renderHook(() => useHttpClient());
     act(() => page.result.current.send("health"));

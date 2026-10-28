@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { effectiveAuth, preview, queryOf, resolveRequest, scope, toCurl, variablesIn, withQuery, type Collection, type Environment } from "../lib/httpClient";
+import { asHttpText, cutForHistory, effectiveAuth, HISTORY_BODY_LIMIT, preview, queryOf, resolveRequest, scope, toCurl, variablesIn, withQuery, type Collection, type Environment } from "../lib/httpClient";
 
 const env: Environment = {
   id: "t",
@@ -113,6 +113,21 @@ describe("http client rules", () => {
     const r = resolveRequest(collection, request, env);
     expect(r.missing).toEqual(["nowhere"]);
     expect(r.notes).toEqual(["a formdata body is kept from Postman and not sent yet"]);
+  });
+
+  test("history cuts a long body and says so, and keeps a short one as it is", () => {
+    expect(cutForHistory("{}")).toBe("{}");
+    const long = "x".repeat(HISTORY_BODY_LIMIT + 10);
+    const cut = cutForHistory(long);
+    expect(cut.startsWith("x".repeat(HISTORY_BODY_LIMIT))).toBe(true);
+    expect(cut).not.toContain("x".repeat(HISTORY_BODY_LIMIT + 1));
+    expect(cut).toContain("cut at 256.0 KB");
+  });
+
+  test("a message reads as HTTP writes it: a blank line before the body, none without one", () => {
+    const headers = [{ key: "Accept", value: "*/*" }];
+    expect(asHttpText("GET /a", headers, null)).toBe("GET /a\nAccept: */*");
+    expect(asHttpText("HTTP/1.1 200 OK", headers, "{}")).toBe("HTTP/1.1 200 OK\nAccept: */*\n\n{}");
   });
 
   test("the Params tab and the address stay in step; a disabled row leaves the address", () => {

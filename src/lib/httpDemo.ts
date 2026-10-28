@@ -169,16 +169,88 @@ export const DEMO_ENVIRONMENTS: Environment[] = [
   },
 ];
 
-const now = Date.now();
-export const DEMO_HISTORY: HistoryEntry[] = [
-  { id: "h1", at: now - 2 * 60_000, method: "POST", url: "{{baseUrl}}/v1/orders", status: 422, ms: 184, environment: "local", requestId: "create-order", agent: { chat: "Fix order validation" } },
-  { id: "h2", at: now - 3 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders?status=paid", status: 200, ms: 61, environment: "local", requestId: "list-orders", agent: { chat: "Fix order validation" } },
-  { id: "h3", at: now - 26 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 200, ms: 92, environment: "test", requestId: "get-order" },
-  { id: "h4", at: now - 3 * 3600_000, method: "DELETE", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 204, ms: 77, environment: "test", requestId: "cancel-order" },
-  { id: "h5", at: now - 26 * 3600_000, method: "GET", url: "{{baseUrl}}/actuator/health", status: null, ms: 30_000, environment: "test", requestId: "health" },
-];
-
 const json = (value: unknown) => JSON.stringify(value);
+
+const now = Date.now();
+const bearer = { key: "Authorization", value: "Bearer •••" };
+const answer = (status: number, statusText: string, ms: number, body: string): HttpResponse => ({
+  status,
+  statusText,
+  ms,
+  bytes: new TextEncoder().encode(body).length,
+  headers: [...(body ? [{ key: "content-type", value: "application/json" }] : []), { key: "x-request-id", value: "9b2e4f10-77a3-4d0c-a1f5-3c8e6d2b9a41" }],
+  body,
+  contentType: body ? "application/json" : "",
+  tests: [],
+});
+export const DEMO_HISTORY: HistoryEntry[] = [
+  {
+    id: "h1",
+    at: now - 2 * 60_000,
+    method: "POST",
+    url: "{{baseUrl}}/v1/orders",
+    status: 422,
+    ms: 184,
+    environment: "local",
+    requestId: "create-order",
+    agent: { chat: "Fix order validation" },
+    request: {
+      url: "http://localhost:8080/v1/orders",
+      headers: [{ key: "Content-Type", value: "application/json" }, { key: "X-Request-Id", value: "5d0c2b7e-1f4a-4e8b-9c3d-7a6b5e4f3d21" }, bearer],
+      body: '{\n  "customerId": "cus_19",\n  "amount": -5,\n  "currency": "RUB"\n}',
+    },
+    response: answer(422, "Unprocessable Entity", 184, json({ error: "validation_failed", fields: { amount: "must be greater than 0", items: "must not be empty" } })),
+  },
+  {
+    id: "h2",
+    at: now - 3 * 60_000,
+    method: "GET",
+    url: "{{baseUrl}}/v1/orders?status=paid",
+    status: 200,
+    ms: 61,
+    environment: "local",
+    requestId: "list-orders",
+    agent: { chat: "Fix order validation" },
+    request: { url: "http://localhost:8080/v1/orders?status=paid", headers: [{ key: "Accept", value: "application/json" }, bearer], body: null },
+    response: answer(200, "OK", 61, json({ items: [{ id: "ord_7Hq2", status: "paid", amount: 990.5 }], total: 1, next: null })),
+  },
+  {
+    id: "h3",
+    at: now - 26 * 60_000,
+    method: "GET",
+    url: "{{baseUrl}}/v1/orders/{{orderId}}",
+    status: 200,
+    ms: 92,
+    environment: "test",
+    requestId: "get-order",
+    request: { url: "https://orders.test.corp.example/v1/orders/ord_7Hq2", headers: [{ key: "Accept", value: "application/json" }, bearer], body: null },
+    response: answer(200, "OK", 92, json({ id: "ord_7Hq2", status: "paid", amount: 990.5, currency: "RUB" })),
+  },
+  {
+    id: "h4",
+    at: now - 3 * 3600_000,
+    method: "DELETE",
+    url: "{{baseUrl}}/v1/orders/{{orderId}}",
+    status: 204,
+    ms: 77,
+    environment: "test",
+    requestId: "cancel-order",
+    request: { url: "https://orders.test.corp.example/v1/orders/ord_6Zt1", headers: [bearer], body: null },
+    response: answer(204, "No Content", 77, ""),
+  },
+  {
+    id: "h5",
+    at: now - 26 * 3600_000,
+    method: "GET",
+    url: "{{baseUrl}}/actuator/health",
+    status: null,
+    ms: 30_000,
+    environment: "test",
+    requestId: "health",
+    request: { url: "https://orders.test.corp.example/actuator/health", headers: [], body: null },
+    error: "No answer in 30 s — timed out.",
+  },
+];
 
 /** What the sample stand answers. */
 export function demoResponse(request: HttpRequest, url: string): HttpResponse {

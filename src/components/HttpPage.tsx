@@ -33,6 +33,7 @@ import { shortcutText } from "../lib/shortcuts";
 import {
   AGENT_ACCESS,
   METHODS,
+  asHttpText,
   SECRET_MASK,
   effectiveAuth,
   findRequest,
@@ -191,7 +192,6 @@ export function HttpPage() {
               request={openTab.request}
               environment={http.environment}
               sent={http.sent[openTab.request.id]}
-              history={http.history.filter((h) => h.requestId === openTab.request.id)}
               onEdit={http.edit}
               onSend={() => http.send(openTab.request.id)}
             />
@@ -259,28 +259,30 @@ function ago(at: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
-function HistoryList({ entries, onOpen }: { entries: HistoryEntry[]; onOpen?: (requestId: string) => void }) {
-  if (entries.length === 0) return <p className="http-quiet">Not sent yet.</p>;
+function HistoryList({ entries, onOpen }: { entries: HistoryEntry[]; onOpen: (requestId: string) => void }) {
+  const [shown, setShown] = useState<string | null>(null);
+  if (entries.length === 0) return <p className="http-quiet">Nothing sent yet.</p>;
   return (
     <ul className="http-history">
       {entries.map((h) => (
-        <HistoryRow key={h.id} entry={h} onOpen={onOpen} />
+        <HistoryRow key={h.id} entry={h} expanded={shown === h.id} onToggle={() => setShown(shown === h.id ? null : h.id)} onOpen={onOpen} />
       ))}
     </ul>
   );
 }
 
-function HistoryRow({ entry, onOpen }: { entry: HistoryEntry; onOpen?: (requestId: string) => void }) {
+function HistoryRow({ entry, expanded, onToggle, onOpen }: { entry: HistoryEntry; expanded: boolean; onToggle: () => void; onOpen: (requestId: string) => void }) {
   const path = entry.url.replace(/^\{\{baseUrl\}\}/, "");
-  const opens = onOpen && entry.requestId;
   return (
     <li>
       <button
         type="button"
-        className={`http-tree-row http-history-row${opens ? "" : " still"}`}
+        className={`http-tree-row http-history-row${expanded ? " on" : ""}`}
+        aria-expanded={expanded}
         title={`${entry.method} ${entry.url} · ${entry.environment}${entry.agent ? ` · sent by the agent in “${entry.agent.chat}”` : ""}`}
-        onClick={() => opens && onOpen(entry.requestId!)}
+        onClick={onToggle}
       >
+        {expanded ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
         <MethodBadge method={entry.method} />
         <span className="http-tree-name http-mono">{path}</span>
         <span className="http-quiet">{entry.environment}</span>
@@ -292,7 +294,57 @@ function HistoryRow({ entry, onOpen }: { entry: HistoryEntry; onOpen?: (requestI
         )}
         <span className="http-quiet">{ago(entry.at)}</span>
       </button>
+      {expanded && <Exchange entry={entry} onOpen={onOpen} />}
     </li>
+  );
+}
+
+/** One send in full: the request as it left, a secret masked, and what came back. */
+function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: string) => void }) {
+  const { request, response } = entry;
+  return (
+    <div className="http-exchange">
+      <div className="http-exchange-head">
+        <span className="http-label">Request</span>
+        <span className="http-quiet">
+          {new Date(entry.at).toLocaleString()} · {entry.environment}
+          {entry.agent && ` · the agent, in “${entry.agent.chat}”`}
+        </span>
+        <span className="http-spacer" />
+        {entry.requestId && (
+          <button type="button" className="http-bar-button" onClick={() => onOpen(entry.requestId!)}>
+            Open request
+          </button>
+        )}
+      </div>
+      {request ? (
+        <div className="http-code-box http-code-box-log">
+          <CodeEditor text={asHttpText(`${entry.method} ${request.url}`, request.headers, request.body)} language="http" numbered={false} label="Request" />
+        </div>
+      ) : (
+        <p className="http-quiet">Not kept — sent before history kept requests.</p>
+      )}
+      <div className="http-exchange-head">
+        <span className="http-label">Response</span>
+        {response && (
+          <span className="http-quiet">
+            {response.ms} ms · {sizeLabel(response.bytes)}
+          </span>
+        )}
+      </div>
+      {response ? (
+        <div className="http-code-box http-code-box-log">
+          <CodeEditor
+            text={asHttpText(`HTTP/1.1 ${response.status} ${response.statusText}`, response.headers, response.body && pretty(response.body, response.contentType))}
+            language="http"
+            numbered={false}
+            label="Response"
+          />
+        </div>
+      ) : (
+        <p className={entry.error ? "http-error" : "http-quiet"}>{entry.error ?? "Not kept — sent before history kept responses."}</p>
+      )}
+    </div>
   );
 }
 
@@ -304,7 +356,6 @@ function RequestView({
   request,
   environment,
   sent,
-  history,
   onEdit,
   onSend,
 }: {
@@ -312,7 +363,6 @@ function RequestView({
   request: HttpRequest;
   environment: Environment | null;
   sent: Sent | undefined;
-  history: HistoryEntry[];
   onEdit: (r: HttpRequest) => void;
   onSend: () => void;
 }) {
@@ -394,7 +444,7 @@ function RequestView({
         {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
       </div>
 
-      <ResponseView sent={sent} scripts={scripts} history={history} />
+      <ResponseView sent={sent} scripts={scripts} />
     </div>
   );
 }
@@ -402,7 +452,7 @@ function RequestView({
 /** The request as it will leave — what Send sends, a secret masked. */
 function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolveRequest>; missing?: string }) {
   // The body as written, not reformatted: a preview that pretty-prints shows `1250` for the `1250.00` sent.
-  const text = [`${resolved.method} ${resolved.url}`, ...resolved.headers.map((h) => `${h.key}: ${h.value}`), ...(resolved.body ? ["", resolved.body] : [])].join("\n");
+  const text = asHttpText(`${resolved.method} ${resolved.url}`, resolved.headers, resolved.body);
   return (
     <div className="http-form">
       {missing && <p className="http-error">{missing} — nothing would be sent.</p>}
@@ -614,7 +664,7 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
   );
 }
 
-type ResTab = "body" | "headers" | "tests" | "history";
+type ResTab = "body" | "headers" | "tests";
 
 /** `14:32` today, `27 Oct 14:32` before. */
 function receivedAt(at: number): string {
@@ -623,7 +673,7 @@ function receivedAt(at: number): string {
   return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
 }
 
-function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scripts: boolean; history: HistoryEntry[] }) {
+function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
   const [tab, setTab] = useState<ResTab>("body");
   const response = sent?.response;
   const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
@@ -631,7 +681,6 @@ function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scri
     ["body", "Response", null],
     ["headers", "Headers", count(response?.headers.length)],
     ["tests", "Tests", response?.tests.length ? <span className="http-count">{`${response.tests.filter((x) => x.passed).length}/${response.tests.length}`}</span> : null],
-    ["history", "History", count(history.length)],
   ];
   return (
     <section className="http-response" aria-label="Response" aria-busy={sent?.busy}>
@@ -663,10 +712,9 @@ function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scri
         )}
       </div>
       <div className="http-response-body">
-        {tab !== "history" && sent?.notSent && <p className="http-error">{sent.notSent}</p>}
-        {tab !== "history" && sent?.error && <p className="http-error">{sent.error}</p>}
-        {tab !== "history" && !response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
-        {tab === "history" && <HistoryList entries={history} />}
+        {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
+        {sent?.error && <p className="http-error">{sent.error}</p>}
+        {!response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
         {response && tab === "body" &&
           (response.body ? (
             <div className="http-code-box http-code-box-fill">

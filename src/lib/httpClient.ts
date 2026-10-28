@@ -78,11 +78,35 @@ export type HistoryEntry = {
   status: number | null;
   ms: number;
   environment: string;
-  /** The collection's request it was, if it was one — its History tab lists it. */
+  /** The collection's request it was, if it was one — the entry opens it. */
   requestId?: string;
   /** The agent's call, with the chat it came from. */
   agent?: { chat: string };
+  /** What left, as Postman's console shows it — a secret masked. Absent in entries from before it was kept. */
+  request?: SentRequest;
+  /** What came back, its body cut at `HISTORY_BODY_LIMIT`; or `error` in its place. */
+  response?: HttpResponse;
+  error?: string;
 };
+
+/** A request as it left: variables and auth filled in, a secret's value never — `•••`. */
+export type SentRequest = { url: string; headers: Pair[]; body: string | null };
+
+/**
+ * A body in history is cut here: the log is for reading what happened, and
+ * 200 whole bodies would be hundreds of megabytes of someone else's data.
+ * The request keeps its last response whole.
+ */
+export const HISTORY_BODY_LIMIT = 256 * 1024;
+
+export function cutForHistory(body: string): string {
+  return body.length <= HISTORY_BODY_LIMIT ? body : `${body.slice(0, HISTORY_BODY_LIMIT)}\n… cut at ${sizeLabel(HISTORY_BODY_LIMIT)} in history`;
+}
+
+/** A request or a response as HTTP writes it: the first line, the headers, a blank line, the body. */
+export function asHttpText(first: string, headers: Pair[], body: string | null): string {
+  return [first, ...headers.map((h) => `${h.key}: ${h.value}`), ...(body ? ["", body] : [])].join("\n");
+}
 
 export const SECRET_MASK = "•••";
 

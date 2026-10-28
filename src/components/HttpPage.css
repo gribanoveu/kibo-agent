@@ -174,8 +174,21 @@
 .http-history-row {
   font-size: var(--fs-sm);
 }
-.http-history-row.still {
-  cursor: default;
+/* A send opened in the log: what left and what came back, under its row. */
+.http-exchange {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 12px 20px;
+}
+.http-exchange-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.http-code-box-log {
+  max-height: 280px;
 }
 .http-history-row .http-tree-name {
   color: var(--text-dim);
