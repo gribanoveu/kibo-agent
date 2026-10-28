@@ -486,7 +486,7 @@ function RequestView({
             ))}
           </div>
 
-          <div className={`http-editor${tab === "body" && request.body.mode === "raw" ? " fills" : ""}`}>
+          <div className={`http-editor${(tab === "body" && request.body.mode === "raw") || tab === "scripts" || tab === "preview" ? " fills" : ""}`}>
             {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
@@ -520,7 +520,7 @@ function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolv
           {n[0].toUpperCase() + n.slice(1)}.
         </p>
       ))}
-      <div className="http-code-box">
+      <div className="http-code-box http-code-box-fill">
         <CodeEditor text={text} language="http" numbered={false} label="The request as it will leave" />
       </div>
     </div>
@@ -698,26 +698,41 @@ function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => voi
   );
 }
 
+/** The scripts that run with this request, picked one at a time, as the Body tab picks its mode. */
 function ScriptsView({ collection, request }: { collection: Collection; request: HttpRequest }) {
-  const blocks = [
-    { where: `${collection.name} · pre-request`, text: collection.scripts.prerequest },
-    { where: "This request · pre-request", text: request.scripts.prerequest },
-    { where: "This request · test", text: request.scripts.test },
-    { where: `${collection.name} · test`, text: collection.scripts.test },
-  ].filter((b) => b.text?.trim());
+  // In the order Postman runs them: the collection's before the request's, before sending and after it.
+  const scripts = [
+    { id: "collection-pre", label: `${collection.name} · pre-request`, text: collection.scripts.prerequest },
+    { id: "pre", label: "Pre-request", text: request.scripts.prerequest },
+    { id: "collection-post", label: `${collection.name} · post-response`, text: collection.scripts.test },
+    { id: "post", label: "Post-response", text: request.scripts.test },
+  ].filter((script) => script.text?.trim());
+  const [shown, setShown] = useState(scripts[0]?.id);
+  const current = scripts.find((script) => script.id === shown) ?? scripts[0];
+  if (!current) return <p className="http-quiet">No scripts on this request or above it.</p>;
   return (
     <div className="http-form">
-      <p className="http-note">
-        <FileCode2 size={13} />
-        Not run yet — the request goes without them until HC-5.
-      </p>
-      {blocks.length === 0 && <p className="http-quiet">No scripts on this request or above it.</p>}
-      {blocks.map((b) => (
-        <div key={b.where} className="http-script">
-          <div className="http-script-head">{b.where}</div>
-          <CodeEditor text={b.text ?? ""} language="javascript" label={b.where} />
-        </div>
-      ))}
+      <div className="http-segments" role="tablist" aria-label="Scripts, in the order they run">
+        {scripts.map((script) => (
+          <button
+            key={script.id}
+            type="button"
+            role="tab"
+            aria-selected={script.id === current.id}
+            className={`http-segment${script.id === current.id ? " on" : ""}`}
+            onClick={() => setShown(script.id)}
+          >
+            {script.label}
+          </button>
+        ))}
+        <span className="http-spacer" />
+        <span className="http-quiet" title="The request goes without them until scripts run (HC-5)">
+          not run yet
+        </span>
+      </div>
+      <div className="http-code-box http-code-box-fill">
+        <CodeEditor text={current.text ?? ""} language="javascript" label={current.label} />
+      </div>
     </div>
   );
 }

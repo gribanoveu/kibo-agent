@@ -459,6 +459,10 @@
 .http-editor.fills {
   overflow: hidden;
 }
+/* In it, a row or a note keeps its height; the editor takes what is left. */
+.http-editor.fills > .http-form > :not(.http-code-box) {
+  flex: none;
+}
 .http-editor > .http-form {
   flex: 1;
   min-height: 0;
@@ -592,18 +596,6 @@
 }
 
 
-.http-script {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.http-script-head {
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-panel-soft);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-}
 
 /* The response takes what is left under the request. */
 .http-response {
@@ -699,11 +691,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
-}
-.http-script .http-code-box,
-.http-script .code-editor {
-  margin: 0;
-  border-radius: 0;
 }
 /* The body fills the request's area, as tall as it is dragged, and as short:
    its text scrolls inside it. */
