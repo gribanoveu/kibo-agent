@@ -131,7 +131,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
         ToolResult::Reviewed { findings, text, .. } => reviewed(findings, text),
-        ToolResult::Kube { text, .. } => text.clone(),
+        ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
         ToolResult::ToolsFound { tools } => found_tools(tools),

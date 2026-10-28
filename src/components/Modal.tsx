@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import "./Modal.css";
 import { matches } from "../lib/shortcuts";
@@ -16,6 +16,8 @@ type Props = {
 };
 
 export function Modal({ title, open, onClose, children, footer, wide, full }: Props) {
+  // Whether the press began on the backdrop: a text selection dragged out of the dialog ends there too.
+  const pressedOutside = useRef(false);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => matches(e, "close") && onClose();
@@ -26,7 +28,11 @@ export function Modal({ title, open, onClose, children, footer, wide, full }: Pr
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="modal-backdrop"
+      onPointerDown={(e) => (pressedOutside.current = e.target === e.currentTarget)}
+      onClick={(e) => e.target === e.currentTarget && pressedOutside.current && onClose()}
+    >
       <div className={`modal${wide ? " wide" : ""}${full ? " full" : ""}`} role="dialog" aria-label={title}>
         <div className="modal-head">
           <h2>{title}</h2>

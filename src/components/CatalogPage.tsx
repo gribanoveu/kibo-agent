@@ -1,5 +1,6 @@
 import { useState, type ComponentType, type KeyboardEvent } from "react";
 import { DeepSeekIcon } from "./DeepSeekIcon";
+import { MongoIcon } from "./MongoIcon";
 import {
   ArrowRight,
   BookOpen,
@@ -49,6 +50,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   board: SquareKanban,
   "provider-balance": DeepSeekIcon,
   "deepseek-search": DeepSeekIcon,
+  mongodb: MongoIcon,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {

@@ -60,3 +60,5 @@ pub mod meeting_audio;
 pub mod meeting_recorder;
 pub mod recording_access;
 pub mod voices_store;
+pub mod mongo_store;
+pub mod mongo_client;

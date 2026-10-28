@@ -168,6 +168,8 @@ pub fn run() {
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
         .manage(std::sync::Arc::new(services::meeting_notes::MeetingNotes::default()))
+        // The MongoDB page's clients, one per connection string, kept.
+        .manage(std::sync::Arc::new(infra::mongo_client::MongoClients::default()))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -397,6 +399,27 @@ pub fn run() {
             commands::features::features_list,
             commands::features::features_set,
             commands::features::features_delete_data,
+            commands::mongo::mongo_connections,
+            commands::mongo::mongo_connection_save,
+            commands::mongo::mongo_connection_delete,
+            commands::mongo::mongo_connection_test,
+            commands::mongo::mongo_databases,
+            commands::mongo::mongo_collections,
+            commands::mongo::mongo_find,
+            commands::mongo::mongo_find_more,
+            commands::mongo::mongo_find_close,
+            commands::mongo::mongo_count,
+            commands::mongo::mongo_aggregate,
+            commands::mongo::mongo_insert,
+            commands::mongo::mongo_replace,
+            commands::mongo::mongo_set_fields,
+            commands::mongo::mongo_filter_add,
+            commands::mongo::mongo_delete,
+            commands::mongo::mongo_indexes,
+            commands::mongo::mongo_index_create,
+            commands::mongo::mongo_index_drop,
+            commands::mongo::mongo_collection_create,
+            commands::mongo::mongo_collection_drop,
             commands::agents::agent_stop,
             commands::terminal::terminal_open,
             commands::terminal::terminal_list,

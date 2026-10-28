@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 
 /**
  * `useState` that the next launch starts from — for how the window was laid
- * out, nothing more. Browser storage is this window's own and may be empty or
- * refuse (a cleared profile, a full disk): then the default stands, and
- * nothing depends on the value surviving.
+ * out and conveniences like a query history, nothing more. Browser storage is
+ * this window's own and may be empty or refuse (a cleared profile, a full
+ * disk): then the default stands, and nothing depends on the value surviving.
  *
  * `accept` screens what comes back: a value stored by an older build — a tab
  * since renamed, a width of the wrong type — is the default, not a broken

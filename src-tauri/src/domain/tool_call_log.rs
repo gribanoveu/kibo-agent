@@ -431,6 +431,11 @@ mod tests {
             // Like the checklist: a card's words are what the user asked
             // to keep, not file content.
             ToolName::Board => (None, ToolResult::Board { cards: vec![] }),
+            // The query is what the log is for; what the server answered goes as `text`.
+            ToolName::Mongo => (
+                Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
+                ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

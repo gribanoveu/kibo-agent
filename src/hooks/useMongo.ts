@@ -1,0 +1,411 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLiveRead } from "./useLiveRead";
+import {
+  EMPTY_FIND,
+  mongoAggregate,
+  mongoCollectionCreate,
+  mongoCollectionDrop,
+  mongoCollections,
+  mongoConnectionDelete,
+  mongoConnectionSave,
+  mongoConnectionTest,
+  mongoConnections,
+  mongoDatabases,
+  mongoDelete,
+  mongoFilterAdd,
+  mongoCount,
+  mongoFind,
+  mongoFindClose,
+  mongoFindMore,
+  mongoIndexCreate,
+  mongoIndexDrop,
+  mongoIndexes,
+  mongoInsert,
+  mongoReplace,
+  mongoSetFields,
+  type CollectionInfo,
+  type ConnectionDraft,
+  type DatabaseInfo,
+  type FieldChange,
+  type FindPage,
+  type FindRequest,
+  type IndexView,
+  type MongoConnection,
+  type MongoDocument,
+  type MongoTarget,
+} from "../lib/mongo";
+
+// No channel: only this page changes what it shows, and each change answers
+// with the list after it or reads again.
+const unchanging = () => Promise.resolve(() => {});
+
+const keyOf = (target: MongoTarget | null) => (target ? `${target.connection}\u0000${target.database}\u0000${target.collection}` : "");
+
+/**
+ * What one view asks the backend: busy while a call runs, its error kept
+ * until the next. A read that lands after the view moved on (another
+ * collection, another connection) is dropped — `key` says which one it is for.
+ */
+function useCalls(key: string) {
+  const current = useRef(key);
+  current.current = key;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setError(null);
+    setBusy(false);
+  }, [key]);
+
+  /** `work`'s result, or `undefined` when it failed or was for a view since left. */
+  const call = useCallback(async <T>(work: () => Promise<T>): Promise<T | undefined> => {
+    const asked = current.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await work();
+      return asked === current.current ? result : undefined;
+    } catch (e) {
+      if (asked === current.current) setError(String(e));
+      return undefined;
+    } finally {
+      if (asked === current.current) setBusy(false);
+    }
+  }, []);
+  return { busy, error, setError, call };
+}
+
+/** The saved connections: read once, and answered with the list by each change. */
+export function useMongoConnections() {
+  const { value: connections, setValue, error, setError } = useLiveRead(mongoConnections, unchanging, [] as MongoConnection[]);
+
+  /** The list after it, or `null` with the reason in `error`. */
+  const change = async (work: () => Promise<MongoConnection[]>): Promise<MongoConnection[] | null> => {
+    try {
+      const list = await work();
+      setValue(list);
+      setError(null);
+      return list;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  };
+
+  return {
+    connections,
+    error,
+    save: (draft: ConnectionDraft) => change(() => mongoConnectionSave(draft)),
+    remove: async (id: string) => (await change(() => mongoConnectionDelete(id))) !== null,
+    clearError: () => setError(null),
+    /** The server's version, or why it could not be reached. */
+    test: async (draft: ConnectionDraft): Promise<{ ok: true; version: string } | { ok: false; error: string }> => {
+      try {
+        return { ok: true, version: await mongoConnectionTest(draft) };
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    },
+  };
+}
+
+/** A connection's databases, and the collections of those opened. */
+/** `server` changes when the connection, kept by its id, was given another URI. */
+export function useMongoTree(connection: string | null, server = 0) {
+  const { busy, error, call } = useCalls(connection === null ? "" : `${connection}#${server}`);
+  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
+  const [collections, setCollections] = useState<Record<string, CollectionInfo[]>>({});
+  const [open, setOpen] = useState<string[]>([]);
+
+  const loadCollections = useCallback(
+    async (database: string) => {
+      if (!connection) return;
+      const found = await call(() => mongoCollections(connection, database));
+      if (found) setCollections((all) => ({ ...all, [database]: found }));
+    },
+    [connection, call],
+  );
+
+  const refresh = useCallback(
+    async (opened: string[]) => {
+      if (!connection) return;
+      const found = await call(() => mongoDatabases(connection));
+      if (!found) return;
+      setDatabases(found);
+      for (const database of opened.filter((d) => found.some((f) => f.name === d))) await loadCollections(database);
+    },
+    [connection, call, loadCollections],
+  );
+
+  useEffect(() => {
+    setDatabases([]);
+    setCollections({});
+    setOpen([]);
+    void refresh([]);
+  }, [connection, server]);
+
+  return {
+    databases,
+    collections,
+    open,
+    busy,
+    error,
+    refresh: () => refresh(open),
+    toggle: (database: string) => {
+      const opening = !open.includes(database);
+      setOpen(opening ? [...open, database] : open.filter((d) => d !== database));
+      if (opening && !collections[database]) void loadCollections(database);
+    },
+    /** Opens the database it went into. */
+    createCollection: async (database: string, collection: string) => {
+      if (!connection) return false;
+      const done = await call(() => mongoCollectionCreate({ connection, database, collection }).then(() => true));
+      if (!done) return false;
+      const opened = open.includes(database) ? open : [...open, database];
+      setOpen(opened);
+      await refresh(opened);
+      return true;
+    },
+    /** On the connection `target` names; the tree is read again when it is the one shown. */
+    dropCollection: async (target: MongoTarget) => {
+      const done = await call(() => mongoCollectionDrop(target).then(() => true));
+      if (done && target.connection === connection) await refresh(open);
+      return !!done;
+    },
+  };
+}
+
+/**
+ * A collection's documents: the query bar's last find, read a page at a time
+ * from a find the backend keeps open, so the next page goes on where the last
+ * stopped. Pages read are kept — going back asks for nothing. The total is
+ * counted only when asked: on a view it runs the whole pipeline.
+ */
+export function useMongoDocuments(target: MongoTarget | null) {
+  const key = keyOf(target);
+  const { busy, error, setError, call } = useCalls(key);
+  const current = useRef(key);
+  current.current = key;
+  // `skip` is where the find began; its pages are read from there.
+  const [request, setRequest] = useState<FindRequest>(EMPTY_FIND);
+  const [read, setRead] = useState<{ pages: MongoDocument[][]; at: number; next: number | null } | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [counting, setCounting] = useState(false);
+  // The find kept open for the next page: let go when another replaces it, or the view goes.
+  const open = useRef<number | null>(null);
+  // Nothing to tell: a find already gone on the backend is what this asks for.
+  const close = (next: number | null) => void (next !== null && mongoFindClose(next).catch(() => {}));
+  const letGo = () => {
+    close(open.current);
+    open.current = null;
+  };
+  // Which read is the latest: a new find, or the view going, makes the ones before it stale.
+  // What a stale one opened is closed rather than kept.
+  const latest = useRef(0);
+  const readLatest = async (work: () => Promise<FindPage>): Promise<FindPage | undefined> => {
+    const asked = latest.current;
+    const page = await call(async () => {
+      const page = await work();
+      // Closed here: `call` drops a page for a view since left without handing it back.
+      if (asked !== latest.current) close(page.next);
+      return page;
+    });
+    return asked === latest.current ? page : undefined;
+  };
+
+  // Finds the user ran, and the view going: a write's own find again is not one, so another write's still runs.
+  const ran = useRef(0);
+  /** The request is the one shown only once its find came back: a refused one leaves the last in place. Whether it did. */
+  const findAgain = async (next: FindRequest) => {
+    if (!target) return false;
+    latest.current++;
+    const found = await readLatest(() => mongoFind(target, next));
+    if (!found) return false;
+    letGo();
+    open.current = found.next;
+    setRequest(next);
+    setTotal(null);
+    setRead({ pages: [found.documents], at: 0, next: found.next });
+    return true;
+  };
+  const find = useCallback(
+    (next: FindRequest) => {
+      ran.current++;
+      return findAgain(next);
+    },
+    [key, call],
+  );
+
+  useEffect(() => {
+    setRead(null);
+    setRequest(EMPTY_FIND);
+    setTotal(null);
+    if (target) void find(EMPTY_FIND);
+    return () => {
+      latest.current++;
+      ran.current++;
+      letGo();
+    };
+  }, [key]);
+
+  const at = read?.at ?? 0;
+  /** Where the page shown starts. */
+  const skip = request.skip + at * request.limit;
+
+  /**
+   * A change, then the same find again from the page shown, refused or not:
+   * an insert stops at the first document it cannot take, the ones before it in.
+   * A refusal's reason stays shown over the find's.
+   */
+  const change = async (work: (target: MongoTarget) => Promise<unknown>) => {
+    if (!target) return false;
+    const asked = key;
+    // A find since — typed while this ran, or the view gone — is newer than the one this would repeat.
+    const of = ran.current;
+    const refused = { reason: null as string | null };
+    const done = await call(() =>
+      work(target).then(
+        () => true,
+        (e: unknown) => {
+          refused.reason = String(e);
+          throw e;
+        },
+      ),
+    );
+    if (of !== ran.current) return !!done;
+    await findAgain({ ...request, skip });
+    if (refused.reason !== null && asked === current.current) setError(refused.reason);
+    return !!done;
+  };
+
+  return {
+    request,
+    /** The page shown, `null` before the first is read. */
+    documents: read?.pages[at] ?? null,
+    skip,
+    hasNext: !!read && (at + 1 < read.pages.length || read.next !== null),
+    hasPrevious: at > 0 || request.skip > 0,
+    total,
+    counting,
+    busy,
+    error,
+    clearError: () => setError(null),
+    find,
+    next: async () => {
+      if (!read) return;
+      if (at + 1 < read.pages.length) return setRead({ ...read, at: at + 1 });
+      const from = read.next;
+      if (from === null) return;
+      const found = await readLatest(() => mongoFindMore(from));
+      if (!found) return;
+      // `from` was used up by reading it; the backend holds only `found.next` now.
+      open.current = found.next;
+      setRead((was) => was && { pages: [...was.pages, found.documents], at: was.pages.length, next: found.next });
+    },
+    previous: () => {
+      if (at > 0) return setRead(read && { ...read, at: at - 1 });
+      // Before where the find began: a find of its own from there.
+      if (request.skip > 0) void find({ ...request, skip: Math.max(0, request.skip - request.limit) });
+    },
+    count: async () => {
+      if (!target) return;
+      const asked = key;
+      // A count of the find shown: one run since makes it another find's.
+      const of = latest.current;
+      setCounting(true);
+      try {
+        const counted = await mongoCount(target, request.filter);
+        if (of === latest.current) setTotal(counted);
+      } catch (e) {
+        if (of === latest.current) setError(String(e));
+      } finally {
+        if (asked === current.current) setCounting(false);
+      }
+    },
+    /**
+     * Done, or not with the documents still to go: refused part way, the ones not in;
+     * all in but unconfirmed, `""`; `null` when none went in.
+     */
+    insert: async (text: string) => {
+      const rest = { text: null as string | null };
+      const done = await change(async (t) => {
+        const inserted = await mongoInsert(t, text);
+        if (inserted.refused === null) return;
+        rest.text = inserted.rest ?? "";
+        throw inserted.refused;
+      });
+      return { done, rest: rest.text };
+    },
+    replace: (id: string, text: string) => change((t) => mongoReplace(t, id, text)),
+    setFields: (id: string, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
+    remove: (id: string) => change((t) => mongoDelete(t, id)),
+    /** The filter with a field's condition added, or `undefined` with the reason in `error`. */
+    condition: (filter: string, path: string[], text: string, exclude: boolean) => call(() => mongoFilterAdd(filter, path, text, exclude)),
+  };
+}
+
+/** An aggregation run on the collection: its results, kept until another runs or the collection changes. */
+export function useMongoAggregation(target: MongoTarget | null) {
+  const key = keyOf(target);
+  const { busy, error, call } = useCalls(key);
+  const [results, setResults] = useState<MongoDocument[] | null>(null);
+  useEffect(() => setResults(null), [key]);
+  // Which run is the latest: one run since — a slow $merge overtaken by a quick read — is not shown, nor asked about.
+  const latest = useRef(0);
+  return {
+    results,
+    busy,
+    error,
+    /** The stage that writes, when the pipeline was held for that and not run. */
+    run: async (pipeline: string, writes = false) => {
+      if (!target) return null;
+      const asked = ++latest.current;
+      const found = await call(() => mongoAggregate(target, pipeline, writes));
+      if (!found || asked !== latest.current) return null;
+      // Held, not run: what an earlier pipeline returned is not this one's.
+      if (found.writes !== null) {
+        setResults(null);
+        return found.writes;
+      }
+      setResults(found.documents);
+      return null;
+    },
+  };
+}
+
+/** A collection's indexes, read while the tab is showing. */
+export function useMongoIndexes(target: MongoTarget | null) {
+  const key = keyOf(target);
+  const { busy, error, setError, call } = useCalls(key);
+  const [indexes, setIndexes] = useState<IndexView[]>([]);
+
+  const load = useCallback(async () => {
+    if (!target) return;
+    const found = await call(() => mongoIndexes(target));
+    if (found) setIndexes(found);
+  }, [key, call]);
+
+  useEffect(() => {
+    setIndexes([]);
+    void load();
+  }, [key]);
+
+  return {
+    indexes,
+    busy,
+    error,
+    clearError: () => setError(null),
+    create: async (keys: string, unique: boolean, name: string) => {
+      if (!target) return false;
+      const made = await call(() => mongoIndexCreate(target, keys, unique, name.trim() || null));
+      if (made === undefined) return false;
+      await load();
+      return true;
+    },
+    drop: async (name: string) => {
+      if (!target) return false;
+      const done = await call(() => mongoIndexDrop(target, name).then(() => true));
+      if (done) await load();
+      return !!done;
+    },
+  };
+}

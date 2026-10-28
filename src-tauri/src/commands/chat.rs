@@ -647,6 +647,12 @@ fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
     app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
 }
 
+/// The MongoDB page's clients, as the agent's `mongo` tool reads through them.
+pub(super) fn mongo_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn crate::domain::mongo::MongoServers>> {
+    let clients = app.try_state::<Arc<crate::infra::mongo_client::MongoClients>>()?;
+    Some(Arc::new(crate::services::mongo::Servers(Arc::clone(&clients))))
+}
+
 /// The knowledge base's search. `None` without the index — and without an
 /// app directory, where the base would be.
 pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
@@ -726,6 +732,7 @@ where
         board: app
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
+        mongo: mongo_servers_of(&app),
     };
 
     tauri::async_runtime::spawn_blocking(move || {

@@ -22,6 +22,7 @@ import {
   NotebookPen,
   ScrollText,
   SquareKanban,
+  Database,
   Telescope,
   Pencil,
   Download,
@@ -94,6 +95,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Review: SearchCheck,
   Explore: Telescope,
   Board: SquareKanban,
+  MongoDB: Database,
   Prototype: AppWindow,
 };
 
