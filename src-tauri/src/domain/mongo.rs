@@ -288,7 +288,7 @@ fn parse_list(text: &str, what: &'static str, expected: &'static str) -> Result<
 
 /// One value in mongosh's syntax, as Extended JSON.
 pub fn parse(text: &str) -> Result<Value, ParseError> {
-    let mut parser = Parser { chars: text.chars().collect(), at: 0 };
+    let mut parser = Parser { chars: text.chars().collect(), at: 0, depth: 0 };
     let value = parser.value()?;
     parser.skip_space();
     if parser.at < parser.chars.len() {
@@ -297,9 +297,15 @@ pub fn parse(text: &str) -> Result<Value, ParseError> {
     Ok(value)
 }
 
+/// How deep values may nest: the server's own limit for a command. Past it a
+/// paste would only run the parser's recursion out of stack — the whole app with it.
+const MAX_DEPTH: usize = 200;
+
 struct Parser {
     chars: Vec<char>,
     at: usize,
+    /// Values open around the one being read.
+    depth: usize,
 }
 
 impl Parser {
@@ -331,6 +337,16 @@ impl Parser {
     }
 
     fn value(&mut self) -> Result<Value, ParseError> {
+        if self.depth == MAX_DEPTH {
+            return Err(self.error(format!("nested deeper than {MAX_DEPTH} levels")));
+        }
+        self.depth += 1;
+        let value = self.one();
+        self.depth -= 1;
+        value
+    }
+
+    fn one(&mut self) -> Result<Value, ParseError> {
         self.skip_space();
         match self.peek() {
             None => Err(self.error("expected a value")),
@@ -1059,6 +1075,20 @@ mod tests {
         let kept = json!({ "$regularExpression": { "pattern": r"a\/b", "options": "" } });
         assert_eq!(to_shell(&kept), r"/a\/b/");
         assert!(parse(&to_shell(&kept)).is_ok());
+    }
+
+    #[test]
+    fn values_nest_as_deep_as_the_server_takes_and_no_deeper() {
+        let nested = |open: &str, close: &str, n: usize| format!("{}1{}", open.repeat(n), close.repeat(n));
+        assert!(parse(&nested("[", "]", MAX_DEPTH - 1)).is_ok());
+        assert!(parse(&nested("{ a: ", " }", MAX_DEPTH - 1)).is_ok());
+        let deeper = parse(&nested("[", "]", MAX_DEPTH)).unwrap_err();
+        assert_eq!((deeper.column, deeper.message.as_str()), (MAX_DEPTH + 1, "nested deeper than 200 levels"));
+        // Through a constructor's arguments too, and a paste far past it is refused, not run out of stack.
+        assert!(parse(&nested("NumberInt(", ")", MAX_DEPTH + 1)).unwrap_err().message.starts_with("nested deeper"));
+        assert!(parse(&"[".repeat(1_000_000)).unwrap_err().message.starts_with("nested deeper"));
+        // Siblings are not depth.
+        assert!(parse(&format!("[{}]", vec!["[1]"; 1000].join(","))).is_ok());
     }
 
     #[test]
