@@ -1,16 +1,16 @@
 import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
+import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { LanguageDescription, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { closeSearchPanel, findNext, findPrevious, openSearchPanel, search } from "@codemirror/search";
+import { search } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { unifiedMergeView } from "@codemirror/merge";
-import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
 import { languageOf } from "../lib/highlight";
 import { sameText } from "../hooks/useOpenFiles";
+import { editorColours, editorTheme, searchKeys, selectingClass } from "./CodeEditor";
 import { matches } from "../lib/shortcuts";
 import "./FileEditor.css";
 
@@ -65,54 +65,6 @@ function language(path: string): Extension | null {
       return null;
   }
 }
-
-// Colours from the theme's tokens, so the editor follows light and dark and
-// the font size preference like the rest of the window.
-const theme = EditorView.theme({
-  "&": { height: "100%", color: "var(--text)", backgroundColor: "transparent", fontSize: "var(--fs-sm)" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.55", overscrollBehavior: "contain" },
-  ".cm-content": { caretColor: "var(--text)", padding: "6px 0" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },
-  ".cm-gutters": { backgroundColor: "transparent", color: "var(--text-faint)", border: "none" },
-  ".cm-activeLine": { backgroundColor: "var(--bg-hover)" },
-  // The selection is drawn under the lines (drawSelection) and the cursor's
-  // line fill over it: lit while selecting, that line's part looked unselected.
-  "&.cm-selecting .cm-activeLine": { backgroundColor: "transparent" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--text-dim)" },
-  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
-    { backgroundColor: "color-mix(in srgb, var(--accent) 28%, transparent)" },
-});
-
-const colours = HighlightStyle.define([
-  { tag: t.heading, color: "var(--text)", fontWeight: "600" },
-  { tag: t.strong, fontWeight: "600" },
-  { tag: t.emphasis, fontStyle: "italic" },
-  { tag: [t.link, t.url], color: "var(--accent)" },
-  { tag: t.comment, color: "var(--text-faint)", fontStyle: "italic" },
-  { tag: [t.keyword, t.meta, t.processingInstruction], color: "var(--purple)" },
-  { tag: [t.string, t.monospace, t.literal], color: "var(--green)" },
-  { tag: t.quote, color: "var(--text-dim)", fontStyle: "italic" },
-  { tag: [t.list, t.special(t.variableName), t.modifier, t.tagName], color: "var(--amber)" },
-  { tag: [t.typeName, t.className, t.namespace], color: "var(--amber)" },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName, t.attributeName], color: "var(--accent)" },
-  { tag: [t.number, t.bool, t.null, t.atom, t.escape], color: "var(--red)" },
-  { tag: t.invalid, color: "var(--red)" },
-]);
-
-// Search's keys by the registry rather than its own keymap, so the shortcuts
-// dialog lists them; in the editor and in the search panel alike.
-const searchKeys: KeyBinding = {
-  scope: "editor search-panel",
-  any: (view, e) =>
-    matches(e, "find")
-      ? openSearchPanel(view)
-      : matches(e, "findNext")
-        ? findNext(view)
-        : matches(e, "findPrevious")
-          ? findPrevious(view)
-          : matches(e, "close") && closeSearchPanel(view),
-};
 
 const wrapping = new Compartment();
 const syntax = new Compartment();
@@ -170,14 +122,12 @@ export function FileEditor({ path, text, wrap, onChange, onSave, original }: Pro
           history(),
           drawSelection(),
           highlightActiveLine(),
-          EditorView.editorAttributes.compute(["selection"], (state): Record<string, string> =>
-            state.selection.ranges.every((range) => range.empty) ? {} : { class: "cm-selecting" },
-          ),
+          selectingClass,
           keymap.of([searchKeys, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           search({ top: true }),
           syntax.of(own ?? []),
-          syntaxHighlighting(colours),
-          theme,
+          syntaxHighlighting(editorColours),
+          editorTheme,
           wrapping.of(lines(wrap)),
           changes.of(changesFrom(original)),
           EditorView.updateListener.of((update) => {
@@ -230,7 +180,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave, original }: Pro
   return (
     <div
       ref={host}
-      className="file-editor"
+      className="file-editor code-editor"
       onKeyDown={(e) => {
         if (!matches(e, "save")) return;
         e.preventDefault();

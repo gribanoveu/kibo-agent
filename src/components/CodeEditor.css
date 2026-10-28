@@ -1,0 +1,83 @@
+/* Fills what holds it; CodeMirror scrolls inside. */
+.code-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.code-editor .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+/* The window's chrome does not select; the text in an editor does. */
+.code-editor .cm-content {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The search panel, in the window's colours rather than CodeMirror's own
+   (whose buttons, themed light or dark, outrank a theme's rule: hence the
+   longer selectors). */
+.code-editor .cm-editor .cm-panels {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.code-editor .cm-editor .cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+.code-editor .cm-editor .cm-panel.cm-search {
+  padding: 6px 28px 6px 10px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.code-editor .cm-editor .cm-panel.cm-search .cm-textfield {
+  background: var(--bg-window);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  font: inherit;
+  outline: none;
+}
+.code-editor .cm-editor .cm-panel.cm-search .cm-textfield:focus {
+  border-color: var(--accent);
+}
+.code-editor .cm-editor .cm-panel.cm-search .cm-button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font: inherit;
+}
+.code-editor .cm-editor .cm-panel.cm-search .cm-button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.code-editor .cm-editor .cm-panel.cm-search label {
+  color: var(--text-dim);
+  font-size: inherit;
+}
+.code-editor .cm-editor .cm-panel.cm-search input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 4px 0 0;
+  vertical-align: -1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+.code-editor .cm-editor .cm-panel.cm-search input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.code-editor .cm-editor .cm-panel.cm-search button[name="close"] {
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.code-editor .cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--amber) 25%, transparent);
+}
+.code-editor .cm-editor .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--amber) 55%, transparent);
+}
