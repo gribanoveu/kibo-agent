@@ -353,7 +353,7 @@ function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: 
 type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview";
 
 /** The request's area never closes; the response keeps its tabs and a few lines in view. */
-const EDITOR_MIN = 60;
+const EDITOR_MIN = 120;
 const RESPONSE_MIN = 160;
 const isHeight = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
 
@@ -452,7 +452,11 @@ function RequestView({
         ))}
       </div>
 
-      <div ref={editor} className="http-editor" style={height === null ? undefined : { height, maxHeight: "none" }}>
+      <div
+        ref={editor}
+        className={`http-editor${tab === "body" && request.body.mode === "raw" ? " fills" : ""}`}
+        style={height === null ? undefined : { height, maxHeight: "none" }}
+      >
         {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
         {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
         {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}

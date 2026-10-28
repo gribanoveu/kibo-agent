@@ -397,10 +397,15 @@
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
-  min-height: 60px;
+  min-height: 120px;
   max-height: 40%;
   overflow-y: auto;
   padding: 10px 2px 12px;
+}
+/* An editor that fills it scrolls its own text; the area around it would be a
+   second scrollbar, and would carry the mode row up under the tabs. */
+.http-editor.fills {
+  overflow: hidden;
 }
 .http-editor > .http-form {
   flex: 1;
@@ -647,11 +652,10 @@
   border-radius: 0;
 }
 /* The body fills the request's area, as tall as it is dragged, and as short:
-   its text scrolls inside, the area around it never does — scrolled, the
-   box slid under the tabs with its top border gone. */
+   its text scrolls inside it. */
 .http-code-box-input {
   flex: 1;
-  min-height: 60px;
+  min-height: 0;
 }
 .http-code-box-input:focus-within {
   border-color: var(--accent);
