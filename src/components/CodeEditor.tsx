@@ -2,7 +2,17 @@ import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
-import { HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import {
+  codeFolding,
+  foldGutter,
+  foldService,
+  HighlightStyle,
+  LanguageDescription,
+  LanguageSupport,
+  matchBrackets,
+  StreamLanguage,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { closeSearchPanel, findNext, findPrevious, openSearchPanel, search } from "@codemirror/search";
 import { tags as t } from "@lezer/highlight";
@@ -61,6 +71,21 @@ export const searchKeys: KeyBinding = {
 export const commentKeys: KeyBinding = { any: (view, e) => matches(e, "comment") && toggleComment(view) };
 
 /**
+ * JSON's objects and arrays fold: a line folds from its first `{` or `[` whose
+ * pair is on a later line. The legacy mode has no syntax tree to fold by; its
+ * tokens are enough for `matchBrackets` to pass over a bracket in a string.
+ */
+export const jsonFolding = foldService.of((state, from, to) => {
+  const line = state.doc.sliceString(from, to);
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== "{" && line[i] !== "[") continue;
+    const pair = matchBrackets(state, from + i, 1);
+    if (pair?.matched && pair.end && pair.end.from > to) return { from: from + i + 1, to: pair.end.from };
+  }
+  return null;
+});
+
+/**
  * JSON as Postman reads a body: `//` and `/* *\/` comments allowed, and ⌘/ writes
  * them. The legacy mode, because the Lezer grammar knows no comments.
  */
@@ -70,7 +95,7 @@ const jsonWithComments = LanguageDescription.of({
   load: async () => {
     const { json } = await import("@codemirror/legacy-modes/mode/javascript");
     const commentTokens = { line: "//", block: { open: "/*", close: "*/" } };
-    return new LanguageSupport(StreamLanguage.define({ ...json, languageData: { ...json.languageData, commentTokens } }));
+    return new LanguageSupport(StreamLanguage.define({ ...json, languageData: { ...json.languageData, commentTokens } }), jsonFolding);
   },
 });
 
@@ -112,6 +137,9 @@ export function CodeEditor({ text, language, onChange, numbered = true, label }:
         doc: text,
         extensions: [
           numbered ? [lineNumbers(), highlightActiveLineGutter()] : [],
+          // A long answer's objects close to a line, by the arrow beside them.
+          codeFolding({ placeholderText: "…" }),
+          foldGutter({ openText: "▾", closedText: "▸" }),
           history(),
           drawSelection(),
           highlightActiveLine(),

@@ -14,6 +14,24 @@
   -webkit-user-select: text;
   user-select: text;
 }
+/* The fold arrows: faint until pointed at; a folded object reads as `{…}`. */
+.code-editor .cm-foldGutter .cm-gutterElement {
+  padding: 0 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.code-editor .cm-foldGutter .cm-gutterElement:hover {
+  color: var(--text);
+}
+.code-editor .cm-foldPlaceholder {
+  margin: 0 2px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  color: var(--text-dim);
+  cursor: pointer;
+}
 
 /* The search panel, in the window's colours rather than CodeMirror's own
    (whose buttons, themed light or dark, outrank a theme's rule: hence the
