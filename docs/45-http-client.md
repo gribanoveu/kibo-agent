@@ -430,6 +430,38 @@ scratchpad: `pm.environment.set`, `pm.test` с `pm.expect`,
 (QuickJS или `iframe`) и цену HC-5. Если не работает ни один, остаётся свой `pm`,
 но только на список из пробы (а), а не на весь API Postman (решение 8).
 
+*Проба (б) — сделано 2026-10-28: путь QuickJS.* Готовый бутстрап `postman-sandbox` 6.9.0
+(`.cache/bootcode.browser.js`, 2,2 МБ, 0,7 МБ в gzip) работает в `rquickjs` 0.14 без
+Node и Worker. Вместо прошивки `uvm` хватило прелюдии на 60 строк: таймеры на
+виртуальных часах, которые двигает хост, `__uvm_emit` и `__uvm_dispatch` как обычные
+вызовы, а также заглушки `File`, `Blob`, `atob` и `btoa`, без которых не грузится
+браузерная сборка `buffer`. Node-сборка (`bootcode.js`) ищет `require("buffer")` и
+не годится.
+- Прошли `pm.environment.set` и `get`, `pm.collectionVariables.set`,
+  `pm.request.headers.add`, `pm.test` с `pm.expect` и `pm.response.to.have.status`,
+  `pm.response.json()`, `require` для `crypto-js` (HMAC-SHA256), `lodash`, `moment`
+  и `uuid`.
+- `pm.sendRequest` уходит хосту событием `execution.request.<id>`. Ответ, поданный в
+  `execution.response.<id>`, доходит до колбэка, и токен попадает в окружение.
+- Старые `postman.setEnvironmentVariable`, `tests[…]`, `responseCode` и `responseBody`
+  тоже работают, с предупреждением в консоль.
+- Таймер на 2 с дожидается без реального ожидания.
+- Проваленный `pm.expect` приходит как assertion `passed=false` с текстом.
+
+Цена:
+- 150 мс и 18 МБ кучи на холодный старт одной песочницы, потом 1–3 мс на скрипт;
+- около 1,3 МБ к бинарнику.
+
+Найдено для HC-5:
+- скрипт запускается внутри `dispatch("execute")`, поэтому дедлайн обработчика
+  прерываний ставится до него, а не после;
+- `while(true){}` прерывается через 1 с, и следующий скрипт в той же песочнице
+  выполняется, но после прерывания надёжнее пересоздать песочницу;
+- `Persistent` и `Context` освобождаются раньше `Runtime`, иначе QuickJS падает на
+  assert при выходе;
+- `eval` нужен не строгий (`EvalOptions.strict = false`): мост пишет в глобальные
+  переменные без объявления.
+
 **HC-1. Домен.** Модель Postman v2.1 с `extra`, наследование `auth`, приоритет
 переменных, запрос к отправке, окружение и маска для окна, подстановка `{{var}}` и
 динамических, разбор cURL, `path` против `baseUrl`. Тесты: каждая
