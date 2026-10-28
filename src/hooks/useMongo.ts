@@ -335,9 +335,9 @@ export function useMongoDocuments(target: MongoTarget | null) {
       });
       return { done, rest: rest.text };
     },
-    replace: (id: unknown, text: string) => change((t) => mongoReplace(t, id, text)),
-    setFields: (id: unknown, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
-    remove: (id: unknown) => change((t) => mongoDelete(t, id)),
+    replace: (id: string, text: string) => change((t) => mongoReplace(t, id, text)),
+    setFields: (id: string, changes: FieldChange[]) => change((t) => mongoSetFields(t, id, changes)),
+    remove: (id: string) => change((t) => mongoDelete(t, id)),
     /** The filter with a field's condition added, or `undefined` with the reason in `error`. */
     condition: (filter: string, path: string[], text: string, exclude: boolean) => call(() => mongoFilterAdd(filter, path, text, exclude)),
   };
@@ -358,7 +358,11 @@ export function useMongoAggregation(target: MongoTarget | null) {
       if (!target) return null;
       const found = await call(() => mongoAggregate(target, pipeline, writes));
       if (!found) return null;
-      if (found.writes !== null) return found.writes;
+      // Held, not run: what an earlier pipeline returned is not this one's.
+      if (found.writes !== null) {
+        setResults(null);
+        return found.writes;
+      }
       setResults(found.documents);
       return null;
     },

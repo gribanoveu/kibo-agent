@@ -43,9 +43,11 @@ pub struct FindRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentView {
-    /// Its `_id` in canonical Extended JSON, sent back as it came to edit or
-    /// delete it; `None` for a result with none (an aggregation's).
-    pub id: Option<Value>,
+    /// Its `_id` as canonical Extended JSON text, sent back as it came to edit
+    /// or delete it; `None` for a result with none (an aggregation's). Text, not
+    /// a value: a JavaScript object puts an embedded `_id`'s integer-like keys
+    /// first, and a document compares in its keys' order — another `_id`.
+    pub id: Option<String>,
     /// As mongosh shows it, and as the editor takes it back.
     pub text: String,
     /// Field by field, as the card draws it.
@@ -160,10 +162,11 @@ pub struct Aggregated {
 /// `writes`: run it even when a stage writes into a collection — the user was asked.
 pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str, writes: bool) -> Result<Aggregated, MongoError> {
     let stages = mongo::parse_pipeline(pipeline)?;
-    if let Some(stage) = mongo::writing_stage(&stages).filter(|_| !writes) {
+    let writing = mongo::writing_stage(&stages);
+    if let Some(stage) = writing.filter(|_| !writes) {
         return Ok(Aggregated { documents: Vec::new(), writes: Some(stage.to_string()) });
     }
-    let documents = mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE)?;
+    let documents = mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE, writing.is_none())?;
     Ok(Aggregated { documents: documents.iter().map(view).collect(), writes: None })
 }
 
@@ -201,21 +204,26 @@ fn refused_after(documents: Vec<Map<String, Value>>, inserted: usize, reason: St
     Inserted { count: inserted, refused: Some(reason), rest: Some(mongo::to_shell(&rest)) }
 }
 
-pub fn replace(clients: &MongoClients, target: &Target, id: Value, text: &str) -> Result<(), MongoError> {
+/// The `_id` a card sent back, as [`DocumentView::id`] wrote it.
+fn id_of(id: &str) -> Result<Value, MongoError> {
+    serde_json::from_str(id).map_err(|e| MongoError::Server(format!("not an _id this page wrote: {e}")))
+}
+
+pub fn replace(clients: &MongoClients, target: &Target, id: &str, text: &str) -> Result<(), MongoError> {
     let replacement = mongo::parse_document(text, "the document")?;
     if replacement.is_empty() {
         return Err(MongoError::WrongShape { what: "the document", expected: "a document with its fields — delete it to remove it" });
     }
-    mongo_client::replace(&client(clients, &target.connection)?, &target.database, &target.collection, id, replacement)
+    mongo_client::replace(&client(clients, &target.connection)?, &target.database, &target.collection, id_of(id)?, replacement)
 }
 
-pub fn set_fields(clients: &MongoClients, target: &Target, id: Value, changes: &[FieldChange]) -> Result<(), MongoError> {
+pub fn set_fields(clients: &MongoClients, target: &Target, id: &str, changes: &[FieldChange]) -> Result<(), MongoError> {
     let update = mongo::set_fields(changes)?;
-    mongo_client::update(&client(clients, &target.connection)?, &target.database, &target.collection, id, update)
+    mongo_client::update(&client(clients, &target.connection)?, &target.database, &target.collection, id_of(id)?, update)
 }
 
-pub fn delete(clients: &MongoClients, target: &Target, id: Value) -> Result<(), MongoError> {
-    mongo_client::delete(&client(clients, &target.connection)?, &target.database, &target.collection, id)
+pub fn delete(clients: &MongoClients, target: &Target, id: &str) -> Result<(), MongoError> {
+    mongo_client::delete(&client(clients, &target.connection)?, &target.database, &target.collection, id_of(id)?)
 }
 
 pub fn indexes(clients: &MongoClients, target: &Target) -> Result<Vec<IndexView>, MongoError> {
@@ -251,7 +259,7 @@ pub fn drop_collection(clients: &MongoClients, target: &Target) -> Result<(), Mo
 
 fn view(document: &Value) -> DocumentView {
     DocumentView {
-        id: document.get("_id").cloned(),
+        id: document.get("_id").map(Value::to_string),
         text: mongo::to_shell(document),
         fields: document.as_object().map(mongo::fields).unwrap_or_default(),
     }
@@ -336,7 +344,7 @@ mod tests {
             assert!(matches!(aggregate(&clients, &gone, "{ $merge: 'copy' }", true), Err(MongoError::NoConnection(_))));
             assert!(matches!(aggregate(&clients, &gone, "[{ $match: {} }]", false), Err(MongoError::NoConnection(_))), "one that only reads runs");
             assert!(insert(&clients, &target, "[]").unwrap_err().to_string().starts_with("the documents must be"));
-            assert!(replace(&clients, &target, json!(1), "{}").unwrap_err().to_string().contains("delete it"));
+            assert!(replace(&clients, &target, "1", "{}").unwrap_err().to_string().contains("delete it"));
             assert!(create_index(&clients, &target, "", false, None).unwrap_err().to_string().starts_with("the keys must be"));
             let unnamed = Target { collection: " ".into(), ..target.clone() };
             assert!(create_collection(&clients, &unnamed).is_err());
@@ -361,7 +369,11 @@ mod tests {
     #[test]
     fn a_document_shows_as_mongosh_text_with_its_id_kept_for_the_way_back() {
         let shown = view(&json!({ "_id": { "$oid": "65f0a1b2c3d4e5f6a7b8c9d0" }, "n": { "$numberLong": "7" } }));
-        assert_eq!(shown.id, Some(json!({ "$oid": "65f0a1b2c3d4e5f6a7b8c9d0" })));
+        assert_eq!(shown.id.as_deref(), Some(r#"{"$oid":"65f0a1b2c3d4e5f6a7b8c9d0"}"#));
+        // An embedded _id comes back in its own order, integer-like keys included.
+        let embedded = view(&json!({ "_id": { "2": { "$numberInt": "1" }, "1": { "$numberInt": "2" } } })).id.unwrap();
+        assert_eq!(id_of(&embedded).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(), ["2", "1"]);
+        assert!(matches!(id_of("{ not json"), Err(MongoError::Server(m)) if m.starts_with("not an _id")));
         assert_eq!(shown.text, "{\n  _id: ObjectId(\"65f0a1b2c3d4e5f6a7b8c9d0\"),\n  n: NumberLong(7)\n}");
         assert_eq!(view(&json!({ "total": 3 })).id, None);
     }

@@ -470,26 +470,30 @@ impl Parser {
         Some(code)
     }
 
-    /// After `\u`: four hex digits, or any number in braces — and a surrogate
-    /// pair, as JSON writes an emoji, is the one character.
+    /// The code after `\u`: four hex digits, or any number of them in braces.
+    fn code_point(&mut self) -> Result<u32, ParseError> {
+        if self.peek() != Some('{') {
+            return self.hex(4).ok_or_else(|| self.error("expected four hex digits after \\u"));
+        }
+        self.at += 1;
+        let start = self.at;
+        while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+            self.at += 1;
+        }
+        let digits: String = self.chars[start..self.at].iter().collect();
+        let code = u32::from_str_radix(&digits, 16).ok().filter(|_| self.peek() == Some('}'));
+        self.at += 1;
+        code.ok_or_else(|| self.error("expected hex digits and } after \\u{"))
+    }
+
+    /// After `\u`: a character. A surrogate pair, as JSON writes an emoji,
+    /// is the one character, either half written either way.
     fn unicode(&mut self) -> Result<char, ParseError> {
-        let code = if self.peek() == Some('{') {
-            self.at += 1;
-            let start = self.at;
-            while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
-                self.at += 1;
-            }
-            let digits: String = self.chars[start..self.at].iter().collect();
-            let code = u32::from_str_radix(&digits, 16).ok().filter(|_| self.peek() == Some('}'));
-            self.at += 1;
-            code.ok_or_else(|| self.error("expected hex digits and } after \\u{"))?
-        } else {
-            self.hex(4).ok_or_else(|| self.error("expected four hex digits after \\u"))?
-        };
+        let code = self.code_point()?;
         if (0xD800..0xDC00).contains(&code) && self.chars.get(self.at..self.at + 2) == Some(&['\\', 'u']) {
             let at = self.at;
             self.at += 2;
-            match self.hex(4) {
+            match self.code_point().ok() {
                 Some(low @ 0xDC00..0xE000) => return Ok(char::from_u32(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)).unwrap_or(char::REPLACEMENT_CHARACTER)),
                 _ => self.at = at,
             }
@@ -1135,6 +1139,8 @@ mod tests {
             // As JSON writes an emoji: a surrogate pair is one character.
             (r#""\ud83d\ude00""#, "😀"),
             (r#""\uD83D\uDE00!""#, "😀!"),
+            (r"'\uD83D\u{DE00}'", "😀"),
+            (r"'\u{D83D}\u{DE00}'", "😀"),
             (r#"'\'\"\\\/\q'"#, "'\"\\/q"),
             ("'a\\\nb\\\r\nc'", "abc"),
         ] {
@@ -1151,6 +1157,7 @@ mod tests {
             (r"'\u{110000}'", "\\u{110000} is past the last character"),
             (r"'\ud83d'", "\\uD83D is half of a pair"),
             (r"'\ud83d\u0041'", "\\uD83D is half of a pair"),
+            (r"'\u{D83D}\u{41}'", "\\uD83D is half of a pair"),
             (r"'\ude00'", "\\uDE00 is half of a pair"),
             (r"'\1'", "an octal escape"),
             (r"'\01'", "an octal escape"),

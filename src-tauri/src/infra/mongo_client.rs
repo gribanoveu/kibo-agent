@@ -244,9 +244,14 @@ pub fn count(client: &Client, db: &str, name: &str, filter: Map<String, Value>) 
 }
 
 /// The first `cap` results: a pipeline can return the whole collection.
-pub fn aggregate(client: &Client, db: &str, name: &str, pipeline: Vec<Map<String, Value>>, cap: usize) -> Result<Vec<Value>, MongoError> {
+/// `timed`: stopped by the server past the query time limit — never a write,
+/// which stopped part way would leave some of its results written.
+pub fn aggregate(client: &Client, db: &str, name: &str, pipeline: Vec<Map<String, Value>>, cap: usize, timed: bool) -> Result<Vec<Value>, MongoError> {
     let stages = pipeline.into_iter().map(document).collect::<Result<Vec<_>, _>>()?;
-    collection(client, db, name).aggregate(stages).max_time(QUERY_TIMEOUT).run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
+    let collection = collection(client, db, name);
+    let aggregate = collection.aggregate(stages);
+    let aggregate = if timed { aggregate.max_time(QUERY_TIMEOUT) } else { aggregate };
+    aggregate.run().map_err(server)?.take(cap).map(|doc| doc.map(canonical).map_err(server)).collect()
 }
 
 /// How many went in. In order, stopping at the first the server refuses: the
@@ -530,9 +535,9 @@ mod tests {
         let third = clients.find(place(), db, &coll, FindSpec { filter: parse_document("{ _id: 3 }", "f").unwrap(), limit: 1, ..Default::default() }).unwrap().documents;
         assert_eq!(third[0]["tags"], json!(["x", { "$numberLong": "7" }]), "one item of an array set, its type kept");
         assert!(matches!(update(&client, db, &coll, json!(99), one(&["name"], "'q'")), Err(MongoError::Gone)));
-        let grouped = aggregate(&client, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10).unwrap();
+        let grouped = aggregate(&client, db, &coll, crate::domain::mongo::parse_pipeline("[{ $match: { name: 'z' } }, { $project: { _id: 0, name: 1 } }]").unwrap(), 10, true).unwrap();
         assert_eq!(grouped, vec![json!({ "name": "z" })]);
-        assert_eq!(aggregate(&client, db, &coll, Vec::new(), 2).unwrap().len(), 2, "capped");
+        assert_eq!(aggregate(&client, db, &coll, Vec::new(), 2, true).unwrap().len(), 2, "capped");
 
         let name = create_index(&client, db, &coll, parse_document("{ name: 1 }", "k").unwrap(), true, None).unwrap();
         let indexes = indexes(&client, db, &coll).unwrap();

@@ -356,6 +356,8 @@ type FormProps = {
 function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps) {
   const [tested, setTested] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  // One save at a time: a second Enter or click before the first is back would seal the connection twice.
+  const saving = useRef(false);
   useEffect(() => {
     setTested(null);
     store.clearError();
@@ -372,8 +374,10 @@ function ConnectionForm({ form, onChange, store, onSaved, onDelete }: FormProps)
     setTested(result.ok ? { ok: true, text: `Connected — MongoDB ${result.version}` } : { ok: false, text: result.error });
   };
   const save = async () => {
+    if (saving.current) return;
+    saving.current = true;
     const before = new Set(store.connections.map((c) => c.id));
-    const list = await store.save(draft);
+    const list = await store.save(draft).finally(() => (saving.current = false));
     if (!list) return;
     onSaved(form.id ?? list.find((c) => !before.has(c.id))?.id ?? list[list.length - 1].id, editing && draft.uri !== undefined);
     onChange(null);
@@ -442,8 +446,8 @@ function Documents({ target }: { target: MongoTarget }) {
   // The query bar as typed: a find run again — after an edit, a page turned — leaves it as it is.
   const [draft, setDraft] = useState<QueryRun>(docs.request);
   const [options, setOptions] = useState(false);
-  const [editor, setEditor] = useState<{ id?: unknown; text: string } | null>(null);
-  const [deleting, setDeleting] = useState<MongoDocument | null>(null);
+  const [editor, setEditor] = useState<{ id?: string; text: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; text: string } | null>(null);
 
   const [history, setHistory] = useStoredState<QueryRan[]>(historyKey(target), [], isHistory);
   // "30 seconds ago" counts from when the menu opened, not ticking while it is open.
@@ -476,7 +480,7 @@ function Documents({ target }: { target: MongoTarget }) {
     const seen = new Map<string, number>();
     return (documents ?? []).map((doc, i) => {
       if (doc.id === null) return `${skip}-${i}`;
-      const id = JSON.stringify(doc.id);
+      const id = doc.id;
       const times = seen.get(id) ?? 0;
       seen.set(id, times + 1);
       return times === 0 ? id : `${id}#${times}`;
@@ -487,8 +491,14 @@ function Documents({ target }: { target: MongoTarget }) {
     const filter = await docs.condition(draft.filter, path, text, exclude);
     if (filter !== undefined) setDraft((now) => ({ ...now, filter }));
   };
+  // One save at a time: a held or twice-pressed Cmd+Enter would insert the documents again.
+  const saving = useRef(false);
   const saveEditor = async () => {
-    if (!editor) return;
+    if (!editor || saving.current) return;
+    saving.current = true;
+    await save(editor).finally(() => (saving.current = false));
+  };
+  const save = async (editor: { id?: string; text: string }) => {
     if (editor.id !== undefined) return void ((await docs.replace(editor.id, editor.text)) && setEditor(null));
     const inserted = await docs.insert(editor.text);
     // All in, though the write concern was not met: nothing is left to insert, and the reason stays on the list.
@@ -598,33 +608,35 @@ function Documents({ target }: { target: MongoTarget }) {
       )}
       {documents && documents.length === 0 && !docs.error && <p className="mongo-quiet">No documents match.</p>}
       <div className="mongo-documents" aria-busy={docs.busy}>
-        {documents?.map((doc, i) => (
-          <DocumentCard
-            key={cardKeys[i]}
-            doc={doc}
-            // Not under a projection: it reshapes what is shown — `$slice`, `$elemMatch`, a computed field — so a path on the card is not one in the document.
-            onSave={doc.id !== null && !partial ? (changes) => docs.setFields(doc.id, changes) : undefined}
-            error={docs.error}
-            filterBy={filterBy}
-            actions={
-              // Nor any action by its _id: a projection can compute that too, `{ _id: "$parentId" }`.
-              doc.id !== null &&
-              !partial && (
-                <>
-                  <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id: doc.id, text: doc.text })}>
-                    <Pencil size={13} />
-                  </button>
-                  <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
-                    <CopyPlus size={13} />
-                  </button>
-                  <button type="button" className="mongo-icon-button" title="Delete" aria-label="Delete document" onClick={() => setDeleting(doc)}>
-                    <Trash2 size={13} />
-                  </button>
-                </>
-              )
-            }
-          />
-        ))}
+        {documents?.map((doc, i) => {
+          // Not under a projection: it reshapes what is shown — `$slice`, `$elemMatch`, a computed field — so a path on the card
+          // is not one in the document, and it can compute the _id too, `{ _id: "$parentId" }`. Nothing is done by it there.
+          const id = partial ? null : doc.id;
+          return (
+            <DocumentCard
+              key={cardKeys[i]}
+              doc={doc}
+              onSave={id !== null ? (changes) => docs.setFields(id, changes) : undefined}
+              error={docs.error}
+              filterBy={filterBy}
+              actions={
+                id !== null && (
+                  <>
+                    <button type="button" className="mongo-icon-button" title="Edit" aria-label="Edit document" onClick={() => showEditor({ id, text: doc.text })}>
+                      <Pencil size={13} />
+                    </button>
+                    <button type="button" className="mongo-icon-button" title="Clone — insert a copy with a new _id" aria-label="Clone document" onClick={() => showEditor({ text: withoutId(doc.text) })}>
+                      <CopyPlus size={13} />
+                    </button>
+                    <button type="button" className="mongo-icon-button" title="Delete" aria-label="Delete document" onClick={() => setDeleting({ id, text: doc.text })}>
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                )
+              }
+            />
+          );
+        })}
       </div>
 
       <Modal

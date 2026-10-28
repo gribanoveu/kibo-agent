@@ -24,7 +24,7 @@ let indexList: unknown[] = [];
 
 const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
 const DOC = {
-  id: { $oid: "65f0a1b2c3d4e5f6a7b8c9d0" },
+  id: JSON.stringify({ $oid: "65f0a1b2c3d4e5f6a7b8c9d0" }),
   text: '{\n  _id: ObjectId("65f0a1b2c3d4e5f6a7b8c9d0"),\n  name: "Ann"\n}',
   fields: [
     ["_id", value('ObjectId("65f0a1b2c3d4e5f6a7b8c9d0")', "ObjectId")],
@@ -33,10 +33,10 @@ const DOC = {
   ],
 };
 
-const BOB = { id: { $oid: "65f0a1b2c3d4e5f6a7b8c9d1" }, text: '{ name: "Bob" }', fields: [["name", value('"Bob"', "String")]] };
+const BOB = { id: JSON.stringify({ $oid: "65f0a1b2c3d4e5f6a7b8c9d1" }), text: '{ name: "Bob" }', fields: [["name", value('"Bob"', "String")]] };
 
 /** Documents of one shape: their texts as long as each other's. */
-const named = (n: number, name: string) => ({ id: { $numberInt: String(n) }, text: `{ _id: ${n}, name: "${name}" }`, fields: [["_id", value(String(n), "Int32")], ["name", value(`"${name}"`, "String")]] });
+const named = (n: number, name: string) => ({ id: JSON.stringify({ $numberInt: String(n) }), text: `{ _id: ${n}, name: "${name}" }`, fields: [["_id", value(String(n), "Int32")], ["name", value(`"${name}"`, "String")]] });
 const [ONE, TWO, SIX] = [named(1, "one"), named(2, "two"), named(6, "six")];
 
 mock.module("@tauri-apps/api/core", () => ({
@@ -166,6 +166,30 @@ describe("connections", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: /Prod/ }).getAttribute("title")).toBe("mongodb://admin:•••@db:27017");
     expect(sent("mongo_databases")).toContainEqual({ connection: "c1" });
+  });
+
+  test("a connection saved twice before the first is back is saved once", async () => {
+    connections = [];
+    page();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.change(dialog().getByLabelText("Name"), { target: { value: "Prod" } });
+    const uri = dialog().getByLabelText(/Connection string/);
+    fireEvent.change(uri, { target: { value: "mongodb://db" } });
+    // Refused, it can be saved again.
+    refusals.mongo_connection_save = "the vault is locked";
+    fireEvent.click(dialog().getByRole("button", { name: "Save" }));
+    await settle();
+    delete refusals.mongo_connection_save;
+    holding.add("mongo_connection_save");
+    fireEvent.click(dialog().getByRole("button", { name: "Save" }));
+    fireEvent.keyDown(uri, { key: "Enter", code: "Enter" });
+    await settle();
+    expect(sent("mongo_connection_save")).toHaveLength(2);
+    holds.mongo_connection_save();
+    await settle();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(connections).toHaveLength(1);
   });
 
   test("an edit with the string left empty keeps the saved one: no uri is sent", async () => {
@@ -747,6 +771,38 @@ describe("a collection", () => {
     expect(sent("mongo_find")).toHaveLength(2);
   });
 
+  test("an insert pressed again before the first is back goes out once", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    const editor = dialog().getByRole("textbox");
+    fireEvent.change(editor, { target: { value: "{ name: 'a' }" } });
+    holding.add("mongo_insert");
+    fireEvent.keyDown(editor, { code: "Enter", ...MOD });
+    await settle();
+    fireEvent.keyDown(editor, { code: "Enter", ...MOD, repeat: true });
+    fireEvent.click(dialog().getByRole("button", { name: "Insert" }));
+    await settle();
+    expect(sent("mongo_insert")).toHaveLength(1);
+    holds.mongo_insert();
+    await settle();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    // Back, it can be pressed again.
+    fireEvent.click(screen.getByRole("button", { name: "Insert document" }));
+    fireEvent.keyDown(dialog().getByRole("textbox"), { code: "Enter", ...MOD });
+    await settle();
+    expect(sent("mongo_insert")).toHaveLength(2);
+  });
+
+  test("an embedded _id goes back as the text it came in, its keys in their order", async () => {
+    const id = '{"2":{"$numberInt":"1"},"1":{"$numberInt":"2"}}';
+    findDocs = [{ ...DOC, id }];
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Delete" }));
+    await settle();
+    expect(sent("mongo_delete").map((a) => a!.id)).toEqual([id]);
+  });
+
   test("two writes in flight each find again", async () => {
     await openOrders();
     holding.add("mongo_delete");
@@ -859,14 +915,19 @@ describe("a collection", () => {
     await openOrders();
     fireEvent.click(screen.getByRole("tab", { name: "Aggregations" }));
     const text = screen.getByLabelText(/Pipeline/);
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    expect(screen.queryByText("1 result")?.textContent).toBe("1 result");
     fireEvent.change(text, { target: { value: "[{ $out: 'copy' }]" } });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await settle();
     expect(dialog().getByText("Run a pipeline with $out?")).toBeTruthy();
+    // Held, not run: the last pipeline's results are not this one's.
+    expect(screen.queryByText("1 result") === null && screen.queryAllByRole("article").length === 0).toBe(true);
     expect(dialog().getByText(/replaces the whole collection/)).toBeTruthy();
     fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
     await settle();
-    expect(sent("mongo_aggregate").map((a) => a!.writes)).toEqual([false]);
+    expect(sent("mongo_aggregate").map((a) => a!.writes)).toEqual([false, false]);
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await settle();

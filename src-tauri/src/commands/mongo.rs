@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
 use tauri::State;
 
 use crate::domain::mongo::{add_condition, ConnectionDraft, ConnectionView, FieldChange, IndexView};
@@ -90,15 +89,15 @@ pub async fn mongo_insert(target: Target, text: String, clients: Clients<'_>) ->
 }
 
 #[tauri::command]
-pub async fn mongo_replace(target: Target, id: Value, text: String, clients: Clients<'_>) -> Result<(), String> {
+pub async fn mongo_replace(target: Target, id: String, text: String, clients: Clients<'_>) -> Result<(), String> {
     let clients = clients.inner().clone();
-    blocking(move || mongo::replace(&clients, &target, id, &text)).await
+    blocking(move || mongo::replace(&clients, &target, &id, &text)).await
 }
 
 #[tauri::command]
-pub async fn mongo_set_fields(target: Target, id: Value, changes: Vec<FieldChange>, clients: Clients<'_>) -> Result<(), String> {
+pub async fn mongo_set_fields(target: Target, id: String, changes: Vec<FieldChange>, clients: Clients<'_>) -> Result<(), String> {
     let clients = clients.inner().clone();
-    blocking(move || mongo::set_fields(&clients, &target, id, &changes)).await
+    blocking(move || mongo::set_fields(&clients, &target, &id, &changes)).await
 }
 
 /// The filter with one more condition, from a field on a card: no server, only the text.
@@ -108,9 +107,9 @@ pub fn mongo_filter_add(filter: String, path: Vec<String>, text: String, exclude
 }
 
 #[tauri::command]
-pub async fn mongo_delete(target: Target, id: Value, clients: Clients<'_>) -> Result<(), String> {
+pub async fn mongo_delete(target: Target, id: String, clients: Clients<'_>) -> Result<(), String> {
     let clients = clients.inner().clone();
-    blocking(move || mongo::delete(&clients, &target, id)).await
+    blocking(move || mongo::delete(&clients, &target, &id)).await
 }
 
 #[tauri::command]

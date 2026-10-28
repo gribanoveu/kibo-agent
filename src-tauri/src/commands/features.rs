@@ -23,6 +23,10 @@ pub fn features_list() -> Vec<FeatureView> {
 #[tauri::command]
 pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
     features::set(&id, on)?;
+    // Off, its clients go: each keeps a pool and a heartbeat to the user's servers.
+    if !on && id == Feature::Mongodb.manifest().id {
+        app.state::<Arc<MongoClients>>().forget_all();
+    }
     // A kill and a wait for the recognition process: off the main thread.
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || notes.feature_set(&id, on));

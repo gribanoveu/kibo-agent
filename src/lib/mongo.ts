@@ -27,7 +27,8 @@ export type Shown =
   | { kind: "value"; text: string; bson: string };
 
 /** A document as mongosh shows it, and field by field; `id` is its `_id` as the backend gave it, sent back as is. */
-export type MongoDocument = { id: unknown | null; text: string; fields: [string, Shown][] };
+/** `id` is its `_id` as Extended JSON text, sent back as it came: text keeps an embedded `_id`'s key order. */
+export type MongoDocument = { id: string | null; text: string; fields: [string, Shown][] };
 
 /** A page of a find; `next` is where the page after it is read from, `null` after the last. */
 export type FindPage = { documents: MongoDocument[]; next: number | null };
@@ -109,7 +110,7 @@ export async function mongoInsert(target: MongoTarget, text: string): Promise<In
   return invoke<Inserted>("mongo_insert", { target, text });
 }
 
-export async function mongoReplace(target: MongoTarget, id: unknown, text: string): Promise<void> {
+export async function mongoReplace(target: MongoTarget, id: string, text: string): Promise<void> {
   requireBackend();
   return invoke<void>("mongo_replace", { target, id, text });
 }
@@ -118,7 +119,7 @@ export async function mongoReplace(target: MongoTarget, id: unknown, text: strin
 export type FieldChange = { path: string[]; text: string };
 
 /** Sets the fields changed on a card, all in one update. */
-export async function mongoSetFields(target: MongoTarget, id: unknown, changes: FieldChange[]): Promise<void> {
+export async function mongoSetFields(target: MongoTarget, id: string, changes: FieldChange[]): Promise<void> {
   requireBackend();
   return invoke<void>("mongo_set_fields", { target, id, changes });
 }
@@ -129,7 +130,7 @@ export async function mongoFilterAdd(filter: string, path: string[], text: strin
   return invoke<string>("mongo_filter_add", { filter, path, text, exclude });
 }
 
-export async function mongoDelete(target: MongoTarget, id: unknown): Promise<void> {
+export async function mongoDelete(target: MongoTarget, id: string): Promise<void> {
   requireBackend();
   return invoke<void>("mongo_delete", { target, id });
 }
