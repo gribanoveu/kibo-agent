@@ -78,6 +78,8 @@ export type HistoryEntry = {
   status: number | null;
   ms: number;
   environment: string;
+  /** The collection's request it was, if it was one — its History tab lists it. */
+  requestId?: string;
   /** The agent's call, with the chat it came from. */
   agent?: { chat: string };
 };
@@ -98,8 +100,11 @@ export function scope(collection: Collection | null, environment: Environment | 
   return out;
 }
 
-/** `text` as it would be sent, a secret shown masked — for the line under the address. */
-export function preview(text: string, vars: Map<string, EnvVariable>): { text: string; missing: string[] } {
+/** How a secret is written where it is shown: masked on the page, its `{{name}}` in a copied cURL. */
+export type SecretAs = "mask" | "name";
+
+/** `text` with its variables filled in, a secret never by its value. */
+export function preview(text: string, vars: Map<string, EnvVariable>, secretAs: SecretAs = "mask"): { text: string; missing: string[] } {
   const missing: string[] = [];
   const out = text.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (whole, name: string) => {
     if (name.startsWith("$")) return whole;
@@ -108,9 +113,79 @@ export function preview(text: string, vars: Map<string, EnvVariable>): { text: s
       missing.push(name);
       return whole;
     }
-    return v.secret ? SECRET_MASK : v.value;
+    return v.secret ? (secretAs === "mask" ? SECRET_MASK : `{{${name}}}`) : v.value;
   });
   return { text: out, missing: [...new Set(missing)] };
+}
+
+/** A request as it leaves: variables filled in, auth turned into a header or a parameter, the body as text. */
+export type Resolved = {
+  method: HttpMethod;
+  url: string;
+  headers: Pair[];
+  body: string | null;
+  /** Variables nowhere in scope — the request is not sent while there are any. */
+  missing: string[];
+  /** What is not sent as written: an auth or a body kept from Postman. */
+  notes: string[];
+};
+
+const hasHeader = (headers: Pair[], name: string) => headers.some(({ key }) => key.toLowerCase() === name.toLowerCase());
+
+export function resolveRequest(collection: Collection, request: HttpRequest, environment: Environment | null, secretAs: SecretAs = "mask"): Resolved {
+  const vars = scope(collection, environment);
+  const missing = new Set<string>();
+  const fill = (text: string) => {
+    const done = preview(text, vars, secretAs);
+    done.missing.forEach((m) => missing.add(m));
+    return done.text;
+  };
+  const notes: string[] = [];
+  let url = fill(request.url);
+  const headers = request.headers.filter(({ key, disabled }) => !disabled && key !== "").map((h) => ({ key: fill(h.key), value: fill(h.value) }));
+
+  const auth = request.auth.type === "inherit" ? (effectiveAuth(collection, request.id)?.auth ?? { type: "noauth" }) : request.auth;
+  if (auth.type === "bearer" && !hasHeader(headers, "Authorization")) headers.push({ key: "Authorization", value: `Bearer ${fill(auth.token)}` });
+  if (auth.type === "basic" && !hasHeader(headers, "Authorization")) {
+    const user = fill(auth.username);
+    const password = fill(auth.password);
+    // A masked or named secret cannot be encoded — it is shown as it is.
+    const plain = !/\{\{|•/.test(`${user}${password}`);
+    headers.push({ key: "Authorization", value: plain ? `Basic ${btoa(`${user}:${password}`)}` : `Basic ${user}:${password}` });
+  }
+  if (auth.type === "apikey") {
+    if (auth.in === "header") headers.push({ key: fill(auth.key), value: fill(auth.value) });
+    else url += `${url.includes("?") ? "&" : "?"}${fill(auth.key)}=${fill(auth.value)}`;
+  }
+  if (auth.type === "other") notes.push(`${auth.name} auth is kept from Postman and not sent yet`);
+
+  let body: string | null = null;
+  if (request.body.mode === "raw") {
+    body = fill(request.body.raw);
+    const type = { json: "application/json", text: "text/plain", xml: "application/xml" }[request.body.language];
+    if (!hasHeader(headers, "Content-Type")) headers.push({ key: "Content-Type", value: type });
+  }
+  if (request.body.mode === "urlencoded") {
+    body = request.body.fields
+      .filter(({ key, disabled }) => !disabled && key !== "")
+      .map((f) => `${encodeURIComponent(fill(f.key))}=${encodeURIComponent(fill(f.value))}`)
+      .join("&");
+    if (!hasHeader(headers, "Content-Type")) headers.push({ key: "Content-Type", value: "application/x-www-form-urlencoded" });
+  }
+  if (request.body.mode === "other") notes.push(`a ${request.body.name} body is kept from Postman and not sent yet`);
+
+  return { method: request.method, url, headers, body, missing: [...missing], notes };
+}
+
+/** One shell word, in single quotes. */
+const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
+
+/** The request as a cURL command — a secret by its `{{name}}`, so the copy carries no token. */
+export function toCurl(r: Resolved): string {
+  const lines = [`curl${r.method === "GET" ? "" : ` -X ${r.method}`} ${quote(r.url)}`];
+  for (const h of r.headers) lines.push(`-H ${quote(`${h.key}: ${h.value}`)}`);
+  if (r.body !== null && r.body !== "") lines.push(`--data-raw ${quote(r.body)}`);
+  return lines.join(" \\\n  ");
 }
 
 /** The query of an address as rows, for the Params tab. */

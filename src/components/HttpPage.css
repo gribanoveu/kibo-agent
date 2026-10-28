@@ -115,11 +115,6 @@
 .http-tree-head span {
   flex: 1;
 }
-.http-history-head {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-soft);
-}
 .http-tree-list {
   margin: 0;
   padding: 0;
@@ -169,8 +164,18 @@
   flex: none;
   color: var(--text-faint);
 }
+.http-history {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 .http-history-row {
   font-size: var(--fs-sm);
+}
+.http-history-row.still {
+  cursor: default;
 }
 .http-history-row .http-tree-name {
   color: var(--text-dim);
@@ -315,6 +320,9 @@
 .http-url-row:focus-within {
   border-color: var(--accent);
 }
+.http-url-row.missing {
+  border-color: var(--amber);
+}
 .http-url {
   flex: 1;
   min-width: 0;
@@ -344,16 +352,23 @@
   opacity: 0.6;
   cursor: default;
 }
-.http-resolved {
-  margin: 5px 0 0 8px;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.http-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
 }
-.http-resolved.missing {
-  color: var(--amber);
+.http-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .http-subtabs {

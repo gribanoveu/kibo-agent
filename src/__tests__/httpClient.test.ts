@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { effectiveAuth, preview, queryOf, scope, variablesIn, withQuery, type Collection, type Environment } from "../lib/httpClient";
+import { effectiveAuth, preview, queryOf, resolveRequest, scope, toCurl, variablesIn, withQuery, type Collection, type Environment } from "../lib/httpClient";
 
 const env: Environment = {
   id: "t",
@@ -52,6 +52,67 @@ describe("http client rules", () => {
     expect(effectiveAuth(collection, "r1")?.from).toBe("Keys");
     expect(effectiveAuth(collection, "r2")).toEqual({ auth: collection.auth, from: "API" });
     expect(effectiveAuth(collection, "r3")?.auth).toEqual({ type: "noauth" });
+  });
+
+  test("a request leaves with its folder's auth, the implied Content-Type and a disabled header left out", () => {
+    const request = {
+      id: "r1",
+      name: "a",
+      method: "POST" as const,
+      url: "{{baseUrl}}/o/{{id}}",
+      headers: [{ key: "X-Debug", value: "1", disabled: true }, { key: "Accept", value: "application/json" }],
+      auth: { type: "inherit" as const },
+      body: { mode: "raw" as const, language: "json" as const, raw: '{"t":"{{token}}"}' },
+      scripts: {},
+    };
+    const env2 = { ...env, variables: [...env.variables, { key: "key", value: "k-1", secret: false, enabled: true }] };
+    expect(resolveRequest(collection, request, env2)).toEqual({
+      method: "POST",
+      url: "https://api.test/o/42",
+      headers: [
+        { key: "Accept", value: "application/json" },
+        { key: "X-Api-Key", value: "k-1" },
+        { key: "Content-Type", value: "application/json" },
+      ],
+      body: '{"t":"•••"}',
+      missing: [],
+      notes: [],
+    });
+  });
+
+  test("the cURL names a secret instead of carrying it, and quotes what the shell would split", () => {
+    const request = {
+      id: "r2",
+      name: "b",
+      method: "GET" as const,
+      url: "{{baseUrl}}/o?q=it's",
+      headers: [],
+      auth: { type: "inherit" as const },
+      body: { mode: "none" as const },
+      scripts: {},
+    };
+    const curl = toCurl(resolveRequest(collection, request, env, "name"));
+    expect(curl).toBe("curl 'https://api.test/o?q=it'\\''s' \\\n  -H 'Authorization: Bearer {{token}}'");
+    expect(curl).not.toContain("s3cret");
+    const post = toCurl(resolveRequest(collection, { ...request, method: "DELETE", body: { mode: "raw", language: "text", raw: "x" } }, env, "name"));
+    expect(post.startsWith("curl -X DELETE ")).toBe(true);
+    expect(post).toContain("--data-raw 'x'");
+  });
+
+  test("a variable nowhere and a body kept from Postman are said, not sent silently", () => {
+    const request = {
+      id: "r3",
+      name: "c",
+      method: "POST" as const,
+      url: "{{baseUrl}}/{{nowhere}}",
+      headers: [],
+      auth: { type: "noauth" as const },
+      body: { mode: "other" as const, name: "formdata" },
+      scripts: {},
+    };
+    const r = resolveRequest(collection, request, env);
+    expect(r.missing).toEqual(["nowhere"]);
+    expect(r.notes).toEqual(["a formdata body is kept from Postman and not sent yet"]);
   });
 
   test("the Params tab and the address stay in step; a disabled row leaves the address", () => {

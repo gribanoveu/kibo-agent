@@ -171,11 +171,11 @@ export const DEMO_ENVIRONMENTS: Environment[] = [
 
 const now = Date.now();
 export const DEMO_HISTORY: HistoryEntry[] = [
-  { id: "h1", at: now - 2 * 60_000, method: "POST", url: "{{baseUrl}}/v1/orders", status: 422, ms: 184, environment: "local", agent: { chat: "Fix order validation" } },
-  { id: "h2", at: now - 3 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders?status=paid", status: 200, ms: 61, environment: "local", agent: { chat: "Fix order validation" } },
-  { id: "h3", at: now - 26 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 200, ms: 92, environment: "test" },
-  { id: "h4", at: now - 3 * 3600_000, method: "DELETE", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 204, ms: 77, environment: "test" },
-  { id: "h5", at: now - 26 * 3600_000, method: "GET", url: "{{baseUrl}}/actuator/health", status: null, ms: 30_000, environment: "test" },
+  { id: "h1", at: now - 2 * 60_000, method: "POST", url: "{{baseUrl}}/v1/orders", status: 422, ms: 184, environment: "local", requestId: "create-order", agent: { chat: "Fix order validation" } },
+  { id: "h2", at: now - 3 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders?status=paid", status: 200, ms: 61, environment: "local", requestId: "list-orders", agent: { chat: "Fix order validation" } },
+  { id: "h3", at: now - 26 * 60_000, method: "GET", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 200, ms: 92, environment: "test", requestId: "get-order" },
+  { id: "h4", at: now - 3 * 3600_000, method: "DELETE", url: "{{baseUrl}}/v1/orders/{{orderId}}", status: 204, ms: 77, environment: "test", requestId: "cancel-order" },
+  { id: "h5", at: now - 26 * 3600_000, method: "GET", url: "{{baseUrl}}/actuator/health", status: null, ms: 30_000, environment: "test", requestId: "health" },
 ];
 
 const json = (value: unknown) => JSON.stringify(value);

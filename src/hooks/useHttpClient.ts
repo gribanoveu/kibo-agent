@@ -93,7 +93,7 @@ export function useHttpClient() {
         setBusy((b) => ({ ...b, [id]: false }));
         setSaved((s) => ({ ...s, [id]: { at: Date.now(), environment: where, response } }));
         setHistory((h) =>
-          [{ id: `h${Date.now()}`, at: Date.now(), method: request.method, url: request.url, status: response.status, ms: response.ms, environment: where }, ...h].slice(0, 200),
+          [{ id: `h${Date.now()}`, at: Date.now(), method: request.method, url: request.url, status: response.status, ms: response.ms, environment: where, requestId: id }, ...h].slice(0, 200),
         );
       }, response.ms + 250);
     },

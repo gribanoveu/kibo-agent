@@ -3,6 +3,8 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  Check,
+  Copy,
   Download,
   FileCode2,
   Folder,
@@ -24,6 +26,7 @@ import {
 import { Page, PageSheet } from "./Page";
 import { Dropdown } from "./Dropdown";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
+import { useCopied } from "../hooks/useCopied";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { highlight, type Token } from "../lib/highlight";
 import { shortcutText } from "../lib/shortcuts";
@@ -34,12 +37,12 @@ import {
   effectiveAuth,
   findRequest,
   hasScripts,
-  preview,
   pretty,
   queryOf,
-  scope,
+  resolveRequest,
   sizeLabel,
   statusTone,
+  toCurl,
   withQuery,
   type Auth,
   type Body,
@@ -61,7 +64,7 @@ import "./HttpPage.css";
  */
 export function HttpPage() {
   const http = useHttpClient();
-  const [editing, setEditing] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["orders", "orders-folder"]));
   const toggle = (id: string) =>
     setExpanded((s) => {
@@ -73,7 +76,7 @@ export function HttpPage() {
 
   useShortcuts({ httpSend: () => http.active && http.send(http.active) });
 
-  const editingEnv = http.environments.find((e) => e.id === editing) ?? null;
+  const editingEnv = sheet?.kind === "environment" ? (http.environments.find((e) => e.id === sheet.id) ?? null) : null;
   const openTab = http.active ? findRequest(http.collections, http.active) : null;
 
   return (
@@ -95,14 +98,18 @@ export function HttpPage() {
               value: e.id,
               label: e.name,
               hint: `${e.variables.find(({ key }) => key === "baseUrl")?.value ?? ""} · agent: ${AGENT_ACCESS.find((a) => a.value === e.agent)?.label}`,
-              action: { icon: <Settings2 size={13} />, title: `Edit ${e.name}`, onRun: () => setEditing(e.id) },
+              action: { icon: <Settings2 size={13} />, title: `Edit ${e.name}`, onRun: () => setSheet({ kind: "environment", id: e.id }) },
             }))}
             value={http.environment?.id ?? ""}
             onPick={http.setEnvironmentId}
           />
-          <button type="button" className="http-bar-button" onClick={() => http.environment && setEditing(http.environment.id)}>
+          <button type="button" className="http-bar-button" data-sheet-opener onClick={() => http.environment && setSheet({ kind: "environment", id: http.environment.id })}>
             <Settings2 size={13} />
             Environments
+          </button>
+          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
+            <History size={13} />
+            History
           </button>
           <span className="http-spacer" />
           <button type="button" className="http-bar-button" title="A Postman collection, environment or globals file (v2.1)">
@@ -112,11 +119,21 @@ export function HttpPage() {
         </>
       }
       sheet={
-        editingEnv && (
-          <PageSheet icon={Globe} title="Environment" label={`Environment ${editingEnv.name}`} onClose={() => setEditing(null)}>
+        editingEnv ? (
+          <PageSheet icon={Globe} title="Environment" label={`Environment ${editingEnv.name}`} onClose={() => setSheet(null)}>
             <EnvironmentForm key={editingEnv.id} environment={editingEnv} onSave={http.saveEnvironment} />
           </PageSheet>
-        )
+        ) : sheet?.kind === "history" ? (
+          <PageSheet icon={History} title="History" label="Every request sent" onClose={() => setSheet(null)}>
+            <HistoryList
+              entries={http.history}
+              onOpen={(id) => {
+                http.open(id);
+                setSheet(null);
+              }}
+            />
+          </PageSheet>
+        ) : null
       }
     >
       <div className="http-layout">
@@ -130,15 +147,6 @@ export function HttpPage() {
           <ul className="http-tree-list">
             {http.collections.map((c) => (
               <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} />
-            ))}
-          </ul>
-          <div className="http-tree-head http-history-head">
-            <History size={12} />
-            <span>History</span>
-          </div>
-          <ul className="http-tree-list">
-            {http.history.slice(0, 30).map((h) => (
-              <HistoryRow key={h.id} entry={h} />
             ))}
           </ul>
         </nav>
@@ -171,6 +179,7 @@ export function HttpPage() {
               path={openTab.path}
               environment={http.environment}
               sent={http.sent[openTab.request.id]}
+              history={http.history.filter((h) => h.requestId === openTab.request.id)}
               onEdit={http.edit}
               onSend={() => http.send(openTab.request.id)}
             />
@@ -238,17 +247,31 @@ function ago(at: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
-function HistoryRow({ entry }: { entry: HistoryEntry }) {
+function HistoryList({ entries, onOpen }: { entries: HistoryEntry[]; onOpen?: (requestId: string) => void }) {
+  if (entries.length === 0) return <p className="http-quiet">Not sent yet.</p>;
+  return (
+    <ul className="http-history">
+      {entries.map((h) => (
+        <HistoryRow key={h.id} entry={h} onOpen={onOpen} />
+      ))}
+    </ul>
+  );
+}
+
+function HistoryRow({ entry, onOpen }: { entry: HistoryEntry; onOpen?: (requestId: string) => void }) {
   const path = entry.url.replace(/^\{\{baseUrl\}\}/, "");
+  const opens = onOpen && entry.requestId;
   return (
     <li>
       <button
         type="button"
-        className="http-tree-row http-history-row"
+        className={`http-tree-row http-history-row${opens ? "" : " still"}`}
         title={`${entry.method} ${entry.url} · ${entry.environment}${entry.agent ? ` · sent by the agent in “${entry.agent.chat}”` : ""}`}
+        onClick={() => opens && onOpen(entry.requestId!)}
       >
         <MethodBadge method={entry.method} />
         <span className="http-tree-name http-mono">{path}</span>
+        <span className="http-quiet">{entry.environment}</span>
         {entry.agent && <Bot size={12} className="http-tree-mark" aria-label="Sent by the agent" />}
         {entry.status === null ? (
           <span className="http-status-text http-tone-server">timeout</span>
@@ -261,7 +284,7 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
   );
 }
 
-type Tab = "params" | "headers" | "auth" | "body" | "scripts";
+type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview" | "history";
 
 function RequestView({
   collection,
@@ -269,6 +292,7 @@ function RequestView({
   path,
   environment,
   sent,
+  history,
   onEdit,
   onSend,
 }: {
@@ -277,12 +301,14 @@ function RequestView({
   path: string[];
   environment: Environment | null;
   sent: Sent | undefined;
+  history: HistoryEntry[];
   onEdit: (r: HttpRequest) => void;
   onSend: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
-  const vars = useMemo(() => scope(collection, environment), [collection, environment]);
-  const resolved = preview(request.url, vars);
+  const resolved = useMemo(() => resolveRequest(collection, request, environment), [collection, request, environment]);
+  const { copied, copy } = useCopied();
+  const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
   const params = queryOf(request.url);
   const set = (patch: Partial<HttpRequest>) => onEdit({ ...request, ...patch });
   const count = (n: number) => (n > 0 ? <span className="http-count">{n}</span> : null);
@@ -300,7 +326,7 @@ function RequestView({
         <strong>{request.name}</strong>
       </div>
 
-      <div className="http-url-row">
+      <div className={`http-url-row${missing ? " missing" : ""}`} title={missing}>
         <Dropdown
           below
           label={<MethodBadge method={request.method} />}
@@ -317,14 +343,20 @@ function RequestView({
           onChange={(e) => set({ url: e.target.value })}
           placeholder="{{baseUrl}}/path — or paste a curl command"
         />
+        <button
+          type="button"
+          className="http-copy"
+          title="Copy as cURL — secrets as their {{name}}, never their value"
+          onClick={() => copy(toCurl(resolveRequest(collection, request, environment, "name")))}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          {copied ? "Copied" : "cURL"}
+        </button>
         <button type="button" className="http-send" title={`Send (${shortcutText("httpSend")})`} disabled={sent?.busy} onClick={onSend}>
           {sent?.busy ? <Loader2 size={14} className="http-spin" /> : <Send size={14} />}
           Send
         </button>
       </div>
-      <p className={`http-resolved http-mono${resolved.missing.length ? " missing" : ""}`}>
-        {resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : `→ ${resolved.text}`}
-      </p>
 
       <div className="http-subtabs" role="tablist" aria-label="Request">
         {(
@@ -334,6 +366,8 @@ function RequestView({
             ["auth", "Auth", null],
             ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
             ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
+            ["preview", "Preview", missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
+            ["history", "History", count(history.length)],
           ] as [Tab, string, ReactNode][]
         ).map(([id, label, extra]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} className={`http-subtab${tab === id ? " on" : ""}`} onClick={() => setTab(id)}>
@@ -349,9 +383,30 @@ function RequestView({
         {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
         {tab === "body" && <BodyEditor body={request.body} onChange={(body) => set({ body })} />}
         {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
+        {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
+        {tab === "history" && <HistoryList entries={history} />}
       </div>
 
       <ResponseView sent={sent} scripts={scripts} />
+    </div>
+  );
+}
+
+/** The request as it will leave — what Send sends, a secret masked. */
+function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolveRequest>; missing?: string }) {
+  // The body as written, not reformatted: a preview that pretty-prints shows `1250` for the `1250.00` sent.
+  const text = [`${resolved.method} ${resolved.url}`, ...resolved.headers.map((h) => `${h.key}: ${h.value}`), ...(resolved.body ? ["", resolved.body] : [])].join("\n");
+  return (
+    <div className="http-form">
+      {missing && <p className="http-error">{missing} — nothing would be sent.</p>}
+      {resolved.notes.map((n) => (
+        <p key={n} className="http-note">
+          <FileCode2 size={13} />
+          {n[0].toUpperCase() + n.slice(1)}.
+        </p>
+      ))}
+      <Code source={text} lang="http" />
+      <p className="http-quiet">Postman scripts are not in it yet — they run before sending from HC-5.</p>
     </div>
   );
 }
