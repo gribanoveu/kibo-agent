@@ -911,6 +911,40 @@ describe("a collection", () => {
     expect(screen.getByText("the pipeline must be an array of stages")).toBeTruthy();
   });
 
+  test("a pipeline overtaken by a later run is not shown, nor asked about", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("tab", { name: "Aggregations" }));
+    const text = screen.getByLabelText(/Pipeline/);
+    // A slow $merge, confirmed, then a quick read run while it goes on.
+    fireEvent.change(text, { target: { value: "[{ $merge: 'copy' }]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    holding.add("mongo_aggregate");
+    fireEvent.click(dialog().getByRole("button", { name: "Run" }));
+    await settle();
+    const merge = holds.mongo_aggregate;
+    fireEvent.change(text, { target: { value: "[{ $match: {} }]" } });
+    fireEvent.keyDown(text, { code: "Enter", ...MOD });
+    await settle();
+    expect(screen.queryByText("1 result")?.textContent).toBe("1 result");
+    merge();
+    await settle();
+    expect(screen.queryByText("1 result")?.textContent).toBe("1 result");
+
+    // A held $out overtaken: no question about it.
+    holding.add("mongo_aggregate");
+    fireEvent.change(text, { target: { value: "[{ $out: 'copy' }]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    const out = holds.mongo_aggregate;
+    fireEvent.change(text, { target: { value: "[{ $match: {} }]" } });
+    fireEvent.keyDown(text, { code: "Enter", ...MOD });
+    await settle();
+    out();
+    await settle();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+  });
+
   test("a pipeline that writes into a collection runs only after asking, the one asked about", async () => {
     await openOrders();
     fireEvent.click(screen.getByRole("tab", { name: "Aggregations" }));
@@ -984,6 +1018,19 @@ describe("a collection", () => {
     expect(screen.queryByRole("dialog") === null).toBe(true);
     expect(screen.getByRole("tab", { name: "items" }).getAttribute("aria-selected")).toBe("true");
     expect(sent("mongo_databases").length).toBe(databasesRead + 1);
+
+    // Enter pressed again before the first is back: made once.
+    holding.add("mongo_collection_create");
+    make("archive", "logs");
+    const name = dialog().getByLabelText("Collection");
+    fireEvent.keyDown(name, { key: "Enter", code: "Enter" });
+    await settle();
+    fireEvent.keyDown(name, { key: "Enter", code: "Enter" });
+    await settle();
+    holds.mongo_collection_create();
+    await settle();
+    expect(sent("mongo_collection_create")).toHaveLength(2);
+    expect(screen.queryByRole("dialog") === null).toBe(true);
 
     refusals.mongo_collection_create = "Collection archive.items already exists";
     make("archive", "items");

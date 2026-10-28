@@ -77,8 +77,13 @@ export function MongoPage(_: PageContext) {
       return { connection: on, tabs: rest, active };
     });
 
+  // One at a time: a held or doubled Enter would make it again, and the second's "already exists" would show.
+  const making = useRef(false);
   const createCollection = async () => {
-    if (creating && (await tree.createCollection(creating.database.trim(), creating.collection.trim()))) {
+    if (!creating || making.current) return;
+    making.current = true;
+    const made = await tree.createCollection(creating.database.trim(), creating.collection.trim()).finally(() => (making.current = false));
+    if (made) {
       openTab({ database: creating.database.trim(), collection: creating.collection.trim() });
       setCreating(null);
     }

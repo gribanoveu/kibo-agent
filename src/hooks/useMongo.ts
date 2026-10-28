@@ -349,6 +349,8 @@ export function useMongoAggregation(target: MongoTarget | null) {
   const { busy, error, call } = useCalls(key);
   const [results, setResults] = useState<MongoDocument[] | null>(null);
   useEffect(() => setResults(null), [key]);
+  // Which run is the latest: one run since — a slow $merge overtaken by a quick read — is not shown, nor asked about.
+  const latest = useRef(0);
   return {
     results,
     busy,
@@ -356,8 +358,9 @@ export function useMongoAggregation(target: MongoTarget | null) {
     /** The stage that writes, when the pipeline was held for that and not run. */
     run: async (pipeline: string, writes = false) => {
       if (!target) return null;
+      const asked = ++latest.current;
       const found = await call(() => mongoAggregate(target, pipeline, writes));
-      if (!found) return null;
+      if (!found || asked !== latest.current) return null;
       // Held, not run: what an earlier pipeline returned is not this one's.
       if (found.writes !== null) {
         setResults(null);

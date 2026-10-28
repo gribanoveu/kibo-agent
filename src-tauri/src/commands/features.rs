@@ -23,9 +23,11 @@ pub fn features_list() -> Vec<FeatureView> {
 #[tauri::command]
 pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
     features::set(&id, on)?;
-    // Off, its clients go: each keeps a pool and a heartbeat to the user's servers.
+    // Off, its clients go: each keeps a pool and a heartbeat to the user's servers. Off the main
+    // thread: the lock waits on a client being made, which can be an SRV lookup.
     if !on && id == Feature::Mongodb.manifest().id {
-        app.state::<Arc<MongoClients>>().forget_all();
+        let mongo = app.state::<Arc<MongoClients>>().inner().clone();
+        tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
     }
     // A kill and a wait for the recognition process: off the main thread.
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
@@ -37,9 +39,10 @@ pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Resu
 #[tauri::command]
 pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
     features::delete_data(&id)?;
-    // Its clients were made from the connections just deleted.
+    // Its clients were made from the connections just deleted; off the main thread, as in `features_set`.
     if id == Feature::Mongodb.manifest().id {
-        mongo.forget_all();
+        let mongo = mongo.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
     }
     Ok(features::list())
 }

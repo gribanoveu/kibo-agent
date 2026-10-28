@@ -26,8 +26,10 @@ export type Shown =
   | { kind: "array"; items: Shown[] }
   | { kind: "value"; text: string; bson: string };
 
-/** A document as mongosh shows it, and field by field; `id` is its `_id` as the backend gave it, sent back as is. */
-/** `id` is its `_id` as Extended JSON text, sent back as it came: text keeps an embedded `_id`'s key order. */
+/**
+ * A document as mongosh shows it, and field by field; `id` is its `_id` as Extended JSON text,
+ * sent back as it came: text keeps an embedded `_id`'s key order.
+ */
 export type MongoDocument = { id: string | null; text: string; fields: [string, Shown][] };
 
 /** A page of a find; `next` is where the page after it is read from, `null` after the last. */
