@@ -165,10 +165,10 @@ export function useMongoTree(connection: string | null, server = 0) {
       await refresh(opened);
       return true;
     },
-    dropCollection: async (database: string, collection: string) => {
-      if (!connection) return false;
-      const done = await call(() => mongoCollectionDrop({ connection, database, collection }).then(() => true));
-      if (done) await refresh(open);
+    /** On the connection `target` names; the tree is read again when it is the one shown. */
+    dropCollection: async (target: MongoTarget) => {
+      const done = await call(() => mongoCollectionDrop(target).then(() => true));
+      if (done && target.connection === connection) await refresh(open);
       return !!done;
     },
   };

@@ -19,6 +19,8 @@ let holding = new Set<string>();
 let holds: Record<string, () => void> = {};
 let inserted: { count: number; refused: string | null; rest: string | null };
 let holdCount = false;
+const ID_INDEX = { name: "_id_", keys: "{ _id: 1 }", unique: false, sparse: false, ttlSeconds: null, partial: null };
+let indexList: unknown[] = [];
 
 const value = (text: string, bson: string) => ({ kind: "value", text, bson }) as const;
 const DOC = {
@@ -87,7 +89,7 @@ function answer(command: string, args?: Record<string, unknown>): Promise<unknow
       return Promise.resolve(`${filter || "{}"} + ${path.join(".")}${exclude ? " != " : " = "}${text}`);
     }
     case "mongo_indexes":
-      return Promise.resolve([{ name: "_id_", keys: "{ _id: 1 }", unique: false, sparse: false, ttlSeconds: null, partial: null }]);
+      return Promise.resolve(structuredClone(indexList));
     case "mongo_insert":
       return Promise.resolve(inserted);
     default:
@@ -123,6 +125,7 @@ beforeEach(() => {
   heldCount = null;
   holdCount = false;
   holding = new Set();
+  indexList = [ID_INDEX];
   holds = {};
   inserted = { count: 1, refused: null, rest: null };
   connections = [{ id: "c1", name: "Local", address: "mongodb://root:•••@localhost:27017" }];
@@ -828,6 +831,62 @@ describe("a collection", () => {
     expect(sent("mongo_indexes")).toHaveLength(1);
     expect(screen.getByText("{ _id: 1 }")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Drop index _id_" })).toBeNull();
+  });
+
+  test("an index is dropped only after asking, the one asked about, and the list read again", async () => {
+    const plain = { unique: false, sparse: false, ttlSeconds: null, partial: null };
+    indexList = [ID_INDEX, { ...plain, name: "name_1", keys: "{ name: 1 }", unique: true }, { ...plain, name: "age_1", keys: "{ age: 1 }" }];
+    await openOrders();
+    fireEvent.click(screen.getByRole("tab", { name: "Indexes" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Drop index name_1" }));
+    expect(dialog().getByText(/duplicates are no longer refused/)).toBeTruthy();
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    await settle();
+    expect(sent("mongo_index_drop")).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Drop index name_1" }));
+    fireEvent.click(dialog().getByRole("button", { name: "Drop" }));
+    await settle();
+    expect(sent("mongo_index_drop")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" }, name: "name_1" }]);
+    expect(sent("mongo_indexes")).toHaveLength(2);
+  });
+
+  test("a collection is dropped only after asking, on the connection it was asked about, and its tab closes", async () => {
+    connections = [...connections, { id: "c2", name: "Other", address: "mongodb://other" }];
+    await openOrders();
+    const drop = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Collection actions" }));
+      fireEvent.click(screen.getByRole("option", { name: /Drop collection/ }));
+    };
+    drop();
+    expect(dialog().getByText("Drop shop.orders?")).toBeTruthy();
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    await settle();
+    expect(sent("mongo_collection_drop")).toEqual([]);
+
+    drop();
+    const databasesRead = sent("mongo_databases").length;
+    fireEvent.click(dialog().getByRole("button", { name: "Drop" }));
+    await settle();
+    expect(sent("mongo_collection_drop")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" } }]);
+    expect(screen.queryByRole("tab", { name: "orders" }) === null).toBe(true);
+    expect(sent("mongo_databases").length).toBe(databasesRead + 1);
+  });
+
+  test("a drop confirmed after another connection was chosen drops on the one asked about", async () => {
+    connections = [...connections, { id: "c2", name: "Other", address: "mongodb://other" }];
+    await openOrders();
+    fireEvent.click(screen.getByRole("button", { name: "Collection actions" }));
+    fireEvent.click(screen.getByRole("option", { name: /Drop collection/ }));
+    const confirm = dialog().getByRole("button", { name: "Drop" });
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Other/ }));
+    await settle();
+    const databasesRead = sent("mongo_databases").length;
+    fireEvent.click(confirm);
+    await settle();
+    expect(sent("mongo_collection_drop")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" } }]);
+    expect(sent("mongo_databases").length).toBe(databasesRead);
   });
 });
 

@@ -28,7 +28,8 @@ const keyOf = (open: Open) => `${open.database}.${open.collection}`;
 type Form = { id?: string; name: string; uri: string; saved?: string };
 
 /** A step that cannot be taken back, asked about first. */
-type Confirm = { what: "connection"; connection: MongoConnection } | { what: "collection"; database: string; collection: string };
+// A collection to drop names its connection: the one asked about, whatever is chosen when Drop is pressed.
+type Confirm = { what: "connection"; connection: MongoConnection } | { what: "collection"; target: MongoTarget };
 
 const isId = (value: unknown): value is string | null => value === null || typeof value === "string";
 
@@ -88,7 +89,7 @@ export function MongoPage(_: PageContext) {
       forgetHistory(c.connection.id);
       setForm(null);
     }
-    if (c.what === "collection" && (await tree.dropCollection(c.database, c.collection))) closeTab(c);
+    if (c.what === "collection" && (await tree.dropCollection(c.target))) closeTab(c.target);
   };
 
   return (
@@ -210,7 +211,7 @@ export function MongoPage(_: PageContext) {
             {connection &&
               tabs.map((t) => (
                 <div key={keyOf(t)} className="mongo-open" hidden={keyOf(t) !== active}>
-                  <Collection target={{ connection: connection.id, ...t }} onDrop={() => setConfirm({ what: "collection", ...t })} />
+                  <Collection target={{ connection: connection.id, ...t }} onDrop={() => setConfirm({ what: "collection", target: { connection: connection.id, ...t } })} />
                 </div>
               ))}
             {tabs.length === 0 && <p className="mongo-quiet mongo-pick">{tree.databases.length > 0 ? "Pick a collection on the left." : ""}</p>}
@@ -259,7 +260,7 @@ export function MongoPage(_: PageContext) {
       </Modal>
 
       <ConfirmModal
-        title={confirm?.what === "connection" ? `Delete “${confirm.connection.name}”?` : confirm?.what === "collection" ? `Drop ${confirm.database}.${confirm.collection}?` : ""}
+        title={confirm?.what === "connection" ? `Delete “${confirm.connection.name}”?` : confirm?.what === "collection" ? `Drop ${confirm.target.database}.${confirm.target.collection}?` : ""}
         action={confirm?.what === "collection" ? "Drop" : "Delete"}
         subject={confirm}
         onClose={() => setConfirm(null)}
@@ -267,7 +268,7 @@ export function MongoPage(_: PageContext) {
       >
         <p className="mongo-confirm">
           {confirm?.what === "connection" && `Forgets the connection and its saved connection string. Nothing on the server changes.`}
-          {confirm?.what === "collection" && `Deletes every document of ${confirm.collection} and its indexes, on the server. This cannot be undone.`}
+          {confirm?.what === "collection" && `Deletes every document of ${confirm.target.collection} and its indexes, on the server. This cannot be undone.`}
         </p>
       </ConfirmModal>
     </Page>
