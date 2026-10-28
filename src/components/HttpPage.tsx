@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Bot,
   ChevronDown,
@@ -24,11 +24,11 @@ import {
   X,
 } from "lucide-react";
 import { Page, PageSheet } from "./Page";
+import { CodeEditor } from "./CodeEditor";
 import { Dropdown } from "./Dropdown";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { highlight, type Token } from "../lib/highlight";
 import { shortcutText } from "../lib/shortcuts";
 import {
   AGENT_ACCESS,
@@ -412,7 +412,9 @@ function PreviewView({ resolved, missing }: { resolved: ReturnType<typeof resolv
           {n[0].toUpperCase() + n.slice(1)}.
         </p>
       ))}
-      <Code source={text} lang="http" />
+      <div className="http-code-box">
+        <CodeEditor text={text} language="http" numbered={false} label="The request as it will leave" />
+      </div>
     </div>
   );
 }
@@ -578,7 +580,11 @@ function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => voi
         )}
       </div>
       {body.mode === "none" && <p className="http-quiet">This request sends no body.</p>}
-      {body.mode === "raw" && <textarea className="http-code-input http-mono" aria-label="Body" spellCheck={false} value={body.raw} onChange={(e) => onChange({ ...body, raw: e.target.value })} />}
+      {body.mode === "raw" && (
+        <div className="http-code-box http-code-box-input">
+          <CodeEditor text={body.raw} language={body.language} label="Body" onChange={(raw) => onChange({ ...body, raw })} />
+        </div>
+      )}
       {body.mode === "urlencoded" && <PairsTable rows={body.fields} keyLabel="Field" onChange={(fields) => onChange({ ...body, fields })} />}
     </div>
   );
@@ -601,7 +607,7 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
       {blocks.map((b) => (
         <div key={b.where} className="http-script">
           <div className="http-script-head">{b.where}</div>
-          <Code source={b.text ?? ""} lang="javascript" />
+          <CodeEditor text={b.text ?? ""} language="javascript" label={b.where} />
         </div>
       ))}
     </div>
@@ -661,7 +667,14 @@ function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scri
         {tab !== "history" && sent?.error && <p className="http-error">{sent.error}</p>}
         {tab !== "history" && !response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
         {tab === "history" && <HistoryList entries={history} />}
-        {response && tab === "body" && (response.body ? <Code source={pretty(response.body, response.contentType)} lang={/json/.test(response.contentType) ? "json" : "text"} /> : <p className="http-quiet">No body.</p>)}
+        {response && tab === "body" &&
+          (response.body ? (
+            <div className="http-code-box http-code-box-fill">
+              <CodeEditor text={pretty(response.body, response.contentType)} language={/json/.test(response.contentType) ? "json" : /xml/.test(response.contentType) ? "xml" : "text"} label="Response body" />
+            </div>
+          ) : (
+            <p className="http-quiet">No body.</p>
+          ))}
         {response && tab === "headers" && (
           <table className="http-pairs http-pairs-read">
             <tbody>
@@ -690,35 +703,6 @@ function ResponseView({ sent, scripts, history }: { sent: Sent | undefined; scri
           ))}
       </div>
     </section>
-  );
-}
-
-/** Coloured by the same Shiki the chat uses; plain until the colours arrive. */
-function Code({ source, lang }: { source: string; lang: string }) {
-  const [tokens, setTokens] = useState<Token[][] | null>(null);
-  useEffect(() => {
-    let live = true;
-    setTokens(null);
-    void highlight(source, lang).then((t) => live && setTokens(t));
-    return () => {
-      live = false;
-    };
-  }, [source, lang]);
-  return (
-    <pre className="http-code http-mono">
-      {tokens
-        ? tokens.map((line, i) => (
-            <div key={i} className="http-code-line">
-              {line.map((t, j) => (
-                <span key={j} style={t.htmlStyle as CSSProperties}>
-                  {t.content}
-                </span>
-              ))}
-              {line.length === 0 && "\n"}
-            </div>
-          ))
-        : source}
-    </pre>
   );
 }
 

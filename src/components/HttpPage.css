@@ -512,21 +512,6 @@
   color: var(--text);
 }
 
-.http-code-input {
-  min-height: 140px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  background: var(--bg-panel-soft);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  resize: vertical;
-}
-.http-code-input:focus {
-  border-color: var(--accent);
-}
 
 .http-script {
   border: 1px solid var(--border-soft);
@@ -586,33 +571,6 @@
   font-weight: 600;
 }
 
-.http-code {
-  flex: 1;
-  min-height: 0;
-  margin: 6px 0 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel-soft);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-  white-space: pre;
-}
-.http-script .http-code {
-  margin: 0;
-  border-radius: 0;
-}
-.http-code-line {
-  min-height: 1.55em;
-}
-/* Shiki gives each token both themes' colours; the app's theme picks one. */
-:root[data-scheme="light"] .http-code span {
-  color: var(--shiki-light);
-}
-:root:not([data-scheme="light"]) .http-code span {
-  color: var(--shiki-dark);
-}
 
 .http-tests {
   margin: 8px 0 0;
@@ -649,4 +607,37 @@
   display: flex;
   align-items: center;
   margin-top: 6px;
+}
+
+/* Text shown in the editor: selected, copied and searched like a file's. */
+.http-code-box {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+}
+.http-script .http-code-box,
+.http-script .code-editor {
+  margin: 0;
+  border-radius: 0;
+}
+.http-code-box-input {
+  min-height: 140px;
+  max-height: 320px;
+  border: 1px solid var(--border);
+}
+.http-code-box-input:focus-within {
+  border-color: var(--accent);
+}
+.http-code-box-fill {
+  flex: 1;
+  min-height: 0;
+}
+/* A response's headers are copied as often as its body. */
+.http-pairs-read,
+.http-history {
+  -webkit-user-select: text;
+  user-select: text;
 }
