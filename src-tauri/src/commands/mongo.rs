@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::domain::mongo::{add_condition, ConnectionDraft, ConnectionView, FieldChange, IndexView};
 use crate::infra::mongo_client::{CollectionInfo, DatabaseInfo, MongoClients};
-use crate::services::mongo::{self, DocumentView, FindPage, FindRequest, Inserted, Target};
+use crate::services::mongo::{self, Aggregated, FindPage, FindRequest, Inserted, Target};
 
 use super::blocking;
 
@@ -78,9 +78,9 @@ pub async fn mongo_count(target: Target, filter: String, clients: Clients<'_>) -
 }
 
 #[tauri::command]
-pub async fn mongo_aggregate(target: Target, pipeline: String, clients: Clients<'_>) -> Result<Vec<DocumentView>, String> {
+pub async fn mongo_aggregate(target: Target, pipeline: String, writes: bool, clients: Clients<'_>) -> Result<Aggregated, String> {
     let clients = clients.inner().clone();
-    blocking(move || mongo::aggregate(&clients, &target, &pipeline)).await
+    blocking(move || mongo::aggregate(&clients, &target, &pipeline, writes)).await
 }
 
 #[tauri::command]

@@ -353,10 +353,14 @@ export function useMongoAggregation(target: MongoTarget | null) {
     results,
     busy,
     error,
-    run: async (pipeline: string) => {
-      if (!target) return;
-      const found = await call(() => mongoAggregate(target, pipeline));
-      if (found) setResults(found);
+    /** The stage that writes, when the pipeline was held for that and not run. */
+    run: async (pipeline: string, writes = false) => {
+      if (!target) return null;
+      const found = await call(() => mongoAggregate(target, pipeline, writes));
+      if (!found) return null;
+      if (found.writes !== null) return found.writes;
+      setResults(found.documents);
+      return null;
     },
   };
 }

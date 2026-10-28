@@ -1105,7 +1105,12 @@ const PIPELINE = "[\n  { $match: {} },\n  { $limit: 20 }\n]";
 function Aggregations({ target }: { target: MongoTarget }) {
   const aggregation = useMongoAggregation(target);
   const [pipeline, setPipeline] = useState(PIPELINE);
-  const run = () => void aggregation.run(pipeline);
+  // A pipeline that writes into a collection, held until asked: the text is the one asked about.
+  const [asking, setAsking] = useState<{ pipeline: string; stage: string } | null>(null);
+  const run = async () => {
+    const stage = await aggregation.run(pipeline);
+    if (stage) setAsking({ pipeline, stage });
+  };
   return (
     <div className="mongo-view">
       <label className="mongo-field">
@@ -1119,12 +1124,12 @@ function Aggregations({ target }: { target: MongoTarget }) {
           onKeyDown={(e) => {
             if (!matches(e, "mongoRun")) return;
             e.preventDefault();
-            run();
+            void run();
           }}
         />
       </label>
       <div className="mongo-toolbar">
-        <button type="button" className="btn btn-primary" disabled={aggregation.busy} onClick={run}>
+        <button type="button" className="btn btn-primary" disabled={aggregation.busy} onClick={() => void run()}>
           <Play size={13} />
           Run
         </button>
@@ -1139,6 +1144,11 @@ function Aggregations({ target }: { target: MongoTarget }) {
       <div className="mongo-documents">
         {aggregation.results?.map((doc, i) => <DocumentCard key={`${i}-${doc.text.length}`} doc={doc} />)}
       </div>
+      <ConfirmModal title={`Run a pipeline with ${asking?.stage ?? ""}?`} action="Run" subject={asking} onClose={() => setAsking(null)} onConfirm={(asked) => void aggregation.run(asked.pipeline, true)}>
+        <p className="mongo-confirm">
+          {asking?.stage === "$out" ? "$out replaces the whole collection it names with the results" : "$merge writes the results into the collection it names, over documents already there"}, on the server. This cannot be undone.
+        </p>
+      </ConfirmModal>
     </div>
   );
 }

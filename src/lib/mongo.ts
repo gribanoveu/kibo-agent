@@ -91,9 +91,13 @@ export async function mongoCount(target: MongoTarget, filter: string): Promise<n
   return invoke<number>("mongo_count", { target, filter });
 }
 
-export async function mongoAggregate(target: MongoTarget, pipeline: string): Promise<MongoDocument[]> {
+/** `writes` is the stage that would write into a collection, when it was not run for that. */
+export type Aggregated = { documents: MongoDocument[]; writes: string | null };
+
+/** `writes`: run it even when a stage writes into a collection — the user was asked. */
+export async function mongoAggregate(target: MongoTarget, pipeline: string, writes: boolean): Promise<Aggregated> {
   requireBackend();
-  return invoke<MongoDocument[]>("mongo_aggregate", { target, pipeline });
+  return invoke<Aggregated>("mongo_aggregate", { target, pipeline, writes });
 }
 
 /** What an insert did; refused part way, why and the documents still to go, as text. */

@@ -90,6 +90,12 @@ function answer(command: string, args?: Record<string, unknown>): Promise<unknow
     }
     case "mongo_indexes":
       return Promise.resolve(structuredClone(indexList));
+    case "mongo_aggregate": {
+      const { pipeline, writes } = args as { pipeline: string; writes: boolean };
+      const stage = ["$out", "$merge"].find((s) => pipeline.includes(s));
+      if (stage && !writes) return Promise.resolve({ documents: [], writes: stage });
+      return Promise.resolve({ documents: stage ? [] : structuredClone(findDocs), writes: null });
+    }
     case "mongo_insert":
       return Promise.resolve(inserted);
     default:
@@ -831,6 +837,42 @@ describe("a collection", () => {
     expect(sent("mongo_indexes")).toHaveLength(1);
     expect(screen.getByText("{ _id: 1 }")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Drop index _id_" })).toBeNull();
+  });
+
+  test("a pipeline runs on the collection and shows what it returned; a refused one says why", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("tab", { name: "Aggregations" }));
+    fireEvent.change(screen.getByLabelText(/Pipeline/), { target: { value: "[{ $match: { a: 1 } }]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    expect(sent("mongo_aggregate")).toEqual([{ target: { connection: "c1", database: "shop", collection: "orders" }, pipeline: "[{ $match: { a: 1 } }]", writes: false }]);
+    expect(screen.getByText("1 result")).toBeTruthy();
+    refusals.mongo_aggregate = "the pipeline must be an array of stages";
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    expect(screen.getByText("the pipeline must be an array of stages")).toBeTruthy();
+  });
+
+  test("a pipeline that writes into a collection runs only after asking, the one asked about", async () => {
+    await openOrders();
+    fireEvent.click(screen.getByRole("tab", { name: "Aggregations" }));
+    const text = screen.getByLabelText(/Pipeline/);
+    fireEvent.change(text, { target: { value: "[{ $out: 'copy' }]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    expect(dialog().getByText("Run a pipeline with $out?")).toBeTruthy();
+    expect(dialog().getByText(/replaces the whole collection/)).toBeTruthy();
+    fireEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    await settle();
+    expect(sent("mongo_aggregate").map((a) => a!.writes)).toEqual([false]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await settle();
+    fireEvent.change(text, { target: { value: "[{ $merge: 'other' }]" } });
+    fireEvent.click(dialog().getByRole("button", { name: "Run" }));
+    await settle();
+    expect(sent("mongo_aggregate").at(-1)).toMatchObject({ pipeline: "[{ $out: 'copy' }]", writes: true });
+    expect(screen.getByText("0 results")).toBeTruthy();
   });
 
   test("an index is dropped only after asking, the one asked about, and the list read again", async () => {

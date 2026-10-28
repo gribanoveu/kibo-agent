@@ -214,6 +214,12 @@ pub fn parse_pipeline(text: &str) -> Result<Vec<Map<String, Value>>, MongoError>
     parse_list(text, "the pipeline", "an array of stages, [ { $match: … }, … ]")
 }
 
+/// The stage that writes the results into a collection, `$out` or `$merge`:
+/// a pipeline with one replaces or changes documents on the server, not only reads them.
+pub fn writing_stage(stages: &[Map<String, Value>]) -> Option<&'static str> {
+    stages.iter().flat_map(Map::keys).find_map(|key| ["$out", "$merge"].into_iter().find(|stage| stage == key))
+}
+
 /// One field changed on a card: `path` is its keys from the document down, an
 /// array's item by its index; `text` its new value, as mongosh writes it.
 #[derive(Debug, Clone, Deserialize)]
@@ -1053,6 +1059,16 @@ mod tests {
         let kept = json!({ "$regularExpression": { "pattern": r"a\/b", "options": "" } });
         assert_eq!(to_shell(&kept), r"/a\/b/");
         assert!(parse(&to_shell(&kept)).is_ok());
+    }
+
+    #[test]
+    fn a_pipeline_that_writes_is_told_by_its_stage() {
+        let stages = |text| parse_pipeline(text).unwrap();
+        assert_eq!(writing_stage(&stages("[{ $match: { a: 1 } }, { $out: 'copy' }]")), Some("$out"));
+        assert_eq!(writing_stage(&stages("{ $merge: { into: 'copy' } }")), Some("$merge"));
+        // A field or a value named so is not a stage.
+        assert_eq!(writing_stage(&stages("[{ $match: { $out: 1 } }, { $project: { '$merge': 1 } }, { $set: { s: '$out' } }]")), None);
+        assert_eq!(writing_stage(&[]), None);
     }
 
     #[test]

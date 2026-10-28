@@ -148,9 +148,23 @@ fn page(found: Found) -> FindPage {
     FindPage { documents: found.documents.iter().map(view).collect(), next: found.next }
 }
 
-pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str) -> Result<Vec<DocumentView>, MongoError> {
+/// What a pipeline returned — or, for one that writes and was not said to, the
+/// stage that would, with nothing run.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Aggregated {
+    pub documents: Vec<DocumentView>,
+    pub writes: Option<String>,
+}
+
+/// `writes`: run it even when a stage writes into a collection — the user was asked.
+pub fn aggregate(clients: &MongoClients, target: &Target, pipeline: &str, writes: bool) -> Result<Aggregated, MongoError> {
     let stages = mongo::parse_pipeline(pipeline)?;
-    Ok(mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE)?.iter().map(view).collect())
+    if let Some(stage) = mongo::writing_stage(&stages).filter(|_| !writes) {
+        return Ok(Aggregated { documents: Vec::new(), writes: Some(stage.to_string()) });
+    }
+    let documents = mongo_client::aggregate(&client(clients, &target.connection)?, &target.database, &target.collection, stages, MAX_AGGREGATE)?;
+    Ok(Aggregated { documents: documents.iter().map(view).collect(), writes: None })
 }
 
 /// What an insert did: how many went in, and — refused part way — why, and the
@@ -315,7 +329,12 @@ mod tests {
             assert!(refused.starts_with("the filter: line 1"), "{refused}");
             let request = FindRequest { sort: "[1]".into(), ..Default::default() };
             assert!(find(&clients, &target, &request).unwrap_err().to_string().starts_with("the sort must be"));
-            assert!(aggregate(&clients, &target, "[1]").unwrap_err().to_string().starts_with("the pipeline must be"));
+            assert!(aggregate(&clients, &target, "[1]", false).unwrap_err().to_string().starts_with("the pipeline must be"));
+            // One that writes waits to be said so, and no server is asked; said so, it goes on — here to a connection not there.
+            let gone = Target { connection: "gone".into(), ..target.clone() };
+            assert_eq!(aggregate(&clients, &gone, "[{ $match: {} }, { $out: 'copy' }]", false).unwrap(), Aggregated { documents: Vec::new(), writes: Some("$out".into()) });
+            assert!(matches!(aggregate(&clients, &gone, "{ $merge: 'copy' }", true), Err(MongoError::NoConnection(_))));
+            assert!(matches!(aggregate(&clients, &gone, "[{ $match: {} }]", false), Err(MongoError::NoConnection(_))), "one that only reads runs");
             assert!(insert(&clients, &target, "[]").unwrap_err().to_string().starts_with("the documents must be"));
             assert!(replace(&clients, &target, json!(1), "{}").unwrap_err().to_string().contains("delete it"));
             assert!(create_index(&clients, &target, "", false, None).unwrap_err().to_string().starts_with("the keys must be"));
