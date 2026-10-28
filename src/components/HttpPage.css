@@ -80,6 +80,14 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+.http-layout-switch {
+  display: flex;
+  gap: 2px;
+}
+.http-layout-switch .http-icon-button.on {
+  background: var(--bg-active);
+  color: var(--text);
+}
 .http-icon-button.on {
   color: var(--amber);
 }
@@ -391,14 +399,57 @@
   background: var(--amber);
 }
 
-/* The request's area: its height dragged, or what it needs up to 40%. It gives
-   way before the response does when the window is shorter than the height kept. */
+/* Under the address: the request's tabs and editor, and the response — one
+   under the other, or side by side. The request's side is sized by the line
+   between them; it gives way before the response does when the window is
+   smaller than the size kept. */
+.http-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.http-split.stacked {
+  flex-direction: column;
+}
+.http-request-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.http-split.stacked > .http-request-pane {
+  flex: 0 1 auto;
+  min-height: 160px;
+  max-height: 45%;
+}
+/* Side by side, each keeps room for its tabs; narrower still, a row wraps
+   rather than running under the other side. */
+.http-split.side > .http-request-pane {
+  flex: 0 1 50%;
+  min-width: min(360px, 55%);
+  padding-right: 12px;
+}
+.http-split.side > .http-response {
+  min-width: min(320px, 45%);
+  margin-top: 12px;
+  padding: 0 0 0 12px;
+  border-top: none;
+  border-left: 1px solid var(--border-soft);
+}
+/* The request's tabs and the response's on one line, the same height. */
+.http-split.side .http-subtabs {
+  min-height: 30px;
+}
+.http-request-pane .http-subtabs,
+.http-segments {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
 .http-editor {
   display: flex;
-  flex: 0 1 auto;
+  flex: 1;
   flex-direction: column;
-  min-height: 120px;
-  max-height: 40%;
+  min-height: 0;
   overflow-y: auto;
   padding: 10px 2px 12px;
 }
@@ -565,9 +616,11 @@
 .http-response-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   min-height: 30px;
 }
+/* Narrow, the status goes under the tabs instead of pushing the page sideways. */
 .http-response-head .http-subtabs {
   flex: none;
   margin-top: 0;

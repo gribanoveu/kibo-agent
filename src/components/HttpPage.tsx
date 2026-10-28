@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Check,
+  Columns2,
   Copy,
   Download,
   FileCode2,
@@ -16,6 +17,7 @@ import {
   Lock,
   LockOpen,
   Plus,
+  Rows2,
   Send,
   Settings2,
   ShieldCheck,
@@ -68,6 +70,7 @@ import "./HttpPage.css";
  */
 export function HttpPage() {
   const http = useHttpClient();
+  const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
   const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["orders", "orders-folder"]));
   const toggle = (id: string) =>
@@ -118,6 +121,13 @@ export function HttpPage() {
             <Settings2 size={14} />
           </button>
           <span className="http-spacer" />
+          <div className="http-layout-switch" role="group" aria-label="Where the response goes">
+            {LAYOUTS.map(({ value, icon: Icon, title }) => (
+              <button key={value} type="button" className={`http-icon-button${layout === value ? " on" : ""}`} title={title} aria-label={title} aria-pressed={layout === value} onClick={() => setLayout(value)}>
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
           <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
             <History size={13} />
             History
@@ -193,6 +203,7 @@ export function HttpPage() {
               collection={openTab.collection}
               request={openTab.request}
               environment={http.environment}
+              layout={layout}
               sent={http.sent[openTab.request.id]}
               onEdit={http.edit}
               onSend={() => http.send(openTab.request.id)}
@@ -352,16 +363,28 @@ function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: 
 
 type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview";
 
-/** The request's area never closes; the response keeps its tabs and a few lines in view. */
-const EDITOR_MIN = 120;
-const RESPONSE_MIN = 160;
-const isHeight = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
+/** The response under the request, or beside it. */
+type Layout = "stacked" | "side";
+const LAYOUTS = [
+  { value: "stacked", icon: Rows2, title: "Response under the request" },
+  { value: "side", icon: Columns2, title: "Response beside the request" },
+] as const;
+const isLayout = (v: unknown): v is Layout => v === "stacked" || v === "side";
 
-/** What is written on top, what came back under it. */
+/**
+ * Neither side closes: the request keeps its tabs and a couple of lines of
+ * body, the response its tabs and a few lines — under it, or beside it.
+ */
+const PANE_MIN = { stacked: 160, side: 360 };
+const RESPONSE_MIN = { stacked: 160, side: 320 };
+const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
+
+/** The address on top; under it what is written and what came back, one under the other or side by side. */
 function RequestView({
   collection,
   request,
   environment,
+  layout,
   sent,
   onEdit,
   onSend,
@@ -369,21 +392,28 @@ function RequestView({
   collection: Collection;
   request: HttpRequest;
   environment: Environment | null;
+  layout: Layout;
   sent: Sent | undefined;
   onEdit: (r: HttpRequest) => void;
   onSend: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
-  // Dragged by the line between the request and the response; until then, the request takes what it needs up to 40%.
-  const [height, setHeight] = useStoredState<number | null>("http.requestHeight", null, isHeight);
-  const whole = useRef<HTMLDivElement>(null);
-  const editor = useRef<HTMLDivElement>(null);
+  // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
+  // the request takes what it needs up to 45%; side by side, half.
+  const [height, setHeight] = useStoredState<number | null>("http.requestHeight", null, isSize);
+  const [width, setWidth] = useStoredState<number | null>("http.requestWidth", null, isSize);
+  const split = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
+  const stacked = layout === "stacked";
   const resize = (delta: number) => {
-    if (!whole.current || !editor.current) return;
-    const room = whole.current.getBoundingClientRect().bottom - editor.current.getBoundingClientRect().top - RESPONSE_MIN;
-    const from = editor.current.offsetHeight;
-    setHeight((h) => Math.max(EDITOR_MIN, Math.min((h ?? from) + delta, room)));
+    if (!split.current || !pane.current) return;
+    const whole = split.current.getBoundingClientRect();
+    const own = pane.current.getBoundingClientRect();
+    const fit = (from: number | null, now: number, room: number) => Math.max(PANE_MIN[layout], Math.min((from ?? now) + delta, room - RESPONSE_MIN[layout]));
+    if (stacked) setHeight((h) => fit(h, own.height, whole.bottom - own.top));
+    else setWidth((w) => fit(w, own.width, whole.right - own.left));
   };
+  const size = stacked ? (height === null ? undefined : { height, maxHeight: "none" }) : width === null ? undefined : { width, flexBasis: "auto" };
   const resolved = useMemo(() => resolveRequest(collection, request, environment), [collection, request, environment]);
   const { copied, copy } = useCopied();
   const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
@@ -393,7 +423,7 @@ function RequestView({
   const scripts = hasScripts(request.scripts) || hasScripts(collection.scripts);
 
   return (
-    <div ref={whole} className="http-request">
+    <div className="http-request">
       <div className={`http-url-row${missing ? " missing" : ""}`} title={missing}>
         <Dropdown
           below
@@ -426,47 +456,51 @@ function RequestView({
         </button>
       </div>
 
-      <div className="http-subtabs" role="tablist" aria-label="Request">
-        {(
-          [
-            ["params", "Params", count(params.length)],
-            ["headers", "Headers", count(request.headers.filter((h) => !h.disabled).length)],
-            ["auth", "Auth", null],
-            ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
-            ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
-            ["preview", "Preview", missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
-          ] as [Tab, string, ReactNode][]
-        ).map(([id, label, extra]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`http-subtab${tab === id ? " on" : ""}${id === "preview" ? " http-subtab-aside" : ""}`}
-            title={id === "preview" ? "The request as it will leave, variables and auth filled in" : undefined}
-            onClick={() => setTab(id)}
-          >
-            {label}
-            {extra}
-          </button>
-        ))}
-      </div>
+      <div ref={split} className={`http-split ${layout}`}>
+        <div ref={pane} className="http-request-pane" style={size}>
+          <div className="http-subtabs" role="tablist" aria-label="Request">
+            {(
+              [
+                ["params", "Params", count(params.length)],
+                ["headers", "Headers", count(request.headers.filter((h) => !h.disabled).length)],
+                ["auth", "Auth", null],
+                ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
+                ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
+                ["preview", "Preview", missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
+              ] as [Tab, string, ReactNode][]
+            ).map(([id, label, extra]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className={`http-subtab${tab === id ? " on" : ""}${id === "preview" ? " http-subtab-aside" : ""}`}
+                title={id === "preview" ? "The request as it will leave, variables and auth filled in" : undefined}
+                onClick={() => setTab(id)}
+              >
+                {label}
+                {extra}
+              </button>
+            ))}
+          </div>
 
-      <div
-        ref={editor}
-        className={`http-editor${tab === "body" && request.body.mode === "raw" ? " fills" : ""}`}
-        style={height === null ? undefined : { height, maxHeight: "none" }}
-      >
-        {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
-        {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
-        {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
-        {tab === "body" && <BodyEditor body={request.body} onChange={(body) => set({ body })} />}
-        {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
-        {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
+          <div className={`http-editor${tab === "body" && request.body.mode === "raw" ? " fills" : ""}`}>
+            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
+            {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
+            {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
+            {tab === "body" && <BodyEditor body={request.body} onChange={(body) => set({ body })} />}
+            {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
+            {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
+          </div>
+        </div>
+        <PanelResizeHandle
+          axis={stacked ? "y" : "x"}
+          ariaLabel="Resize the request and the response"
+          onResize={resize}
+          onResizeEnd={(px) => px && (stacked ? setHeight : setWidth)(Math.round(px))}
+        />
+        <ResponseView sent={sent} scripts={scripts} />
       </div>
-      <PanelResizeHandle axis="y" ariaLabel="Resize the request and the response" onResize={resize} onResizeEnd={(size) => size && setHeight(Math.round(size))} />
-
-      <ResponseView sent={sent} scripts={scripts} />
     </div>
   );
 }
