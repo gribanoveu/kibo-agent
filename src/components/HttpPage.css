@@ -218,6 +218,7 @@
   white-space: nowrap;
 }
 .http-tree-mark {
+  display: flex;
   flex: none;
   color: var(--text-faint);
 }

@@ -321,6 +321,15 @@ type TreeNode = { id: string; name: string; kind: "collection" | "folder" | "req
 type Action = { value: string; label: string; hint?: string; run: () => void };
 type TreeProps = { expanded: Set<string>; toggle: (id: string) => void; active: string | null; open: (id: string) => void; menu: (node: TreeNode) => Action[] };
 
+/** Says a collection or request carries Postman scripts — on hover, in words. */
+function ScriptsMark() {
+  return (
+    <span className="http-tree-mark" title="Has Postman scripts — they show in a request's Scripts tab and do not run yet" aria-label="Has Postman scripts">
+      <FileCode2 size={12} />
+    </span>
+  );
+}
+
 /** A row of the tree, and beside it what can be done to it. */
 function TreeRow({ node, menu, children }: { node: TreeNode; menu: TreeProps["menu"]; children: ReactNode }) {
   const actions = menu(node);
@@ -351,7 +360,7 @@ function CollectionNode({ collection, ...tree }: { collection: Collection } & Tr
           {isOpen ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
           <Layers size={13} className="http-tree-icon" />
           <span className="http-tree-name">{collection.name}</span>
-          {hasScripts(collection.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
+          {hasScripts(collection.scripts) && <ScriptsMark />}
         </button>
       </TreeRow>
       {isOpen && (collection.items.length > 0 ? <Items items={collection.items} {...tree} /> : <p className="http-quiet http-tree-empty">No requests yet</p>)}
@@ -379,7 +388,7 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
               <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} onClick={() => tree.open(item.id)}>
                 <MethodBadge method={item.method} />
                 <span className="http-tree-name">{item.name}</span>
-                {hasScripts(item.scripts) && <FileCode2 size={12} className="http-tree-mark" aria-label="Has Postman scripts" />}
+                {hasScripts(item.scripts) && <ScriptsMark />}
               </button>
             </TreeRow>
           </li>
