@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
   ChevronDown,
@@ -26,9 +26,11 @@ import {
 import { Page, PageSheet } from "./Page";
 import { CodeEditor } from "./CodeEditor";
 import { Dropdown } from "./Dropdown";
+import { PanelResizeHandle } from "./PanelResizeHandle";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useShortcuts } from "../hooks/useShortcuts";
+import { useStoredState } from "../hooks/useStoredState";
 import { shortcutText } from "../lib/shortcuts";
 import {
   AGENT_ACCESS,
@@ -350,6 +352,11 @@ function Exchange({ entry, onOpen }: { entry: HistoryEntry; onOpen: (requestId: 
 
 type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview";
 
+/** The request's area never closes; the response keeps its tabs and a few lines in view. */
+const EDITOR_MIN = 60;
+const RESPONSE_MIN = 160;
+const isHeight = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
+
 /** What is written on top, what came back under it. */
 function RequestView({
   collection,
@@ -367,6 +374,16 @@ function RequestView({
   onSend: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
+  // Dragged by the line between the request and the response; until then, the request takes what it needs up to 40%.
+  const [height, setHeight] = useStoredState<number | null>("http.requestHeight", null, isHeight);
+  const whole = useRef<HTMLDivElement>(null);
+  const editor = useRef<HTMLDivElement>(null);
+  const resize = (delta: number) => {
+    if (!whole.current || !editor.current) return;
+    const room = whole.current.getBoundingClientRect().bottom - editor.current.getBoundingClientRect().top - RESPONSE_MIN;
+    const from = editor.current.offsetHeight;
+    setHeight((h) => Math.max(EDITOR_MIN, Math.min((h ?? from) + delta, room)));
+  };
   const resolved = useMemo(() => resolveRequest(collection, request, environment), [collection, request, environment]);
   const { copied, copy } = useCopied();
   const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
@@ -376,7 +393,7 @@ function RequestView({
   const scripts = hasScripts(request.scripts) || hasScripts(collection.scripts);
 
   return (
-    <div className="http-request">
+    <div ref={whole} className="http-request">
       <div className={`http-url-row${missing ? " missing" : ""}`} title={missing}>
         <Dropdown
           below
@@ -435,7 +452,7 @@ function RequestView({
         ))}
       </div>
 
-      <div className="http-editor">
+      <div ref={editor} className="http-editor" style={height === null ? undefined : { height, maxHeight: "none" }}>
         {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" onChange={(rows) => set({ url: withQuery(request.url, rows) })} />}
         {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" onChange={(headers) => set({ headers })} />}
         {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} onChange={(auth) => set({ auth })} />}
@@ -443,6 +460,7 @@ function RequestView({
         {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
         {tab === "preview" && <PreviewView resolved={resolved} missing={missing} />}
       </div>
+      <PanelResizeHandle axis="y" ariaLabel="Resize the request and the response" onResize={resize} onResizeEnd={(size) => size && setHeight(Math.round(size))} />
 
       <ResponseView sent={sent} scripts={scripts} />
     </div>
