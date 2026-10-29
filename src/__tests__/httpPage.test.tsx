@@ -198,6 +198,28 @@ describe("the HTTP page", () => {
     expect(screen.getAllByRole("tab", { name: /Headers/ })[0].querySelector(".http-dot-amber") !== null).toBe(false);
   });
 
+  test("a curl pasted into the address is read as the request, not typed in", async () => {
+    await shown("r2");
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    const command = "curl 'https://api.test/v1/items' -H 'accept: application/json'";
+    const notTyped = fireEvent.paste(address, { clipboardData: { getData: (type: string) => (type === "text/plain" || type === "text" ? command : "") } });
+    expect(notTyped).toBe(false);
+    await waitFor(() => expect(called("http_parse_curl")).toEqual([{ command }]));
+  });
+
+  test("a curl pasted where the paste event carries no text is still read, once it is in the address", async () => {
+    await shown("r2");
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    const command = "curl 'https://api.test/v1/items'";
+    fireEvent.paste(address, { clipboardData: { getData: () => "" } });
+    fireEvent.input(address, { target: { value: command }, inputType: "insertFromPaste" });
+    await waitFor(() => expect(called("http_parse_curl")).toEqual([{ command }]));
+    // Typed, it is an address like any other.
+    fireEvent.input(address, { target: { value: "curl x" }, inputType: "insertText" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_parse_curl").length).toBe(1);
+  });
+
   test("a request with scripts is marked; one with a body kept from Postman shows it and is refused", async () => {
     await shown("r3");
     fireEvent.click(screen.getByText("Orders API"));

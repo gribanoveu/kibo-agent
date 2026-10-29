@@ -387,6 +387,9 @@ export function HttpPage() {
 // the component: a new function each render would be called again, and select again.
 const selectAll = (input: HTMLInputElement | null) => input?.select();
 
+/** A curl command, as DevTools and docs write it. */
+const CURL = /^\s*curl\s/;
+
 /** What the name dialog names: a node there is, or one made on Create. */
 type Naming = { kind: "rename"; id: string; name: string } | { kind: "collection"; name: string } | { kind: "request"; parent: string; name: string };
 
@@ -768,11 +771,17 @@ function RequestView({
           spellCheck={false}
           values={values}
           value={request.url}
-          onChange={(e) => set({ url: e.target.value })}
-          // A whole `curl …`, as DevTools copies it, becomes the request rather than its address.
+          // A whole `curl …`, as DevTools copies it, becomes the request rather than its address —
+          // caught on `paste`, and again on the input it makes, for a webview whose paste event
+          // carries no text (in the app the curl landed in the address as it was).
+          onChange={(e) => {
+            const pasted = (e.nativeEvent as InputEvent).inputType === "insertFromPaste";
+            if (pasted && CURL.test(e.target.value)) onPasteCurl(e.target.value.trim());
+            else set({ url: e.target.value });
+          }}
           onPaste={(e) => {
-            const pasted = e.clipboardData.getData("text");
-            if (!/^\s*curl\s/.test(pasted)) return;
+            const pasted = e.clipboardData.getData("text/plain");
+            if (!CURL.test(pasted)) return;
             e.preventDefault();
             onPasteCurl(pasted.trim());
           }}
