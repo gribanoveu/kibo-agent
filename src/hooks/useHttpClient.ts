@@ -175,20 +175,20 @@ export function useHttpClient() {
     [edit],
   );
 
-  /** A new, empty collection; its id, to name it. */
-  const newCollection = useCallback(async () => {
-    const made = collectionFrom(await newHttpCollection("New collection"));
+  /** A new, empty collection named `name`; its id. */
+  const newCollection = useCallback(async (name: string) => {
+    const made = collectionFrom(await newHttpCollection(name));
     setCollections((c) => [...c, made]);
     return made.id;
   }, []);
 
-  /** A new GET in a collection or folder, open in a tab; its id, to name it. */
+  /** A new GET named `name` in a collection or folder, open in a tab; its id. */
   const newRequest = useCallback(
-    (parent: string) => {
+    (parent: string, name: string) => {
       const owner = ownerOf(collections, parent);
       if (!owner) return null;
       const id = crypto.randomUUID();
-      const request: HttpRequest = { id, name: "New request", method: "GET", url: "", headers: [], auth: { type: "inherit" }, body: { mode: "none" }, scripts: {} };
+      const request: HttpRequest = { id, name, method: "GET", url: "", headers: [], auth: { type: "inherit" }, body: { mode: "none" }, scripts: {} };
       setCollections((c) => addRequest(c, parent, request));
       void write("The request was not added", () => addHttpItem(owner.id, parent === owner.id ? null : parent, { id, name: request.name, request: requestToPostman(request) }));
       // Not through `open`: it checks the collections this render holds, which do not have it yet.

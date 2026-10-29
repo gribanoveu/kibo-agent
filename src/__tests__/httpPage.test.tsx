@@ -45,6 +45,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null }]);
     if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
+    if (command === "http_collection_new") return Promise.resolve({ id: "c2", file: { info: { name: args!.name }, item: [] }, error: null });
     if (command === "http_send") {
       if (args!.requestId === "r3") return Promise.reject("a formdata body is kept from Postman and not sent yet");
       return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(null);
@@ -91,7 +92,7 @@ describe("the HTTP page", () => {
     await shown();
     fireEvent.click(screen.getByLabelText("Actions for Orders API"));
     fireEvent.click(screen.getByRole("option", { name: /Rename/ }));
-    const input = screen.getByLabelText("New name") as HTMLInputElement;
+    const input = screen.getByLabelText("Name") as HTMLInputElement;
     const select = spyOn(HTMLInputElement.prototype, "select");
     fireEvent.change(input, { target: { value: "Orders API v2" } });
     fireEvent.change(input, { target: { value: "Orders API v23" } });
@@ -101,6 +102,27 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
     expect(screen.getByText("Orders API v23")).toBeDefined();
     await waitFor(() => expect(called("http_item_rename")).toEqual([{ collection: "c", id: "c", name: "Orders API v23" }]));
+  });
+
+  test("a new collection or request is made only once its name is confirmed", async () => {
+    await shown();
+    fireEvent.click(screen.getByLabelText("New collection"));
+    expect(screen.getByRole("dialog", { name: "New collection" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByLabelText("Actions for Orders API"));
+    fireEvent.click(screen.getByRole("option", { name: /New request/ }));
+    expect(screen.getByRole("dialog", { name: "New request" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_collection_new")).toEqual([]);
+    expect(called("http_item_add")).toEqual([]);
+
+    fireEvent.click(screen.getByLabelText("New collection"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Billing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Billing")).toBeDefined();
+    expect(called("http_collection_new")).toEqual([{ name: "Billing" }]);
+    expect(called("http_item_rename")).toEqual([]);
   });
 
   test("⌘Enter under a dialog is the dialog's; outside one it sends the open request", async () => {

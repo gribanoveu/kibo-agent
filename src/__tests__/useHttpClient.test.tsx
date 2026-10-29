@@ -151,7 +151,7 @@ describe("the HTTP page's state", () => {
     const hook = await page();
     let id: string | null = null;
     act(() => {
-      id = hook.result.current.newRequest("c");
+      id = hook.result.current.newRequest("c", "New request");
     });
     act(() => hook.result.current.rename(id!, "Ping"));
     await waitFor(() => expect(holds.http_item_add).toBeDefined());
@@ -194,18 +194,16 @@ describe("the HTTP page's state", () => {
     expect(called("http_request_save")).toEqual([]);
   });
 
-  test("a new request is added, then named, in that order; a deleted folder takes its tabs", async () => {
+  test("a new request is added with its name and opened; a deleted folder takes its tabs", async () => {
     const hook = await page();
     act(() => hook.result.current.open("r1"));
     let id: string | null = null;
     act(() => {
-      id = hook.result.current.newRequest("f");
+      id = hook.result.current.newRequest("f", "Ping");
     });
-    act(() => hook.result.current.rename(id!, "Ping"));
-    await waitFor(() => expect(called("http_item_rename").length).toBe(1));
-    const order = calls.map((c) => c.command).filter((c) => c.startsWith("http_item"));
-    expect(order).toEqual(["http_item_add", "http_item_rename"]);
-    expect(called("http_item_add")[0]).toMatchObject({ collection: "c", parent: "f", item: { id, name: "New request", request: { method: "GET", url: "" } } });
+    expect(hook.result.current.active).toBe(id);
+    await waitFor(() => expect(called("http_item_add").length).toBe(1));
+    expect(called("http_item_add")[0]).toMatchObject({ collection: "c", parent: "f", item: { id, name: "Ping", request: { method: "GET", url: "" } } });
 
     act(() => hook.result.current.open("r2"));
     act(() => hook.result.current.remove("f"));

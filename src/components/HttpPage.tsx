@@ -92,8 +92,8 @@ export function HttpPage() {
       return next;
     });
 
-  // A collection, folder or request being renamed or deleted — a new one is named straight away.
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  // A name being typed: for a node renamed, or for a collection or request made only once it is confirmed.
+  const [renaming, setRenaming] = useState<Naming | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string; what: string; environment?: boolean } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const shownProblem = failed ?? http.problem;
@@ -107,9 +107,18 @@ export function HttpPage() {
     },
   });
   const rename = () => {
-    if (!renaming?.name.trim()) return;
-    http.rename(renaming.id, renaming.name.trim());
+    const name = renaming?.name.trim();
+    if (!renaming || !name) return;
     setRenaming(null);
+    if (renaming.kind === "rename") http.rename(renaming.id, name);
+    else if (renaming.kind === "request") {
+      reveal(renaming.parent);
+      http.newRequest(renaming.parent, name);
+    } else
+      http.newCollection(name).then(
+        (id) => reveal(id),
+        (e) => setFailed(`The collection was not made: ${e}`),
+      );
   };
   const remove = () => {
     if (!deleting) return;
@@ -120,19 +129,8 @@ export function HttpPage() {
     setDeleting(null);
   };
   const reveal = (id: string) => setExpanded((s) => new Set(s).add(id));
-  const newCollection = () =>
-    http.newCollection().then(
-      (id) => {
-        reveal(id);
-        setRenaming({ id, name: "New collection" });
-      },
-      (e) => setFailed(`The collection was not made: ${e}`),
-    );
-  const newRequest = (parent: string) => {
-    reveal(parent);
-    const id = http.newRequest(parent);
-    if (id) setRenaming({ id, name: "New request" });
-  };
+  const newCollection = () => setRenaming({ kind: "collection", name: "New collection" });
+  const newRequest = (parent: string) => setRenaming({ kind: "request", parent, name: "New request" });
   const importFile = () =>
     http.importFile().then(
       (imported) => imported?.kind === "collection" && reveal(imported.id),
@@ -158,7 +156,7 @@ export function HttpPage() {
     const broken = node.kind === "collection" && http.collections.some((c) => c.id === node.id && c.error);
     return [
       ...(node.kind === "request" || broken ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
-      ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ id: node.id, name: node.name }) }]),
+      ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ kind: "rename", id: node.id, name: node.name }) }]),
       ...(node.kind === "collection" && !broken
         ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
         : []),
@@ -323,7 +321,7 @@ export function HttpPage() {
         </section>
       </div>
       <Modal
-        title="Rename"
+        title={NAMING_TITLE[renaming?.kind ?? "rename"]}
         open={renaming !== null}
         onClose={() => setRenaming(null)}
         footer={
@@ -332,7 +330,7 @@ export function HttpPage() {
               Cancel
             </button>
             <button type="button" className="btn btn-primary" disabled={!renaming?.name.trim()} onClick={rename}>
-              Rename
+              {renaming?.kind === "rename" ? "Rename" : "Create"}
             </button>
           </>
         }
@@ -341,7 +339,7 @@ export function HttpPage() {
           className="http-rename"
           ref={selectAll}
           value={renaming?.name ?? ""}
-          aria-label="New name"
+          aria-label="Name"
           onChange={(e) => renaming && setRenaming({ ...renaming, name: e.target.value })}
           // A form field's Enter, as in every settings form here — not a shortcut.
           onKeyDown={(e) => {
@@ -387,6 +385,11 @@ export function HttpPage() {
 // Focused with the name selected, as a new name replaces it more often than not. Outside
 // the component: a new function each render would be called again, and select again.
 const selectAll = (input: HTMLInputElement | null) => input?.select();
+
+/** What the name dialog names: a node there is, or one made on Create. */
+type Naming = { kind: "rename"; id: string; name: string } | { kind: "collection"; name: string } | { kind: "request"; parent: string; name: string };
+
+const NAMING_TITLE: Record<Naming["kind"], string> = { rename: "Rename", collection: "New collection", request: "New request" };
 
 function MethodBadge({ method }: { method: HttpMethod }) {
   return <span className={`http-method http-method-${method.toLowerCase()}`}>{method === "DELETE" ? "DEL" : method === "OPTIONS" ? "OPT" : method}</span>;
