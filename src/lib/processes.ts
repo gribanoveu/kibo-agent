@@ -22,21 +22,22 @@ export async function onProcessChanged(handler: (id: number) => void): Promise<U
   return listen<{ id: number }>(PROCESS_EVENT, ({ payload }) => handler(payload.id));
 }
 
-export async function processesList(): Promise<ProcessView[]> {
+/** The ones chat `chatId` started; with no chat, every one — a folder switch stops them all. */
+export async function processesList(chatId: string | null = null): Promise<ProcessView[]> {
   if (!inTauri()) return [];
-  return invoke<ProcessView[]>("processes_list");
+  return invoke<ProcessView[]>("processes_list", { chatId });
 }
 
-/** The running ones, newest first, without output — cheap to read on every change. */
-export async function processesRunning(): Promise<ProcessInfo[]> {
+/** The running ones chat `chatId` started, newest first, without output — cheap to read on every change. */
+export async function processesRunning(chatId: string): Promise<ProcessInfo[]> {
   if (!inTauri()) return [];
-  return invoke<ProcessInfo[]>("processes_running");
+  return invoke<ProcessInfo[]>("processes_running", { chatId });
 }
 
-/** The model is told at its next round that the user stopped it. */
-export async function stopProcess(id: number): Promise<ProcessView[]> {
+/** The model is told at its next round that the user stopped it. Answers with chat `chatId`'s list. */
+export async function stopProcess(id: number, chatId: string): Promise<ProcessView[]> {
   requireBackend();
-  return invoke<ProcessView[]>("process_stop", { id });
+  return invoke<ProcessView[]>("process_stop", { id, chatId });
 }
 
 /** How a process stands, in a few words: `running`, `exit 1`, `stopped`. */
