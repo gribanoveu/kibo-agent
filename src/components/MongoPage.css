@@ -1,0 +1,783 @@
+/* The MongoDB page (MongoPage.tsx): the tree of a connection on the left, a
+   collection on the right. Its own styles throughout — none borrowed. */
+
+.mongo-error,
+.mongo-ok,
+.mongo-quiet {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.mongo-error {
+  margin: 8px 0;
+  color: var(--red);
+  white-space: pre-wrap;
+}
+.mongo-ok {
+  margin: 8px 0;
+  color: var(--green);
+}
+.mongo-quiet {
+  color: var(--text-faint);
+}
+.mongo-mono {
+  font-family: var(--font-mono);
+}
+.mongo-spacer {
+  flex: 1;
+}
+
+.mongo-connection-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mongo-icon-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mongo-icon-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.mongo-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* No connection yet. */
+.mongo-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 520px;
+  margin-top: 24px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.mongo-welcome p {
+  margin: 0;
+}
+.mongo-welcome-icon {
+  color: var(--text-faint);
+}
+
+/* The tree beside the collection, each scrolling on its own: the layout fills
+   the page's body, so what is over a collection's documents stays put. */
+.mongo-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+}
+
+.mongo-tree {
+  align-self: start;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.mongo-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 6px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mongo-tree-head span {
+  flex: 1;
+}
+.mongo-tree-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mongo-tree-list .mongo-tree-list {
+  padding-left: 14px;
+}
+.mongo-tree-db,
+.mongo-tree-collection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+.mongo-tree-db:hover,
+.mongo-tree-collection:hover {
+  background: var(--bg-hover);
+}
+.mongo-tree-collection.on {
+  background: var(--bg-active);
+}
+.mongo-tree-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+.mongo-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mongo-tree-empty {
+  padding: 4px 6px;
+}
+.mongo-kind {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: var(--fs-2xs);
+}
+
+/* One collection: its tabs and head on top, the open one's view under them. */
+.mongo-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mongo-main > :not(.mongo-open) {
+  flex: none;
+}
+.mongo-open:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mongo-open > :not(.mongo-view) {
+  flex: none;
+}
+/* Open collections, one tab each. */
+.mongo-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mongo-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  max-width: 220px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--text-faint);
+}
+.mongo-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.mongo-tab.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.mongo-tab-name {
+  min-width: 0;
+  padding: 6px 4px 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mongo-tab-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+.mongo-tab:hover .mongo-tab-close,
+.mongo-tab.active .mongo-tab-close,
+.mongo-tab-close:focus-visible {
+  opacity: 1;
+}
+.mongo-tab-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.mongo-main-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.mongo-namespace {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.mongo-namespace-database {
+  color: var(--text-faint);
+}
+.mongo-namespace-gap {
+  margin: 0 4px;
+  color: var(--text-faint);
+  vertical-align: -2px;
+}
+.mongo-pick {
+  margin-top: 12px;
+}
+/* Only the documents scroll; the whole view does where it has no list, or no room. */
+.mongo-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mongo-view > :not(.mongo-documents) {
+  flex: none;
+}
+
+/* The query bar: a field per part, the buttons at its end. */
+.mongo-query {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mongo-query-field {
+  position: relative;
+  flex: 1 1 220px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.mongo-query-field:focus-within {
+  border-color: var(--accent);
+}
+.mongo-query-field > label {
+  flex: none;
+  padding: 0 8px 0 10px;
+  border-right: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+.mongo-query-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+.mongo-query-field > .dropdown-wrap {
+  margin-right: 4px;
+}
+.mongo-query-lead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 4px;
+  border-right: 1px solid var(--border-soft);
+}
+/* An icon for a label sits on the text's baseline otherwise, above the middle. */
+.mongo-query-field .chip-label {
+  display: flex;
+}
+.mongo-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 260px;
+  max-width: 100%;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-menu);
+  box-shadow: var(--shadow-popover);
+}
+.mongo-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.mongo-suggest-item.active {
+  background: var(--bg-menu-hover);
+}
+.mongo-suggest-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-faint);
+}
+.mongo-suggest-key {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+
+.mongo-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Documents as mongosh shows them, actions on the corner. */
+.mongo-documents {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mongo-documents > * {
+  flex: none;
+}
+/* A document: a head with its size and actions, then its fields. */
+.mongo-document {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  transition: border-color 0.12s;
+}
+.mongo-document:hover {
+  border-color: var(--border);
+}
+.mongo-document-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-sm);
+}
+.mongo-document-count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.mongo-document-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin-left: auto;
+}
+/* Room on the left for a top-level field's "+" and "−", which stand out of its gutter. */
+.mongo-document-body {
+  padding: 8px 12px 10px 20px;
+}
+.mongo-document-editing,
+.mongo-document-editing:hover {
+  border-color: var(--accent);
+}
+/* Edit mode's end: what changed, or why it was not saved, then Cancel and Save. */
+.mongo-document-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.mongo-document-foot > :first-child {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* What shows only under the pointer or the keyboard: a card's actions, a value's copy. */
+.mongo-document-actions,
+.mongo-copy {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.mongo-document:hover .mongo-document-actions,
+.mongo-document:focus-within .mongo-document-actions,
+.mongo-entry:hover > .mongo-copy,
+.mongo-copy:focus-visible {
+  opacity: 1;
+}
+.mongo-copy {
+  width: 20px;
+  height: 20px;
+}
+.mongo-document-text {
+  margin: 0;
+  overflow-x: auto;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre;
+}
+/* Fields a line each. Each leaves a gutter for a toggle; what nests hangs
+   from a guide under its parent's toggle and is indented by one gutter. */
+.mongo-tree-fields {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+.mongo-tree-fields .mongo-tree-fields {
+  margin-left: -8px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
+}
+.mongo-entry {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding-left: 14px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  white-space: pre;
+}
+.mongo-entry-nest {
+  display: block;
+}
+/* A field's "+" and "−" for the filter: in the gutter left of its key, out over the guides while hovered. */
+.mongo-entry:not(.mongo-entry-nest),
+.mongo-entry-head {
+  position: relative;
+}
+.mongo-entry-filter {
+  position: absolute;
+  top: 0;
+  right: calc(100% - 12px);
+  display: flex;
+  height: 1.7em;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+/* An object's or array's "+" goes left of its chevron, which already takes the gutter. */
+.mongo-entry-head > .mongo-entry-filter {
+  right: calc(100% + 14px);
+}
+.mongo-entry:hover > .mongo-entry-filter,
+.mongo-entry-head:hover > .mongo-entry-filter,
+.mongo-entry-filter:has(:focus-visible) {
+  opacity: 1;
+}
+.mongo-entry-filter button {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mongo-entry-filter button:hover {
+  background: var(--bg-panel);
+  color: var(--accent);
+}
+.mongo-entry-key {
+  flex: none;
+  font-weight: 600;
+}
+.mongo-entry-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.mongo-entry-input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.mongo-entry-input.mongo-entry-name {
+  flex: 0 1 16ch;
+}
+.mongo-entry-input:focus,
+.mongo-entry-changed {
+  border-color: var(--accent);
+}
+.mongo-entry-wrapped {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* The type ends the line, so the eye runs down one column for it. */
+.mongo-entry-type {
+  flex: none;
+  margin: 0 2px 0 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.mongo-entry > .mongo-copy,
+.mongo-entry-toggle > .mongo-entry-type {
+  margin-left: auto;
+}
+.mongo-entry:not(.mongo-entry-nest):hover,
+.mongo-entry-toggle:hover {
+  background: var(--bg-hover);
+}
+.mongo-entry-toggle {
+  display: flex;
+  align-items: center;
+  width: calc(100% + 14px);
+  margin-left: -14px;
+  text-align: left;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+  cursor: pointer;
+}
+.mongo-entry-toggle svg {
+  width: 14px;
+  color: var(--text-faint);
+  transition: transform 0.12s;
+}
+.mongo-entry-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.mongo-bson-String {
+  color: var(--green);
+}
+.mongo-bson-ObjectId {
+  color: var(--red);
+}
+.mongo-bson-Date,
+.mongo-bson-Int32,
+.mongo-bson-Int64,
+.mongo-bson-Double,
+.mongo-bson-Decimal128,
+.mongo-bson-Number {
+  color: var(--purple);
+}
+.mongo-bson-Boolean,
+.mongo-bson-Null,
+.mongo-bson-Undefined {
+  color: var(--amber);
+}
+
+.mongo-confirm-doc {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.mongo-unfold {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+/* Ends a card being edited: a field of the document's own, where the guides' + cannot reach. */
+.mongo-add-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 6px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.mongo-add-field:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mongo-indexes {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+.mongo-indexes th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: left;
+}
+.mongo-indexes td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  vertical-align: middle;
+}
+.mongo-indexes td:last-child {
+  width: 30px;
+}
+
+/* The dialogs' fields. */
+.mongo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.mongo-field input,
+.mongo-editor {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-md);
+  resize: vertical;
+}
+.mongo-field input:not(.mongo-mono) {
+  font-family: inherit;
+}
+.mongo-field input:focus,
+.mongo-editor:focus {
+  border-color: var(--accent);
+}
+.mongo-editor {
+  margin-top: 8px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+.mongo-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.mongo-confirm {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+/* Delete sits apart from Cancel and Save, at the footer's other end. */
+.mongo-foot-left {
+  margin-right: auto;
+}
+
+@media (max-width: 760px) {
+  .mongo-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mongo-tree {
+    position: static;
+    max-height: 260px;
+  }
+}
+
+/* While a find runs: the first page waits under a spinner, a later one dims what is shown. */
+.mongo-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mongo-documents[aria-busy="true"] {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.mongo-count {
+  gap: 6px;
+}
+.mongo-spin {
+  animation: mongo-spin 0.9s linear infinite;
+}
+@keyframes mongo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -97,6 +97,22 @@ where
     }
 }
 
+/// `Option<String>` where `""` and `"null"` mean not set, as a model sends
+/// them for an optional name. For a query written as text, the object or
+/// array it describes — `"filter": {"age": 3}` for `"{ age: 3 }"` — is taken
+/// as its JSON text, which the query syntax reads too.
+pub fn opt_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<Value>::deserialize(deserializer)? {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if NULLISH.contains(&s.trim().to_ascii_lowercase().as_str()) => None,
+        Some(Value::String(s)) => Some(s),
+        Some(other) => Some(other.to_string()),
+    })
+}
+
 /// `Option<Vec<String>>` that also accepts one string for a one-item list —
 /// `"fts": "read_source"` is a list of one term, not a type error. An empty
 /// list, a nullish string and `null` all mean "not set".

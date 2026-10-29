@@ -243,4 +243,37 @@ describe("the columns", () => {
     expect(names(document.querySelector(".ide-middle")!)).toEqual(["ide-empty"]);
     expect(document.querySelector(".ide-middle")!.className).toBe("ide-middle");
   });
+
+  test("a kept page stays mounted, hidden, when left — in either layout — and the file's handle comes back", () => {
+    const { result } = renderHook(() => usePanelSizes({}));
+    const kept = (ide: boolean, shown: boolean) => (
+      <div data-testid="body">
+        <Columns
+          ide={ide}
+          chat={<main key="chat" className="main" />}
+          page={
+            <div key="page" className="page-kept" hidden={!shown}>
+              <input aria-label="query" />
+            </div>
+          }
+          pageShown={shown}
+          viewer={<section key="viewer" className="file-viewer" />}
+          top={<aside className="aside-right" />}
+          topShown
+          bottom={null}
+          panels={result.current}
+        />
+      </div>
+    );
+    const { rerender } = render(kept(false, true));
+    expect(order()).not.toContain("Resize the file viewer");
+    fireEvent.change(screen.getByLabelText("query"), { target: { value: "{ a: 1 }" } });
+
+    rerender(kept(false, false));
+    expect(order()).toContain("Resize the file viewer");
+    expect(document.querySelector(".page-kept")!.hasAttribute("hidden")).toBe(true);
+    rerender(kept(true, false));
+    rerender(kept(false, true));
+    expect((document.querySelector("input") as HTMLInputElement).value).toBe("{ a: 1 }");
+  });
 });

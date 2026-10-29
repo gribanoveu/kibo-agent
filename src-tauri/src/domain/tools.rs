@@ -101,6 +101,9 @@ pub enum ToolName {
     /// The Assistant's board: cards kept for later, which the user sees on
     /// the Board page (`domain::board`).
     Board,
+    /// The MongoDB connections the user opened to the agent, read: their
+    /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
+    Mongo,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -171,6 +174,7 @@ impl ToolName {
         ToolName::DeepseekSearch,
         ToolName::DeepseekFetch,
         ToolName::Board,
+        ToolName::Mongo,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -229,6 +233,7 @@ impl ToolName {
             ToolName::DeepseekSearch => "deepseekSearch",
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
+            ToolName::Mongo => "mongo",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -382,6 +387,8 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             | ToolName::Board
+            // Reads; a pipeline that would write is refused before the server.
+            | ToolName::Mongo
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -410,7 +417,9 @@ impl ToolName {
             | ToolName::WebSearch
             | ToolName::WebFetch
             | ToolName::DeepseekSearch
-            | ToolName::DeepseekFetch => true,
+            | ToolName::DeepseekFetch
+            // A server asked, nothing left open after it.
+            | ToolName::Mongo => true,
             ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -488,6 +497,7 @@ impl ToolName {
             | ToolName::DeepseekFetch
             | ToolName::ToolSearch
             | ToolName::Board
+            | ToolName::Mongo
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -620,6 +630,8 @@ impl ToolName {
             ToolName::WebFetch => 2,
             // One request each; DeepSeek reads the page on its side.
             ToolName::DeepseekSearch | ToolName::DeepseekFetch => 2,
+            // A request or two to a server; a search by name, one per database.
+            ToolName::Mongo => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -804,14 +816,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            52,
+            53,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1227,6 +1239,8 @@ pub struct ToolDeps<'a> {
     pub history: &'a [crate::domain::llm::LlmMessage],
     /// The board `board` keeps cards on; `None` where there is none.
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
+    /// The MongoDB servers `mongo` reads; `None` while the feature is off.
+    pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
 }
@@ -1449,6 +1463,8 @@ pub enum ToolError {
     #[error(transparent)]
     Board(#[from] crate::domain::board::BoardError),
     #[error(transparent)]
+    Mongo(#[from] crate::domain::mongo::MongoError),
+    #[error(transparent)]
     Prototype(#[from] crate::domain::prototype::PrototypeError),
     /// A tool of a feature the user has off — called from memory of a turn
     /// when it was on.
@@ -1526,6 +1542,7 @@ pub enum ToolCall {
     DeepseekSearch(DeepseekSearchArgs),
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
+    Mongo(MongoArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1583,6 +1600,7 @@ impl ToolCall {
             ToolCall::DeepseekSearch(_) => ToolName::DeepseekSearch,
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
+            ToolCall::Mongo(_) => ToolName::Mongo,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -1879,6 +1897,9 @@ pub enum ToolResult {
     ToolsFound { tools: Vec<FoundTool> },
     /// `board`: the whole board after the call.
     Board { cards: Vec<crate::domain::board::Card> },
+    /// `mongo`: what was read, already shaped for the model, and a few words
+    /// for the row in the transcript.
+    Mongo { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -1948,6 +1969,47 @@ pub enum BoardOp {
     Add,
     Move,
     Edit,
+}
+
+/// `mongo`. Flat like `board`'s: which fields go with which `op` is the
+/// tool's to check. The query texts are mongosh's, read as the page reads
+/// them; an object sent instead of text is taken as its JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MongoArgs {
+    pub op: MongoOp,
+    /// A connection's name, as the user named it on the MongoDB page.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub connection: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub database: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub collection: Option<String>,
+    /// For `collections`: part of a collection's name to look for.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub filter: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub projection: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub sort: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub pipeline: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_usize")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MongoOp {
+    #[default]
+    Collections,
+    Schema,
+    Find,
+    Count,
+    Aggregate,
+    Indexes,
 }
 
 /// `webFetch`. `query` picks the passages of a long page.

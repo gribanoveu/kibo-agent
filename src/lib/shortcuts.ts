@@ -8,7 +8,7 @@ import type { AsideTab } from "../types";
  */
 export type Combo = { code: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean };
 
-export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board" | "HTTP";
+export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board" | "MongoDB" | "HTTP";
 type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
@@ -63,6 +63,11 @@ export const SHORTCUTS = {
   // Up, down, left, right — the board's keyboard drag takes them in this order.
   cardDragMove: { label: "Move the card you picked up", group: "Board", combos: [{ code: "ArrowUp" }, { code: "ArrowDown" }, { code: "ArrowLeft" }, { code: "ArrowRight" }] },
   cardSave: { label: "Save the card from its note", group: "Board", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  mongoRun: { label: "Run the pipeline, or save the document being edited", group: "MongoDB", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  mongoSuggestNext: { label: "Next suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowDown" }] },
+  mongoSuggestPrev: { label: "Previous suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowUp" }] },
+  mongoSuggestPick: { label: "Use the suggestion picked in a query field", group: "MongoDB", combos: [{ code: "Tab" }, { code: "Enter" }, { code: "NumpadEnter" }] },
+  mongoPairErase: { label: "Erase an empty pair of brackets or quotes in a query field", group: "MongoDB", combos: [{ code: "Backspace" }] },
   httpSend: { label: "Send the request", group: "HTTP", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
 } satisfies Record<string, Shortcut>;
 

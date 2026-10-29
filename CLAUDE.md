@@ -85,6 +85,22 @@ up. The provider is the agent bench's (`AGENT_BENCH_*`). Run it after touching
 cd src-tauri && AGENT_BENCH_KIND=openai AGENT_BENCH_BASE_URL=https://api.deepseek.com AGENT_BENCH_MODEL=deepseek-flash AGENT_BENCH_API_KEY=… cargo test vision_live -- --ignored --nocapture
 ```
 
+The MongoDB page's driver has a live test against a real server — a scratch collection
+written, read, indexed and dropped. It needs a MongoDB at `KIBO_MONGO_URI` (default
+`mongodb://localhost:27017`); run it after touching `infra/mongo_client.rs`:
+
+```bash
+cd src-tauri && KIBO_MONGO_URI=mongodb://localhost:27017 cargo test live_server -- --ignored --nocapture
+```
+
+The same filter runs `live_server_unconfirmed`: an insert asked for two members on a
+one-member replica set at `KIBO_MONGO_RS_URI` (default `mongodb://localhost:27018/?directConnection=true`),
+which goes in with the write concern unmet. Such a set, for instance:
+
+```bash
+docker run -d --rm --name kibo-mongo-rs -p 27018:27017 mongo:7.0 --replSet rs0 && sleep 3 && docker exec kibo-mongo-rs mongosh --quiet --eval 'rs.initiate()'
+```
+
 The Kubernetes client has a live test against the local cluster (OrbStack's, context
 `orbstack` in `~/.kube/config`), ignored because it needs that cluster running. Run it
 after touching `infra/kube_client.rs`:

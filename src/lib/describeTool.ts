@@ -90,6 +90,7 @@ export const LABELS: Record<string, string> = {
   deepseekSearch: "DeepSeek web",
   deepseekFetch: "DeepSeek page",
   board: "Board",
+  mongo: "MongoDB",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -363,6 +364,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
                 : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
         detail: [str(args.note), str(args.due) && `due ${str(args.due)}`].filter(Boolean).join("\n"),
+      };
+    }
+
+    // What was read, and where: `find shop.orders on Local { paid: true }`.
+    case "mongo": {
+      const collection = [str(args.database), str(args.collection)].filter(Boolean).join(".");
+      const where = [collection, str(args.connection) && `on ${str(args.connection)}`, str(args.name) && `"${str(args.name)}"`].filter(Boolean).join(" ");
+      return {
+        name,
+        arg: [str(args.op) ?? "collections", where, str(args.filter) ?? str(args.pipeline)].filter(Boolean).join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? "",
       };
     }
 
