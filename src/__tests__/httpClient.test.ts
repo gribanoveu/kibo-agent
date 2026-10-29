@@ -2,11 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   addRequest,
   asHttpText,
-  cutForHistory,
+  collectionFrom,
   effectiveAuth,
   findRequest,
-  HISTORY_BODY_LIMIT,
-  POSTMAN_SCHEMA,
+  ownerOf,
   pretty,
   preview,
   queryOf,
@@ -16,8 +15,9 @@ import {
   resolveRequest,
   scope,
   shownValues,
+  requestFrom,
+  requestToPostman,
   toCurl,
-  toPostman,
   variableParts,
   variableValue,
   variablesIn,
@@ -32,8 +32,6 @@ import {
 const env: Environment = {
   id: "t",
   name: "test",
-  agent: "off",
-  trustedCert: false,
   variables: [
     { key: "baseUrl", value: "https://api.test", secret: false, enabled: true },
     { key: "token", value: "s3cret", secret: true, enabled: true },
@@ -188,15 +186,6 @@ describe("http client rules", () => {
     expect(r.notes).toEqual(["a formdata body is kept from Postman and not sent yet"]);
   });
 
-  test("history cuts a long body and says so, and keeps a short one as it is", () => {
-    expect(cutForHistory("{}")).toBe("{}");
-    const long = "x".repeat(HISTORY_BODY_LIMIT + 10);
-    const cut = cutForHistory(long);
-    expect(cut.startsWith("x".repeat(HISTORY_BODY_LIMIT))).toBe(true);
-    expect(cut).not.toContain("x".repeat(HISTORY_BODY_LIMIT + 1));
-    expect(cut).toContain("cut at 256.0 KB");
-  });
-
   test("a message reads as HTTP writes it: a blank line before the body, none without one", () => {
     const headers = [{ key: "Accept", value: "*/*" }];
     expect(asHttpText("GET /a", headers, null)).toBe("GET /a\nAccept: */*");
@@ -254,47 +243,204 @@ describe("http client rules", () => {
     expect(removeNode(tree, "c").map((c) => c.id)).toEqual(["c2"]);
   });
 
-  test("a collection goes out as a Postman v2.1 file: auth, body, scripts and variables in Postman's shapes", () => {
-    const withMore: Collection = {
-      ...collection,
-      scripts: { prerequest: "a();\nb();", test: " " },
-      items: [
-        ...collection.items,
-        {
-          kind: "request",
-          id: "r4",
-          name: "post",
-          method: "POST",
-          url: "{{baseUrl}}/o",
-          headers: [{ key: "X-Off", value: "1", disabled: true }],
-          auth: { type: "basic", username: "u", password: "p" },
-          body: { mode: "raw", language: "json", raw: "{}" },
-          scripts: { test: "pm.test();" },
-        },
-      ],
-    };
-    const text = toPostman(withMore);
-    expect(text).toContain('\n\t"info"');
-    const file = JSON.parse(text);
-    expect(file.info).toEqual({ _postman_id: "c", name: "API", schema: POSTMAN_SCHEMA });
-    expect(file.auth).toEqual({ type: "bearer", bearer: [{ key: "token", value: "{{token}}", type: "string" }] });
-    expect(file.event).toEqual([{ listen: "prerequest", script: { type: "text/javascript", exec: ["a();", "b();"] } }]);
-    expect(file.variable).toEqual([
-      { key: "baseUrl", value: "http://collection" },
-      { key: "id", value: "42" },
-    ]);
-    const [folder, inherit, , post] = file.item;
-    expect(folder.item[0].name).toBe("a");
-    expect(folder.auth.apikey).toContainEqual({ key: "in", value: "header", type: "string" });
-    expect(inherit.request.auth).toBeUndefined();
-    expect(inherit.request.body).toBeUndefined();
-    expect(post.request).toEqual({
-      auth: { type: "basic", basic: [{ key: "username", value: "u", type: "string" }, { key: "password", value: "p", type: "string" }] },
-      method: "POST",
-      header: [{ key: "X-Off", value: "1", disabled: true }],
-      body: { mode: "raw", raw: "{}", options: { raw: { language: "json" } } },
-      url: "{{baseUrl}}/o",
-    });
-    expect(post.event[0].listen).toBe("test");
+  test("globals are under the collection, which is under the environment", () => {
+    const globals = [
+      { key: "id", value: "from-globals", secret: false, enabled: true },
+      { key: "only", value: "g", secret: true, enabled: true },
+      { key: "off", value: "x", secret: false, enabled: false },
+    ];
+    const vars = scope(collection, env, globals);
+    expect(vars.get("id")?.value).toBe("42");
+    expect(vars.get("baseUrl")?.value).toBe("https://api.test");
+    expect(shownValues(vars).get("only")).toBe("•••");
+    expect(vars.has("off")).toBe(false);
   });
+
+  test("the collection that holds a node is found at any depth, and a collection holds itself", () => {
+    const tree = [collection, { ...collection, id: "c2", items: [] }];
+    expect(ownerOf(tree, "r1")?.id).toBe("c");
+    expect(ownerOf(tree, "f")?.id).toBe("c");
+    expect(ownerOf(tree, "c2")?.id).toBe("c2");
+    expect(ownerOf(tree, "nowhere")).toBeNull();
+  });
+});
+
+describe("a Postman file read and written back", () => {
+  const SOURCE = {
+    method: "POST",
+    header: [
+      { key: "Accept", value: "application/json", type: "text", description: "what comes back" },
+      { key: "X-Off", value: "1", disabled: true },
+    ],
+    body: { mode: "raw", raw: '{"a": 1}', options: { raw: { language: "json", headerFamily: "json" } } },
+    url: {
+      raw: "{{baseUrl}}/orders/:id?page=2",
+      host: ["{{baseUrl}}"],
+      path: ["orders", ":id"],
+      query: [
+        { key: "page", value: "2" },
+        { key: "debug", value: "1", disabled: true },
+      ],
+      variable: [{ key: "id", value: "7" }],
+    },
+    description: "made in Postman",
+  };
+  const FILE = {
+    info: { _postman_id: "x", name: "Shop", schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+    auth: { type: "bearer", bearer: [{ key: "token", value: "{{token}}", type: "string" }] },
+    event: [{ listen: "prerequest", script: { type: "text/javascript", exec: ["a();", "b();"] } }],
+    variable: [{ key: "page", value: "1" }],
+    item: [
+      {
+        id: "f",
+        name: "Orders",
+        auth: { type: "oauth2", oauth2: [] },
+        item: [{ id: "r", name: "Create", event: [{ listen: "test", script: { exec: "pm.test();" } }], request: SOURCE, response: [{ code: 201 }] }],
+      },
+      { id: "s", name: "Ping", request: "{{baseUrl}}/ping" },
+      { id: "g", name: "GraphQL", request: { method: "post", url: "/g", body: { mode: "graphql", graphql: {} }, auth: { type: "digest" } } },
+    ],
+  };
+  const read = () => collectionFrom({ id: "c", file: structuredClone(FILE), error: null });
+  const request = (id: string) => findRequest([read()], id)!.request;
+
+  test("what the page edits is read out of the file, the rest named and kept", () => {
+    const c = read();
+    expect(c.name).toBe("Shop");
+    expect(c.auth).toEqual({ type: "bearer", token: "{{token}}" });
+    expect(c.scripts).toEqual({ prerequest: "a();\nb();" });
+    expect(c.variables).toEqual([{ key: "page", value: "1" }]);
+    expect(c.items[0]).toMatchObject({ kind: "folder", name: "Orders", auth: { type: "other", name: "oauth2" } });
+    const r = request("r");
+    expect(r).toMatchObject({
+      method: "POST",
+      url: "{{baseUrl}}/orders/:id?page=2",
+      paramsOff: [{ key: "debug", value: "1" }],
+      headers: [
+        { key: "Accept", value: "application/json" },
+        { key: "X-Off", value: "1", disabled: true },
+      ],
+      auth: { type: "inherit" },
+      body: { mode: "raw", language: "json", raw: '{"a": 1}' },
+      scripts: { test: "pm.test();" },
+    });
+    expect(request("s")).toMatchObject({ method: "GET", url: "{{baseUrl}}/ping", body: { mode: "none" } });
+    expect(request("g")).toMatchObject({ method: "POST", auth: { type: "other", name: "digest" }, body: { mode: "other", name: "graphql" } });
+    const apikey = (where: string) => ({ type: "apikey", apikey: [{ key: "key", value: "k" }, { key: "value", value: "v" }, { key: "in", value: where }] });
+    expect(requestFrom("a", "A", { auth: apikey("query") }).auth).toEqual({ type: "apikey", key: "k", value: "v", in: "query" });
+    expect(requestFrom("a", "A", { auth: apikey("header") }).auth).toMatchObject({ in: "header" });
+    expect(collectionFrom({ id: "bad", file: null, error: "not JSON" })).toMatchObject({ name: "bad", items: [], error: "not JSON" });
+  });
+
+  test("a request not edited goes back as it came, to the byte", () => {
+    for (const id of ["r", "s", "g"]) expect(requestToPostman(request(id))).toEqual(findSource(id));
+    // A method written in lower case reads as upper, and is still not an edit.
+    expect(JSON.stringify(requestToPostman(request("g")))).toBe(JSON.stringify(FILE.item[2].request));
+  });
+
+  test("an edit is written over what it changes, and the rest keeps its place and its extras", () => {
+    const r = request("r");
+    const out = requestToPostman({ ...r, url: "{{baseUrl}}/orders/:id?page=3&sort=asc" }) as Record<string, unknown>;
+    expect(Object.keys(out)).toEqual(Object.keys(SOURCE));
+    expect(out.header).toEqual(SOURCE.header);
+    expect(out.body).toEqual(SOURCE.body);
+    expect(out.url).toEqual({
+      raw: "{{baseUrl}}/orders/:id?page=3&sort=asc",
+      host: ["{{baseUrl}}"],
+      path: ["orders", ":id"],
+      query: [
+        { key: "page", value: "3" },
+        { key: "sort", value: "asc" },
+        { key: "debug", value: "1", disabled: true },
+      ],
+      variable: [{ key: "id", value: "7" }],
+    });
+
+    const headers = requestToPostman({ ...r, headers: [{ key: "Accept", value: "text/xml" }, { key: "X-New", value: "2" }] }) as { header: unknown };
+    expect(headers.header).toEqual([
+      { key: "Accept", value: "text/xml", type: "text", description: "what comes back" },
+      { key: "X-New", value: "2" },
+    ]);
+    const on = requestToPostman({ ...r, headers: r.headers.map((h) => ({ key: h.key, value: h.value })) }) as { header: unknown[] };
+    expect(on.header[1]).toEqual({ key: "X-Off", value: "1" });
+    const body = requestToPostman({ ...r, body: { mode: "raw", language: "xml", raw: "<a/>" } }) as { body: unknown };
+    expect(body.body).toEqual({ mode: "raw", raw: "<a/>", options: { raw: { language: "xml", headerFamily: "json" } } });
+    const none = requestToPostman({ ...r, body: { mode: "none" }, auth: { type: "noauth" } }) as Record<string, unknown>;
+    expect("body" in none).toBe(false);
+    expect(none.auth).toEqual({ type: "noauth" });
+    const inherit = requestToPostman({ ...request("g"), auth: { type: "inherit" } }) as Record<string, unknown>;
+    expect("auth" in inherit).toBe(false);
+    expect(inherit.body).toEqual({ mode: "graphql", graphql: {} });
+  });
+
+  test("an address that was text stays text, until a parameter is turned off", () => {
+    const s = request("s");
+    expect(requestToPostman({ ...s, url: "https://api.test:8443/v1/ping" })).toEqual({ url: "https://api.test:8443/v1/ping", method: "GET" });
+    const off = requestToPostman(withParams({ ...s, url: "https://api.test:8443/v1/ping?a=1" }, [{ key: "a", value: "1", disabled: true }])) as { url: unknown };
+    expect(off.url).toEqual({ raw: "https://api.test:8443/v1/ping", protocol: "https", host: ["api", "test"], port: "8443", path: ["v1", "ping"], query: [{ key: "a", value: "1", disabled: true }] });
+  });
+
+  test("a request made on the page is written whole", () => {
+    const fresh = requestFrom("n", "New", undefined);
+    expect(requestToPostman({ ...fresh, source: undefined })).toEqual({ method: "GET", url: "", header: [] });
+    const made: HttpRequest = { ...fresh, source: undefined, method: "PUT", url: "/x", auth: { type: "basic", username: "u", password: "{{p}}" }, body: { mode: "urlencoded", fields: [{ key: "a", value: "1" }] } };
+    expect(requestToPostman(made)).toEqual({
+      method: "PUT",
+      url: "/x",
+      header: [],
+      auth: { type: "basic", basic: [{ key: "username", value: "u", type: "string" }, { key: "password", value: "{{p}}", type: "string" }] },
+      body: { mode: "urlencoded", urlencoded: [{ key: "a", value: "1" }] },
+    });
+  });
+
+  test("a row keeps its extras by its key, not its place, and an address keeps what is not its parts", () => {
+    const source = {
+      method: "GET",
+      header: [
+        { key: "A", value: "1", description: "first" },
+        { key: "B", value: "2", type: "text", description: "second" },
+      ],
+      body: { mode: "urlencoded", urlencoded: [{ key: "x", value: "1", description: "gone" }, { key: "y", value: "2", description: "kept" }] },
+      url: { raw: "https://h.test/p?page=1", protocol: "https", host: ["h", "test"], path: ["p"], query: [{ key: "page", value: "1", description: "page" }], hash: "top" },
+    };
+    const r = requestFrom("r", "R", source);
+    const out = requestToPostman({
+      ...r,
+      url: "{{baseUrl}}/q?page=2",
+      headers: r.headers.slice(1),
+      body: { mode: "urlencoded", fields: [{ key: "y", value: "3" }] },
+    }) as { header: unknown; body: { urlencoded: unknown }; url: unknown };
+    expect(out.header).toEqual([{ key: "B", value: "2", type: "text", description: "second" }]);
+    expect(out.body.urlencoded).toEqual([{ key: "y", value: "3", description: "kept" }]);
+    expect(out.url).toEqual({ raw: "{{baseUrl}}/q?page=2", host: ["{{baseUrl}}"], path: ["q"], query: [{ key: "page", value: "2", description: "page" }], hash: "top" });
+  });
+
+  test("a body in a language the page reads as text keeps its language", () => {
+    const r = requestFrom("r", "R", { method: "POST", url: "/", body: { mode: "raw", raw: "<p/>", options: { raw: { language: "html" } } } });
+    expect(r.body).toMatchObject({ language: "text" });
+    const out = requestToPostman({ ...r, body: { mode: "raw", language: "text", raw: "<b/>" } }) as { body: unknown };
+    expect(out.body).toEqual({ mode: "raw", raw: "<b/>", options: { raw: { language: "html" } } });
+    const json = requestToPostman({ ...r, body: { mode: "raw", language: "json", raw: "{}" } }) as { body: unknown };
+    expect(json.body).toEqual({ mode: "raw", raw: "{}", options: { raw: { language: "json" } } });
+  });
+
+  test("a collection's secret variable is masked in Preview and named in cURL", () => {
+    const c = collectionFrom({
+      id: "c",
+      file: { info: { name: "S" }, variable: [{ key: "token", value: "pm-hunter2", type: "secret" }, { key: "id", value: "1" }], item: [{ id: "r", name: "R", request: { method: "GET", url: "/x/{{id}}", header: [{ key: "T", value: "{{token}}" }] } }] },
+      error: null,
+    });
+    const r = findRequest([c], "r")!.request;
+    expect(resolveRequest(c, r, null).headers).toContainEqual({ key: "T", value: "•••" });
+    const curl = toCurl(resolveRequest(c, r, null, "name"));
+    expect(curl).toContain("{{token}}");
+    expect(curl).toContain("/x/1");
+    expect(curl).not.toContain("pm-hunter2");
+  });
+
+  function findSource(id: string): unknown {
+    const walk = (items: unknown[]): unknown =>
+      items.map((i) => i as { id: string; request?: unknown; item?: unknown[] }).reduce<unknown>((hit, i) => hit ?? (i.id === id ? i.request : i.item ? walk(i.item) : undefined), undefined);
+    return walk(FILE.item);
+  }
 });

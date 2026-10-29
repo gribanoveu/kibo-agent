@@ -1,11 +1,12 @@
 // The HTTP page's shapes and the pure rules over them (docs/45-http-client.md).
-// Collections follow Postman Collection v2.1 — the subset the page edits; the
-// rest of a real file stays on the backend, untouched (decision 2). No command
-// exists yet: the page runs on the sample in `httpDemo.ts` until HC-3.
+// Collections are Postman Collection v2.1 files kept by the backend; the page
+// reads the subset it edits out of them, and writes an edit back over the
+// request it came from, so what it does not edit stays as it was (decision 2).
 
 import { formatJson, formatXml, stripJsonComments } from "./formatText";
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+/** Any method a file names — `PURGE`, `PROPFIND` — goes; these are the ones offered. */
+export type HttpMethod = string;
 export const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 /** A header, a query parameter, a form field or a variable: Postman's `{key, value, disabled}`. */
@@ -40,72 +41,20 @@ export type HttpRequest = {
   auth: Auth;
   body: Body;
   scripts: Scripts;
+  /** The Postman `request` it was read from — what the page does not edit goes back from it. None for one made here. */
+  source?: unknown;
 };
 
 export type Folder = { id: string; name: string; auth: Auth; items: Item[] };
 export type Item = ({ kind: "folder" } & Folder) | ({ kind: "request" } & HttpRequest);
 
-export type Collection = { id: string; name: string; auth: Auth; variables: Pair[]; items: Item[]; scripts: Scripts };
+/** `error` says why a stored file does not read; such a collection holds nothing and can only be deleted. */
+export type Collection = { id: string; name: string; auth: Auth; variables: (Pair & { secret?: boolean })[]; items: Item[]; scripts: Scripts; error?: string };
 
-/** What the agent may do in an environment (decision 6). */
-export type AgentAccess = "off" | "read" | "ask" | "allow";
-export const AGENT_ACCESS: { value: AgentAccess; label: string; hint: string }[] = [
-  { value: "off", label: "Off", hint: "The agent does not see this environment" },
-  { value: "read", label: "Read only", hint: "GET, HEAD, OPTIONS — anything else is refused" },
-  { value: "ask", label: "Ask for writes", hint: "Every write asks, even under Always allow and Auto" },
-  { value: "allow", label: "Writes as other tools", hint: "Writes ask as other tools do" },
-];
-
-/** A variable as the window sees it: a secret's value never comes back, only that it has one. */
+/** A variable as the window sees it: a secret's value never comes back, only `•••` when it has one. */
 export type EnvVariable = { key: string; value: string; secret: boolean; enabled: boolean };
-export type Environment = { id: string; name: string; variables: EnvVariable[]; agent: AgentAccess; trustedCert: boolean };
-
-export type HttpResponse = {
-  status: number;
-  statusText: string;
-  ms: number;
-  bytes: number;
-  /** After redirects, when they moved it. */
-  finalUrl?: string;
-  headers: Pair[];
-  body: string;
-  contentType: string;
-  tests: { name: string; passed: boolean; error?: string }[];
-};
-
-export type HistoryEntry = {
-  id: string;
-  at: number;
-  method: HttpMethod;
-  /** Before substitution — `{{baseUrl}}`, never a secret's value. */
-  url: string;
-  status: number | null;
-  ms: number;
-  environment: string;
-  /** The collection's request it was, if it was one — the entry opens it. */
-  requestId?: string;
-  /** The agent's call, with the chat it came from. */
-  agent?: { chat: string };
-  /** What left, as Postman's console shows it — a secret masked. Absent in entries from before it was kept. */
-  request?: SentRequest;
-  /** What came back, its body cut at `HISTORY_BODY_LIMIT`; or `error` in its place. */
-  response?: HttpResponse;
-  error?: string;
-};
-
-/** A request as it left: variables and auth filled in, a secret's value never — `•••`. */
-export type SentRequest = { url: string; headers: Pair[]; body: string | null };
-
-/**
- * A body in history is cut here: the log is for reading what happened, and
- * 200 whole bodies would be hundreds of megabytes of someone else's data.
- * The request keeps its last response whole.
- */
-export const HISTORY_BODY_LIMIT = 256 * 1024;
-
-export function cutForHistory(body: string): string {
-  return body.length <= HISTORY_BODY_LIMIT ? body : `${body.slice(0, HISTORY_BODY_LIMIT)}\n… cut at ${sizeLabel(HISTORY_BODY_LIMIT)} in history`;
-}
+/** `trustedCert` is the PEM of the stand's own certificate or its CA's. */
+export type Environment = { id: string; name: string; variables: EnvVariable[]; trustedCert?: string };
 
 /** A request or a response as HTTP writes it: the first line, the headers, a blank line, the body. */
 export function asHttpText(first: string, headers: Pair[], body: string | null): string {
@@ -120,10 +69,11 @@ export function variablesIn(text: string): string[] {
   return [...new Set(names)];
 }
 
-/** Postman's order: the collection's variables, the environment over them. */
-export function scope(collection: Collection | null, environment: Environment | null): Map<string, EnvVariable> {
+/** Postman's order: globals, the collection's variables over them, the environment over those. */
+export function scope(collection: Collection | null, environment: Environment | null, globals: EnvVariable[] = []): Map<string, EnvVariable> {
   const out = new Map<string, EnvVariable>();
-  for (const v of collection?.variables ?? []) if (!v.disabled) out.set(v.key, { key: v.key, value: v.value, secret: false, enabled: true });
+  for (const v of globals) if (v.enabled) out.set(v.key, v);
+  for (const v of collection?.variables ?? []) if (!v.disabled) out.set(v.key, { key: v.key, value: v.value, secret: v.secret ?? false, enabled: true });
   for (const v of environment?.variables ?? []) if (v.enabled) out.set(v.key, v);
   return out;
 }
@@ -189,8 +139,8 @@ export type Resolved = {
 
 const hasHeader = (headers: Pair[], name: string) => headers.some(({ key }) => key.toLowerCase() === name.toLowerCase());
 
-export function resolveRequest(collection: Collection, request: HttpRequest, environment: Environment | null, secretAs: SecretAs = "mask"): Resolved {
-  const vars = scope(collection, environment);
+export function resolveRequest(collection: Collection, request: HttpRequest, environment: Environment | null, secretAs: SecretAs = "mask", globals: EnvVariable[] = []): Resolved {
+  const vars = scope(collection, environment, globals);
   const missing = new Set<string>();
   const fill = (text: string) => {
     const done = preview(text, vars, secretAs);
@@ -361,6 +311,12 @@ export function addRequest(collections: Collection[], parent: string, request: H
   );
 }
 
+/** The collection that holds `id` — a folder's, a request's, or its own. */
+export function ownerOf(collections: Collection[], id: string): Collection | null {
+  const holds = (items: Item[]): boolean => items.some((item) => item.id === id || (item.kind === "folder" && holds(item.items)));
+  return collections.find((c) => c.id === id || holds(c.items)) ?? null;
+}
+
 /** The requests a collection, folder or request holds — what closes with it. */
 export function requestsUnder(collections: Collection[], id: string): string[] {
   const all = (items: Item[]): string[] => items.flatMap((item) => (item.kind === "request" ? [item.id] : all(item.items)));
@@ -379,14 +335,128 @@ export function requestsUnder(collections: Collection[], id: string): string[] {
   return [];
 }
 
-export const POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
+type Json = Record<string, unknown>;
 
-type PostmanPair = { key: string; value: string; disabled?: boolean; type?: string };
+const obj = (v: unknown): Json => (v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+/** A value as text, as the backend reads it: a string as it is, nothing as "", anything else as JSON. */
+const text = (v: unknown): string => (typeof v === "string" ? v : v === undefined || v === null ? "" : JSON.stringify(v));
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-const pairs = (rows: Pair[]): PostmanPair[] => rows.map(({ key, value, disabled }) => (disabled ? { key, value, disabled } : { key, value }));
-const strings = (rows: [string, string][]): PostmanPair[] => rows.map(([key, value]) => ({ key, value, type: "string" }));
+const pairsFrom = (v: unknown): Pair[] =>
+  list(v)
+    .map(obj)
+    .map((p) => (p.disabled === true ? { key: text(p.key), value: text(p.value), disabled: true } : { key: text(p.key), value: text(p.value) }));
 
-function postmanAuth(auth: Auth): object | undefined {
+function authFrom(v: unknown): Auth {
+  const auth = obj(v);
+  const type = auth.type;
+  // Absent or null, Postman's inherit.
+  if (typeof type !== "string" || type === "inherit") return { type: "inherit" };
+  const field = (key: string) => text(list(auth[type]).map(obj).find((p) => key === p.key)?.value);
+  switch (type) {
+    case "noauth":
+      return { type };
+    case "bearer":
+      return { type, token: field("token") };
+    case "basic":
+      return { type, username: field("username"), password: field("password") };
+    case "apikey":
+      return { type, key: field("key"), value: field("value"), in: field("in") === "query" ? "query" : "header" };
+    default:
+      return { type: "other", name: type };
+  }
+}
+
+function bodyFrom(v: unknown): Body {
+  const body = obj(v);
+  if (body.mode === "raw") {
+    const language = text(obj(obj(body.options).raw).language);
+    return { mode: "raw", language: language === "json" || language === "xml" ? language : "text", raw: text(body.raw) };
+  }
+  if (body.mode === "urlencoded") return { mode: "urlencoded", fields: pairsFrom(body.urlencoded) };
+  return typeof body.mode === "string" ? { mode: "other", name: body.mode } : { mode: "none" };
+}
+
+function scriptsFrom(v: unknown): Scripts {
+  const scripts: Scripts = {};
+  for (const event of list(v).map(obj)) {
+    const exec = obj(event.script).exec;
+    if (event.listen === "prerequest" || event.listen === "test") scripts[event.listen] = Array.isArray(exec) ? exec.map(text).join("\n") : text(exec);
+  }
+  return scripts;
+}
+
+/** A Postman `request` — an object, or an address alone — as the page edits it. */
+export function requestFrom(id: string, name: string, source: unknown, events?: unknown): HttpRequest {
+  const request = typeof source === "string" ? { url: source } : obj(source);
+  const url = request.url;
+  // Postman keeps a parameter turned off in `query`, out of `raw`.
+  const off = pairsFrom(obj(url).query)
+    .filter((q) => q.disabled)
+    .map(({ key, value }) => ({ key, value }));
+  return {
+    id,
+    name,
+    method: (text(request.method) || "GET").toUpperCase(),
+    url: typeof url === "string" ? url : text(obj(url).raw),
+    ...(off.length > 0 ? { paramsOff: off } : {}),
+    headers: pairsFrom(request.header),
+    auth: authFrom(request.auth),
+    body: bodyFrom(request.body),
+    scripts: scriptsFrom(events),
+    source,
+  };
+}
+
+function itemsFrom(v: unknown): Item[] {
+  return list(v)
+    .map(obj)
+    .map((item): Item => {
+      const id = text(item.id);
+      const name = text(item.name);
+      if (Array.isArray(item.item)) return { kind: "folder", id, name, auth: authFrom(item.auth), items: itemsFrom(item.item) };
+      return { kind: "request", ...requestFrom(id, name, item.request, item.event) };
+    });
+}
+
+/** A stored collection as the page draws it. */
+export function collectionFrom(view: { id: string; file: unknown; error: string | null }): Collection {
+  const file = obj(view.file);
+  return {
+    id: view.id,
+    name: view.error === null ? text(obj(file.info).name) : view.id,
+    auth: authFrom(file.auth),
+    // A `secret` one masked in Preview and named in cURL, as the backend masks it in history.
+    variables: pairsFrom(file.variable).map((v, i) => {
+      const row = obj(list(file.variable)[i]);
+      return row.type === "secret" || row.secret === true ? { ...v, secret: true } : v;
+    }),
+    items: itemsFrom(file.item),
+    scripts: scriptsFrom(file.event),
+    ...(view.error === null ? {} : { error: view.error }),
+  };
+}
+
+/** A row over the one it came from — its `type`, its `description` — when it is still that key. */
+function pairOver(pair: Pair, old: unknown): Json {
+  const out: Json = { ...obj(old), key: pair.key, value: pair.value };
+  if (pair.disabled) out.disabled = true;
+  else delete out.disabled;
+  return out;
+}
+
+/** Rows over the ones they came from, matched by key in order, not by place: one deleted does not hand its neighbour's description on. */
+function pairsOver(rows: Pair[], old: unknown): Json[] {
+  const left = list(old).map(obj);
+  return rows.map((row) => {
+    const at = left.findIndex((was) => Object.is(was.key, row.key));
+    return pairOver(row, at < 0 ? undefined : left.splice(at, 1)[0]);
+  });
+}
+
+function authToPostman(auth: Auth): Json | undefined {
+  const strings = (rows: [string, string][]) => rows.map(([key, value]) => ({ key, value, type: "string" }));
   switch (auth.type) {
     case "inherit":
       return undefined;
@@ -403,52 +473,73 @@ function postmanAuth(auth: Auth): object | undefined {
   }
 }
 
-function postmanBody(body: Body): object | undefined {
+function bodyToPostman(body: Body, old: unknown): unknown {
+  const was = obj(old);
   switch (body.mode) {
     case "none":
-    case "other":
       return undefined;
-    case "raw":
-      return { mode: "raw", raw: body.raw, options: { raw: { language: body.language } } };
+    case "other":
+      return old;
+    case "raw": {
+      const options = obj(was.options);
+      // `html`, `javascript`: read as text, and kept as they were while text is what it says.
+      const had = text(obj(options.raw).language);
+      const language = body.language === "text" && had !== "" && had !== "json" && had !== "xml" ? had : body.language;
+      return { ...(was.mode === "raw" ? was : {}), mode: "raw", raw: body.raw, options: { ...options, raw: { ...obj(options.raw), language } } };
+    }
     case "urlencoded":
-      return { mode: "urlencoded", urlencoded: pairs(body.fields) };
+      return { ...(was.mode === "urlencoded" ? was : {}), mode: "urlencoded", urlencoded: pairsOver(body.fields, was.urlencoded) };
   }
 }
 
-function postmanEvents(scripts: Scripts): object[] | undefined {
-  const events = (["prerequest", "test"] as const)
-    .filter((listen) => scripts[listen]?.trim())
-    .map((listen) => ({ listen, script: { type: "text/javascript", exec: (scripts[listen] ?? "").split("\n") } }));
-  return events.length > 0 ? events : undefined;
-}
-
-function postmanItem(item: Item): object {
-  if (item.kind === "folder") return { id: item.id, name: item.name, item: item.items.map(postmanItem), auth: postmanAuth(item.auth) };
-  return {
-    id: item.id,
-    name: item.name,
-    event: postmanEvents(item.scripts),
-    request: { auth: postmanAuth(item.auth), method: item.method, header: pairs(item.headers), body: postmanBody(item.body), url: item.url },
-  };
+/**
+ * An address as Postman writes it. One that was text stays text while no
+ * parameter is off; otherwise its parts, as Postman's own export has them —
+ * `raw` is what Kibo reads, the parts what other tools read — and the path
+ * variables it had.
+ */
+function urlToPostman(raw: string, off: Pair[], old: unknown): unknown {
+  if ((typeof old === "string" || old === undefined) && off.length === 0) return raw;
+  const [, protocol, authority, path] = /^(?:([^:/?#]+):\/\/)?([^/?#]*)([^?#]*)/.exec(raw) ?? [];
+  const port = /:(\d+)$/.exec(authority ?? "");
+  const host = port ? authority.slice(0, port.index) : authority;
+  const query = pairsOver([...queryOf(raw), ...off.map((p) => ({ ...p, disabled: true }))], obj(old).query);
+  // The parts are made again from `raw`; the rest — `variable`, `hash`, a description — stays.
+  const out: Json = { ...obj(old), raw };
+  const put = (key: string, value: unknown) => (value === undefined ? delete out[key] : (out[key] = value));
+  put("protocol", protocol || undefined);
+  put("host", host ? host.split(".") : undefined);
+  put("port", port ? port[1] : undefined);
+  put("path", path ? path.replace(/^\//, "").split("/") : undefined);
+  put("query", query.length > 0 ? query : undefined);
+  return out;
 }
 
 /**
- * The collection as a Postman v2.1 file — what Postman's Import takes, indented with
- * tabs as Postman writes it. Built from what the page holds, so a body or auth it
- * keeps but does not edit (`other`) goes out as its type alone.
+ * The request as Postman's `request` object: what the page changed written over
+ * what it came as, and nothing else — an unedited request goes back as it came,
+ * a header keeps its `description`, a body its options.
  */
-// ponytail: built from the page's model on sample data, the address as a string — a
-// parameter turned off in Params is not in it. HC-2 hands out the stored file as is,
-// `extra` and all, and this goes.
-export function toPostman(collection: Collection): string {
-  const file = {
-    info: { _postman_id: collection.id, name: collection.name, schema: POSTMAN_SCHEMA },
-    item: collection.items.map(postmanItem),
-    auth: postmanAuth(collection.auth),
-    event: postmanEvents(collection.scripts),
-    variable: collection.variables.length > 0 ? pairs(collection.variables) : undefined,
-  };
-  return JSON.stringify(file, null, "\t");
+export function requestToPostman(request: HttpRequest): unknown {
+  const before = request.source === undefined ? null : requestFrom(request.id, request.name, request.source);
+  const changed = (...keys: (keyof HttpRequest)[]) => before === null || keys.some((k) => !same(before[k], request[k]));
+  if (!changed("method", "url", "paramsOff", "headers", "auth", "body")) return request.source;
+  const was = typeof request.source === "string" ? { url: request.source } : obj(request.source);
+  const out: Json = { ...was };
+  if (changed("method") || !("method" in was)) out.method = request.method;
+  if (changed("url", "paramsOff")) out.url = urlToPostman(request.url, request.paramsOff ?? [], was.url);
+  if (changed("headers")) out.header = pairsOver(request.headers, was.header);
+  if (changed("auth")) {
+    const auth = authToPostman(request.auth);
+    if (auth) out.auth = auth;
+    else delete out.auth;
+  }
+  if (changed("body")) {
+    const body = bodyToPostman(request.body, was.body);
+    if (body) out.body = body;
+    else delete out.body;
+  }
+  return out;
 }
 
 export const hasScripts = (s: Scripts) => Boolean(s.prerequest?.trim() || s.test?.trim());

@@ -666,6 +666,18 @@
 .http-input:focus {
   border-color: var(--accent);
 }
+.http-field-top {
+  align-items: flex-start;
+}
+.http-field-top .http-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 6px;
+}
+.http-cert {
+  resize: vertical;
+}
 .http-kept {
   margin: 0;
   padding: 8px 10px;

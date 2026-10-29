@@ -41,8 +41,8 @@ import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
+import type { HttpHistoryEntry, HttpOutcome } from "../lib/httpCommands";
 import {
-  AGENT_ACCESS,
   requestsUnder,
   METHODS,
   asHttpText,
@@ -67,7 +67,6 @@ import {
   type Collection,
   type EnvVariable,
   type Environment,
-  type HistoryEntry,
   type HttpMethod,
   type HttpRequest,
   type Item,
@@ -78,14 +77,13 @@ import "./HttpPage.css";
 /**
  * The HTTP page (docs/45-http-client.md): collections on the left, the open
  * requests on the right — what is written on top, what came back under it —
- * the environment and every send's history in the bar. Runs on sample data
- * until the backend has commands.
+ * the environment and every send's history in the bar.
  */
 export function HttpPage() {
   const http = useHttpClient();
   const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
   const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["orders", "orders-folder"]));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggle = (id: string) =>
     setExpanded((s) => {
       const next = new Set(s);
@@ -96,13 +94,15 @@ export function HttpPage() {
 
   // A collection, folder or request being renamed or deleted — a new one is named straight away.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
-  const [deleting, setDeleting] = useState<{ id: string; name: string; what: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; name: string; what: string; environment?: boolean } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const shownProblem = failed ?? http.problem;
+  const dismiss = () => (failed ? setFailed(null) : http.dismissProblem());
 
   useShortcuts({
     // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
     httpSend: () => {
-      if (renaming || deleting || failed || sheet || !http.active) return false;
+      if (renaming || deleting || shownProblem || sheet || !http.active) return false;
       http.send(http.active);
     },
   });
@@ -113,18 +113,39 @@ export function HttpPage() {
   };
   const remove = () => {
     if (!deleting) return;
-    http.remove(deleting.id);
+    if (deleting.environment) {
+      setSheet(null);
+      http.deleteEnvironment(deleting.id).catch((e) => setFailed(`The environment was not deleted: ${e}`));
+    } else http.remove(deleting.id);
     setDeleting(null);
   };
   const reveal = (id: string) => setExpanded((s) => new Set(s).add(id));
-  const newCollection = () => {
-    const id = http.newCollection();
-    reveal(id);
-    setRenaming({ id, name: "New collection" });
-  };
+  const newCollection = () =>
+    http.newCollection().then(
+      (id) => {
+        reveal(id);
+        setRenaming({ id, name: "New collection" });
+      },
+      (e) => setFailed(`The collection was not made: ${e}`),
+    );
   const newRequest = (parent: string) => {
     reveal(parent);
-    setRenaming({ id: http.newRequest(parent), name: "New request" });
+    const id = http.newRequest(parent);
+    if (id) setRenaming({ id, name: "New request" });
+  };
+  const importFile = () =>
+    http.importFile().then(
+      (imported) => imported?.kind === "collection" && reveal(imported.id),
+      (e) => setFailed(`Nothing was imported: ${e}`),
+    );
+  const newEnvironment = () =>
+    http.newEnvironment().then(
+      (id) => setSheet({ kind: "environment", id }),
+      (e) => setFailed(`The environment was not made: ${e}`),
+    );
+  const openHistory = () => {
+    setSheet({ kind: "history" });
+    void http.loadHistory();
   };
   const menu = (node: TreeNode): Action[] => {
     // Counted when Delete is picked, not for every row on every render.
@@ -133,10 +154,12 @@ export function HttpPage() {
       if (requests === 0) return "— there is nothing in it";
       return `with ${requests === 1 ? "its request" : `its ${requests} requests`}`;
     };
+    // A file that does not read can only go.
+    const broken = node.kind === "collection" && http.collections.some((c) => c.id === node.id && c.error);
     return [
-      ...(node.kind === "request" ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
-      { value: "rename", label: "Rename…", run: () => setRenaming({ id: node.id, name: node.name }) },
-      ...(node.kind === "collection"
+      ...(node.kind === "request" || broken ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
+      ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ id: node.id, name: node.name }) }]),
+      ...(node.kind === "collection" && !broken
         ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
         : []),
       {
@@ -170,14 +193,17 @@ export function HttpPage() {
               </span>
             }
             title="The environment whose variables fill {{…}}"
-            options={http.environments.map((e) => ({
-              value: e.id,
-              label: e.name,
-              hint: `${e.variables.find(({ key }) => key === "baseUrl")?.value ?? ""} · agent: ${AGENT_ACCESS.find((a) => a.value === e.agent)?.label}`,
-              action: { icon: <Settings2 size={13} />, title: `Edit ${e.name}`, onRun: () => setSheet({ kind: "environment", id: e.id }) },
-            }))}
+            options={[
+              { value: "", label: "No environment", hint: "Globals and the collection's variables only" },
+              ...http.environments.map((e) => ({
+                value: e.id,
+                label: e.name,
+                hint: e.variables.find(({ key }) => key === "baseUrl")?.value,
+                action: { icon: <Settings2 size={13} />, title: `Edit ${e.name}`, onRun: () => setSheet({ kind: "environment", id: e.id }) },
+              })),
+            ]}
             value={http.environment?.id ?? ""}
-            onPick={http.setEnvironmentId}
+            onPick={(id) => http.setEnvironmentId(id || null)}
           />
           <button
             type="button"
@@ -185,9 +211,13 @@ export function HttpPage() {
             data-sheet-opener
             title={`Edit ${http.environment?.name ?? "the environment"}`}
             aria-label="Edit the environment"
+            disabled={!http.environment}
             onClick={() => http.environment && setSheet({ kind: "environment", id: http.environment.id })}
           >
             <Settings2 size={14} />
+          </button>
+          <button type="button" className="http-icon-button" data-sheet-opener title="New environment" aria-label="New environment" onClick={newEnvironment}>
+            <Plus size={14} />
           </button>
           <span className="http-spacer" />
           <div className="http-layout-switch" role="group" aria-label="Where the response goes">
@@ -197,7 +227,7 @@ export function HttpPage() {
               </button>
             ))}
           </div>
-          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
+          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={openHistory}>
             <History size={13} />
             History
           </button>
@@ -206,7 +236,13 @@ export function HttpPage() {
       sheet={
         editingEnv ? (
           <PageSheet icon={Globe} title="Environment" label={`Environment ${editingEnv.name}`} onClose={() => setSheet(null)}>
-            <EnvironmentForm key={editingEnv.id} environment={editingEnv} onSave={http.saveEnvironment} />
+            <EnvironmentForm
+              key={editingEnv.id}
+              environment={editingEnv}
+              onSave={http.saveEnvironment}
+              onExport={() => http.exportEnvironment(editingEnv.id)}
+              onDelete={() => setDeleting({ id: editingEnv.id, name: editingEnv.name, what: "Deletes the environment and its sealed secrets.", environment: true })}
+            />
           </PageSheet>
         ) : sheet?.kind === "history" ? (
           <PageSheet icon={History} title="History" label="Every request sent" onClose={() => setSheet(null)}>
@@ -227,8 +263,7 @@ export function HttpPage() {
         <nav className="http-tree" aria-label="Collections">
           <div className="http-tree-head">
             <span>Collections</span>
-            {/* TODO(HC-2): no action yet — the file is read and kept by the backend's import. */}
-            <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import">
+            <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import" onClick={importFile}>
               <Upload size={14} />
             </button>
             <button type="button" className="http-icon-button" title="New collection" aria-label="New collection" onClick={newCollection}>
@@ -275,9 +310,11 @@ export function HttpPage() {
               collection={openTab.collection}
               request={openTab.request}
               environment={http.environment}
+              globals={http.globals}
               layout={layout}
               sent={http.sent[openTab.request.id]}
               onEdit={http.edit}
+              onPasteCurl={(command) => http.pasteCurl(openTab.request, command).catch((e) => setFailed(`The command was not read: ${e}`))}
               onSend={() => http.send(openTab.request.id)}
             />
           ) : (
@@ -333,15 +370,15 @@ export function HttpPage() {
       </Modal>
       <Modal
         title="Not done"
-        open={failed !== null}
-        onClose={() => setFailed(null)}
+        open={shownProblem !== null}
+        onClose={dismiss}
         footer={
-          <button type="button" className="btn btn-primary" onClick={() => setFailed(null)}>
+          <button type="button" className="btn btn-primary" onClick={dismiss}>
             OK
           </button>
         }
       >
-        <p className="http-confirm">{failed}</p>
+        <p className="http-confirm">{shownProblem}</p>
       </Modal>
     </Page>
   );
@@ -401,7 +438,14 @@ function CollectionNode({ collection, ...tree }: { collection: Collection } & Tr
           {hasScripts(collection.scripts) && <ScriptsMark />}
         </button>
       </TreeRow>
-      {isOpen && (collection.items.length > 0 ? <Items items={collection.items} {...tree} /> : <p className="http-quiet http-tree-empty">No requests yet</p>)}
+      {isOpen &&
+        (collection.error ? (
+          <p className="http-error http-tree-empty">Does not read: {collection.error}</p>
+        ) : collection.items.length > 0 ? (
+          <Items items={collection.items} {...tree} />
+        ) : (
+          <p className="http-quiet http-tree-empty">No requests yet</p>
+        ))}
     </li>
   );
 }
@@ -447,8 +491,13 @@ function ago(at: number): string {
 /** Opening a send's request from the history, if it is still there. */
 type Opening = { canOpen: (requestId: string) => boolean; onOpen: (requestId: string) => void };
 
-function HistoryList({ entries, ...opening }: { entries: HistoryEntry[] } & Opening) {
+const pairs = (headers: [string, string][]): Pair[] => headers.map(([key, value]) => ({ key, value }));
+const contentTypeOf = (headers: [string, string][]) => headers.find(([key]) => key.toLowerCase() === "content-type")?.[1] ?? "";
+const statusOf = (outcome: HttpOutcome) => (outcome.kind === "response" ? outcome.status : null);
+
+function HistoryList({ entries, ...opening }: { entries: HttpHistoryEntry[] | null } & Opening) {
   const [shown, setShown] = useState<string | null>(null);
+  if (entries === null) return <p className="http-quiet">Reading…</p>;
   if (entries.length === 0) return <p className="http-quiet">Nothing sent yet.</p>;
   return (
     <ul className="http-history">
@@ -459,26 +508,28 @@ function HistoryList({ entries, ...opening }: { entries: HistoryEntry[] } & Open
   );
 }
 
-function HistoryRow({ entry, expanded, onToggle, ...opening }: { entry: HistoryEntry; expanded: boolean; onToggle: () => void } & Opening) {
-  const path = entry.url.replace(/^\{\{baseUrl\}\}/, "");
+function HistoryRow({ entry, expanded, onToggle, ...opening }: { entry: HttpHistoryEntry; expanded: boolean; onToggle: () => void } & Opening) {
+  const path = entry.templateUrl.replace(/^\{\{baseUrl\}\}/, "");
+  const where = entry.environment ?? "no environment";
+  const status = statusOf(entry.outcome);
   return (
     <li>
       <button
         type="button"
         className={`http-tree-row http-history-row${expanded ? " on" : ""}`}
         aria-expanded={expanded}
-        title={`${entry.method} ${entry.url} · ${entry.environment}${entry.agent ? ` · sent by the agent in “${entry.agent.chat}”` : ""}`}
+        title={`${entry.request.method} ${entry.templateUrl} · ${where}${entry.agentChat ? ` · sent by the agent in “${entry.agentChat}”` : ""}`}
         onClick={onToggle}
       >
         {expanded ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
-        <MethodBadge method={entry.method} />
+        <MethodBadge method={entry.request.method} />
         <span className="http-tree-name http-mono">{path}</span>
-        <span className="http-quiet">{entry.environment}</span>
-        {entry.agent && <Bot size={12} className="http-tree-mark" aria-label="Sent by the agent" />}
-        {entry.status === null ? (
-          <span className="http-status-text http-tone-server">timeout</span>
+        <span className="http-quiet">{where}</span>
+        {entry.agentChat && <Bot size={12} className="http-tree-mark" aria-label="Sent by the agent" />}
+        {status === null ? (
+          <span className="http-status-text http-tone-server">failed</span>
         ) : (
-          <span className={`http-status-text http-tone-${statusTone(entry.status)}`}>{entry.status}</span>
+          <span className={`http-status-text http-tone-${statusTone(status)}`}>{status}</span>
         )}
         <span className="http-quiet">{ago(entry.at)}</span>
       </button>
@@ -488,17 +539,18 @@ function HistoryRow({ entry, expanded, onToggle, ...opening }: { entry: HistoryE
 }
 
 /** One send in full: the request as it left, a secret masked, and what came back. */
-function Exchange({ entry, canOpen, onOpen }: { entry: HistoryEntry } & Opening) {
-  const { request, response } = entry;
-  const body = useMemo(() => (response?.body ? pretty(response.body, response.contentType) : null), [response]);
+function Exchange({ entry, canOpen, onOpen }: { entry: HttpHistoryEntry } & Opening) {
+  const { request, outcome } = entry;
+  const response = outcome.kind === "response" ? outcome : null;
+  const body = useMemo(() => (response && entry.responseBody ? pretty(entry.responseBody, contentTypeOf(response.headers)) : null), [response, entry.responseBody]);
   const requestId = entry.requestId && canOpen(entry.requestId) ? entry.requestId : null;
   return (
     <div className="http-exchange">
       <div className="http-exchange-head">
         <span className="http-label">Request</span>
         <span className="http-quiet">
-          {new Date(entry.at).toLocaleString()} · {entry.environment}
-          {entry.agent && ` · the agent, in “${entry.agent.chat}”`}
+          {new Date(entry.at).toLocaleString()} · {entry.environment ?? "no environment"}
+          {entry.agentChat && ` · the agent, in “${entry.agentChat}”`}
         </span>
         <span className="http-spacer" />
         {requestId && (
@@ -507,32 +559,19 @@ function Exchange({ entry, canOpen, onOpen }: { entry: HistoryEntry } & Opening)
           </button>
         )}
       </div>
-      {request ? (
-        <div className="http-code-box http-code-box-log">
-          <CodeEditor text={asHttpText(`${entry.method} ${request.url}`, request.headers, request.body)} language="http" numbered={false} label="Request" />
-        </div>
-      ) : (
-        <p className="http-quiet">Not kept — sent before history kept requests.</p>
-      )}
+      <div className="http-code-box http-code-box-log">
+        <CodeEditor text={asHttpText(`${request.method} ${request.url}`, pairs(request.headers), request.body)} language="http" numbered={false} label="Request" />
+      </div>
       <div className="http-exchange-head">
         <span className="http-label">Response</span>
-        {response && (
-          <span className="http-quiet">
-            {response.ms} ms · {sizeLabel(response.bytes)}
-          </span>
-        )}
+        {response && <span className="http-quiet">{response.elapsedMs} ms</span>}
       </div>
       {response ? (
         <div className="http-code-box http-code-box-log">
-          <CodeEditor
-            text={asHttpText(`HTTP/1.1 ${response.status} ${response.statusText}`, response.headers, body)}
-            language="http"
-            numbered={false}
-            label="Response"
-          />
+          <CodeEditor text={asHttpText(`HTTP/1.1 ${response.status}`, pairs(response.headers), body)} language="http" numbered={false} label="Response" />
         </div>
       ) : (
-        <p className={entry.error ? "http-error" : "http-quiet"}>{entry.error ?? "Not kept — sent before history kept responses."}</p>
+        <p className="http-error">{outcome.kind === "failed" && outcome.error}</p>
       )}
     </div>
   );
@@ -654,17 +693,21 @@ function RequestView({
   collection,
   request,
   environment,
+  globals,
   layout,
   sent,
   onEdit,
+  onPasteCurl,
   onSend,
 }: {
   collection: Collection;
   request: HttpRequest;
   environment: Environment | null;
+  globals: EnvVariable[];
   layout: Layout;
   sent: Sent | undefined;
   onEdit: (r: HttpRequest) => void;
+  onPasteCurl: (command: string) => void;
   onSend: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
@@ -684,8 +727,8 @@ function RequestView({
     else setWidth((w) => fit(w, own.width, whole.right - own.left));
   };
   const size = stacked ? (height === null ? undefined : { height, maxHeight: "none" }) : width === null ? undefined : { width, flexBasis: "auto" };
-  const resolved = useMemo(() => resolveRequest(collection, request, environment), [collection, request, environment]);
-  const values = useMemo(() => shownValues(scope(collection, environment)), [collection, environment]);
+  const resolved = useMemo(() => resolveRequest(collection, request, environment, "mask", globals), [collection, request, environment, globals]);
+  const values = useMemo(() => shownValues(scope(collection, environment, globals)), [collection, environment, globals]);
   const valuesKey = JSON.stringify([...values]);
   // Keyed by what the values say, not by the map: typing makes a new map of the same values,
   // and new marks would have the editors draw every variable again.
@@ -715,7 +758,13 @@ function RequestView({
           values={values}
           value={request.url}
           onChange={(e) => set({ url: e.target.value })}
-          // TODO(HC-4): a pasted curl command is not read yet — the parser comes with HC-1.
+          // A whole `curl …`, as DevTools copies it, becomes the request rather than its address.
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData("text");
+            if (!/^\s*curl\s/.test(pasted)) return;
+            e.preventDefault();
+            onPasteCurl(pasted.trim());
+          }}
           placeholder="{{baseUrl}}/path — or paste a curl command"
         />
         <button
@@ -723,7 +772,7 @@ function RequestView({
           className="http-icon-button"
           title={copied ? "Copied" : "Copy as cURL — secrets as their {{name}}, never their value"}
           aria-label="Copy as cURL"
-          onClick={() => copy(toCurl(resolveRequest(collection, request, environment, "name")))}
+          onClick={() => copy(toCurl(resolveRequest(collection, request, environment, "name", globals)))}
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
@@ -1045,14 +1094,17 @@ function receivedAt(at: number): string {
 
 function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
   const [tab, setTab] = useState<ResTab>("body");
-  const response = sent?.response;
-  const body = useMemo(() => response && pretty(response.body, response.contentType), [response]);
+  const view = sent?.view;
+  const response = view?.outcome.kind === "response" ? view.outcome : null;
+  const contentType = response ? contentTypeOf(response.headers) : "";
+  // Undefined when there is no text to show: nothing came back, or not text.
+  const body = useMemo(() => (response && view?.body != null ? pretty(view.body, contentType) : undefined), [response, view, contentType]);
   const { copied, copy } = useCopied();
   const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
   const tabs: [ResTab, string, ReactNode][] = [
     ["body", "Response", null],
     ["headers", "Headers", count(response?.headers.length)],
-    ["tests", "Tests", response?.tests.length ? <span className="http-count">{`${response.tests.filter((x) => x.passed).length}/${response.tests.length}`}</span> : null],
+    ["tests", "Tests", null],
   ];
   return (
     <section className="http-response" aria-label="Response" aria-busy={sent?.busy}>
@@ -1067,14 +1119,10 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
         </div>
         <span className="http-spacer" />
         {sent?.busy && <Loader2 size={13} className="http-spin" />}
-        {response && (
-          <span className={`http-status http-tone-${statusTone(response.status)}`}>
-            {response.status} {response.statusText}
-          </span>
-        )}
-        {sent?.at !== undefined && (
-          <span className="http-quiet http-response-meta" title={`Received ${new Date(sent.at).toLocaleString()}${sent.environment ? ` from ${sent.environment}` : ""}`}>
-            {[response && `${response.ms} ms`, response && sizeLabel(response.bytes), receivedAt(sent.at), sent.environment].filter(Boolean).join(" · ")}
+        {response && <span className={`http-status http-tone-${statusTone(response.status)}`}>{response.status}</span>}
+        {view && (
+          <span className="http-quiet http-response-meta" title={`Received ${new Date(view.at).toLocaleString()}${view.environment ? ` from ${view.environment}` : ""}`}>
+            {[response && `${response.elapsedMs} ms`, response && sizeLabel(view.size), receivedAt(view.at), view.environment].filter(Boolean).join(" · ")}
           </span>
         )}
         {body !== undefined && (
@@ -1091,71 +1139,80 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
       </div>
       <div className="http-response-body">
         {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
-        {sent?.error && <p className="http-error">{sent.error}</p>}
-        {!response && !sent?.error && !sent?.busy && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
+        {view?.outcome.kind === "failed" && <p className="http-error">{view.outcome.error}</p>}
+        {!view && !sent?.busy && !sent?.notSent && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
+        {response?.status === 401 && scripts && (
+          <p className="http-note">
+            <FileCode2 size={13} />
+            This request has Postman scripts, which do not run yet: if one of them gets the token, the request went without it.
+          </p>
+        )}
+        {response?.redirects && <p className="http-quiet http-mono" title="Redirected through">{[...response.redirects, response.url].join(" → ")}</p>}
         {response && tab === "body" &&
-          (response.body ? (
+          (body ? (
             <div className="http-code-box http-code-box-fill">
-              <CodeEditor text={body ?? ""} language={/json/.test(response.contentType) ? "json" : /xml/.test(response.contentType) ? "xml" : "text"} label="Response body" />
+              <CodeEditor text={body} language={/json/i.test(contentType) ? "json" : /xml/i.test(contentType) ? "xml" : "text"} label="Response body" />
             </div>
           ) : (
-            <p className="http-quiet">No body.</p>
+            <p className="http-quiet">{view && view.size > 0 ? `Not text — ${sizeLabel(view.size)}${contentType ? ` of ${contentType}` : ""}.` : "No body."}</p>
           ))}
         {response && tab === "headers" && (
           <table className="http-pairs http-pairs-read">
             <tbody>
-              {response.headers.map((h, i) => (
+              {response.headers.map(([key, value], i) => (
                 // By place: a header can come more than once (`Set-Cookie`).
                 <tr key={i}>
-                  <td className="http-mono">{h.key}</td>
-                  <td className="http-mono">{h.value}</td>
+                  <td className="http-mono">{key}</td>
+                  <td className="http-mono">{value}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-        {response && tab === "tests" &&
-          (response.tests.length === 0 ? (
-            <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>
-          ) : (
-            <ul className="http-tests">
-              {response.tests.map((t, i) => (
-                <li key={i} className={t.passed ? "pass" : "fail"}>
-                  <span className="http-test-mark">{t.passed ? "PASS" : "FAIL"}</span>
-                  {t.name}
-                  {t.error && <span className="http-quiet"> — {t.error}</span>}
-                </li>
-              ))}
-            </ul>
-          ))}
+        {response && tab === "tests" && <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>}
       </div>
     </section>
   );
 }
 
-function EnvironmentForm({ environment, onSave }: { environment: Environment; onSave: (e: Environment) => void }) {
-  const [draft, setDraft] = useState(environment);
-  const put = (i: number, patch: Partial<EnvVariable>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
-  const access = AGENT_ACCESS.find((a) => a.value === draft.agent);
+/** A variable in the form; `kept` when a sealed value is behind it. */
+type Row = EnvVariable & { kept?: boolean };
+
+function EnvironmentForm({
+  environment,
+  onSave,
+  onExport,
+  onDelete,
+}: {
+  environment: Environment;
+  onSave: (e: Environment) => Promise<void>;
+  onExport: () => Promise<boolean>;
+  onDelete: () => void;
+}) {
+  // A saved secret's field starts empty — typing replaces it — never `•••` to type after. `kept` says
+  // a sealed value is behind the row: left empty, it goes back as the mask, which keeps the value —
+  // and is refused when the row was renamed away from it, rather than saved empty.
+  const [draft, setDraft] = useState(() => ({
+    ...environment,
+    variables: environment.variables.map((v): Row => (v.secret && v.value === SECRET_MASK ? { ...v, value: "", kept: true } : v)),
+  }));
+  const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
+  const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
+  const save = () =>
+    onSave({ ...draft, variables: draft.variables.map(({ kept, ...v }) => (kept && v.value === "" ? { ...v, value: SECRET_MASK } : v)) }).then(
+      () => {
+        setSaid({ error: false, text: "Saved." });
+        // A secret just typed is sealed now: its field empties, as a saved one's is.
+        setDraft((d) => ({ ...d, variables: d.variables.map((v) => (v.secret ? { ...v, value: "", kept: v.kept || v.value !== "" } : v)) }));
+      },
+      (e) => setSaid({ error: true, text: String(e) }),
+    );
   return (
     <div className="http-form http-env">
       <label className="http-field-row">
         <span className="http-label">Name</span>
         <input className="http-input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
       </label>
-
-      <div className="http-field-row">
-        <span className="http-label">Agent</span>
-        <Dropdown
-          below
-          label={access?.label}
-          heading="What the agent may send here"
-          options={AGENT_ACCESS.map((a) => ({ value: a.value, label: a.label, hint: a.hint }))}
-          value={draft.agent}
-          onPick={(agent) => setDraft({ ...draft, agent: agent as Environment["agent"] })}
-        />
-        <span className="http-quiet">{access?.hint}</span>
-      </div>
 
       <table className="http-pairs">
         <thead>
@@ -1164,6 +1221,7 @@ function EnvironmentForm({ environment, onSave }: { environment: Environment; on
             <th>Variable</th>
             <th>Value</th>
             <th aria-label="Secret" />
+            <th aria-label="Remove" />
           </tr>
         </thead>
         <tbody>
@@ -1182,7 +1240,7 @@ function EnvironmentForm({ environment, onSave }: { environment: Environment; on
                   spellCheck={false}
                   type={v.secret ? "password" : "text"}
                   value={v.value}
-                  placeholder={v.secret ? `${SECRET_MASK} saved — type to replace` : ""}
+                  placeholder={v.secret && v.kept ? `${SECRET_MASK} saved — type to replace` : ""}
                   onChange={(e) => put(i, { value: e.target.value })}
                 />
               </td>
@@ -1198,6 +1256,17 @@ function EnvironmentForm({ environment, onSave }: { environment: Environment; on
                   {v.secret ? <Lock size={13} /> : <LockOpen size={13} />}
                 </button>
               </td>
+              <td>
+                <button
+                  type="button"
+                  className="http-icon-button"
+                  title="Remove"
+                  aria-label={`Remove ${v.key}`}
+                  onClick={() => setDraft((d) => ({ ...d, variables: d.variables.filter((_, j) => j !== i) }))}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1207,22 +1276,38 @@ function EnvironmentForm({ environment, onSave }: { environment: Environment; on
         Variable
       </button>
 
-      <div className="http-field-row">
-        <span className="http-label">Certificate</span>
-        <span className={draft.trustedCert ? "http-ok" : "http-quiet"}>
-          <ShieldCheck size={13} /> {draft.trustedCert ? "The stand's own certificate is trusted" : "System trust store"}
+      <label className="http-field-row http-field-top">
+        <span className="http-label">
+          <ShieldCheck size={13} /> Certificate
         </span>
-      </div>
+        <textarea
+          className="http-input http-mono http-cert"
+          rows={4}
+          spellCheck={false}
+          value={draft.trustedCert ?? ""}
+          placeholder="The stand's own certificate or its CA's, PEM — empty for the system's trust store"
+          onChange={(e) => setDraft({ ...draft, trustedCert: e.target.value })}
+        />
+      </label>
 
       <p className="http-quiet">Sealed on this computer under the app's master key, as the API keys are. A secret's value is never shown again — leave it empty to keep it.</p>
+      {said && <p className={said.error ? "http-error" : "http-quiet"}>{said.text}</p>}
       <div className="http-actions">
-        {/* TODO(HC-2): no action yet — the backend writes the environment, its secrets empty. */}
-        <button type="button" className="http-bar-button" title="As a Postman environment file — secrets empty">
+        <button
+          type="button"
+          className="http-bar-button"
+          title="As a Postman environment file — secrets empty"
+          onClick={() => onExport().catch((e) => setSaid({ error: true, text: `Not exported: ${e}` }))}
+        >
           <Download size={13} />
           Export
         </button>
+        <button type="button" className="http-bar-button" onClick={onDelete}>
+          <Trash2 size={13} />
+          Delete…
+        </button>
         <span className="http-spacer" />
-        <button type="button" className="http-send" onClick={() => onSave(draft)}>
+        <button type="button" className="http-send" onClick={save}>
           Save
         </button>
       </div>
