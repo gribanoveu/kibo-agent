@@ -39,3 +39,4 @@ pub mod turn_setup;
 pub mod provider_balance;
 pub mod meeting_notes;
 pub mod mongo;
+pub mod http_client;
