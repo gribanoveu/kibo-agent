@@ -48,6 +48,8 @@ pub enum HttpError {
     NoEnvironment(String),
     #[error("no collection {0}")]
     NoCollection(String),
+    #[error("the certificate: {0}")]
+    BadCertificate(String),
     #[error("{0} is not an id Kibo keeps a file under")]
     BadId(String),
     #[error("{0}")]
@@ -64,6 +66,14 @@ pub struct Variable {
     pub secret: bool,
     #[serde(default = "on")]
     pub enabled: bool,
+}
+
+impl Variable {
+    /// What the window gets: a secret's value never — the mask if it has one, "" if not.
+    pub fn for_window(&self) -> Variable {
+        let value = if self.secret && !self.value.is_empty() { SECRET_MASK.into() } else { self.value.clone() };
+        Variable { value, ..self.clone() }
+    }
 }
 
 fn on() -> bool {
@@ -85,15 +95,7 @@ pub struct Environment {
 impl Environment {
     /// What the window gets: a secret's value never — the mask if it has one, "" if not.
     pub fn for_window(&self) -> Environment {
-        let variables = self
-            .variables
-            .iter()
-            .map(|v| Variable {
-                value: if v.secret && !v.value.is_empty() { SECRET_MASK.into() } else { v.value.clone() },
-                ..v.clone()
-            })
-            .collect();
-        Environment { variables, ..self.clone() }
+        Environment { variables: self.variables.iter().map(Variable::for_window).collect(), ..self.clone() }
     }
 
     /// The window's edit over what is stored: a stored secret sent back empty
@@ -321,6 +323,9 @@ pub struct HistoryEntry {
     pub agent_chat: Option<String>,
     /// The address before its variables were filled in: what the list shows.
     pub template_url: String,
+    /// The collection's request it was, which the entry opens; none for the agent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub request: Outgoing,
     pub outcome: Outcome,
     pub response_body: Option<String>,
@@ -332,7 +337,7 @@ impl HistoryEntry {
         let mut request = prepared.shown.clone();
         request.body = request.body.map(|b| loggable(b.as_bytes()));
         let response_body = matches!(outcome, Outcome::Response { .. }).then(|| loggable(body));
-        HistoryEntry { id: uuid::Uuid::new_v4().to_string(), at, environment, agent_chat, template_url, request, outcome, response_body }
+        HistoryEntry { id: uuid::Uuid::new_v4().to_string(), at, environment, agent_chat, template_url, request_id: None, request, outcome, response_body }
     }
 
     /// Near what it takes as JSON: a body with control characters is not kept

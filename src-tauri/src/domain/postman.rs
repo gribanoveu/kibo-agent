@@ -11,6 +11,9 @@ use serde_json::{Map, Value};
 
 use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable};
 
+/// What a v2.1 file names in `info.schema`.
+const SCHEMA: &str = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
+
 pub struct Collection {
     /// Always an object: `parse` lets nothing else in.
     root: Value,
@@ -62,6 +65,13 @@ impl Collection {
     /// has none (HC-0), and a saved response is kept by its request's id.
     /// The only change Kibo makes to a file the user did not edit.
     pub fn ensure_ids(&mut self) -> usize {
+        self.ensure_ids_besides(&std::collections::HashSet::new())
+    }
+
+    /// As `ensure_ids`, and an id another collection has (`ids`) is replaced too:
+    /// the same export imported twice must not share its requests' ids, which
+    /// the page opens them by.
+    pub fn ensure_ids_besides(&mut self, taken: &std::collections::HashSet<String>) -> usize {
         fn walk(items: &mut [Value], seen: &mut std::collections::HashSet<String>, added: &mut usize) {
             for obj in items.iter_mut().filter_map(Value::as_object_mut) {
                 // A number would never match an id asked for, `../x` names no file to keep a response in,
@@ -84,9 +94,80 @@ impl Collection {
         }
         let mut added = 0;
         if let Some(Value::Array(items)) = self.root.get_mut("item") {
-            walk(items, &mut Default::default(), &mut added);
+            walk(items, &mut taken.clone(), &mut added);
         }
         added
+    }
+
+    /// A new collection with nothing in it.
+    pub fn new(id: &str, name: &str) -> Collection {
+        let root = serde_json::json!({"info": {"_postman_id": id, "name": name, "schema": SCHEMA}, "item": []});
+        Collection { root }
+    }
+
+    /// The tree as it is, for the window to draw and edit.
+    pub fn json(&self) -> &Value {
+        &self.root
+    }
+
+    /// Every folder's and request's id, lowercased as a file name compares them.
+    pub fn ids(&self) -> Vec<String> {
+        fn walk(items: &[Value], ids: &mut Vec<String>) {
+            for obj in items.iter().filter_map(Value::as_object) {
+                ids.extend(obj.get("id").and_then(Value::as_str).map(str::to_ascii_lowercase));
+                if let Some(Value::Array(children)) = obj.get("item") {
+                    walk(children, ids);
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        if let Some(Value::Array(items)) = self.root.get("item") {
+            walk(items, &mut ids);
+        }
+        ids
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        match self.root.get_mut("info").and_then(Value::as_object_mut) {
+            Some(info) => _ = info.insert("name".into(), name.into()),
+            None => self.root["info"] = serde_json::json!({"name": name}),
+        }
+    }
+
+    /// The page's edit of a request: its `request` in place of the stored one,
+    /// in the same place; the rest of the item — scripts, examples — as it was.
+    pub fn set_request(&mut self, id: &str, request: Value) -> Result<(), HttpError> {
+        let item = self.item_mut(id).filter(|i| !i.contains_key("item")).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        item.insert("request".into(), request);
+        Ok(())
+    }
+
+    /// A new item from the page, last in the folder `parent`, or in the collection when there is none.
+    pub fn add(&mut self, parent: Option<&str>, item: Value) -> Result<(), HttpError> {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        if !is_safe_id(id) || self.ids().contains(&id.to_ascii_lowercase()) {
+            return Err(HttpError::BadId(id.into()));
+        }
+        let items = match parent {
+            Some(p) => self.item_mut(p).and_then(|f| f.get_mut("item")).ok_or_else(|| HttpError::NoSuchItem(p.into()))?,
+            None => self.root.as_object_mut().expect("parse lets only an object in").entry("item").or_insert_with(|| Value::Array(Vec::new())),
+        };
+        items.as_array_mut().ok_or_else(|| HttpError::NoSuchItem(parent.unwrap_or_default().into()))?.push(item);
+        Ok(())
+    }
+
+    /// The folder or request `id` gone, with all it held; the requests that went, whose responses go too.
+    pub fn remove(&mut self, id: &str) -> Result<Vec<String>, HttpError> {
+        fn take(items: &mut Vec<Value>, id: &str) -> Option<Value> {
+            if let Some(at) = items.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id)) {
+                return Some(items.remove(at));
+            }
+            items.iter_mut().filter_map(|v| v.get_mut("item")?.as_array_mut()).find_map(|children| take(children, id))
+        }
+        let items = self.root.get_mut("item").and_then(Value::as_array_mut).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let gone = take(items, id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let held = Collection { root: serde_json::json!({"item": [gone]}) };
+        Ok(held.request_ids())
     }
 
     pub fn name(&self) -> String {
@@ -552,6 +633,42 @@ mod tests {
         let changed: Vec<(&str, &str)> = before.lines().zip(after.lines()).filter(|(a, b)| a != b).collect();
         assert_eq!(changed, vec![("            \"method\": \"POST\",", "            \"method\": \"PUT\",")]);
         assert_eq!(before.lines().count(), after.lines().count());
+    }
+
+    #[test]
+    fn the_tree_is_added_to_renamed_and_cut_where_the_page_says() {
+        let mut c = Collection::parse(&Collection::new("c", "Shop").to_text()).unwrap();
+        c.set_name("Store");
+        assert_eq!(c.name(), "Store");
+        c.add(None, json!({"id": "f", "name": "F", "item": []})).unwrap();
+        c.add(Some("f"), json!({"id": "g", "name": "G", "item": []})).unwrap();
+        c.add(Some("g"), json!({"id": "deep", "name": "Deep", "request": {"url": "/d"}})).unwrap();
+        c.add(None, json!({"id": "top", "name": "Top", "event": [{"listen": "test"}], "request": {"url": "/t"}})).unwrap();
+        assert!(matches!(c.add(Some("top"), json!({"id": "x"})), Err(HttpError::NoSuchItem(_))), "a request holds nothing");
+        assert!(matches!(c.add(None, json!({"id": "../x"})), Err(HttpError::BadId(_))));
+        assert!(matches!(c.add(None, json!({"name": "no id"})), Err(HttpError::BadId(_))));
+
+        c.set_request("top", json!({"method": "PUT", "url": "/u"})).unwrap();
+        assert_eq!(c.json()["item"][1], json!({"id": "top", "name": "Top", "event": [{"listen": "test"}], "request": {"method": "PUT", "url": "/u"}}));
+        assert!(matches!(c.set_request("f", json!({})), Err(HttpError::NoSuchItem(_))), "a folder has no request");
+
+        c.add(Some("g"), json!({"id": "Deeper", "name": "Deeper", "request": {"url": "/e"}})).unwrap();
+        assert!(c.ids().contains(&"deeper".to_string()), "lowercased, as a file name compares them");
+        assert_eq!(c.remove("Deeper").unwrap(), ["Deeper"], "found below the top");
+        assert_eq!(c.remove("f").unwrap(), ["deep"]);
+        assert_eq!(c.ids(), ["top"]);
+        assert!(matches!(c.remove("f"), Err(HttpError::NoSuchItem(_))));
+    }
+
+    #[test]
+    fn an_id_another_collection_has_is_replaced_and_no_other() {
+        let mut c = probe();
+        let ids = c.ids();
+        let taken = std::collections::HashSet::from([ids[0].clone()]);
+        assert_eq!(c.ensure_ids_besides(&taken), 1);
+        let now = c.ids();
+        assert_ne!(now[0], ids[0]);
+        assert_eq!(now[1..], ids[1..]);
     }
 
     #[test]

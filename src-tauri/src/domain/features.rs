@@ -118,8 +118,8 @@ impl Feature {
                 id: "http-client",
                 name: "HTTP client",
                 description: "An HTTP page for trying an API: requests in collections kept in the Postman format, \
-                    environments with their variables, the response beside the request. Not finished — the page's look \
-                    with sample data, nothing is sent yet (docs/45-http-client.md).",
+                    imported from and exported to Postman, environments with sealed secrets, the response beside the \
+                    request and kept with it, every send in History. Postman scripts do not run yet (docs/45-http-client.md).",
                 enabled_by_default: false,
                 tools: &[],
                 data: Some("http"),
