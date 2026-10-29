@@ -43,6 +43,14 @@ pub enum HttpError {
     BadBaseUrl(String),
     #[error("not a cURL command Kibo reads: {0}")]
     BadCurl(String),
+    #[error("no environment {0}")]
+    NoEnvironment(String),
+    #[error("no collection {0}")]
+    NoCollection(String),
+    #[error("{0} is not an id Kibo keeps a file under")]
+    BadId(String),
+    #[error("{0}")]
+    Store(String),
 }
 
 /// A variable of an environment, a collection or globals — Postman's `{key, value}`.
@@ -196,7 +204,7 @@ fn dynamic_value(name: &str) -> Option<String> {
 }
 
 /// A request as it leaves: variables filled in, auth a header or a parameter, the body as text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outgoing {
     pub method: String,
@@ -210,6 +218,99 @@ pub struct Outgoing {
 pub struct Prepared {
     pub sent: Outgoing,
     pub shown: Outgoing,
+}
+
+/// What came back: a response, 4xx and 5xx too, or why none did. The body is apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Outcome {
+    #[serde(rename_all = "camelCase")]
+    Response { status: u16, headers: Vec<(String, String)>, url: String, elapsed_ms: u64 },
+    Failed { error: String },
+}
+
+/// A request's last response, kept whole until the next send (decision 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedResponse {
+    /// Unix milliseconds.
+    pub at: i64,
+    pub environment: Option<String>,
+    pub outcome: Outcome,
+    /// Bytes, a picture's too; the store keeps them beside the rest, not in JSON.
+    #[serde(skip)]
+    pub body: Vec<u8>,
+}
+
+/// History keeps this many sends, and no more than `HISTORY_BYTES` of them.
+pub const HISTORY_ENTRIES: usize = 200;
+pub const HISTORY_BYTES: usize = 50 << 20;
+/// A body in history is cut here: the log says what happened, the request keeps the whole response.
+pub const HISTORY_BODY: usize = 256 << 10;
+
+/// One send in the log: the request as shown — a secret masked — and what came back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub id: String,
+    pub at: i64,
+    pub environment: Option<String>,
+    /// The chat whose agent sent it; none when the page did.
+    pub agent_chat: Option<String>,
+    /// The address before its variables were filled in: what the list shows.
+    pub template_url: String,
+    pub request: Outgoing,
+    pub outcome: Outcome,
+    pub response_body: Option<String>,
+}
+
+impl HistoryEntry {
+    /// Built from the shown request only, so a secret's value has no way in.
+    pub fn new(at: i64, environment: Option<String>, agent_chat: Option<String>, template_url: String, prepared: &Prepared, outcome: Outcome, body: &[u8]) -> HistoryEntry {
+        let mut request = prepared.shown.clone();
+        request.body = request.body.map(|b| loggable(b.as_bytes()));
+        let response_body = matches!(outcome, Outcome::Response { .. }).then(|| loggable(body));
+        HistoryEntry { id: uuid::Uuid::new_v4().to_string(), at, environment, agent_chat, template_url, request, outcome, response_body }
+    }
+
+    /// Near what it takes as JSON: a body with control characters is not kept
+    /// (`loggable`), so an escape at most doubles a `"` or a `\`.
+    fn size(&self) -> usize {
+        let headers = |h: &[(String, String)]| h.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+        let outcome = match &self.outcome {
+            Outcome::Response { headers: h, url, .. } => headers(h) + url.len(),
+            Outcome::Failed { error } => error.len(),
+        };
+        self.template_url.len() + self.request.url.len() + headers(&self.request.headers) + self.request.body.as_ref().map_or(0, String::len) + outcome + self.response_body.as_ref().map_or(0, String::len)
+    }
+}
+
+/// The oldest sends go, oldest first, until the log holds 200 and 50 MB at most.
+pub fn trim_history(entries: &mut Vec<HistoryEntry>) {
+    let mut total: usize = entries.iter().map(HistoryEntry::size).sum();
+    let mut drop = 0;
+    while entries.len() - drop > HISTORY_ENTRIES || total > HISTORY_BYTES {
+        total -= entries[drop].size();
+        drop += 1;
+    }
+    entries.drain(..drop);
+}
+
+/// A body as the log keeps it: text cut at 256 KB; anything else — a picture,
+/// protobuf, `\0` that JSON would write as six bytes — only its size.
+fn loggable(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) => cut(text),
+        _ => format!("binary, {} bytes", bytes.len()),
+    }
+}
+
+fn cut(text: &str) -> String {
+    if text.len() <= HISTORY_BODY {
+        return text.to_string();
+    }
+    let end = (0..=HISTORY_BODY).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+    format!("{}\n… cut at 256.0 KB in history", &text[..end])
 }
 
 /// The text without its `//` and `/* */` comments — what Postman sends of a JSON
@@ -544,6 +645,51 @@ mod tests {
         let mut off = stored.clone();
         off.variables[2].enabled = false;
         assert_eq!(off.base_url(), None, "a baseUrl turned off is not the base");
+    }
+
+    fn sent(body: &str) -> HistoryEntry {
+        let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()) };
+        let prepared = Prepared { sent: out("Bearer t0k"), shown: out("Bearer •••") };
+        let outcome = Outcome::Response { status: 200, headers: vec![], url: "https://api/x".into(), elapsed_ms: 1 };
+        HistoryEntry::new(1, None, None, "{{baseUrl}}/x".into(), &prepared, outcome, body.as_bytes())
+    }
+
+    #[test]
+    fn history_keeps_the_shown_request_and_cuts_bodies() {
+        let e = sent("small");
+        assert_eq!(e.request.headers[0].1, "Bearer •••");
+        assert_eq!((e.request.body.as_deref(), e.response_body.as_deref()), (Some("small"), Some("small")));
+
+        // A three-byte character across the line: cut before it, not through it.
+        let big = format!("{}€tail", "a".repeat(HISTORY_BODY - 1));
+        let e = sent(&big);
+        let cut = format!("{}\n… cut at 256.0 KB in history", "a".repeat(HISTORY_BODY - 1));
+        assert_eq!((e.request.body.as_deref(), e.response_body.as_deref()), (Some(cut.as_str()), Some(cut.as_str())));
+        assert_eq!(sent(&"a".repeat(HISTORY_BODY)).response_body.unwrap().len(), HISTORY_BODY, "at the line, whole");
+
+        let failed = HistoryEntry::new(1, None, None, String::new(), &Prepared { sent: e.request.clone(), shown: e.request.clone() }, Outcome::Failed { error: "refused".into() }, b"");
+        assert_eq!(failed.response_body, None);
+
+        let binary = HistoryEntry::new(1, None, None, String::new(), &Prepared { sent: e.request.clone(), shown: e.request.clone() }, Outcome::Response { status: 200, headers: vec![], url: String::new(), elapsed_ms: 1 }, &[0, 0, 0, 0xff]);
+        assert_eq!(binary.response_body.as_deref(), Some("binary, 4 bytes"));
+        assert_eq!(sent("a\0b").response_body.as_deref(), Some("binary, 3 bytes"), "valid UTF-8, but \\0 is six bytes in JSON");
+        assert_eq!(sent("a\tb\r\nc").response_body.as_deref(), Some("a\tb\r\nc"));
+    }
+
+    #[test]
+    fn history_drops_the_oldest_past_200_or_50_mb() {
+        let mut log: Vec<HistoryEntry> = (0..205).map(|i| sent(&i.to_string())).collect();
+        trim_history(&mut log);
+        assert_eq!(log.len(), HISTORY_ENTRIES);
+        assert_eq!(log[0].request.body.as_deref(), Some("5"), "the five oldest went");
+
+        let quarter = "b".repeat(HISTORY_BODY);
+        let mut log: Vec<HistoryEntry> = (0..120).map(|_| sent(&quarter)).collect();
+        log.push(sent("newest"));
+        trim_history(&mut log);
+        let total: usize = log.iter().map(HistoryEntry::size).sum();
+        assert!(total <= HISTORY_BYTES && total > HISTORY_BYTES - 2 * sent(&quarter).size(), "{total}");
+        assert_eq!(log.last().unwrap().request.body.as_deref(), Some("newest"));
     }
 
     #[test]

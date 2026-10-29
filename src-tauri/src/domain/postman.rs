@@ -9,7 +9,7 @@ use base64::Engine;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::{Map, Value};
 
-use super::http_client::{strip_json_comments, Filled, HttpError, Outgoing, Prepared, Scope, Variable};
+use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable};
 
 pub struct Collection {
     /// Always an object: `parse` lets nothing else in.
@@ -29,15 +29,22 @@ pub enum Auth {
 
 impl Collection {
     pub fn parse(text: &str) -> Result<Collection, HttpError> {
-        let root: Value = serde_json::from_str(text).map_err(|e| HttpError::NotACollection(format!("not JSON — {e}")))?;
-        let schema = root.pointer("/info/schema").and_then(Value::as_str);
         let wrong = |what: &str| Err(HttpError::NotACollection(what.into()));
+        // v3 is a folder of YAML files, each with its `$kind`.
+        const V3: &str = "it is Postman v3 — export the collection from Postman as v2.1";
+        let root: Value = match serde_json::from_str(text) {
+            Ok(root) => root,
+            Err(_) if text.contains("$kind") => return wrong(V3),
+            Err(e) => return wrong(&format!("not JSON — {e}")),
+        };
+        let schema = root.pointer("/info/schema").and_then(Value::as_str);
         match schema {
             Some(s) if s.contains("/collection/v2.1") => {}
             Some(s) if s.contains("/collection/v2.0") => return wrong("it is v2.0 — export it from Postman as v2.1"),
             Some(s) => return wrong(&format!("its schema is {s}")),
             None if root.get("_postman_variable_scope").is_some() => return wrong("it is a Postman environment"),
             None if root.get("requests").is_some() => return wrong("it is a Postman collection v1"),
+            None if root.get("$kind").is_some() => return wrong(V3),
             None => return wrong("it has no info.schema"),
         }
         if root.get("item").is_some_and(|i| !i.is_array()) {
@@ -55,11 +62,15 @@ impl Collection {
     /// has none (HC-0), and a saved response is kept by its request's id.
     /// The only change Kibo makes to a file the user did not edit.
     pub fn ensure_ids(&mut self) -> usize {
-        fn walk(items: &mut [Value], added: &mut usize) {
+        fn walk(items: &mut [Value], seen: &mut std::collections::HashSet<String>, added: &mut usize) {
             for obj in items.iter_mut().filter_map(Value::as_object_mut) {
-                // A number or null there would never match an id asked for.
-                if !obj.get("id").is_some_and(Value::is_string) {
-                    let id = Value::String(uuid::Uuid::new_v4().to_string());
+                // A number would never match an id asked for, `../x` names no file to keep a response in,
+                // and a second `abc` or `ABC` — one name on macOS and Windows — would share the first's.
+                let id = obj.get("id").and_then(Value::as_str).filter(|id| is_safe_id(id)).map(str::to_ascii_lowercase);
+                if !id.is_some_and(|id| seen.insert(id)) {
+                    let fresh = uuid::Uuid::new_v4().to_string();
+                    seen.insert(fresh.clone());
+                    let id = Value::String(fresh);
                     match obj.get_mut("id") {
                         Some(other) => *other = id,
                         None => _ = obj.shift_insert(0, "id".into(), id),
@@ -67,15 +78,38 @@ impl Collection {
                     *added += 1;
                 }
                 if let Some(Value::Array(children)) = obj.get_mut("item") {
-                    walk(children, added);
+                    walk(children, seen, added);
                 }
             }
         }
         let mut added = 0;
         if let Some(Value::Array(items)) = self.root.get_mut("item") {
-            walk(items, &mut added);
+            walk(items, &mut Default::default(), &mut added);
         }
         added
+    }
+
+    pub fn name(&self) -> String {
+        text_of(self.root.pointer("/info/name"))
+    }
+
+    /// Every request's id, at any depth: whose saved responses are still wanted.
+    pub fn request_ids(&self) -> Vec<String> {
+        fn walk(items: &[Value], ids: &mut Vec<String>) {
+            for obj in items.iter().filter_map(Value::as_object) {
+                if let (Some(_), Some(id)) = (obj.get("request"), obj.get("id").and_then(Value::as_str)) {
+                    ids.push(id.to_string());
+                }
+                if let Some(Value::Array(children)) = obj.get("item") {
+                    walk(children, ids);
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        if let Some(Value::Array(items)) = self.root.get("item") {
+            walk(items, &mut ids);
+        }
+        ids
     }
 
     /// A folder or request by id, to edit in place.
@@ -250,6 +284,76 @@ impl Collection {
     }
 }
 
+/// An id a file can be named by: what Postman and Kibo write, a UUID, and nothing with a path in it.
+pub fn is_safe_id(id: &str) -> bool {
+    // Windows' device names, `con.enc` included, are no files.
+    let device = |name: &str| matches!(name, "con" | "prn" | "aux" | "nul") || (name.len() == 4 && (name.starts_with("com") || name.starts_with("lpt")) && name.as_bytes()[3].is_ascii_digit());
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') && !device(&id.to_ascii_lowercase())
+}
+
+/// What a file brought in by Import turned out to be.
+pub enum Imported {
+    Collection(Collection),
+    Environment(Environment),
+    Globals(Vec<Variable>),
+}
+
+/// A collection, an environment or globals, as Postman exports them; an
+/// environment gets an id of its own, so the same file imported twice is two.
+pub fn read_import(text: &str) -> Result<Imported, HttpError> {
+    let Ok(root) = serde_json::from_str::<Value>(text) else {
+        return Collection::parse(text).map(Imported::Collection);
+    };
+    let values = || -> Result<Vec<Variable>, HttpError> {
+        let rows = root.get("values").map_or(Some(&[][..]), |v| v.as_array().map(Vec::as_slice));
+        let rows = rows.ok_or_else(|| HttpError::NotACollection("its values are not a list".into()))?;
+        Ok(rows
+            .iter()
+            .filter_map(|v| {
+                Some(Variable {
+                    key: v.get("key")?.as_str()?.to_string(),
+                    value: text_of(v.get("value")),
+                    secret: v.get("type").and_then(Value::as_str) == Some("secret"),
+                    enabled: v.get("enabled") != Some(&Value::Bool(false)),
+                })
+            })
+            .collect())
+    };
+    match root.get("_postman_variable_scope").and_then(Value::as_str) {
+        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()? })),
+        Some("globals") => Ok(Imported::Globals(values()?)),
+        Some(other) => Err(HttpError::NotACollection(format!("it is Postman {other} variables, which Kibo does not import"))),
+        None => {
+            let mut collection = Collection::parse(text)?;
+            collection.ensure_ids();
+            Ok(Imported::Collection(collection))
+        }
+    }
+}
+
+/// An environment as Postman imports it; a secret's value only when asked for, empty otherwise.
+pub fn environment_to_postman(environment: &Environment, with_secrets: bool) -> String {
+    variables_to_postman(serde_json::json!({"id": environment.id, "name": environment.name}), &environment.variables, "environment", with_secrets)
+}
+
+/// Globals as Postman imports them, the same way.
+pub fn globals_to_postman(globals: &[Variable], with_secrets: bool) -> String {
+    variables_to_postman(serde_json::json!({"name": "Globals"}), globals, "globals", with_secrets)
+}
+
+fn variables_to_postman(mut file: Value, variables: &[Variable], scope: &str, with_secrets: bool) -> String {
+    let values: Vec<Value> = variables
+        .iter()
+        .map(|v| {
+            let value = if v.secret && !with_secrets { "" } else { v.value.as_str() };
+            serde_json::json!({"key": v.key, "value": value, "type": if v.secret { "secret" } else { "default" }, "enabled": v.enabled})
+        })
+        .collect();
+    file["values"] = Value::Array(values);
+    file["_postman_variable_scope"] = scope.into();
+    serde_json::to_string_pretty(&file).expect("a JSON value always serializes")
+}
+
 /// A request built for sending and for showing at once.
 struct Both {
     sent: Outgoing,
@@ -359,6 +463,7 @@ fn encode_form(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::http_client::{HistoryEntry, Outcome};
     use serde_json::json;
 
     const PROBE: &str = include_str!("../infra/testdata/postman/probe.postman_collection.json");
@@ -622,13 +727,109 @@ mod tests {
     fn a_number_where_an_id_goes_is_replaced() {
         let mut c = Collection::parse(&json!({
             "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
-            "item": [{"name": "a", "id": 5, "request": "https://x"}, {"id": "b", "name": "b", "request": "https://x"}],
+            "item": [{"name": "a", "id": 5, "request": "https://x"}, {"id": "b", "name": "b", "request": "https://x"},
+                {"id": "../../x", "name": "c", "item": [{"id": "", "name": "d", "request": "https://x"}]}],
         }).to_string()).unwrap();
-        assert_eq!(c.ensure_ids(), 1);
+        assert_eq!(c.ensure_ids(), 3, "a number, a path and an empty id");
         let id = c.root["item"][0]["id"].as_str().unwrap().to_string();
         assert_eq!(c.root["item"][0].as_object().unwrap().keys().collect::<Vec<_>>(), ["name", "id", "request"], "replaced where it was");
         assert!(c.prepare(&id, &Scope::default()).is_ok());
         assert_eq!(c.root["item"][1]["id"], "b");
+        assert!(c.request_ids().iter().all(|i| is_safe_id(i)));
+        assert_eq!(c.request_ids().len(), 3, "requests at any depth, not the folder");
+        assert!(!is_safe_id(&"a".repeat(65)) && is_safe_id(&"a".repeat(64)) && is_safe_id("A_b-9"));
+    }
+
+    #[test]
+    fn an_id_that_would_share_a_file_is_replaced() {
+        let mut c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "abc", "name": "a", "request": "https://x"}, {"id": "ABC", "name": "b", "request": "https://x"},
+                {"id": "f", "name": "f", "item": [{"id": "abc", "name": "c", "request": "https://x"}, {"id": "Con", "name": "d", "request": "https://x"}]}],
+        }).to_string()).unwrap();
+        assert_eq!(c.ensure_ids(), 3, "ABC, the nested abc and Con");
+        assert_eq!(c.root["item"][0]["id"], "abc", "the first keeps its id");
+        let ids: std::collections::HashSet<String> = c.request_ids().iter().map(|i| i.to_ascii_lowercase()).collect();
+        assert_eq!(ids.len(), 4);
+        assert!(!is_safe_id("nul") && !is_safe_id("LPT1") && !is_safe_id("com9") && is_safe_id("com") && is_safe_id("comx") && is_safe_id("console"));
+    }
+
+    #[test]
+    fn a_secret_in_the_body_is_masked_in_history() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "r", "name": "r", "request": {"method": "POST", "url": "https://x", "body": {"mode": "raw", "raw": "{\"password\": \"{{pass}}\"}"}}}],
+        }).to_string()).unwrap();
+        let env = [Variable { key: "pass".into(), value: "hunter2".into(), secret: true, enabled: true }];
+        let prepared = c.prepare("r", &Scope::new(&[&env])).unwrap();
+        let ok = Outcome::Response { status: 200, headers: vec![], url: "https://x".into(), elapsed_ms: 1 };
+        let entry = HistoryEntry::new(1, None, None, "https://x".into(), &prepared, ok, b"{}");
+        assert_eq!(entry.request.body.as_deref(), Some("{\"password\": \"•••\"}"));
+        assert!(!serde_json::to_string(&entry).unwrap().contains("hunter2"));
+    }
+
+    #[test]
+    fn globals_leave_for_postman_and_come_back() {
+        let globals = vec![Variable { key: "k".into(), value: "s".into(), secret: true, enabled: true }];
+        let out: Value = serde_json::from_str(&globals_to_postman(&globals, false)).unwrap();
+        assert_eq!((out["_postman_variable_scope"].as_str(), out["values"][0]["value"].as_str()), (Some("globals"), Some("")));
+        let Ok(Imported::Globals(back)) = read_import(&globals_to_postman(&globals, true)) else { panic!("globals") };
+        assert_eq!(back, globals);
+    }
+
+    #[test]
+    fn an_import_is_a_collection_an_environment_or_globals() {
+        let Ok(Imported::Collection(c)) = read_import(PROBE) else { panic!("a collection") };
+        assert_eq!(c.name(), "wire_kibo_test");
+        assert_eq!(c.request_ids().len(), 10, "ids given on import");
+
+        let env = r#"{"id": "pm-1", "name": "Stage", "values": [
+            {"key": "baseUrl", "value": "https://stage", "type": "default", "enabled": true},
+            {"key": "token", "value": "t0k", "type": "secret", "enabled": true},
+            {"key": "off", "value": 1, "enabled": false}, {"value": "no key"}],
+            "_postman_variable_scope": "environment", "_postman_exported_using": "Postman/12.0"}"#;
+        let Ok(Imported::Environment(e)) = read_import(env) else { panic!("an environment") };
+        assert_eq!(e.name, "Stage");
+        assert_ne!(e.id, "pm-1", "its own id: imported twice is two");
+        assert_eq!(e.variables, vec![
+            Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: true },
+            Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
+            Variable { key: "off".into(), value: "1".into(), secret: false, enabled: false },
+        ]);
+
+        let globals = r#"{"name": "Globals", "values": [{"key": "g", "value": "v"}], "_postman_variable_scope": "globals"}"#;
+        let Ok(Imported::Globals(g)) = read_import(globals) else { panic!("globals") };
+        assert_eq!((g[0].key.as_str(), g[0].enabled), ("g", true), "no enabled is on, as in Postman");
+    }
+
+    #[test]
+    fn what_is_not_imported_is_named() {
+        let named = |text: &str| match read_import(text) {
+            Err(HttpError::NotACollection(why)) => why,
+            _ => panic!("{text} imported"),
+        };
+        assert_eq!(named("$kind: http-request\nmethod: GET\nurl: https://x\n"), "it is Postman v3 — export the collection from Postman as v2.1");
+        assert_eq!(named(r#"{"$kind": "collection", "name": "x"}"#), "it is Postman v3 — export the collection from Postman as v2.1");
+        assert!(named(r#"{"info": {"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"}}"#).contains("v2.0"));
+        assert!(named(r#"{"openapi": "3.0.0"}"#).contains("no info.schema"));
+        assert!(named("GET https://x HTTP/1.1").contains("not JSON"));
+        assert!(named(r#"{"values": [], "_postman_variable_scope": "collection"}"#).contains("collection variables"));
+        assert!(named(r#"{"values": {}, "_postman_variable_scope": "environment"}"#).contains("not a list"));
+    }
+
+    #[test]
+    fn an_environment_leaves_for_postman_with_its_secrets_empty_unless_asked() {
+        let env = Environment { id: "e".into(), name: "Stage".into(), variables: vec![
+            Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
+            Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: false },
+        ] };
+        let out: Value = serde_json::from_str(&environment_to_postman(&env, false)).unwrap();
+        assert_eq!(out["_postman_variable_scope"], "environment");
+        assert_eq!(out["values"][0], json!({"key": "token", "value": "", "type": "secret", "enabled": true}));
+        assert_eq!(out["values"][1], json!({"key": "baseUrl", "value": "https://stage", "type": "default", "enabled": false}));
+        let with = environment_to_postman(&env, true);
+        let Ok(Imported::Environment(back)) = read_import(&with) else { panic!("it imports back") };
+        assert_eq!(back.variables, env.variables, "with its secrets it comes back as it left");
     }
 
     #[test]
