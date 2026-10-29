@@ -1,12 +1,14 @@
 //! The HTTP page (`docs/45-http-client.md`), through `services::http_client`.
-//! No channel yet: the page sends, and each send answers with what came back.
+//! No channel yet: only the page changes its stores, and each command answers
+//! with what it did. `http:changed` comes with the agent's sends (HC-7).
 
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::domain::http_client::ResponseView;
-use crate::services::http_client;
+use crate::domain::http_client::{parse_curl, Environment, HistoryEntry, ResponseView};
+use crate::infra::{http_collections, http_env_store};
+use crate::services::http_client::{self, CollectionView, Environments, ImportedAs};
 
 use super::blocking;
 
@@ -21,38 +23,86 @@ pub async fn http_response_last(collection: String, request_id: String) -> Resul
     blocking(move || http_client::last_response(&collection, &request_id)).await
 }
 
-/// A Postman collection the page built, written at `dest` from the system's save dialog.
-// ponytail: the page's own text, checked to be a JSON file and nothing else — HC-2
-// writes the stored collection by its id, and this goes.
 #[tauri::command]
-pub async fn http_export(dest: String, text: String) -> Result<(), String> {
-    blocking(move || write_json(Path::new(&dest), &text)).await
+pub async fn http_collection_list() -> Result<Vec<CollectionView>, String> {
+    blocking(http_client::collections).await
 }
 
-fn write_json(dest: &Path, text: &str) -> Result<(), String> {
-    if dest.extension().and_then(|e| e.to_str()) != Some("json") {
-        return Err(format!("{} is not a .json file", dest.display()));
-    }
-    serde_json::from_str::<serde_json::Value>(text).map_err(|e| format!("not JSON: {e}"))?;
-    std::fs::write(dest, text).map_err(|e| format!("{}: {e}", dest.display()))
+#[tauri::command]
+pub async fn http_collection_new(name: String) -> Result<CollectionView, String> {
+    blocking(move || http_client::new_collection(&name)).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testing::temp_dir;
+#[tauri::command]
+pub async fn http_collection_delete(id: String) -> Result<(), String> {
+    blocking(move || http_client::delete_collection(&id)).await
+}
 
-    #[test]
-    fn writes_json_to_a_json_file_and_nothing_else() {
-        let dir = temp_dir("http-export");
-        let file = dir.join("orders.postman_collection.json");
-        write_json(&file, "{\"info\": {}}").unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"info\": {}}");
+/// A request's `request` object as the page edited it; the rest of its item stays as stored.
+#[tauri::command]
+pub async fn http_request_save(collection: String, request_id: String, request: Value) -> Result<(), String> {
+    blocking(move || http_client::save_request(&collection, &request_id, request)).await
+}
 
-        let script = dir.join("run.sh");
-        assert!(write_json(&script, "{}").is_err());
-        assert!(!script.exists());
-        assert!(write_json(&file, "echo hi").is_err());
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"info\": {}}");
-    }
+/// A new Postman item, last in the folder `parent` — or in the collection when there is none.
+#[tauri::command]
+pub async fn http_item_add(collection: String, parent: Option<String>, item: Value) -> Result<(), String> {
+    blocking(move || http_client::add_item(&collection, parent.as_deref(), item)).await
+}
+
+/// `id` is a folder's or a request's, or the collection's own to rename the collection.
+#[tauri::command]
+pub async fn http_item_rename(collection: String, id: String, name: String) -> Result<(), String> {
+    blocking(move || http_client::rename(&collection, &id, &name)).await
+}
+
+#[tauri::command]
+pub async fn http_item_delete(collection: String, id: String) -> Result<(), String> {
+    blocking(move || http_client::delete_item(&collection, &id)).await
+}
+
+/// A Postman collection, environment or globals file the system's dialog picked.
+#[tauri::command]
+pub async fn http_import(path: String) -> Result<ImportedAs, String> {
+    blocking(move || http_client::import_file(Path::new(&path))).await
+}
+
+/// The stored collection at `dest`, a `.json` path from the save dialog.
+#[tauri::command]
+pub async fn http_export_collection(id: String, dest: String) -> Result<(), String> {
+    blocking(move || http_client::export_collection(&id, Path::new(&dest))).await
+}
+
+/// The environment at `dest` as a Postman environment, its secrets empty.
+#[tauri::command]
+pub async fn http_export_environment(id: String, dest: String) -> Result<(), String> {
+    blocking(move || http_client::export_environment(&id, Path::new(&dest))).await
+}
+
+#[tauri::command]
+pub async fn http_environment_list() -> Result<Environments, String> {
+    blocking(http_client::environments).await
+}
+
+/// The form's environment; a secret left masked or empty keeps its value, a new id is a new one.
+#[tauri::command]
+pub async fn http_environment_save(environment: Environment) -> Result<(), String> {
+    blocking(move || http_client::save_environment(environment)).await
+}
+
+#[tauri::command]
+pub async fn http_environment_delete(id: String) -> Result<(), String> {
+    blocking(move || http_env_store::delete(&id)).await
+}
+
+/// Every send kept, the oldest first.
+#[tauri::command]
+pub async fn http_history_list() -> Result<Vec<HistoryEntry>, String> {
+    blocking(http_collections::history).await
+}
+
+/// A pasted `curl …` as a Postman `request`; nothing is read or sent.
+#[tauri::command]
+pub fn http_parse_curl(command: String) -> Result<Value, String> {
+    parse_curl(&command).map_err(|e| e.to_string())
 }
