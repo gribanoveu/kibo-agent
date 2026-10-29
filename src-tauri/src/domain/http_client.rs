@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -75,6 +76,10 @@ pub struct Environment {
     pub id: String,
     pub name: String,
     pub variables: Vec<Variable>,
+    /// PEM of the server's own certificate, or its CA's: a stand on a self-signed
+    /// certificate is trusted this way, never by turning the check off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_cert: Option<String>,
 }
 
 impl Environment {
@@ -118,6 +123,9 @@ impl Environment {
 /// `{{name}}`, as Postman writes a variable; the same pattern as the window's.
 static VARIABLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*([^{}\s]+)\s*\}\}").expect("valid regex"));
 
+/// What an address percent-encodes of a path or query, as the `url` crate does on sending.
+const ADDRESS: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'`').add(b'{').add(b'}').add(b'\'');
+
 /// A variable's value nests other variables at most this deep — Postman's own limit is 19.
 const MAX_DEPTH: usize = 10;
 
@@ -152,6 +160,20 @@ impl Scope {
         let mut missing = Vec::new();
         let filled = self.fill_in(text, &mut Vec::new(), &mut missing)?;
         if missing.is_empty() { Ok(filled) } else { Err(HttpError::UnknownVariables(missing)) }
+    }
+
+    /// `text` with each secret's value masked — as it is, and as an address or a
+    /// form encodes it: what comes back about a request (where it went, why it
+    /// failed) is written from the address as sent.
+    pub fn hide(&self, text: &str) -> String {
+        let mut text = text.to_string();
+        for secret in self.vars.values().filter(|v| v.secret && !v.value.is_empty()) {
+            let forms = [secret.value.clone(), utf8_percent_encode(&secret.value, ADDRESS).to_string(), utf8_percent_encode(&secret.value, super::postman::FORM).to_string()];
+            for form in forms {
+                text = text.replace(&form, SECRET_MASK);
+            }
+        }
+        text
     }
 
     fn fill_in(&self, text: &str, path: &mut Vec<String>, missing: &mut Vec<String>) -> Result<Filled, HttpError> {
@@ -225,8 +247,30 @@ pub struct Prepared {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Outcome {
     #[serde(rename_all = "camelCase")]
-    Response { status: u16, headers: Vec<(String, String)>, url: String, elapsed_ms: u64 },
+    Response {
+        status: u16,
+        headers: Vec<(String, String)>,
+        /// Where it came from, after any redirects.
+        url: String,
+        /// The addresses redirected through on the way, the first the request's own.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        redirects: Vec<String>,
+        elapsed_ms: u64,
+    },
     Failed { error: String },
+}
+
+impl Outcome {
+    /// As the window and the disk may have it: the addresses and the error are
+    /// the sender's, written from the request with its secrets filled in.
+    pub fn hidden(self, scope: &Scope) -> Outcome {
+        match self {
+            Outcome::Response { status, headers, url, redirects, elapsed_ms } => {
+                Outcome::Response { status, headers, url: scope.hide(&url), redirects: redirects.iter().map(|r| scope.hide(r)).collect(), elapsed_ms }
+            }
+            Outcome::Failed { error } => Outcome::Failed { error: scope.hide(&error) },
+        }
+    }
 }
 
 /// A request's last response, kept whole until the next send (decision 4).
@@ -240,6 +284,24 @@ pub struct SavedResponse {
     /// Bytes, a picture's too; the store keeps them beside the rest, not in JSON.
     #[serde(skip)]
     pub body: Vec<u8>,
+}
+
+/// A response as the window gets it: the body as text when it is UTF-8, and its size either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseView {
+    pub at: i64,
+    pub environment: Option<String>,
+    pub outcome: Outcome,
+    pub body: Option<String>,
+    pub size: usize,
+}
+
+impl From<SavedResponse> for ResponseView {
+    fn from(saved: SavedResponse) -> ResponseView {
+        let size = saved.body.len();
+        ResponseView { at: saved.at, environment: saved.environment, outcome: saved.outcome, body: String::from_utf8(saved.body).ok(), size }
+    }
 }
 
 /// History keeps this many sends, and no more than `HISTORY_BYTES` of them.
@@ -278,7 +340,7 @@ impl HistoryEntry {
     fn size(&self) -> usize {
         let headers = |h: &[(String, String)]| h.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
         let outcome = match &self.outcome {
-            Outcome::Response { headers: h, url, .. } => headers(h) + url.len(),
+            Outcome::Response { headers: h, url, redirects, .. } => headers(h) + url.len() + redirects.iter().map(String::len).sum::<usize>(),
             Outcome::Failed { error } => error.len(),
         };
         self.template_url.len() + self.request.url.len() + headers(&self.request.headers) + self.request.body.as_ref().map_or(0, String::len) + outcome + self.response_body.as_ref().map_or(0, String::len)
@@ -615,7 +677,7 @@ mod tests {
 
     #[test]
     fn the_window_never_gets_a_secrets_value_and_an_untouched_secret_keeps_it() {
-        let stored = Environment { id: "e".into(), name: "test".into(), variables: vec![secret("token", "s3cr3t"), secret("unset", ""), var("baseUrl", "https://api")] };
+        let stored = Environment { id: "e".into(), name: "test".into(), variables: vec![secret("token", "s3cr3t"), secret("unset", ""), var("baseUrl", "https://api")], trusted_cert: None };
         let shown = stored.for_window();
         assert!(!serde_json::to_string(&shown).unwrap().contains("s3cr3t"));
         assert_eq!(shown.variables[0].value, SECRET_MASK);
@@ -650,8 +712,41 @@ mod tests {
     fn sent(body: &str) -> HistoryEntry {
         let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()) };
         let prepared = Prepared { sent: out("Bearer t0k"), shown: out("Bearer •••") };
-        let outcome = Outcome::Response { status: 200, headers: vec![], url: "https://api/x".into(), elapsed_ms: 1 };
+        let outcome = Outcome::Response { status: 200, headers: vec![], url: "https://api/x".into(), redirects: vec![], elapsed_ms: 1 };
         HistoryEntry::new(1, None, None, "{{baseUrl}}/x".into(), &prepared, outcome, body.as_bytes())
+    }
+
+    #[test]
+    fn what_comes_back_about_a_request_hides_its_secrets_however_encoded() {
+        let secret = |key: &str, value: &str| Variable { key: key.into(), value: value.into(), secret: true, enabled: true };
+        let vars = [secret("token", "t0k"), secret("pass", "a b/é"), secret("unset", ""), var("open", "t0")];
+        let scope = Scope::new(&[&vars]);
+        assert_eq!(scope.hide("https://api/bot-t0k/x?pass=a%20b%2F%C3%A9&p2=a%20b/%C3%A9&p3=a b/é"), "https://api/bot-•••/x?pass=•••&p2=•••&p3=•••");
+        assert_eq!(scope.hide("t0 stays"), "t0 stays");
+
+        let outcome = Outcome::Response { status: 200, headers: vec![("x".into(), "t0k".into())], url: "https://api/t0k".into(), redirects: vec!["https://api/old?k=t0k".into()], elapsed_ms: 1 };
+        let Outcome::Response { headers, url, redirects, .. } = outcome.hidden(&scope) else { panic!() };
+        assert_eq!((url.as_str(), redirects[0].as_str()), ("https://api/•••", "https://api/old?k=•••"));
+        assert_eq!(headers[0].1, "t0k", "the server's own headers are its answer, shown as they came");
+        assert_eq!(Outcome::Failed { error: "http://[t0k is not an address".into() }.hidden(&scope), Outcome::Failed { error: "http://[••• is not an address".into() });
+    }
+
+    #[test]
+    fn the_way_a_response_was_redirected_counts_toward_the_50_mb() {
+        let e = sent("small");
+        let mut redirected = e.clone();
+        let Outcome::Response { redirects, .. } = &mut redirected.outcome else { panic!() };
+        redirects.push("x".repeat(1000));
+        assert_eq!(redirected.size(), e.size() + 1000);
+    }
+
+    #[test]
+    fn a_body_that_is_not_text_reaches_the_window_as_its_size() {
+        let saved = |body: Vec<u8>| SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: String::new() }, body };
+        let view = ResponseView::from(saved(vec![0x89, b'P', b'N', b'G', 0xff]));
+        assert_eq!((view.body, view.size), (None, 5));
+        let view = ResponseView::from(saved("é".into()));
+        assert_eq!((view.body.as_deref(), view.size), (Some("é"), 2));
     }
 
     #[test]
@@ -670,7 +765,7 @@ mod tests {
         let failed = HistoryEntry::new(1, None, None, String::new(), &Prepared { sent: e.request.clone(), shown: e.request.clone() }, Outcome::Failed { error: "refused".into() }, b"");
         assert_eq!(failed.response_body, None);
 
-        let binary = HistoryEntry::new(1, None, None, String::new(), &Prepared { sent: e.request.clone(), shown: e.request.clone() }, Outcome::Response { status: 200, headers: vec![], url: String::new(), elapsed_ms: 1 }, &[0, 0, 0, 0xff]);
+        let binary = HistoryEntry::new(1, None, None, String::new(), &Prepared { sent: e.request.clone(), shown: e.request.clone() }, Outcome::Response { status: 200, headers: vec![], url: String::new(), redirects: vec![], elapsed_ms: 1 }, &[0, 0, 0, 0xff]);
         assert_eq!(binary.response_body.as_deref(), Some("binary, 4 bytes"));
         assert_eq!(sent("a\0b").response_body.as_deref(), Some("binary, 3 bytes"), "valid UTF-8, but \\0 is six bytes in JSON");
         assert_eq!(sent("a\tb\r\nc").response_body.as_deref(), Some("a\tb\r\nc"));

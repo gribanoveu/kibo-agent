@@ -253,7 +253,7 @@ mod tests {
         SavedResponse {
             at: 1_761_700_000_000,
             environment: Some("test".into()),
-            outcome: Outcome::Response { status, headers: vec![("Content-Type".into(), "application/json".into())], url: "https://api/x".into(), elapsed_ms: 42 },
+            outcome: Outcome::Response { status, headers: vec![("Content-Type".into(), "application/json".into())], url: "https://api/x".into(), redirects: vec![], elapsed_ms: 42 },
             body: body.to_vec(),
         }
     }

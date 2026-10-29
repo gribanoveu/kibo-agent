@@ -112,6 +112,16 @@ impl Collection {
         ids
     }
 
+    /// A request's address as written, `{{baseUrl}}` and all: what history lists it by.
+    pub fn written_url(&self, id: &str) -> Option<String> {
+        let request = self.chain(id)?.last()?.get("request")?;
+        Some(match request.get("url") {
+            Some(Value::Object(url)) => text_of(url.get("raw")),
+            Some(url) => text_of(Some(url)),
+            None => text_of(Some(request)),
+        })
+    }
+
     /// A folder or request by id, to edit in place.
     pub fn item_mut(&mut self, id: &str) -> Option<&mut Map<String, Value>> {
         fn find<'a>(items: &'a mut [Value], id: &str) -> Option<&'a mut Map<String, Value>> {
@@ -320,7 +330,7 @@ pub fn read_import(text: &str) -> Result<Imported, HttpError> {
             .collect())
     };
     match root.get("_postman_variable_scope").and_then(Value::as_str) {
-        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()? })),
+        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()?, trusted_cert: None })),
         Some("globals") => Ok(Imported::Globals(values()?)),
         Some(other) => Err(HttpError::NotACollection(format!("it is Postman {other} variables, which Kibo does not import"))),
         None => {
@@ -454,7 +464,7 @@ fn content_type(language: &str) -> &'static str {
 }
 
 /// `encodeURIComponent`, as the window encodes a form.
-const FORM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
+pub(crate) const FORM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
 
 fn encode_form(text: &str) -> String {
     utf8_percent_encode(text, FORM).to_string()
@@ -716,6 +726,22 @@ mod tests {
     }
 
     #[test]
+    fn a_request_is_listed_by_its_address_as_written() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [
+                {"id": "obj", "request": {"url": {"raw": "{{baseUrl}}/a/:id", "variable": [{"key": "id", "value": "7"}]}}},
+                {"id": "str", "request": {"url": "{{baseUrl}}/b"}},
+                {"id": "short", "request": "{{baseUrl}}/c"},
+                {"id": "folder", "item": []}
+            ]
+        }).to_string()).unwrap();
+        let written = |id| c.written_url(id);
+        assert_eq!((written("obj"), written("str"), written("short")), (Some("{{baseUrl}}/a/:id".into()), Some("{{baseUrl}}/b".into()), Some("{{baseUrl}}/c".into())));
+        assert_eq!((written("folder"), written("gone")), (None, None));
+    }
+
+    #[test]
     fn a_path_variable_fills_its_segment_and_not_the_query() {
         let c = pruning();
         let sent = c.prepare("path", &Scope::new(&[&c.variables()])).unwrap().sent;
@@ -762,7 +788,7 @@ mod tests {
         }).to_string()).unwrap();
         let env = [Variable { key: "pass".into(), value: "hunter2".into(), secret: true, enabled: true }];
         let prepared = c.prepare("r", &Scope::new(&[&env])).unwrap();
-        let ok = Outcome::Response { status: 200, headers: vec![], url: "https://x".into(), elapsed_ms: 1 };
+        let ok = Outcome::Response { status: 200, headers: vec![], url: "https://x".into(), redirects: vec![], elapsed_ms: 1 };
         let entry = HistoryEntry::new(1, None, None, "https://x".into(), &prepared, ok, b"{}");
         assert_eq!(entry.request.body.as_deref(), Some("{\"password\": \"•••\"}"));
         assert!(!serde_json::to_string(&entry).unwrap().contains("hunter2"));
@@ -822,7 +848,7 @@ mod tests {
         let env = Environment { id: "e".into(), name: "Stage".into(), variables: vec![
             Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
             Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: false },
-        ] };
+        ], trusted_cert: None };
         let out: Value = serde_json::from_str(&environment_to_postman(&env, false)).unwrap();
         assert_eq!(out["_postman_variable_scope"], "environment");
         assert_eq!(out["values"][0], json!({"key": "token", "value": "", "type": "secret", "enabled": true}));

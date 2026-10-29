@@ -92,7 +92,7 @@ pub fn save_from_window(from_window: Environment) -> Result<(), HttpError> {
     let _held = writing();
     let mut stored = load()?;
     let position = stored.environments.iter().position(|e| e.id == from_window.id);
-    let blank = Environment { id: String::new(), name: String::new(), variables: Vec::new() };
+    let blank = Environment { id: String::new(), name: String::new(), variables: Vec::new(), trusted_cert: None };
     let edited = position.map_or(&blank, |at| &stored.environments[at]).edited(from_window)?;
     match position {
         Some(at) => wipe(&mut std::mem::replace(&mut stored.environments[at], edited)),
@@ -145,7 +145,7 @@ mod tests {
     }
 
     fn env(id: &str, variables: Vec<Variable>) -> Environment {
-        Environment { id: id.into(), name: format!("env {id}"), variables }
+        Environment { id: id.into(), name: format!("env {id}"), variables, trusted_cert: None }
     }
 
     #[test]
