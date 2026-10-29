@@ -125,6 +125,9 @@ export function preview(text: string, vars: Map<string, EnvVariable>, secretAs: 
   return { text: out, missing: [...new Set(missing)] };
 }
 
+/** Where in the request a variable is written — the page marks a missing one there. */
+export type Place = "url" | "headers" | "auth" | "body";
+
 /** A request as it leaves: variables filled in, auth turned into a header or a parameter, the body as text. */
 export type Resolved = {
   method: HttpMethod;
@@ -133,6 +136,8 @@ export type Resolved = {
   body: string | null;
   /** Variables nowhere in scope — the request is not sent while there are any. */
   missing: string[];
+  /** The same, by where each is written. */
+  missingIn: Record<Place, string[]>;
   /** What is not sent as written: an auth or a body kept from Postman. */
   notes: string[];
 };
@@ -141,15 +146,19 @@ const hasHeader = (headers: Pair[], name: string) => headers.some(({ key }) => k
 
 export function resolveRequest(collection: Collection, request: HttpRequest, environment: Environment | null, secretAs: SecretAs = "mask", globals: EnvVariable[] = []): Resolved {
   const vars = scope(collection, environment, globals);
-  const missing = new Set<string>();
+  const missingIn: Record<Place, Set<string>> = { url: new Set(), headers: new Set(), auth: new Set(), body: new Set() };
+  let at: Place = "url";
   const fill = (text: string) => {
     const done = preview(text, vars, secretAs);
-    done.missing.forEach((m) => missing.add(m));
+    done.missing.forEach((m) => missingIn[at].add(m));
     return done.text;
   };
   const notes: string[] = [];
   let url = fill(request.url);
+  at = "headers";
   const headers = request.headers.filter(({ key, disabled }) => !disabled && key !== "").map((h) => ({ key: fill(h.key), value: fill(h.value) }));
+
+  at = "auth";
 
   const auth = request.auth.type === "inherit" ? (effectiveAuth(collection, request.id)?.auth ?? { type: "noauth" }) : request.auth;
   if (auth.type === "bearer" && !hasHeader(headers, "Authorization")) headers.push({ key: "Authorization", value: `Bearer ${fill(auth.token)}` });
@@ -166,6 +175,7 @@ export function resolveRequest(collection: Collection, request: HttpRequest, env
   }
   if (auth.type === "other") notes.push(`${auth.name} auth is kept from Postman and not sent yet`);
 
+  at = "body";
   let body: string | null = null;
   if (request.body.mode === "raw") {
     // Comments go first, as Postman sends a JSON body: a variable in a part commented out is not missing.
@@ -182,7 +192,9 @@ export function resolveRequest(collection: Collection, request: HttpRequest, env
   }
   if (request.body.mode === "other") notes.push(`a ${request.body.name} body is kept from Postman and not sent yet`);
 
-  return { method: request.method, url, headers, body, missing: [...missing], notes };
+  const by = (p: Place) => [...missingIn[p]];
+  const all = new Set([...missingIn.url, ...missingIn.headers, ...missingIn.auth, ...missingIn.body]);
+  return { method: request.method, url, headers, body, missing: [...all], missingIn: { url: by("url"), headers: by("headers"), auth: by("auth"), body: by("body") }, notes };
 }
 
 /** One shell word, in single quotes. */

@@ -11,6 +11,7 @@ const FILE = {
   item: [
     { id: "r1", name: "Create order", event: [{ listen: "prerequest", script: { exec: ["pm.environment.set('t', 1);"] } }], request: { method: "POST", url: "{{baseUrl}}/orders" } },
     { id: "r2", name: "Health", request: "{{baseUrl}}/health" },
+    { id: "r4", name: "Me", request: { method: "GET", url: "{{baseUrl}}/me", auth: { type: "bearer", bearer: [{ key: "token", value: "{{apiToken}}" }] } } },
     { id: "r3", name: "Upload", request: { method: "POST", url: "{{baseUrl}}/files", body: { mode: "formdata", formdata: [] } } },
   ],
 };
@@ -184,6 +185,17 @@ describe("the HTTP page", () => {
     fireEvent.change(screen.getByPlaceholderText(/PEM/), { target: { value: "junk" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("the certificate: no certificate in it")).toBeDefined();
+  });
+
+  test("a variable missing from the auth marks the Auth tab, not the address", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown("r4");
+    // Booleans, not elements: a failing expect prints an element's whole page, for minutes.
+    expect(document.querySelector(".http-url-row.missing") !== null).toBe(false);
+    const tab = screen.getByRole("tab", { name: /Auth/ });
+    expect(tab.querySelector('[aria-label="Not in Stage: {{apiToken}}"]') !== null).toBe(true);
+    // The request's Headers, before the response's.
+    expect(screen.getAllByRole("tab", { name: /Headers/ })[0].querySelector(".http-dot-amber") !== null).toBe(false);
   });
 
   test("a request with scripts is marked; one with a body kept from Postman shows it and is refused", async () => {

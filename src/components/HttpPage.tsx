@@ -71,6 +71,7 @@ import {
   type HttpRequest,
   type Item,
   type Pair,
+  type Place,
 } from "../lib/httpClient";
 import "./HttpPage.css";
 
@@ -737,7 +738,14 @@ function RequestView({
   // and new marks would have the editors draw every variable again.
   const marks = useMemo(() => variableMarks(values), [valuesKey]);
   const { copied, copy } = useCopied();
-  const missing = resolved.missing.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${resolved.missing.map((m) => `{{${m}}}`).join(", ")}` : undefined;
+  const notIn = (names: string[]) => (names.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${names.map((m) => `{{${m}}}`).join(", ")}` : undefined);
+  const missing = notIn(resolved.missing);
+  // Marked where it is written: the address for its own, a tab's dot for the rest.
+  const missingInUrl = notIn(resolved.missingIn.url);
+  const warn = (place: Place) => {
+    const said = notIn(resolved.missingIn[place]);
+    return said ? <span className="http-dot http-dot-amber" role="img" aria-label={said} title={said} /> : null;
+  };
   const params = paramsOf(request);
   const set = (patch: Partial<HttpRequest>) => onEdit({ ...request, ...patch });
   const count = (n: number) => (n > 0 ? <span className="http-count">{n}</span> : null);
@@ -745,7 +753,7 @@ function RequestView({
 
   return (
     <div className="http-request">
-      <div className={`http-url-row${missing ? " missing" : ""}`} title={missing}>
+      <div className={`http-url-row${missingInUrl ? " missing" : ""}`} title={missingInUrl}>
         <Dropdown
           below
           label={<MethodBadge method={request.method} />}
@@ -791,9 +799,9 @@ function RequestView({
             {(
               [
                 ["params", "Params", count(params.filter((p) => !p.disabled).length)],
-                ["headers", "Headers", count(request.headers.filter((h) => !h.disabled).length)],
-                ["auth", "Auth", null],
-                ["body", "Body", request.body.mode === "none" ? null : <span className="http-dot" />],
+                ["headers", "Headers", <>{count(request.headers.filter((h) => !h.disabled).length)}{warn("headers")}</>],
+                ["auth", "Auth", warn("auth")],
+                ["body", "Body", warn("body") ?? (request.body.mode === "none" ? null : <span className="http-dot" />)],
                 ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
                 ["preview", <Eye size={15} />, missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
               ] as [Tab, ReactNode, ReactNode][]

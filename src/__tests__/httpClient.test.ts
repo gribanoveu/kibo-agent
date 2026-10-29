@@ -102,8 +102,25 @@ describe("http client rules", () => {
       ],
       body: '{"t":"•••"}',
       missing: [],
+      missingIn: { url: [], headers: [], auth: [], body: [] },
       notes: [],
     });
+  });
+
+  test("a missing variable is said where it is written: the address, a header, the auth or the body", () => {
+    const request = {
+      id: "r1",
+      name: "a",
+      method: "POST" as const,
+      url: "{{host}}/o/{{id}}",
+      headers: [{ key: "X-Trace", value: "{{trace}}" }],
+      auth: { type: "bearer" as const, token: "{{apiToken}}" },
+      body: { mode: "raw" as const, language: "text" as const, raw: "{{payload}} {{host}}" },
+      scripts: {},
+    };
+    const resolved = resolveRequest(collection, request, env);
+    expect(resolved.missingIn).toEqual({ url: ["host"], headers: ["trace"], auth: ["apiToken"], body: ["payload", "host"] });
+    expect(resolved.missing).toEqual(["host", "trace", "apiToken", "payload"]);
   });
 
   test("a JSON body leaves without its comments, and a variable in one is not missing; a text body keeps them", () => {
