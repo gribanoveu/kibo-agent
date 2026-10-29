@@ -1,9 +1,25 @@
-//! The HTTP page (`docs/45-http-client.md`). Its collections live in the window
-//! until HC-2 keeps them here, so the one command writes the file the page built.
+//! The HTTP page (`docs/45-http-client.md`), through `services::http_client`.
+//! No channel yet: the page sends, and each send answers with what came back.
 
 use std::path::Path;
 
+use serde_json::Value;
+
+use crate::domain::http_client::ResponseView;
+use crate::services::http_client;
+
 use super::blocking;
+
+/// `request` is the page's unsaved edit of the request, sent in place of the stored one.
+#[tauri::command]
+pub async fn http_send(collection: String, request_id: String, request: Option<Value>, environment: Option<String>) -> Result<ResponseView, String> {
+    blocking(move || http_client::send(&collection, &request_id, request, environment.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn http_response_last(collection: String, request_id: String) -> Result<Option<ResponseView>, String> {
+    blocking(move || http_client::last_response(&collection, &request_id)).await
+}
 
 /// A Postman collection the page built, written at `dest` from the system's save dialog.
 // ponytail: the page's own text, checked to be a JSON file and nothing else — HC-2

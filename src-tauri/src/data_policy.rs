@@ -28,6 +28,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
     "src/infra/mongo_client.rs",
+    "src/infra/http_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.
