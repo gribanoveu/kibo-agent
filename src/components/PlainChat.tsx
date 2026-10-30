@@ -11,6 +11,7 @@ import type { ChatRoleId } from "../lib/plainChat";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
+import { ErrorNote } from "./ErrorNote";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
@@ -366,9 +367,7 @@ export function PlainChat({
             </div>
           )}
           {attachments.error && (
-            <p className="plain-attach-error" role="alert">
-              {attachments.error}
-            </p>
+            <ErrorNote className="plain-attach-error" message={attachments.error} onClose={attachments.clearError} />
           )}
           <textarea
             ref={input}

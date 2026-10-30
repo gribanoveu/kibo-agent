@@ -12,6 +12,7 @@ import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
 import { useArrival } from "../hooks/useArrival";
 import { ImageThumbs } from "./ImageThumbs";
+import { ErrorNote } from "./ErrorNote";
 import "./Composer.css";
 
 // Two permission states, not the prototype's three, because two is what
@@ -246,9 +247,7 @@ export function Composer({
         {menuOpen && <SlashMenu commands={offered} active={at} onPick={pick} pending={pendingCommands} />}
         <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
         {attachments.error && (
-          <p className="composer-attach-error" role="alert">
-            {attachments.error}
-          </p>
+          <ErrorNote className="composer-attach-error" message={attachments.error} onClose={attachments.clearError} />
         )}
         <div className="composer-input">
           {/* The arguments still to type, in grey after the text: the text

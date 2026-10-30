@@ -146,6 +146,10 @@ describe("attaching a picture", () => {
       expect(screen.getByRole("alert").textContent).toBe("notes.txt: this file is not supported: save the image as PNG or JPEG"),
     );
     expect(thumbs()).toHaveLength(0);
+
+    // Said until closed: a refusal the user has read need not stay over the box.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   test("a model set to text only takes no drop either", async () => {
