@@ -22,16 +22,19 @@ fn newest_first(agents: &Agents, chat: &str) -> Vec<AgentInfo> {
     agents.list_for(chat).into_iter().rev().collect()
 }
 
-/// Read when the tab opens and on each [`AGENT_EVENT`].
+/// Read when the tab opens and on each [`AGENT_EVENT`]. The chat's stored
+/// runs are read too, hence off the main thread.
 #[tauri::command]
-pub fn agents_list(chat_id: String, agents: State<'_, Arc<Agents>>) -> Vec<AgentInfo> {
-    newest_first(&agents, &chat_id)
+pub async fn agents_list(chat_id: String, agents: State<'_, Arc<Agents>>) -> Result<Vec<AgentInfo>, String> {
+    let agents = Arc::clone(&agents);
+    super::blocking(move || Ok::<_, String>(newest_first(&agents, &chat_id))).await
 }
 
 /// The helper ends at its next check; the turn that started it reads why.
 #[tauri::command]
-pub fn agent_stop(id: u32, chat_id: String, agents: State<'_, Arc<Agents>>) -> Result<Vec<AgentInfo>, String> {
-    stop(&agents, id, &chat_id)
+pub async fn agent_stop(id: u32, chat_id: String, agents: State<'_, Arc<Agents>>) -> Result<Vec<AgentInfo>, String> {
+    let agents = Arc::clone(&agents);
+    super::blocking(move || stop(&agents, id, &chat_id)).await
 }
 
 fn stop(agents: &Agents, id: u32, chat: &str) -> Result<Vec<AgentInfo>, String> {

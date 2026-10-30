@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS suggestions (
   used        INTEGER NOT NULL DEFAULT 0,
   sent        TEXT
 );
+CREATE TABLE IF NOT EXISTS runs (
+  kind        TEXT NOT NULL,
+  id          INTEGER NOT NULL,
+  chat_id     TEXT NOT NULL,
+  version     INTEGER NOT NULL,
+  started_at  INTEGER NOT NULL,
+  ended_at    INTEGER,
+  state       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
+);
+CREATE INDEX IF NOT EXISTS runs_chat ON runs(chat_id, kind, id);
 ";
 
 pub(crate) fn store(e: rusqlite::Error) -> ChatError {
@@ -341,9 +353,12 @@ pub fn set_generated_title(id: &str, title: &str) -> Result<bool, ChatError> {
         .map_err(store)
 }
 
+/// The chat, and the record of its helper runs and processes (`run_store`).
 pub fn delete(id: &str) -> Result<(), ChatError> {
     chat_record::check_id(id)?;
-    match open()?.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
+    let conn = open()?;
+    conn.execute("DELETE FROM runs WHERE chat_id = ?1", params![id]).map_err(store)?;
+    match conn.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
         0 => Err(ChatError::NotFound(id.to_string())),
         _ => Ok(()),
     }
@@ -351,12 +366,19 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
 
 /// Every chat about `workspace` — a folder that is gone with them. How many.
 pub fn delete_in(workspace: &str) -> Result<usize, ChatError> {
-    open()?.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
+    let conn = open()?;
+    conn.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+        .map_err(store)?;
+    conn.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agents::{AgentInfo, AgentState};
+    use crate::domain::background::{ProcessInfo, ProcessState, ProcessView};
+    use crate::domain::runs::RunLog;
+    use crate::infra::run_store::RunStore;
     use crate::testing::with_app_dir;
 
     fn blocks(text: &str) -> Value {
@@ -441,7 +463,15 @@ mod tests {
             save_one("three", "/wt/main-10", "c");
             save_one("four", "/repo", "d");
 
+            let ran = |chat: &str| {
+                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), cwd: ".".into(), state: ProcessState::Stopped };
+                RunStore.save_process(chat, &ProcessView { info, tail: String::new() });
+            };
+            let runs = |chat: &str| RunStore.processes(chat).len();
+            ran("one");
+            ran("three");
             assert_eq!(delete_in("/wt/main-1").unwrap(), 2);
+            assert_eq!((runs("one"), runs("three")), (0, 1), "a gone chat's runs go with it");
             assert!(list("/wt/main-1").unwrap().is_empty());
             assert_eq!(list("/wt/main-10").unwrap().len(), 1);
             assert_eq!(list("/repo").unwrap().len(), 1);
@@ -630,7 +660,14 @@ mod tests {
     fn a_deleted_chat_is_gone() {
         with_app_dir("chat-store-delete", || {
             save_one("one", "/repo", "first");
+            save_one("two", "/repo", "second");
+            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None };
+            RunStore.save_agent("one", &run(1));
+            RunStore.save_agent("two", &run(2));
             delete("one").unwrap();
+            assert!(RunStore.agents("one").is_empty(), "its runs go with it");
+            assert_eq!(RunStore.agents("two").len(), 1);
+            delete("two").unwrap();
 
             assert!(list("/repo").unwrap().is_empty());
             assert!(matches!(load("one"), Err(ChatError::NotFound(_))));

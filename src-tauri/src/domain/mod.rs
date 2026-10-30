@@ -41,6 +41,7 @@ pub mod metrics;
 pub mod mcp;
 pub mod hooks;
 pub mod agents;
+pub mod runs;
 pub mod board;
 pub mod meeting;
 pub mod mongo;

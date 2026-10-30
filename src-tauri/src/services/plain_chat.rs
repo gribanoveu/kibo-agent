@@ -56,9 +56,12 @@ pub struct ChatTurn<'a> {
     pub features: crate::domain::features::Features,
 }
 
-/// Deletes any chat, the agent's or Chat mode's: its row, and with it a
-/// Prototype chat's folder — any other chat has none.
-pub fn delete_chat(id: &str) -> Result<(), crate::domain::prototype::PrototypeError> {
+/// Deletes any chat, the agent's or Chat mode's: its row and its runs' record,
+/// and with it a Prototype chat's folder — any other chat has none. What it
+/// left running is stopped first: no tab would list it any more, and a stop
+/// saved after the delete would bring a row back.
+pub fn delete_chat(id: &str, processes: &crate::infra::background::Processes) -> Result<(), crate::domain::prototype::PrototypeError> {
+    processes.stop_chat(id);
     crate::infra::chat_store::delete(id)?;
     crate::infra::prototype_store::remove(id)
 }
@@ -892,6 +895,28 @@ mod tests {
         assert_eq!(offered, ["listFiles", "readFile", "writeFile", "editFile", "delete", "present"]);
     }
 
+    /// What a deleted chat left running is stopped: no tab lists it any more.
+    #[cfg(unix)]
+    #[test]
+    fn deleting_a_chat_stops_what_it_left_running() {
+        use crate::domain::background::BackgroundProcesses;
+        crate::testing::with_app_dir("chat-delete-processes", || {
+            let id = "6a1d3e2f-0b8c-4d4e-9f70-2b3c4d5e6f70";
+            crate::infra::chat_store::save_plain(id, ChatRole::Assistant, None, &[LlmMessage::user("hi")], &serde_json::json!([]))
+                .unwrap();
+            let processes = std::sync::Arc::new(crate::infra::background::Processes::default());
+            let dir = crate::testing::temp_dir("chat-delete-processes");
+            let shell = crate::domain::command_exec::Shell::default();
+            processes.for_chat(id).start(&shell, "sleep 30", &dir, ".").unwrap();
+            processes.for_chat("other").start(&shell, "sleep 30", &dir, ".").unwrap();
+
+            delete_chat(id, &processes).unwrap();
+            assert!(processes.running_for(id).is_empty());
+            assert_eq!(processes.running_for("other").len(), 1);
+            processes.stop_all();
+        });
+    }
+
     /// A Prototype chat's folder does not outlive the chat.
     #[test]
     fn deleting_a_chat_takes_its_folder_with_it() {
@@ -902,7 +927,7 @@ mod tests {
             let folder = crate::infra::prototype_store::files_dir(id).unwrap();
             std::fs::write(folder.join("index.html"), "<p>hi</p>").unwrap();
 
-            delete_chat(id).unwrap();
+            delete_chat(id, &crate::infra::background::Processes::default()).unwrap();
             assert!(!folder.parent().unwrap().exists());
             assert!(crate::infra::chat_store::load(id).is_err(), "the row goes too");
         });
