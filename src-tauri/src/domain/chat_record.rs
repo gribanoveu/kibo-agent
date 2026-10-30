@@ -91,6 +91,11 @@ pub struct ChatRecord {
     /// pick never moves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kube: Option<KubePin>,
+    /// The git branch its folder had checked out when it was last saved — the
+    /// branch the chat works on. The folder is shared by all its chats, so
+    /// another chat's switch moves the folder, never this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -111,6 +116,10 @@ pub struct ChatSummary {
     /// `None` for the agent's, and for a chat last saved before rows kept it.
     #[serde(default)]
     pub role: Option<ChatRole>,
+    /// The chat's own branch, for telling it from the folder's; `None`
+    /// outside a repository and for a chat last saved before rows kept it.
+    #[serde(default)]
+    pub git_branch: Option<String>,
 }
 
 impl From<&ChatRecord> for ChatSummary {
@@ -122,6 +131,7 @@ impl From<&ChatRecord> for ChatSummary {
             branched_from: record.branched_from.clone(),
             archived: false,
             role: record.role,
+            git_branch: record.git_branch.clone(),
         }
     }
 }
@@ -248,6 +258,7 @@ mod tests {
             branched_from: None,
             role: None,
             kube: None,
+            git_branch: None,
         }
     }
 

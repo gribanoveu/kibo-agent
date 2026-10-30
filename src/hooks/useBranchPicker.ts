@@ -6,6 +6,8 @@ import type { ImagePart } from "../lib/images";
 export type BranchConflict = { branch: string; paths: string[] };
 
 type Deps = {
+  /** The chat on screen: Worktree and its base are that chat's choice, not the next one's. */
+  chatId: string | null;
   /** The branch checked out now: picking it again is not a switch. */
   current: string | null;
   /** Runs `go` once leaving the open folder is agreed to, `onCancel` if it is not — `useFolderSwitch`'s guard. */
@@ -29,7 +31,7 @@ type Deps = {
  * worktree as the way round it; committing or stashing is left to the user,
  * or to the agent when asked.
  */
-export function useBranchPicker({ current, guard, open, notify, send }: Deps) {
+export function useBranchPicker({ chatId, current, guard, open, notify, send }: Deps) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
   const [worktree, setWorktree] = useState(false);
   // Where a worktree starts; `null` is the branch checked out now.
@@ -37,6 +39,12 @@ export function useBranchPicker({ current, guard, open, notify, send }: Deps) {
   const [conflict, setConflict] = useState<BranchConflict | null>(null);
   // A first message waiting for its worktree to be the open folder.
   const [waiting, setWaiting] = useState<{ text: string; sent?: string; images?: ImagePart[] } | null>(null);
+
+  // Another chat is not this one's start: whatever was ticked for it is dropped.
+  useEffect(() => {
+    setWorktree(false);
+    setBase(null);
+  }, [chatId]);
 
   useEffect(() => {
     if (waiting === null) return;

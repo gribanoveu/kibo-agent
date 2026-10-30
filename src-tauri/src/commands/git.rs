@@ -262,7 +262,7 @@ mod tests {
             let path = git_branches::add_worktree(&main, &head, "t", &temp_dir("cmd-worktree-remove-home")).unwrap();
             let shown = |dir: &Path| dir.canonicalize().unwrap().display().to_string();
             let save = |id: &str, folder: &str| {
-                chat_store::save(id, folder, &[], &serde_json::json!([]), &[], None, None).unwrap();
+                chat_store::save(id, folder, &[], &serde_json::json!([]), &[], None, None, None).unwrap();
             };
             save("in-worktree", &shown(&path));
             save("in-main", &shown(&main));

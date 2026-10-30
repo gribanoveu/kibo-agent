@@ -100,7 +100,7 @@ mod tests {
 
     fn save(id: &str, said: &str) {
         let blocks = json!([{ "kind": "user", "id": "user:0", "text": said }]);
-        chat_store::save(id, "/repo", &[LlmMessage::user(said)], &blocks, &[], None, None).unwrap();
+        chat_store::save(id, "/repo", &[LlmMessage::user(said)], &blocks, &[], None, None, None).unwrap();
     }
 
     fn listed(id: &str) -> String {

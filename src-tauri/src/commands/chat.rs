@@ -937,6 +937,34 @@ mod tests {
         assert!(err.contains("no folder"), "{err}");
     }
 
+    /// A chat is saved with the branch its folder has out at that moment —
+    /// read at the save, so a switch the turn made is the one kept.
+    #[test]
+    fn a_saved_chat_keeps_the_branch_its_folder_has_out() {
+        crate::testing::with_app_dir("cmd-chat-git-branch", || {
+            let root = temp_dir("cmd-chat-git-branch-repo").canonicalize().unwrap();
+            git2::Repository::init(&root).unwrap().set_head("refs/heads/feature").unwrap();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(root.clone());
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            let saved = tauri::async_runtime::block_on(super::super::chat_history::chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(saved.git_branch.as_deref(), Some("feature"));
+            let listed = crate::infra::chat_store::list(&root.display().to_string()).unwrap();
+            assert_eq!(listed[0].git_branch.as_deref(), Some("feature"));
+        });
+    }
+
     #[test]
     fn opening_a_folder_canonicalizes_it_once() {
         let state = state();

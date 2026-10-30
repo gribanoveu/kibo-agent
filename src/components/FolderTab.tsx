@@ -1,4 +1,4 @@
-import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2, X } from "lucide-react";
+import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2, Undo2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { Dropdown } from "./Dropdown";
 import { IndexBadge } from "./IndexBadge";
@@ -49,8 +49,8 @@ type Props = {
   branch?: string | null;
   /** The folder's index; `null` until anything is known about it. */
   index?: IndexState | null;
-  /** Offered while the chat has not started: switch the branch, or start a
-      worktree from one. Without it the branch is only shown. */
+  /** Switch the folder's branch, or start a worktree from one. Without it
+      the branch is only shown. */
   branchPicker?: {
     branches: BranchRef[];
     onOpen: () => void;
@@ -58,8 +58,14 @@ type Props = {
     worktree: boolean;
     /** Where a worktree starts, shown in place of the branch while Worktree is on. */
     base?: string | null;
-    onWorktree: (on: boolean) => void;
+    /** Offered only before the chat starts: a worktree is a new folder, and a new chat in it. */
+    onWorktree?: (on: boolean) => void;
+    /** Why the branch cannot be switched now — a turn is working in it. */
+    locked?: string;
   };
+  /** The branch the open chat works on. Another chat of the folder may have
+      moved the folder off it since: then it is said, with the way back. */
+  chatBranch?: string | null;
   /** At the strip's right end — the provider's balance. */
   end?: ReactNode;
 };
@@ -78,9 +84,11 @@ export function FolderTab({
   worktreeOf = null,
   index = null,
   branchPicker,
+  chatBranch = null,
   end,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
+  const away = chatBranch && branch && chatBranch !== branch ? chatBranch : null;
   return (
     <div className={`folder-tab${path ? "" : " no-folder"}`}>
       <Dropdown
@@ -144,7 +152,11 @@ export function FolderTab({
       {path && branch && branchPicker && (
         <>
           <Dropdown
-            title={branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch"}
+            locked={!!branchPicker.locked}
+            title={
+              branchPicker.locked ??
+              (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
+            }
             heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
             label={
               <span className="folder-tab-name">
@@ -158,21 +170,34 @@ export function FolderTab({
             onOpen={branchPicker.onOpen}
             onPick={branchPicker.onPick}
           />
-          <button
-            type="button"
-            role="checkbox"
-            className={`folder-tab-worktree${branchPicker.worktree ? " on" : ""}`}
-            aria-checked={branchPicker.worktree}
-            aria-label="Worktree"
-            title={`The first message starts a worktree from ${shownBranch}: its own folder on a new branch, this one left as it is`}
-            onClick={() => branchPicker.onWorktree(!branchPicker.worktree)}
-          >
-            <span className="folder-tab-check" aria-hidden="true">
-              {branchPicker.worktree && <Check size={9} strokeWidth={3.5} />}
-            </span>
-            <GitFork size={12} />
-            <span className="folder-tab-narrow-hide">Worktree</span>
-          </button>
+          {away && (
+            <button
+              type="button"
+              className="folder-tab-away"
+              title={`This chat works on ${away}; the folder is on ${branch} now. Switch back to ${away}`}
+              onClick={() => branchPicker.onPick(away)}
+            >
+              <Undo2 size={12} />
+              <span className="folder-tab-text">{away}</span>
+            </button>
+          )}
+          {branchPicker.onWorktree && (
+            <button
+              type="button"
+              role="checkbox"
+              className={`folder-tab-worktree${branchPicker.worktree ? " on" : ""}`}
+              aria-checked={branchPicker.worktree}
+              aria-label="Worktree"
+              title={`The first message starts a worktree from ${shownBranch}: its own folder on a new branch, this one left as it is`}
+              onClick={() => branchPicker.onWorktree?.(!branchPicker.worktree)}
+            >
+              <span className="folder-tab-check" aria-hidden="true">
+                {branchPicker.worktree && <Check size={9} strokeWidth={3.5} />}
+              </span>
+              <GitFork size={12} />
+              <span className="folder-tab-narrow-hide">Worktree</span>
+            </button>
+          )}
         </>
       )}
       {path && branch && !branchPicker && (

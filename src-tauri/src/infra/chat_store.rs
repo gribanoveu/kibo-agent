@@ -100,6 +100,9 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     add_column(&conn, "role", "TEXT")?;
     // Null until the model has named the chat, and for good when it could not.
     add_column(&conn, "generated_title", "TEXT")?;
+    // The branch a chat works on, listed so the window can tell it from the
+    // folder's without loading the transcript.
+    add_column(&conn, "git_branch", "TEXT")?;
     Ok(conn)
 }
 
@@ -130,7 +133,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
     rename_summary_titles(&conn, workspace)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, COALESCE(generated_title, title), updated_at, branched_from, archived, role FROM chats
+            "SELECT id, COALESCE(generated_title, title), updated_at, branched_from, archived, role, git_branch FROM chats
              WHERE workspace = ?1 AND schema_version <= ?2
              ORDER BY updated_at DESC, id",
         )
@@ -145,6 +148,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
                 archived: row.get(4)?,
                 // A role a newer build wrote is no sign, not an error.
                 role: row.get::<_, Option<String>>(5)?.and_then(|role| serde_json::from_value(serde_json::Value::String(role)).ok()),
+                git_branch: row.get(6)?,
             })
         })
         .map_err(store)?;
@@ -219,6 +223,7 @@ pub fn save(
     todos: &[Task],
     plan: Option<&str>,
     branched_from: Option<&str>,
+    git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
@@ -234,6 +239,7 @@ pub fn save(
         branched_from: branched_from.map(str::to_string),
         role: None,
         kube: None,
+        git_branch: git_branch.map(str::to_string),
     })
 }
 
@@ -261,6 +267,7 @@ pub fn save_plain(
         branched_from: None,
         role: Some(role),
         kube,
+        git_branch: None,
     })
 }
 
@@ -288,8 +295,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     // it starts with its first message.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, generated_title)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, (SELECT generated_title FROM chats WHERE id = ?7))
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7))
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -298,7 +305,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
            updated_at = excluded.updated_at,
            branched_from = excluded.branched_from,
            body = excluded.body,
-           role = excluded.role",
+           role = excluded.role,
+           git_branch = excluded.git_branch",
         params![
             record.id,
             record.workspace,
@@ -309,6 +317,7 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
             record.branched_from,
             body,
             record.role.and_then(|role| serde_json::to_value(role).ok()?.as_str().map(str::to_string)),
+            record.git_branch,
         ],
     )
     .map_err(store)?;
@@ -398,6 +407,7 @@ mod tests {
             &[],
             Some("# Plan"),
             None,
+            None,
         )
         .unwrap()
     }
@@ -427,7 +437,7 @@ mod tests {
     #[test]
     fn a_compacted_chat_keeps_its_name() {
         with_app_dir("chat-store-compacted-title", || {
-            let saved = save("one", "/repo", &compacted(), &blocks("why is a token dropped?"), &[], None, None)
+            let saved = save("one", "/repo", &compacted(), &blocks("why is a token dropped?"), &[], None, None, None)
                 .unwrap();
             assert_eq!(saved.title, "why is a token dropped?");
         });
@@ -439,7 +449,7 @@ mod tests {
     fn a_chat_named_after_its_summary_is_named_again() {
         with_app_dir("chat-store-summary-title", || {
             for (id, workspace) in [("one", "/repo"), ("two", "/other")] {
-                save(id, workspace, &compacted(), &blocks("why is a token dropped?"), &[], None, None).unwrap();
+                save(id, workspace, &compacted(), &blocks("why is a token dropped?"), &[], None, None, None).unwrap();
                 open()
                     .unwrap()
                     .execute("UPDATE chats SET title = ?1 WHERE id = ?2", params![SUMMARY_PREFIX, id])
@@ -570,6 +580,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -623,13 +634,37 @@ mod tests {
     fn a_branch_says_where_it_came_from() {
         with_app_dir("chat-store-branch", || {
             save_one("one", "/repo", "first");
-            save("two", "/repo", &[LlmMessage::user("first")], &blocks("first"), &[], None, Some("one")).unwrap();
+            save("two", "/repo", &[LlmMessage::user("first")], &blocks("first"), &[], None, Some("one"), None).unwrap();
 
             let listed = list("/repo").unwrap();
             let from = |id: &str| listed.iter().find(|c| c.id == id).unwrap().branched_from.clone();
             assert_eq!(from("one"), None);
             assert_eq!(from("two").as_deref(), Some("one"));
             assert_eq!(load("two").unwrap().branched_from.as_deref(), Some("one"));
+        });
+    }
+
+    /// Each chat keeps the git branch it was last saved on: another chat of the
+    /// same folder moving to another branch does not move it, and its own next
+    /// save does.
+    #[test]
+    fn a_chat_keeps_its_own_git_branch() {
+        with_app_dir("chat-store-git-branch", || {
+            let said = |id: &str, branch: Option<&str>| {
+                save(id, "/repo", &[LlmMessage::user("hi")], &blocks("hi"), &[], None, None, branch).unwrap()
+            };
+            assert_eq!(said("a", Some("main")).git_branch.as_deref(), Some("main"));
+            said("b", Some("feature"));
+
+            let branch_of = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().git_branch;
+            assert_eq!(branch_of("a").as_deref(), Some("main"));
+            assert_eq!(branch_of("b").as_deref(), Some("feature"));
+            assert_eq!(load("a").unwrap().git_branch.as_deref(), Some("main"));
+
+            said("a", Some("feature"));
+            assert_eq!(branch_of("a").as_deref(), Some("feature"));
+            said("a", None);
+            assert_eq!(branch_of("a"), None);
         });
     }
 
@@ -648,7 +683,7 @@ mod tests {
             assert_eq!(title("gone").unwrap(), None);
             assert_eq!(list("/repo").unwrap()[0].title, "Lost token");
 
-            save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one")).unwrap();
+            save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one"), None).unwrap();
             save_one("three", "/repo", "untouched");
             let title = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().title;
             assert_eq!(title("two"), "Lost token", "a branch starts with its original's name");
@@ -730,6 +765,7 @@ mod tests {
             let listed = list("/repo").unwrap();
             assert_eq!(listed.len(), 1);
             assert!(!listed[0].archived);
+            assert_eq!(listed[0].git_branch, None);
             set_archived("old", true).unwrap();
             assert!(list("/repo").unwrap()[0].archived);
         });
@@ -773,7 +809,7 @@ mod tests {
         with_app_dir("chat-store-bad-id", || {
             assert!(matches!(load("../settings"), Err(ChatError::BadId(_))));
             assert!(matches!(
-                save("../settings", "/repo", &[], &Value::Null, &[], None, None),
+                save("../settings", "/repo", &[], &Value::Null, &[], None, None, None),
                 Err(ChatError::BadId(_))
             ));
         });
