@@ -68,7 +68,8 @@ export function AgentRun({ agent: a, onStop }: { agent: AgentInfo; onStop: (id: 
 type Props = {
   /** The chat the run belongs to: only its own are listed. */
   chatId: string | null;
-  /** Which run: the task as well as the number, which starts again with the app. */
+  /** Which run: the task as well as the number, which starts again with the app.
+      The task may be only the start of the brief — the review card knows no more. */
   run: AgentFocus;
   onClose: () => void;
 };
@@ -78,7 +79,7 @@ type Props = {
     backend says a run changed, so a running one moves on under the user's eyes. */
 export function AgentSheet({ chatId, run, onClose }: Props) {
   const { agents, loaded, error, stop } = useAgents(true, chatId);
-  const agent = agents.find((a) => a.id === run.id && a.task === run.task);
+  const agent = agents.find((a) => a.id === run.id && a.task.startsWith(run.task));
   return (
     <PageSheet icon={Bot} title="Agent" label={briefTitle(run.task)} onClose={onClose}>
       {agent ? (

@@ -205,6 +205,14 @@ describe("the agent sheet", () => {
     expect(screen.queryByText("Stop")).toBeNull();
   });
 
+  test("the review card's run is found by how its brief begins", async () => {
+    listed[0] = { ...listed[0], task: "Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>" };
+    render(sheet({ id: 2, task: "Review the uncommitted changes" }));
+    await settle();
+    expect(screen.getByText("2 steps")).toBeTruthy();
+    expect(screen.queryByText("This run is no longer listed.")).toBeNull();
+  });
+
   test("a failed run says why", async () => {
     listed[1] = { ...listed[1], state: { state: "failed", reason: "the helper used up its 60 rounds" }, answer: null };
     render(sheet({ id: 1, task: "Which tests cover the parser?" }));
