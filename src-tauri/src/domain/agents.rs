@@ -3,8 +3,10 @@
 //!
 //! A run lives inside the call that started it: the calling turn waits for
 //! it. What outlives it is the record, so the tab can still show what a
-//! finished helper read and answered. No I/O here, only the list and a lock,
-//! which is why it sits in `domain` next to its sink.
+//! finished helper read and answered — a chat's runs go to its [`RunLog`] as
+//! well, at the start and the end, and are listed from there once they are
+//! gone from here. No I/O here, only the list and a lock, which is why it
+//! sits in `domain` next to its sink.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,11 +14,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::domain::llm::ChatUsage;
+use crate::domain::runs::{self, NoLog, RunKind, RunLog};
 
 /// Finished runs kept for the tab, oldest dropped first.
 pub const MAX_FINISHED: usize = 20;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
     pub id: u32,
@@ -29,7 +32,7 @@ pub struct AgentInfo {
     pub answer: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum AgentState {
     Running,
@@ -87,6 +90,7 @@ pub struct Agents {
     runs: Arc<Mutex<(u32, Vec<Run>)>>,
     sink: AgentEventSink,
     chat: Option<String>,
+    log: Arc<dyn RunLog>,
 }
 
 impl Default for Agents {
@@ -97,12 +101,23 @@ impl Default for Agents {
 
 impl Agents {
     pub fn new(sink: AgentEventSink) -> Self {
-        Self { runs: Arc::default(), sink, chat: None }
+        Self::with_log(sink, Arc::new(NoLog))
+    }
+
+    /// Numbered on from the last run `log` holds, and a chat's runs saved there.
+    pub fn with_log(sink: AgentEventSink, log: Arc<dyn RunLog>) -> Self {
+        let runs = Arc::new(Mutex::new((log.last_id(RunKind::Agent), Vec::new())));
+        Self { runs, sink, chat: None, log }
     }
 
     /// The same record, for a turn of `chat`: what it starts is that chat's.
     pub fn for_chat(&self, chat: &str) -> Agents {
-        Agents { runs: Arc::clone(&self.runs), sink: Arc::clone(&self.sink), chat: Some(chat.to_string()) }
+        Agents {
+            runs: Arc::clone(&self.runs),
+            sink: Arc::clone(&self.sink),
+            chat: Some(chat.to_string()),
+            log: Arc::clone(&self.log),
+        }
     }
 
     pub fn start(&self, task: &str) -> u32 {
@@ -124,6 +139,7 @@ impl Agents {
             });
             id
         };
+        self.save(id);
         (self.sink)(AgentChanged { id });
         id
     }
@@ -142,6 +158,7 @@ impl Agents {
             run.info.state = state;
             run.info.answer = answer;
         });
+        self.save(id);
         let mut runs = self.lock();
         let finished = runs.1.iter().filter(|run| run.info.state != AgentState::Running).count();
         let mut excess = finished.saturating_sub(MAX_FINISHED);
@@ -180,9 +197,21 @@ impl Agents {
     }
 
     /// The runs `chat` started, oldest first: the tab and Overview show the
-    /// open chat's, not every chat's since launch.
+    /// open chat's, not every chat's since launch — and its stored ones, from
+    /// before a restart too.
     pub fn list_for(&self, chat: &str) -> Vec<AgentInfo> {
-        self.lock().1.iter().filter(|run| run.chat.as_deref() == Some(chat)).map(|run| run.info.clone()).collect()
+        let live =
+            self.lock().1.iter().filter(|run| run.chat.as_deref() == Some(chat)).map(|run| run.info.clone()).collect();
+        runs::merge(self.log.agents(chat), live, |run| run.id, runs::agent_cut_short)
+    }
+
+    /// Writes run `id` to the log as it stands, if a chat started it. Outside
+    /// the lock: the log is a database.
+    fn save(&self, id: u32) {
+        let saved = self.lock().1.iter().find(|run| run.info.id == id).and_then(|run| Some((run.chat.clone()?, run.info.clone())));
+        if let Some((chat, info)) = saved {
+            self.log.save_agent(&chat, &info);
+        }
     }
 
     fn update(&self, id: u32, change: impl FnOnce(&mut Run)) {
@@ -257,6 +286,33 @@ mod tests {
         agents.finish(id, AgentState::Stopped, None);
         assert_eq!(agents.stop(id), Err(AgentError::NotRunning(id)));
         assert_eq!(agents.stop(9), Err(AgentError::NotFound(9)));
+    }
+
+    /// A chat's runs are saved as they start and end, and listed from the
+    /// log once the record has let them go — after a restart, numbered on.
+    #[test]
+    fn a_chats_runs_are_saved_and_listed_back_after_a_restart() {
+        use crate::domain::runs::{MemoryLog, RunLog};
+        let log = Arc::new(MemoryLog::default());
+        let before = Agents::with_log(Arc::new(|_| {}), log.clone());
+        let chat = before.for_chat("a");
+        let done = chat.start("where is X");
+        chat.step(done, "grep X".into());
+        let saved_running = log.agents("a");
+        chat.finish(done, AgentState::Done, Some("a.rs:1".into()));
+        let cut = chat.start("never finished");
+        before.start("outside a chat");
+        assert_eq!(saved_running.iter().map(|r| r.state.clone()).collect::<Vec<_>>(), [AgentState::Running]);
+        assert_eq!(log.agents("a").len(), 2, "the run outside a chat is not saved");
+
+        let after = Agents::with_log(Arc::new(|_| {}), log.clone());
+        let next = after.for_chat("a").start("again");
+        assert_eq!(next, cut + 1, "numbered on from the log: the run outside a chat went with the launch");
+        after.for_chat("b").start("elsewhere");
+        let listed = after.list_for("a");
+        let shown: Vec<_> = listed.iter().map(|r| (r.id, r.state.clone())).collect();
+        assert_eq!(shown, [(done, AgentState::Done), (cut, AgentState::Stopped), (next, AgentState::Running)]);
+        assert_eq!((listed[0].steps.as_slice(), listed[0].answer.as_deref()), (["grep X".to_string()].as_slice(), Some("a.rs:1")));
     }
 
     #[test]

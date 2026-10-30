@@ -95,8 +95,9 @@ pub async fn chat_set_archived(id: String, archived: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-pub async fn chat_delete(id: String) -> Result<(), String> {
-    blocking(move || crate::services::plain_chat::delete_chat(&id)).await
+pub async fn chat_delete(id: String, processes: State<'_, Arc<crate::infra::background::Processes>>) -> Result<(), String> {
+    let processes = Arc::clone(&processes);
+    blocking(move || crate::services::plain_chat::delete_chat(&id, &processes)).await
 }
 
 #[cfg(test)]

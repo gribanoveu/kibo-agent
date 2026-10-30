@@ -177,8 +177,12 @@ pub fn run() {
             use tauri::Manager;
             // Background processes the agent started; they outlive turns.
             // Here because what they report goes out through the app.
-            app.manage(std::sync::Arc::new(infra::background::Processes::new(
+            // A chat's processes and helper runs are kept in `chats.db` as well,
+            // so a chat reopened after a restart still lists them.
+            let runs: std::sync::Arc<dyn domain::runs::RunLog> = std::sync::Arc::new(infra::run_store::RunStore);
+            app.manage(std::sync::Arc::new(infra::background::Processes::with_log(
                 commands::processes::process_event_sink(app.handle()),
+                std::sync::Arc::clone(&runs),
             )));
             // The MCP servers, kept running between turns. Here because their
             // starts and ends go out through the app.
@@ -193,8 +197,9 @@ pub fn run() {
                 commands::mcp::mcp_event_sink(app.handle()),
             )));
             // Every `explore` run, for the Agents tab; the record outlives the run.
-            app.manage(std::sync::Arc::new(domain::agents::Agents::new(
+            app.manage(std::sync::Arc::new(domain::agents::Agents::with_log(
                 commands::agents::agent_event_sink(app.handle()),
+                runs,
             )));
             // The Assistant's board, for its `board` tool and the Board page.
             app.manage(std::sync::Arc::new(infra::board_store::Board::in_app_dir(

@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::domain::background::{BackgroundProcesses, ProcessChanged, ProcessEventSink, ProcessInfo};
+use super::blocking;
+use crate::domain::background::{BackgroundProcesses, ProcessChanged, ProcessEventSink, ProcessInfo, ProcessView, TAIL_BYTES};
 use crate::domain::command_exec::collapse_redraws;
 use crate::infra::background::Processes;
 
@@ -20,41 +20,32 @@ pub fn process_event_sink<R: Runtime>(app: &AppHandle<R>) -> ProcessEventSink {
     })
 }
 
-/// How much of each process's output the tab shows: its last screenfuls.
-const TAIL_BYTES: usize = 8 * 1024;
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProcessView {
-    #[serde(flatten)]
-    pub info: ProcessInfo,
-    pub tail: String,
-}
-
-/// The open chat's — what another chat started is not this one's to show —
-/// or, for `None`, every one: switching folders stops them all.
+/// The open chat's, stored ones included — what another chat started is not
+/// this one's to show — or, for `None`, every one running or kept since
+/// launch: switching folders stops them all.
 fn views(processes: &Processes, chat: Option<&str>) -> Vec<ProcessView> {
     let listed = match chat {
         Some(chat) => processes.list_for(chat),
-        None => processes.list(),
+        None => processes
+            .list()
+            .into_iter()
+            .map(|info| ProcessView { tail: processes.tail(info.id, TAIL_BYTES).unwrap_or_default(), info })
+            .collect(),
     };
-    // Newest first: the one just started is the one being watched.
+    // Newest first: the one just started is the one being watched. The tail
+    // as a terminal would show it: a countdown is its last value, not every one.
     listed
         .into_iter()
         .rev()
-        .map(|info| ProcessView { tail: shown_tail(processes, info.id), info })
+        .map(|view| ProcessView { tail: collapse_redraws(&view.tail).into_owned(), info: view.info })
         .collect()
-}
-
-/// As a terminal would show it: a countdown is its last value, not every one.
-fn shown_tail(processes: &Processes, id: u32) -> String {
-    collapse_redraws(&processes.tail(id, TAIL_BYTES).unwrap_or_default()).into_owned()
 }
 
 /// Read when the tab opens and on each [`PROCESS_EVENT`].
 #[tauri::command]
-pub fn processes_list(chat_id: Option<String>, processes: State<'_, Arc<Processes>>) -> Vec<ProcessView> {
-    views(&processes, chat_id.as_deref())
+pub async fn processes_list(chat_id: Option<String>, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
+    let processes = Arc::clone(&processes);
+    blocking(move || Ok::<_, String>(views(&processes, chat_id.as_deref()))).await
 }
 
 /// The ones still running, newest first and without their output: the chat's
@@ -65,13 +56,14 @@ pub fn processes_running(chat_id: String, processes: State<'_, Arc<Processes>>) 
 }
 
 fn running(processes: &Processes, chat: &str) -> Vec<ProcessInfo> {
-    processes.list_for(chat).into_iter().rev().filter(ProcessInfo::running).collect()
+    processes.running_for(chat).into_iter().rev().collect()
 }
 
 /// The model is told at its next round that the user stopped it.
 #[tauri::command]
-pub fn process_stop(id: u32, chat_id: String, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
-    stop(&processes, id, &chat_id)
+pub async fn process_stop(id: u32, chat_id: String, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
+    let processes = Arc::clone(&processes);
+    blocking(move || stop(&processes, id, &chat_id)).await
 }
 
 fn stop(processes: &Processes, id: u32, chat: &str) -> Result<Vec<ProcessView>, String> {
