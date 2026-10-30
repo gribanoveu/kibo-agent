@@ -3,9 +3,9 @@ import { useLiveRead } from "./useLiveRead";
 import { type AgentInfo, agentsList, onAgentChanged, stopAgent } from "../lib/agents";
 
 /**
- * The helper agents' runs the open chat started, read while the Agents tab is
- * open: when it opens, when another chat is opened, and each time the backend
- * says one of them changed. A chat not started yet has none.
+ * The helper agents' runs the open chat started, read while the Agents tab or
+ * a run's sheet is open: when it opens, when another chat is opened, and each
+ * time the backend says one of them changed. A chat not started yet has none.
  */
 export function useAgents(visible: boolean, chatId: string | null) {
   const read = () => (chatId ? agentsList(chatId) : Promise.resolve([])).then((list) => ({ chatId, list }));
@@ -27,5 +27,6 @@ export function useAgents(visible: boolean, chatId: string | null) {
     [chatId],
   );
 
-  return { agents, error, stop };
+  // Read for this chat at least once: a run missing from the list is missing, not on its way.
+  return { agents, loaded: value.chatId === chatId, error, stop };
 }

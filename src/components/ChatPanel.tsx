@@ -212,10 +212,10 @@ function ToolRow({
         )}
       </button>
       {/* Unfolded rather than instead of it, as a process row does: the
-          answer stays readable here after the Agents tab has forgotten the run. */}
+          answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
-        <button type="button" className="tool-open-agent" onClick={() => onOpenAgent(shown.agent!)}>
-          Show in Agents
+        <button type="button" className="tool-open-agent" data-sheet-opener onClick={() => onOpenAgent(shown.agent!)}>
+          Show run
           <ArrowUpRight size={12} aria-hidden />
         </button>
       )}
@@ -690,7 +690,7 @@ type Props = {
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
-  /** Opens the Agents tab on the helper run an `explore` call was. */
+  /** Opens the helper run an `explore` call was, in the sheet over the chat. */
   onOpenAgent?: OpenAgent;
   /** Background processes still running, newest first — counted beside the turn's clock. */
   runningProcesses?: number[];

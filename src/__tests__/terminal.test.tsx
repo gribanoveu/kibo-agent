@@ -153,7 +153,7 @@ describe("useTerminals", () => {
 
 describe("TerminalPanel", () => {
   const panel = (props: Partial<Parameters<typeof TerminalPanel>[0]> = {}) => (
-    <TerminalPanel active workspace="/work/kibo" chatId="c" processFocus={null} onFocusTaken={() => {}} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
+    <TerminalPanel active workspace="/work/kibo" chatId="c" processFocus={null} onOpenAgent={() => {}} onFocusTaken={() => {}} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
   );
 
   test("opening the tab with no shell gives one, and draws it", async () => {
@@ -186,12 +186,18 @@ describe("TerminalPanel", () => {
     expect(screen.getByText(/No background processes/)).toBeTruthy();
   });
 
-  test("a helper run asked for from the chat shows the Agents tab", async () => {
-    const { rerender } = render(panel());
+  test("a row in the Agents tab opens its run over the chat", async () => {
+    runs = [{ id: 1, task: "t", state: { state: "done" }, steps: ["grep needle"], tokens: { prompt: 0, cached: 0, completion: 0 }, answer: "found" }];
+    const opened: AgentFocus[] = [];
+    render(panel({ onOpenAgent: (agent) => opened.push(agent) }));
     await settle();
     await settle();
-    rerender(panel({ agentFocus: { id: 1, task: "t" } }));
-    expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await settle();
+    fireEvent.click(screen.getByText("t"));
+    expect(opened).toEqual([{ id: 1, task: "t" }]);
+    // Shown in the sheet, not unfolded here.
+    expect(screen.queryByText("found")).toBeNull();
   });
 
   /// The pane has no heading of its own: the strip's end closes it, and only
@@ -266,23 +272,19 @@ describe("TerminalPanel", () => {
   // Drawn anew each time it opens: an ask still held by App would be taken again.
   test("an ask is taken once: App lets go, the pane keeps it, and opened again it shows a shell", async () => {
     listed = [{ id: 1, shell: "zsh", state: { state: "running" } }];
-    runs = [{ id: 1, task: "t", state: { state: "done" }, steps: ["grep needle"], tokens: { prompt: 0, cached: 0, completion: 0 }, answer: "found" }];
     // App: holds the ask till told it was taken.
-    let held: AgentFocus | null = null;
+    let held: { id: number | null } | null = null;
     function Host() {
-      const [focus, setFocus] = useState<AgentFocus | null>({ id: 1, task: "t" });
+      const [focus, setFocus] = useState<{ id: number | null } | null>({ id: null });
       held = focus;
-      return panel({ agentFocus: focus, onFocusTaken: () => setFocus(null) });
+      return panel({ processFocus: focus, onFocusTaken: () => setFocus(null) });
     }
     const { unmount } = render(<Host />);
     await settle();
     await settle();
-    expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
-    // The run asked for is open: its number shows only in its detail.
-    expect(screen.getByText("#1")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
     expect(held).toBeNull();
     unmount();
-    runs = [];
     render(panel());
     await settle();
     expect(screen.getByRole("tab", { name: "zsh" }).getAttribute("aria-selected")).toBe("true");
