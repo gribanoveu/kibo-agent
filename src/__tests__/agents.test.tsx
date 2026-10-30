@@ -147,6 +147,11 @@ describe("the agent list", () => {
   test("nothing reported is no cost shown, not zero", () => {
     expect(tokensSpent({ prompt: 0, cached: 0, completion: 0 })).toBe("");
   });
+
+  test("a run past a million says millions", () => {
+    expect(tokensSpent({ prompt: 495_000, cached: 0, completion: 0 })).toBe("495k tokens");
+    expect(tokensSpent({ prompt: 2_000_000, cached: 1_800_000, completion: 40_000 })).toBe("2.04M tokens · 90% cached");
+  });
 });
 
 describe("the agent sheet", () => {

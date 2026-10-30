@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri, requireBackend } from "./backend";
+import { compactTokens } from "./usage";
 
 // Helper agents: `explore` runs, for the Agents tab.
 
@@ -56,7 +57,7 @@ export async function stopAgent(id: number, chatId: string): Promise<AgentInfo[]
 export function tokensSpent(tokens: AgentTokens): string {
   const total = tokens.prompt + tokens.completion;
   if (!total) return "";
-  const shown = total >= 1000 ? `${Math.round(total / 1000)}k` : `${total}`;
+  const shown = compactTokens(total);
   const cached = tokens.prompt ? Math.round((tokens.cached / tokens.prompt) * 100) : 0;
   return cached ? `${shown} tokens · ${cached}% cached` : `${shown} tokens`;
 }

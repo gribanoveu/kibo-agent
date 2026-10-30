@@ -24,6 +24,10 @@ export const METRICS: Metric[] = [
   "toolCalls",
 ];
 
+/** A token count in a few characters: 950, 38k, 2.04M — a session runs into millions, and 2040k is a number to count digits in. */
+export const compactTokens = (n: number) =>
+  n >= 999_500 ? `${Number((n / 1_000_000).toFixed(2))}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
+
 export interface DailyMetric {
   /** `YYYY-MM-DD`, the user's local date. */
   day: string;

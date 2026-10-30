@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-10-30 Millions of tokens read as millions — Session tokens in the context meter and a helper agent's run say 2.04M rather than 2040k — and a picture the composer refused can be closed
 - 2026-10-30 Each chat keeps its own git branch: going back to a chat after another one switched the folder shows the folder's branch with the chat's own beside it, one click from switching back. A started chat can switch its branch between turns too — not while the agent works — and a Worktree tick is dropped when you open another chat
 - 2026-10-30 A chat keeps its helper agents' runs and its background commands: reopened later or after a restart, its Processes and Agents tabs and the Background card still show what each helper did and answered and how each command ended, with the last of its output. Deleting a chat deletes that record and stops what it left running
 - 2026-10-30 A helper agent's run opens in a sheet over the right side of the chat — from its explore row, Overview's Background card or the Agents tab — with the brief, its steps as they happen, what it cost, its answer and Stop; Escape or a click elsewhere closes it
