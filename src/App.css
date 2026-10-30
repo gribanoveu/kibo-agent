@@ -37,6 +37,8 @@
 /* The chat keeps room to be read: the panels beside it shrink first, and
    past their minimums give way (App.tsx). CHAT_MIN in usePanelSizes.ts. */
 .main {
+  /* What it opens over the chat (AgentSheet) is placed against it. */
+  position: relative;
   flex: 1;
   min-width: 400px;
   display: flex;

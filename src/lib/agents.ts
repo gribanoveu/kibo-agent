@@ -65,3 +65,9 @@ export function tokensSpent(tokens: AgentTokens): string {
 export function agentStatus(state: AgentState): string {
   return state.state === "failed" ? "failed" : state.state;
 }
+
+/** A step as the helper logged it, `readFile src/auth.rs`: the tool, then what it was called on. */
+export function splitStep(step: string): { tool: string; on: string } {
+  const space = step.indexOf(" ");
+  return space < 0 ? { tool: step, on: "" } : { tool: step.slice(0, space), on: step.slice(space + 1) };
+}
