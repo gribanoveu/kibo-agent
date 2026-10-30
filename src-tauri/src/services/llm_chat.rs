@@ -1960,6 +1960,17 @@ fn latest_plan_is(history: &[LlmMessage], plan: &str) -> bool {
 /// How a note on a changed part of the prompt begins; the part's name follows.
 const STANDING_NOTE: &str = "[Changed during this conversation:";
 
+/// The note saying what `name` is now. It ends in a line of its own, since a
+/// section separates its files and paragraphs with blank lines — and the next
+/// note follows after one — so without it a section cut at a blank line would
+/// read as the start of the note that said it whole.
+fn standing_note(name: &str, now: Option<&str>) -> String {
+    format!(
+        "{STANDING_NOTE} {name}. Where it differs from that section of the system prompt, this one is right.]\n{}\n[End of {name}.]",
+        now.unwrap_or("Gone: the section no longer applies."),
+    )
+}
+
 /// Puts into the history each part of the prompt that the files say
 /// otherwise than the history last did — the prompt's own frozen version
 /// ([`Frozen`]) until a note has followed it — and otherwise leaves it alone.
@@ -1973,10 +1984,7 @@ fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
         ("Knowledge", knowledge(frozen.knowledge.as_ref()), knowledge(turn.knowledge_overview)),
     ];
     for (name, was, now) in parts {
-        let note = format!(
-            "{STANDING_NOTE} {name}. Where it differs from that section of the system prompt, this one is right.]\n{}",
-            now.as_deref().unwrap_or("Gone: the section no longer applies."),
-        );
+        let note = standing_note(name, now.as_deref());
         let head = format!("{STANDING_NOTE} {name}.");
         let shown = history.iter().rev().filter_map(|m| m.content.as_deref()).find_map(|c| c.rfind(&head).map(|at| &c[at..]));
         let current = match shown {
@@ -5694,10 +5702,7 @@ mod tests {
         let quiet = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         assert!(notes_of(&quiet, "Project instructions").is_empty(), "{quiet:?}");
 
-        let said = format!(
-            "{STANDING_NOTE} Project instructions. Where it differs from that section of the system prompt, this one is right.]\n{}",
-            prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.")]).unwrap()
-        );
+        let said = standing_note("Project instructions", Some(&prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.")]).unwrap()));
         let back = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go"), LlmMessage::user(said), LlmMessage::user("on")], vec![])).expect("finishes"));
         let notes = notes_of(&back, "Project instructions");
         assert_eq!(notes.len(), 2, "{notes:?}");
@@ -5717,10 +5722,7 @@ mod tests {
         let mut h = harness("standing-shortened", vec![text("done")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
         h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
-        let longer = format!(
-            "{STANDING_NOTE} Project instructions. Where it differs from that section of the system prompt, this one is right.]\n{}",
-            prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\nThen lint.")]).unwrap()
-        );
+        let longer = standing_note("Project instructions", Some(&prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\n\nThen lint.")]).unwrap()));
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user(longer), LlmMessage::user("go")], vec![])).expect("finishes"));
 
@@ -5772,7 +5774,7 @@ mod tests {
         let knowledge = notes_of(&history, "Knowledge");
         assert!(knowledge.len() == 1 && knowledge[0].contains("`tax-api-now` in the base"), "{knowledge:?}");
         let memory = notes_of(&history, "Memory");
-        assert!(memory.len() == 1 && memory[0].ends_with("Gone: the section no longer applies."), "{memory:?}");
+        assert!(memory.len() == 1 && memory[0].contains("Gone: the section no longer applies.\n[End of Memory.]"), "{memory:?}");
     }
 
     fn assert_requests_list_release(requests: Vec<ChatRequest>) {
