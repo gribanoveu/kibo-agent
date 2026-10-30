@@ -17,26 +17,26 @@ pub fn agent_event_sink<R: Runtime>(app: &AppHandle<R>) -> AgentEventSink {
     })
 }
 
-/// Newest first: the one just started is the one being watched.
-fn newest_first(agents: &Agents) -> Vec<AgentInfo> {
-    agents.list().into_iter().rev().collect()
+/// The open chat's, newest first: the one just started is the one being watched.
+fn newest_first(agents: &Agents, chat: &str) -> Vec<AgentInfo> {
+    agents.list_for(chat).into_iter().rev().collect()
 }
 
 /// Read when the tab opens and on each [`AGENT_EVENT`].
 #[tauri::command]
-pub fn agents_list(agents: State<'_, Arc<Agents>>) -> Vec<AgentInfo> {
-    newest_first(&agents)
+pub fn agents_list(chat_id: String, agents: State<'_, Arc<Agents>>) -> Vec<AgentInfo> {
+    newest_first(&agents, &chat_id)
 }
 
 /// The helper ends at its next check; the turn that started it reads why.
 #[tauri::command]
-pub fn agent_stop(id: u32, agents: State<'_, Arc<Agents>>) -> Result<Vec<AgentInfo>, String> {
-    stop(&agents, id)
+pub fn agent_stop(id: u32, chat_id: String, agents: State<'_, Arc<Agents>>) -> Result<Vec<AgentInfo>, String> {
+    stop(&agents, id, &chat_id)
 }
 
-fn stop(agents: &Agents, id: u32) -> Result<Vec<AgentInfo>, String> {
+fn stop(agents: &Agents, id: u32, chat: &str) -> Result<Vec<AgentInfo>, String> {
     agents.stop(id).map_err(|e| e.to_string())?;
-    Ok(newest_first(agents))
+    Ok(newest_first(agents, chat))
 }
 
 #[cfg(test)]
@@ -66,11 +66,13 @@ mod tests {
     #[test]
     fn the_tab_lists_newest_first_and_stops_by_id() {
         let agents = Agents::default();
-        agents.start("first");
-        agents.start("second");
-        assert_eq!(newest_first(&agents).iter().map(|a| a.task.as_str()).collect::<Vec<_>>(), ["second", "first"]);
-        stop(&agents, 1).unwrap();
-        assert!(agents.stop_asked(1) && !agents.stop_asked(2));
-        assert!(stop(&agents, 7).unwrap_err().contains("no helper agent #7"));
+        let chat = agents.for_chat("c");
+        chat.start("first");
+        agents.for_chat("other").start("elsewhere");
+        chat.start("second");
+        assert_eq!(newest_first(&agents, "c").iter().map(|a| a.task.as_str()).collect::<Vec<_>>(), ["second", "first"]);
+        assert_eq!(stop(&agents, 1, "c").unwrap().len(), 2);
+        assert!(agents.stop_asked(1) && !agents.stop_asked(3));
+        assert!(stop(&agents, 7, "c").unwrap_err().contains("no helper agent #7"));
     }
 }

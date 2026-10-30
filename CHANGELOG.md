@@ -3,6 +3,7 @@
 ## Unreleased
 
 - 2026-10-29 Editing AGENTS.md, a `remember` note or a knowledge document mid-chat no longer resends the whole conversation at full price: the agent's prompt stays as the chat began and the change reaches it as a short note, and `/init` and the agent keep progress out of AGENTS.md
+- 2026-10-29 The Background card in Overview opens the Terminal on its Processes tab, and it, the Processes and the Agents tabs show only what the open chat started — the "N ended" count follows you to another chat or folder instead of piling up since launch
 - 2026-10-28 Let the agent read your MongoDB: turn on "Open to the agent" for a connection on the MongoDB page, and in any mode — and in the assistant chat — the agent finds a collection by its name, looks at its fields, finds, counts and aggregates documents and lists indexes; it writes nothing, and fields named like passwords or tokens reach it as `<redacted>`
 - 2026-10-27 Choose which microphone a call is recorded from in the Meetings page's recording settings; the choice is kept, and while that microphone is unplugged the system's default records instead
 - 2026-10-27 Semantic search puts the right code first far more often: the active model reads the index's first 30 results against the query and reorders them, at the cost of a few seconds a search

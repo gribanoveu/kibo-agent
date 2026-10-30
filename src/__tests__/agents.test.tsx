@@ -64,7 +64,7 @@ beforeEach(() => {
 
 describe("useAgents", () => {
   test("asks when the tab opens and when a run changes, and not once it closes", async () => {
-    const { result, rerender } = renderHook(({ visible }) => useAgents(visible), { initialProps: { visible: false } });
+    const { result, rerender } = renderHook(({ visible }) => useAgents(visible, "c"), { initialProps: { visible: false } });
     const asked = () => calls.filter((c) => c.command === "agents_list").length;
     await settle();
     expect(calls).toEqual([]);
@@ -86,11 +86,31 @@ describe("useAgents", () => {
   });
 
   test("a stop is settled by what the backend says", async () => {
-    const { result } = renderHook(() => useAgents(true));
+    const { result } = renderHook(() => useAgents(true, "c"));
     await settle();
     await act(() => result.current.stop(2));
-    expect(calls.at(-1)).toEqual({ command: "agent_stop", args: { id: 2 } });
+    expect(calls.at(-1)).toEqual({ command: "agent_stop", args: { id: 2, chatId: "c" } });
     expect(result.current.agents[0].state).toEqual({ state: "stopped" });
+  });
+
+  test("lists the open chat's, reads again for another chat, and nothing for a chat not started", async () => {
+    const { result, rerender } = renderHook(({ chat }) => useAgents(true, chat), { initialProps: { chat: "a" as string | null } });
+    await settle();
+    expect(calls).toEqual([{ command: "agents_list", args: { chatId: "a" } }]);
+    expect(result.current.agents).toHaveLength(2);
+
+    listed = [listed[1]];
+    rerender({ chat: "b" });
+    // Till b's list arrives, a's is not shown under it.
+    expect(result.current.agents).toEqual([]);
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "agents_list", args: { chatId: "b" } });
+    expect(result.current.agents.map((a) => a.id)).toEqual([1]);
+
+    rerender({ chat: null });
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(result.current.agents).toEqual([]);
   });
 });
 

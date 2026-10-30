@@ -45,8 +45,12 @@ export type PaneContext = {
   onNotify: (msg: string) => void;
   /** The commit message being written in Changes. */
   commitDraft: { message: string; onMessage: (message: string) => void };
-  /** The background process a chat row asked to see; a new object each ask. */
-  processFocus: { id: number } | null;
+  /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
+  processFocus: { id: number | null } | null;
+  /** Terminal took the process or helper asked for: App lets go of it. */
+  onFocusTaken: () => void;
+  /** The open chat: Overview and Terminal list only the processes and helpers it started. */
+  chatId: string | null;
   /** The helper run a chat row asked to see; a new object each ask. */
   agentFocus: AgentFocus | null;
   /** A command an answer asked to put in a shell; a new object each ask. */
@@ -406,9 +410,9 @@ function RulesPane({ active, workspace }: PaneContext) {
 // ─── Overview ──────────────────────────────────────────────────────────────
 
 /** Reads the processes and helper agents itself, as Terminal does, while it is on screen. */
-function OverviewPane({ active, mcp, overview }: PaneContext) {
-  const { processes } = useProcesses(active);
-  const { agents } = useAgents(active);
+function OverviewPane({ active, chatId, mcp, overview }: PaneContext) {
+  const { processes } = useProcesses(active, chatId);
+  const { agents } = useAgents(active, chatId);
   return <OverviewPanel servers={mcp.view?.servers ?? []} processes={processes} agents={agents} {...overview} />;
 }
 

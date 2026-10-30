@@ -21,6 +21,7 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   processes: [],
   agents: [],
   onOpenProcess: () => {},
+  onOpenProcesses: () => {},
   onOpenAgent: () => {},
   onOpenPanel: () => {},
   ...over,
@@ -75,6 +76,14 @@ describe("Overview", () => {
     fireEvent.click(screen.getByText("Find the ranking code"));
     expect(opened).toEqual([1, { id: 7, task: "Find the ranking code" }]);
     expect(screen.getByText("2 ended")).toBeTruthy();
+  });
+
+  // Terminal alone would open on whichever of its tabs was picked last.
+  test("the Background heading asks for the processes, not just the Terminal", () => {
+    const opened: string[] = [];
+    render(<OverviewPanel {...props({ onOpenProcesses: () => opened.push("processes"), onOpenPanel: (tab) => opened.push(tab) })} />);
+    fireEvent.click(screen.getByText("Background"));
+    expect(opened).toEqual(["processes"]);
   });
 
   test("says when there is nothing to count", () => {

@@ -40,16 +40,16 @@ export function briefTitle(task: string): string {
   return asked ?? lines[0] ?? "";
 }
 
-/** Newest first. */
-export async function agentsList(): Promise<AgentInfo[]> {
+/** The runs chat `chatId` started, newest first. */
+export async function agentsList(chatId: string): Promise<AgentInfo[]> {
   if (!inTauri()) return [];
-  return invoke<AgentInfo[]>("agents_list");
+  return invoke<AgentInfo[]>("agents_list", { chatId });
 }
 
-/** The helper ends at its next check; the turn that started it is told and carries on. */
-export async function stopAgent(id: number): Promise<AgentInfo[]> {
+/** The helper ends at its next check; the turn that started it is told and carries on. Answers with chat `chatId`'s list. */
+export async function stopAgent(id: number, chatId: string): Promise<AgentInfo[]> {
   requireBackend();
-  return invoke<AgentInfo[]>("agent_stop", { id });
+  return invoke<AgentInfo[]>("agent_stop", { id, chatId });
 }
 
 /** What a run cost: `38k tokens · 90% cached`; nothing while nothing is reported. */
