@@ -57,6 +57,9 @@ pub async fn chat_save(
             &todos,
             plan.as_deref(),
             branched_from.as_deref(),
+            // Read here, at the save, rather than sent: the window's copy of
+            // HEAD lags a switch the agent made in the turn just ended.
+            crate::infra::git_head::current_branch(&workspace).as_deref(),
         )
         .map_err(|e| e.to_string())?;
         if first {
@@ -110,7 +113,7 @@ mod tests {
         crate::testing::with_app_dir("chat-title-spent", || {
             crate::testing::spending_provider("Fix the parser", 20, 3);
             let blocks = serde_json::json!([{ "kind": "user", "id": "user:0", "text": "fix the parser" }]);
-            chat_store::save("t1", "/repo", &[LlmMessage::user("fix the parser")], &blocks, &[], None, None).unwrap();
+            chat_store::save("t1", "/repo", &[LlmMessage::user("fix the parser")], &blocks, &[], None, None, None).unwrap();
             tauri::async_runtime::block_on(chat_generate_title("t1".into())).unwrap();
             assert_eq!(crate::testing::chat_tokens("t1"), 23);
         });

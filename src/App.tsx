@@ -423,9 +423,10 @@ export default function App() {
   );
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
-  // Offered only before the first message: a chat that has started is about
-  // the branch it started on.
+  // Before the first message the branch is where the chat starts; after it,
+  // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
+    chatId: agent.chatId,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,
@@ -433,6 +434,7 @@ export default function App() {
     send: agent.send,
   });
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
+  const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
   const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
@@ -614,18 +616,17 @@ export default function App() {
                 worktreeOf={worktreeOf}
                 index={index}
                 end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
-                branchPicker={
-                  unstarted
-                    ? {
-                        branches: branchPicker.branches,
-                        onOpen: branchPicker.load,
-                        onPick: (name) => void branchPicker.pick(name),
-                        worktree: branchPicker.worktree,
-                        base: branchPicker.base,
-                        onWorktree: branchPicker.setWorktree,
-                      }
-                    : undefined
-                }
+                branchPicker={{
+                  branches: branchPicker.branches,
+                  onOpen: branchPicker.load,
+                  onPick: (name) => void branchPicker.pick(name),
+                  worktree: branchPicker.worktree,
+                  base: branchPicker.base,
+                  onWorktree: unstarted ? branchPicker.setWorktree : undefined,
+                  locked: turnBusy ? "The agent is working on this branch — switch it once the turn ends" : undefined,
+                }}
+                // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
+                chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
               />
             }
             onSend={(text, images) => send(text, undefined, images)}

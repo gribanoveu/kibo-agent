@@ -18,6 +18,8 @@ export type ChatSummary = {
   archived: boolean;
   /** Who answers in a Chat mode conversation; absent for the agent's and for chats saved before rows kept it. */
   role?: ChatRoleId | null;
+  /** The git branch the chat works on — its folder's when last saved; null outside a repository and for chats saved before rows kept it. */
+  gitBranch?: string | null;
 };
 
 /**

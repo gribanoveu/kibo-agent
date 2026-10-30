@@ -287,7 +287,7 @@ mod tests {
     fn a_prototype_without_a_manifest_is_named_as_its_chat() {
         with_app_dir("artifacts-old-prototype", || {
             let said = "Сделай лендинг кофейни";
-            chat_store::save(OLD, "/repo", &[crate::domain::llm::LlmMessage::user(said)], &serde_json::json!([{ "kind": "user", "id": "user:0", "text": said }]), &[], None, None).unwrap();
+            chat_store::save(OLD, "/repo", &[crate::domain::llm::LlmMessage::user(said)], &serde_json::json!([{ "kind": "user", "id": "user:0", "text": said }]), &[], None, None, None).unwrap();
             let old = prototype_of(OLD);
             let orphan = prototype_of(ORPHAN);
             fs::remove_file(orphan.join("index.html")).unwrap();
