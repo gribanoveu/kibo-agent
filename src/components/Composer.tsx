@@ -118,6 +118,8 @@ export function Composer({
   focus = 0,
 }: Props) {
   const [text, setText] = useState("");
+  /** The queued row shown whole; the rest are a line each. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const attachments = useAttachments(imagesEnabled);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
@@ -210,6 +212,24 @@ export function Composer({
   // placeholders in it — and Enter again runs it once they are typed.
   const pick = (command: SlashCommand) => (command.argumentHint ? complete(command) : run(command));
 
+  // A row of the queue: when it is read, said in words rather than in a
+  // tooltip, and its text, cut to a line until clicked open.
+  const queueRow = (key: string, icon: ReactNode, when: string, text: string, back: string, onBack: () => void) => {
+    const open = openRow === key;
+    return (
+      <li key={key} className={open ? "open" : undefined}>
+        {icon}
+        <span className="composer-queue-when">{when}</span>
+        <button type="button" className="composer-queue-text" aria-expanded={open} onClick={() => setOpenRow(open ? null : key)}>
+          {text}
+        </button>
+        <button type="button" className="composer-queue-back" title={back} aria-label={back} onClick={onBack}>
+          <X size={13} />
+        </button>
+      </li>
+    );
+  };
+
   return (
     <div className="composer-wrap">
       {/* Above the folder tab, which sits on the box's edge. */}
@@ -217,24 +237,16 @@ export function Composer({
         <ul className="composer-queue" aria-label="Queued messages">
           {/* The notes first: they reach the agent at its next step, the
               queue only after the turn. */}
-          {steered.map((note) => (
-            <li key={note.id} title="Reaches the agent at its next step">
-              <MessageSquareReply size={13} />
-              <span className="composer-queue-text">{note.text}</span>
-              <button type="button" title="Take back to the message box" aria-label="Take back to the message box" onClick={() => onWithdraw?.(note.id)}>
-                <X size={13} />
-              </button>
-            </li>
-          ))}
-          {queued.map((item) => (
-            <li key={item.id}>
-              <CornerDownRight size={13} />
-              <span className="composer-queue-text">{item.text}</span>
-              <button type="button" title="Back to the message box" aria-label="Back to the message box" onClick={() => onUnqueue?.(item.id)}>
-                <X size={13} />
-              </button>
-            </li>
-          ))}
+          {steered.map((note) =>
+            queueRow(`note-${note.id}`, <MessageSquareReply size={13} />, "Next step", note.text, "Take back to the message box", () =>
+              onWithdraw?.(note.id),
+            ),
+          )}
+          {queued.map((item) =>
+            queueRow(`queued-${item.id}`, <CornerDownRight size={13} />, "After this turn", item.text, "Back to the message box", () =>
+              onUnqueue?.(item.id),
+            ),
+          )}
         </ul>
       )}
       {tab}

@@ -115,10 +115,11 @@
   display: flex;
   flex-direction: column;
 }
-/* Messages waiting for the turn to end, oldest first, just above the box. */
+/* Messages waiting for the turn to end, oldest first, just above the box and
+   as wide as it: they are what the box will send. */
 .composer-queue {
   list-style: none;
-  margin: 0 0 6px;
+  margin: 0 14px 6px;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -128,20 +129,51 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 12px;
+  padding: 5px 6px 5px 12px;
   background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   color: var(--text-dim);
   font-size: var(--fs-sm);
 }
+.composer-queue li > svg {
+  flex: none;
+  color: var(--text-faint);
+}
+.composer-queue-when {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
 .composer-queue-text {
   flex: 1;
   min-width: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.composer-queue button {
+.composer-queue-text:hover {
+  color: var(--text);
+}
+/* Opened, the row shows the whole message, scrolling past a few lines. */
+.composer-queue li.open {
+  align-items: flex-start;
+}
+.composer-queue li.open .composer-queue-text {
+  max-height: 30vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.composer-queue-back {
+  flex: none;
   display: flex;
   padding: 2px;
   background: none;
@@ -150,7 +182,7 @@
   color: var(--text-faint);
   cursor: pointer;
 }
-.composer-queue button:hover {
+.composer-queue-back:hover {
   background: var(--bg-hover);
   color: var(--text);
 }

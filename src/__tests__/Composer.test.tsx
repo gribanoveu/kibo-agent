@@ -699,4 +699,20 @@ describe("the queue", () => {
     expect(withdrawn).toEqual(["n-1"]);
     expect(taken).toEqual([]);
   });
+
+  /// When a row is read is said on it, not in a tooltip; a long one opens
+  /// whole on a click, one at a time.
+  test("a row says when it is read, and opens whole on a click", () => {
+    queueing(true, [{ id: 1, text: "then the docs" }], [{ id: "n-1", text: "use the helper" }]);
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect([...list.querySelectorAll(".composer-queue-when")].map((el) => el.textContent)).toEqual(["Next step", "After this turn"]);
+
+    const [note, queued] = [screen.getByRole("button", { name: "use the helper" }), screen.getByRole("button", { name: "then the docs" })];
+    fireEvent.click(note);
+    expect(note.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(queued);
+    expect([note.getAttribute("aria-expanded"), queued.getAttribute("aria-expanded")]).toEqual(["false", "true"]);
+    fireEvent.click(queued);
+    expect(queued.getAttribute("aria-expanded")).toBe("false");
+  });
 });
