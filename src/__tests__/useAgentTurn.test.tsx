@@ -141,9 +141,10 @@ describe("making room before a turn", () => {
       await result.current.send("and b.rs");
     });
 
+    const chatId = calls.find((call) => call.command === "chat_start")?.args.chatId;
     expect(calls.filter((call) => call.command === "chat_steer").map((call) => call.args)).toEqual([
-      { text: "Review a.rs line by line", shown: "/review a.rs" },
-      { text: "and b.rs", shown: null },
+      { text: "Review a.rs line by line", shown: "/review a.rs", chatId },
+      { text: "and b.rs", shown: null, chatId },
     ]);
   });
 
@@ -890,6 +891,20 @@ describe("the queue", () => {
 
   const started = () => calls.filter((call) => call.command === "chat_start");
 
+  /// Stop reaches the running turn's own chat: with two chats side by side a
+  /// stop without the id would end both — or the wrong one.
+  test("stop is sent for the running turn's chat", async () => {
+    const turn = heldTurn();
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+
+    await act(async () => result.current.cancel());
+    expect(calls.find((call) => call.command === "chat_cancel")?.args).toEqual({ chatId: started()[0].args.chatId });
+
+    await act(async () => turn.end("cancelled"));
+  });
+
   test("a message queued mid-turn is sent as the next turn once this one is done, not steered", async () => {
     const turn = heldTurn();
     const { result } = renderHook(() => useAgentTurn());
@@ -980,7 +995,7 @@ describe("the queue", () => {
     results.chat_cancel_steer = true;
 
     await act(() => result.current.withdraw("note-1"));
-    expect(calls.find((call) => call.command === "chat_cancel_steer")?.args).toEqual({ id: "note-1" });
+    expect(calls.find((call) => call.command === "chat_cancel_steer")?.args).toEqual({ id: "note-1", chatId: started()[0].args.chatId });
     expect(given).toEqual(["use the helper"]);
     expect(result.current.steered).toEqual([]);
   });

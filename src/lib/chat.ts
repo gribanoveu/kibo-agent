@@ -232,25 +232,25 @@ export async function resumeChat(
   return invoke<Outcome>("chat_resume", { turnId, chatId, checkpoint, decisions, plan });
 }
 
-/** Returns at once; the turn stops at its next checkpoint. */
-export async function cancelChat(): Promise<void> {
+/** Returns at once; the turn stops at its next checkpoint. Another chat's turn is not its to stop. */
+export async function cancelChat(chatId: string): Promise<void> {
   requireBackend();
-  return invoke<void>("chat_cancel");
+  return invoke<void>("chat_cancel", { chatId });
 }
 
 /**
  * Queues a mid-turn note and returns its id, which is what withdraws it.
  * `shown` is what the transcript shows in place of `text` — a `/` command.
  */
-export async function steer(text: string, shown?: string): Promise<string> {
+export async function steer(text: string, shown: string | undefined, chatId: string): Promise<string> {
   requireBackend();
-  return invoke<string>("chat_steer", { text, shown: shown ?? null });
+  return invoke<string>("chat_steer", { text, shown: shown ?? null, chatId });
 }
 
 /** `false` means a round already took it — what is said to the model cannot be unsaid. */
-export async function cancelSteer(id: string): Promise<boolean> {
+export async function cancelSteer(id: string, chatId: string): Promise<boolean> {
   requireBackend();
-  return invoke<boolean>("chat_cancel_steer", { id });
+  return invoke<boolean>("chat_cancel_steer", { id, chatId });
 }
 
 export async function alwaysAllow(tool: string): Promise<void> {

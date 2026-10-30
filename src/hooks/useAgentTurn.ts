@@ -266,7 +266,7 @@ export function useAgentTurn({
       if (!trimmed && images.length === 0) return;
 
       if (turn.status === "running") {
-        const id = await steerCommand(content, content === trimmed ? undefined : trimmed);
+        const id = await steerCommand(content, content === trimmed ? undefined : trimmed, chatKey.current);
         setSentNotes((notes) => [...notes, { id, text: trimmed }]);
         return;
       }
@@ -356,7 +356,7 @@ export function useAgentTurn({
       if (!note) return;
       setSentNotes((notes) => notes.filter((n) => n.id !== id));
       try {
-        if (await cancelSteer(id)) giveBackRef.current?.(note.text);
+        if (await cancelSteer(id, chatKey.current)) giveBackRef.current?.(note.text);
       } catch (e) {
         setError(String(e));
       }
@@ -407,7 +407,7 @@ export function useAgentTurn({
   );
 
   const cancel = useCallback(async () => {
-    await cancelChat();
+    await cancelChat(chatKey.current);
   }, []);
 
   /**

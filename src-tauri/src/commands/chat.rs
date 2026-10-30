@@ -10,9 +10,12 @@
 //! and `chat_resume` receives the whole checkpoint, which is what makes a
 //! paused turn survive a reload, a crash, or being picked up by a different
 //! window. What *is* resident is only what a running turn needs to be reached
-//! from outside while it runs: the stop flag, the queue of notes typed at it,
-//! the workspace it acts on, and the standing approval policy.
+//! from outside while it runs — and that is resident **per chat**: each
+//! chat's turns are reached through their own `SessionHandle`, so two chats'
+//! turns can run side by side without one's stop or steering note touching
+//! the other's.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,25 +50,17 @@ use crate::services::workspace_index::WorkspaceIndex;
 use super::chat_events::chat_event_sink;
 use super::workspace_events::index_event_sink;
 
+/// What a running turn of one chat is reached through while it runs: its stop
+/// flag, the notes typed at it, and its side of the next-prompt journal. One
+/// per chat, so a chat's turn never shares any of this with another chat's.
 #[derive(Default)]
-pub struct AgentState {
-    /// One in-flight turn at a time, so one flag needs no turn id to
+pub(crate) struct SessionHandle {
+    /// One in-flight turn per chat, so one flag needs no turn id to
     /// disambiguate. Reset by `chat_start` and deliberately *not* by
     /// `chat_resume` — a stop pressed while an approval card was showing has
     /// to survive until the resumed turn reads it.
     cancel: AtomicBool,
     steering: SteeringQueue,
-    workspace: Mutex<Option<PathBuf>>,
-    /// Grows as the user answers "always allow"; not persisted, because a
-    /// saved "never ask me" is a brake released a month ago and forgotten.
-    approval: Mutex<ApprovalPolicy>,
-    /// What the window's mode chip says right now. Resident rather than sent
-    /// with each turn for the same reason as the approval policy: a paused
-    /// turn is resumed from a checkpoint that predates the chip, and a mode
-    /// threaded through both entry points would have to be re-sent correctly
-    /// by the caller at the one moment it is easiest to forget. Not persisted
-    /// — a mode is a decision about this conversation, not about the app.
-    mode: Mutex<ConversationMode>,
     /// The running turn's signals for the next-prompt journal. Resident
     /// because a turn outlives one command: what came before a pause for
     /// approval still counts after the resume.
@@ -76,32 +71,14 @@ pub struct AgentState {
     finished_turn: Mutex<Option<(String, FinishedTurn)>>,
 }
 
-impl AgentState {
-    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
-        self.workspace
-            .lock()
-            .map_err(|_| "workspace lock poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "no folder is open".to_string())
-    }
-
-    fn mode(&self) -> ConversationMode {
-        // A poisoned lock loses the chip's setting, not the turn. Falling back
-        // to the default would silently widen it, so the last successful read
-        // is not available — `Agent` is the default and the honest answer is
-        // to say the mode could not be read.
-        self.mode
-            .lock()
-            .map_or(ConversationMode::default(), |mode| *mode)
-    }
-
+impl SessionHandle {
     // The next-prompt journal's side of a turn. A poisoned lock costs the
     // journal one row, never the turn.
 
     /// A fresh turn, in the mode it starts in. A resume is not one.
-    fn begin_turn(&self) {
+    fn begin_turn(&self, mode: ConversationMode) {
         if let Ok(mut features) = self.next_prompt.lock() {
-            *features = TurnFeatures::new(self.mode());
+            *features = TurnFeatures::new(mode);
         }
     }
 
@@ -126,6 +103,55 @@ impl AgentState {
         } else {
             None
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AgentState {
+    /// Each chat's handle, made on first ask. The workspace, the approval
+    /// policy and the mode stay shared: the folder is the window's, and the
+    /// policy and the chip are decisions about the conversation in it, not
+    /// about one chat's turn.
+    /// ponytail: handles are never pruned — the map grows by one entry per
+    /// chat touched in a window's run. An LRU is the way past that if a long
+    /// run ever shows it.
+    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    workspace: Mutex<Option<PathBuf>>,
+    /// Grows as the user answers "always allow"; not persisted, because a
+    /// saved "never ask me" is a brake released a month ago and forgotten.
+    approval: Mutex<ApprovalPolicy>,
+    /// What the window's mode chip says right now. Resident rather than sent
+    /// with each turn for the same reason as the approval policy: a paused
+    /// turn is resumed from a checkpoint that predates the chip, and a mode
+    /// threaded through both entry points would have to be re-sent correctly
+    /// by the caller at the one moment it is easiest to forget. Not persisted
+    /// — a mode is a decision about this conversation, not about the app.
+    mode: Mutex<ConversationMode>,
+}
+
+impl AgentState {
+    /// The handle `chat_id`'s turns are reached through, made on first ask.
+    pub(crate) fn session(&self, chat_id: &str) -> Arc<SessionHandle> {
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(sessions.entry(chat_id.to_string()).or_default())
+    }
+
+    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
+        self.workspace
+            .lock()
+            .map_err(|_| "workspace lock poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "no folder is open".to_string())
+    }
+
+    fn mode(&self) -> ConversationMode {
+        // A poisoned lock loses the chip's setting, not the turn. Falling back
+        // to the default would silently widen it, so the last successful read
+        // is not available — `Agent` is the default and the honest answer is
+        // to say the mode could not be read.
+        self.mode
+            .lock()
+            .map_or(ConversationMode::default(), |mode| *mode)
     }
 
     fn approval(&self) -> Result<ApprovalPolicy, String> {
@@ -294,12 +320,13 @@ pub async fn chat_start<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
+    let session = state.session(&chat_id);
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
-    state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn();
+    session.cancel.store(false, Ordering::SeqCst);
+    session.begin_turn(state.mode());
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
     .await
@@ -318,7 +345,8 @@ pub async fn chat_resume<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    let session = state.session(&chat_id);
+    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
     .await
@@ -496,7 +524,7 @@ pub async fn next_prompt_log(
     user: String,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<String>, String> {
-    let Some(finished) = state.take_finished(&turn_id) else {
+    let Some(finished) = state.session(&chat_id).take_finished(&turn_id) else {
         return Ok(None);
     };
     let input = finished.model_input(&user, &home());
@@ -513,8 +541,6 @@ fn home() -> String {
     dirs::home_dir().map(|home| home.display().to_string()).unwrap_or_default()
 }
 
-/// Asks the running turn to stop. Returns at once: the turn notices at its
-/// next checkpoint, which is never more than one tool call away.
 /// The window's answer to an MCP server's question, by the id the question
 /// came with. A question no longer open — its call stopped — is said to be.
 #[tauri::command]
@@ -526,27 +552,30 @@ pub fn chat_answer_mcp_question(id: String, answer: McpAnswer, questions: State<
     }
 }
 
+/// Asks the running turn of `chat_id` to stop. Returns at once: the turn
+/// notices at its next checkpoint, which is never more than one tool call
+/// away. Another chat's turn is not its to stop.
 #[tauri::command]
-pub fn chat_cancel(state: State<'_, Arc<AgentState>>) {
-    state.cancel.store(true, Ordering::SeqCst);
+pub fn chat_cancel(chat_id: String, state: State<'_, Arc<AgentState>>) {
+    state.session(&chat_id).cancel.store(true, Ordering::SeqCst);
 }
 
 /// Queues something the user typed while the turn was running. The id comes
 /// back so the same note can be withdrawn before a round takes it. `shown`
 /// is what the transcript shows in place of `text` — a `/` command.
 #[tauri::command]
-pub fn chat_steer(text: String, shown: Option<String>, state: State<'_, Arc<AgentState>>) -> String {
+pub fn chat_steer(text: String, shown: Option<String>, chat_id: String, state: State<'_, Arc<AgentState>>) -> String {
     let note = SteeringNote { shown, ..SteeringNote::user(text) };
     let id = note.id.clone();
-    state.steering.push(note);
+    state.session(&chat_id).steering.push(note);
     id
 }
 
 /// `false` means the note is already gone — a round picked it up while the
 /// user was reaching for cancel.
 #[tauri::command]
-pub fn chat_cancel_steer(id: String, state: State<'_, Arc<AgentState>>) -> bool {
-    state.steering.cancel(&id)
+pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<AgentState>>) -> bool {
+    state.session(&chat_id).steering.cancel(&id)
 }
 
 /// "Always allow this tool", from an approval card. Lasts as long as the app
@@ -688,9 +717,10 @@ pub async fn review_start<R: Runtime>(
     }
     let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
     let desk = Arc::new(ReviewDesk::new(kept));
-    state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn();
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    let session = state.session(&chat_id);
+    session.cancel.store(false, Ordering::SeqCst);
+    session.begin_turn(state.mode());
+    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
         llm_chat::review(turn, messages, todos, &brief, desk, handed)
     })
     .await
@@ -713,10 +743,13 @@ fn chats_own(
 
 /// Off the event loop because the whole turn is synchronous — provider calls,
 /// tool calls and a process runner — and holding the IPC loop for minutes
-/// freezes every other command, including the one that stops it.
+/// freezes every other command, including the one that stops it. Everything
+/// the running turn is reached through is the chat's own `session`, so a turn
+/// of another chat running alongside neither stops it nor reads its notes.
 async fn run_off_the_event_loop<R, F>(
     app: AppHandle<R>,
     state: Arc<AgentState>,
+    session: Arc<SessionHandle>,
     turn_id: String,
     chat_id: String,
     plan: Option<String>,
@@ -753,14 +786,14 @@ where
 
     tauri::async_runtime::spawn_blocking(move || {
         let emit = chat_event_sink(&app, turn_id.clone());
-        let observed = Arc::clone(&state);
+        let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
             observed.observe(&event.event);
             emit(event)
         });
-        let cancelled = || state.cancel.load(Ordering::SeqCst);
-        let take_steering = || state.steering.take();
-        let notes_typed = || state.steering.typed();
+        let cancelled = || session.cancel.load(Ordering::SeqCst);
+        let take_steering = || session.steering.take();
+        let notes_typed = || session.steering.typed();
         let folder = FolderTurn {
             chat_id: &chat_id,
             workspace: &workspace,
@@ -773,7 +806,7 @@ where
             notes_typed: &notes_typed,
         };
         let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
-        state.end_turn(turn_id, &outcome);
+        session.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
     .await
@@ -831,10 +864,10 @@ mod tests {
         Arc::new(AgentState::default())
     }
 
-    fn next_prompt_turn(state: &AgentState, id: &str, events: &[ChatEventPayload]) {
-        events.iter().for_each(|event| state.observe(event));
+    fn next_prompt_turn(session: &SessionHandle, id: &str, events: &[ChatEventPayload]) {
+        events.iter().for_each(|event| session.observe(event));
         let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new(), limit_reached: None };
-        state.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
+        session.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
     }
 
     fn said(text: &str) -> ChatEventPayload {
@@ -846,12 +879,13 @@ mod tests {
     #[test]
     fn the_next_prompt_journal_takes_a_finished_turn_once_and_only_by_its_id() {
         let state = state();
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-2", &[said("ok")]);
+        let session = state.session("c1");
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-2", &[said("ok")]);
 
-        assert!(state.take_finished("turn-1").is_none());
-        assert!(state.take_finished("turn-2").is_some(), "another turn's is left where it was");
-        assert!(state.take_finished("turn-2").is_none());
+        assert!(session.take_finished("turn-1").is_none());
+        assert!(session.take_finished("turn-2").is_some(), "another turn's is left where it was");
+        assert!(session.take_finished("turn-2").is_none());
     }
 
     /// A new turn starts from nothing, in the mode it starts in — and does
@@ -859,15 +893,191 @@ mod tests {
     #[test]
     fn a_new_turn_starts_the_next_prompt_signals_afresh() {
         let state = state();
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-1", &[said("first")]);
+        let session = state.session("c1");
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-1", &[said("first")]);
         *state.mode.lock().unwrap() = ConversationMode::Plan;
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-2", &[said("second")]);
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-2", &[said("second")]);
 
-        let input = state.take_finished("turn-2").expect("journaled").model_input("u", "");
+        let input = session.take_finished("turn-2").expect("journaled").model_input("u", "");
         assert!(input.starts_with("<mode>plan"), "{input}");
         assert!(input.ends_with("<agent>second"), "{input}");
+    }
+
+    /// Each chat is reached through its own handle: one chat's stop says
+    /// nothing to another's turn, a note waits in the queue it was typed at,
+    /// and each chat journals its own finished turn.
+    #[test]
+    fn one_chats_turn_is_reached_without_touching_anothers() {
+        let state = state();
+        let one = state.session("c1");
+        let other = state.session("c2");
+
+        one.cancel.store(true, Ordering::SeqCst);
+        assert!(one.cancel.load(Ordering::SeqCst));
+        assert!(!other.cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
+
+        one.steering.push(SteeringNote::user("use the helper"));
+        assert!(other.steering.take().is_empty(), "not the other chat's note");
+        assert_eq!(one.steering.take().len(), 1);
+
+        other.begin_turn(state.mode());
+        next_prompt_turn(&other, "turn-1", &[said("done")]);
+        assert!(one.take_finished("turn-1").is_none(), "not the one chat's turn to journal");
+        assert!(other.take_finished("turn-1").is_some());
+    }
+
+    /// The commands route by chat id: a stop, a note and its withdrawal land
+    /// on that chat's handle and no other.
+    #[test]
+    fn the_commands_reach_their_own_chats_handle() {
+        let state = state();
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+
+        chat_cancel("c1".into(), app.state());
+        assert!(state.session("c1").cancel.load(Ordering::SeqCst));
+        assert!(!state.session("c2").cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
+
+        let id = chat_steer("use the helper".into(), None, "c2".into(), app.state());
+        assert!(state.session("c1").steering.take().is_empty(), "not the other chat's note");
+        assert!(!chat_cancel_steer(id.clone(), "c1".into(), app.state()), "the note is not the one chat's");
+        assert!(chat_cancel_steer(id, "c2".into(), app.state()));
+        assert!(state.session("c2").steering.take().is_empty());
+    }
+
+    /// A stop left over from the chat's last turn is cleared when its fresh
+    /// turn starts — the whole way from the command, or "stop while the
+    /// approval card shows" would end the resumed turn's successor instead.
+    #[test]
+    fn a_fresh_turn_clears_its_chats_leftover_stop() {
+        crate::testing::with_app_dir("cmd-chat-fresh-turn", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-fresh").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+            ));
+            let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("the leftover stop ended the fresh turn: {outcome:?}") };
+            assert_eq!(done.result.text, "hello");
+        });
+    }
+
+    /// Journaling asks the chat's own session: another chat's id finds
+    /// nothing there, and the turn's own chat journals it once.
+    #[test]
+    fn the_journal_is_the_chats_own() {
+        crate::testing::with_app_dir("cmd-chat-journal-own", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-journal").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "{outcome:?}");
+
+            let other = tauri::async_runtime::block_on(next_prompt_log("c2".into(), "t1".into(), "hi".into(), app.state()));
+            assert!(matches!(other, Ok(None)), "another chat has nothing to journal: {other:?}");
+            let own = tauri::async_runtime::block_on(next_prompt_log("c1".into(), "t1".into(), "hi".into(), app.state()));
+            assert!(matches!(own, Ok(Some(_))), "the turn's own chat journals it: {own:?}");
+        });
+    }
+
+    /// A resume deliberately does not clear the stop: pressed while the
+    /// approval card was showing, it ends the resumed turn — and it is the
+    /// resumed chat's own handle that says so.
+    #[test]
+    fn a_resumed_turn_reads_its_own_chats_stop() {
+        crate::testing::with_app_dir("cmd-chat-resume-stop", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-resume").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let call = |id: &str| LlmToolCall { id: id.into(), name: "readFile".into(), arguments: "{\"path\":\"a.txt\"}".into() };
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("hi"), LlmMessage::tool_requests(vec![call("w1")])],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{\"path\":\"a.txt\"}".into(), requires_confirmation: true, reason: None }],
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            // Pressed while the card was showing; another chat's stop says
+            // nothing here either way.
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                checkpoint,
+                vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }],
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
+        });
+    }
+
+    /// `/review` runs under its own chat's handle: a fresh review clears its
+    /// own chat's leftover stop, and no other chat's.
+    #[test]
+    fn a_review_runs_under_its_own_chats_handle() {
+        crate::testing::with_app_dir("cmd-chat-review-own", || {
+            crate::testing::spending_provider("Nothing wrong.", 10, 2);
+            let root = temp_dir("cmd-chat-review").canonicalize().unwrap();
+            std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+            let repo = git2::Repository::init(&root).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.rs")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("T", "t@example.com").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
+            std::fs::write(root.join("a.rs"), "fn a() { 1 }\n").unwrap();
+
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(root);
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+            state.session("c2").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(review_start(
+                app.handle().clone(),
+                app.state(),
+                "tr".into(),
+                "c1".into(),
+                vec![LlmMessage::user("/review")],
+                Vec::new(),
+                None,
+                false,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "the cleared stop lets it run: {outcome:?}");
+            assert!(!state.session("c1").cancel.load(Ordering::SeqCst), "its own chat's stop is the one cleared");
+            assert!(state.session("c2").cancel.load(Ordering::SeqCst), "another chat's stop is not the review's to clear");
+        });
     }
 
     #[test]
@@ -1003,13 +1213,14 @@ mod tests {
     #[test]
     fn a_note_can_be_withdrawn_until_a_round_takes_it() {
         let state = state();
+        let session = state.session("c1");
         let note = SteeringNote::user("actually, use the helper");
         let id = note.id.clone();
-        state.steering.push(note);
+        session.steering.push(note);
 
-        assert!(state.steering.cancel(&id));
-        assert!(state.steering.take().is_empty());
-        assert!(!state.steering.cancel(&id), "already gone");
+        assert!(session.steering.cancel(&id));
+        assert!(session.steering.take().is_empty());
+        assert!(!session.steering.cancel(&id), "already gone");
     }
 
     /// A stop is remembered until a fresh turn clears it — that is what makes
@@ -1018,11 +1229,12 @@ mod tests {
     #[test]
     fn a_stop_survives_until_the_next_fresh_turn() {
         let state = state();
-        state.cancel.store(true, Ordering::SeqCst);
-        assert!(state.cancel.load(Ordering::SeqCst));
+        let session = state.session("c1");
+        session.cancel.store(true, Ordering::SeqCst);
+        assert!(session.cancel.load(Ordering::SeqCst));
 
-        state.cancel.store(false, Ordering::SeqCst);
-        assert!(!state.cancel.load(Ordering::SeqCst));
+        session.cancel.store(false, Ordering::SeqCst);
+        assert!(!session.cancel.load(Ordering::SeqCst));
     }
 
     #[test]

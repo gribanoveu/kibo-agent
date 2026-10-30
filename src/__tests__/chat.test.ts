@@ -91,9 +91,9 @@ describe("command wrappers", () => {
 
   test("each command is named once, here", async () => {
     invokeResult = true;
-    await chat.cancelChat();
-    await chat.steer("use the helper");
-    await chat.cancelSteer("note-1");
+    await chat.cancelChat("c1");
+    await chat.steer("use the helper", undefined, "c1");
+    await chat.cancelSteer("note-1", "c1");
     await chat.alwaysAllow("writeFile");
     await chat.setUnattended(true);
     await chat.openWorkspace("/tmp/project");
@@ -106,7 +106,7 @@ describe("command wrappers", () => {
       "approval_set_unattended",
       "workspace_open",
     ]);
-    expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null });
+    expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, chatId: "c1" });
     expect(calls[5]?.args).toEqual({ path: "/tmp/project" });
   });
 });
