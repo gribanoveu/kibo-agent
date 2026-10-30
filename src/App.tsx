@@ -154,9 +154,9 @@ export default function App() {
   const [commitMessage, setCommitMessage] = useState("");
   // The title bar's room for the chat's header, once it is on screen.
   const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
-  // Which background process a chat row asked the Terminal tab to show. The
-  // row and the tab are in different subtrees, so it passes through here.
-  const [processFocus, setProcessFocus] = useState<{ id: number } | null>(null);
+  // Which background process a chat row asked the Terminal tab to show — `null`
+  // for the list. The row and the tab are in different subtrees, so it passes through here.
+  const [processFocus, setProcessFocus] = useState<{ id: number | null } | null>(null);
   const [agentFocus, setAgentFocus] = useState<AgentFocus | null>(null);
   // A shell block an answer asked to put in a shell, until the Terminal tab
   // takes it. Kept only till then: an ask still held when the tab is drawn
@@ -233,14 +233,14 @@ export default function App() {
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
-  // Counted in the chat beside the turn's clock: they outlive the turn.
-  const runningProcesses = useRunningProcesses();
   const agent = useAgentTurn({
     model,
     onSaved: history.refresh,
     onGiveBack: giveBack,
     spentShown: agentMode && shown("overview"),
   });
+  // Counted in the chat beside the turn's clock: they outlive the turn.
+  const runningProcesses = useRunningProcesses(agent.chatId);
   const approval = useApprovalMemory(agent.chatId, workspace.path, () =>
     toast.show("Auto is on here — the agent will change files without asking"),
   );
@@ -484,7 +484,7 @@ export default function App() {
   };
 
   // A chat row or Overview asking to see one: Terminal shows it.
-  const openProcess = (id: number) => {
+  const openProcess = (id: number | null) => {
     openTab("terminal");
     setProcessFocus({ id });
   };
@@ -492,6 +492,13 @@ export default function App() {
     openTab("terminal");
     setAgentFocus({ ...agent });
   };
+  // Held only till Terminal takes it, as `terminalPaste` is: the pane is drawn
+  // anew each time it opens, and an ask still held would be taken again — with
+  // both held, the Agents tab won every time.
+  const focusTaken = useCallback(() => {
+    setProcessFocus(null);
+    setAgentFocus(null);
+  }, []);
 
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
@@ -500,7 +507,9 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
+    chatId: agent.chatId,
     agentFocus,
+    onFocusTaken: focusTaken,
     terminalPaste,
     onTerminalPasted: terminalPasted,
     onAddToChat: giveBack,
@@ -539,6 +548,8 @@ export default function App() {
       usage: agent.turn.usage,
       spent: agent.spent,
       onOpenProcess: openProcess,
+      // Not `openTab`: Terminal would show whichever of its tabs was last picked.
+      onOpenProcesses: () => openProcess(null),
       onOpenAgent: openAgent,
       onOpenPanel: openTab,
     },

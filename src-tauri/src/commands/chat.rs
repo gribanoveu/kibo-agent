@@ -698,6 +698,19 @@ pub async fn review_start<R: Runtime>(
 
 /// Assembles a turn and runs it on a blocking thread.
 ///
+/// The processes and helpers a turn of `chat_id` starts through: recorded as
+/// that chat's, for the Processes and Agents tabs to list the open chat's.
+fn chats_own(
+    processes: Option<Arc<Processes>>,
+    agents: Option<Arc<crate::domain::agents::Agents>>,
+    chat_id: &str,
+) -> (Option<Arc<dyn crate::domain::background::BackgroundProcesses>>, Option<Arc<crate::domain::agents::Agents>>) {
+    (
+        processes.map(|processes| Arc::new(processes.for_chat(chat_id)) as Arc<dyn crate::domain::background::BackgroundProcesses>),
+        agents.map(|agents| Arc::new(agents.for_chat(chat_id))),
+    )
+}
+
 /// Off the event loop because the whole turn is synchronous — provider calls,
 /// tool calls and a process runner — and holding the IPC loop for minutes
 /// freezes every other command, including the one that stops it.
@@ -716,15 +729,18 @@ where
     let workspace = state.workspace()?;
     let approval = state.approval()?;
     let mode = state.mode();
+    let (processes, agents) = chats_own(
+        app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes)),
+        app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
+        &chat_id,
+    );
     let handles = FolderHandles {
         search: searcher_of(&app),
         knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
-        processes: app
-            .try_state::<Arc<Processes>>()
-            .map(|processes| Arc::clone(&processes) as Arc<dyn crate::domain::background::BackgroundProcesses>),
-        agents: app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
+        processes,
+        agents,
         questions: app.try_state::<Arc<McpQuestions>>().map(|questions| Arc::clone(&questions)),
         terminals: app
             .try_state::<Arc<crate::infra::terminal::Terminals>>()
@@ -767,6 +783,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A turn's starts are its chat's, so the tabs list them under it.
+    #[cfg(unix)]
+    #[test]
+    fn what_a_turn_starts_is_its_chats() {
+        let (processes, agents) = (Arc::new(Processes::default()), Arc::new(crate::domain::agents::Agents::default()));
+        let (theirs, helpers) = chats_own(Some(Arc::clone(&processes)), Some(Arc::clone(&agents)), "c1");
+        let dir = crate::testing::temp_dir("cmd-chat-owned");
+        theirs.unwrap().start(&crate::domain::command_exec::Shell::default(), "sleep 30", &dir, ".").unwrap();
+        helpers.unwrap().start("where is X");
+        assert_eq!((processes.list_for("c1").len(), agents.list_for("c1").len()), (1, 1));
+        processes.stop_all();
+    }
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
 

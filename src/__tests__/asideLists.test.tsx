@@ -158,6 +158,8 @@ describe("the side panel", () => {
     onNotify: () => {},
     commitDraft: { message: "", onMessage: () => {} },
     processFocus: null,
+    onFocusTaken: () => {},
+    chatId: null,
     chatBlocks: [],
     mcp: {
       view: null,
@@ -179,6 +181,7 @@ describe("the side panel", () => {
       running: false,
       onCompact: () => {},
       onOpenProcess: () => {},
+      onOpenProcesses: () => {},
       onOpenAgent: () => {},
       onOpenPanel: () => {},
     },

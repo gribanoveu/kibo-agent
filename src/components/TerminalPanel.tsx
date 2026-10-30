@@ -15,10 +15,14 @@ import type { AgentFocus } from "../lib/describeTool";
 type Props = {
   active: boolean;
   workspace: string | null;
-  /** The background process a chat row asked to see; a new object each ask. */
-  processFocus: { id: number } | null;
+  /** The background process a chat row asked to see — `null` for the list, as the Background card asks; a new object each ask. */
+  processFocus: { id: number | null } | null;
+  /** The open chat: only what it started is listed. `null` before its first message. */
+  chatId: string | null;
   /** The helper run a chat row asked to see; a new object each ask. */
   agentFocus: AgentFocus | null;
+  /** Says either ask was taken: the pane, drawn anew each time it opens, is not handed it again. */
+  onFocusTaken: () => void;
   /** A command an answer asked to put in a shell; a new object each ask. */
   terminalPaste: { command: string } | null;
   /** Says the ask was taken, so it is not taken again when the pane is drawn anew. */
@@ -62,11 +66,14 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
  * background processes and helper agents as the last two tabs. Opening the pane gives a shell, as a
  * terminal window does — once per folder, not again after the last is closed.
  */
-export function TerminalPanel({ active, workspace, processFocus, agentFocus, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
-  const { processes, error: processError, stop } = useProcesses(active);
-  const { agents, error: agentError, stop: stopAgent } = useAgents(active);
+export function TerminalPanel({ active, workspace, chatId, processFocus, agentFocus, onFocusTaken, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
+  const { processes, error: processError, stop } = useProcesses(active, chatId);
+  const { agents, error: agentError, stop: stopAgent } = useAgents(active, chatId);
   const shells = useTerminals(active);
   const [picked, setPicked] = useState<Shown | null>(null);
+  // The asks taken from App, kept here: a list is drawn only once it is picked.
+  const [processAsk, setProcessAsk] = useState<{ id: number | null } | null>(null);
+  const [agentAsk, setAgentAsk] = useState<AgentFocus | null>(null);
   const openedFor = useRef<string | null>(null);
   // The ask taken from App. App lets go of it once told, but StrictMode runs
   // this effect a second time before App has heard.
@@ -78,7 +85,8 @@ export function TerminalPanel({ active, workspace, processFocus, agentFocus, ter
     openedFor.current = workspace;
     const ask = terminalPaste && taken.current !== terminalPaste ? terminalPaste : null;
     if (!ask) {
-      if (first && shells.terminals.length === 0) void shells.open().then((t) => t && setPicked(t.id));
+      // A list asked for as the pane opened stays in front of the new shell.
+      if (first && shells.terminals.length === 0) void shells.open().then((t) => t && setPicked((p) => p ?? t.id));
       return;
     }
     taken.current = ask;
@@ -96,11 +104,17 @@ export function TerminalPanel({ active, workspace, processFocus, agentFocus, ter
   }, [active, workspace, shells.loaded, shells.terminals, shells.open, terminalPaste, onTerminalPasted, picked]);
 
   useEffect(() => {
-    if (processFocus) setPicked("processes");
+    if (!processFocus) return;
+    setPicked("processes");
+    setProcessAsk(processFocus);
+    onFocusTaken();
   }, [processFocus]);
 
   useEffect(() => {
-    if (agentFocus) setPicked("agents");
+    if (!agentFocus) return;
+    setPicked("agents");
+    setAgentAsk(agentFocus);
+    onFocusTaken();
   }, [agentFocus]);
 
   // A picked shell that was closed falls back to the newest one left.
@@ -182,11 +196,11 @@ export function TerminalPanel({ active, workspace, processFocus, agentFocus, ter
         <TerminalView key={drawn.id} terminal={drawn} onAddToChat={onAddToChat} />
       ) : shown === "agents" ? (
         <div className="terminal-processes">
-          <AgentList agents={agents} error={agentError} onStop={stopAgent} focus={agentFocus} />
+          <AgentList agents={agents} error={agentError} onStop={stopAgent} focus={agentAsk} />
         </div>
       ) : (
         <div className="terminal-processes">
-          <ProcessList processes={processes} error={processError} onStop={stop} focus={processFocus} />
+          <ProcessList processes={processes} error={processError} onStop={stop} focus={processAsk} />
         </div>
       )}
     </div>

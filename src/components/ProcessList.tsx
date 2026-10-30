@@ -7,8 +7,8 @@ type Props = {
   processes: ProcessView[];
   error: string | null;
   onStop: (id: number) => void;
-  /** A process asked for from the chat: it opens and scrolls into view. A new object each ask. */
-  focus?: { id: number } | null;
+  /** A process asked for from the chat: it opens and scrolls into view; `null` asks for the list as it opens. A new object each ask. */
+  focus?: { id: number | null } | null;
 };
 
 /** Kept scrolled to the end, where a running process's news is. */
@@ -34,7 +34,7 @@ export function ProcessList({ processes, error, onStop, focus = null }: Props) {
   useEffect(() => {
     if (!focus) return;
     setOpen(focus.id);
-    cards.current.get(focus.id)?.scrollIntoView?.({ block: "nearest" });
+    if (focus.id !== null) cards.current.get(focus.id)?.scrollIntoView?.({ block: "nearest" });
   }, [focus]);
 
   if (!processes.length) {

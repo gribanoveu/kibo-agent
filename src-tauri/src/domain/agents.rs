@@ -77,11 +77,16 @@ pub enum AgentError {
 struct Run {
     info: AgentInfo,
     stop_asked: bool,
+    /// The chat whose turn started it; `None` outside one.
+    chat: Option<String>,
 }
 
+/// The record of every run. [`Agents::for_chat`] gives a turn its own handle
+/// on the same record, so what it starts is listed under its chat.
 pub struct Agents {
-    runs: Mutex<(u32, Vec<Run>)>,
+    runs: Arc<Mutex<(u32, Vec<Run>)>>,
     sink: AgentEventSink,
+    chat: Option<String>,
 }
 
 impl Default for Agents {
@@ -92,7 +97,12 @@ impl Default for Agents {
 
 impl Agents {
     pub fn new(sink: AgentEventSink) -> Self {
-        Self { runs: Mutex::new((0, Vec::new())), sink }
+        Self { runs: Arc::default(), sink, chat: None }
+    }
+
+    /// The same record, for a turn of `chat`: what it starts is that chat's.
+    pub fn for_chat(&self, chat: &str) -> Agents {
+        Agents { runs: Arc::clone(&self.runs), sink: Arc::clone(&self.sink), chat: Some(chat.to_string()) }
     }
 
     pub fn start(&self, task: &str) -> u32 {
@@ -110,6 +120,7 @@ impl Agents {
                     answer: None,
                 },
                 stop_asked: false,
+                chat: self.chat.clone(),
             });
             id
         };
@@ -168,6 +179,12 @@ impl Agents {
         self.lock().1.iter().map(|run| run.info.clone()).collect()
     }
 
+    /// The runs `chat` started, oldest first: the tab and Overview show the
+    /// open chat's, not every chat's since launch.
+    pub fn list_for(&self, chat: &str) -> Vec<AgentInfo> {
+        self.lock().1.iter().filter(|run| run.chat.as_deref() == Some(chat)).map(|run| run.info.clone()).collect()
+    }
+
     fn update(&self, id: u32, change: impl FnOnce(&mut Run)) {
         let found = match self.lock().1.iter_mut().find(|run| run.info.id == id) {
             Some(run) => {
@@ -194,6 +211,22 @@ mod tests {
 
     fn usage(prompt: u32, cached: u32, completion: u32) -> ChatUsage {
         ChatUsage { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion, cached_tokens: cached }
+    }
+
+    #[test]
+    fn a_chats_handle_lists_its_runs_under_it_and_signals_on_the_same_sink() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let heard = Arc::clone(&seen);
+        let agents = Agents::new(Arc::new(move |event: AgentChanged| heard.lock().unwrap().push(event.id)));
+        let (mine, theirs) = (agents.for_chat("a"), agents.for_chat("b"));
+        mine.start("first");
+        theirs.start("second");
+        agents.start("outside a chat");
+        mine.start("third");
+        let tasks = |chat| agents.list_for(chat).into_iter().map(|run| run.task).collect::<Vec<_>>();
+        assert_eq!((tasks("a"), tasks("b"), tasks("c")), (vec!["first".to_string(), "third".into()], vec!["second".into()], vec![]));
+        assert_eq!(theirs.list().len(), 4);
+        assert_eq!(*seen.lock().unwrap(), [1, 2, 3, 4]);
     }
 
     #[test]

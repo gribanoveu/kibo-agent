@@ -24,6 +24,8 @@ export type OverviewProps = {
   processes: ProcessInfo[];
   agents: AgentInfo[];
   onOpenProcess: (id: number) => void;
+  /** The Background card's heading: Terminal, on its Processes tab. */
+  onOpenProcesses: () => void;
   onOpenAgent: (agent: AgentFocus) => void;
   onOpenPanel: (tab: AsideTab) => void;
 };
@@ -58,6 +60,7 @@ export function OverviewPanel({
   processes,
   agents,
   onOpenProcess,
+  onOpenProcesses,
   onOpenAgent,
   onOpenPanel,
 }: OverviewProps) {
@@ -98,7 +101,7 @@ export function OverviewPanel({
       </section>
 
       <section className="overview-card">
-        <button type="button" className="overview-head overview-link" onClick={() => onOpenPanel("terminal")}>
+        <button type="button" className="overview-head overview-link" onClick={onOpenProcesses}>
           Background
           <span className="overview-count">{busyProcesses.length + busyAgents.length}</span>
           <ChevronRight size={13} className="overview-chev" />
