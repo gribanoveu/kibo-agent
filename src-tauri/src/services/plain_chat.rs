@@ -138,6 +138,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         knowledge_overview: None,
         skills: &[],
         rules: &[],
+        frozen: None,
         log_call: chat.log_call,
         plan: None,
         worktree_of: None,

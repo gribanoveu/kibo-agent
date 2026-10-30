@@ -101,12 +101,15 @@ Include the block below, adapted to the project rather than copied:
 - If requirements are ambiguous or a change would break an architectural rule, ask
   instead of guessing.
 - Don't leave TODOs without explaining them in your final summary.
+- Edit AGENTS.md when a command, convention or layer it describes changes — never to
+  record progress.
 ```
 
 Rules for AGENTS.md as a whole:
 
 - don't invent commands, practices or sections the project doesn't have (section A);
 - don't list every file or state the obvious;
+- only what stays true until a convention changes: no progress, current status, dates or "so far" / "for now" — what is built and what comes next belongs in the project's docs or plans, not here. Every agent rereads this file on every request, and an edit to it makes the conversation that follows start over;
 - keep it under about 200 lines — a small project needs far fewer;
 - write in the language of the repository's existing agent instructions, or in English if there are none.
 

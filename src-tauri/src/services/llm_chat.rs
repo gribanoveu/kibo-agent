@@ -206,6 +206,11 @@ pub struct Turn<'a> {
     pub skills: &'a [Skill],
     /// The open folder's instruction files, read once per turn like the skills.
     pub rules: &'a [RuleFile],
+    /// The rules and the knowledge base's overview as the chat's first turn
+    /// read them, which the prompt keeps saying; what changed since reaches
+    /// the model through the history ([`restore_standing`]). `None` says
+    /// [`Turn::rules`] and [`Turn::knowledge_overview`] in the prompt.
+    pub frozen: Option<&'a Frozen>,
     /// Where each settled call's redacted record goes — the log on disk in
     /// the app, a list in a test. A port rather than a direct write so that
     /// a turn under test never touches whatever app directory another test
@@ -248,6 +253,22 @@ pub struct Turn<'a> {
     /// start is read from the provider's cache, and of the tools only what
     /// Explore mode offers runs (`preflight`).
     pub fork: bool,
+}
+
+/// The part of a folder's prompt that the files behind it can change in the
+/// middle of a chat: the instruction files, the memory among them, and the
+/// knowledge base's overview.
+///
+/// Kept as the chat's first turn read it. The system prompt comes first in
+/// every request, so a change to it is a cache miss on the whole
+/// conversation behind it: an agent that kept `AGENTS.md` up to date after
+/// each step paid for a 290k history in full on ten turns of thirteen. Said
+/// in the prompt as it was, and as it is now in a note at the end of the
+/// history, a change costs the note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frozen {
+    pub rules: Vec<RuleFile>,
+    pub knowledge: Option<crate::domain::knowledge::Overview>,
 }
 
 
@@ -655,6 +676,7 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
             Err(_) => {}
         }
     }
+    restore_standing(&mut state.history, turn);
     restore_plan(&mut state.history, state.written_plan.as_deref().or(turn.plan));
     restore_checklist(&mut state.history, &state.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::RoundStarted);
@@ -1296,6 +1318,9 @@ fn run_helper(
         knowledge_overview: turn.knowledge_overview,
         skills: turn.skills,
         rules: turn.rules,
+        // A fork's prompt is the calling turn's, for the cache; a helper's
+        // own starts fresh and has nothing to be told changed.
+        frozen: turn.frozen.filter(|_| fork.is_some()),
         log_call: turn.log_call,
         plan: None,
         worktree_of: turn.worktree_of,
@@ -1707,6 +1732,7 @@ fn fold(
     // must come back in full, not as "already above".
     seen_results.clear();
     // The summary may have folded the last list, and the last plan, away.
+    restore_standing(history, turn);
     restore_plan(history, folding.plan);
     restore_checklist(history, folding.todos);
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
@@ -1834,17 +1860,21 @@ pub fn today() -> String {
 
 /// What a request in the open folder is told before the conversation.
 fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode, today: &'a str) -> prompt::TurnContext<'a> {
+    let (rules, knowledge) = match turn.frozen {
+        Some(frozen) => (&frozen.rules[..], frozen.knowledge.as_ref()),
+        None => (turn.rules, turn.knowledge_overview),
+    };
     prompt::TurnContext {
         mode,
         workspace: scope.root(),
         shell: turn.shell_described,
         today,
         skills: turn.skills,
-        rules: turn.rules,
+        rules,
         worktree_of: turn.worktree_of,
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
-        knowledge: turn.knowledge_overview,
+        knowledge,
     }
 }
 
@@ -1925,6 +1955,38 @@ fn latest_plan_is(history: &[LlmMessage], plan: &str) -> bool {
         }
     }
     false
+}
+
+/// How a note on a changed part of the prompt begins; the part's name follows.
+const STANDING_NOTE: &str = "[Changed during this conversation:";
+
+/// Puts into the history each part of the prompt that the files say
+/// otherwise than the history last did — the prompt's own frozen version
+/// ([`Frozen`]) until a note has followed it — and otherwise leaves it alone.
+/// The latest note, not any: a file put back as it was is a change too.
+fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
+    let (Some(frozen), Some(mode)) = (turn.frozen, turn.place.mode()) else { return };
+    let knowledge = |overview: Option<&crate::domain::knowledge::Overview>| overview.map(|o| prompt::knowledge_block(o, mode));
+    let parts = [
+        ("Project instructions", prompt::rules_block(&frozen.rules), prompt::rules_block(turn.rules)),
+        ("Memory", prompt::memory_block(&frozen.rules), prompt::memory_block(turn.rules)),
+        ("Knowledge", knowledge(frozen.knowledge.as_ref()), knowledge(turn.knowledge_overview)),
+    ];
+    for (name, was, now) in parts {
+        let note = format!(
+            "{STANDING_NOTE} {name}. Where it differs from that section of the system prompt, this one is right.]\n{}",
+            now.as_deref().unwrap_or("Gone: the section no longer applies."),
+        );
+        let head = format!("{STANDING_NOTE} {name}.");
+        let shown = history.iter().rev().filter_map(|m| m.content.as_deref()).find_map(|c| c.rfind(&head).map(|at| &c[at..]));
+        let current = match shown {
+            Some(shown) => shown.strip_prefix(note.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with("\n\n")),
+            None => was == now,
+        };
+        if !current {
+            append_note(history, note);
+        }
+    }
 }
 
 /// Onto the last tool result when that is where the history ends — it has
@@ -2437,6 +2499,7 @@ mod tests {
         skills: Vec<Skill>,
         knowledge_overview: Option<crate::domain::knowledge::Overview>,
         rules: Vec<RuleFile>,
+        frozen: Option<Frozen>,
         logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
         plan: Option<String>,
         worktree_of: Option<PathBuf>,
@@ -2491,6 +2554,7 @@ mod tests {
             skills: Vec::new(),
             knowledge_overview: None,
             rules: Vec::new(),
+            frozen: None,
             logged: Arc::new(Mutex::new(Vec::new())),
             plan: None,
             worktree_of: None,
@@ -2553,6 +2617,7 @@ mod tests {
                 shell_described: &self.shell_described,
                 skills: &self.skills,
                 rules: &self.rules,
+                frozen: self.frozen.as_ref(),
                 log_call: &log_call,
                 plan: self.plan.as_deref(),
                 worktree_of: self.worktree_of.as_deref(),
@@ -5574,6 +5639,142 @@ mod tests {
         }
     }
 
+    fn system_says(request: &ChatRequest, text: &str) -> bool {
+        request.messages.iter().any(|m| m.role == LlmRole::System && m.content.as_deref().is_some_and(|c| c.contains(text)))
+    }
+
+    fn notes_of(history: &[LlmMessage], name: &str) -> Vec<String> {
+        let head = format!("{STANDING_NOTE} {name}.");
+        history.iter().filter_map(|m| m.content.as_deref()).filter(|c| c.contains(&head)).map(str::to_string).collect()
+    }
+
+    fn done_history(outcome: ChatStreamOutcome) -> Vec<LlmMessage> {
+        match outcome {
+            ChatStreamOutcome::Done(done) => done.history,
+            other => panic!("not done: {other:?}"),
+        }
+    }
+
+    /// A file edited mid-chat leaves the prompt as the chat began — the cache
+    /// holds it — and reaches the model once, as a note the next turn keeps.
+    #[test]
+    fn a_changed_file_is_a_note_once_and_the_prompt_stays_as_the_chat_began() {
+        let mut h = harness("standing-changed", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done"), text("again")]);
+        h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+
+        let first = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("fix it")], vec![])).expect("finishes"));
+        let mut history = first.clone();
+        history.push(LlmMessage::user("and the rest"));
+        let second = done_history(h.run(|turn| stream(turn, history, vec![])).expect("finishes"));
+
+        let requests = h.provider.requests();
+        assert_eq!(requests.len(), 3);
+        for request in &requests {
+            assert!(system_says(request, "Run cargo test.") && !system_says(request, "Run bun test."), "the prompt moved");
+        }
+        let notes = notes_of(&second, "Project instructions");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("### AGENTS.md\n\nRun bun test."), "{}", notes[0]);
+        assert!(notes_of(&second, "Memory").is_empty() && notes_of(&second, "Knowledge").is_empty(), "only what changed is said");
+        assert!(requests[0].messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Run bun test."))), "the first request is told");
+        // Each request extends the last: the note sits where the first turn put it.
+        assert_eq!(&second[..first.len()], &first[..]);
+    }
+
+    /// Files as the chat began say nothing; a file put back after a note
+    /// said otherwise is a change again.
+    #[test]
+    fn a_note_follows_the_files_back_and_nothing_is_said_without_a_change() {
+        let rules = vec![RuleFile::new("AGENTS.md", "Run cargo test.")];
+        let mut h = harness("standing-back", vec![text("done"), text("done"), text("done")]);
+        h.rules = rules.clone();
+        h.frozen = Some(Frozen { rules: rules.clone(), knowledge: None });
+
+        let quiet = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
+        assert!(notes_of(&quiet, "Project instructions").is_empty(), "{quiet:?}");
+
+        let said = format!(
+            "{STANDING_NOTE} Project instructions. Where it differs from that section of the system prompt, this one is right.]\n{}",
+            prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.")]).unwrap()
+        );
+        let back = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go"), LlmMessage::user(said), LlmMessage::user("on")], vec![])).expect("finishes"));
+        let notes = notes_of(&back, "Project instructions");
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[1].contains("Run cargo test."), "{}", notes[1]);
+
+        // The latest note is what the model believes, not the first one.
+        let mut settled = back.clone();
+        settled.push(LlmMessage::user("more"));
+        let still = done_history(h.run(|turn| stream(turn, settled, vec![])).expect("finishes"));
+        assert_eq!(notes_of(&still, "Project instructions").len(), 2, "said again with nothing changed");
+    }
+
+    /// A file cut short is a change, though what it says now begins what the
+    /// last note said.
+    #[test]
+    fn a_shortened_file_is_not_taken_for_the_longer_note() {
+        let mut h = harness("standing-shortened", vec![text("done")]);
+        h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        let longer = format!(
+            "{STANDING_NOTE} Project instructions. Where it differs from that section of the system prompt, this one is right.]\n{}",
+            prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\nThen lint.")]).unwrap()
+        );
+
+        let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user(longer), LlmMessage::user("go")], vec![])).expect("finishes"));
+
+        let notes = notes_of(&history, "Project instructions");
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(!notes[1].contains("Then lint."), "{}", notes[1]);
+    }
+
+    /// A summary that folds the note away is followed by it again: the
+    /// prompt still says the files as the chat began.
+    #[test]
+    fn a_note_folded_away_comes_back_after_the_summary() {
+        let mut h = harness(
+            "standing-folded",
+            vec![asks(vec![wants("r", "readFile", r#"{"path":"big.txt"}"#)]), Step::Fail(too_long_error()), text("done")],
+        );
+        h.session.context_limit = Some(90_000);
+        h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        std::fs::write(h.root.join("big.txt"), "x".repeat(40_000)).unwrap();
+
+        h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
+
+        let requests = h.provider.requests();
+        let says = |m: &LlmMessage| m.content.as_deref().is_some_and(|c| c.contains("Run bun test."));
+        // With the project instructions the prompt is four messages, not the three `conversation_of` expects.
+        let conversation = |request: &ChatRequest| request.messages.iter().filter(|m| m.role != LlmRole::System).cloned().collect::<Vec<_>>();
+        let first = conversation(&requests[0]);
+        let at = first.iter().position(says).expect("said before the fold");
+        let retry = conversation(requests.last().unwrap());
+        assert!(!retry.iter().any(|m| m.content == first[at - 1].content), "the note was not folded — this proves nothing");
+        assert_eq!(retry.iter().filter(|m| says(m)).count(), 1, "{retry:?}");
+    }
+
+    /// The knowledge base's overview is frozen with the rules: a document
+    /// written mid-chat is a note, and a part that is gone says so.
+    #[test]
+    fn a_written_document_is_a_knowledge_note_and_a_lost_memory_says_gone() {
+        use crate::domain::project_rules::MEMORY_NAME;
+        let overview = |repo: &str| crate::domain::knowledge::Overview { repo: repo.into(), ..Default::default() };
+        let mut h = harness("standing-knowledge", vec![text("done")]);
+        h.knowledge_overview = Some(overview("tax-api-now"));
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], knowledge: Some(overview("tax-api")) });
+
+        let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
+
+        let request = &h.provider.requests()[0];
+        assert!(system_says(request, "`tax-api` in the base") && system_says(request, "k8s is OrbStack"), "the prompt moved");
+        let knowledge = notes_of(&history, "Knowledge");
+        assert!(knowledge.len() == 1 && knowledge[0].contains("`tax-api-now` in the base"), "{knowledge:?}");
+        let memory = notes_of(&history, "Memory");
+        assert!(memory.len() == 1 && memory[0].ends_with("Gone: the section no longer applies."), "{memory:?}");
+    }
+
     fn assert_requests_list_release(requests: Vec<ChatRequest>) {
         assert_eq!(requests.len(), 2);
         for request in requests {
@@ -6201,6 +6402,9 @@ mod tests {
         );
         h.web = Some(Web::search_only(Arc::new(|_: &crate::domain::web_search::WebQuery| Ok(Vec::new()))));
         h.features = Features::all();
+        // Its prompt is the caller's frozen one, not the files as they are now.
+        h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
         let h = with_server(h, 1);
         std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
