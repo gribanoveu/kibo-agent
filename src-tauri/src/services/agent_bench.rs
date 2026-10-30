@@ -311,6 +311,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         knowledge_overview: None,
         skills: &[],
         rules: &rules,
+        frozen: None,
         log_call: &log_call,
         plan: None,
         worktree_of: None,
