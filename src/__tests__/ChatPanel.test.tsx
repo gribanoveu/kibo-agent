@@ -189,6 +189,19 @@ describe("a run of calls", () => {
     expect(runs).toEqual(["Read a file, searched a pattern", "Ran a command"]);
   });
 
+  test("thinking with no calls folds into a line of its own", () => {
+    const { container } = panel(
+      state([
+        { kind: "reasoning", id: "r1", round: 1, text: "where is the thermostat?" },
+        { kind: "message", id: "m1", round: 1, text: "let me look" },
+      ] as Block[]),
+    );
+    const runs = [...container.querySelectorAll(".tool-run > summary")].map((s) => s.textContent);
+    expect(runs).toEqual(["Thinking"]);
+    // The whole thought is inside the fold, not beside it.
+    expect(container.querySelector(".tool-run .reasoning-text")?.textContent).toBe("where is the thermostat?");
+  });
+
   test("names the call under way while the turn runs", () => {
     const { container } = panel(state([call("c1", "readFile"), call("c2", "readFile", "running")], { status: "running" }));
     expect(container.querySelector(".tool-run-step")?.textContent).toBe("Reading a.rs…");
