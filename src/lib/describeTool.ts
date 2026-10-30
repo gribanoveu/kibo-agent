@@ -30,7 +30,7 @@ export type ToolDisplay = {
   agent?: AgentFocus;
 };
 
-/** A helper run to show in the Agents tab. The task as well as the number:
+/** A helper run to show in the sheet over the chat. The task as well as the number:
  * numbers start again when the app does, and an old chat's #3 is not today's. */
 export type AgentFocus = { id: number; task: string };
 

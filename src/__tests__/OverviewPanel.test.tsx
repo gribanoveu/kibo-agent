@@ -75,6 +75,7 @@ describe("Overview", () => {
     fireEvent.click(screen.getByText("bun run dev"));
     fireEvent.click(screen.getByText("Find the ranking code"));
     expect(opened).toEqual([1, { id: 7, task: "Find the ranking code" }]);
+    expect(screen.getByText("Find the ranking code").closest("[data-sheet-opener]")).toBeTruthy();
     expect(screen.getByText("2 ended")).toBeTruthy();
   });
 

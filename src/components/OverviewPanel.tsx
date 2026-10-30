@@ -119,7 +119,7 @@ export function OverviewPanel({
             ))}
             {busyAgents.map((agent) => (
               <li key={`a${agent.id}`}>
-                <button type="button" className="overview-row" title={agent.task} onClick={() => onOpenAgent({ id: agent.id, task: agent.task })}>
+                <button type="button" className="overview-row" title={agent.task} data-sheet-opener onClick={() => onOpenAgent({ id: agent.id, task: agent.task })}>
                   <Telescope size={14} />
                   <span className="overview-name">{briefTitle(agent.task)}</span>
                   <span className="overview-status ok">running</span>

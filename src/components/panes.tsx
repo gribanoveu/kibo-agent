@@ -47,12 +47,12 @@ export type PaneContext = {
   commitDraft: { message: string; onMessage: (message: string) => void };
   /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
   processFocus: { id: number | null } | null;
-  /** Terminal took the process or helper asked for: App lets go of it. */
+  /** Terminal took the process asked for: App lets go of it. */
   onFocusTaken: () => void;
   /** The open chat: Overview and Terminal list only the processes and helpers it started. */
   chatId: string | null;
-  /** The helper run a chat row asked to see; a new object each ask. */
-  agentFocus: AgentFocus | null;
+  /** Opens a helper run in the sheet over the chat. */
+  onOpenAgent: (agent: AgentFocus) => void;
   /** A command an answer asked to put in a shell; a new object each ask. */
   terminalPaste: { command: string } | null;
   /** The Terminal took it: not again when the pane is drawn anew. */

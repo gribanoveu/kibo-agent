@@ -762,23 +762,25 @@ describe("a helper's explore row", () => {
     output: "grep X\n",
   } as Block;
 
-  test("unfolds to its answer, with its run in the Agents tab a click away", () => {
+  test("unfolds to its answer, with its run a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(
       <ChatPanel workspace="/tmp/project" turn={state([explored])} onDecide={() => {}} onOpenRepo={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
     );
-    expect(screen.queryByText("Show in Agents")).toBeNull();
+    expect(screen.queryByText("Show run")).toBeNull();
     fireEvent.click(screen.getByText("Where is X?"));
     expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
-    fireEvent.click(screen.getByText("Show in Agents"));
+    fireEvent.click(screen.getByText("Show run"));
     expect(opened).toEqual([{ id: 4, task: "Where is X?" }]);
+    // Another run's opener: a click on it does not close the sheet it opens.
+    expect(screen.getByText("Show run").closest("[data-sheet-opener]")).toBeTruthy();
   });
 
   test("with nowhere to open it, the answer is all there is", () => {
     panel(state([explored]));
     fireEvent.click(screen.getByText("Where is X?"));
     expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
-    expect(screen.queryByText("Show in Agents")).toBeNull();
+    expect(screen.queryByText("Show run")).toBeNull();
   });
 });
 

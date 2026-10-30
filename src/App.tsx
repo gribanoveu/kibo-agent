@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
+import { AgentSheet } from "./components/AgentSheet";
 import { Composer } from "./components/Composer";
 import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
@@ -157,7 +158,10 @@ export default function App() {
   // Which background process a chat row asked the Terminal tab to show — `null`
   // for the list. The row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number | null } | null>(null);
-  const [agentFocus, setAgentFocus] = useState<AgentFocus | null>(null);
+  // The helper run opened in a sheet over the chat, with the chat it is from:
+  // another chat's sheet is not drawn over this one.
+  const [agentShown, setAgentShown] = useState<{ run: AgentFocus; chatId: string | null } | null>(null);
+  const closeAgent = useCallback(() => setAgentShown(null), []);
   // A shell block an answer asked to put in a shell, until the Terminal tab
   // takes it. Kept only till then: an ask still held when the tab is drawn
   // again would be pasted again. `pasteInTerminal` is stable, so the answers'
@@ -488,17 +492,11 @@ export default function App() {
     openTab("terminal");
     setProcessFocus({ id });
   };
-  const openAgent = (agent: AgentFocus) => {
-    openTab("terminal");
-    setAgentFocus({ ...agent });
-  };
+  // A chat row, Overview or the Agents tab: the run opens over the chat.
+  const openAgent = (run: AgentFocus) => setAgentShown({ run, chatId: agent.chatId });
   // Held only till Terminal takes it, as `terminalPaste` is: the pane is drawn
-  // anew each time it opens, and an ask still held would be taken again — with
-  // both held, the Agents tab won every time.
-  const focusTaken = useCallback(() => {
-    setProcessFocus(null);
-    setAgentFocus(null);
-  }, []);
+  // anew each time it opens, and an ask still held would be taken again.
+  const focusTaken = useCallback(() => setProcessFocus(null), []);
 
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
@@ -508,7 +506,7 @@ export default function App() {
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
     chatId: agent.chatId,
-    agentFocus,
+    onOpenAgent: openAgent,
     onFocusTaken: focusTaken,
     terminalPaste,
     onTerminalPasted: terminalPasted,
@@ -660,6 +658,7 @@ export default function App() {
             }}
             pendingCommands={serverPrompts.starting ? "Loading MCP prompts…" : undefined}
           />
+          {agentShown && agentShown.chatId === agent.chatId && <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} />}
         </>
       ) : (
         <PlainChat
