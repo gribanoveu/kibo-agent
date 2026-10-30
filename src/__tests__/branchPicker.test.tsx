@@ -49,6 +49,7 @@ const picker = ({ agree = true }: Setup = {}) => {
   const opened: string[] = [];
   const notes: string[] = [];
   let guarded = 0;
+  let switched = 0;
   const hook = renderHook(() =>
     useBranchPicker({
       chatId: null,
@@ -64,29 +65,34 @@ const picker = ({ agree = true }: Setup = {}) => {
       },
       notify: (message) => notes.push(message),
       send: () => {},
+      onSwitched: () => switched++,
     }),
   );
-  return { hook, opened, notes, guarded: () => guarded };
+  return { hook, opened, notes, guarded: () => guarded, switched: () => switched };
 };
 
 describe("picking a branch", () => {
   test("switches the folder when nothing is in the way, and not at all for the branch already out", async () => {
-    const { hook, opened } = picker();
+    const { hook, opened, switched } = picker();
     await act(() => hook.result.current.pick("main"));
     expect(commands()).toEqual([]);
+    expect(switched()).toBe(0);
 
     await act(() => hook.result.current.pick("origin/feature"));
     expect(calls).toEqual([{ command: "git_checkout", args: { branch: "origin/feature" } }]);
     expect(hook.result.current.conflict).toBeNull();
     expect(opened).toEqual([]);
+    // The chat is told, so it keeps the branch it is on now as its own.
+    expect(switched()).toBe(1);
   });
 
   test("holds a refused switch with the files in the way, and does nothing else about them", async () => {
     outcome = { kind: "conflicts", paths: ["src/a.ts", "notes.md"] };
-    const { hook } = picker();
+    const { hook, switched } = picker();
     await act(() => hook.result.current.pick("feature"));
     expect(hook.result.current.conflict).toEqual({ branch: "feature", paths: ["src/a.ts", "notes.md"] });
     expect(commands()).toEqual(["git_checkout"]);
+    expect(switched()).toBe(0);
 
     act(() => hook.result.current.closeConflict());
     expect(hook.result.current.conflict).toBeNull();

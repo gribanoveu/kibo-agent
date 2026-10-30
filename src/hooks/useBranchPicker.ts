@@ -16,6 +16,8 @@ type Deps = {
   notify: (message: string) => void;
   /** Sends a message in the folder open now — the agent's; `sent` as `useAgentTurn`'s. */
   send: (text: string, sent?: string, images?: ImagePart[]) => void;
+  /** The open folder is on another branch now — the chat keeps it as its own. */
+  onSwitched?: () => void;
 };
 
 /**
@@ -31,7 +33,7 @@ type Deps = {
  * worktree as the way round it; committing or stashing is left to the user,
  * or to the agent when asked.
  */
-export function useBranchPicker({ chatId, current, guard, open, notify, send }: Deps) {
+export function useBranchPicker({ chatId, current, guard, open, notify, send, onSwitched }: Deps) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
   const [worktree, setWorktree] = useState(false);
   // Where a worktree starts; `null` is the branch checked out now.
@@ -99,11 +101,12 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send }: 
       try {
         const outcome = await gitCheckout(name);
         if (outcome.kind === "conflicts") setConflict({ branch: name, paths: outcome.paths });
+        else onSwitched?.();
       } catch (e) {
         notify(String(e));
       }
     },
-    [worktree, current, notify],
+    [worktree, current, notify, onSwitched],
   );
 
   const closeConflict = useCallback(() => setConflict(null), []);

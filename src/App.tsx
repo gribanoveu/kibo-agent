@@ -432,6 +432,7 @@ export default function App() {
     open: workspace.open,
     notify: toast.show,
     send: agent.send,
+    onSwitched: agent.saveBranch,
   });
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";

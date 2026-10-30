@@ -616,6 +616,18 @@ export function useAgentTurn({
     [chatId, turn.status, turn.blocks, keepPlan],
   );
 
+  /**
+   * The folder switched to another branch between turns: the chat, once it
+   * has started, is saved now, and the save reads its branch from the folder.
+   * Left till the next turn, the chat would claim the branch it just left.
+   */
+  const saveBranch = useCallback(() => {
+    if (!chatId || turn.status === "running") return;
+    saveChat(chatId, history.current, turn.blocks, todos.current, planRef.current, branchedFrom.current)
+      .then(() => onSaved?.())
+      .catch((e) => setError(String(e)));
+  }, [chatId, turn.status, turn.blocks, onSaved]);
+
   return {
     turn,
     chatId,
@@ -639,6 +651,7 @@ export function useAgentTurn({
     compact: makeRoom,
     plan,
     editPlan,
+    saveBranch,
     checklist,
     branch,
     branchable,
