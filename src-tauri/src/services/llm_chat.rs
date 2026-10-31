@@ -4317,7 +4317,7 @@ mod tests {
             })
             .collect();
         let mut h = harness("loop-ceiling", steps);
-        h.session.limits = crate::domain::settings::TurnLimits { rounds: 3, budget: 250 };
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 3, budget: 250, parallel: 3 };
 
         let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("loop forever")], vec![])).expect("ends");
 
@@ -4340,7 +4340,7 @@ mod tests {
             .map(|i| asks((0..2).map(|j| wants(&format!("c{i}-{j}"), "writeFile", &format!(r#"{{"path":"d{i}-{j}","content":"x"}}"#))).collect()))
             .collect();
         let mut h = harness("budget-ceiling", steps);
-        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 5 };
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 5, parallel: 3 };
 
         let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("loop forever")], vec![])).expect("ends");
 
@@ -6053,7 +6053,7 @@ mod tests {
         let mut steps: Vec<Step> = (0..rounds).map(heavy).collect();
         steps.push(text("done"));
         let mut h = harness(label, steps);
-        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 250 };
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 250, parallel: 3 };
         h
     }
 

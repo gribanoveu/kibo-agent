@@ -69,6 +69,26 @@ pub(crate) struct SessionHandle {
     /// from the running one, so a queued message that starts the next turn
     /// before that call arrives does not wipe it.
     finished_turn: Mutex<Option<(String, FinishedTurn)>>,
+    /// Set while the chat's turn runs, by `AgentState::begin_running`; the
+    /// guard it hands back clears it. What makes a second start of the same
+    /// chat refuse rather than fork the history the window owns.
+    running: AtomicBool,
+}
+
+/// Counted while a chat's turn runs; clears itself on drop, however the turn
+/// ended — finished, paused, stopped, refused or lost to a panicked thread.
+pub(crate) struct RunningTurn(Arc<SessionHandle>);
+
+impl std::fmt::Debug for RunningTurn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunningTurn")
+    }
+}
+
+impl Drop for RunningTurn {
+    fn drop(&mut self) {
+        self.0.running.store(false, Ordering::SeqCst);
+    }
 }
 
 impl SessionHandle {
@@ -134,6 +154,30 @@ impl AgentState {
     pub(crate) fn session(&self, chat_id: &str) -> Arc<SessionHandle> {
         let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         Arc::clone(sessions.entry(chat_id.to_string()).or_default())
+    }
+
+    /// Marks `chat_id`'s turn as running and hands back the guard that clears
+    /// it. Refused when that chat's turn already runs — one chat, one turn:
+    /// the window owns the history, and two turns of one chat would fork it —
+    /// and when `limit` turns run already. Check and mark are under the one
+    /// lock, so two starts racing for the last slot cannot both take it.
+    fn begin_running(&self, chat_id: &str, limit: u32) -> Result<RunningTurn, String> {
+        // A hand-edited zero would refuse every turn; one always runs.
+        let limit = limit.max(1);
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handle = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
+        if handle.running.load(Ordering::SeqCst) {
+            return Err("this chat's turn is already running".to_string());
+        }
+        let running = sessions.values().filter(|s| s.running.load(Ordering::SeqCst)).count() as u32;
+        if running >= limit {
+            return Err(format!(
+                "{running} turns are already running — the parallel-turns limit. \
+                 Wait for one to finish, or raise it in Settings"
+            ));
+        }
+        handle.running.store(true, Ordering::SeqCst);
+        Ok(RunningTurn(handle))
     }
 
     pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
@@ -321,12 +365,15 @@ pub async fn chat_start<R: Runtime>(
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     let session = state.session(&chat_id);
+    // Admission before anything about the session is touched: a refused
+    // start must leave the running turn's stop flag and journal alone.
+    let running = state.begin_running(&chat_id, parallel_limit())?;
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
     .await
@@ -346,7 +393,8 @@ pub async fn chat_resume<R: Runtime>(
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
     let session = state.session(&chat_id);
-    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
+    let running = state.begin_running(&chat_id, parallel_limit())?;
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
     .await
@@ -718,9 +766,10 @@ pub async fn review_start<R: Runtime>(
     let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
     let desk = Arc::new(ReviewDesk::new(kept));
     let session = state.session(&chat_id);
+    let running = state.begin_running(&chat_id, parallel_limit())?;
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
-    run_off_the_event_loop(app, state, session, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
         llm_chat::review(turn, messages, todos, &brief, desk, handed)
     })
     .await
@@ -741,15 +790,28 @@ fn chats_own(
     )
 }
 
+/// How many turns may run at once, from the settings. An unreadable settings
+/// file costs the user's chosen limit, not the turn — the default stands in.
+fn parallel_limit() -> u32 {
+    crate::infra::settings_store::load()
+        .map(|settings| settings.llm.turn_limits.parallel)
+        .unwrap_or_else(|_| crate::domain::settings::TurnLimits::default().parallel)
+}
+
 /// Off the event loop because the whole turn is synchronous — provider calls,
 /// tool calls and a process runner — and holding the IPC loop for minutes
 /// freezes every other command, including the one that stops it. Everything
 /// the running turn is reached through is the chat's own `session`, so a turn
 /// of another chat running alongside neither stops it nor reads its notes.
+///
+/// `running` is the admission the caller took before touching the session;
+/// the guard lives here until the turn ends and clears the mark on any way
+/// out — finished, paused, stopped, refused or lost to a panicked thread.
 async fn run_off_the_event_loop<R, F>(
     app: AppHandle<R>,
     state: Arc<AgentState>,
     session: Arc<SessionHandle>,
+    running: RunningTurn,
     turn_id: String,
     chat_id: String,
     plan: Option<String>,
@@ -762,6 +824,7 @@ where
     let workspace = state.workspace()?;
     let approval = state.approval()?;
     let mode = state.mode();
+    let _running = running;
     let (processes, agents) = chats_own(
         app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes)),
         app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
@@ -1077,6 +1140,275 @@ mod tests {
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "the cleared stop lets it run: {outcome:?}");
             assert!(!state.session("c1").cancel.load(Ordering::SeqCst), "its own chat's stop is the one cleared");
             assert!(state.session("c2").cancel.load(Ordering::SeqCst), "another chat's stop is not the review's to clear");
+        });
+    }
+
+    /// One chat, one turn; the limit counts across chats; a guard's drop
+    /// frees its slot.
+    #[test]
+    fn a_chat_runs_one_turn_and_the_limit_counts_across_chats() {
+        let state = state();
+        let one = state.begin_running("c1", 3).expect("the first turn runs");
+        let refused = state.begin_running("c1", 3).expect_err("the same chat refuses");
+        assert!(refused.contains("already running"), "{refused}");
+
+        let two = state.begin_running("c2", 2).expect("another chat's turn runs beside it");
+        let over = state.begin_running("c3", 2).expect_err("the limit binds across chats");
+        assert!(over.contains("limit"), "{over}");
+
+        drop(one);
+        state.begin_running("c3", 2).expect("a finished turn frees its slot");
+        drop(two);
+
+        // A hand-edited zero in the settings still lets one turn run.
+        state.begin_running("c4", 0).expect("a zero limit still runs one");
+    }
+
+    /// The turn's thread dying with the guard frees the mark all the same —
+    /// the Drop, not the happy path, is what the next start relies on.
+    #[test]
+    fn a_panicked_turn_frees_its_slot() {
+        let state = state();
+        let guard = state.begin_running("c1", 3).expect("the turn runs");
+        std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("the turn's thread died");
+        })
+        .join()
+        .expect_err("the thread panicked");
+        state.begin_running("c1", 3).expect("a panicked turn frees its slot");
+    }
+
+    /// A refused start is only a refusal: the running turn's stop flag — a
+    /// Stop already pressed, waiting for the next checkpoint — survives it.
+    #[test]
+    fn a_refused_start_leaves_the_running_turn_alone() {
+        crate::testing::with_app_dir("cmd-refused-keeps-stop", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-refused-keeps-stop-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                state.session("c1").cancel.store(true, Ordering::SeqCst);
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c1", "t2", "go"));
+                assert!(refused.contains("already running"), "{refused}");
+                assert!(state.session("c1").cancel.load(Ordering::SeqCst), "the refused start kept the stop");
+
+                provider.open();
+                // Done or Cancelled — either way the refusal kept the stop.
+                assert!(first.join().expect("the first turn's thread").is_ok());
+            });
+        });
+    }
+
+    /// A provider that holds every answer until `open` is called and says
+    /// through `arrived` as each request comes in — what a test keeps a turn
+    /// mid-flight with. The server itself is `gated_server` beside the
+    /// providers: network code lives there (`data_policy`).
+    struct HeldProvider {
+        port: u16,
+        arrived: std::sync::mpsc::Receiver<()>,
+        gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl HeldProvider {
+        fn start() -> Self {
+            let (arrived_tx, arrived) = std::sync::mpsc::channel::<()>();
+            let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            let port = crate::infra::llm_providers::gated_server(
+                crate::testing::spending_reply("hello", 10, 2),
+                Arc::clone(&gate),
+                arrived_tx,
+            );
+            Self { port, arrived, gate }
+        }
+
+        /// The settings' only provider is this server, key included.
+        fn install(&self) {
+            crate::testing::spending_provider_on(self.port);
+        }
+
+        /// One request has reached the provider — the turn is mid-flight.
+        fn wait_request(&self) {
+            self.arrived
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the turn never asked the provider");
+        }
+
+        fn open(&self) {
+            let (lock, cvar) = &*self.gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+    }
+
+    /// The refusal F-8 kept is gone: two chats' turns run at once, each to
+    /// its own outcome, each counted under its own chat.
+    #[test]
+    fn two_chats_turns_run_at_once() {
+        crate::testing::with_app_dir("cmd-two-turns", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-two-turns-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            // The mock App itself does not cross threads; its handles do.
+            let first_handle = app.handle().clone();
+            let second_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "one"));
+                let second = scope.spawn(move || start_turn(&second_handle, "c2", "t2", "two"));
+                // Both requests in before either is answered: truly concurrent.
+                provider.wait_request();
+                provider.wait_request();
+                provider.open();
+
+                let one = first.join().expect("the first turn's thread");
+                let two = second.join().expect("the second turn's thread");
+                assert!(matches!(one, Ok(ChatStreamOutcome::Done(_))), "{one:?}");
+                assert!(matches!(two, Ok(ChatStreamOutcome::Done(_))), "{two:?}");
+            });
+            assert_eq!(crate::testing::chat_tokens("c1"), 12);
+            assert_eq!(crate::testing::chat_tokens("c2"), 12);
+        });
+    }
+
+    /// `chat_start` through a handle of the test's mock app — the shape the
+    /// concurrency tests need, a handle per thread.
+    fn start_turn(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        chat: &str,
+        turn: &str,
+        said: &str,
+    ) -> Result<ChatStreamOutcome, String> {
+        tauri::async_runtime::block_on(chat_start(
+            app.clone(),
+            app.state(),
+            turn.into(),
+            chat.into(),
+            vec![LlmMessage::user(said)],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    /// A start — or a resume — that is expected to refuse, waited on with a
+    /// timeout. A start that unexpectedly runs would block on the provider's
+    /// closed gate and hang the test with it, so the refusal has to arrive
+    /// in time. The side thread is detached: only a mutant ever strands it.
+    fn expect_refusal<F>(run: F) -> String
+    where
+        F: FnOnce() -> Result<ChatStreamOutcome, String> + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Err(refusal)) => refusal,
+            Ok(Ok(outcome)) => panic!("expected a refusal, the turn ran: {outcome:?}"),
+            Err(_) => panic!("no refusal within 10 s — the start is running, not refusing"),
+        }
+    }
+
+    /// A second start of the same chat — or a resume of it — refuses while
+    /// its turn runs, and runs once that turn has finished: the running mark
+    /// goes with the turn, not with the chat.
+    #[test]
+    fn a_second_turn_of_the_same_chat_waits_for_the_first() {
+        crate::testing::with_app_dir("cmd-same-chat-turn", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-same-chat-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c1", "t2", "go"));
+                assert!(refused.contains("already running"), "{refused}");
+
+                let checkpoint = PendingApproval {
+                    history: vec![
+                        LlmMessage::user("go"),
+                        LlmMessage::tool_requests(vec![LlmToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{}".into() }]),
+                    ],
+                    round: 1,
+                    budget_used: 0,
+                    event_seq: 0,
+                    calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{}".into(), requires_confirmation: true, reason: None }],
+                    todos: Vec::new(),
+                    reads: Default::default(),
+                };
+                // The command takes a `State`, which does not cross threads;
+                // its body is this, with the Arc it clones from the State.
+                let resume_handle = app.handle().clone();
+                let resume_state = Arc::clone(&state);
+                let resumed = expect_refusal(move || {
+                    let session = resume_state.session("c1");
+                    let running = resume_state.begin_running("c1", parallel_limit())?;
+                    tauri::async_runtime::block_on(run_off_the_event_loop(
+                        resume_handle,
+                        resume_state,
+                        session,
+                        running,
+                        "t1".into(),
+                        "c1".into(),
+                        None,
+                        move |turn| llm_chat::resume(turn, checkpoint, vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }]),
+                    ))
+                });
+                assert!(resumed.contains("already running"), "{resumed}");
+
+                provider.open();
+                assert!(matches!(first.join().expect("the first turn's thread"), Ok(ChatStreamOutcome::Done(_))));
+
+                let again = start_turn(app.handle(), "c1", "t3", "go");
+                assert!(matches!(again, Ok(ChatStreamOutcome::Done(_))), "finished, the chat starts again: {again:?}");
+            });
+        });
+    }
+
+    /// Past the limit a start refuses with why, and the limit is the
+    /// settings', not a constant.
+    #[test]
+    fn the_parallel_limit_refuses_the_extra_turn() {
+        crate::testing::with_app_dir("cmd-parallel-limit", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            crate::infra::settings_store::update(|s| s.llm.turn_limits.parallel = 1).expect("settings");
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-parallel-limit-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c2", "t2", "go"));
+                assert!(refused.contains("limit"), "{refused}");
+
+                provider.open();
+                assert!(matches!(first.join().expect("the first turn's thread"), Ok(ChatStreamOutcome::Done(_))));
+            });
         });
     }
 
