@@ -29,6 +29,9 @@ const BLANK = {
   temperature: "",
   topP: "",
   cert: "",
+  // Not drawn anywhere in the form: a provider the app carries brings the
+  // headers its gateway wants, and a stored one keeps whatever it has.
+  headers: {} as Record<string, string>,
   supportsImages: false,
 };
 
@@ -70,6 +73,7 @@ const fromConfig = (config: ProviderConfig): Draft => ({
   temperature: sampling(config.temperature),
   topP: sampling(config.topP),
   cert: config.trustedCertPem ?? "",
+  headers: config.requestHeaders ?? {},
   supportsImages: config.supportsImages ?? false,
 });
 
@@ -135,6 +139,9 @@ export function ProviderSettings({
     temperature: draft.temperature === "" ? null : Number(draft.temperature),
     topP: draft.topP === "" ? null : Number(draft.topP),
     trustedCertPem: draft.cert.trim() || null,
+    // Carried through the draft rather than left on `chosen`: a provider the
+    // app carries brings them, and a save must not drop them.
+    requestHeaders: draft.headers,
     supportsImages: draft.supportsImages,
   });
 
@@ -236,6 +243,9 @@ export function ProviderSettings({
                   // certificate; a plain catalog one starts without, so a
                   // certificate belongs to the entry that brought it.
                   cert: entry.trustedCertPem ?? "",
+                  // Same rule for the headers: they belong to the entry that
+                  // brought them, not to the one picked before it.
+                  headers: entry.requestHeaders ?? {},
                 })
               }
             />

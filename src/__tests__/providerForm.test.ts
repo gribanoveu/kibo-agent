@@ -57,6 +57,13 @@ describe("the providers the app carries", () => {
     expect(builtinSourceOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----")).toBeUndefined();
   });
 
+  /// The gateway tells its clients apart by `User-Agent`, and the version in
+  /// it has to be the one of the build that sends it — hence a placeholder,
+  /// expanded by the backend on each request, not a version copied in here.
+  test("and with the User-Agent its gateway asks for, as a placeholder", () => {
+    expect(alfagen?.requestHeaders).toEqual({ "User-Agent": "Kibo-Agent/$appVersion" });
+  });
+
   test("are offered ahead of the catalog", () => {
     expect(KNOWN_PROVIDERS.slice(0, BUILTIN_PROVIDERS.length)).toEqual(BUILTIN_PROVIDERS);
     expect(KNOWN_PROVIDERS).toHaveLength(BUILTIN_PROVIDERS.length + CATALOG.length);

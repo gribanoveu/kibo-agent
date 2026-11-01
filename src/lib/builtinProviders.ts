@@ -4,15 +4,18 @@
 
 import type { CatalogEntry } from "./providerForm";
 import { CATALOG } from "./providerForm";
+import type { ProviderConfig } from "./settings";
 import alfagenCertificate from "./certs/alfa-bank-st-ca-root.pem?raw";
 
 /**
  * A known provider that comes with the app rather than from models.dev.
  *
  * `trustedCertPem` replaces the public roots for that provider alone — the
- * same field the form's Certificate card fills by hand.
+ * same field the form's Certificate card fills by hand — and `requestHeaders`
+ * is what a gateway of its own wants on every request, which the form has no
+ * fields for.
  */
-export type BuiltinProvider = CatalogEntry & { trustedCertPem?: string };
+export type BuiltinProvider = CatalogEntry & Pick<ProviderConfig, "trustedCertPem" | "requestHeaders">;
 
 /**
  * AlfaGen, the bank's own gateway. Its certificate is the `Alfa-Bank ST CA
@@ -27,6 +30,10 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     kind: "openAiCompatible",
     baseUrl: "https://alfagen.moscow.alfaintra.net/continue-dev/v1",
     trustedCertPem: alfagenCertificate.trim(),
+    // The gateway tells its clients apart by this line. The placeholder is
+    // sent as it is and expanded to the build's version on each request, so an
+    // update does not leave a stale version in the settings.
+    requestHeaders: { "User-Agent": "Kibo-Agent/$appVersion" },
   },
 ];
 
