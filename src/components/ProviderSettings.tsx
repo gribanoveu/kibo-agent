@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
 import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
 import { certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
-import { builtinSourceOf, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
+import { builtinSourceOf, isBuiltIn, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import "./ProviderSettings.css";
 import "./Segmented.css";
 import { matches } from "../lib/shortcuts";
@@ -638,7 +638,7 @@ function Catalog({
               )}
               <span className="model-name">{entry.name}</span>
               <span className="model-hint">{entry.baseUrl.replace(/^https:\/\//, "")}</span>
-              {entry.trustedCertPem && <span className="model-note">built in</span>}
+              {isBuiltIn(entry.id) && <span className="model-note">built in</span>}
             </button>
           );
         })}

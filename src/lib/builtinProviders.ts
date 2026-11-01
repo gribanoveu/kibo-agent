@@ -1,6 +1,7 @@
-// The providers the app carries itself, offered beside the catalog generated
-// from models.dev: a row here may also name the certificate its gateway needs,
-// which the generated list has no field for.
+// The providers the app carries itself, offered ahead of the catalog generated
+// from models.dev: the handful nearly everyone configures, and a gateway that
+// needs more than a name and a URL — a certificate, headers — which the
+// generated list has no field for.
 
 import type { CatalogEntry } from "./providerForm";
 import { CATALOG } from "./providerForm";
@@ -13,7 +14,7 @@ import alfagenCertificate from "./certs/alfa-bank-st-ca-root.pem?raw";
  * `trustedCertPem` replaces the public roots for that provider alone — the
  * same field the form's Certificate card fills by hand — and `requestHeaders`
  * is what a gateway of its own wants on every request, which the form has no
- * fields for.
+ * fields for. A row that carries neither is here for its place in the list.
  */
 export type BuiltinProvider = CatalogEntry & Pick<ProviderConfig, "trustedCertPem" | "requestHeaders">;
 
@@ -38,10 +39,21 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     // not know goes out literally, and nothing in the app complains.
     requestHeaders: { "User-Agent": "Kibo-Agent/$appVersion" },
   },
+  // The ones most people configure first, so they are not hunted for in a list
+  // of two hundred. Nothing special about them beyond the place: the same name,
+  // protocol and address models.dev has, which `KNOWN_PROVIDERS` then leaves out
+  // of its own copy so that each appears once.
+  { id: "openai", name: "OpenAI", kind: "openAiCompatible", baseUrl: "https://api.openai.com/v1" },
+  { id: "anthropic", name: "Anthropic", kind: "anthropic", baseUrl: "https://api.anthropic.com/v1" },
+  { id: "deepseek", name: "DeepSeek", kind: "openAiCompatible", baseUrl: "https://api.deepseek.com" },
+  // The one that runs on the machine, and so the one models.dev has no row for
+  // at all — its plain `http` is what Ollama serves, not a slip.
+  { id: "ollama", name: "Ollama", kind: "openAiCompatible", baseUrl: "http://localhost:11434/v1" },
 ];
 
 /**
- * Everything the form offers by name, the app's own rows first.
+ * Everything the form offers by name: the app's own rows first, then models.dev's
+ * — less the ones the app already carries, so that a name is offered once.
  *
  * ponytail: the certificate travels in `settings.json` inside the provider it
  * was picked for, so a new root from the bank needs the row picked again, or
@@ -50,7 +62,15 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
  * (docs/47-alfagen-provider.md, decision 4) — worth it only once a second
  * internal provider or a changed CA makes it so.
  */
-export const KNOWN_PROVIDERS: BuiltinProvider[] = [...BUILTIN_PROVIDERS, ...CATALOG];
+export const KNOWN_PROVIDERS: BuiltinProvider[] = [
+  ...BUILTIN_PROVIDERS,
+  ...CATALOG.filter((entry) => !isBuiltIn(entry.id)),
+];
+
+/** Whether the app carries this row itself rather than reading it from models.dev. */
+export function isBuiltIn(id: string): boolean {
+  return BUILTIN_PROVIDERS.some((provider) => provider.id === id);
+}
 
 /**
  * The built-in provider whose certificate this is, when it is one of theirs:

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { LlmSettings, ProviderConfig } from "../lib/settings";
-import { KNOWN_PROVIDERS } from "../lib/builtinProviders";
+import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS } from "../lib/builtinProviders";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no
@@ -378,6 +378,14 @@ describe("the known providers", () => {
     add();
     expect(screen.getByRole("radio", { name: /^AlfaGen/ })).toBeTruthy();
     expect(screen.getByText(String(KNOWN_PROVIDERS.length))).toBeTruthy();
+  });
+
+  /// Marked, because where a row comes from is not visible otherwise: the four
+  /// rows the app puts first look exactly like models.dev's.
+  test("the rows the app carries are marked, and only they", () => {
+    form();
+    add();
+    expect(screen.getAllByText("built in")).toHaveLength(BUILTIN_PROVIDERS.length);
   });
 });
 
