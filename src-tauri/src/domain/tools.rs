@@ -1396,10 +1396,10 @@ pub enum ToolError {
     /// agent has seen it.
     #[error("read {0} in full before deleting it — a file you have not read may not be what you expect; an outline is not a read")]
     DeleteNotReadInFull(String),
-    /// The file moved under the agent between the read and the write. The
+    /// The file moved under the agent between the read and the change. The
     /// classic loss: the agent read, a person edited in their own editor, the
-    /// agent wrote its stale copy over the top.
-    #[error("{0} changed on disk since you read it — read it again before writing: another running agent or a person may have edited it, and writing your copy would overwrite their work")]
+    /// agent changed its stale copy over the top.
+    #[error("{0} changed on disk since you read it — read it again before changing it: another running agent or a person may have edited it, and changing it from what you last saw would overwrite their work")]
     FileChangedSinceRead(String),
     /// A git read failed. Carried as a string so git types stay out of the
     /// tool boundary.

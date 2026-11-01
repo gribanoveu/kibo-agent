@@ -157,10 +157,11 @@ mod tests {
         agent_reads(&scope, &mut reads, "a.txt", None);
         write(&root, "a.txt", "edited by a human\n");
 
-        assert!(matches!(
-            delete(&scope, &DeleteArgs { path: "a.txt".into(), recursive: None }, &mut reads),
-            Err(ToolError::FileChangedSinceRead(_))
-        ));
+        let err = delete(&scope, &DeleteArgs { path: "a.txt".into(), recursive: None }, &mut reads)
+            .expect_err("changed under it");
+        assert!(matches!(err, ToolError::FileChangedSinceRead(_)), "{err}");
+        assert!(err.to_string().contains("before changing it"), "{err}");
+        assert!(!err.to_string().contains("before writing"), "{err}");
         assert!(root.join("a.txt").exists(), "left in place");
     }
 
