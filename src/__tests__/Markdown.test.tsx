@@ -212,12 +212,12 @@ describe("a mermaid block", () => {
 
   test("is drawn again when the theme changes, to take its colours", async () => {
     drawing = async () => "<svg></svg>";
-    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.theme = "ember";
     drawn.length = 0;
     render(<Markdown text={fence} streaming={false} />);
     await waitFor(() => expect(drawn).toHaveLength(1));
     // Both dark: the scheme stays, the colours do not.
-    document.documentElement.dataset.theme = "one-dark";
+    document.documentElement.dataset.theme = "basalt";
     await waitFor(() => expect(drawn).toHaveLength(2));
   });
 

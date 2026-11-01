@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 2026-11-01 Tide, a light palette in DeepSeek's brand blue: its near-white page and #4d6bfe accent, a step darker so links clear 4.5:1
+- 2026-11-01 Clay, a third light palette with as little blue as a palette can carry — paper-toned ground, warm greys, rust accent — and the same or better contrast, AAA for body text
+- 2026-11-01 Six palettes, each under a name of its own — Linen and Chalk light, Ember, Basalt, Iris and Fjord dark — instead of borrowing other editors' theme names
 - 2026-11-01 AlfaGen, the bank's gateway, is offered as a provider with its certificate already trusted — nothing to find and paste — and OpenAI, Anthropic, DeepSeek and Ollama now stand at the top of the list instead of somewhere among two hundred
 - 2026-10-30 The agent's opening thought folds into a "Thinking" line in the run list, like "Ran a command", instead of standing alone above the answer — click it to read the whole thought
 - 2026-10-30 Messages waiting while the agent works line up with the message box and say when they are read — "Next step" or "After this turn" — and a long one opens whole on a click

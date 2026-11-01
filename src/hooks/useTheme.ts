@@ -3,19 +3,27 @@ import { setWindowTheme } from "../lib/window";
 
 /** Each palette in src/styles/tokens.css, and whether it is light or dark. */
 export const SCHEMES = {
-  light: "light",
-  latte: "light",
-  dark: "dark",
-  "one-dark": "dark",
+  linen: "light",
+  chalk: "light",
+  clay: "light",
+  tide: "light",
+  ember: "dark",
+  basalt: "dark",
+  iris: "dark",
+  fjord: "dark",
 } as const;
 export type Theme = keyof typeof SCHEMES;
 export type Scheme = (typeof SCHEMES)[Theme];
 
 export const THEME_LABELS: Record<Theme, string> = {
-  light: "Light",
-  latte: "Latte",
-  dark: "Dark",
-  "one-dark": "One Dark",
+  linen: "Linen",
+  chalk: "Chalk",
+  clay: "Clay",
+  tide: "Tide",
+  ember: "Ember",
+  basalt: "Basalt",
+  iris: "Iris",
+  fjord: "Fjord",
 };
 
 /** The palettes on one side, in the order they are offered. */
@@ -30,7 +38,7 @@ export type Mode = (typeof MODES)[number];
  */
 export type ThemeChoice = { mode: Mode; light: Theme; dark: Theme };
 
-const DEFAULT: ThemeChoice = { mode: "system", light: "light", dark: "dark" };
+const DEFAULT: ThemeChoice = { mode: "system", light: "linen", dark: "ember" };
 const KEY = "kibo-theme";
 
 const isMode = (value: unknown): value is Mode => (MODES as readonly unknown[]).includes(value);
