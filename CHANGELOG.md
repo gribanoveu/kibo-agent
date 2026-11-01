@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-01 A half-written message stays in the chat it was typed in: switching to another chat, going between Agent and Chat or closing the window no longer carries it to the next chat or throws it away — and deleting the chat deletes it too
 - 2026-11-01 Tide, a light palette in DeepSeek's brand blue: its near-white page and #4d6bfe accent, a step darker so links clear 4.5:1
 - 2026-11-01 Clay, a third light palette with as little blue as a palette can carry — paper-toned ground, warm greys, rust accent — and the same or better contrast, AAA for body text
 - 2026-11-01 Six palettes, each under a name of its own — Linen and Chalk light, Ember, Basalt, Iris and Fjord dark — instead of borrowing other editors' theme names
