@@ -216,6 +216,17 @@
   font-size: var(--fs-2xs);
   font-weight: 600;
 }
+/* A note beside a row, not a state: a provider the app carries itself is not
+   the chosen one, and the accent pill above reads as chosen. */
+.model-note {
+  margin-left: auto;
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-active);
+  color: var(--text-faint);
+  font-size: var(--fs-2xs);
+}
 .model-empty {
   padding: 8px;
   color: var(--text-faint);

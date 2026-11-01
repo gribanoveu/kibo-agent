@@ -31,6 +31,12 @@ use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, ChatUsage,
 /// correlation id per request — several corporate gateways require one.
 pub const REQUEST_HEADER_VALUE_UUID: &str = "$uuid";
 
+/// Placeholder a configured request header can carry to get the version of
+/// this build — a gateway that tells its clients apart by `User-Agent` asks for
+/// `Kibo-Agent/{version}`. A version typed into the settings would be the
+/// version of the day it was typed.
+pub const REQUEST_HEADER_VALUE_VERSION: &str = "$appVersion";
+
 /// How much of an error response body is folded into the message. A provider's
 /// error page can be an entire HTML document; the goal is a diagnosable line,
 /// not a dump.
@@ -311,10 +317,12 @@ fn retry_after_seconds(headers: &http::HeaderMap) -> Option<u64> {
 
 pub(super) fn header_value(value: &str) -> String {
     if value == REQUEST_HEADER_VALUE_UUID {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        value.to_string()
+        return uuid::Uuid::new_v4().to_string();
     }
+    // The version is replaced where it stands, unlike `$uuid`: the value it
+    // exists for is `Kibo-Agent/$appVersion`, with the name of the client in
+    // front of it.
+    value.replace(REQUEST_HEADER_VALUE_VERSION, env!("CARGO_PKG_VERSION"))
 }
 
 /// Reasoning this provider kept on `message` under `field`, if any.
@@ -1422,5 +1430,60 @@ pub(super) mod tests {
         assert_ne!(first, second);
         assert_ne!(first, REQUEST_HEADER_VALUE_UUID);
         assert_eq!(header_value("static"), "static");
+    }
+
+    /// The gateway tells its clients apart by this line, and a version written
+    /// into the settings would be yesterday's after the first update: the
+    /// version comes from the build, inside a value that names the client.
+    #[test]
+    fn the_version_placeholder_names_this_build() {
+        assert_eq!(
+            header_value("Kibo-Agent/$appVersion"),
+            format!("Kibo-Agent/{}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_ne!(header_value("Kibo-Agent/$appVersion"), "Kibo-Agent/$appVersion");
+    }
+
+    /// Both requests a provider makes, not only the chat one: the model list is
+    /// asked before a turn, and a gateway that wants this header wants it there
+    /// too. It is also the one ureq answers with its own name unless the request
+    /// carries one — so the count is checked, not only the value.
+    #[test]
+    fn a_configured_header_reaches_the_chat_and_the_model_list() {
+        let headers = HashMap::from([("User-Agent".to_string(), "Kibo-Agent/$appVersion".to_string())]);
+        let build = |url: String| {
+            OpenAiCompatibleProvider::new(
+                crate::infra::http_agent::build_agent(None).expect("agent"),
+                url,
+                SecretString::from("sk-test"),
+                headers.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let expected = format!("user-agent: kibo-agent/{}", env!("CARGO_PKG_VERSION"));
+
+        let (url, server) = serve_capturing(sse(&[]));
+        let _ = build(url).chat_stream(
+            ChatRequest {
+                messages: vec![LlmMessage::user("hi")],
+                tools: Vec::new(),
+                model: "m".into(),
+            },
+            &|_| {},
+            &|| false,
+        );
+        let chat = server.join().expect("served").to_lowercase();
+        assert_eq!(chat.matches("user-agent:").count(), 1, "ureq added its own as well: {chat}");
+        assert!(chat.contains(&expected), "the chat request: {chat}");
+
+        let (url, server) = serve_capturing(r#"{"data":[]}"#.to_string());
+        build(url).list_models().expect("lists");
+        let models = server.join().expect("served").to_lowercase();
+        assert_eq!(models.matches("user-agent:").count(), 1, "ureq added its own as well: {models}");
+        assert!(models.contains(&expected), "the model list request: {models}");
     }
 }

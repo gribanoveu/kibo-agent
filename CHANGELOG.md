@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-01 AlfaGen, the bank's gateway, is offered as a provider with its certificate already trusted — nothing to find and paste — and OpenAI, Anthropic, DeepSeek and Ollama now stand at the top of the list instead of somewhere among two hundred
 - 2026-10-30 The agent's opening thought folds into a "Thinking" line in the run list, like "Ran a command", instead of standing alone above the answer — click it to read the whole thought
 - 2026-10-30 Messages waiting while the agent works line up with the message box and say when they are read — "Next step" or "After this turn" — and a long one opens whole on a click
 - 2026-10-30 Millions of tokens read as millions — Session tokens in the context meter and a helper agent's run say 2.04M rather than 2040k — and a picture the composer refused can be closed
