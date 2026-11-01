@@ -29,7 +29,7 @@
 - **A real terminal and background processes.** A genuine PTY with xterm.js. Dev servers and watchers live between turns, and the agent reads their output.
 - **Context as a budget.** A turn's budget is weighed by tool cost. History compacts itself, and old results are replaced with stubs. History is append-only, so the provider's prompt cache holds across rounds.
 - **Extensions.** MCP servers, local or at a URL over Streamable HTTP (a Claude Desktop or Cursor config pastes in as is), skills, and hooks in the Claude Code format.
-- **Themes.** Separate light and dark palettes — Apple's colours, One Dark, Latte — and every key in one registry, listed from the account menu.
+- **Themes.** Separate light and dark palettes — Linen, Chalk, Clay and Tide light, Ember, Basalt, Iris and Fjord dark — and every key in one registry, listed from the account menu.
 
 ## Your data stays yours
 
