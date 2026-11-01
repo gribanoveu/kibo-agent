@@ -53,6 +53,8 @@ afterEach(() => {
   prepared.length = 0;
   dropped.length = 0;
   refusal = null;
+  // The box keeps its text per chat, and every box here is the same chat.
+  localStorage.clear();
 });
 
 /** A picture whose one byte says which it is, as the mock hands it back. */
@@ -64,6 +66,7 @@ function box({ imagesEnabled = true, running = false } = {}) {
   const sent: Sent[] = [];
   render(
     <Composer
+      draftKey="draft"
       onSend={(text, images) => sent.push({ text, images })}
       imagesEnabled={imagesEnabled}
       onStop={() => {}}

@@ -47,6 +47,7 @@ import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
+import { chatDraftKey } from "./hooks/useChatDraft";
 import { useTurnAlerts } from "./hooks/useTurnAlerts";
 import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
@@ -638,6 +639,8 @@ export default function App() {
             steered={agent.steered}
             onWithdraw={agent.withdraw}
             focus={composerFocus}
+            // The box is this chat's: what was typed in another one waits there.
+            draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
             running={agent.turn.status === "running"}
             conversation={conversation.value}

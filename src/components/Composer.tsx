@@ -11,6 +11,7 @@ import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
 import { useArrival } from "../hooks/useArrival";
+import { useChatDraft } from "../hooks/useChatDraft";
 import { ImageThumbs } from "./ImageThumbs";
 import { ErrorNote } from "./ErrorNote";
 import "./Composer.css";
@@ -86,6 +87,9 @@ type Props = {
   pendingCommands?: string;
   /** Each change puts the cursor in the box. */
   focus?: number;
+  /** Where this chat's unsent message is kept: the box belongs to a chat, not
+      to the window, so it comes back to the one it was typed in. */
+  draftKey: string;
 };
 
 export function Composer({
@@ -116,21 +120,25 @@ export function Composer({
   onCommandsOpen,
   pendingCommands,
   focus = 0,
+  draftKey,
 }: Props) {
-  const [text, setText] = useState("");
+  const [text, setText] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
   const [openRow, setOpenRow] = useState<string | null>(null);
   const attachments = useAttachments(imagesEnabled);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
   // The menu follows the text: shown while a name is being typed, until
-  // Escape or a click elsewhere — and back with the next keystroke.
-  const [dismissed, setDismissed] = useState(false);
+  // Escape or a click elsewhere — and back with the next keystroke. What is
+  // *typed*, not what the box holds: a draft restored as a chat opens is not
+  // being typed, so its menu waits. `typedIn` is the chat whose text in the box
+  // was typed here.
+  const [typedIn, setTypedIn] = useState<string | null>(null);
   const [active, setActive] = useState(0);
-  const offered = dismissed ? [] : suggestCommands(commands, text);
+  const offered = typedIn === draftKey ? suggestCommands(commands, text) : [];
   // Open while more commands are coming, even if none typed so far matches
   // yet: the prompt being typed may be one of them.
-  const menuOpen = offered.length > 0 || (!!pendingCommands && !dismissed && typingCommandName(text));
+  const menuOpen = offered.length > 0 || (!!pendingCommands && typedIn === draftKey && typingCommandName(text));
   const at = Math.min(active, Math.max(offered.length - 1, 0));
   const hint = pendingHint(commands, text);
 
@@ -138,7 +146,7 @@ export function Composer({
     if (!menuOpen) return;
     onCommandsOpen?.();
     const onDown = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node)) setDismissed(true);
+      if (!box.current?.contains(e.target as Node)) setTypedIn(null);
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
@@ -150,6 +158,13 @@ export function Composer({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   };
+
+  // Another chat's draft was put in the box during the render, so the box has
+  // to be made to fit it — the textarea grew for the text it had before.
+  useEffect(() => {
+    setActive(0);
+    requestAnimationFrame(grow);
+  }, [draftKey]);
 
   useArrival(draft, (draft) => {
     setText(draft.text);
@@ -285,7 +300,7 @@ export function Composer({
             onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
             onChange={(e) => {
               setText(e.target.value);
-              setDismissed(false);
+              setTypedIn(draftKey);
               setActive(0);
               grow();
             }}
@@ -308,7 +323,7 @@ export function Composer({
                   // The menu's Escape, not the window's.
                   e.preventDefault();
                   e.stopPropagation();
-                  setDismissed(true);
+                  setTypedIn(null);
                   return;
                 }
                 if (offered.length > 0 && matches(e, "send")) {

@@ -30,6 +30,7 @@ const { modelChoices } = await import("../hooks/useLlmSettings");
 afterEach(() => {
   calls.length = 0;
   refuse = false;
+  localStorage.clear();
 });
 
 function composer(
@@ -40,6 +41,7 @@ function composer(
 ) {
   return render(
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
@@ -132,6 +134,7 @@ describe("telling the backend", () => {
 });
 
 const { useBackendSetting } = await import("../hooks/useBackendSetting");
+const { chatDraftKey, readChatDraft } = await import("../hooks/useChatDraft");
 const { act, renderHook } = await import("@testing-library/react");
 
 describe("holding the chosen mode", () => {
@@ -178,6 +181,7 @@ describe("text handed to the box", () => {
     quote: { text: string; seq: number } | null = null,
   ) => (
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
@@ -209,16 +213,19 @@ describe("text handed to the box", () => {
     expect(box.value).toBe("try this");
   });
 
-  /// The box is drawn anew when the mode changes; what it was handed before
-  /// was already used, and the user may have sent or cleared it since.
-  test("a box drawn anew does not take what was handed to the one before it", () => {
+  /// The box is drawn anew when the mode changes. What was handed before is
+  /// not applied again — the user may have typed over it since — and what it
+  /// was left holding is the draft it comes back with.
+  test("a box drawn anew keeps what was left in it, not the text handed before", () => {
     const draft = { text: "try this", seq: 1 };
     const quote = { text: "1 failed", seq: 1 };
     const first = render(withDraft(null));
     first.rerender(withDraft(draft, quote));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "edited" } });
     first.unmount();
+
     render(withDraft(draft, quote));
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("edited");
   });
 
   /// A terminal selection is added to the message, not put in its place.
@@ -260,6 +267,7 @@ describe("the model chip", () => {
     let loads = 0;
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -292,6 +300,7 @@ describe("the model chip", () => {
     const picked: (string | null)[] = [];
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -321,6 +330,7 @@ describe("the model chip", () => {
   test("the context ring sits in the bar, beside the send button", () => {
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -356,6 +366,7 @@ describe("slash commands", () => {
     ];
     render(
       <Composer
+        draftKey="draft"
         onSend={(text) => sent.push(text)}
         onStop={() => {}}
         running={false}
@@ -495,6 +506,7 @@ describe("slash commands", () => {
     let asked = 0;
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -580,6 +592,7 @@ describe("slash commands", () => {
 describe("the box's focus", () => {
   const withFocus = (focus: number) => (
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
@@ -626,6 +639,7 @@ describe("the queue", () => {
     const ran: string[] = [];
     render(
       <Composer
+        draftKey="draft"
         onSend={(text) => sent.push(text)}
         onQueue={(text) => held.push(text)}
         queued={queued}
@@ -714,5 +728,111 @@ describe("the queue", () => {
     expect([note.getAttribute("aria-expanded"), queued.getAttribute("aria-expanded")]).toEqual(["false", "true"]);
     fireEvent.click(queued);
     expect(queued.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("the draft a chat keeps", () => {
+  const boxFor = (key: string, onSend: (text: string) => void = () => {}) => (
+    <Composer
+      draftKey={key}
+      onSend={onSend}
+      onStop={() => {}}
+      running={false}
+      conversation="agent"
+      onConversation={() => {}}
+      unattended={false}
+      onUnattended={() => {}}
+      models={{ choices: [], current: null }}
+      onModel={() => {}}
+      onEffort={() => {}}
+      onLoadModels={() => {}}
+      context={null}
+      usage={null}
+      onCompact={() => {}}
+    />
+  );
+  const type = (text: string) => fireEvent.change(screen.getByRole("textbox"), { target: { value: text } });
+  const value = () => (screen.getByRole("textbox") as HTMLTextAreaElement).value;
+
+  /// The box belongs to a chat, not to the window: what was typed in one waits
+  /// there, and the next chat starts with its own text — nothing or its own.
+  test("each chat finds its own text, and only its own", () => {
+    const a = chatDraftKey("agent", "a");
+    const b = chatDraftKey("agent", "b");
+    const { rerender } = render(boxFor(a));
+
+    type("про первый");
+    rerender(boxFor(b));
+    expect(value()).toBe("");
+
+    type("про второй");
+    rerender(boxFor(a));
+    expect(value()).toBe("про первый");
+    rerender(boxFor(b));
+    expect(value()).toBe("про второй");
+  });
+
+  /// A chat not saved yet is one slot per mode: what was typed in a new chat is
+  /// in the next new one, and not in a chat opened from the list.
+  test("a chat opened from the list does not take the new chat's text", () => {
+    const { rerender } = render(boxFor(chatDraftKey("agent", null)));
+    type("новый чат");
+    rerender(boxFor(chatDraftKey("agent", "a")));
+    expect(value()).toBe("");
+    rerender(boxFor(chatDraftKey("agent", null)));
+    expect(value()).toBe("новый чат");
+  });
+
+  /// Sent, the text is the turn's: nothing is kept for the next visit.
+  test("a message sent leaves no draft behind", () => {
+    const sent: string[] = [];
+    const key = chatDraftKey("agent", "a");
+    const { rerender } = render(boxFor(key, (text) => sent.push(text)));
+    type("сделай");
+    expect(readChatDraft(key)).toBe("сделай");
+    fireEvent.keyDown(screen.getByRole("textbox"), { code: "Enter", key: "Enter" });
+    expect(sent).toEqual(["сделай"]);
+    expect(readChatDraft(key)).toBe("");
+
+    rerender(boxFor(chatDraftKey("agent", "b")));
+    rerender(boxFor(key));
+    expect(value()).toBe("");
+  });
+
+  /// A draft is not being typed: one that starts like a command opens no menu
+  /// where the box appears, and asks for no list of commands, until a key is
+  /// pressed — the same as a menu closed with Escape.
+  test("a restored draft does not open the command menu by itself", () => {
+    let asked = 0;
+    const key = chatDraftKey("agent", "a");
+    localStorage.setItem(key, "/rev");
+    render(
+      <Composer
+        draftKey={key}
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+        commands={[{ name: "review", hint: "Review a file", run: () => {} }]}
+        onCommandsOpen={() => asked++}
+      />,
+    );
+    expect(value()).toBe("/rev");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(asked).toBe(0);
+
+    type("/revi");
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    expect(asked).toBe(1);
   });
 });
