@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { LlmSettings, ProviderConfig } from "../lib/settings";
+import { KNOWN_PROVIDERS } from "../lib/builtinProviders";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no
@@ -300,6 +301,50 @@ describe("the known providers", () => {
     search("openai");
     fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
     expect(field("Name").value).toBe("openai-2");
+  });
+
+  /// The gateway sits behind the bank's own CA, which no public trust store
+  /// knows: without the certificate the row brings, every request to it fails
+  /// the handshake. It has to arrive without the user finding a `.pem`.
+  test("AlfaGen comes with its gateway's certificate", async () => {
+    const { saved } = form();
+    add();
+    search("alfa");
+    fireEvent.click(screen.getByRole("radio", { name: /^AlfaGen/ }));
+
+    expect(field("Base URL").value).toBe("https://alfagen.moscow.alfaintra.net/continue-dev/v1");
+    expect(protocol()).toBe("OpenAI-compatible");
+    expect(screen.getByText(/the one AlfaGen comes with/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+    const pem = saved[0]?.provider.trustedCertPem ?? "";
+    expect(pem.match(/-----BEGIN CERTIFICATE-----/g)).toHaveLength(1);
+  });
+
+  /// A certificate is the signature of one host. Left behind on the next pick,
+  /// it would make a provider that has nothing to do with the bank fail.
+  test("a certificate does not follow the next pick", async () => {
+    const { saved } = form();
+    add();
+    search("alfa");
+    fireEvent.click(screen.getByRole("radio", { name: /^AlfaGen/ }));
+    search("openai");
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+    expect(saved[0]?.provider.id).toBe("openai-2");
+    expect(saved[0]?.provider.trustedCertPem).toBeNull();
+  });
+
+  test("the app's own provider is offered without searching, and counted", () => {
+    form();
+    add();
+    expect(screen.getByRole("radio", { name: /^AlfaGen/ })).toBeTruthy();
+    expect(screen.getByText(String(KNOWN_PROVIDERS.length))).toBeTruthy();
   });
 });
 

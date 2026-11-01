@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
 import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
-import { CATALOG, type CatalogEntry, certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { builtinSourceOf, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import "./ProviderSettings.css";
 import "./Segmented.css";
 import { matches } from "../lib/shortcuts";
@@ -221,15 +222,20 @@ export function ProviderSettings({
           <section className="provider-card">
             <h4 className="provider-card-title">
               Known providers
-              <span className="provider-count">{CATALOG.length}</span>
+              <span className="provider-count">{KNOWN_PROVIDERS.length}</span>
             </h4>
             <Catalog
+              entries={KNOWN_PROVIDERS}
               baseUrl={draft.baseUrl.trim()}
               onPick={(entry) =>
                 edit({
                   id: freeName(entry.id, providers.map((p) => p.id)),
                   kind: entry.kind,
                   baseUrl: entry.baseUrl,
+                  // A provider the app carries comes with its gateway's
+                  // certificate; a plain catalog one starts without, so a
+                  // certificate belongs to the entry that brought it.
+                  cert: entry.trustedCertPem ?? "",
                 })
               }
             />
@@ -417,7 +423,11 @@ export function ProviderSettings({
           </p>
         </section>
 
-        <Certificate pem={draft.cert} onChange={(cert) => edit({ cert })} />
+        <Certificate
+          pem={draft.cert}
+          source={builtinSourceOf(draft.cert)?.name}
+          onChange={(cert) => edit({ cert })}
+        />
 
         <div className="provider-foot">
           <button className="btn btn-primary" type="submit" disabled={busy}>
@@ -556,17 +566,27 @@ function ModelList({
 }
 
 /**
- * The known providers, searched by name. Picking one fills the name, protocol
- * and base URL, all still editable — a URL with `${…}` in it wants the user's
- * own account or host put there.
+ * The known providers, searched by name — the app's own rows first, then the
+ * catalog generated from models.dev. Picking one fills the name, protocol and
+ * base URL, all still editable — a URL with `${…}` in it wants the user's own
+ * account or host put there — and a row that carries a certificate fills that
+ * too.
  */
-function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: CatalogEntry) => void }) {
+function Catalog({
+  entries,
+  baseUrl,
+  onPick,
+}: {
+  entries: BuiltinProvider[];
+  baseUrl: string;
+  onPick: (entry: BuiltinProvider) => void;
+}) {
   const [query, setQuery] = useState("");
   // Several providers share a URL (a plan and its API), so the row picked is
   // remembered; it stays marked only while the URL is still its own.
   const [picked, setPicked] = useState<string | null>(null);
-  const shown = filterBy(CATALOG, query, (entry) => `${entry.name} ${entry.id}`);
-  const pick = (entry: CatalogEntry) => {
+  const shown = filterBy(entries, query, (entry) => `${entry.name} ${entry.id}`);
+  const pick = (entry: BuiltinProvider) => {
     setPicked(entry.id);
     onPick(entry);
   };
@@ -578,7 +598,7 @@ function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: Catalog
         <input
           type="search"
           value={query}
-          placeholder={`Search ${CATALOG.length} providers`}
+          placeholder={`Search ${entries.length} providers`}
           onChange={(e) => setQuery(e.target.value)}
           // Enter picks the first match rather than saving the form.
           onKeyDown={(e) => {
@@ -608,6 +628,7 @@ function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: Catalog
               )}
               <span className="model-name">{entry.name}</span>
               <span className="model-hint">{entry.baseUrl.replace(/^https:\/\//, "")}</span>
+              {entry.trustedCertPem && <span className="model-badge">built in</span>}
             </button>
           );
         })}
@@ -669,7 +690,16 @@ function Slider({
  * or a self-signed server. Loaded from a file or pasted; shown as a count, and
  * as text only when asked.
  */
-function Certificate({ pem, onChange }: { pem: string; onChange: (pem: string) => void }) {
+function Certificate({
+  pem,
+  source,
+  onChange,
+}: {
+  pem: string;
+  /** The built-in provider this certificate came with, when it is one of its own. */
+  source?: string;
+  onChange: (pem: string) => void;
+}) {
   const file = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
@@ -717,7 +747,9 @@ function Certificate({ pem, onChange }: { pem: string; onChange: (pem: string) =
       <p className={`provider-cert-state${pem.trim() ? " set" : ""}`}>
         {pem.trim()
           ? count
-            ? `${count} certificate${count === 1 ? "" : "s"} — trusted instead of the public roots`
+            ? source
+              ? `${count} certificate${count === 1 ? "" : "s"} — the one ${source} comes with, trusted instead of the public roots`
+              : `${count} certificate${count === 1 ? "" : "s"} — trusted instead of the public roots`
             : "No certificate found in this text"
           : "None — the server is checked against the public roots"}
       </p>

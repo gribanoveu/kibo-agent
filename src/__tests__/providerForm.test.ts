@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CATALOG, certificateCount, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS, builtinSourceOf } from "../lib/builtinProviders";
 
 describe("filterModels", () => {
   const models = ["gpt-4o", "claude-sonnet-4-5", "claude-opus-4-1", "Qwen3-Coder"];
@@ -30,6 +31,35 @@ describe("the provider catalog", () => {
   test("a taken name gets the next free number", () => {
     expect(freeName("deepseek", [])).toBe("deepseek");
     expect(freeName("deepseek", ["deepseek", "deepseek-2"])).toBe("deepseek-3");
+  });
+});
+
+describe("the providers the app carries", () => {
+  const alfagen = BUILTIN_PROVIDERS.find((provider) => provider.id === "alfagen");
+
+  test("AlfaGen is offered at the bank's own address, on the protocol it speaks", () => {
+    expect(alfagen?.baseUrl).toBe("https://alfagen.moscow.alfaintra.net/continue-dev/v1");
+    expect(alfagen?.kind).toBe("openAiCompatible");
+  });
+
+  /// One certificate, the root the gateway's chain ends at: the server sends
+  /// its intermediate itself, and a bundled leaf would be pinned to the
+  /// certificate that expires first.
+  test("and with exactly one certificate — the root", () => {
+    expect(certificateCount(alfagen?.trustedCertPem ?? "")).toBe(1);
+    expect(alfagen?.trustedCertPem).toStartWith("-----BEGIN CERTIFICATE-----");
+    expect(alfagen?.trustedCertPem).toEndWith("-----END CERTIFICATE-----");
+  });
+
+  test("a certificate is the app's own only when it is that one", () => {
+    expect(builtinSourceOf(alfagen?.trustedCertPem ?? "")?.id).toBe("alfagen");
+    expect(builtinSourceOf("  ")).toBeUndefined();
+    expect(builtinSourceOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----")).toBeUndefined();
+  });
+
+  test("are offered ahead of the catalog", () => {
+    expect(KNOWN_PROVIDERS.slice(0, BUILTIN_PROVIDERS.length)).toEqual(BUILTIN_PROVIDERS);
+    expect(KNOWN_PROVIDERS).toHaveLength(BUILTIN_PROVIDERS.length + CATALOG.length);
   });
 });
 
