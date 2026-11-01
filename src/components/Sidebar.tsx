@@ -5,10 +5,13 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  CircleCheck,
   CodeXml,
   GitBranch,
   Info,
   Keyboard,
+  Loader2,
+  MessageCircleQuestion,
   MessageSquare,
   MessagesSquare,
   Moon,
@@ -28,7 +31,7 @@ import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { comboKeys, matches, shortcutText, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/savedChats";
-import { APP_MODES, type AppMode, type AsideTab } from "../types";
+import { APP_MODES, type AppMode, type AsideTab, type ChatActivity } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
 
@@ -74,6 +77,7 @@ type Props = {
   onPage: (page: PageId) => void;
   chats: ChatSummary[];
   activeChat: string | null;
+  chatActivity?: Record<string, ChatActivity>;
   onSelectChat: (id: string) => void;
   onNewChat: () => void;
   onArchiveChat: (id: string, archived: boolean) => void;
@@ -93,6 +97,7 @@ export function Sidebar({
   onPage,
   chats,
   activeChat,
+  chatActivity = {},
   onSelectChat,
   onNewChat,
   onArchiveChat,
@@ -216,6 +221,13 @@ export function Sidebar({
                     <MessageSquare size={14} />
                   )}
                   <ChangingText text={chat.title} />
+                  {chatActivity[chat.id] === "running" ? (
+                    <Loader2 className="chat-activity chat-activity-running" size={13} aria-label="Turn running" />
+                  ) : chatActivity[chat.id] === "awaitingApproval" ? (
+                    <MessageCircleQuestion className="chat-activity chat-activity-awaiting" size={14} aria-label="Approval needed" />
+                  ) : chatActivity[chat.id] === "finished" ? (
+                    <CircleCheck className="chat-activity" size={14} aria-label="Finished in background" />
+                  ) : null}
                 </button>
                 <ChatMenu
                   items={[

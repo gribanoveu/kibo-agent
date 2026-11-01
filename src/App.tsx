@@ -417,9 +417,10 @@ export default function App() {
     if (workspace.error) toast.show(workspace.error);
   }, [workspace.error]);
 
-  // Leaving the folder ends what runs in it: the user is told first.
+  // Leaving the folder ends every turn in it, including one in a background chat.
+  const activities = Object.values(agent.chatActivity);
   const folderSwitch = useFolderSwitch(
-    agent.turn.status === "running" ? "running" : agent.turn.status === "awaitingApproval" ? "waiting" : null,
+    activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
   );
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
@@ -802,6 +803,7 @@ export default function App() {
           }}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
+          chatActivity={agent.chatActivity}
           onSelectChat={selectChat}
           onNewChat={newChat}
           onArchiveChat={(id, archived) =>
@@ -813,9 +815,11 @@ export default function App() {
                 (removed) => removed || toast.show(STAY),
                 (e) => toast.show(String(e)),
               );
-            // The open chat goes first: left on screen, its next save would write it back.
-            if (id === agent.chatId && !agent.reset()) return toast.show(STAY);
-            history.remove(id).catch((e) => toast.show(String(e)));
+            // Deleting first would let a save already in flight recreate the row.
+            void agent.discard(id).then((discarded) => {
+              if (!discarded) return toast.show("Stop the running turn before deleting this chat");
+              history.remove(id).catch((e) => toast.show(String(e)));
+            });
           }}
           onOpenSettings={() => openSettings()}
           onOnboardingAction={openTab}
@@ -856,7 +860,7 @@ export default function App() {
       <FolderSwitchDialog
         blocked={folderSwitch.blocked}
         folder={workspace.path}
-        onStopAgent={agent.cancel}
+        onStopAgent={agent.cancelAll}
         onClose={folderSwitch.close}
       />
       <FolderTrustDialog
