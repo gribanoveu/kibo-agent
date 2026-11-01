@@ -419,6 +419,7 @@ export default function App() {
 
   // Leaving the folder ends every turn in it, including one in a background chat.
   const activities = Object.values(agent.chatActivity);
+  const anyTurnBusy = activities.includes("running") || activities.includes("awaitingApproval");
   const folderSwitch = useFolderSwitch(
     activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
   );
@@ -625,7 +626,9 @@ export default function App() {
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
                   onWorktree: unstarted ? branchPicker.setWorktree : undefined,
-                  locked: turnBusy ? "The agent is working on this branch — switch it once the turn ends" : undefined,
+                  locked: anyTurnBusy
+                    ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
+                    : undefined,
                 }}
                 // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}

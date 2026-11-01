@@ -93,6 +93,8 @@ pub struct FolderTurn<'a> {
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub take_steering: &'a (dyn Fn() -> Vec<SteeringNote> + Sync),
     pub notes_typed: &'a (dyn Fn() -> u64 + Sync),
+    /// True while another chat's turn runs beside this one in the folder.
+    pub parallel: &'a (dyn Fn() -> bool + Sync),
 }
 
 /// Puts a turn in the open folder together and hands it to `run`. Blocking:
@@ -146,7 +148,7 @@ pub fn run_in_folder(
     let turn = Turn {
         events: folder.events,
         session: &session,
-        place: Place::Folder { scope: &scope, mode: folder.mode, web: web.as_ref() },
+        place: Place::Folder { scope: &scope, mode: folder.mode, web: web.as_ref(), parallel: folder.parallel },
         approval: &approval,
         cancelled: folder.cancelled,
         sleep: &sleep,
@@ -468,6 +470,7 @@ mod tests {
                 cancelled: &no,
                 take_steering: &none,
                 notes_typed: &zero,
+                parallel: &no,
             };
             run_in_folder(folder, FolderHandles::default(), |turn| {
                 ask(turn.session);
@@ -545,6 +548,7 @@ mod tests {
                     cancelled: &no,
                     take_steering: &none,
                     notes_typed: &zero,
+                    parallel: &no,
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;

@@ -152,9 +152,11 @@ export function FolderTab({
       {path && branch && branchPicker && (
         <>
           <Dropdown
-            locked={!!branchPicker.locked}
+            locked={!!branchPicker.locked && !branchPicker.worktree}
             title={
-              branchPicker.locked ??
+              (branchPicker.locked && !branchPicker.worktree
+                ? branchPicker.locked
+                : undefined) ??
               (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
             }
             heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
@@ -174,8 +176,11 @@ export function FolderTab({
             <button
               type="button"
               className="folder-tab-away"
-              title={`This chat works on ${away}; the folder is on ${branch} now. Switch back to ${away}`}
-              onClick={() => branchPicker.onPick(away)}
+              title={branchPicker.locked ?? `This chat works on ${away}; the folder is on ${branch} now. Switch back to ${away}`}
+              aria-disabled={!!branchPicker.locked || undefined}
+              onClick={() => {
+                if (!branchPicker.locked) branchPicker.onPick(away);
+              }}
             >
               <Undo2 size={12} />
               <span className="folder-tab-text">{away}</span>

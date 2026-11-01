@@ -180,6 +180,20 @@ impl AgentState {
         Ok(RunningTurn(handle))
     }
 
+    fn running_turns(&self) -> usize {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions.values().filter(|session| session.running.load(Ordering::SeqCst)).count()
+    }
+
+    /// A checkout moves every chat's folder, so none may be running in it.
+    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
+        if self.running_turns() == 0 {
+            Ok(())
+        } else {
+            Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
+        }
+    }
+
     pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
         self.workspace
             .lock()
@@ -857,6 +871,7 @@ where
         let cancelled = || session.cancel.load(Ordering::SeqCst);
         let take_steering = || session.steering.take();
         let notes_typed = || session.steering.typed();
+        let parallel = || state.running_turns() > 1;
         let folder = FolderTurn {
             chat_id: &chat_id,
             workspace: &workspace,
@@ -867,6 +882,7 @@ where
             cancelled: &cancelled,
             take_steering: &take_steering,
             notes_typed: &notes_typed,
+            parallel: &parallel,
         };
         let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
         session.end_turn(turn_id, &outcome);
@@ -1162,6 +1178,17 @@ mod tests {
 
         // A hand-edited zero in the settings still lets one turn run.
         state.begin_running("c4", 0).expect("a zero limit still runs one");
+    }
+
+    #[test]
+    fn a_checkout_waits_for_every_running_turn() {
+        let state = state();
+        state.ensure_tree_is_idle().expect("an idle tree can be switched");
+        let running = state.begin_running("c1", 2).expect("the turn runs");
+        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
+        assert!(refused.contains("worktree"), "{refused}");
+        drop(running);
+        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
     }
 
     /// The turn's thread dying with the guard frees the mark all the same —

@@ -287,6 +287,9 @@ pub enum Place<'a> {
         /// Settings → Web search; `None` while it is off, and then neither
         /// is offered.
         web: Option<&'a Web>,
+        /// Asked on each command, not frozen at the start: another chat may
+        /// begin after this one, and both must then protect the shared tree.
+        parallel: &'a (dyn Fn() -> bool + Sync),
     },
     /// Chat mode (`docs/21-kubernetes-mode.md`, K-1): no folder. The role is
     /// who the model is and all it may call; `kube` is what it is told of the
@@ -1067,7 +1070,14 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
         return Err(crate::domain::tools::ToolError::FeatureOff { tool: call.name.clone(), feature: feature.to_string() });
     }
     match turn.place {
-        Place::Folder { scope, mode, .. } => {
+        Place::Folder { scope, mode, parallel, .. } => {
+            if parallel() && call.name == ToolName::RunCommand.wire_name() {
+                if let Ok(crate::domain::tools::ToolCall::RunCommand(request)) = parse_tool_call(call) {
+                    if let Some(subcommand) = crate::domain::command_risk::git_tree_change(&request.command, &turn.approval.git_aliases) {
+                        return Err(crate::domain::tools::ToolError::GitTreeDuringParallel(subcommand));
+                    }
+                }
+            }
             // A fork is offered its parent's tools for the parent's cache,
             // and runs only what an `explore` helper would: the folder, not
             // the web — several run side by side, and the credits are the user's.
@@ -1285,6 +1295,11 @@ fn run_helper(
     };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
     let no_steering = Vec::new;
+    let no_parallel = || false;
+    let parallel = match turn.place {
+        Place::Folder { parallel, .. } => parallel,
+        Place::Chat { .. } => &no_parallel,
+    };
     let (mode, web, mcp, features, messages) = match fork {
         // A fork does not search the web either: offered for the cache, refused when called.
         Some(history) => {
@@ -1304,7 +1319,7 @@ fn run_helper(
     let helper = Turn {
         events: &events,
         session: turn.session,
-        place: Place::Folder { scope, mode, web },
+        place: Place::Folder { scope, mode, web, parallel },
         approval,
         cancelled: &stopped,
         sleep: turn.sleep,
@@ -1883,7 +1898,7 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
 /// history.
 fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
     let frame = match turn.place {
-        Place::Folder { scope, mode, web } => {
+        Place::Folder { scope, mode, web, .. } => {
             let today = today();
             context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some(), &turn.features)
         }
@@ -2521,6 +2536,7 @@ mod tests {
         /// The agent's web, as Settings would give it; `None` is off.
         web: Option<Web>,
         features: Features,
+        parallel: bool,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -2575,6 +2591,7 @@ mod tests {
             questions: None,
             web: None,
             features: Features::default(),
+            parallel: false,
         }
     }
 
@@ -2606,12 +2623,13 @@ mod tests {
             let notes_typed = move || typed.typed();
             let logged = self.logged.clone();
             let log_call = move |entry: ToolCallLogEntry| logged.lock().unwrap().push(entry);
+            let parallel = || self.parallel;
             let turn = Turn {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
                     Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None, scope: None },
-                    None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref() },
+                    None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref(), parallel: &parallel },
                 },
                 approval: &self.approval,
                 cancelled: &cancelled,
@@ -2705,6 +2723,21 @@ mod tests {
 
     fn grep() -> ToolResult {
         ToolResult::GrepResults { matches: vec![], truncated: false, total: 0, total_files: 0, total_is_floor: false, skipped: vec![] }
+    }
+
+    #[test]
+    fn parallel_git_guard_is_asked_on_every_command() {
+        let mut h = harness("parallel-git-preflight", vec![]);
+        let checkout = call("runCommand", r#"{"command":"git checkout main"}"#);
+        h.run(|turn| preflight(turn, &ReadFiles::default(), &checkout)).expect("one turn may switch its tree");
+
+        h.parallel = true;
+        let refused = h.run(|turn| preflight(turn, &ReadFiles::default(), &checkout)).expect_err("a second turn protects the shared tree");
+        assert!(matches!(&refused, crate::domain::tools::ToolError::GitTreeDuringParallel(subcommand) if subcommand == "checkout"), "{refused}");
+        for command in ["git status", "git add src/lib.rs"] {
+            let call = call("runCommand", &format!(r#"{{"command":"{command}"}}"#));
+            h.run(|turn| preflight(turn, &ReadFiles::default(), &call)).unwrap_or_else(|error| panic!("{command}: {error}"));
+        }
     }
 
     #[test]

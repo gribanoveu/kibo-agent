@@ -1401,6 +1401,8 @@ pub enum ToolError {
     /// agent changed its stale copy over the top.
     #[error("{0} changed on disk since you read it — read it again before changing it: another running agent or a person may have edited it, and changing it from what you last saw would overwrite their work")]
     FileChangedSinceRead(String),
+    #[error("git {0} would change the shared working tree while another agent turn is running — wait for it to finish, or work in a separate worktree")]
+    GitTreeDuringParallel(String),
     /// A git read failed. Carried as a string so git types stay out of the
     /// tool boundary.
     /// Addressed to the model, which still has `grep` and `listFiles`.
