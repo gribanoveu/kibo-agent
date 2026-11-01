@@ -1399,7 +1399,7 @@ pub enum ToolError {
     /// The file moved under the agent between the read and the write. The
     /// classic loss: the agent read, a person edited in their own editor, the
     /// agent wrote its stale copy over the top.
-    #[error("{0} changed on disk since you read it — read it again before writing, or your change will overwrite someone else's")]
+    #[error("{0} changed on disk since you read it — read it again before writing: another running agent or a person may have edited it, and writing your copy would overwrite their work")]
     FileChangedSinceRead(String),
     /// A git read failed. Carried as a string so git types stay out of the
     /// tool boundary.

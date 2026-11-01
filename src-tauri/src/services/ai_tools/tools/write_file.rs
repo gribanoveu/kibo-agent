@@ -210,6 +210,28 @@ mod tests {
         assert_eq!(on_disk(&root, "a.txt"), "edited by a human\n", "left untouched");
     }
 
+    /// PS-4: another turn in the same folder may land between this turn's read
+    /// and write. The stale write is refused; a fresh read makes it legal.
+    #[test]
+    fn a_parallel_session_stale_write_is_refused_then_a_fresh_read_allows_it() {
+        let (scope, root, mut reads) = fixture("write-parallel-stale");
+        std::fs::write(root.join("a.txt"), "original\n").expect("writable");
+        agent_reads(&scope, &mut reads, "a.txt", None);
+
+        std::fs::write(root.join("a.txt"), "edited by a parallel session\n").expect("writable");
+
+        let err = write_file(&scope, &write_args("a.txt", "agent version\n"), &mut reads)
+            .expect_err("changed by the other turn");
+        assert!(matches!(err, ToolError::FileChangedSinceRead(_)), "{err}");
+        assert!(err.to_string().contains("another running agent"), "{err}");
+        assert_eq!(on_disk(&root, "a.txt"), "edited by a parallel session\n", "left untouched");
+
+        agent_reads(&scope, &mut reads, "a.txt", None);
+        write_file(&scope, &write_args("a.txt", "agent version\n"), &mut reads)
+            .expect("a fresh read vouches for the current file");
+        assert_eq!(on_disk(&root, "a.txt"), "agent version\n");
+    }
+
     /// After writing, the agent knows precisely what is there. Refusing its
     /// next write as stale would make consecutive writes impossible.
     #[test]

@@ -761,6 +761,25 @@ mod tests {
         assert_eq!(on_disk(&root), "edited by a human\n", "left untouched");
     }
 
+    /// PS-4: a stale anchored edit after another turn's write is refused, and
+    /// reading the file again is the only way to make the same edit legal.
+    #[test]
+    fn a_parallel_session_stale_edit_is_refused_then_a_fresh_read_allows_it() {
+        let (scope, root, mut reads) = fixture("edit-parallel-stale", "original\n");
+        agent_reads(&scope, &mut reads, "a.txt", None);
+        std::fs::write(root.join("a.txt"), "edited by parallel session\n").expect("writable");
+
+        let err = edit_file(&scope, &edits(&[("parallel", "another agent")]), &mut reads)
+            .expect_err("changed by the other turn");
+        assert!(matches!(err, ToolError::FileChangedSinceRead(_)), "{err}");
+        assert_eq!(on_disk(&root), "edited by parallel session\n", "left untouched");
+
+        agent_reads(&scope, &mut reads, "a.txt", None);
+        edit_file(&scope, &edits(&[("parallel", "another agent")]), &mut reads)
+            .expect("a fresh read vouches for the current file");
+        assert_eq!(on_disk(&root), "edited by another agent session\n");
+    }
+
     /// The registry is refreshed by the write, so a follow-up edit is not
     /// mistaken for one made against a stale read.
     #[test]
