@@ -122,7 +122,7 @@ export function Composer({
   focus = 0,
   draftKey,
 }: Props) {
-  const [text, setText] = useChatDraft(draftKey);
+  const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
   const [openRow, setOpenRow] = useState<string | null>(null);
   const attachments = useAttachments(imagesEnabled);
@@ -186,7 +186,7 @@ export function Composer({
   const efforts = effortOptions(effort);
 
   const clear = () => {
-    setText("");
+    take();
     requestAnimationFrame(grow);
   };
 

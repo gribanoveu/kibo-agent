@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 
 // The chip is the only way to reach `chat_set_mode`, and what it says has to
 // be what the backend was actually told — a label reading "Plan" over a turn
@@ -834,5 +835,42 @@ describe("the draft a chat keeps", () => {
     type("/revi");
     expect(screen.getByRole("listbox")).toBeTruthy();
     expect(asked).toBe(1);
+  });
+
+  /// A command can start another chat — `/fork` does. What was in the box
+  /// belongs to the chat it was typed in, and the box it moves to is not that
+  /// one, so the draft goes with the message the command sent.
+  test("a command that starts another chat leaves no draft behind", () => {
+    const first = chatDraftKey("agent", "a");
+    function Forking() {
+      const [key, setKey] = useState(first);
+      return (
+        <Composer
+          draftKey={key}
+          onSend={() => {}}
+          onStop={() => {}}
+          running={false}
+          conversation="agent"
+          onConversation={() => {}}
+          unattended={false}
+          onUnattended={() => {}}
+          models={{ choices: [], current: null }}
+          onModel={() => {}}
+          onEffort={() => {}}
+          onLoadModels={() => {}}
+          context={null}
+          usage={null}
+          onCompact={() => {}}
+          commands={[{ name: "fork", hint: "Copy the chat", run: () => setKey(chatDraftKey("agent", null)) }]}
+        />
+      );
+    }
+    render(<Forking />);
+    type("/fork");
+    expect(readChatDraft(first)).toBe("/fork");
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { code: "Enter", key: "Enter" });
+    expect(readChatDraft(first)).toBe("");
+    expect(value()).toBe("");
   });
 });

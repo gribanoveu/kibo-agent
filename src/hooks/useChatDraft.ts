@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useState } from "react";
 
 /** Which message box it is: the agent's one, or Chat mode's own. */
 export type DraftMode = "agent" | "chat";
@@ -53,7 +53,7 @@ export function forgetChatDraft(key: string) {
  * a quote added after what was typed — stays a function of the box, not of the
  * text this render happened to have.
  */
-export function useChatDraft(key: string): [string, Dispatch<SetStateAction<string>>] {
+export function useChatDraft(key: string): [string, Dispatch<SetStateAction<string>>, () => void] {
   const [text, setText] = useState(() => readChatDraft(key));
   // Which key the text in the box belongs to. A state, not a ref, because the
   // box must be drawn again in the same render the text was read in.
@@ -71,5 +71,14 @@ export function useChatDraft(key: string): [string, Dispatch<SetStateAction<stri
     writeChatDraft(key, text);
   }, [key, text]);
 
-  return [text, setText];
+  // The box emptied now — sent, or a command that started another chat. Written
+  // under the chat the box shows at this moment: sending the first message of a
+  // chat gives it an id in the same commit, and the draft that has to go is the
+  // one the text was typed under, not the one now open.
+  const take = useCallback(() => {
+    setText("");
+    writeChatDraft(key, "");
+  }, [key]);
+
+  return [text, setText, take];
 }
