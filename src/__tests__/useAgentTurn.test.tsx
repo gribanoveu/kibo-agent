@@ -237,7 +237,7 @@ describe("making room before a turn", () => {
 
     expect(folded).toBe(false);
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
-      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/), chatId: expect.any(String) } },
+      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/\/compact-1$/), chatId: expect.any(String) } },
     ]);
   });
 });
@@ -327,6 +327,10 @@ describe("the session's tokens", () => {
     await waitFor(() => expect(saved().length).toBeGreaterThan(0));
     expect(calls.find((call) => call.command === "chat_resume")?.args.chatId).toBe(sentId());
     expect(saved().every((call) => call.args.id === sentId())).toBe(true);
+    // The resume is the same turn on the one channel: the start's id, not a new one.
+    const startedId = calls.find((call) => call.command === "chat_start")?.args.turnId;
+    expect(startedId).toBe(`${sentId()}/turn-1`);
+    expect(calls.find((call) => call.command === "chat_resume")?.args.turnId).toBe(startedId);
   });
 
   /// Two reads in flight, the first landing last: the total drawn is the
@@ -905,6 +909,57 @@ describe("the queue", () => {
     await act(async () => turn.end("cancelled"));
   });
 
+  /// Two sessions side by side count turns from one — the chat's key in the
+  /// id is what keeps an event of the one out of the other's transcript.
+  test("another session's events stay out of the transcript, and the id carries its chat", async () => {
+    const ends = new Map<string, (outcome: unknown) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.set(args.turnId as string, (status) => resolve({ ...done("ok")(args), status })));
+    const first = renderHook(() => useAgentTurn());
+    const second = renderHook(() => useAgentTurn());
+
+    act(() => void first.result.current.send("one"));
+    await waitFor(() => expect(first.result.current.turn.status).toBe("running"));
+    act(() => void second.result.current.send("two"));
+    await waitFor(() => expect(second.result.current.turn.status).toBe("running"));
+
+    const [a, b] = started().map((call) => call.args);
+    expect(a.turnId).toBe(`${a.chatId}/turn-1`);
+    expect(b.turnId).toBe(`${b.chatId}/turn-1`);
+
+    const said = (hook: typeof first) => hook.result.current.turn.blocks.filter((block) => block.kind === "message").map((block) => block.text);
+    act(() => emit({ turnId: b.turnId, seq: 1, round: 1, type: "delta", payload: { delta: "the other's answer" } }));
+    expect(said(second)).toEqual(["the other's answer"]);
+    expect(said(first)).toEqual([]);
+
+    await act(async () => {
+      ends.get(a.turnId as string)?.("done");
+      ends.get(b.turnId as string)?.("done");
+    });
+  });
+
+  /// The count is the chat's, not the instance's: two sessions that open the
+  /// same saved chat still mint different ids on the one channel.
+  test("two sessions of one saved chat mint different turn ids", async () => {
+    results.chat_load = { id: "shared-chat", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_start = done("ok");
+    const first = renderHook(() => useAgentTurn());
+    const second = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await first.result.current.open("shared-chat");
+      await second.result.current.open("shared-chat");
+    });
+    await act(async () => {
+      await first.result.current.send("one");
+    });
+    await act(async () => {
+      await second.result.current.send("two");
+    });
+
+    expect(started().map((call) => call.args.turnId)).toEqual(["shared-chat/turn-1", "shared-chat/turn-2"]);
+  });
+
   test("a message queued mid-turn is sent as the next turn once this one is done, not steered", async () => {
     const turn = heldTurn();
     const { result } = renderHook(() => useAgentTurn());
@@ -1340,7 +1395,7 @@ describe("reviewing", () => {
       await result.current.review();
     });
     const call = calls.find((c) => c.command === "review_start");
-    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), chatId: expect.any(String), messages: [], todos: [], plan: null, handed: false });
+    expect(call?.args).toEqual({ turnId: expect.stringMatching(/\/turn-1$/), chatId: expect.any(String), messages: [], todos: [], plan: null, handed: false });
     expect(result.current.turn.status).toBe("done");
     expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
     await waitFor(() => expect(saved()).toHaveLength(1));

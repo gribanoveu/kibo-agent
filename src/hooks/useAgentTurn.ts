@@ -39,6 +39,11 @@ export type Queued = { id: number; text: string };
 /** A note typed into the running turn, until a round of it reads the note. */
 export type Steered = { id: string; text: string };
 
+// Turn ids on the one global event channel, counted per chat key rather than
+// per hook instance. Grows by an entry per chat touched in a window's run —
+// small, and a window's life is bounded.
+const turnCounts = new Map<string, number>();
+
 export function useAgentTurn({
   model,
   onSaved,
@@ -88,8 +93,16 @@ export function useAgentTurn({
   // the sidebar for having been read.
   const unsaved = useRef(false);
   // A turn's own id, so its events can be told from another turn's on the one
-  // global channel.
+  // global channel. The count is per chat across every session instance — two
+  // hooks that open the same saved chat still cannot mint the same id — and
+  // the ref keeps this instance's last one, which `decide` resumes under.
   const turnId = useRef(0);
+  const mint = useCallback((prefix: string) => {
+    const n = (turnCounts.get(chatKey.current) ?? 0) + 1;
+    turnCounts.set(chatKey.current, n);
+    turnId.current = n;
+    return `${chatKey.current}/${prefix}-${n}`;
+  }, []);
   // The chat this one was branched from, written with every save of it.
   const branchedFrom = useRef<string | null>(null);
   // Text handed to the composer — a branch gives back the message it starts
@@ -220,7 +233,7 @@ export function useAgentTurn({
     // Its own id on the turn channel: the backend says there when a summary
     // is being made, which only it knows. Its end is what the call returns —
     // so a start arriving after that is stale, not a second pass.
-    const id = `compact-${++turnId.current}`;
+    const id = mint("compact");
     const end = await channel.watchCompaction(id);
     try {
       const shorter = await compactHistory(history.current, force, id, chatKey.current);
@@ -284,7 +297,7 @@ export function useAgentTurn({
 
       if (!keepChecklist) keepTodos(dropOpen(todos.current));
 
-      const id = `turn-${++turnId.current}`;
+      const id = mint("turn");
       lastTurn.current = { id, user: trimmed };
       try {
         await listen(id);
@@ -319,7 +332,7 @@ export function useAgentTurn({
     setTurn((state) => appendUserMessage(state, typed, Date.now(), "/review"));
     keepTodos(dropOpen(todos.current));
 
-    const id = `turn-${++turnId.current}`;
+    const id = mint("turn");
     lastTurn.current = { id, user: typed };
     try {
       await listen(id);
@@ -392,7 +405,7 @@ export function useAgentTurn({
       if (!checkpoint) return;
 
       setTurn((state) => clearApproval(state));
-      const id = `turn-${turnId.current}`;
+      const id = `${chatKey.current}/turn-${turnId.current}`;
       try {
         for (const tool of always) await alwaysAllow(tool);
         finish(await resumeChat(id, chatKey.current, checkpoint, decisions, planRef.current));
