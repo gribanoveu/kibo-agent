@@ -404,6 +404,28 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
         assert!(get(SELF, serve_tls(LEAF, LEAF_KEY)).is_err(), "server issued by an unpasted CA");
     }
 
+    /// The certificate the app ships for AlfaGen has to be one the TLS layer
+    /// can take, and the bank's own root rather than any other: a file that lost
+    /// a line, or that was replaced by a working CA of some other gateway, fails
+    /// here instead of at the first handshake in the field. The frontend can only
+    /// count the blocks in it.
+    ///
+    /// The pinned hash is blake3, the one this build already carries; the DER's
+    /// SHA-256, for checking with `openssl x509 -in <file> -outform DER |
+    /// shasum -a 256`, is `4211dba6d2c39459458ac136717e8884288595cf8de0d3535d
+    /// 6973611cf75253`. The two hashes are of different algorithms and do not
+    /// match — a replaced certificate changes both.
+    #[test]
+    fn the_bundled_certificate_is_the_banks_root() {
+        let pem = include_str!("../../../src/lib/certs/alfa-bank-st-ca-root.pem");
+        let certs = parse_trusted_certs(pem).expect("the bundled certificate parses");
+        assert_eq!(certs.len(), 1, "one certificate, not a chain");
+        assert_eq!(
+            blake3::hash(certs[0].der()).to_hex().to_string(),
+            "ee7aa9d8d44d44afc5f9e7927d8b2d702889fa577118cc025466f7d4fb477f6e"
+        );
+    }
+
     #[test]
     fn damaged_certificate_data_is_refused() {
         let damaged = ROOT_1.replace("MII", "!!!");

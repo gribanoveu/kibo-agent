@@ -638,7 +638,7 @@ function Catalog({
               )}
               <span className="model-name">{entry.name}</span>
               <span className="model-hint">{entry.baseUrl.replace(/^https:\/\//, "")}</span>
-              {entry.trustedCertPem && <span className="model-badge">built in</span>}
+              {entry.trustedCertPem && <span className="model-note">built in</span>}
             </button>
           );
         })}

@@ -1446,7 +1446,8 @@ pub(super) mod tests {
 
     /// Both requests a provider makes, not only the chat one: the model list is
     /// asked before a turn, and a gateway that wants this header wants it there
-    /// too. It is also the one ureq would otherwise answer with its own name.
+    /// too. It is also the one ureq answers with its own name unless the request
+    /// carries one — so the count is checked, not only the value.
     #[test]
     fn a_configured_header_reaches_the_chat_and_the_model_list() {
         let headers = HashMap::from([("User-Agent".to_string(), "Kibo-Agent/$appVersion".to_string())]);
@@ -1476,11 +1477,13 @@ pub(super) mod tests {
             &|| false,
         );
         let chat = server.join().expect("served").to_lowercase();
+        assert_eq!(chat.matches("user-agent:").count(), 1, "ureq added its own as well: {chat}");
         assert!(chat.contains(&expected), "the chat request: {chat}");
 
         let (url, server) = serve_capturing(r#"{"data":[]}"#.to_string());
         build(url).list_models().expect("lists");
         let models = server.join().expect("served").to_lowercase();
+        assert_eq!(models.matches("user-agent:").count(), 1, "ureq added its own as well: {models}");
         assert!(models.contains(&expected), "the model list request: {models}");
     }
 }

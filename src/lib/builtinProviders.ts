@@ -32,7 +32,10 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     trustedCertPem: alfagenCertificate.trim(),
     // The gateway tells its clients apart by this line. The placeholder is
     // sent as it is and expanded to the build's version on each request, so an
-    // update does not leave a stale version in the settings.
+    // update does not leave a stale version in the settings. Its spelling is a
+    // contract with `REQUEST_HEADER_VALUE_VERSION` in
+    // `infra/llm_providers/openai_compatible.rs` — a placeholder the backend does
+    // not know goes out literally, and nothing in the app complains.
     requestHeaders: { "User-Agent": "Kibo-Agent/$appVersion" },
   },
 ];
