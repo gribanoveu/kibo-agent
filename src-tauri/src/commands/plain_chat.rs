@@ -3,6 +3,7 @@
 //! saves it. A saved one opens, archives and goes with `chat_load`,
 //! `chat_set_archived` and `chat_delete`, as the agent's do.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -28,15 +29,62 @@ use crate::services::{context_compaction, kubeconfigs, llm_session, plain_chat};
 use super::chat::CompactedHistory;
 use super::chat_events::chat_event_sink;
 
-/// The stop flag of the reply being written. Apart from the agent's: a chat
-/// and an agent turn may run at once, and a stop is for the one it was pressed in.
+/// One chat's stop flag and admission. Separate handles keep parallel replies
+/// from stopping, replacing, or resuming one another.
+#[derive(Default)]
+struct PlainChatSession {
+    cancel: AtomicBool,
+    running: AtomicBool,
+    paused: AtomicBool,
+}
+
+struct RunningPlainTurn(Arc<PlainChatSession>);
+
+impl std::fmt::Debug for RunningPlainTurn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunningPlainTurn")
+    }
+}
+
+impl Drop for RunningPlainTurn {
+    fn drop(&mut self) {
+        self.0.running.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Default)]
 pub struct PlainChatState {
-    cancel: AtomicBool,
+    sessions: Mutex<HashMap<String, Arc<PlainChatSession>>>,
     /// Grows as the user answers "Always" on a chat's card; not persisted,
     /// for the agent's reason — a saved "never ask me" is a brake released a
     /// month ago and forgotten.
     approval: Mutex<ApprovalPolicy>,
+}
+
+impl PlainChatState {
+    fn session(&self, chat_id: &str) -> Arc<PlainChatSession> {
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(sessions.entry(chat_id.to_string()).or_default())
+    }
+
+    fn begin(&self, chat_id: &str, limit: u32, resume: bool) -> Result<RunningPlainTurn, String> {
+        let limit = limit.max(1);
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let session = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
+        if session.running.load(Ordering::SeqCst) {
+            return Err("this chat's turn is already running".to_string());
+        }
+        if !resume && session.paused.load(Ordering::SeqCst) {
+            return Err("this chat's turn is waiting for approval — resume or stop it first".to_string());
+        }
+        let running = sessions.values().filter(|session| session.running.load(Ordering::SeqCst)).count() as u32;
+        if running >= limit {
+            return Err(format!("{running} chat turns are already running — wait for one to finish, or raise the parallel-turns limit in Settings"));
+        }
+        session.running.store(true, Ordering::SeqCst);
+        session.paused.store(false, Ordering::SeqCst);
+        Ok(RunningPlainTurn(session))
+    }
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -67,9 +115,11 @@ pub async fn plain_chat_send<R: Runtime>(
     messages: Vec<LlmMessage>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    state.cancel.store(false, Ordering::SeqCst);
+    let running = state.begin(&chat_id, super::chat::parallel_limit(), false)?;
+    let session = state.session(&chat_id);
+    session.cancel.store(false, Ordering::SeqCst);
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
+    run_turn(app, state, session, running, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
 /// Continues a turn paused on the approval card, with the user's answers. The
@@ -87,7 +137,9 @@ pub async fn plain_chat_resume<R: Runtime>(
     decisions: Vec<ToolCallDecision>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_turn(app, state, turn_id, chat_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
+    let running = state.begin(&chat_id, super::chat::parallel_limit(), true)?;
+    let session = state.session(&chat_id);
+    run_turn(app, state, session, running, turn_id, chat_id, role, kube, move |chat| plain_chat::resume(chat, checkpoint, decisions)).await
 }
 
 /// "Always allow this tool", from a chat's approval card — for Chat mode's
@@ -102,6 +154,8 @@ pub fn plain_chat_always_allow(tool: String, state: State<'_, Arc<PlainChatState
 async fn run_turn<R, F>(
     app: AppHandle<R>,
     state: Arc<PlainChatState>,
+    session: Arc<PlainChatSession>,
+    running: RunningPlainTurn,
     turn_id: String,
     chat_id: String,
     role: ChatRole,
@@ -120,9 +174,12 @@ where
     let mongo = super::chat::mongo_servers_of(&app);
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let cancelled = || state.cancel.load(Ordering::SeqCst);
+        let _running = running;
+        let cancelled = || session.cancel.load(Ordering::SeqCst);
         let chat = ChatTurnInput { chat_id, role, kube, clusters, board, mongo, embeddings, knowledge, approval, events: &events, cancelled: &cancelled };
-        turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())
+        let outcome = turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())?;
+        session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
+        Ok(outcome)
     })
     .await
     .map_err(|e| format!("the chat thread failed: {e}"))?
@@ -228,15 +285,32 @@ pub async fn plain_chat_save(
     super::blocking(move || chat_store::save_plain(&id, role, kube, &messages, &blocks)).await
 }
 
-/// Returns at once; the reply stops at its next chunk.
+/// Returns at once; this chat's reply stops at its next chunk.
 #[tauri::command]
-pub fn plain_chat_cancel(state: State<'_, Arc<PlainChatState>>) {
-    state.cancel.store(true, Ordering::SeqCst);
+pub fn plain_chat_cancel(chat_id: String, state: State<'_, Arc<PlainChatState>>) {
+    state.session(&chat_id).cancel.store(true, Ordering::SeqCst);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chats_have_independent_stop_and_admission() {
+        let state = PlainChatState::default();
+        let one = state.begin("c1", 2, false).expect("the first chat runs");
+        let _two = state.begin("c2", 2, false).expect("a second chat runs beside it");
+        let refused = state.begin("c3", 2, false).expect_err("the limit binds across chats");
+        assert!(refused.contains("limit"), "{refused}");
+
+        state.session("c1").cancel.store(true, Ordering::SeqCst);
+        assert!(!state.session("c2").cancel.load(Ordering::SeqCst), "one chat's stop is not another's");
+        drop(one);
+        state.session("c1").paused.store(true, Ordering::SeqCst);
+        let paused = state.begin("c1", 2, false).expect_err("a fresh start cannot orphan the card");
+        assert!(paused.contains("waiting for approval"), "{paused}");
+        state.begin("c1", 2, true).expect("the card resumes its own chat");
+    }
 
     /// A Chat-mode compaction is that chat's spending, as the agent's is.
     #[test]

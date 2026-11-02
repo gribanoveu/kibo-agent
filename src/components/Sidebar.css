@@ -232,7 +232,6 @@
   min-width: 0;
 }
 .chat .chat-activity {
-  margin-left: auto;
   color: var(--text-faint);
 }
 .chat .chat-activity-running {

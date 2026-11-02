@@ -553,6 +553,12 @@ describe("saving", () => {
 
     expect(result.current.turn.status).toBe("awaitingApproval");
     expect(saved()).toEqual([]);
+
+    await act(async () => {
+      await result.current.send("after the card");
+    });
+    expect(result.current.queued.map((item) => item.text)).toEqual(["after the card"]);
+    expect(calls.filter((call) => call.command === "chat_start")).toHaveLength(1);
   });
 
   test("starting a new chat leaves the old one where it is", async () => {

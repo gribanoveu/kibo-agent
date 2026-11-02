@@ -69,12 +69,12 @@ pub(crate) struct SessionHandle {
     /// from the running one, so a queued message that starts the next turn
     /// before that call arrives does not wipe it.
     finished_turn: Mutex<Option<(String, FinishedTurn)>>,
-    /// Set while the chat's turn runs, by `AgentState::begin_running`; the
-    /// guard it hands back clears it. What makes a second start of the same
-    /// chat refuse rather than fork the history the window owns.
-    running: AtomicBool,
-    /// Its own checkout: only turns in the same one share files and a git index.
+    /// Its own checkout while the turn runs: the mark and the root cannot
+    /// disagree because one lock holds both. Only turns in the same checkout
+    /// share files and a git index.
     running_root: Mutex<Option<PathBuf>>,
+    /// A paused turn still owns the chat's history until its card is resumed.
+    paused: AtomicBool,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn
@@ -89,12 +89,15 @@ impl std::fmt::Debug for RunningTurn {
 
 impl Drop for RunningTurn {
     fn drop(&mut self) {
-        self.0.running.store(false, Ordering::SeqCst);
         *self.0.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 }
 
 impl SessionHandle {
+    fn is_running(&self) -> bool {
+        self.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some()
+    }
+
     // The next-prompt journal's side of a turn. A poisoned lock costs the
     // journal one row, never the turn.
 
@@ -160,20 +163,29 @@ impl AgentState {
     }
 
     /// Marks `chat_id`'s turn as running and hands back the guard that clears
-    /// it. Refused when that chat's turn already runs — one chat, one turn:
-    /// the window owns the history, and two turns of one chat would fork it —
-    /// and when `limit` turns run already. Check and mark are under the one
-    /// lock, so two starts racing for the last slot cannot both take it.
+    /// it. Refused when that chat's turn already runs or waits on its card —
+    /// one chat, one owned history — and when `limit` turns run already.
     pub(crate) fn begin_running(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
+        self.begin_running_inner(chat_id, limit, workspace, false)
+    }
+
+    fn begin_resume(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
+        self.begin_running_inner(chat_id, limit, workspace, true)
+    }
+
+    fn begin_running_inner(&self, chat_id: &str, limit: u32, workspace: &std::path::Path, resume: bool) -> Result<RunningTurn, String> {
         // A hand-edited zero would refuse every turn; one always runs.
         let limit = limit.max(1);
         let _tree = crate::domain::command_risk::git_tree_lock();
         let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let handle = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
-        if handle.running.load(Ordering::SeqCst) {
+        if handle.is_running() {
             return Err("this chat's turn is already running".to_string());
         }
-        let running = sessions.values().filter(|s| s.running.load(Ordering::SeqCst)).count() as u32;
+        if !resume && handle.paused.load(Ordering::SeqCst) {
+            return Err("this chat's turn is waiting for approval — resume or stop it first".to_string());
+        }
+        let running = sessions.values().filter(|s| s.is_running()).count() as u32;
         if running >= limit {
             return Err(format!(
                 "{running} turns are already running — the parallel-turns limit. \
@@ -181,7 +193,7 @@ impl AgentState {
             ));
         }
         *handle.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.to_path_buf());
-        handle.running.store(true, Ordering::SeqCst);
+        handle.paused.store(false, Ordering::SeqCst);
         Ok(RunningTurn(handle))
     }
 
@@ -193,7 +205,7 @@ impl AgentState {
             .iter()
             .filter(|(id, session)| {
                 id.as_str() != chat_id
-                    && session.running.load(Ordering::SeqCst)
+                    && session.is_running()
                     && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
             })
             .map(|(id, _)| id.clone())
@@ -204,11 +216,11 @@ impl AgentState {
 
     fn running_turns(&self) -> usize {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        sessions.values().filter(|session| session.running.load(Ordering::SeqCst)).count()
+        sessions.values().filter(|session| session.is_running()).count()
     }
 
     pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
-        if self.session(chat_id).running.load(Ordering::SeqCst) {
+        if self.session(chat_id).is_running() {
             Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
         } else {
             Ok(())
@@ -219,7 +231,7 @@ impl AgentState {
     pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         !sessions.values().any(|session| {
-            session.running.load(Ordering::SeqCst)
+            session.is_running()
                 && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
         })
     }
@@ -484,7 +496,7 @@ pub async fn chat_resume<R: Runtime>(
     let state = state.inner().clone();
     let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
-    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
+    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
@@ -890,7 +902,7 @@ fn chats_own(
 
 /// How many turns may run at once, from the settings. An unreadable settings
 /// file costs the user's chosen limit, not the turn — the default stands in.
-fn parallel_limit() -> u32 {
+pub(crate) fn parallel_limit() -> u32 {
     crate::infra::settings_store::load()
         .map(|settings| settings.llm.turn_limits.parallel)
         .unwrap_or_else(|_| crate::domain::settings::TurnLimits::default().parallel)
@@ -971,6 +983,7 @@ where
             worktree_base: worktree_base.as_deref(),
         };
         let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
+        session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         session.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
@@ -1374,6 +1387,47 @@ mod tests {
 
         // A hand-edited zero in the settings still lets one turn run.
         state.begin_running("c4", 0, root).expect("a zero limit still runs one");
+    }
+
+    #[test]
+    fn a_paused_turn_refuses_a_fresh_start_until_it_is_resumed() {
+        crate::testing::with_app_dir("cmd-paused-chat-turn", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let root = temp_dir("cmd-paused-chat-root").canonicalize().unwrap();
+            state.set_workspace_for_test(root.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let session = state.session("c1");
+            let running = state.begin_running("c1", 3, &root).expect("the first turn runs");
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("go")],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: Vec::new(),
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                session,
+                running,
+                "t1".into(),
+                "c1".into(),
+                root.clone(),
+                None,
+                None,
+                move |_| Ok(ChatStreamOutcome::PendingApproval(checkpoint)),
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::PendingApproval(_))), "{outcome:?}");
+
+            let refused = state.begin_running("c1", 3, &root).expect_err("a fresh start cannot orphan the card");
+            assert!(refused.contains("waiting for approval"), "{refused}");
+            drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
+            state.begin_running("c1", 3, &root).expect("after the resume ends, a fresh turn may start");
+        });
     }
 
     #[test]

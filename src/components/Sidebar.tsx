@@ -207,7 +207,13 @@ export function Sidebar({
                   onClick={() => onSelectChat(chat.id)}
                   title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
                 >
-                  {chat.archived ? (
+                  {chatActivity[chat.id] === "running" ? (
+                    <Loader2 className="chat-activity chat-activity-running" size={14} aria-label="Turn running" />
+                  ) : chatActivity[chat.id] === "awaitingApproval" ? (
+                    <MessageCircleQuestion className="chat-activity chat-activity-awaiting" size={14} aria-label="Approval needed" />
+                  ) : chatActivity[chat.id] === "finished" ? (
+                    <CircleCheck className="chat-activity" size={14} aria-label="Finished in background" />
+                  ) : chat.archived ? (
                     <Archive size={14} />
                   ) : chat.branchedFrom ? (
                     <GitBranch size={14} />
@@ -221,13 +227,6 @@ export function Sidebar({
                     <MessageSquare size={14} />
                   )}
                   <ChangingText text={chat.title} />
-                  {chatActivity[chat.id] === "running" ? (
-                    <Loader2 className="chat-activity chat-activity-running" size={13} aria-label="Turn running" />
-                  ) : chatActivity[chat.id] === "awaitingApproval" ? (
-                    <MessageCircleQuestion className="chat-activity chat-activity-awaiting" size={14} aria-label="Approval needed" />
-                  ) : chatActivity[chat.id] === "finished" ? (
-                    <CircleCheck className="chat-activity" size={14} aria-label="Finished in background" />
-                  ) : null}
                 </button>
                 <ChatMenu
                   items={[

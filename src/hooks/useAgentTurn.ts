@@ -363,6 +363,11 @@ export function useAgentTurn({
         changed(session);
         return;
       }
+      if (session.turn.status === "awaitingApproval") {
+        session.queued = [...session.queued, { id: ++session.queueSeq, text: trimmed }];
+        changed(session);
+        return;
+      }
 
       session.error = null;
       const answered = session.journaled;

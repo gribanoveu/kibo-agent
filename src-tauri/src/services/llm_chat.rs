@@ -1096,7 +1096,7 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
     }
     match turn.place {
         Place::Folder { scope, mode, parallel, .. } => {
-            if !parallel().is_empty() && call.name == ToolName::RunCommand.wire_name() {
+            if call.name == ToolName::RunCommand.wire_name() && !parallel().is_empty() {
                 if let Ok(crate::domain::tools::ToolCall::RunCommand(request)) = parse_tool_call(call) {
                     if let Some(subcommand) = crate::domain::command_risk::git_tree_change(&request.command, &turn.approval.git_aliases) {
                         return Err(crate::domain::tools::ToolError::GitTreeDuringParallel(subcommand));
@@ -2568,6 +2568,7 @@ mod tests {
         web: Option<Web>,
         features: Features,
         parallel: Vec<String>,
+        parallel_calls: Arc<Mutex<usize>>,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -2623,6 +2624,7 @@ mod tests {
             web: None,
             features: Features::default(),
             parallel: Vec::new(),
+            parallel_calls: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -2654,7 +2656,10 @@ mod tests {
             let notes_typed = move || typed.typed();
             let logged = self.logged.clone();
             let log_call = move |entry: ToolCallLogEntry| logged.lock().unwrap().push(entry);
-            let parallel = || self.parallel.clone();
+            let parallel = || {
+                *self.parallel_calls.lock().unwrap() += 1;
+                self.parallel.clone()
+            };
             let turn = Turn {
                 events: &self.events,
                 session: &self.session,
@@ -2769,6 +2774,10 @@ mod tests {
             let call = call("runCommand", &format!(r#"{{"command":"{command}"}}"#));
             h.run(|turn| preflight(turn, &ReadFiles::default(), &call)).unwrap_or_else(|error| panic!("{command}: {error}"));
         }
+        let before = *h.parallel_calls.lock().unwrap();
+        let read = call("readFile", r#"{"path":"a.rs"}"#);
+        h.run(|turn| preflight(turn, &ReadFiles::default(), &read)).expect("a read needs no neighbour lookup");
+        assert_eq!(*h.parallel_calls.lock().unwrap(), before, "only runCommand asks about neighbours");
     }
 
     #[test]

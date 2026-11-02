@@ -838,7 +838,7 @@ export default function App() {
           }}
           chats={agentMode ? history.chats : plain.chats}
           activeChat={agentMode ? agent.chatId : plain.chatId}
-          chatActivity={agent.chatActivity}
+          chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
           onNewChat={newChat}
           onArchiveChat={(id, archived) =>

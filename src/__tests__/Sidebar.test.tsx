@@ -105,9 +105,13 @@ describe("the chat list", () => {
     sidebar({ select: (id) => selected.push(id) }, "dark", { a: "running", b: "awaitingApproval", c: "finished" }, rows);
     pickFilter("All");
 
-    expect(screen.getByLabelText("Turn running")).toBeTruthy();
+    const running = screen.getByLabelText("Turn running");
+    expect(running).toBeTruthy();
     expect(screen.getByLabelText("Approval needed")).toBeTruthy();
     expect(screen.getByLabelText("Finished in background")).toBeTruthy();
+    const row = running.closest("button");
+    expect(row?.firstElementChild).toBe(running);
+    expect(row?.querySelectorAll("svg")).toHaveLength(1);
     fireEvent.click(screen.getByText("done away"));
     expect(selected).toEqual(["c"]);
   });
