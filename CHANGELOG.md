@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-02 The card an MCP server asks through reads at its own size instead of the chat's — its message no longer stands twice the label above it — and its Send and Decline are drawn as the app's buttons rather than as bare text
 - 2026-11-02 A review's card is drawn as Markdown, as an answer is — a finding's title, what it says and the reviewer's summary get bold, lists, links and `code` instead of the characters as written, and a fenced block in one reads as a block
 - 2026-11-02 The text size chosen in Settings is no longer the chat's alone: a file as it renders, and what the sheets over a page hold — a helper agent's run, a knowledge document, a skill, a feature — read at that size too
 - 2026-11-01 A half-written message stays in the chat it was typed in: switching to another chat, going between Agent and Chat or closing the window no longer carries it to the next chat or throws it away — and deleting the chat deletes it too
