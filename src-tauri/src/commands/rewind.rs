@@ -95,7 +95,7 @@ mod prototype_tests {
             state.set_workspace_for_test(other);
 
             let scope = scope(&state, None, Some("c1")).unwrap();
-            assert_eq!(scope.root(), own.canonicalize().unwrap());
+            assert_eq!(scope.root(), crate::infra::paths::canonicalize_plain(&own).unwrap());
         });
     }
 

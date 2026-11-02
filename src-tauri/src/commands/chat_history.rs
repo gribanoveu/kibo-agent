@@ -183,6 +183,7 @@ mod tests {
         let root = temp_dir(label);
         let repo = git2::Repository::init(&root).unwrap();
         let mut config = repo.config().unwrap();
+        config.set_bool("core.autocrlf", false).unwrap();
         config.set_str("user.name", "Test").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
         std::fs::write(root.join("a.rs"), "one\n").unwrap();
