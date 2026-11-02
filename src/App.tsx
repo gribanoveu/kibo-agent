@@ -580,6 +580,7 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
+      activeTurns: activities.filter((activity) => activity === "running" || activity === "awaitingApproval").length,
       spent: agent.spent,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.

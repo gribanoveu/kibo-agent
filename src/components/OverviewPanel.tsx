@@ -17,6 +17,8 @@ export type OverviewProps = {
   /** `null` until the first estimate arrives. */
   context: ContextUsage | null;
   usage: ChatUsage | null;
+  /** Live agent turns across all chats, including ones waiting for approval. */
+  activeTurns: number;
   /** Every model call of the open chat, in tokens — helpers, title and checks included; `null` until read. */
   spent: number | null;
   servers: McpServerItem[];
@@ -47,14 +49,16 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
   }
 }
 
-/** The open session at a glance: how full the model's window is, which MCP
-    servers are on, what runs in the background, and what the folder holds
-    against its last commit. The folder and branch are over the message box. Each section leads to the pane that does something about it. */
+/** The open session at a glance: live agent turns, how full the model's window
+    is, which MCP servers are on, what runs in the background, and what the folder
+    holds against its last commit. The folder and branch are over the message box.
+    Each section leads to the pane that does something about it. */
 export function OverviewPanel({
   branch,
   changes,
   context,
   usage,
+  activeTurns,
   spent,
   servers,
   processes,
@@ -75,6 +79,16 @@ export function OverviewPanel({
           <ContextDetails context={context} cache={usage} spent={spent} />
         </section>
       )}
+
+      <section className="overview-card">
+        <h3 className="overview-head">
+          Agent turns
+          <span className="overview-count">{activeTurns}</span>
+        </h3>
+        <p className="overview-empty">
+          {activeTurns ? `${activeTurns} active across chats.` : "No agent turns are active."}
+        </p>
+      </section>
 
       <section className="overview-card">
         <button type="button" className="overview-head overview-link" onClick={() => onOpenPanel("mcp")}>
