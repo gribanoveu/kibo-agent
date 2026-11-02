@@ -59,6 +59,15 @@ const GIT_READS: &[&str] = &[
 /// editing. `restore` belongs beside the PS-5 list for the same reason.
 const GIT_TREE_WRITES: &[&str] = &["checkout", "switch", "restore", "reset", "clean", "rebase", "merge"];
 
+/// Admission of a turn and execution of a tree-mutating command use the same
+/// critical section. One lock covers every checkout: admission is short and
+/// these commands are rare; a canonical-root lock map is the way past if that
+/// ever shows contention. Always taken before the session registry's lock.
+pub fn git_tree_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TREE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TREE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Programs whose purpose is moving data over the network.
 const NETWORK: &[&str] = &[
     "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "rsync", "ftp", "http",

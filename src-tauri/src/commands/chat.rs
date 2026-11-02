@@ -167,6 +167,7 @@ impl AgentState {
     pub(crate) fn begin_running(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
         // A hand-edited zero would refuse every turn; one always runs.
         let limit = limit.max(1);
+        let _tree = crate::domain::command_risk::git_tree_lock();
         let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let handle = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
         if handle.running.load(Ordering::SeqCst) {
@@ -1373,6 +1374,23 @@ mod tests {
 
         // A hand-edited zero in the settings still lets one turn run.
         state.begin_running("c4", 0, root).expect("a zero limit still runs one");
+    }
+
+    #[test]
+    fn turn_admission_waits_for_a_tree_mutation() {
+        let state = state();
+        let tree = crate::domain::command_risk::git_tree_lock();
+        let (admitted, wait) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            threads.spawn(|| {
+                let guard = state.begin_running("c1", 3, Path::new("/repo")).expect("turn runs after the mutation");
+                admitted.send(()).unwrap();
+                drop(guard);
+            });
+            assert!(wait.recv_timeout(std::time::Duration::from_millis(50)).is_err(), "admission crossed the tree lock");
+            drop(tree);
+            wait.recv_timeout(std::time::Duration::from_secs(1)).expect("admission resumes with the lock");
+        });
     }
 
     #[test]

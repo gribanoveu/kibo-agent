@@ -18,6 +18,7 @@ pub fn delete(scope: &ToolScope, args: &DeleteArgs, reads: &mut ReadFiles) -> Re
     if path.is_dir() {
         return super::delete_directory::delete_directory(scope, args);
     }
+    let _write = super::file_mutation_lock();
     if !path.is_file() {
         return Err(ToolError::NotAFile(args.path.clone()));
     }

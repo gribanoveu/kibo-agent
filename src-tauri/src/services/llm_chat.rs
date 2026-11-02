@@ -1023,6 +1023,18 @@ fn execute_call(
     reads: &mut ReadFiles,
     todos: &mut Vec<Task>,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    let tree_change = match parsed {
+        crate::domain::tools::ToolCall::RunCommand(request) => {
+            crate::domain::command_risk::git_tree_change(&request.command, &turn.approval.git_aliases)
+        }
+        _ => None,
+    };
+    // Approval may have paused for long enough for a neighbour to start. Check
+    // again at the point of effect; for a tree mutation, hold the same lock as
+    // turn admission so a neighbour cannot appear between this check and exec.
+    let _tree = tree_change.as_ref().map(|_| crate::domain::command_risk::git_tree_lock());
+    preflight(turn, reads, call)?;
+
     // Built per call, because the id is what pairs a line of output with the
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
@@ -1040,6 +1052,7 @@ fn execute_call(
         notes_typed: Some(turn.notes_typed),
         ask: turn.questions.is_some().then_some(&ask as _),
         processes: turn.processes.clone(),
+        tree_mutation: tree_change.is_some(),
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
@@ -2756,6 +2769,27 @@ mod tests {
             let call = call("runCommand", &format!(r#"{{"command":"{command}"}}"#));
             h.run(|turn| preflight(turn, &ReadFiles::default(), &call)).unwrap_or_else(|error| panic!("{command}: {error}"));
         }
+    }
+
+    #[test]
+    fn an_approved_git_tree_change_is_guarded_again_on_resume() {
+        let mut h = harness(
+            "parallel-git-resume",
+            vec![asks(vec![wants("g1", "runCommand", r#"{"command":"git checkout main"}"#)]), text("done")],
+        );
+        h.approval = asking();
+        let paused = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("pauses");
+        let ChatStreamOutcome::PendingApproval(pending) = paused else { panic!("expected approval") };
+
+        h.parallel = vec!["other".into()];
+        let decision = ToolCallDecision { id: "g1".into(), approved: true, reason: None };
+        let outcome = h.run(|turn| resume(turn, pending, vec![decision])).expect("a refusal is a tool result");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected the model to react") };
+        let result = done.history.iter().find(|message| message.tool_call_id.as_deref() == Some("g1")).expect("tool result");
+        assert!(
+            result.content.as_deref().is_some_and(|text| text.contains("git checkout would change the shared working tree")),
+            "{result:?}"
+        );
     }
 
     #[test]

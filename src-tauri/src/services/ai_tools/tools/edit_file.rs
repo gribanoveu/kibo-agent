@@ -34,6 +34,7 @@ pub fn edit_file(
     reads: &mut ReadFiles,
 ) -> Result<ToolResult, ToolError> {
     let path = resolve_existing(scope, &args.path)?;
+    let _write = super::file_mutation_lock();
     if !path.is_file() {
         return Err(ToolError::NotAFile(args.path.clone()));
     }

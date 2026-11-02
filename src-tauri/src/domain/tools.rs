@@ -1210,6 +1210,9 @@ pub struct ToolDeps<'a> {
     /// The background processes; `None` where there are none to have, and
     /// `runCommand` with `background` says so.
     pub processes: Option<std::sync::Arc<dyn crate::domain::background::BackgroundProcesses>>,
+    /// A git tree mutation stays in the foreground while its admission lock is
+    /// held: returning a live background process would release the guard early.
+    pub tree_mutation: bool,
     /// The user's own terminals; `None` where there are none to have.
     pub terminals: Option<std::sync::Arc<dyn crate::domain::terminal::UserTerminals>>,
     /// A review worker's files and findings, for `reportFinding`; `None`
