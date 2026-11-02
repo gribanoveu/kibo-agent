@@ -181,7 +181,10 @@ mod tests {
 
     fn git_repo(label: &str) -> (PathBuf, String) {
         let root = temp_dir(label);
-        git2::Repository::init(&root).unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
         std::fs::write(root.join("a.rs"), "one\n").unwrap();
         crate::infra::git_changes::stage(&root, &["a.rs".into()]).unwrap();
         crate::infra::git_changes::commit(&root, "first").unwrap();

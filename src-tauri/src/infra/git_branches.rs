@@ -356,9 +356,12 @@ mod tests {
     fn two_branches(label: &str) -> (PathBuf, Repository) {
         let dir = temp_dir(label);
         let repo = Repository::init(&dir).unwrap();
+        let mut config = repo.config().unwrap();
         // Files as committed, whatever the machine's `core.autocrlf` says: a
         // Windows runner's makes them CRLF on checkout.
-        repo.config().unwrap().set_bool("core.autocrlf", false).unwrap();
+        config.set_bool("core.autocrlf", false).unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
         repo.set_head("refs/heads/main").unwrap();
         let main = commit(&repo, "HEAD", None, &[("a.txt", "a\n"), ("b.txt", "b\n")]);
         commit(&repo, "refs/heads/other", Some(main), &[("a.txt", "a\n"), ("b.txt", "B\n"), ("c.txt", "c\n")]);
