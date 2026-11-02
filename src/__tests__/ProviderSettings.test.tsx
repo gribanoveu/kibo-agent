@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { LlmSettings, ProviderConfig } from "../lib/settings";
+import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS } from "../lib/builtinProviders";
 
 // The form's one real rule: an untouched key field must leave the stored key
 // alone. Everything else here is about not editing a provider that is no
@@ -101,6 +102,23 @@ describe("editing a provider", () => {
     });
 
     expect(saved[0]?.provider.model).toBeNull();
+  });
+
+  /// The form has no fields for request headers, so they travel through the
+  /// draft: without that, saving any other field of a provider that carries
+  /// them — AlfaGen's `User-Agent` — would silently drop them.
+  test("a stored provider keeps its headers when another field is saved", async () => {
+    const { saved } = form({
+      providers: [{ id: "local", baseUrl: "u", requestHeaders: { "X-Trace": "$uuid" }, hasApiKey: true }],
+    });
+
+    fireEvent.change(field("Model"), { target: { value: "qwen3" } });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+
+    expect(saved[0]?.provider.model).toBe("qwen3");
+    expect(saved[0]?.provider.requestHeaders).toEqual({ "X-Trace": "$uuid" });
   });
 
   /// Found by a mutation: without clearing the field on the way out, a key
@@ -300,6 +318,74 @@ describe("the known providers", () => {
     search("openai");
     fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
     expect(field("Name").value).toBe("openai-2");
+  });
+
+  /// The gateway sits behind the bank's own CA, which no public trust store
+  /// knows: without the certificate the row brings, every request to it fails
+  /// the handshake. It has to arrive without the user finding a `.pem`.
+  test("AlfaGen comes with its gateway's certificate", async () => {
+    const { saved } = form();
+    add();
+    search("alfa");
+    fireEvent.click(screen.getByRole("radio", { name: /^AlfaGen/ }));
+
+    expect(field("Base URL").value).toBe("https://alfagen.moscow.alfaintra.net/continue-dev/v1");
+    expect(protocol()).toBe("OpenAI-compatible");
+    expect(screen.getByText(/the one AlfaGen comes with/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+    const pem = saved[0]?.provider.trustedCertPem ?? "";
+    expect(pem.match(/-----BEGIN CERTIFICATE-----/g)).toHaveLength(1);
+  });
+
+  /// The gateway tells its clients apart by this line, and a version typed into
+  /// the settings once would be wrong from the next release on: what is stored
+  /// is the placeholder, and the backend expands it per request.
+  test("AlfaGen sends the app's own User-Agent, as a placeholder", async () => {
+    const { saved } = form();
+    add();
+    search("alfa");
+    fireEvent.click(screen.getByRole("radio", { name: /^AlfaGen/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+    expect(saved[0]?.provider.requestHeaders).toEqual({ "User-Agent": "Kibo-Agent/$appVersion" });
+  });
+
+  /// A certificate is the signature of one host. Left behind on the next pick,
+  /// it would make a provider that has nothing to do with the bank fail.
+  test("a certificate does not follow the next pick", async () => {
+    const { saved } = form();
+    add();
+    search("alfa");
+    fireEvent.click(screen.getByRole("radio", { name: /^AlfaGen/ }));
+    search("openai");
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenAI api\.openai\.com/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+    expect(saved[0]?.provider.id).toBe("openai-2");
+    expect(saved[0]?.provider.trustedCertPem).toBeNull();
+    expect(saved[0]?.provider.requestHeaders).toEqual({});
+  });
+
+  test("the app's own provider is offered without searching, and counted", () => {
+    form();
+    add();
+    expect(screen.getByRole("radio", { name: /^AlfaGen/ })).toBeTruthy();
+    expect(screen.getByText(String(KNOWN_PROVIDERS.length))).toBeTruthy();
+  });
+
+  /// Marked, because where a row comes from is not visible otherwise: the four
+  /// rows the app puts first look exactly like models.dev's.
+  test("the rows the app carries are marked, and only they", () => {
+    form();
+    add();
+    expect(screen.getAllByText("built in")).toHaveLength(BUILTIN_PROVIDERS.length);
   });
 });
 

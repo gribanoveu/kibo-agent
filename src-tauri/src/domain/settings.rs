@@ -47,8 +47,12 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
     /// Extra headers on every request to this provider — a gateway's own
-    /// tracing or routing headers. `$uuid` as a value is replaced per request
-    /// (see `infra::llm_providers::openai_compatible`).
+    /// tracing or routing headers. Two placeholders are replaced per request
+    /// (see `infra::llm_providers::openai_compatible`): `$uuid`, which stands
+    /// for the whole value, and `$appVersion`, which is replaced where it stands
+    /// so that `Kibo-Agent/$appVersion` names the client and its version — the
+    /// version of the build that sends it, not of the day the settings were
+    /// written.
     #[serde(default)]
     pub request_headers: HashMap<String, String>,
     /// `None` sends the parameter not at all, which is the only safe default

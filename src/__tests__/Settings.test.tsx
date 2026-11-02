@@ -46,7 +46,7 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       onReplyLanguage={(language) => languages.push(language)}
       turnLimits={{ rounds: 60, budget: 250, parallel: 3 }}
       onTurnLimits={(next) => limits.push(next)}
-      theme={{ mode: "system", light: "light", dark: "one-dark" }}
+      theme={{ mode: "system", light: "linen", dark: "basalt" }}
       onThemeMode={(mode) => modes.push(mode)}
       onThemePalette={(theme) => palettes.push(theme)}
       fontSize="large"
@@ -119,12 +119,12 @@ describe("the settings dialog", () => {
     expect(modes).toEqual(["dark"]);
 
     // One card per palette, drawn in it; the picked one on each side is checked.
-    const latte = screen.getByRole("radio", { name: "Latte" });
-    expect((latte.querySelector(".theme-preview") as HTMLElement).dataset.theme).toBe("latte");
-    expect(screen.getByRole("radio", { name: "One Dark" }).getAttribute("aria-checked")).toBe("true");
-    expect(latte.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(latte);
-    expect(palettes).toEqual(["latte"]);
+    const chalk = screen.getByRole("radio", { name: "Chalk" });
+    expect((chalk.querySelector(".theme-preview") as HTMLElement).dataset.theme).toBe("chalk");
+    expect(screen.getByRole("radio", { name: "Basalt" }).getAttribute("aria-checked")).toBe("true");
+    expect(chalk.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(chalk);
+    expect(palettes).toEqual(["chalk"]);
   });
 
   test("Skills lists the folders skills come from, in the order a name is looked up, each with a switch", () => {

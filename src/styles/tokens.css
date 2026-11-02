@@ -18,8 +18,9 @@
  */
 
 :root,
-[data-theme="dark"] {
-  /* Built on Apple's dark-mode system colours. The surfaces are its neutral
+[data-theme="ember"] {
+  /* Ember. Built on Apple's dark-mode system colours. The surfaces are its
+     neutral
      greys (#1c1c1e, #2c2c2e, #3a3a3c), lighter as they rise. Text is not white:
      the primary is about macOS's 85% label, 12:1 on a panel instead of 14:1,
      which glares less; secondary and faint text keep 4.7:1 or better even on
@@ -76,8 +77,9 @@
   color-scheme: dark;
 }
 
-[data-theme="light"] {
-  /* Built on Apple's light-mode system colours, as the dark theme is on its
+[data-theme="linen"] {
+  /* Linen. Built on Apple's light-mode system colours, as the dark theme is on
+     its
      dark ones: white content on its grey ground, #e5e5ea and #d1d1d6 for what
      rises or divides. Text is about macOS's 85% black label, 15:1 rather than
      a near-black 17:1. Apple's own secondary grey is 3.4:1 on white — too
@@ -131,11 +133,12 @@
   color-scheme: light;
 }
 
-/* After Atom's One Dark, with the app's coral for its accent. Its own greys
+/* Basalt. After Atom's One Dark, with the app's coral for its accent. Its own
+   greys
    are too faint to read on its panels (comments are 2.6:1), so the secondary
    text is lifted to 4.8:1 and better; its red sat too near the coral, so errors
    are rose, as in the default dark. */
-[data-theme="one-dark"] {
+[data-theme="basalt"] {
   --bg-app: #181a1f;
   --bg-window: #21252b;
   --bg-panel: #282c34;
@@ -179,13 +182,14 @@
   color-scheme: dark;
 }
 
-/* After Catppuccin Latte: a light theme that is not white. The panels are its
+/* Chalk. After Catppuccin Latte: a light theme that is not white. The panels
+   are its
    grey-lavender and the text slate, 9:1 rather than the default's near-black
    17:1, so there is less glare. Latte's own green, yellow and peach are too pale
    to read (2–3:1); every colour here is darkened to 4.8:1 or better on the
    surfaces it is drawn on. The accent is the app's coral, a shade darker than
    the default light's for the lavender panels. */
-[data-theme="latte"] {
+[data-theme="chalk"] {
   --bg-app: #ccd0da;
   --bg-window: #dce0e8;
   --bg-panel: #eff1f5;
@@ -227,6 +231,217 @@
   --term-bright-white: #acb0be;
 
   color-scheme: light;
+}
+
+/* Clay. A light theme with as little blue in it as a palette can carry: paper
+   rather than white underfoot (#fbf6ee), warm greys for every surface and a rust
+   accent. Blue light from a screen has not been shown to harm eyes, and a blue
+   filter is no better than a neutral one against strain — what does strain them
+   is glare and a screen much brighter than the room, so no panel here is white.
+   What is left to the evidence is contrast: body text at 11.7:1 and secondary at
+   7.7:1, past the 7:1 WCAG asks at AAA, so the warmth costs no legibility. The
+   terminal's blue stays, the one hue ANSI needs, muted to #3f6a8f. */
+[data-theme="clay"] {
+  --bg-app: #ddd2c3;
+  --bg-window: #efe7da;
+  --bg-panel: #fbf6ee;
+  --bg-panel-soft: #f4ece0;
+  --bg-hover: #ece2d3;
+  --bg-active: #e1d5c2;
+  --bg-bubble: #f6eee2;
+
+  --border: #d8ccb8;
+  --border-soft: #e7ddcc;
+  --window-border: transparent;
+
+  --text: #3a322a;
+  --text-dim: #574d43;
+  --text-faint: #695e51;
+
+  --accent: #9c3a25;
+  --accent-contrast: #fff8f2;
+  --green: #3a6f2f;
+  --red: #b02a1f;
+  --amber: #7d5400;
+  --purple: #7a3d75;
+
+  --term-black: #6b6157;
+  --term-red: #b02a1f;
+  --term-green: #3a6f2f;
+  --term-yellow: #8a6410;
+  --term-blue: #3f6a8f;
+  --term-magenta: #7a3d75;
+  --term-cyan: #2f6f6a;
+  --term-white: #a2947f;
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #c24232;
+  --term-bright-green: #4a8a3d;
+  --term-bright-yellow: #a3760f;
+  --term-bright-blue: #4f7fa8;
+  --term-bright-magenta: #95508f;
+  --term-bright-cyan: #3b8a84;
+  --term-bright-white: #7b6f61;
+
+  color-scheme: light;
+}
+
+/* Tide. DeepSeek's colours in the light: its brand blue #4d6bfe, the one of the
+   whale and the site's gradient (#4d6bfe → #3982ff → #2498ff), on its page's
+   near-white #fbfaf9 with its own text #1e232c. The brand blue is 4.2:1 as text on
+   that page — under the 4.5 WCAG asks — so the accent is that blue a step darker,
+   5.4:1 on a panel and 4.8:1 on a hovered row, white on it 5.6:1. The rest of
+   the blues are the brand's family: the terminal's own, which ANSI needs. */
+[data-theme="tide"] {
+  --bg-app: #dcdde3;
+  --bg-window: #f2f2f5;
+  --bg-panel: #fbfaf9;
+  --bg-panel-soft: #f3f2f4;
+  --bg-hover: #ededf2;
+  --bg-active: #e0dfe8;
+  --bg-bubble: #f2f1f5;
+
+  --border: #d6d5de;
+  --border-soft: #e7e6ec;
+  --window-border: transparent;
+
+  --text: #1e232c;
+  --text-dim: #4a505c;
+  --text-faint: #5f6570;
+
+  --accent: #3b56ee;
+  --accent-contrast: #ffffff;
+  --green: #1d7a3c;
+  --red: #c02840;
+  --amber: #8a5a00;
+  --purple: #6b3fa0;
+
+  --term-black: #303540;
+  --term-red: #c02840;
+  --term-green: #1d7a3c;
+  --term-yellow: #8a5a00;
+  --term-blue: #3059d6;
+  --term-magenta: #6b3fa0;
+  --term-cyan: #16697a;
+  --term-white: #9aa0ac;
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #d13a52;
+  --term-bright-green: #248c47;
+  --term-bright-yellow: #9c6a00;
+  --term-bright-blue: #4169e8;
+  --term-bright-magenta: #804fc0;
+  --term-bright-cyan: #1d7e92;
+  --term-bright-white: #6e7480;
+
+  color-scheme: light;
+}
+
+/* Iris. After Discord's dark theme: its greys (#2b2d31, #313338, #383a40) and
+   its
+   blurple. Discord draws its sidebar darker than its content, the reverse of
+   the ladder here — so the darkest grey is the app's and the two lighter ones
+   are the panel and its soft, and the ladder keeps rising. Its muted greys are
+   too faint to read on these panels (3:1), so the secondary and faint text are
+   lifted to 5.4:1 and 4.8:1 on a hovered row; its green, red and yellow are
+   lightened for the same reason. The accent is Discord's blurple lifted out of
+   its own #5865f2, which is 2.7:1 as text on these panels; this one is 5:1, and
+   dark text on it reads at 6.4:1. */
+[data-theme="iris"] {
+  --bg-app: #2b2d31;
+  --bg-window: #2b2d31;
+  --bg-panel: #313338;
+  --bg-panel-soft: #383a40;
+  --bg-hover: #3c3f45;
+  --bg-active: #464a54;
+  --bg-bubble: #3a3d44;
+
+  --border: #404249;
+  --border-soft: #383a40;
+  --window-border: #404249;
+
+  --text: #dbdee1;
+  --text-dim: #b5bac1;
+  --text-faint: #a9b0ba;
+
+  --accent: #8f9bff;
+  --accent-contrast: #1e2126;
+  --green: #43b581;
+  --red: #f06569;
+  --amber: #f0b232;
+  --purple: #b48cf2;
+
+  --term-black: #4e5058;
+  --term-red: #f47b7b;
+  --term-green: #57d68a;
+  --term-yellow: #eec165;
+  --term-blue: #00a8fc;
+  --term-magenta: #b48cf2;
+  --term-cyan: #4ecfd6;
+  --term-white: var(--text-dim);
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #f8a3a3;
+  --term-bright-green: #8ae3b4;
+  --term-bright-yellow: #f3d18a;
+  --term-bright-blue: #6cc0ff;
+  --term-bright-magenta: #cbb8ff;
+  --term-bright-cyan: #8adbe4;
+  --term-bright-white: var(--text);
+
+  color-scheme: dark;
+}
+
+/* Fjord. After Nord (Polar Night), minus its own murk. Its "panel" is darker
+   than its
+   ground, as Discord's is, so the darker #292e39 is the app's and the ladder
+   rises through #2e3440 and #353c4a to nord1 and nord2. Faint text on a hovered
+   row has to lift out of nord1: 4.7:1 there is #a7b2c3, which is why the
+   secondary text sits a step above it. Its red is 3:1 on these panels, so
+   errors are its rose lightened; green, yellow, purple and the blues are Nord's
+   own. The accent is its aurora orange lifted: the panels' blue-grey washes out
+   its frost, so the warm hue reads as itself rather than as part of the ground —
+   6.9:1 as text on the panel, 5.6:1 on a hovered row and 4.8:1 on a picked one,
+   with dark text on it at 8.9:1. */
+[data-theme="fjord"] {
+  --bg-app: #292e39;
+  --bg-window: #292e39;
+  --bg-panel: #2e3440;
+  --bg-panel-soft: #353c4a;
+  --bg-hover: #3b4252;
+  --bg-active: #434c5e;
+  --bg-bubble: #3a4150;
+
+  --border: #404859;
+  --border-soft: #353c4a;
+  --window-border: #404859;
+
+  --text: #d8dee9;
+  --text-dim: #b8c2d2;
+  --text-faint: #a7b2c3;
+
+  --accent: #f2b295;
+  --accent-contrast: #1e2126;
+  --green: #a3be8c;
+  --red: #d97b84;
+  --amber: #ebcb8b;
+  --purple: #b48ead;
+
+  --term-black: #4c566a;
+  --term-red: #d97b84;
+  --term-green: #a3be8c;
+  --term-yellow: #ebcb8b;
+  --term-blue: #81a1c1;
+  --term-magenta: #b48ead;
+  --term-cyan: #88c0d0;
+  --term-white: var(--text-dim);
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #e39aa2;
+  --term-bright-green: #b8d1a5;
+  --term-bright-yellow: #f0d79c;
+  --term-bright-blue: #9db8d6;
+  --term-bright-magenta: #cba8c4;
+  --term-bright-cyan: #a3d6e3;
+  --term-bright-white: var(--text);
+
+  color-scheme: dark;
 }
 
 :root {
@@ -272,10 +487,28 @@
 [data-scheme="dark"] {
   --bg-menu: var(--bg-hover);
   --bg-menu-hover: var(--bg-active);
+
+  /* The context bar's five parts: one hue each, close enough in lightness to
+     read as one bar and far enough apart in tone to tell one part from the next.
+     They are the side's, not the theme's, so a part keeps its hue when the
+     palette changes — a legend the eye has already learnt. */
+  --ctx-instructions: #c9a8ff;
+  --ctx-tools: #7ddcea;
+  --ctx-skills: #6fd996;
+  --ctx-mcp: #f6d274;
+  --ctx-conversation: #8cbcfa;
 }
 [data-scheme="light"] {
   --bg-menu: var(--bg-panel);
   --bg-menu-hover: var(--bg-hover);
+
+  /* As above, a step darker: on white a bar has to be drawn with ink, and each
+     of these clears 3:1 against the track it sits in. */
+  --ctx-instructions: #7d5cd8;
+  --ctx-tools: #0a7c8c;
+  --ctx-skills: #23803f;
+  --ctx-mcp: #9c6200;
+  --ctx-conversation: #2a6fd6;
 }
 
 /* The type scale. Five steps, not a size per component: monospace is for
