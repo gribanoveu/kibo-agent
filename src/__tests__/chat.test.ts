@@ -107,7 +107,7 @@ describe("command wrappers", () => {
       "workspace_open",
     ]);
     expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, chatId: "c1" });
-    expect(calls[5]?.args).toEqual({ path: "/tmp/project" });
+    expect(calls[5]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
   });
 });
 
@@ -175,6 +175,12 @@ describe("saved chats", () => {
       { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null } },
     ]);
     expect(summary.title).toBe("fix the parser");
+  });
+
+  test("a chat moves to its worktree by id", async () => {
+    invokeResult = "/tmp/worktree";
+    await savedChats.moveChatToWorktree("c1");
+    expect(calls).toEqual([{ command: "chat_move_to_worktree", args: { id: "c1" } }]);
   });
 
   test("a chat is loaded by id", async () => {

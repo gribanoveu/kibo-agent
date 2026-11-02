@@ -57,11 +57,11 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { type ConversationMode, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST } from "./lib/offer";
+import { type ConversationMode, previewCalls, setConversationMode } from "./lib/chat";
+import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
-import { type ChatSummary, exportChat } from "./lib/savedChats";
+import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
 import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
@@ -234,6 +234,8 @@ export default function App() {
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.path);
+  const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
+  const movedChatOpened = useCallback(() => setMovedChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
@@ -252,7 +254,14 @@ export default function App() {
   const worktreeOf = useWorktreeOf(workspace.path);
   const changeTotals = useChangeTotals(workspace.path);
   // An archived chat is not where the user left off, even when it was touched last.
-  useFolderConversation(workspace.path, workspace.resumed, history.chats.find((one) => !one.archived)?.id, agent);
+  useFolderConversation(
+    workspace.path,
+    workspace.resumed,
+    history.chats.find((one) => !one.archived)?.id,
+    agent,
+    movedChat,
+    movedChatOpened,
+  );
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
   useTurnAlerts({
@@ -465,6 +474,28 @@ export default function App() {
     agent.send(text, sent, images);
   };
 
+  const pickOffer = async (kind: OfferKind) => {
+    if (kind === "review") return agent.review(true);
+    if (kind === "commit") return send(COMMIT_REQUEST);
+    if (kind === "pullRequest") return send(PULL_REQUEST);
+    const id = agent.chatId;
+    if (!id) return;
+    try {
+      const path = await moveChatToWorktree(id);
+      setMovedChat({ id, path });
+      // This is not an ordinary folder switch: the neighbouring chat keeps
+      // its running processes, terminals and checkout.
+      if (!(await workspace.open(path, true))) {
+        setMovedChat(null);
+        return;
+      }
+      history.refresh();
+    } catch (e) {
+      setMovedChat(null);
+      toast.show(String(e));
+    }
+  };
+
   const openChat = history.chats.find((one) => one.id === agent.chatId);
 
   // The conversation as a file, for reading it somewhere else. Only what is
@@ -599,12 +630,12 @@ export default function App() {
             runningProcesses={runningProcesses.map((process) => process.id)}
             onPasteCommand={workspace.path ? pasteInTerminal : undefined}
             onOpenFile={workspace.path ? openFileLink : undefined}
+            preview={(calls) => previewCalls(agent.chatId ?? "", calls)}
             branchable={agent.branchable}
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
-            // Both are work for the agent to do: a review's findings to fix, a commit.
-            onOffer={conversation.value === "agent" ? (kind) => (kind === "review" ? void agent.review(true) : void send(COMMIT_REQUEST)) : undefined}
+            onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
           />
           <Composer
             tab={

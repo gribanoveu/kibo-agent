@@ -73,6 +73,8 @@ pub(crate) struct SessionHandle {
     /// guard it hands back clears it. What makes a second start of the same
     /// chat refuse rather than fork the history the window owns.
     running: AtomicBool,
+    /// Its own checkout: only turns in the same one share files and a git index.
+    running_root: Mutex<Option<PathBuf>>,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn
@@ -88,6 +90,7 @@ impl std::fmt::Debug for RunningTurn {
 impl Drop for RunningTurn {
     fn drop(&mut self) {
         self.0.running.store(false, Ordering::SeqCst);
+        *self.0.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 }
 
@@ -161,7 +164,7 @@ impl AgentState {
     /// the window owns the history, and two turns of one chat would fork it —
     /// and when `limit` turns run already. Check and mark are under the one
     /// lock, so two starts racing for the last slot cannot both take it.
-    fn begin_running(&self, chat_id: &str, limit: u32) -> Result<RunningTurn, String> {
+    pub(crate) fn begin_running(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
         // A hand-edited zero would refuse every turn; one always runs.
         let limit = limit.max(1);
         let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -176,13 +179,48 @@ impl AgentState {
                  Wait for one to finish, or raise it in Settings"
             ));
         }
+        *handle.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.to_path_buf());
         handle.running.store(true, Ordering::SeqCst);
         Ok(RunningTurn(handle))
+    }
+
+    /// Titles of the other chats running in this checkout, live for the prompt's
+    /// standing note and the command guard. A linked worktree is another checkout.
+    fn parallel_chats(&self, chat_id: &str, workspace: &std::path::Path) -> Vec<String> {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let running: Vec<String> = sessions
+            .iter()
+            .filter(|(id, session)| {
+                id.as_str() != chat_id
+                    && session.running.load(Ordering::SeqCst)
+                    && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        drop(sessions);
+        running.into_iter().map(|id| crate::infra::chat_store::title(&id).ok().flatten().unwrap_or(id)).collect()
     }
 
     fn running_turns(&self) -> usize {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         sessions.values().filter(|session| session.running.load(Ordering::SeqCst)).count()
+    }
+
+    pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
+        if self.session(chat_id).running.load(Ordering::SeqCst) {
+            Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Automatic cleanup never removes a checkout another turn is still using.
+    pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        !sessions.values().any(|session| {
+            session.running.load(Ordering::SeqCst)
+                && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+        })
     }
 
     /// A checkout moves every chat's folder, so none may be running in it.
@@ -200,6 +238,38 @@ impl AgentState {
             .map_err(|_| "workspace lock poisoned".to_string())?
             .clone()
             .ok_or_else(|| "no folder is open".to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_workspace_for_test(&self, workspace: PathBuf) {
+        *self.workspace.lock().unwrap() = Some(workspace);
+    }
+
+    /// The checkout this chat belongs to, not whichever folder is open now.
+    /// An unsaved chat has no record yet and starts in the open folder.
+    pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
+        let record = match crate::infra::chat_store::load(chat_id) {
+            Ok(record) => Some(record),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let Some(record) = record else { return Ok((self.workspace()?, None)) };
+        let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
+            .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
+        if !root.is_dir() {
+            return Err(format!("the chat's folder {} is not a folder", record.workspace));
+        }
+        Ok((root, record.worktree_base))
+    }
+
+    /// Prompt measuring also works before any folder is open, as it did for
+    /// an unsaved chat; a saved chat still reads only its own checkout.
+    fn chat_prompt_workspace(&self, chat_id: &str) -> Result<Option<PathBuf>, String> {
+        match crate::infra::chat_store::load(chat_id) {
+            Ok(_) => self.chat_workspace(chat_id).map(|(root, _)| Some(root)),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.workspace().ok()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn mode(&self) -> ConversationMode {
@@ -232,6 +302,7 @@ impl AgentState {
 #[tauri::command]
 pub async fn workspace_open(
     path: String,
+    keep_running: Option<bool>,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
@@ -250,12 +321,15 @@ pub async fn workspace_open(
         .workspace
         .lock()
         .map_err(|_| "workspace lock poisoned".to_string())? = Some(resolved.clone());
-    // They ran in the folder that was open, for the conversation about it.
-    if let Some(processes) = app.try_state::<Arc<Processes>>() {
-        processes.stop_all();
-    }
-    if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
-        terminals.close_all();
+    // A chat moved to its worktree must not stop the neighbouring chat's
+    // processes. Ordinary folder switches keep the old behaviour.
+    if keep_running != Some(true) {
+        if let Some(processes) = app.try_state::<Arc<Processes>>() {
+            processes.stop_all();
+        }
+        if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
+            terminals.close_all();
+        }
     }
 
     let shown = resolved.display().to_string();
@@ -378,16 +452,17 @@ pub async fn chat_start<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
     // Admission before anything about the session is touched: a refused
     // start must leave the running turn's stop flag and journal alone.
-    let running = state.begin_running(&chat_id, parallel_limit())?;
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
     .await
@@ -406,9 +481,10 @@ pub async fn chat_resume<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
-    let running = state.begin_running(&chat_id, parallel_limit())?;
-    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
     .await
@@ -420,10 +496,11 @@ pub async fn chat_resume<R: Runtime>(
 /// trip beats one per call. Nothing here runs anything.
 #[tauri::command]
 pub async fn chat_preview(
+    chat_id: String,
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
-    let workspace = state.workspace()?;
+    let (workspace, _) = state.chat_workspace(&chat_id)?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -469,7 +546,8 @@ pub async fn chat_compact<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
-    let frame = next_request_frame(&app, &state);
+    let workspace = state.chat_prompt_workspace(&chat_id)?;
+    let frame = next_request_frame(&app, &state, workspace);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
     // IPC loop freezes every other command for its duration.
@@ -522,13 +600,15 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>, chat_id: String) -> 
 #[tauri::command]
 pub async fn chat_context_usage(
     messages: Vec<LlmMessage>,
+    chat_id: String,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
+    let workspace = state.chat_prompt_workspace(&chat_id)?;
     let state = Arc::clone(&state);
     super::blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state), &messages))
+        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, workspace), &messages))
     })
     .await
 }
@@ -538,8 +618,7 @@ pub async fn chat_context_usage(
 /// MCP servers only as they run now, since none is started to be measured,
 /// and the shell by name, since probing it runs it. Without an open folder,
 /// the prompt a turn there would have.
-fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> RequestFrame {
-    let workspace = state.workspace().ok();
+fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
     let root = workspace.as_deref();
     let mode = state.mode();
     let skills = crate::services::skills::enabled_catalog(root).unwrap_or_default();
@@ -564,6 +643,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
             skills: &skills,
             rules: &rules,
             worktree_of: worktree_of.as_deref(),
+            parallel: None,
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
@@ -732,10 +812,12 @@ fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The open folder's search, for the turn's tools. `None` when no folder's
-/// index is open — or when `setup` never ran, as under a mock runtime.
-fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
-    app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
+/// The chat folder's search, for the turn's tools. A background chat never
+/// searches through the index of a folder opened after its turn started.
+fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<CodeSearchFn> {
+    let index = app.try_state::<Arc<WorkspaceIndex>>()?;
+    let current = index.current()?;
+    (current.root() == workspace).then(|| index.searcher()).flatten()
 }
 
 /// The MongoDB page's clients, as the agent's `mongo` tool reads through them.
@@ -768,8 +850,9 @@ pub async fn review_start<R: Runtime>(
     handed: bool,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    let workspace = state.workspace()?;
-    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&workspace))
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let diff_workspace = workspace.clone();
+    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&diff_workspace))
         .await
         .map_err(|e| format!("reading the change failed: {e}"))?
         .map_err(|e| e.to_string())?;
@@ -780,10 +863,10 @@ pub async fn review_start<R: Runtime>(
     let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
     let desk = Arc::new(ReviewDesk::new(kept));
     let session = state.session(&chat_id);
-    let running = state.begin_running(&chat_id, parallel_limit())?;
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
-    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::review(turn, messages, todos, &brief, desk, handed)
     })
     .await
@@ -828,6 +911,8 @@ async fn run_off_the_event_loop<R, F>(
     running: RunningTurn,
     turn_id: String,
     chat_id: String,
+    workspace: PathBuf,
+    worktree_base: Option<String>,
     plan: Option<String>,
     run: F,
 ) -> Result<ChatStreamOutcome, String>
@@ -835,7 +920,6 @@ where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let workspace = state.workspace()?;
     let approval = state.approval()?;
     let mode = state.mode();
     let _running = running;
@@ -845,7 +929,7 @@ where
         &chat_id,
     );
     let handles = FolderHandles {
-        search: searcher_of(&app),
+        search: searcher_of(&app, &workspace),
         knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
@@ -871,7 +955,7 @@ where
         let cancelled = || session.cancel.load(Ordering::SeqCst);
         let take_steering = || session.steering.take();
         let notes_typed = || session.steering.typed();
-        let parallel = || state.running_turns() > 1;
+        let parallel = || state.parallel_chats(&chat_id, &workspace);
         let folder = FolderTurn {
             chat_id: &chat_id,
             workspace: &workspace,
@@ -883,6 +967,7 @@ where
             take_steering: &take_steering,
             notes_typed: &notes_typed,
             parallel: &parallel,
+            worktree_base: worktree_base.as_deref(),
         };
         let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
         session.end_turn(turn_id, &outcome);
@@ -910,6 +995,7 @@ mod tests {
     }
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
+    use std::path::Path;
 
     /// So is a compaction's summary, "Compact now" or before a message.
     #[test]
@@ -941,6 +1027,114 @@ mod tests {
     /// checks about behaviour rather than about Tauri.
     fn state() -> Arc<AgentState> {
         Arc::new(AgentState::default())
+    }
+
+    #[test]
+    fn a_background_chat_saves_under_its_own_checkout() {
+        crate::testing::with_app_dir("cmd-chat-save-own-root", || {
+            let own = temp_dir("cmd-chat-save-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-save-other").canonicalize().unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other);
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            tauri::async_runtime::block_on(super::super::chat_history::chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("hi"), LlmMessage::assistant("done")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, own.display().to_string());
+        });
+    }
+
+    #[test]
+    fn preview_and_resume_read_the_saved_chats_checkout() {
+        crate::testing::with_app_dir("cmd-chat-resume-own-root", || {
+            crate::testing::spending_provider("done", 10, 2);
+            let own = temp_dir("cmd-chat-resume-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-resume-other").canonicalize().unwrap();
+            std::fs::write(own.join("a.txt"), "own\n").unwrap();
+            std::fs::write(other.join("a.txt"), "other\n").unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other);
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            let call = PendingToolCall {
+                id: "w1".into(),
+                name: "writeFile".into(),
+                arguments: r#"{"path":"a.txt","content":"after\n"}"#.into(),
+                requires_confirmation: true,
+                reason: None,
+            };
+            let shown = tauri::async_runtime::block_on(chat_preview("c1".into(), vec![call], app.state())).unwrap();
+            let ToolPreview::Diff { diff, .. } = &shown[0] else { panic!("a write has a diff: {shown:?}") };
+            assert!(diff.unified_diff.contains("own"), "{}", diff.unified_diff);
+            assert!(!diff.unified_diff.contains("other"), "{}", diff.unified_diff);
+
+            let read = LlmToolCall { id: "w1".into(), name: "readFile".into(), arguments: r#"{"path":"a.txt"}"#.into() };
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("hi"), LlmMessage::tool_requests(vec![read])],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: r#"{"path":"a.txt"}"#.into(), requires_confirmation: true, reason: None }],
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            let outcome = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                checkpoint,
+                vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }],
+                None,
+            ));
+            let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("resume failed: {outcome:?}") };
+            let result = done.history.iter().find(|message| message.tool_call_id.as_deref() == Some("w1")).unwrap();
+            let content = result.content.as_deref().unwrap();
+            assert!(content.contains("own\n"), "{content}");
+            assert!(!content.contains("other"), "{content}");
+        });
+    }
+
+    #[test]
+    fn compaction_measures_the_saved_chats_prompt_not_the_open_folders() {
+        crate::testing::with_app_dir("cmd-chat-compact-own-root", || {
+            crate::testing::spending_provider("the earlier part", 10, 2);
+            let own = temp_dir("cmd-chat-compact-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-compact-other").canonicalize().unwrap();
+            std::fs::write(own.join("AGENTS.md"), "x".repeat(1_000_000)).unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other.clone());
+            let app = tauri::test::mock_app();
+            let other_frame = next_request_frame(app.handle(), &state, Some(other));
+            let own_frame = next_request_frame(app.handle(), &state, Some(own));
+            app.manage(state);
+            let mut history: Vec<_> = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i}")) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
+            // Just under the threshold without the saved folder's rules, just
+            // over with them: only the chat's own frame can trigger this pass.
+            let limit = Some(crate::domain::settings::DEFAULT_CONTEXT_LIMIT);
+            let baseline = ContextUsage::new(other_frame, &history, limit);
+            let threshold = baseline.compacts_at.unwrap();
+            history[0] = LlmMessage::user("x".repeat((threshold - baseline.total + 1) * 4));
+            assert!(ContextUsage::new(other_frame, &history, limit).total < threshold);
+            let own_usage = ContextUsage::new(own_frame, &history, limit);
+            assert!(own_usage.total >= threshold);
+
+            let compacted = tauri::async_runtime::block_on(chat_compact(history, false, "t1".into(), "c1".into(), app.handle().clone(), app.state()));
+            assert!(compacted.expect("the saved folder's large frame compacts").is_some());
+        });
     }
 
     fn next_prompt_turn(session: &SessionHandle, id: &str, events: &[ChatEventPayload]) {
@@ -1164,27 +1358,44 @@ mod tests {
     #[test]
     fn a_chat_runs_one_turn_and_the_limit_counts_across_chats() {
         let state = state();
-        let one = state.begin_running("c1", 3).expect("the first turn runs");
-        let refused = state.begin_running("c1", 3).expect_err("the same chat refuses");
+        let root = Path::new("/repo");
+        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
+        let refused = state.begin_running("c1", 3, root).expect_err("the same chat refuses");
         assert!(refused.contains("already running"), "{refused}");
 
-        let two = state.begin_running("c2", 2).expect("another chat's turn runs beside it");
-        let over = state.begin_running("c3", 2).expect_err("the limit binds across chats");
+        let two = state.begin_running("c2", 2, root).expect("another chat's turn runs beside it");
+        let over = state.begin_running("c3", 2, root).expect_err("the limit binds across chats");
         assert!(over.contains("limit"), "{over}");
 
         drop(one);
-        state.begin_running("c3", 2).expect("a finished turn frees its slot");
+        state.begin_running("c3", 2, root).expect("a finished turn frees its slot");
         drop(two);
 
         // A hand-edited zero in the settings still lets one turn run.
-        state.begin_running("c4", 0).expect("a zero limit still runs one");
+        state.begin_running("c4", 0, root).expect("a zero limit still runs one");
+    }
+
+    #[test]
+    fn parallel_chats_are_scoped_to_their_checkout() {
+        let state = state();
+        let root = Path::new("/repo");
+        let linked = Path::new("/repo-worktree");
+        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
+        let two = state.begin_running("c2", 3, root).expect("the second turn runs");
+        let three = state.begin_running("c3", 3, linked).expect("a worktree turn runs");
+        assert_eq!(state.parallel_chats("c1", root), vec!["c2"]);
+        assert_eq!(state.parallel_chats("c3", linked), Vec::<String>::new());
+        drop(two);
+        assert_eq!(state.parallel_chats("c1", root), Vec::<String>::new());
+        drop(one);
+        drop(three);
     }
 
     #[test]
     fn a_checkout_waits_for_every_running_turn() {
         let state = state();
         state.ensure_tree_is_idle().expect("an idle tree can be switched");
-        let running = state.begin_running("c1", 2).expect("the turn runs");
+        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
         let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
         assert!(refused.contains("worktree"), "{refused}");
         drop(running);
@@ -1196,14 +1407,15 @@ mod tests {
     #[test]
     fn a_panicked_turn_frees_its_slot() {
         let state = state();
-        let guard = state.begin_running("c1", 3).expect("the turn runs");
+        let root = Path::new("/repo");
+        let guard = state.begin_running("c1", 3, root).expect("the turn runs");
         std::thread::spawn(move || {
             let _guard = guard;
             panic!("the turn's thread died");
         })
         .join()
         .expect_err("the thread panicked");
-        state.begin_running("c1", 3).expect("a panicked turn frees its slot");
+        state.begin_running("c1", 3, root).expect("a panicked turn frees its slot");
     }
 
     /// A refused start is only a refusal: the running turn's stop flag — a
@@ -1387,8 +1599,9 @@ mod tests {
                 let resume_handle = app.handle().clone();
                 let resume_state = Arc::clone(&state);
                 let resumed = expect_refusal(move || {
+                    let workspace = resume_state.workspace()?;
                     let session = resume_state.session("c1");
-                    let running = resume_state.begin_running("c1", parallel_limit())?;
+                    let running = resume_state.begin_running("c1", parallel_limit(), &workspace)?;
                     tauri::async_runtime::block_on(run_off_the_event_loop(
                         resume_handle,
                         resume_state,
@@ -1396,6 +1609,8 @@ mod tests {
                         running,
                         "t1".into(),
                         "c1".into(),
+                        workspace,
+                        None,
                         None,
                         move |turn| llm_chat::resume(turn, checkpoint, vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }]),
                     ))
@@ -1609,14 +1824,16 @@ mod tests {
             }
         }
         let app = tauri::test::mock_app();
-        assert!(searcher_of(app.handle()).is_none(), "no index state at all");
+        let root = temp_dir("cmd-search-repo");
+        assert!(searcher_of(app.handle(), &root).is_none(), "no index state at all");
 
         let index = Arc::new(WorkspaceIndex::new(temp_dir("cmd-search-index"), Arc::new(NoModel)));
         tauri::Manager::manage(&app, Arc::clone(&index));
-        assert!(searcher_of(app.handle()).is_none(), "no folder open");
+        assert!(searcher_of(app.handle(), &root).is_none(), "no folder open");
 
-        index.open(&temp_dir("cmd-search-repo"), Arc::new(|_| {})).unwrap();
-        assert!(searcher_of(app.handle()).is_some());
+        index.open(&root, Arc::new(|_| {})).unwrap();
+        assert!(searcher_of(app.handle(), &root).is_some());
+        assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
     }
 
     /// The snapshot names the folder the way the events do, and says why

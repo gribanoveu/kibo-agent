@@ -400,7 +400,10 @@ describe("the context estimate", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await waitFor(() => expect(result.current.context?.total).toBe(4_000));
-    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [] } });
+    expect(calls).toContainEqual({
+      command: "chat_context_usage",
+      args: { chatId: expect.any(String), messages: [] },
+    });
   });
 
   /// It is an estimate over the history, so it has to be asked again once the
@@ -417,9 +420,11 @@ describe("the context estimate", () => {
       await result.current.compact(true);
     });
 
+    const chatId = calls.find((call) => call.command === "chat_compact")?.args.chatId;
+    expect(chatId).toEqual(expect.any(String));
     expect(calls).toContainEqual({
       command: "chat_context_usage",
-      args: { messages: [{ role: "user", content: "summary" }] },
+      args: { chatId, messages: [{ role: "user", content: "summary" }] },
     });
   });
 });
@@ -1645,8 +1650,12 @@ describe("rewinding", () => {
     await act(async () => {
       preview = await result.current.previewRewind("user:1");
     });
-    // The open folder: no chat named.
-    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
+    // The agent chat names its own record, not a Chat-mode record.
+    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({
+      changes: [bChange],
+      chatId: undefined,
+      agentChatId: "kept",
+    });
     expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
   });
 
@@ -1662,7 +1671,11 @@ describe("rewinding", () => {
       await result.current.rewind("user:0");
     });
 
-    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange] });
+    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({
+      changes: [aChange, bChange],
+      chatId: undefined,
+      agentChatId: "kept",
+    });
     expect(result.current.chatId).toBe("kept");
     expect(result.current.draft?.text).toBe("first");
     expect(result.current.turn.blocks).toMatchObject([

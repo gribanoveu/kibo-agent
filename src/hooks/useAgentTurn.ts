@@ -282,7 +282,7 @@ export function useAgentTurn({
 
   const refreshContext = useCallback(
     (session: Session) => {
-      contextUsage(session.history).then(
+      contextUsage(session.key, session.history).then(
         (context) => {
           session.context = context;
           changed(session);
@@ -645,7 +645,7 @@ export function useAgentTurn({
         : null;
       if (!points?.has(bubbleId)) return null;
       const { changes, unrecorded } = changesFrom(session.turn.blocks, bubbleId);
-      return { files: changes.length ? await rewindPreview(changes) : [], unrecorded };
+      return { files: changes.length ? await rewindPreview(changes, undefined, session.key) : [], unrecorded };
     },
     [],
   );
@@ -672,7 +672,7 @@ export function useAgentTurn({
       const { changes } = changesFrom(session.turn.blocks, bubbleId);
       let files: FileRewind[] = [];
       try {
-        if (changes.length) files = await rewindApply(changes);
+        if (changes.length) files = await rewindApply(changes, undefined, session.key);
       } catch (e) {
         session.error = String(e);
         changed(session);

@@ -16,7 +16,8 @@ use git2::{
 };
 
 use crate::domain::git_branches::{
-    keeps_branch, worktree_name, BranchRef, CheckoutOutcome, GitBranchError, WorktreeState, WORKTREE_BRANCH_PREFIX,
+    keeps_branch, worktree_name, BranchRef, CheckoutOutcome, GitBranchError, WorktreeState,
+    AGENT_WORKTREE_BRANCH_PREFIX, WORKTREE_BRANCH_PREFIX,
 };
 
 /// Local branches, then the remote ones with no local branch of that name.
@@ -93,6 +94,16 @@ pub fn checkout(root: &Path, name: &str) -> Result<CheckoutOutcome, GitBranchErr
 /// reads the clock. The open folder is not touched: nothing is checked out in
 /// it and its changes stay where they are.
 pub fn add_worktree(root: &Path, base: &str, stamp: &str, worktrees: &Path) -> Result<PathBuf, GitBranchError> {
+    add_with_prefix(root, base, stamp, worktrees, WORKTREE_BRANCH_PREFIX)
+}
+
+/// A moved chat's worktree. `stamp` is its id, so retries and other chats
+/// cannot silently reuse a branch that may already hold work.
+pub fn add_agent_worktree(root: &Path, base: &str, stamp: &str, worktrees: &Path) -> Result<PathBuf, GitBranchError> {
+    add_with_prefix(root, base, stamp, worktrees, AGENT_WORKTREE_BRANCH_PREFIX)
+}
+
+fn add_with_prefix(root: &Path, base: &str, stamp: &str, worktrees: &Path, prefix: &str) -> Result<PathBuf, GitBranchError> {
     let repo = open(root)?;
     let start = resolve(&repo, base)?;
     let parent = worktrees.join(repository_name(&repo));
@@ -100,7 +111,7 @@ pub fn add_worktree(root: &Path, base: &str, stamp: &str, worktrees: &Path) -> R
     // name may still hold someone's work.
     for n in 1..=100 {
         let name = worktree_name(&start.local, stamp, n);
-        let branch_name = format!("{WORKTREE_BRANCH_PREFIX}{name}");
+        let branch_name = format!("{prefix}{name}");
         let path = parent.join(&name);
         // A registered worktree has its branch, so the two checks cover it too.
         if path.exists() || repo.find_branch(&branch_name, BranchType::Local).is_ok() {
@@ -138,6 +149,30 @@ pub fn worktree_state(root: &Path) -> Result<WorktreeState, GitBranchError> {
     };
     let keeps_branch = branch.as_deref().is_some_and(|name| keeps_branch(name, own_commits));
     Ok(WorktreeState { main, branch, dirty: dirty(&repo)?, own_commits, keeps_branch })
+}
+
+/// Whether this chat's worktree can be published as a PR into its recorded
+/// base. Nothing is pushed here; the offer is withheld until a PR makes sense.
+pub fn pr_ready(root: &Path, base: &str) -> Result<(), GitBranchError> {
+    let repo = open(root)?;
+    if !repo.is_worktree() {
+        return Err(GitBranchError::NotAWorktree);
+    }
+    ready(&repo)?;
+    let changed = dirty(&repo)?;
+    if !changed.is_empty() {
+        return Err(GitBranchError::Git(format!("commit the worktree changes first: {}", changed.join(", "))));
+    }
+    let head = repo.head().map_err(git)?.target().ok_or_else(|| GitBranchError::Git("the worktree has no commit to publish".into()))?;
+    let base = resolve(&repo, base)?.commit.id();
+    let (ahead, behind) = repo.graph_ahead_behind(head, base).map_err(git)?;
+    if behind > 0 {
+        return Err(GitBranchError::Git(format!("the worktree is {behind} commit(s) behind its base — rebase or merge the base first")));
+    }
+    if ahead == 0 {
+        return Err(GitBranchError::Git("the worktree has no commits beyond its base".into()));
+    }
+    Ok(())
 }
 
 /// Removes the linked worktree at `path`, with its folder. Its branch goes
@@ -430,6 +465,42 @@ mod tests {
         assert_eq!(second, worktrees.join(repo_name).join("other-0925-2214-2"));
         assert_eq!(head(&second), "kibo/other-0925-2214-2");
         assert_eq!(fs::read_to_string(first.join("a.txt")).unwrap(), "work in the first\n");
+    }
+
+    #[test]
+    fn an_agent_worktree_never_carries_or_overwrites_uncommitted_work() {
+        let (dir, _repo) = two_branches("branches-agent-worktree");
+        fs::write(dir.join("a.txt"), "only in the source\n").unwrap();
+        let worktrees = temp_dir("branches-agent-worktree-home");
+
+        let first = add_agent_worktree(&dir, "main", "chat-1", &worktrees).unwrap();
+        assert_eq!(head(&first), "agent/main-chat-1");
+        assert_eq!(fs::read_to_string(first.join("a.txt")).unwrap(), "a\n");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "only in the source\n");
+
+        fs::write(first.join("a.txt"), "keep the first chat's work\n").unwrap();
+        let second = add_agent_worktree(&dir, "main", "chat-1", &worktrees).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(first.join("a.txt")).unwrap(), "keep the first chat's work\n");
+        assert_eq!(fs::read_to_string(second.join("a.txt")).unwrap(), "a\n");
+    }
+
+    #[test]
+    fn a_pr_waits_for_a_clean_ahead_and_up_to_date_worktree() {
+        let (dir, repo) = two_branches("branches-pr-ready");
+        let path = add_agent_worktree(&dir, "main", "chat-1", &temp_dir("branches-pr-ready-home")).unwrap();
+        assert!(pr_ready(&path, "main").unwrap_err().to_string().contains("no commits"));
+
+        fs::write(path.join("a.txt"), "changed\n").unwrap();
+        assert!(pr_ready(&path, "main").unwrap_err().to_string().contains("commit"));
+
+        crate::infra::git_changes::stage(&path, &["a.txt".into()]).unwrap();
+        crate::infra::git_changes::commit(&path, "change").unwrap();
+        pr_ready(&path, "main").unwrap();
+
+        let base = repo.refname_to_id("refs/heads/main").unwrap();
+        commit(&repo, "refs/heads/main", Some(base), &[("a.txt", "base moved\n"), ("b.txt", "b\n")]);
+        assert!(pr_ready(&path, "main").unwrap_err().to_string().contains("behind"));
     }
 
     #[test]

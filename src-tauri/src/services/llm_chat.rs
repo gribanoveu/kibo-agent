@@ -269,6 +269,8 @@ pub struct Turn<'a> {
 pub struct Frozen {
     pub rules: Vec<RuleFile>,
     pub knowledge: Option<crate::domain::knowledge::Overview>,
+    /// The shared-tree warning as this chat's first turn saw it.
+    pub parallel: Option<String>,
 }
 
 
@@ -287,9 +289,11 @@ pub enum Place<'a> {
         /// Settings → Web search; `None` while it is off, and then neither
         /// is offered.
         web: Option<&'a Web>,
-        /// Asked on each command, not frozen at the start: another chat may
-        /// begin after this one, and both must then protect the shared tree.
-        parallel: &'a (dyn Fn() -> bool + Sync),
+        /// Asked live: another chat may begin after this one. The git guard
+        /// reads it per command; the standing note reads it between rounds.
+        parallel: &'a (dyn Fn() -> Vec<String> + Sync),
+        /// The base this chat's worktree was moved from, if it was.
+        worktree_base: Option<&'a str>,
     },
     /// Chat mode (`docs/21-kubernetes-mode.md`, K-1): no folder. The role is
     /// who the model is and all it may call; `kube` is what it is told of the
@@ -1052,6 +1056,14 @@ fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        parallel: match turn.place {
+            Place::Folder { parallel, .. } => Some(parallel),
+            Place::Chat { .. } => None,
+        },
+        worktree_base: match turn.place {
+            Place::Folder { worktree_base, .. } => worktree_base,
+            Place::Chat { .. } => None,
+        },
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
             Place::Chat { .. } => Vec::new(),
@@ -1071,7 +1083,7 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
     }
     match turn.place {
         Place::Folder { scope, mode, parallel, .. } => {
-            if parallel() && call.name == ToolName::RunCommand.wire_name() {
+            if !parallel().is_empty() && call.name == ToolName::RunCommand.wire_name() {
                 if let Ok(crate::domain::tools::ToolCall::RunCommand(request)) = parse_tool_call(call) {
                     if let Some(subcommand) = crate::domain::command_risk::git_tree_change(&request.command, &turn.approval.git_aliases) {
                         return Err(crate::domain::tools::ToolError::GitTreeDuringParallel(subcommand));
@@ -1295,7 +1307,7 @@ fn run_helper(
     };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
     let no_steering = Vec::new;
-    let no_parallel = || false;
+    let no_parallel = Vec::new;
     let parallel = match turn.place {
         Place::Folder { parallel, .. } => parallel,
         Place::Chat { .. } => &no_parallel,
@@ -1319,7 +1331,7 @@ fn run_helper(
     let helper = Turn {
         events: &events,
         session: turn.session,
-        place: Place::Folder { scope, mode, web, parallel },
+        place: Place::Folder { scope, mode, web, parallel, worktree_base: None },
         approval,
         cancelled: &stopped,
         sleep: turn.sleep,
@@ -1887,6 +1899,7 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         skills: turn.skills,
         rules,
         worktree_of: turn.worktree_of,
+        parallel: turn.frozen.and_then(|frozen| frozen.parallel.as_deref()),
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
         knowledge,
@@ -1993,10 +2006,15 @@ fn standing_note(name: &str, now: Option<&str>) -> String {
 fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
     let (Some(frozen), Some(mode)) = (turn.frozen, turn.place.mode()) else { return };
     let knowledge = |overview: Option<&crate::domain::knowledge::Overview>| overview.map(|o| prompt::knowledge_block(o, mode));
+    let parallel = match turn.place {
+        Place::Folder { parallel, .. } => prompt::parallel_block(&parallel()),
+        Place::Chat { .. } => None,
+    };
     let parts = [
         ("Project instructions", prompt::rules_block(&frozen.rules), prompt::rules_block(turn.rules)),
         ("Memory", prompt::memory_block(&frozen.rules), prompt::memory_block(turn.rules)),
         ("Knowledge", knowledge(frozen.knowledge.as_ref()), knowledge(turn.knowledge_overview)),
+        ("Parallel sessions", frozen.parallel.clone(), parallel),
     ];
     for (name, was, now) in parts {
         let note = standing_note(name, now.as_deref());
@@ -2536,7 +2554,7 @@ mod tests {
         /// The agent's web, as Settings would give it; `None` is off.
         web: Option<Web>,
         features: Features,
-        parallel: bool,
+        parallel: Vec<String>,
     }
 
     fn harness(label: &str, steps: Vec<Step>) -> Harness {
@@ -2591,7 +2609,7 @@ mod tests {
             questions: None,
             web: None,
             features: Features::default(),
-            parallel: false,
+            parallel: Vec::new(),
         }
     }
 
@@ -2623,13 +2641,13 @@ mod tests {
             let notes_typed = move || typed.typed();
             let logged = self.logged.clone();
             let log_call = move |entry: ToolCallLogEntry| logged.lock().unwrap().push(entry);
-            let parallel = || self.parallel;
+            let parallel = || self.parallel.clone();
             let turn = Turn {
                 events: &self.events,
                 session: &self.session,
                 place: match self.chat {
                     Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None, scope: None },
-                    None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref(), parallel: &parallel },
+                    None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref(), parallel: &parallel, worktree_base: None },
                 },
                 approval: &self.approval,
                 cancelled: &cancelled,
@@ -2731,7 +2749,7 @@ mod tests {
         let checkout = call("runCommand", r#"{"command":"git checkout main"}"#);
         h.run(|turn| preflight(turn, &ReadFiles::default(), &checkout)).expect("one turn may switch its tree");
 
-        h.parallel = true;
+        h.parallel = vec!["other".into()];
         let refused = h.run(|turn| preflight(turn, &ReadFiles::default(), &checkout)).expect_err("a second turn protects the shared tree");
         assert!(matches!(&refused, crate::domain::tools::ToolError::GitTreeDuringParallel(subcommand) if subcommand == "checkout"), "{refused}");
         for command in ["git status", "git add src/lib.rs"] {
@@ -5702,7 +5720,7 @@ mod tests {
     fn a_changed_file_is_a_note_once_and_the_prompt_stays_as_the_chat_began() {
         let mut h = harness("standing-changed", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done"), text("again")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
 
         let first = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("fix it")], vec![])).expect("finishes"));
         let mut history = first.clone();
@@ -5723,6 +5741,41 @@ mod tests {
         assert_eq!(&second[..first.len()], &first[..]);
     }
 
+    #[test]
+    fn parallel_sessions_change_in_notes_not_in_the_frozen_prompt() {
+        let first = "first".to_string();
+        let second = "second".to_string();
+        let mut h = harness("standing-parallel", vec![text("one"), text("two"), text("three"), text("four")]);
+        h.parallel = vec![first.clone()];
+        h.frozen = Some(Frozen { rules: Vec::new(), knowledge: None, parallel: prompt::parallel_block(&h.parallel) });
+
+        let one = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
+        h.parallel = vec![second.clone()];
+        let mut history = one;
+        history.push(LlmMessage::user("next"));
+        let two = done_history(h.run(|turn| stream(turn, history, vec![])).expect("finishes"));
+        let notes = notes_of(&two, "Parallel sessions");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("chat \"second\""), "{}", notes[0]);
+
+        h.parallel.clear();
+        let mut history = two;
+        history.push(LlmMessage::user("next"));
+        let three = done_history(h.run(|turn| stream(turn, history, vec![])).expect("finishes"));
+        let notes = notes_of(&three, "Parallel sessions");
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[1].contains("Gone: the section no longer applies."), "{}", notes[1]);
+
+        let mut history = three;
+        history.push(LlmMessage::user("next"));
+        let four = done_history(h.run(|turn| stream(turn, history, vec![])).expect("finishes"));
+        assert_eq!(notes_of(&four, "Parallel sessions").len(), 2, "an unchanged absence is not repeated");
+        for request in h.provider.requests() {
+            assert!(system_says(&request, "chat \"first\""), "the frozen neighbour disappeared");
+            assert!(!system_says(&request, "chat \"second\""), "the system prompt followed the live sessions");
+        }
+    }
+
     /// Files as the chat began say nothing; a file put back after a note
     /// said otherwise is a change again.
     #[test]
@@ -5730,7 +5783,7 @@ mod tests {
         let rules = vec![RuleFile::new("AGENTS.md", "Run cargo test.")];
         let mut h = harness("standing-back", vec![text("done"), text("done"), text("done")]);
         h.rules = rules.clone();
-        h.frozen = Some(Frozen { rules: rules.clone(), knowledge: None });
+        h.frozen = Some(Frozen { rules: rules.clone(), knowledge: None, parallel: None });
 
         let quiet = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         assert!(notes_of(&quiet, "Project instructions").is_empty(), "{quiet:?}");
@@ -5754,7 +5807,7 @@ mod tests {
     fn a_shortened_file_is_not_taken_for_the_longer_note() {
         let mut h = harness("standing-shortened", vec![text("done")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
         let longer = standing_note("Project instructions", Some(&prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\n\nThen lint.")]).unwrap()));
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user(longer), LlmMessage::user("go")], vec![])).expect("finishes"));
@@ -5774,7 +5827,7 @@ mod tests {
         );
         h.session.context_limit = Some(90_000);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
         std::fs::write(h.root.join("big.txt"), "x".repeat(40_000)).unwrap();
 
         h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
@@ -5798,7 +5851,7 @@ mod tests {
         let overview = |repo: &str| crate::domain::knowledge::Overview { repo: repo.into(), ..Default::default() };
         let mut h = harness("standing-knowledge", vec![text("done")]);
         h.knowledge_overview = Some(overview("tax-api-now"));
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], knowledge: Some(overview("tax-api")) });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], knowledge: Some(overview("tax-api")), parallel: None });
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
 
@@ -6439,7 +6492,7 @@ mod tests {
         h.features = Features::all();
         // Its prompt is the caller's frozen one, not the files as they are now.
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
         let h = with_server(h, 1);
         std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");

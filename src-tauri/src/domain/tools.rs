@@ -1243,6 +1243,10 @@ pub struct ToolDeps<'a> {
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
+    /// Other turns in this checkout, for the worktree offer.
+    pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
+    /// The base recorded when this chat moved to its worktree.
+    pub worktree_base: Option<&'a str>,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -2323,6 +2327,8 @@ pub enum OfferKind {
     #[default]
     Review,
     Commit,
+    Worktree,
+    PullRequest,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.

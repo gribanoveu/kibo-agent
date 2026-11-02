@@ -55,7 +55,7 @@ describe("coming back", () => {
     recent = ["/work/b", "/work/a"];
     const { result } = renderHook(() => useWorkspace());
     await settle();
-    expect(calls).toContainEqual({ command: "workspace_open", args: { path: "/work/b" } });
+    expect(calls).toContainEqual({ command: "workspace_open", args: { path: "/work/b", keepRunning: false } });
     expect(result.current.path).toBe("/work/b");
     expect(result.current.recent).toEqual(folders(["/work/b", "/work/a"]));
     expect(result.current.resumed).toBe(true);
@@ -122,7 +122,7 @@ describe("picking a folder", () => {
 
     expect(calls).toContainEqual({
       command: "workspace_open",
-      args: { path: "/Users/me/project" },
+      args: { path: "/Users/me/project", keepRunning: false },
     });
     expect(result.current.path).toBe("/Users/me/project");
   });

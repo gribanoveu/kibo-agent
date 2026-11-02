@@ -25,8 +25,12 @@ fn root(chat_id: Option<&str>, workspace: impl FnOnce() -> Result<PathBuf, Strin
     }
 }
 
-fn scope(state: &AgentState, chat_id: Option<&str>) -> Result<ToolScope, String> {
-    ToolScope::new(&root(chat_id, || state.workspace())?).map_err(|e| e.to_string())
+fn scope(state: &AgentState, chat_id: Option<&str>, agent_chat_id: Option<&str>) -> Result<ToolScope, String> {
+    let workspace = || match agent_chat_id {
+        Some(id) => state.chat_workspace(id).map(|(root, _)| root),
+        None => state.workspace(),
+    };
+    ToolScope::new(&root(chat_id, workspace)?).map_err(|e| e.to_string())
 }
 
 /// What a rewind would do, file by file. Touches nothing.
@@ -34,9 +38,10 @@ fn scope(state: &AgentState, chat_id: Option<&str>) -> Result<ToolScope, String>
 pub async fn rewind_preview(
     changes: Vec<FileChange>,
     chat_id: Option<String>,
+    agent_chat_id: Option<String>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<FileRewind>, String> {
-    let scope = scope(&state, chat_id.as_deref())?;
+    let scope = scope(&state, chat_id.as_deref(), agent_chat_id.as_deref())?;
     blocking(move || Ok::<_, String>(rewind::preview(&scope, &changes))).await
 }
 
@@ -45,9 +50,10 @@ pub async fn rewind_preview(
 pub async fn rewind_apply(
     changes: Vec<FileChange>,
     chat_id: Option<String>,
+    agent_chat_id: Option<String>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<FileRewind>, String> {
-    let scope = scope(&state, chat_id.as_deref())?;
+    let scope = scope(&state, chat_id.as_deref(), agent_chat_id.as_deref())?;
     blocking(move || apply(chat_id.as_deref(), &scope, &changes)).await
 }
 
@@ -76,6 +82,20 @@ mod prototype_tests {
             assert!(!asked.get());
             assert_eq!(root(None, || Ok(PathBuf::from("/open/folder"))).unwrap(), PathBuf::from("/open/folder"));
             assert!(root(Some("../x"), || Ok(PathBuf::new())).is_err());
+        });
+    }
+
+    #[test]
+    fn an_agent_chat_rewinds_its_saved_checkout_not_the_newly_open_one() {
+        crate::testing::with_app_dir("rewind-agent-root", || {
+            let own = crate::testing::temp_dir("rewind-agent-own");
+            let other = crate::testing::temp_dir("rewind-agent-other");
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[crate::domain::llm::LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = crate::commands::chat::AgentState::default();
+            state.set_workspace_for_test(other);
+
+            let scope = scope(&state, None, Some("c1")).unwrap();
+            assert_eq!(scope.root(), own.canonicalize().unwrap());
         });
     }
 

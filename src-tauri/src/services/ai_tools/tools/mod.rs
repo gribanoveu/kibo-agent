@@ -165,7 +165,7 @@ pub fn dispatch(
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
-        ToolCall::Offer(args) => offer::offer(folder()?, args),
+        ToolCall::Offer(args) => offer::offer(folder()?, args, deps),
         ToolCall::Explore(args) => explore::explore(args, deps),
         ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),

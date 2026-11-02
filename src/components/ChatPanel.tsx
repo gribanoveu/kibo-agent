@@ -232,10 +232,12 @@ function ToolRow({
   );
 }
 
+const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
+
 function ApprovalCard({
   block,
   onDecide,
-  preview = previewCalls,
+  preview = previewInOpenWorkspace,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
@@ -704,6 +706,8 @@ type Props = {
   onRewind?: (bubbleId: string) => void;
   /** Puts a request to fix a review's finding into the message box. */
   onFix?: (text: string) => void;
+  /** Previews approval calls in this chat's own checkout. */
+  preview?: PreviewCalls;
   /** Sends what an offer under the last answer offered, as the user's message. */
   onOffer?: (kind: OfferKind) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
@@ -852,6 +856,7 @@ export function ChatPanel({
   onBranch,
   onRewind,
   onFix,
+  preview,
   onOffer,
   onAnswerQuestion,
   headSlot = null,
@@ -977,6 +982,7 @@ export function ChatPanel({
               onRewind={onRewind}
               onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
+              preview={preview}
               onOffer={onOffer}
               checklist={checklist}
             />

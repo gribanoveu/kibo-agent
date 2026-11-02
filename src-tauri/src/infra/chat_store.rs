@@ -83,6 +83,11 @@ pub(crate) fn store(e: rusqlite::Error) -> ChatError {
 }
 
 pub(crate) fn open() -> Result<Connection, ChatError> {
+    // Opening checks and, on an older database, changes the schema. Two first
+    // turns may open together; serialize that short setup so neither sees the
+    // other's schema write as `database is locked` or a duplicate column.
+    static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _opening = OPEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = app_dir::ensure().map_err(ChatError::AppDir)?.join(FILE);
     let conn = Connection::open(&path).map_err(store)?;
     #[cfg(unix)]
@@ -225,10 +230,17 @@ pub fn save(
     branched_from: Option<&str>,
     git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
+    // An existing chat keeps its checkout: a save already in flight when the
+    // chat moved to a worktree must not write the old folder back.
+    let (workspace, worktree_base) = match load(id) {
+        Ok(record) => (record.workspace, record.worktree_base),
+        Err(ChatError::NotFound(_)) => (workspace.to_string(), None),
+        Err(e) => return Err(e),
+    };
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
-        workspace: workspace.to_string(),
+        workspace,
         title: chat_record::derive_title(messages, blocks),
         created_at: 0,
         updated_at: 0,
@@ -239,6 +251,7 @@ pub fn save(
         branched_from: branched_from.map(str::to_string),
         role: None,
         kube: None,
+        worktree_base,
         git_branch: git_branch.map(str::to_string),
     })
 }
@@ -267,8 +280,18 @@ pub fn save_plain(
         branched_from: None,
         role: Some(role),
         kube,
+        worktree_base: None,
         git_branch: None,
     })
+}
+
+/// Moves only the chat's own record; the worktree has already been made.
+pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, ChatError> {
+    let mut record = load(id)?;
+    record.workspace = workspace.to_string();
+    record.worktree_base = Some(base.to_string());
+    record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
+    upsert(record)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
@@ -665,6 +688,20 @@ mod tests {
             assert_eq!(branch_of("a").as_deref(), Some("feature"));
             said("a", None);
             assert_eq!(branch_of("a"), None);
+        });
+    }
+
+    #[test]
+    fn a_save_already_in_flight_cannot_move_a_chat_back_from_its_worktree() {
+        with_app_dir("chat-store-save-after-move", || {
+            save_one("one", "/repo", "first");
+            relocate("one", "/repo-worktree", "main").unwrap();
+
+            save_one("one", "/repo", "finished meanwhile");
+
+            let record = load("one").unwrap();
+            assert_eq!(record.workspace, "/repo-worktree");
+            assert_eq!(record.worktree_base.as_deref(), Some("main"));
         });
     }
 
