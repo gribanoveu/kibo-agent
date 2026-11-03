@@ -110,8 +110,12 @@ pub fn has_api_key(provider_id: &str) -> Result<bool, CredentialsError> {
 
 /// Moves the key sealed under `from` to `to`, for a provider renamed in the
 /// settings form. No key under `from` is nothing to move.
+///
+/// [`load_all`], not `load_for_save`: starting a damaged file over is right for
+/// a save, which is how the user gets back to working keys, and wrong for a
+/// move — the keys it cannot read would be written away by the next save.
 pub fn rename_api_key(from: &str, to: &str) -> Result<(), CredentialsError> {
-    let mut map = load_for_save();
+    let mut map = load_all()?;
     if let Some(key) = map.remove(from) {
         map.insert(to.to_string(), key);
         save_all(&map).map_err(CredentialsError::Save)?;

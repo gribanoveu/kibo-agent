@@ -557,6 +557,10 @@ pub enum SettingsError {
     /// name is a list nothing can tell apart, keys included.
     #[error("there is already a provider called {0} — remove it, or give this one another name")]
     NameTaken(String),
+    /// The key store a rename asked to move a key in refused: nothing was
+    /// renamed, so the user can retry once it is reachable.
+    #[error(transparent)]
+    Credentials(#[from] CredentialsError),
 }
 
 #[cfg(test)]
