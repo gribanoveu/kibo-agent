@@ -19,6 +19,7 @@ use super::super::resolve::{relative_to_root, resolve_existing, resolve_writable
 pub fn move_path(scope: &ToolScope, args: &MoveArgs, reads: &mut ReadFiles) -> Result<ToolResult, ToolError> {
     let from = resolve_existing(scope, &args.path)?;
     let to = resolve_writable(scope, &args.new_path)?;
+    let _write = super::file_mutation_lock();
 
     // Checked before the rename, never after: `fs::rename` would replace the
     // destination without a word.

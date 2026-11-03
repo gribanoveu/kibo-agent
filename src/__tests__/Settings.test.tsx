@@ -17,7 +17,7 @@ const SOURCES: SkillsView["sources"] = [
 const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
-  const limits: { rounds: number; budget: number }[] = [];
+  const limits: { rounds: number; budget: number; parallel: number }[] = [];
   const sizes: string[] = [];
   const modes: string[] = [];
   const palettes: string[] = [];
@@ -44,7 +44,7 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       onDebugLogging={(enabled) => logging.push(enabled)}
       replyLanguage="auto"
       onReplyLanguage={(language) => languages.push(language)}
-      turnLimits={{ rounds: 60, budget: 250 }}
+      turnLimits={{ rounds: 60, budget: 250, parallel: 3 }}
       onTurnLimits={(next) => limits.push(next)}
       theme={{ mode: "system", light: "linen", dark: "basalt" }}
       onThemeMode={(mode) => modes.push(mode)}
@@ -75,7 +75,17 @@ describe("the settings dialog", () => {
 
     fireEvent.change(rounds, { target: { value: "200" } });
     fireEvent.blur(rounds);
-    expect(limits).toEqual([{ rounds: 200, budget: 250 }]);
+    expect(limits).toEqual([{ rounds: 200, budget: 250, parallel: 3 }]);
+  });
+
+  test("the parallel-turns limit is its own field and is saved the same way", () => {
+    const { limits } = dialog();
+    fireEvent.click(screen.getByText("Agent"));
+    const parallel = screen.getByLabelText("Parallel turns") as HTMLInputElement;
+
+    fireEvent.change(parallel, { target: { value: "5" } });
+    fireEvent.blur(parallel);
+    expect(limits).toEqual([{ rounds: 60, budget: 250, parallel: 5 }]);
   });
 
   test("opens on the model provider, one section at a time", () => {

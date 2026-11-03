@@ -227,6 +227,30 @@
   background: var(--bg-active);
   color: var(--text);
 }
+.chat > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+.chat .chat-activity {
+  color: var(--text-faint);
+}
+.chat .chat-activity-running {
+  color: var(--accent);
+  animation: chat-activity-spin 0.9s linear infinite;
+}
+.chat .chat-activity-awaiting {
+  color: var(--accent);
+}
+@keyframes chat-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat .chat-activity-running {
+    animation: none;
+  }
+}
 
 /* "Chats" and the filter over the list. */
 .group-head {

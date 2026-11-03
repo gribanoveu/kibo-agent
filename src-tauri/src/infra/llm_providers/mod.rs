@@ -176,31 +176,82 @@ impl StreamLines {
 /// providers, because it is network code (`data_policy`) — local only.
 #[cfg(test)]
 pub(crate) fn stub_server(body: String) -> u16 {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
     let port = listener.local_addr().expect("addr").port();
     std::thread::spawn(move || {
         for socket in listener.incoming() {
             let Ok(mut socket) = socket else { return };
-            // The whole request first: answering before the body is read
-            // breaks the client's write of it.
-            let mut request = Vec::new();
-            let mut chunk = [0; 8192];
-            while let Ok(n @ 1..) = socket.read(&mut chunk) {
-                request.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&request);
-                let Some(end) = text.find("\r\n\r\n") else { continue };
-                let length = text[..end]
-                    .lines()
-                    .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
-                    .unwrap_or(0);
-                if request.len() >= end + 4 + length {
-                    break;
-                }
-            }
+            read_request(&mut socket);
             let _ = socket.write_all(
                 format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}").as_bytes(),
             );
+        }
+    });
+    port
+}
+
+/// The whole request first: answering before the body is read breaks the
+/// client's write of it.
+#[cfg(test)]
+fn read_request(socket: &mut std::net::TcpStream) {
+    use std::io::Read;
+    let mut request = Vec::new();
+    let mut chunk = [0; 8192];
+    while let Ok(n @ 1..) = socket.read(&mut chunk) {
+        request.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&request);
+        let Some(end) = text.find("\r\n\r\n") else { continue };
+        let length = text[..end]
+            .lines()
+            .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+            .unwrap_or(0);
+        if request.len() >= end + 4 + length {
+            break;
+        }
+    }
+}
+
+/// A stub server that answers once `gate` opens — or 30 s in, so a failing
+/// test never strands the turn it holds — saying through `arrived` as each
+/// request comes in. What a test keeps a turn mid-flight with. Each
+/// connection gets its own thread: two held turns are both in flight, not
+/// queued behind one socket.
+#[cfg(test)]
+pub(crate) fn gated_server(
+    body: String,
+    gate: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    arrived: std::sync::mpsc::Sender<()>,
+) -> u16 {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            let Ok(mut socket) = socket else { return };
+            let arrived = arrived.clone();
+            let gate = std::sync::Arc::clone(&gate);
+            let body = body.clone();
+            std::thread::spawn(move || {
+                read_request(&mut socket);
+                let _ = arrived.send(());
+                // Past the cap the answer goes out anyway: a test that fails
+                // before opening the gate must not hang the suite behind the
+                // turn it holds.
+                let (lock, cvar) = &*gate;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                let mut open = lock.lock().unwrap();
+                while !*open {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    open = cvar.wait_timeout(open, left).unwrap().0;
+                }
+                drop(open);
+                let _ = socket
+                    .write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}").as_bytes());
+            });
         }
     });
     port

@@ -117,16 +117,18 @@ pub struct LlmSettings {
     pub turn_limits: TurnLimits,
 }
 
-/// The ceilings of one agent turn's tool loop, raised by a user who knows a
+/// The ceilings of the agent's turns, raised by a user who knows a
 /// task needs more — a long refactor, a big review — and lowered to keep a
 /// model on a short leash.
 ///
-/// Two of them, and the second is not a duplicate of the first: `budget` is
-/// counted in `ToolName::loop_weight` units, so sixty cheap reads and sixty
-/// repository-wide searches are not the same amount of work, and it is the
-/// one that binds in practice. `rounds` is the backstop beside it — a tool
-/// whose weight is misconfigured to zero would otherwise make the loop
-/// unstoppable.
+/// `rounds` and `budget` bound one turn, and the second is not a duplicate
+/// of the first: `budget` is counted in `ToolName::loop_weight` units, so
+/// sixty cheap reads and sixty repository-wide searches are not the same
+/// amount of work, and it is the one that binds in practice. `rounds` is
+/// the backstop beside it — a tool whose weight is misconfigured to zero
+/// would otherwise make the loop unstoppable. `parallel` bounds the window
+/// instead: how many chats' turns may run at once before a start is refused
+/// outright (docs/45-parallel-sessions.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TurnLimits {
@@ -134,6 +136,8 @@ pub struct TurnLimits {
     pub rounds: u32,
     /// Weighted tool calls.
     pub budget: u32,
+    /// Chats whose turns may run at once; a start past the limit is refused.
+    pub parallel: u32,
 }
 
 impl Default for TurnLimits {
@@ -142,7 +146,9 @@ impl Default for TurnLimits {
         // the heaviest — documenting a repository — 71 rounds and ~410 budget.
         // 60/250 stopped those mid-work; this keeps a margin over them and
         // still ends a model going round in circles.
-        Self { rounds: 100, budget: 500 }
+        // Parallel: past three the bottleneck is the human reading the
+        // answers, not the runtime.
+        Self { rounds: 100, budget: 500, parallel: 3 }
     }
 }
 

@@ -55,6 +55,19 @@ const GIT_READS: &[&str] = &[
     "cat-file", "rev-list", "merge-base", "whatchanged", "branch", "tag", "remote", "stash", "config",
 ];
 
+/// These replace files in the checkout another running turn may be reading or
+/// editing. `restore` belongs beside the PS-5 list for the same reason.
+const GIT_TREE_WRITES: &[&str] = &["checkout", "switch", "restore", "reset", "clean", "rebase", "merge"];
+
+/// Admission of a turn and execution of a tree-mutating command use the same
+/// critical section. One lock covers every checkout: admission is short and
+/// these commands are rare; a canonical-root lock map is the way past if that
+/// ever shows contention. Always taken before the session registry's lock.
+pub fn git_tree_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TREE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TREE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Programs whose purpose is moving data over the network.
 const NETWORK: &[&str] = &[
     "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "rsync", "ftp", "http",
@@ -89,6 +102,12 @@ pub fn classify_with(command: &str, aliases: &GitAliases) -> CommandRisk {
     classify_at(command, Cx { depth: 0, aliases })
 }
 
+/// The first git subcommand on the line that would replace files in the
+/// checkout. Shells, wrappers and aliases are read exactly as for approval.
+pub fn git_tree_change(command: &str, aliases: &GitAliases) -> Option<String> {
+    git_tree_at(command, Cx { depth: 0, aliases })
+}
+
 /// What every level of the reading needs: how deep in `sh -c` it is, and
 /// what git's aliases say.
 #[derive(Clone, Copy)]
@@ -104,13 +123,7 @@ impl Cx<'_> {
 }
 
 fn classify_at(command: &str, cx: Cx) -> CommandRisk {
-    let mut parser = Parser::new();
-    if cx.depth > MAX_DEPTH || parser.set_language(&tree_sitter_bash::LANGUAGE.into()).is_err() {
-        return CommandRisk::Ask;
-    }
-    let Some(tree) = parser.parse(command, None) else { return CommandRisk::Ask };
-    let mut walk = Walk { src: command, cx, read_only: true, always: None };
-    walk.visit(tree.root_node());
+    let Some(walk) = walk_at(command, cx) else { return CommandRisk::Ask };
     match walk.always {
         Some(why) => CommandRisk::AlwaysAsk(why),
         None if walk.read_only => CommandRisk::ReadOnly,
@@ -118,11 +131,27 @@ fn classify_at(command: &str, cx: Cx) -> CommandRisk {
     }
 }
 
+fn git_tree_at(command: &str, cx: Cx) -> Option<String> {
+    walk_at(command, cx)?.git_tree
+}
+
+fn walk_at<'a>(command: &'a str, cx: Cx<'a>) -> Option<Walk<'a>> {
+    let mut parser = Parser::new();
+    if cx.depth > MAX_DEPTH || parser.set_language(&tree_sitter_bash::LANGUAGE.into()).is_err() {
+        return None;
+    }
+    let tree = parser.parse(command, None)?;
+    let mut walk = Walk { src: command, cx, read_only: true, always: None, git_tree: None };
+    walk.visit(tree.root_node());
+    Some(walk)
+}
+
 struct Walk<'a> {
     src: &'a str,
     cx: Cx<'a>,
     read_only: bool,
     always: Option<String>,
+    git_tree: Option<String>,
 }
 
 impl Walk<'_> {
@@ -199,6 +228,9 @@ impl Walk<'_> {
             }
         }
         let words: Vec<String> = words.into_iter().map(|w| w.unwrap_or_default()).collect();
+        if self.git_tree.is_none() {
+            self.git_tree = git_tree_command(&words, self.cx);
+        }
         let risk = match judge(&words, self.cx) {
             // `cp x ~/.bashrc`, `tee -a .git/hooks/pre-commit`: anything but
             // reading a startup file is planting something that runs later.
@@ -398,25 +430,64 @@ fn git_destructive(args: &[String]) -> Option<String> {
     }
 }
 
-/// `git …` with its aliases applied, then judged. An alias is expanded even
-/// where git would ignore it for shadowing a built-in: that only ever reads
-/// the line as riskier than it is. `!…` aliases run a shell line, with the
-/// arguments after the alias appended.
-fn git_line(args: &[String], cx: Cx) -> CommandRisk {
+/// `git …` with its aliases applied. An alias is expanded even where git
+/// would ignore it for shadowing a built-in: that only ever reads the line as
+/// riskier than it is. `!…` aliases run a shell line, with the arguments after
+/// the alias appended.
+enum GitLine {
+    Shell(String),
+    Args(Vec<String>),
+}
+
+fn expand_git_line(args: &[String], cx: Cx) -> GitLine {
     let mut args = args.to_vec();
     for _ in 0..=MAX_DEPTH {
         let Some((at, _)) = git_subcommand_at(&args) else { break };
         let Some(value) = cx.aliases.get(&args[at].to_lowercase()) else { break };
         if let Some(script) = value.strip_prefix('!') {
             let line = std::iter::once(script.to_string()).chain(args[at + 1..].iter().map(|w| shell_quote(w))).collect::<Vec<_>>().join(" ");
-            return classify_at(&line, cx.deeper());
+            return GitLine::Shell(line);
         }
         let expanded: Vec<String> = value.split_whitespace().map(str::to_string).collect();
         args.splice(at..=at, expanded);
     }
-    match git_destructive(&args) {
-        Some(why) => CommandRisk::AlwaysAsk(why),
-        None => git(&args),
+    GitLine::Args(args)
+}
+
+/// The git write in one simple command, if there is one. This shares the
+/// approval reader's wrappers and alias expansion rather than grepping for
+/// `git checkout` in text that may be quoted or hidden in `sh -c`.
+fn git_tree_command(words: &[String], cx: Cx) -> Option<String> {
+    let first = words.first()?;
+    let program = basename(first);
+    let args = &words[1..];
+    if WRAPPERS.contains(&program) {
+        let rest = skip_wrapper_options(program, args);
+        return if rest.is_empty() { None } else { git_tree_command(rest, cx) };
+    }
+    if SHELLS.contains(&program) {
+        let at = args.iter().position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))?;
+        return git_tree_at(args.get(at + 1)?, cx.deeper());
+    }
+    if program != "git" {
+        return None;
+    }
+    match expand_git_line(args, cx) {
+        GitLine::Shell(line) => git_tree_at(&line, cx.deeper()),
+        GitLine::Args(args) => {
+            let (sub, _, _) = git_split(&args)?;
+            GIT_TREE_WRITES.contains(&sub).then(|| sub.to_string())
+        }
+    }
+}
+
+fn git_line(args: &[String], cx: Cx) -> CommandRisk {
+    match expand_git_line(args, cx) {
+        GitLine::Shell(line) => classify_at(&line, cx.deeper()),
+        GitLine::Args(args) => match git_destructive(&args) {
+            Some(why) => CommandRisk::AlwaysAsk(why),
+            None => git(&args),
+        },
     }
 }
 
@@ -739,6 +810,36 @@ mod tests {
         assert_eq!(risk("git loop"), CommandRisk::Ask, "an alias naming itself stops, and asks");
         assert_eq!(risk("git ST"), CommandRisk::ReadOnly, "git lower-cases alias names");
         assert_eq!(classify("git st"), CommandRisk::Ask, "without the aliases, an unknown subcommand asks");
+    }
+
+    #[test]
+    fn parallel_git_guard_covers_tree_writes_but_not_commits_or_reads() {
+        for subcommand in GIT_TREE_WRITES {
+            let command = format!("git {subcommand}");
+            assert_eq!(git_tree_change(&command, &GitAliases::new()).as_deref(), Some(*subcommand), "{command}");
+        }
+        for command in ["git status", "git diff HEAD", "git add src/lib.rs", "git commit -m done", "echo 'git checkout main'"] {
+            assert_eq!(git_tree_change(command, &GitAliases::new()), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn parallel_git_guard_reads_shells_wrappers_and_aliases() {
+        let aliases: GitAliases = [
+            ("co", "checkout"),
+            ("st", "status -sb"),
+            ("wipe", "!git reset --hard && git clean -fd"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+        let tree_change = |command: &str| git_tree_change(command, &aliases);
+
+        assert_eq!(tree_change("git status && sh -c 'git checkout main'").as_deref(), Some("checkout"));
+        assert_eq!(tree_change("env git reset --hard HEAD").as_deref(), Some("reset"));
+        assert_eq!(tree_change("git co main").as_deref(), Some("checkout"));
+        assert_eq!(tree_change("git wipe").as_deref(), Some("reset"));
+        assert_eq!(tree_change("git st"), None);
     }
 
     #[test]

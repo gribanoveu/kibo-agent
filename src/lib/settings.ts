@@ -44,10 +44,13 @@ export function withLanguageReminder(prompt: string, language: ReplyLanguage): s
   return `${prompt}\n\n[Reply in ${name}.]`;
 }
 
-/** Mirrors `domain::settings::TurnLimits`: how far one agent turn may run. */
-export type TurnLimits = { rounds: number; budget: number };
+/**
+ * Mirrors `domain::settings::TurnLimits`: `rounds`/`budget` bound one turn,
+ * `parallel` the window — how many chats' turns may run at once.
+ */
+export type TurnLimits = { rounds: number; budget: number; parallel: number };
 
-export const DEFAULT_TURN_LIMITS: TurnLimits = { rounds: 100, budget: 500 };
+export const DEFAULT_TURN_LIMITS: TurnLimits = { rounds: 100, budget: 500, parallel: 3 };
 
 /** Mirrors `infra::master_key::KeyStore`: where the key the API keys are sealed under is kept. */
 export type KeyStore = "file" | "keychain";
