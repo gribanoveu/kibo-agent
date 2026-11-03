@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Kibo Agent: the chat list, an empty agent chat and the side panel with context, connectors and changes">
+  <img src="docs/screenshot-2026-11.png" alt="Kibo Agent: the chat list, an empty agent chat and the side panel with context, connectors and changes">
 </p>
 
 ---
