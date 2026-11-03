@@ -288,7 +288,9 @@ pub async fn plain_chat_save(
 /// Returns at once; this chat's reply stops at its next chunk.
 #[tauri::command]
 pub fn plain_chat_cancel(chat_id: String, state: State<'_, Arc<PlainChatState>>) {
-    state.session(&chat_id).cancel.store(true, Ordering::SeqCst);
+    let session = state.session(&chat_id);
+    session.cancel.store(true, Ordering::SeqCst);
+    session.paused.store(false, Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -310,6 +312,14 @@ mod tests {
         let paused = state.begin("c1", 2, false).expect_err("a fresh start cannot orphan the card");
         assert!(paused.contains("waiting for approval"), "{paused}");
         state.begin("c1", 2, true).expect("the card resumes its own chat");
+
+        let state = Arc::new(state);
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+        state.session("c1").paused.store(true, Ordering::SeqCst);
+        plain_chat_cancel("c1".into(), app.state());
+        assert!(!state.session("c1").paused.load(Ordering::SeqCst), "stop releases a chat whose card was lost");
+        state.begin("c1", 2, false).expect("a fresh turn can start after stop");
     }
 
     /// A Chat-mode compaction is that chat's spending, as the agent's is.

@@ -316,7 +316,10 @@ describe("the session's tokens", () => {
         reads: {},
       },
     };
-    results.chat_resume = done("written");
+    results.chat_resume = {
+      status: "done",
+      value: { text: "written", truncated: false, todos: [], history: [{ role: "assistant", content: "written" }] },
+    };
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
       await result.current.send("write it");
@@ -351,6 +354,27 @@ describe("the session's tokens", () => {
 
     await act(async () => result.current.decide([{ id: "w1", approved: true }]));
     expect(calls.find((call) => call.command === "chat_resume")?.args.plan).toBe("# Current");
+  });
+
+  test("a refused resume keeps the approval card and its checkpoint", async () => {
+    const checkpoint = {
+      history: [],
+      round: 1,
+      budgetUsed: 1,
+      eventSeq: 3,
+      calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }],
+      todos: [],
+      reads: {},
+    };
+    results.chat_start = { status: "pendingApproval", value: checkpoint };
+    results.chat_resume = new Error("the parallel-turns limit");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    await act(async () => result.current.decide([{ id: "w1", approved: true }]));
+
+    expect(result.current.turn.status).toBe("awaitingApproval");
+    expect(result.current.turn.checkpoint).toEqual(checkpoint);
+    expect(result.current.error).toContain("parallel-turns limit");
   });
 
   /// Two reads in flight, the first landing last: the total drawn is the

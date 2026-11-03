@@ -712,7 +712,9 @@ pub fn chat_answer_mcp_question(id: String, answer: McpAnswer, questions: State<
 /// away. Another chat's turn is not its to stop.
 #[tauri::command]
 pub fn chat_cancel(chat_id: String, state: State<'_, Arc<AgentState>>) {
-    state.session(&chat_id).cancel.store(true, Ordering::SeqCst);
+    let session = state.session(&chat_id);
+    session.cancel.store(true, Ordering::SeqCst);
+    session.paused.store(false, Ordering::SeqCst);
 }
 
 /// Queues something the user typed while the turn was running. The id comes
@@ -1223,8 +1225,10 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(Arc::clone(&state));
 
+        state.session("c1").paused.store(true, Ordering::SeqCst);
         chat_cancel("c1".into(), app.state());
         assert!(state.session("c1").cancel.load(Ordering::SeqCst));
+        assert!(!state.session("c1").paused.load(Ordering::SeqCst), "stop releases a chat whose card was lost");
         assert!(!state.session("c2").cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
 
         let id = chat_steer("use the helper".into(), None, "c2".into(), app.state());

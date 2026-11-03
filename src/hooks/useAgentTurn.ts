@@ -566,7 +566,8 @@ export function useAgentTurn({
   const decide = useCallback(
     async (decisions: ToolCallDecision[], always: string[] = []) => {
       const session = active.current;
-      const checkpoint = session.turn.checkpoint;
+      const before = session.turn;
+      const checkpoint = before.checkpoint;
       if (!checkpoint) return;
       setTurn(session, clearApproval);
       const id = `${session.key}/turn-${session.turnId}`;
@@ -575,9 +576,10 @@ export function useAgentTurn({
         const plan = writtenPlan(session.turn.blocks.slice(session.turnStart)) ?? session.plan;
         finish(session, await resumeChat(id, session.key, checkpoint, decisions, plan));
       } catch (e) {
+        // Admission can refuse a resume while another chat holds the last slot.
+        // Keep the checkpoint and its card so the user can answer it again.
         session.error = String(e);
-        stop(session);
-        setTurn(session, (state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
+        setTurn(session, () => before);
       }
     },
     [setTurn, finish, stop],
