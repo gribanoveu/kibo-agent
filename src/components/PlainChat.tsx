@@ -4,7 +4,7 @@ import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
-import logo from "../assets/kibo-chat-pixel.png";
+import { KiboBrand } from "./KiboBrand";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
@@ -26,7 +26,7 @@ import "./PlainChat.css";
 const WRITES_OFF = "read";
 const WRITES_ON = "changes";
 
-/** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
+/** Each role's sign, on its chip above the message box and in the role's menu. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
@@ -41,28 +41,6 @@ const ROLE_WELCOME: Record<ChatRoleId, string> = {
   prototype:
     "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
 };
-
-// A thought cloud: overlapping circles, then the bubbles trailing to the head.
-const CLOUD = [
-  [24, 24, 13],
-  [38, 17, 15],
-  [53, 25, 12],
-  [31, 35, 10],
-  [46, 36, 10],
-  [12, 47, 4.5],
-  [5, 54, 2.5],
-] as const;
-
-/** Drawn twice — outlines, then fills over them — so only the outer edge shows. */
-function Cloud() {
-  const circles = CLOUD.map(([cx, cy, r]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} />);
-  return (
-    <svg className="plain-cloud-shape" viewBox="0 0 72 58">
-      <g className="plain-cloud-edge">{circles}</g>
-      <g className="plain-cloud-fill">{circles}</g>
-    </svg>
-  );
-}
 
 type Props = {
   chat: PlainChatState;
@@ -185,13 +163,7 @@ export function PlainChat({
         <div ref={scrollRef} className="plain-thread chat-text">
           {empty ? (
             <div className="plain-welcome">
-              <div className="plain-welcome-mascot">
-                <img className="plain-welcome-logo" src={logo} alt="" />
-                <span className="plain-welcome-cloud" aria-hidden>
-                  <Cloud />
-                  <RoleIcon size={22} />
-                </span>
-              </div>
+              <KiboBrand />
               <h2>{greeting}</h2>
               <p>{ROLE_WELCOME[chat.role]}</p>
               <div className="plain-suggest">
