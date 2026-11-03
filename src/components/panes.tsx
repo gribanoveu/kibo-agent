@@ -47,7 +47,9 @@ export type PaneContext = {
   commitDraft: { message: string; onMessage: (message: string) => void };
   /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
   processFocus: { id: number | null } | null;
-  /** Terminal took the process asked for: App lets go of it. */
+  /** Overview's Agent turns card asked for the helper agents; an empty ask, a new object each time. */
+  agentsFocus: object | null;
+  /** Terminal took what was asked for: App lets go of it. */
   onFocusTaken: () => void;
   /** The open chat: Overview and Terminal list only the processes and helpers it started. */
   chatId: string | null;
@@ -427,7 +429,8 @@ function FilesPane({ active, workspace, ide, chatBlocks, openFile, onOpenFile }:
 
 // Every pane the window can show, in the order the chat header's "⋮" lists
 // them. Adding one is an id in `ASIDE_TABS` and an entry here — nothing else
-// names a pane. `dock` is where the menu opens it; each dock shows one pane. There is no tab strip: eight icons in a 300px column were
+// names a pane. `dock` is where the menu opens it, under the message box for the
+// terminal, in the column right of the chat for the rest. There is no tab strip: eight icons in a 300px column were
 // unreadable, and only one of them is opened often.
 // The terminal brings xterm, a quarter of the app's script, and is opened
 // far less often than the app is: it is loaded the first time it is shown.

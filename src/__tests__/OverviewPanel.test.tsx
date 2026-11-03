@@ -23,6 +23,7 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   activeTurns: 0,
   onOpenProcess: () => {},
   onOpenProcesses: () => {},
+  onOpenAgents: () => {},
   onOpenAgent: () => {},
   onOpenPanel: () => {},
   ...over,
@@ -100,6 +101,13 @@ describe("Overview", () => {
     render(<OverviewPanel {...props({ onOpenProcesses: () => opened.push("processes"), onOpenPanel: (tab) => opened.push(tab) })} />);
     fireEvent.click(screen.getByText("Background"));
     expect(opened).toEqual(["processes"]);
+  });
+
+  test("the Agent turns heading asks for the helpers", () => {
+    const opened: string[] = [];
+    render(<OverviewPanel {...props({ onOpenAgents: () => opened.push("agents"), onOpenPanel: (tab) => opened.push(tab) })} />);
+    fireEvent.click(screen.getByText("Agent turns"));
+    expect(opened).toEqual(["agents"]);
   });
 
   test("says when there is nothing to count", () => {

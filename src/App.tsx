@@ -148,7 +148,7 @@ export default function App() {
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
   const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
-  // The strip under the chat: closed when null.
+  // The terminal under the message box: closed when null.
   const [bottomTab, setBottomTab] = useStoredState<AsideTab | null>("atlas-bottom-tab", null, isBottomTab);
   // Held here, not in the Changes pane: closing the pane, or moving it to the
   // other dock, would otherwise throw away a message half written. A different
@@ -159,6 +159,9 @@ export default function App() {
   // Which background process a chat row asked the Terminal tab to show — `null`
   // for the list. The row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number | null } | null>(null);
+  // Overview's Agent turns card asked for the helper agents. An empty ask, a new
+  // object each time, so the same one is never taken twice.
+  const [agentsFocus, setAgentsFocus] = useState<object | null>(null);
   // The helper run opened in a sheet over the chat, with the chat it is from:
   // another chat's sheet is not drawn over this one.
   const [agentShown, setAgentShown] = useState<{ run: AgentFocus; chatId: string | null } | null>(null);
@@ -226,9 +229,10 @@ export default function App() {
   // chat, or beside a page that keeps it.
   const docked = onPage ? onPage.dock : agentMode;
   const topHidden = asideHidden || !dockFits || !docked;
-  const bottomShown = dockFits && docked ? bottomTab : null;
-  // In the IDE layout the bottom dock sits under the file, not in the column.
-  const dockShown = !topHidden || (bottomShown !== null && !ide);
+  // The terminal is not in the column: it opens under the message box, as wide
+  // as the chat, so it needs no width of the window's own.
+  const bottomShown = agentMode ? bottomTab : null;
+  const dockShown = !topHidden;
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
@@ -303,7 +307,7 @@ export default function App() {
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
     // gives way, or the pane would open out of sight.
-    if (!dockFits && (!next.topHidden || next.bottom)) viewer.closeAll();
+    if (!dockFits && !next.topHidden) viewer.closeAll();
     putDocks(next);
   };
   // The tree is what the layout is for: it opens with it, in the dock now on the
@@ -536,9 +540,17 @@ export default function App() {
   };
   // A chat row, Overview or the Agents tab: the run opens over the chat.
   const openAgent = (run: AgentFocus) => setAgentShown({ run, chatId: agent.chatId });
+  // Overview's Agent turns card: the Terminal, on its helpers.
+  const openAgents = () => {
+    openTab("terminal");
+    setAgentsFocus({});
+  };
   // Held only till Terminal takes it, as `terminalPaste` is: the pane is drawn
   // anew each time it opens, and an ask still held would be taken again.
-  const focusTaken = useCallback(() => setProcessFocus(null), []);
+  const focusTaken = useCallback(() => {
+    setProcessFocus(null);
+    setAgentsFocus(null);
+  }, []);
 
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
@@ -547,6 +559,7 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
+    agentsFocus,
     chatId: agent.chatId,
     onOpenAgent: openAgent,
     onFocusTaken: focusTaken,
@@ -591,6 +604,7 @@ export default function App() {
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
+      onOpenAgents: openAgents,
       onOpenAgent: openAgent,
       onOpenPanel: openTab,
     },
@@ -602,6 +616,11 @@ export default function App() {
       locked: agent.turn.status === "running",
     },
   };
+
+  // The terminal, under the message box: the only pane that opens there.
+  const bottomPane = bottomShown && (
+    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
+  );
 
   const chat = (
     <main key="chat" className="main">
@@ -704,6 +723,16 @@ export default function App() {
             }}
             pendingCommands={serverPrompts.starting ? "Loading MCP prompts…" : undefined}
           />
+          {bottomPane && (
+            <PanelResizeHandle
+              axis="y"
+              invert
+              ariaLabel="Resize the terminal"
+              onResize={panels.resizeBottomBy}
+              onResizeEnd={(size) => panels.endResize("bottom", size)}
+            />
+          )}
+          {bottomPane}
           {agentShown && agentShown.chatId === agent.chatId && <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} />}
         </>
       ) : (
@@ -775,9 +804,6 @@ export default function App() {
   const topPane = (
     <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
   );
-  const bottomPane = bottomShown && (
-    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
-  );
   const renderPage = (one: (typeof pages)[number]) => (
     <one.Component
       openPane={openTab}
@@ -802,7 +828,7 @@ export default function App() {
 
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${bottomShown ? "" : " bottom-closed"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -901,7 +927,6 @@ export default function App() {
           }
           viewer={fileViewer}
           top={topPane}
-          bottom={bottomPane || null}
           topShown={!topHidden}
           panels={panels}
         />

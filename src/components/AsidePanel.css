@@ -1,5 +1,5 @@
-/* Right of the chat, as wide as it was dragged: the right dock on top, the
-   bottom dock under it. */
+/* Right of the chat, as wide as it was dragged: the pane the chat's header
+   opens. The terminal is not here — it opens under the message box. */
 /* As wide as it was dragged, but never pushing the window's edge out: past
    the room there is, it gives up width down to its minimum — the file viewer
    first (flex-shrink 5 there), the chat not at all (App.css). Whole shrink
@@ -16,7 +16,7 @@
   min-height: 0;
   transition: width 0.22s ease;
 }
-.window.aside-hidden.bottom-closed .dock-column {
+.window.aside-hidden .dock-column {
   display: none;
 }
 
@@ -33,23 +33,26 @@
   min-height: 0;
   animation: aside-in 0.18s ease-out;
 }
-/* As tall as it was dragged — but never the whole column: the pane above
-   stays readable. */
+/* As tall as it was dragged — but never the whole chat, which stays
+   readable. */
 .aside-bottom {
   flex: none;
   height: var(--bottom-height, 240px);
   max-height: 70%;
   animation: aside-up 0.18s ease-out;
 }
+/* Under the message box: the box's own inset, so the two sit on the same edges,
+   and the handle above it in the gap the box's margin leaves. A hairline of its
+   own — the chat's background is the panel's, and nothing else separates them. */
+.main > .aside-bottom {
+  margin: 0 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
 /* Hidden until asked for, from the chat header — hidden rather than
-   unmounted, so a half-written commit message survives. Alone in the
-   column, the bottom dock takes all of it. */
+   unmounted, so a half-written commit message survives. */
 .window.aside-hidden .aside-right {
   display: none;
-}
-.window.aside-hidden .aside-bottom {
-  flex: 1;
-  max-height: none;
 }
 
 /* Leaving `display: none` restarts the animation, so showing the panel

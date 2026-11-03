@@ -8,9 +8,9 @@ describe("the Changes shortcut", () => {
     expect(togglePane(docks("plan", true), "changes", "right")).toEqual(docks("changes", false));
   });
 
-  test("closes what was there: Changes is a panel of its own", () => {
+  test("closes what was there: Changes is a panel of its own, and the terminal stays", () => {
     expect(togglePane(docks("plan", false), "changes", "right")).toEqual(docks("changes", false));
-    expect(togglePane(docks("overview", false, "terminal"), "changes", "right")).toEqual(docks("changes", false));
+    expect(togglePane(docks("overview", false, "terminal"), "changes", "right")).toEqual(docks("changes", false, "terminal"));
   });
 
   test("hides Changes, and leaves the rest", () => {
@@ -24,10 +24,10 @@ describe("a pane from the menu", () => {
     expect(openPane(docks("changes", true), "mcp", "right")).toEqual(docks("mcp", false));
   });
 
-  test("replaces the pane there, and closes Terminal with Overview", () => {
+  test("replaces the pane there, and leaves the terminal under the message box", () => {
     expect(openPane(docks("hooks", false), "plan", "right")).toEqual(docks("plan", false));
-    expect(openPane(docks("plan", true, "terminal"), "mcp", "right")).toEqual(docks("mcp", false));
-    expect(openPane(docks("overview", false, "terminal"), "mcp", "right")).toEqual(docks("mcp", false));
+    expect(openPane(docks("plan", true, "terminal"), "mcp", "right")).toEqual(docks("mcp", false, "terminal"));
+    expect(openPane(docks("overview", false, "terminal"), "mcp", "right")).toEqual(docks("mcp", false, "terminal"));
   });
 
   test("already on screen stays where it is, so it is never drawn twice", () => {
@@ -37,20 +37,16 @@ describe("a pane from the menu", () => {
   });
 });
 
-describe("Overview and Terminal", () => {
-  test("open one under the other, as one panel", () => {
+describe("the terminal and the column", () => {
+  test("open beside each other: the column's pane stays, and the terminal closes alone", () => {
     expect(openPane(docks("overview", false), "terminal", "bottom")).toEqual(docks("overview", false, "terminal"));
-    expect(openPane(docks("overview", true, "terminal"), "overview", "right")).toEqual(docks("overview", false, "terminal"));
     expect(openPane(docks("plan", true), "terminal", "bottom")).toEqual(docks("plan", true, "terminal"));
+    expect(togglePane(docks("changes", false, "terminal"), "terminal", "bottom")).toEqual(docks("changes", false));
   });
 
-  test("replace a panel of its own instead of going beside it", () => {
-    expect(openPane(docks("mcp", false), "overview", "right")).toEqual(docks("overview", false));
-    expect(openPane(docks("mcp", false), "terminal", "bottom")).toEqual(docks("mcp", true, "terminal"));
-  });
-
-  test("a pane left under another by an older version goes when Overview opens", () => {
-    expect(openPane(docks("plan", true, "changes"), "overview", "right")).toEqual(docks("overview", false));
+  test("a pane opened in the column leaves the terminal where it is", () => {
+    expect(openPane(docks("plan", true, "terminal"), "overview", "right")).toEqual(docks("overview", false, "terminal"));
+    expect(openPane(docks("overview", true, "terminal"), "overview", "right")).toEqual(docks("overview", false, "terminal"));
   });
 });
 
@@ -60,8 +56,8 @@ describe("the Terminal button", () => {
     expect(toggleTerminal(docks("overview", false, "terminal"))).toEqual(docks("overview", false, null));
   });
 
-  test("in place of a panel of its own", () => {
-    expect(toggleTerminal(docks("plan", false))).toEqual(docks("plan", true, "terminal"));
+  test("beside a panel of its own, leaving it there", () => {
+    expect(toggleTerminal(docks("plan", false))).toEqual(docks("plan", false, "terminal"));
   });
 });
 

@@ -16,8 +16,6 @@ type Props = {
   /** The pane from the header's button; hidden by the window's class rather than unmounted. */
   top: ReactElement;
   topShown: boolean;
-  /** The bottom dock: under the top pane, or under the file in the IDE layout. */
-  bottom: ReactElement | null;
   panels: ReturnType<typeof usePanelSizes>;
 };
 
@@ -27,16 +25,7 @@ type Props = {
  * layout: switching moves the chat rather than drawing it anew, so a draft
  * survives it.
  */
-export function Columns({ ide, chat, page, pageShown, viewer, top, topShown, bottom, panels }: Props) {
-  const bottomHandle = (
-    <PanelResizeHandle
-      axis="y"
-      invert
-      ariaLabel="Resize the bottom panel"
-      onResize={panels.resizeBottomBy}
-      onResizeEnd={(size) => panels.endResize("bottom", size)}
-    />
-  );
+export function Columns({ ide, chat, page, pageShown, viewer, top, topShown, panels }: Props) {
   // The dock's handle sizes the column beside it: right of the dock in the
   // IDE layout, left of it otherwise.
   const dockHandle = (
@@ -56,8 +45,6 @@ export function Columns({ ide, chat, page, pageShown, viewer, top, topShown, bot
       topShown && dockHandle,
       <div key="middle" className={`ide-middle${viewer ? " has-file" : ""}`}>
         {viewer ?? <div className="ide-empty">Pick a file in the tree to read it here.</div>}
-        {bottom && bottomHandle}
-        {bottom}
       </div>,
       <PanelResizeHandle
         key="chat-handle"
@@ -82,12 +69,9 @@ export function Columns({ ide, chat, page, pageShown, viewer, top, topShown, bot
       />
     ),
     viewer,
-    (topShown || bottom) && dockHandle,
-    // Either may be closed; the column goes when both are.
+    topShown && dockHandle,
     <div key="dock" className="dock-column">
       {top}
-      {bottom && topShown && bottomHandle}
-      {bottom}
     </div>,
   ];
 }
