@@ -46,8 +46,12 @@ type Props = {
   settings: LlmSettings | null;
   busy: boolean;
   error: string | null;
-  /** Resolves to whether it was stored — the form says so rather than making it a guess. */
-  onSave: (provider: ProviderConfig, apiKey: string | null) => void | Promise<boolean>;
+  /**
+   * Resolves to whether it was stored — the form says so rather than making it
+   * a guess. `renamedFrom` is the id the form was opened on, when the user
+   * typed another name for it.
+   */
+  onSave: (provider: ProviderConfig, apiKey: string | null, renamedFrom: string | null) => void | Promise<boolean>;
   onRemove: (id: string) => void;
   onSelect: (id: string) => void;
   /** Moves the key the API keys are sealed under between `~/.kibo` and the system keychain. */
@@ -150,7 +154,7 @@ export function ProviderSettings({
     // sends on Enter, and a settings box that quietly does nothing looks
     // exactly like a settings box that saved.
     e?.preventDefault();
-    const ok = await onSave(config(), apiKey);
+    const ok = await onSave(config(), apiKey, chosen?.id ?? null);
     setSaved(ok !== false);
   };
 

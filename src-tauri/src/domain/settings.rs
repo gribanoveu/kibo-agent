@@ -515,9 +515,9 @@ impl From<AppDirError> for String {
 #[error("{0}")]
 pub struct RecentFoldersError(pub String);
 
-/// Why the saved API keys cannot be read. Not "no key": that one is
-/// `Ok(None)`, and reading this as it sent providers a request without a key
-/// that came back 401 with nothing to say why.
+/// Why the saved API keys cannot be read — or the file they are in cannot be
+/// written. Not "no key": that one is `Ok(None)`, and reading this as it sent
+/// providers a request without a key that came back 401 with nothing to say why.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CredentialsError {
     #[error(transparent)]
@@ -531,6 +531,8 @@ pub enum CredentialsError {
     Foreign(String),
     #[error("{0} is damaged — save the API keys again")]
     Damaged(String),
+    #[error("could not save the API keys: {0}")]
+    Save(String),
 }
 
 impl From<CredentialsError> for String {
@@ -551,6 +553,14 @@ pub enum SettingsError {
     Parse(#[source] serde_json::Error),
     #[error("failed to serialize settings: {0}")]
     Serialize(#[source] serde_json::Error),
+    /// A rename onto a name another provider already has: two providers of one
+    /// name is a list nothing can tell apart, keys included.
+    #[error("there is already a provider called {0} — remove it, or give this one another name")]
+    NameTaken(String),
+    /// The key store a rename asked to move a key in refused: nothing was
+    /// renamed, so the user can retry once it is reachable.
+    #[error(transparent)]
+    Credentials(#[from] CredentialsError),
 }
 
 #[cfg(test)]

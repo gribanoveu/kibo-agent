@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-02 Renaming a provider renames it: a save under another name no longer leaves the old one beside it, and the key and the pin come along instead of a second `alfagen` beside `alfagen-2`
 - 2026-11-03 New app icon, with a transparent background around its rounded square; the empty Agent and Chat screens carry the "kibo" wordmark instead of the pixel dog head — the logo's own orange in every theme, its letters in the theme's ink
 
 ## v0.11.0 — 2026-11-03

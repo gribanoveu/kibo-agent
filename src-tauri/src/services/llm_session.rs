@@ -122,11 +122,50 @@ pub fn list_models_for(config: &ProviderConfig, api_key: Option<SecretString>) -
 /// In place, rather than remove-and-append: an edit must not move the entry to
 /// the end of a list the user arranged, and the first entry is what an
 /// unpinned setup uses.
-pub fn save_provider(config: ProviderConfig) -> Result<(), SettingsError> {
-    settings_store::update(|settings| match settings.llm.providers.iter_mut().find(|p| p.id == config.id) {
-        Some(existing) => *existing = config,
-        None => settings.llm.providers.push(config),
-    })
+///
+/// `renamed_from` is the id the form was opened on: the user typed another
+/// name, which is one provider under a new one, not a second provider. Its
+/// place in the list, the pin on it and the key sealed under its old name all
+/// move with it — and a rename onto another provider's name is refused.
+pub fn save_provider(config: ProviderConfig, renamed_from: Option<&str>) -> Result<(), SettingsError> {
+    let renamed_from = renamed_from.filter(|from| *from != config.id);
+    let id = config.id.clone();
+    settings_store::update(|settings| -> Result<(), SettingsError> {
+        let Some(from) = renamed_from else {
+            return match settings.llm.providers.iter_mut().find(|p| p.id == id) {
+                Some(existing) => {
+                    *existing = config;
+                    Ok(())
+                }
+                None => {
+                    settings.llm.providers.push(config);
+                    Ok(())
+                }
+            };
+        };
+        // Asked under the lock, not before it: two saves at once must not both
+        // find the name free. The name is what a key is sealed under.
+        if settings.llm.providers.iter().any(|p| p.id == id) {
+            return Err(SettingsError::NameTaken(id.clone()));
+        }
+        // The key moves with the name, and before the settings are written: a
+        // key store that refuses then leaves the rename unapplied, and the form
+        // says why — instead of a provider without the key it had, and a live
+        // key left under the old name for the next provider of that name.
+        llm_credentials_store::rename_api_key(from, &id)?;
+        // The pin follows the provider it names: left behind, every turn would
+        // have no provider to talk to and say so in no way the user could see.
+        if settings.llm.active_provider_id.as_deref() == Some(from) {
+            settings.llm.active_provider_id = Some(id.clone());
+        }
+        // In place: an edit must not move the entry to the end of a list the
+        // user arranged.
+        match settings.llm.providers.iter().position(|p| p.id == from) {
+            Some(at) => settings.llm.providers[at] = config,
+            None => settings.llm.providers.push(config),
+        }
+        Ok(())
+    })?
 }
 
 /// Removes a provider and the key sealed under its id.
@@ -421,9 +460,9 @@ mod tests {
     #[test]
     fn a_provider_is_added_once_and_edited_in_place() {
         with_app_dir("providers-upsert", || {
-            save_provider(provider("local", None)).unwrap();
-            save_provider(provider("openai", Some("gpt"))).unwrap();
-            save_provider(provider("local", Some("qwen"))).unwrap();
+            save_provider(provider("local", None), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
+            save_provider(provider("local", Some("qwen")), None).unwrap();
 
             let providers = settings_store::load().unwrap().llm.providers;
             assert_eq!(
@@ -435,12 +474,135 @@ mod tests {
         });
     }
 
+    /// The form sends the name it was opened on with every save, not only when
+    /// the user changed it: a save under the same name is an edit, and must not
+    /// read as a rename onto a taken name — its own.
+    #[test]
+    fn a_provider_saved_under_its_own_name_is_an_edit() {
+        with_app_dir("providers-same-name", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+
+            save_provider(provider("local", Some("llama")), Some("local")).unwrap();
+
+            let providers = settings_store::load().unwrap().llm.providers;
+            assert_eq!(providers.len(), 1);
+            assert_eq!(providers[0].model.as_deref(), Some("llama"));
+        });
+    }
+
+    /// A rename is one provider under another name, not a second one: found in
+    /// Settings as an `alfagen` beside the `alfagen-2` it was renamed from.
+    /// Its place in the list, the pin and the key all come with the name.
+    #[test]
+    fn renaming_a_provider_keeps_one_provider_in_place_with_its_key() {
+        with_app_dir("providers-rename", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
+            llm_credentials_store::save_api_key("local", "sk-secret").unwrap();
+            set_active_provider(Some("local".to_string())).unwrap();
+
+            save_provider(provider("llama", Some("qwen")), Some("local")).unwrap();
+
+            let settings = settings_store::load().unwrap().llm;
+            assert_eq!(
+                settings.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                ["llama", "openai"],
+                "one provider, where it was"
+            );
+            assert_eq!(settings.active_provider_id.as_deref(), Some("llama"), "the pin follows the name");
+            assert!(!llm_credentials_store::has_api_key("local").unwrap(), "the old name keeps no key");
+            assert!(llm_credentials_store::has_api_key("llama").unwrap(), "and the new one has it");
+        });
+    }
+
+    /// Two providers of one name is a list nothing can tell apart — and the
+    /// name is what a key is sealed under.
+    #[test]
+    fn renaming_onto_a_taken_name_is_refused() {
+        with_app_dir("providers-rename-taken", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
+
+            let err = save_provider(provider("openai", Some("qwen")), Some("local")).expect_err("taken");
+            assert!(err.to_string().contains("already a provider"), "{err}");
+            let providers = settings_store::load().unwrap().llm.providers;
+            assert_eq!(providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["local", "openai"]);
+        });
+    }
+
+    /// The pin follows the provider it names and nothing else: renaming one
+    /// nobody pinned leaves the pin where the user put it.
+    #[test]
+    fn renaming_another_provider_leaves_the_pin_where_it_was() {
+        with_app_dir("providers-rename-pin", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
+            set_active_provider(Some("local".to_string())).unwrap();
+
+            save_provider(provider("anthropic", Some("gpt")), Some("openai")).unwrap();
+
+            let settings = settings_store::load().unwrap().llm;
+            assert_eq!(settings.active_provider_id.as_deref(), Some("local"), "not the provider renamed");
+        });
+    }
+
+    /// A save that is not a rename pins nothing: a setup nobody pinned stays
+    /// that way, and the first provider in the list goes on answering.
+    #[test]
+    fn a_save_that_is_not_a_rename_pins_nothing() {
+        with_app_dir("providers-no-pin", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("local", Some("llama")), Some("local")).unwrap();
+
+            assert_eq!(settings_store::load().unwrap().llm.active_provider_id, None);
+        });
+    }
+
+    /// A rename carries one key, not the whole store: the key saved for
+    /// another provider is neither written away nor left without its own.
+    #[test]
+    fn a_rename_leaves_the_other_providers_key_where_it_was() {
+        with_app_dir("providers-rename-others-key", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
+            llm_credentials_store::save_api_key("local", "sk-local").unwrap();
+            llm_credentials_store::save_api_key("openai", "sk-openai").unwrap();
+
+            save_provider(provider("llama", Some("qwen")), Some("local")).unwrap();
+
+            let key = |id: &str| {
+                let stored = llm_credentials_store::get_api_key(id).unwrap().expect("a key");
+                secrecy::ExposeSecret::expose_secret(&stored).to_string()
+            };
+            assert_eq!(key("openai"), "sk-openai", "the other provider's key stays");
+            assert_eq!(key("llama"), "sk-local", "and the renamed one moves");
+        });
+    }
+
+    /// A key store that will not open refuses the rename and nothing moves: a
+    /// rename that quietly left the key under the old name would hand a live
+    /// key to the next provider of that name.
+    #[test]
+    fn a_rename_the_key_store_cannot_open_changes_nothing() {
+        with_app_dir("providers-rename-broken-keys", || {
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            llm_credentials_store::save_api_key("local", "sk-secret").unwrap();
+            let dir = crate::infra::app_dir::ensure().unwrap();
+            crate::infra::app_dir::write_private(&dir.join("llm_credentials.enc"), b"ATLS not sealed by anyone").unwrap();
+
+            let err = save_provider(provider("llama", Some("qwen")), Some("local")).expect_err("refused");
+            assert!(err.to_string().contains("llm_credentials.enc"), "{err}");
+            let providers = settings_store::load().unwrap().llm.providers;
+            assert_eq!(providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["local"], "nothing renamed");
+        });
+    }
+
     /// An id reused later for a different endpoint would otherwise inherit a
     /// credential the user believed they had deleted.
     #[test]
     fn removing_a_provider_takes_its_key_with_it() {
         with_app_dir("providers-remove", || {
-            save_provider(provider("local", Some("qwen"))).unwrap();
+            save_provider(provider("local", Some("qwen")), None).unwrap();
             llm_credentials_store::save_api_key("local", "sk-secret").unwrap();
 
             remove_provider("local").unwrap();
@@ -455,8 +617,8 @@ mod tests {
     #[test]
     fn removing_the_active_provider_clears_the_pin() {
         with_app_dir("providers-remove-active", || {
-            save_provider(provider("local", Some("qwen"))).unwrap();
-            save_provider(provider("openai", Some("gpt"))).unwrap();
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            save_provider(provider("openai", Some("gpt")), None).unwrap();
             set_active_provider(Some("local".to_string())).unwrap();
 
             remove_provider("local").unwrap();
@@ -470,7 +632,7 @@ mod tests {
     #[test]
     fn the_active_provider_and_the_debug_flag_are_remembered() {
         with_app_dir("providers-flags", || {
-            save_provider(provider("local", Some("qwen"))).unwrap();
+            save_provider(provider("local", Some("qwen")), None).unwrap();
             set_active_provider(Some("local".to_string())).unwrap();
             set_debug_logging(true).unwrap();
 
@@ -488,7 +650,7 @@ mod tests {
             set_debug_logging(true).unwrap();
             set_active_provider(Some("local".to_string())).unwrap();
 
-            save_provider(provider("local", Some("qwen"))).unwrap();
+            save_provider(provider("local", Some("qwen")), None).unwrap();
 
             let settings = settings_store::load().unwrap().llm;
             assert!(settings.debug_logging);
