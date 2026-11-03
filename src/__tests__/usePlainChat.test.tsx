@@ -126,19 +126,116 @@ describe("a turn in a role", () => {
     expect((last.blocks as { kind: string }[]).some((b) => b.kind === "approval")).toBe(false);
   });
 
-  test("while it waits, the chat is not left: another, or a new one, is refused", async () => {
+  test("while it waits, another chat can open and its card stays with it", async () => {
     results.plain_chat_send = card;
+    results.chat_load = { id: "other", messages: [], blocks: [], role: "assistant", kube: null };
     const { result } = renderHook(() => usePlainChat());
     await act(async () => {
       await result.current.send("delete it");
     });
-    let opened = true;
+    const waiting = called("plain_chat_send")[0].args.chatId as string;
     await act(async () => {
-      opened = await result.current.open("other");
+      expect(await result.current.open("other")).toBe(true);
     });
-    expect(opened).toBe(false);
-    expect(result.current.newChat()).toBe(false);
-    expect(called("chat_load")).toEqual([]);
+    expect(result.current.chatId).toBe("other");
+    expect(result.current.chatActivity[waiting]).toBe("awaitingApproval");
+    expect(result.current.newChat()).toBe(true);
+
+    await act(async () => {
+      await result.current.open(waiting);
+    });
+    expect(result.current.turn.status).toBe("awaitingApproval");
+    expect(result.current.turn.checkpoint).toEqual(card.value);
+  });
+
+  test("two replies run independently, including background completion and stop", async () => {
+    const pending = new Map<string, (outcome: unknown) => void>();
+    results.plain_chat_send = (args: { chatId: string }) => new Promise((resolve) => pending.set(args.chatId, resolve));
+    const { result } = renderHook(() => usePlainChat());
+    act(() => void result.current.send("first"));
+    await waitFor(() => expect(pending.size).toBe(1));
+    const first = called("plain_chat_send")[0].args.chatId as string;
+
+    act(() => {
+      result.current.newChat();
+      void result.current.send("second");
+    });
+    await waitFor(() => expect(pending.size).toBe(2));
+    const second = called("plain_chat_send")[1].args.chatId as string;
+    expect(result.current.chatActivity).toMatchObject({ [first]: "running", [second]: "running" });
+
+    act(() => result.current.stop());
+    expect(called("plain_chat_cancel").map((call) => call.args)).toEqual([{ chatId: second }]);
+    await act(async () => {
+      pending.get(first)?.({ status: "done", value: { text: "one", history: [{ role: "user", content: "first" }], todos: [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.chatActivity[first]).toBe("finished"));
+    expect(result.current.chatActivity[second]).toBe("running");
+
+    await act(async () => {
+      pending.get(second)?.({ status: "done", value: { text: "two", history: [{ role: "user", content: "second" }], todos: [] } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await result.current.open(first);
+    });
+    expect(result.current.turn.blocks.find((block) => block.kind === "user")).toMatchObject({ text: "first" });
+  });
+
+  test("a refused resume keeps the approval card and its checkpoint", async () => {
+    results.plain_chat_send = card;
+    results.plain_chat_resume = new Error("the parallel-turns limit");
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("delete it");
+    });
+    await act(async () => {
+      await result.current.decide([{ id: "c1", approved: true }]);
+    });
+    expect(result.current.turn.status).toBe("awaitingApproval");
+    expect(result.current.turn.checkpoint).toEqual(card.value);
+    expect(result.current.error).toContain("parallel-turns limit");
+  });
+
+  test("two hook instances never mint the same turn id for one saved chat", async () => {
+    results.chat_load = { id: "shared", messages: [], blocks: [], role: "assistant", kube: null };
+    results.plain_chat_send = () => new Promise(() => {});
+    const first = renderHook(() => usePlainChat());
+    const second = renderHook(() => usePlainChat());
+    await act(async () => {
+      await first.result.current.open("shared");
+      await second.result.current.open("shared");
+    });
+    act(() => {
+      void first.result.current.send("one");
+      void second.result.current.send("two");
+    });
+    await waitFor(() => expect(called("plain_chat_send")).toHaveLength(2));
+    const ids = called("plain_chat_send").map((call) => call.args.turnId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("stop during the initial save is repeated after the backend start", async () => {
+    let releaseSave: ((value: unknown) => void) | undefined;
+    results.plain_chat_save = () => new Promise((resolve) => {
+      releaseSave = resolve;
+    });
+    results.plain_chat_send = () => new Promise(() => {});
+    const { result } = renderHook(() => usePlainChat());
+    act(() => void result.current.send("wait"));
+    await waitFor(() => expect(called("plain_chat_save")).toHaveLength(1));
+    act(() => result.current.stop());
+    const id = called("plain_chat_cancel")[0].args.chatId;
+
+    await act(async () => {
+      releaseSave?.(null);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(called("plain_chat_send")).toHaveLength(1));
+    await waitFor(() => expect(called("plain_chat_cancel")).toHaveLength(2));
+    expect(called("plain_chat_cancel").map((call) => call.args)).toEqual([{ chatId: id }, { chatId: id }]);
+    expect(calls.findIndex((call) => call.command === "plain_chat_send")).toBeLessThan(calls.map((call) => call.command).lastIndexOf("plain_chat_cancel"));
   });
 
   test("a turn that fails says so in the transcript", async () => {
@@ -229,6 +326,31 @@ describe("room in the window", () => {
     expect(called("plain_chat_compact").map((c) => c.args.force)).toEqual([true]);
     // Its summary is the chat's spending, as the turn's is.
     expect(called("plain_chat_compact")[0].args.chatId).toBe(called("plain_chat_send")[0].args.chatId);
+  });
+
+  test("a compaction finished in the background is saved without reopening the chat", async () => {
+    results.plain_chat_send = done;
+    let releaseCompact: ((value: unknown) => void) | undefined;
+    results.plain_chat_compact = () => new Promise((resolve) => {
+      releaseCompact = resolve;
+    });
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    const id = result.current.chatId;
+    act(() => void result.current.compact());
+    await waitFor(() => expect(called("plain_chat_compact")).toHaveLength(1));
+    act(() => result.current.newChat());
+
+    await act(async () => {
+      releaseCompact?.({ history: [{ role: "user", content: "folded" }], folded: 2 });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      const saved = called("plain_chat_save").some((call) => call.args.id === id && (call.args.messages as { content: string }[])[0]?.content === "folded");
+      expect(saved).toBe(true);
+    });
   });
 
   /// On screen, the chat's total is read; and again once Compact now is back,
@@ -424,6 +546,34 @@ describe("a Prototype chat's folder put back", () => {
     });
     expect(restored).toBe(false);
     expect(called("prototype_restore")).toEqual([]);
+  });
+
+  test("a restore finishing after deletion cannot recreate the chat", async () => {
+    results.plain_chat_send = done;
+    let releaseRestore: ((value: unknown) => void) | undefined;
+    results.prototype_restore = () => new Promise((resolve) => {
+      releaseRestore = resolve;
+    });
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("a page");
+    });
+    const id = result.current.chatId!;
+    let restoring: Promise<boolean> | undefined;
+    act(() => {
+      restoring = result.current.restore(1);
+    });
+    await waitFor(() => expect(called("prototype_restore")).toHaveLength(1));
+    await act(async () => {
+      expect(await result.current.remove(id)).toBe(true);
+    });
+    const saves = called("plain_chat_save").length;
+
+    await act(async () => {
+      releaseRestore?.({ from: 1, version: 3, before: 2 });
+      await restoring;
+    });
+    expect(called("plain_chat_save")).toHaveLength(saves);
   });
 
   test("a restore that failed says why and adds nothing", async () => {

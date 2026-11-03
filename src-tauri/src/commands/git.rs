@@ -128,6 +128,7 @@ pub async fn git_branches(state: State<'_, Arc<AgentState>>) -> Result<Vec<Branc
 /// way — it never overwrites them.
 #[tauri::command]
 pub async fn git_checkout(branch: String, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
+    state.ensure_tree_is_idle()?;
     in_repo(&state, move |root| git_branches::checkout(&root, &branch)).await
 }
 

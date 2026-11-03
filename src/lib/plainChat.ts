@@ -100,7 +100,7 @@ export async function plainChatCompact(
   return invoke<{ history: LlmMessage[]; folded: number } | null>("plain_chat_compact", { role, kube, messages, force, turnId, chatId });
 }
 
-export async function plainChatCancel(): Promise<void> {
+export async function plainChatCancel(chatId: string): Promise<void> {
   requireBackend();
-  return invoke<void>("plain_chat_cancel");
+  return invoke<void>("plain_chat_cancel", { chatId });
 }

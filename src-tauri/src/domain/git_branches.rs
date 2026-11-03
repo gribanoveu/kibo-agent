@@ -76,11 +76,13 @@ pub struct WorktreeState {
 /// Prefix of every branch a worktree is started on, so the ones the app made
 /// are told apart from the user's own.
 pub const WORKTREE_BRANCH_PREFIX: &str = "kibo/";
+/// A chat moved beside another running one gets its own, distinct namespace.
+pub const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/";
 
 /// Whether removing a worktree leaves its branch: when commits are only on
 /// it, or when the user made it — theirs, merged or not.
 pub fn keeps_branch(branch: &str, own_commits: usize) -> bool {
-    own_commits > 0 || !branch.starts_with(WORKTREE_BRANCH_PREFIX)
+    own_commits > 0 || !(branch.starts_with(WORKTREE_BRANCH_PREFIX) || branch.starts_with(AGENT_WORKTREE_BRANCH_PREFIX))
 }
 
 /// Where a worktree started from `base` at `stamp` is named, the `n`th try

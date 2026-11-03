@@ -464,6 +464,35 @@ mod tests {
         assert!(matches!(err, ToolError::DeleteNotReadInFull(_)), "{err}");
     }
 
+    /// A write staled by another turn in the same folder is refused before it
+    /// can cost an approval card; a fresh read clears it for the same call.
+    #[test]
+    fn preflight_refuses_a_write_staled_by_a_parallel_session() {
+        let (scope, root, mut reads) = fixture("preflight-stale");
+        std::fs::write(root.join("a.txt"), "original\n").expect("writable");
+        reads.record("a.txt", "original\n", true);
+        std::fs::write(root.join("a.txt"), "edited by a parallel session\n").expect("writable");
+
+        let err = preflight_tool_call(
+            &scope,
+            ConversationMode::Agent,
+            &reads,
+            &call("writeFile", r#"{"path": "a.txt", "content": "agent version"}"#),
+        )
+        .expect_err("changed by the other turn");
+        assert!(matches!(err, ToolError::FileChangedSinceRead(_)), "{err}");
+        assert!(err.to_string().contains("another running agent"), "{err}");
+
+        reads.record("a.txt", "edited by a parallel session\n", true);
+        preflight_tool_call(
+            &scope,
+            ConversationMode::Agent,
+            &reads,
+            &call("writeFile", r#"{"path": "a.txt", "content": "agent version"}"#),
+        )
+        .expect("a fresh read vouches for the current file");
+    }
+
     /// Creating a file is not a write over anything, so it must reach approval.
     #[test]
     fn preflight_lets_a_new_file_through() {

@@ -20,6 +20,7 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   servers: [],
   processes: [],
   agents: [],
+  activeTurns: 0,
   onOpenProcess: () => {},
   onOpenProcesses: () => {},
   onOpenAgent: () => {},
@@ -28,6 +29,20 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
 });
 
 describe("Overview", () => {
+  test("counts live agent turns as they start and finish", () => {
+    const { rerender } = render(<OverviewPanel {...props()} />);
+    expect(screen.getByText("No agent turns are active.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props({ activeTurns: 2 })} />);
+    expect(screen.getByText("2 active across chats.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props({ activeTurns: 1 })} />);
+    expect(screen.getByText("1 active across chats.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props()} />);
+    expect(screen.getByText("No agent turns are active.")).toBeTruthy();
+  });
+
   test("lists the MCP servers that are on, with what they are doing", () => {
     const tools = [{ name: "a", description: "" }, { name: "b", description: "" }];
     render(

@@ -321,6 +321,12 @@ describe("the folder tab's branch", () => {
     expect(screen.queryAllByRole("option")).toHaveLength(0);
   });
 
+  test("with Worktree on, another turn does not lock the choice of its base", () => {
+    tab(started({ worktree: true, base: "feature", locked: "An agent is working in this folder" }));
+    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
+    expect(screen.getByRole("option", { name: "feature" })).toBeTruthy();
+  });
+
   /// Another chat of the folder switched it: the label shows what is checked
   /// out, and this chat's own branch beside it, one click away.
   test("a chat the folder was moved off says which branch is its own, and switches back", () => {
@@ -329,6 +335,15 @@ describe("the folder tab's branch", () => {
     expect(screen.getByTitle("Switch the folder's branch").textContent).toBe("main");
     fireEvent.click(screen.getByTitle(/This chat works on feature; the folder is on main now/));
     expect(picked).toEqual(["feature"]);
+  });
+
+  test("the way back to a chat's branch is locked by another turn too", () => {
+    const picked: string[] = [];
+    tab(started({ locked: "An agent is working in this folder", onPick: (name) => picked.push(name) }), "feature");
+    const away = screen.getByRole("button", { name: "feature" });
+    expect(away.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(away);
+    expect(picked).toEqual([]);
   });
 
   test("a chat on the branch checked out has nothing to say about it", () => {

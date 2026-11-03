@@ -37,6 +37,15 @@ use crate::infra::app_dir;
 
 const FILE: &str = "chats.db";
 
+/// A record update is read-modify-write: relocating a chat and saving its last
+/// turn must not each write back a whole record read before the other finished.
+/// Saves are once a turn, so one process-wide lock is cheaper than a per-chat
+/// registry; a per-chat lock is the way past if that ever becomes contention.
+fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 3000;
@@ -83,6 +92,11 @@ pub(crate) fn store(e: rusqlite::Error) -> ChatError {
 }
 
 pub(crate) fn open() -> Result<Connection, ChatError> {
+    // Opening checks and, on an older database, changes the schema. Two first
+    // turns may open together; serialize that short setup so neither sees the
+    // other's schema write as `database is locked` or a duplicate column.
+    static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _opening = OPEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = app_dir::ensure().map_err(ChatError::AppDir)?.join(FILE);
     let conn = Connection::open(&path).map_err(store)?;
     #[cfg(unix)]
@@ -225,10 +239,27 @@ pub fn save(
     branched_from: Option<&str>,
     git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
+    // An existing chat keeps its checkout: a save already in flight when the
+    // chat moved to a worktree must not write the old folder or its branch back.
+    let (workspace, worktree_base, git_branch) = match load(id) {
+        Ok(record) => {
+            let branch = if record.workspace == workspace {
+                git_branch.map(str::to_string)
+            } else {
+                crate::infra::git_head::current_branch(Path::new(&record.workspace)).or(record.git_branch)
+            };
+            (record.workspace, record.worktree_base, branch)
+        }
+        Err(ChatError::NotFound(_)) => (workspace.to_string(), None, git_branch.map(str::to_string)),
+        Err(e) => return Err(e),
+    };
+    #[cfg(test)]
+    std::thread::yield_now();
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
-        workspace: workspace.to_string(),
+        workspace,
         title: chat_record::derive_title(messages, blocks),
         created_at: 0,
         updated_at: 0,
@@ -239,7 +270,8 @@ pub fn save(
         branched_from: branched_from.map(str::to_string),
         role: None,
         kube: None,
-        git_branch: git_branch.map(str::to_string),
+        worktree_base,
+        git_branch,
     })
 }
 
@@ -253,6 +285,7 @@ pub fn save_plain(
     messages: &[LlmMessage],
     blocks: &Value,
 ) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
@@ -267,8 +300,21 @@ pub fn save_plain(
         branched_from: None,
         role: Some(role),
         kube,
+        worktree_base: None,
         git_branch: None,
     })
+}
+
+/// Moves only the chat's own record; the worktree has already been made.
+pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
+    let mut record = load(id)?;
+    #[cfg(test)]
+    std::thread::yield_now();
+    record.workspace = workspace.to_string();
+    record.worktree_base = Some(base.to_string());
+    record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
+    upsert(record)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
@@ -665,6 +711,47 @@ mod tests {
             assert_eq!(branch_of("a").as_deref(), Some("feature"));
             said("a", None);
             assert_eq!(branch_of("a"), None);
+        });
+    }
+
+    #[test]
+    fn a_save_already_in_flight_cannot_move_a_chat_back_from_its_worktree() {
+        with_app_dir("chat-store-save-after-move", || {
+            save_one("one", "/repo", "first");
+            relocate("one", "/repo-worktree", "main").unwrap();
+
+            save_one("one", "/repo", "finished meanwhile");
+
+            let record = load("one").unwrap();
+            assert_eq!(record.workspace, "/repo-worktree");
+            assert_eq!(record.worktree_base.as_deref(), Some("main"));
+        });
+    }
+
+    #[test]
+    fn concurrent_save_and_relocate_keep_both_the_transcript_and_the_worktree() {
+        with_app_dir("chat-store-save-relocate-race", || {
+            for round in 0..16 {
+                let id = format!("race-{round}");
+                save_one(&id, "/repo", "first");
+                let start = std::sync::Barrier::new(2);
+                std::thread::scope(|threads| {
+                    threads.spawn(|| {
+                        start.wait();
+                        save_one(&id, "/repo", "finished meanwhile");
+                    });
+                    threads.spawn(|| {
+                        start.wait();
+                        relocate(&id, "/repo-worktree", "main").unwrap();
+                    });
+                });
+
+                let record = load(&id).unwrap();
+                assert_eq!(record.workspace, "/repo-worktree", "round {round}");
+                assert_eq!(record.worktree_base.as_deref(), Some("main"), "round {round}");
+                assert_eq!(record.messages, vec![LlmMessage::user("finished meanwhile")], "round {round}");
+                assert_eq!(record.blocks, blocks("finished meanwhile"), "round {round}");
+            }
         });
     }
 

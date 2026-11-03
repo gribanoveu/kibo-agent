@@ -229,6 +229,8 @@ pub struct TurnContext<'a> {
     pub rules: &'a [RuleFile],
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
+    /// The parallel-session warning as this chat's first turn froze it.
+    pub parallel: Option<&'a str>,
     /// The language the user asked replies in; `None` asks nothing.
     pub language: Option<&'a str>,
     /// What the connected MCP servers say about using their tools, and
@@ -269,7 +271,26 @@ pub fn context_block(ctx: &TurnContext) -> String {
             main.display(),
         ));
     }
+    if let Some(parallel) = ctx.parallel {
+        text.push('\n');
+        text.push_str(parallel);
+    }
     text
+}
+
+/// The shared-tree etiquette, named for the chats running beside this one.
+/// Kept whole in `Frozen`: the prompt never follows a session starting or ending.
+pub fn parallel_block(chats: &[String]) -> Option<String> {
+    let (first, rest) = chats.split_first()?;
+    let names = std::iter::once(first).chain(rest).map(|title| format!("\"{}\"", title.replace(['\n', '\r'], " "))).collect::<Vec<_>>().join(", ");
+    Some(format!(
+        "- Other agent turns are running in this folder right now (chat {names}). Their edits can land while you work: \
+         a file you read earlier may have changed since, and a write that finds it changed is refused — re-read the file \
+         and apply your change to what is there now. Never revert, delete or commit changes you did not make; branches and \
+         the git index are shared — do not run git checkout, switch, restore, reset, clean, rebase or merge. If your task is \
+         likely to touch the same files, offer the user a move of this chat to a separate worktree (offer `worktree`) and \
+         carry on there."
+    ))
 }
 
 /// How to read a checklist row, said wherever the rows are shown.
@@ -619,10 +640,23 @@ mod tests {
             skills: &[],
             rules: &[],
             worktree_of: None,
+            parallel: None,
             language: None,
             mcp_servers: &[],
             knowledge: None,
         }
+    }
+
+    #[test]
+    fn a_parallel_chat_is_named_with_the_shared_tree_rules() {
+        assert_eq!(parallel_block(&[]), None);
+        let block = parallel_block(&["Fix\nlogin".into()]).expect("a running neighbour is named");
+        assert!(block.contains("chat \"Fix login\""), "{block}");
+        assert!(block.contains("do not run git checkout") && block.contains("reset") && block.contains("merge"), "{block}");
+        assert!(block.contains("offer `worktree`"), "{block}");
+        let workspace = PathBuf::from("/tmp/p");
+        let parallel = Some(block.as_str());
+        assert!(context_block(&TurnContext { parallel, ..ctx(&workspace) }).contains(&block));
     }
 
     /// A server's instructions are their own message, said to be the

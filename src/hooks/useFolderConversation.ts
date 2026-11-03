@@ -22,6 +22,8 @@ export function useFolderConversation(
   resumed: boolean,
   latest: string | undefined,
   agent: Agent,
+  moved?: { id: string; path: string } | null,
+  onMoved?: () => void,
 ) {
   const reopened = useRef(false);
   useEffect(() => {
@@ -34,5 +36,8 @@ export function useFolderConversation(
   useEffect(() => {
     if (shown.current && path !== shown.current) agent.reset();
     shown.current = path;
-  }, [path, agent]);
+    // A moved chat is reopened only once its worktree is actually open; doing
+    // it after the invoke alone would race the folder-change reset above.
+    if (moved?.path === path) void Promise.resolve(agent.open(moved.id)).then(onMoved);
+  }, [path, agent, moved, onMoved]);
 }

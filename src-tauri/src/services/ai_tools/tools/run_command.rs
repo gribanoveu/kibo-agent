@@ -28,6 +28,11 @@ pub fn run_command(
     };
 
     if request.background == Some(true) {
+        if deps.tree_mutation {
+            return Err(ToolError::Command(
+                "a git command that changes the checkout must run in the foreground, so the parallel-turn guard stays held until it finishes".into(),
+            ));
+        }
         let processes = deps.processes.as_deref().ok_or_else(super::process::unavailable)?;
         let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
         return Ok(ToolResult::ProcessStarted(processes.start(&deps.shell, &request.command, &cwd, shown)?));
@@ -39,13 +44,18 @@ pub fn run_command(
     let typed = deps.notes_typed.map(|count| (count, count()));
     let woken = || typed.is_some_and(|(count, at)| count() != at);
     let stop = || deps.cancelled.is_some_and(|cancelled| cancelled());
-    // With nowhere to move to — a hook, a test — the timeout kills as it always did.
-    let ran = match deps.processes.as_deref() {
-        Some(processes) => {
-            let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
-            process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes, &woken, &stop)
+    // A tree mutation cannot outlive its parallel-turn lock. With nowhere to
+    // move to — a hook, a test — the timeout kills as it always did.
+    let ran = if deps.tree_mutation {
+        process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished)
+    } else {
+        match deps.processes.as_deref() {
+            Some(processes) => {
+                let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
+                process_runner::run_or_move(&deps.shell, request, &cwd, shown, deps.output.as_ref(), processes, &woken, &stop)
+            }
+            None => process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished),
         }
-        None => process_runner::run(&deps.shell, request, &cwd, deps.output.as_ref()).map(Ran::Finished),
     };
     ran.map(|ran| match ran {
         Ran::Finished(output) => ToolResult::CommandRan(output),
@@ -188,6 +198,24 @@ mod tests {
         assert_eq!(out.exit_code, Some(1));
         assert!(out.stderr.contains("assertion failed"), "{}", out.stderr);
         assert!(!out.succeeded());
+    }
+
+    #[test]
+    fn a_tree_mutation_cannot_outlive_its_guard_in_the_background() {
+        let root = temp_dir("cmd-tree-background");
+        let scope = ToolScope::new(&root).expect("scope");
+        let mut call = ask("git checkout main", None);
+        let ToolCall::RunCommand(request) = &mut call else { unreachable!() };
+        request.background = Some(true);
+        let err = execute_tool(
+            &scope,
+            &call,
+            &mut ReadFiles::default(),
+            &mut Vec::new(),
+            &ToolDeps { tree_mutation: true, ..ToolDeps::default() },
+        )
+        .expect_err("background tree mutation refused");
+        assert!(matches!(&err, ToolError::Command(message) if message.contains("foreground")), "{err}");
     }
 
     #[test]

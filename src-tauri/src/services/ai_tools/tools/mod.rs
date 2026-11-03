@@ -55,6 +55,15 @@ pub mod web_fetch;
 pub mod web_search;
 pub mod tool_search;
 
+/// The fresh-read check and its write are one operation between the app's own
+/// sessions. One process-wide lock avoids a canonical-path lock registry for a
+/// short critical section; external processes still need the hash check because
+/// they do not share this lock.
+fn file_mutation_lock() -> std::sync::MutexGuard<'static, ()> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// One row: a tool and the function that builds its schema.
 type ToolDefinitionRow = (ToolName, fn() -> LlmToolDefinition);
 
@@ -165,7 +174,7 @@ pub fn dispatch(
         ToolCall::Skill(args) => skill::skill(args, deps),
         ToolCall::WritePlan(args) => write_plan::write_plan(args),
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
-        ToolCall::Offer(args) => offer::offer(folder()?, args),
+        ToolCall::Offer(args) => offer::offer(folder()?, args, deps),
         ToolCall::Explore(args) => explore::explore(args, deps),
         ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),

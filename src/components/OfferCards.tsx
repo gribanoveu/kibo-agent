@@ -1,10 +1,12 @@
-import { CornerDownLeft, GitCommitHorizontal, SearchCheck } from "lucide-react";
+import { CornerDownLeft, GitCommitHorizontal, GitFork, GitPullRequest, SearchCheck } from "lucide-react";
 import type { Offer, OfferKind } from "../lib/offer";
 import "./OfferCards.css";
 
 const LOOK: Record<OfferKind, { label: string; icon: typeof SearchCheck }> = {
   review: { label: "Run a subagent for review", icon: SearchCheck },
   commit: { label: "Commit", icon: GitCommitHorizontal },
+  worktree: { label: "Move this chat to a worktree", icon: GitFork },
+  pullRequest: { label: "Create a pull request", icon: GitPullRequest },
 };
 
 /** The next steps the agent offered, after its answer: each a button that sends it as the user's message. */

@@ -214,6 +214,7 @@ mod tests {
                 skills,
                 rules,
                 worktree_of: None,
+                parallel: None,
                 language: None,
                 mcp_servers: mcp.notes(),
                 knowledge: None,

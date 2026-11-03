@@ -8,6 +8,7 @@ import { Sidebar } from "../components/Sidebar";
 import { PAGES, pagesShown } from "../components/pages";
 import type { ChatSummary } from "../lib/savedChats";
 import { IS_MAC } from "../lib/shortcuts";
+import type { ChatActivity } from "../types";
 
 const chats: ChatSummary[] = [
   { id: "a", title: "kept in view", updatedAt: 2, archived: false },
@@ -15,8 +16,15 @@ const chats: ChatSummary[] = [
 ];
 
 const sidebar = (
-  on: { archive?: (id: string, archived: boolean) => void; remove?: (id: string) => void; toggleTheme?: () => void } = {},
+  on: {
+    archive?: (id: string, archived: boolean) => void;
+    remove?: (id: string) => void;
+    select?: (id: string) => void;
+    toggleTheme?: () => void;
+  } = {},
   themeSide: "light" | "dark" = "dark",
+  chatActivity: Record<string, ChatActivity> = {},
+  rows: ChatSummary[] = chats,
 ) =>
   render(
     <Sidebar
@@ -25,9 +33,10 @@ const sidebar = (
       pages={PAGES}
       page={null}
       onPage={() => {}}
-      chats={chats}
+      chats={rows}
       activeChat={null}
-      onSelectChat={() => {}}
+      chatActivity={chatActivity}
+      onSelectChat={on.select ?? (() => {})}
       onNewChat={() => {}}
       onArchiveChat={on.archive ?? (() => {})}
       onDeleteChat={on.remove ?? (() => {})}
@@ -88,6 +97,23 @@ describe("the chat list", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(removed).toEqual(["a"]);
+  });
+
+  test("distinguishes a running turn, an approval wait and a background finish", () => {
+    const selected: string[] = [];
+    const rows = [...chats, { id: "c", title: "done away", updatedAt: 3, archived: false }];
+    sidebar({ select: (id) => selected.push(id) }, "dark", { a: "running", b: "awaitingApproval", c: "finished" }, rows);
+    pickFilter("All");
+
+    const running = screen.getByLabelText("Turn running");
+    expect(running).toBeTruthy();
+    expect(screen.getByLabelText("Approval needed")).toBeTruthy();
+    expect(screen.getByLabelText("Finished in background")).toBeTruthy();
+    const row = running.closest("button");
+    expect(row?.firstElementChild).toBe(running);
+    expect(row?.querySelectorAll("svg")).toHaveLength(1);
+    fireEvent.click(screen.getByText("done away"));
+    expect(selected).toEqual(["c"]);
   });
 });
 

@@ -294,11 +294,12 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let mcp = McpTools::default();
     let hooks = Hooks::default();
     let agents = Arc::new(crate::domain::agents::Agents::default());
+    let no_parallel = Vec::new;
 
     let turn = Turn {
         events: &events,
         session,
-        place: llm_chat::Place::Folder { scope: &scope, mode: ConversationMode::Agent, web: None },
+        place: llm_chat::Place::Folder { scope: &scope, mode: ConversationMode::Agent, web: None, parallel: &no_parallel, worktree_base: None },
         approval: &approval,
         cancelled: &cancelled,
         sleep: &sleep,

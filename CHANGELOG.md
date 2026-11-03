@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-02 Run several Agent or Chat mode conversations at once with live status in the chat list; Agent chats also show their active-turn count in Overview, and when two tasks share a checkout the agent can offer to move its chat to a clean worktree and later offer a pull request back into the recorded base
 - 2026-11-02 The agent says what it is about to do, and why, before its first tool call, and speaks up mid-task when something it found changes the plan — instead of narrating every call or saying nothing
 - 2026-11-01 Tide, a light palette in DeepSeek's brand blue: its near-white page and #4d6bfe accent, a step darker so links clear 4.5:1
 - 2026-11-01 Clay, a third light palette with as little blue as a palette can carry — paper-toned ground, warm greys, rust accent — and the same or better contrast, AAA for body text

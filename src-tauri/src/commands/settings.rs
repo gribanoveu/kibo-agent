@@ -224,8 +224,8 @@ pub fn llm_reply_language_set(language: ReplyLanguage) -> Result<(), String> {
 /// How far an agent turn may run, from the next turn on.
 #[tauri::command]
 pub fn llm_turn_limits_set(limits: TurnLimits) -> Result<(), String> {
-    // A zero would end every turn before its first round.
-    if limits.rounds == 0 || limits.budget == 0 {
+    // A zero would end every turn before its first round — or refuse it.
+    if limits.rounds == 0 || limits.budget == 0 || limits.parallel == 0 {
         return Err("turn limits are at least 1".to_string());
     }
     llm_session::set_turn_limits(limits).map_err(|e| e.to_string())
@@ -373,6 +373,23 @@ pub async fn provider_balance(id: String) -> Result<Option<ProviderBalance>, Str
 mod tests {
     use super::*;
     use crate::testing::with_app_dir;
+
+    /// Every limit is at least one — a zero would end every turn before its
+    /// first round, or refuse it.
+    #[test]
+    fn a_zero_turn_limit_is_refused() {
+        with_app_dir("settings-zero-limits", || {
+            let limits = TurnLimits { rounds: 100, budget: 500, parallel: 3 };
+            for zero in [
+                TurnLimits { rounds: 0, ..limits },
+                TurnLimits { budget: 0, ..limits },
+                TurnLimits { parallel: 0, ..limits },
+            ] {
+                assert!(llm_turn_limits_set(zero).is_err(), "{zero:?} must be refused");
+            }
+            llm_turn_limits_set(limits).expect("all ones and up are fine");
+        });
+    }
 
     /// Saved keys that do not open: a blob sealed under no key of this machine.
     fn break_the_keys() {
