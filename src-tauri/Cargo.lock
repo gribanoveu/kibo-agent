@@ -3243,7 +3243,7 @@ dependencies = [
 
 [[package]]
 name = "kibo-agent"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

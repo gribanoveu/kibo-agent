@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.11.0 — 2026-11-03
+
 - 2026-11-02 Run several Agent or Chat mode conversations at once with live status in the chat list; Agent chats also show their active-turn count in Overview, and when two tasks share a checkout the agent can offer to move its chat to a clean worktree and later offer a pull request back into the recorded base
 - 2026-11-02 The card an MCP server asks through reads at its own size instead of the chat's — its message no longer stands twice the label above it — and its Send and Decline are drawn as the app's buttons rather than as bare text
 - 2026-11-02 A review's card is drawn as Markdown, as an answer is — a finding's title, what it says and the reviewer's summary get bold, lists, links and `code` instead of the characters as written, and a fenced block in one reads as a block
