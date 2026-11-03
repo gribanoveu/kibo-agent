@@ -79,7 +79,7 @@ fn llm_settings_view() -> Result<LlmSettingsView, String> {
 }
 
 #[tauri::command]
-pub fn llm_provider_save(mut provider: ProviderConfig) -> Result<(), String> {
+pub fn llm_provider_save(mut provider: ProviderConfig, renamed_from: Option<String>) -> Result<(), String> {
     if provider.id.trim().is_empty() {
         return Err("a provider needs a name".to_string());
     }
@@ -98,7 +98,7 @@ pub fn llm_provider_save(mut provider: ProviderConfig) -> Result<(), String> {
     if let Some(pem) = &provider.trusted_cert_pem {
         http_agent::parse_trusted_certs(pem).map_err(|e| format!("the certificate: {}", e.0))?;
     }
-    llm_session::save_provider(provider).map_err(|e| e.to_string())
+    llm_session::save_provider(provider, renamed_from.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -402,11 +402,14 @@ mod tests {
     #[test]
     fn settings_say_why_no_key_shows() {
         with_app_dir("settings-broken-keys", || {
-            llm_provider_save(ProviderConfig {
-                id: "gateway".into(),
-                base_url: "https://llm.example/v1".into(),
-                ..Default::default()
-            })
+            llm_provider_save(
+                ProviderConfig {
+                    id: "gateway".into(),
+                    base_url: "https://llm.example/v1".into(),
+                    ..Default::default()
+                },
+                None,
+            )
             .unwrap();
             assert_eq!(wait(llm_settings_get()).unwrap().key_error, None);
 
@@ -473,7 +476,7 @@ mod tests {
     #[test]
     fn a_saved_key_is_reported_as_stored() {
         with_app_dir("cmd-settings-key", || {
-            llm_provider_save(provider("gateway")).unwrap();
+            llm_provider_save(provider("gateway"), None).unwrap();
             wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
             llm_active_provider_set(Some("gateway".to_string())).unwrap();
 
@@ -502,7 +505,7 @@ mod tests {
             });
             let parsed: ProviderConfig = serde_json::from_value(wire).expect("accepted");
 
-            llm_provider_save(parsed).unwrap();
+            llm_provider_save(parsed, None).unwrap();
             assert_eq!(wait(llm_settings_get()).unwrap().providers.len(), 1);
         });
     }
@@ -512,7 +515,7 @@ mod tests {
     #[test]
     fn an_emptied_key_box_removes_the_key() {
         with_app_dir("cmd-settings-clear", || {
-            llm_provider_save(provider("gateway")).unwrap();
+            llm_provider_save(provider("gateway"), None).unwrap();
             wait(llm_api_key_save("gateway".to_string(), "sk-live".to_string())).unwrap();
             wait(llm_api_key_save("gateway".to_string(), "  ".to_string())).unwrap();
 
@@ -524,10 +527,10 @@ mod tests {
     fn sampling_out_of_range_is_refused_and_in_range_kept() {
         with_app_dir("cmd-settings-sampling", || {
             let with = |temperature, top_p| ProviderConfig { temperature, top_p, ..provider("gateway") };
-            assert!(llm_provider_save(with(Some(2.5), None)).is_err());
-            assert!(llm_provider_save(with(Some(-0.1), None)).is_err());
-            assert!(llm_provider_save(with(None, Some(1.5))).is_err());
-            llm_provider_save(with(Some(2.0), Some(0.0))).unwrap();
+            assert!(llm_provider_save(with(Some(2.5), None), None).is_err());
+            assert!(llm_provider_save(with(Some(-0.1), None), None).is_err());
+            assert!(llm_provider_save(with(None, Some(1.5)), None).is_err());
+            llm_provider_save(with(Some(2.0), Some(0.0)), None).unwrap();
             let saved = &wait(llm_settings_get()).unwrap().providers[0].config;
             assert_eq!((saved.temperature, saved.top_p), (Some(2.0), Some(0.0)));
         });
@@ -538,9 +541,9 @@ mod tests {
     fn a_certificate_is_checked_at_save_and_a_blank_one_is_none() {
         with_app_dir("cmd-settings-cert", || {
             let with = |pem: &str| ProviderConfig { trusted_cert_pem: Some(pem.to_string()), ..provider("gateway") };
-            let err = llm_provider_save(with("not a certificate")).expect_err("refused");
+            let err = llm_provider_save(with("not a certificate"), None).expect_err("refused");
             assert!(err.contains("certificate"), "{err}");
-            llm_provider_save(with("  \n")).unwrap();
+            llm_provider_save(with("  \n"), None).unwrap();
             assert_eq!(wait(llm_settings_get()).unwrap().providers[0].config.trusted_cert_pem, None);
         });
     }
@@ -548,12 +551,15 @@ mod tests {
     #[test]
     fn a_provider_without_a_name_or_a_url_is_refused() {
         with_app_dir("cmd-settings-blank", || {
-            assert!(llm_provider_save(provider("  ")).is_err());
-            assert!(llm_provider_save(ProviderConfig {
-                id: "gateway".to_string(),
-                base_url: " ".to_string(),
-                ..Default::default()
-            })
+            assert!(llm_provider_save(provider("  "), None).is_err());
+            assert!(llm_provider_save(
+                ProviderConfig {
+                    id: "gateway".to_string(),
+                    base_url: " ".to_string(),
+                    ..Default::default()
+                },
+                None
+            )
             .is_err());
         });
     }

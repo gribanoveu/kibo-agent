@@ -108,6 +108,17 @@ pub fn has_api_key(provider_id: &str) -> Result<bool, CredentialsError> {
     Ok(load_all()?.contains_key(provider_id))
 }
 
+/// Moves the key sealed under `from` to `to`, for a provider renamed in the
+/// settings form. No key under `from` is nothing to move.
+pub fn rename_api_key(from: &str, to: &str) -> Result<(), CredentialsError> {
+    let mut map = load_for_save();
+    if let Some(key) = map.remove(from) {
+        map.insert(to.to_string(), key);
+        save_all(&map).map_err(CredentialsError::Save)?;
+    }
+    Ok(())
+}
+
 pub fn delete_api_key(provider_id: &str) -> Result<(), String> {
     let mut map = load_for_save();
     // `remove` moves the key out of the map, past the wipe-on-drop above — so
