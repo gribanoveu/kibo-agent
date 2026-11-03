@@ -5,7 +5,7 @@ import { ContextMeter } from "./ContextMeter";
 import { SlashMenu } from "./SlashMenu";
 import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { ChatUsage, ContextUsage, ConversationMode } from "../lib/chat";
+import { CONVERSATION_MODES, type ChatUsage, type ContextUsage, type ConversationMode } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
@@ -24,14 +24,6 @@ import "./Composer.css";
 const MODES: { value: string; label: string; hint: string }[] = [
   { value: "ask", label: "Ask", hint: "Confirm edits and commands" },
   { value: "auto", label: "Auto", hint: "Run the whole turn without asking" },
-];
-
-// What the agent may be this turn. The labels are the user's words for it;
-// the values are what `domain::conversation_mode` deserializes.
-const CONVERSATIONS: { value: ConversationMode; label: string; hint: string }[] = [
-  { value: "agent", label: "Agent", hint: "Reads, edits files and runs commands" },
-  { value: "plan", label: "Plan", hint: "Reads only and writes a plan" },
-  { value: "ask", label: "Ask", hint: "Answers questions, changes nothing" },
 ];
 
 type Props = {
@@ -366,11 +358,11 @@ export function Composer({
             label={
               <span className="mode-label">
                 <Bot size={13} />
-                {CONVERSATIONS.find((c) => c.value === conversation)?.label ?? "Agent"}
+                {CONVERSATION_MODES.find((c) => c.value === conversation)?.label ?? "Agent"}
               </span>
             }
             value={conversation}
-            options={CONVERSATIONS.map((c) => ({ value: c.value, label: c.label, hint: c.hint }))}
+            options={CONVERSATION_MODES.map((c) => ({ value: c.value, label: c.label, hint: c.hint }))}
             onPick={(v) => onConversation(v as ConversationMode)}
           />
           <Dropdown
