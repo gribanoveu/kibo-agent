@@ -18,7 +18,7 @@ const settings = (over: Partial<LlmSettings> = {}): LlmSettings => ({
   ...over,
 });
 
-type Saved = { provider: ProviderConfig; apiKey: string | null };
+type Saved = { provider: ProviderConfig; apiKey: string | null; renamedFrom: string | null };
 
 const form = (over: Partial<LlmSettings> = {}) => {
   const saved: Saved[] = [];
@@ -28,7 +28,7 @@ const form = (over: Partial<LlmSettings> = {}) => {
       settings={settings(over)}
       busy={false}
       error={null}
-      onSave={(provider, apiKey) => saved.push({ provider, apiKey })}
+      onSave={(provider, apiKey, renamedFrom) => saved.push({ provider, apiKey, renamedFrom })}
       onRemove={(id) => removed.push(id)}
       onSelect={() => {}}
     />,
@@ -262,6 +262,35 @@ describe("editing a provider", () => {
     const { removed } = form();
     fireEvent.click(screen.getByText("Remove"));
     expect(removed).toEqual(["local"]);
+  });
+
+  /// Renaming is not adding: without the name it was opened on, the backend
+  /// files it as a second provider — an `alfagen` beside the `alfagen-2` it
+  /// was renamed from, both there after one save.
+  test("a renamed provider is saved with the name it was opened on", async () => {
+    const { saved } = form();
+
+    fireEvent.change(field("Name"), { target: { value: "local-2" } });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+
+    expect(saved[0]?.provider.id).toBe("local-2");
+    expect(saved[0]?.renamedFrom).toBe("local");
+  });
+
+  test("a provider added from scratch carries no name to rename", async () => {
+    const { saved } = form();
+
+    fireEvent.click(screen.getByTitle("Add another provider"));
+    fireEvent.change(field("Name"), { target: { value: "deepseek" } });
+    fireEvent.change(field("Base URL"), { target: { value: "https://api.deepseek.com" } });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save"));
+    });
+
+    expect(saved[0]?.provider.id).toBe("deepseek");
+    expect(saved[0]?.renamedFrom).toBeNull();
   });
 });
 

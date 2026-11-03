@@ -71,9 +71,9 @@ export async function llmSettings(): Promise<LlmSettings> {
   return invoke<LlmSettings>("llm_settings_get");
 }
 
-export async function saveProvider(provider: ProviderConfig): Promise<void> {
+export async function saveProvider(provider: ProviderConfig, renamedFrom: string | null = null): Promise<void> {
   requireBackend();
-  return invoke<void>("llm_provider_save", { provider });
+  return invoke<void>("llm_provider_save", { provider, renamedFrom });
 }
 
 export async function removeProvider(id: string): Promise<void> {
