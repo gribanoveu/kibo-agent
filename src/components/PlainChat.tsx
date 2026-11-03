@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
@@ -17,6 +17,7 @@ import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useArrival } from "../hooks/useArrival";
+import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
 import { rememberNamespace } from "../lib/kube";
@@ -121,7 +122,9 @@ export function PlainChat({
   onRewind,
   pages,
 }: Props) {
-  const [draft, setDraft] = useState("");
+  // The box belongs to this chat, as the agent's does: what was typed here
+  // waits here while another chat is open, and comes back with this one.
+  const [draft, setDraft, take] = useChatDraft(chatDraftKey("chat", chat.chatId));
   // A Prototype chat keeps pictures in its folder for any model: one that
   // cannot see them still names them on the page.
   const attachments = useAttachments(imagesEnabled || chat.role === "prototype");
@@ -162,7 +165,9 @@ export function PlainChat({
     if (attached.length > 0) pages?.onShowAssets();
     void chat.send(draft, attached, pages?.pointed ?? null, imagesEnabled);
     pages?.onUnpoint();
-    setDraft("");
+    // The chat gets its id as the message goes: the draft to clear is this one,
+    // not the one the box is about to show.
+    take();
   };
   // Pointed at in the preview: the message box is where the request about it is written.
   const pointed = pages?.pointed ?? null;

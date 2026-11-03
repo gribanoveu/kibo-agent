@@ -31,6 +31,8 @@ describe("a page", () => {
     // Inside the page, not beside it: the page keeps its width.
     expect(screen.getByRole("region", { name: "Things" }).contains(screen.getByRole("complementary", { name: "One thing" }))).toBe(true);
     expect(screen.getByRole("complementary", { name: "One thing" }).textContent).toContain("about it");
+    // What it holds reads at the user's text size, as the chat does.
+    expect(document.querySelector(".page-sheet-body")?.classList.contains("text-scale")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(closed).toBe(1);
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" });

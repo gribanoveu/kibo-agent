@@ -267,8 +267,8 @@ export function Settings({
               </section>
             ))}
             <div className="modal-field">
-              <label>Chat text size</label>
-              <div className="segmented" role="radiogroup" aria-label="Chat text size">
+              <label>Text size</label>
+              <div className="segmented" role="radiogroup" aria-label="Text size">
                 {(Object.keys(FONT_SIZES) as FontSize[]).map((name) => (
                   <button
                     key={name}

@@ -47,6 +47,7 @@ import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
+import { chatDraftKey, forgetChatDraft } from "./hooks/useChatDraft";
 import { useTurnAlerts } from "./hooks/useTurnAlerts";
 import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
@@ -356,6 +357,11 @@ export default function App() {
     setPage(null);
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
   };
+
+  // A deleted chat takes its unsent message with it — the sidebar's own path
+  // and the Artifacts page's prototype, which deletes its chat through the same
+  // `plain.remove`.
+  const dropDraft = (mode: "agent" | "chat", id: string) => forgetChatDraft(chatDraftKey(mode, id));
 
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
@@ -674,6 +680,8 @@ export default function App() {
             steered={agent.steered}
             onWithdraw={agent.withdraw}
             focus={composerFocus}
+            // The box is this chat's: what was typed in another one waits there.
+            draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
             running={agent.turn.status === "running"}
             conversation={conversation.value}
@@ -783,7 +791,11 @@ export default function App() {
         setMode("chat");
         void plain.open(id).then((opened) => opened || toast.show(STAY));
       }}
-      removeChat={plain.remove}
+      removeChat={async (id) => {
+        const removed = await plain.remove(id);
+        if (removed) dropDraft("chat", id);
+        return removed;
+      }}
       chats={plain.chats}
     />
   );
@@ -847,13 +859,16 @@ export default function App() {
           onDeleteChat={(id) => {
             if (!agentMode)
               return void plain.remove(id).then(
-                (removed) => removed || toast.show(STAY),
+                (removed) => (removed ? dropDraft("chat", id) : toast.show(STAY)),
                 (e) => toast.show(String(e)),
               );
             // Deleting first would let a save already in flight recreate the row.
             void agent.discard(id).then((discarded) => {
               if (!discarded) return toast.show("Stop the running turn before deleting this chat");
-              history.remove(id).catch((e) => toast.show(String(e)));
+              history.remove(id).then(
+                () => dropDraft("agent", id),
+                (e) => toast.show(String(e)),
+              );
             });
           }}
           onOpenSettings={() => openSettings()}

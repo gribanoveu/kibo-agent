@@ -513,11 +513,13 @@
 
 /* The type scale. Five steps, not a size per component: monospace is for
    code, paths and diffs only — labels and chrome use --font-ui.
-   Declared again on .chat-text so that there it is computed with the chat's
-   own scale — the user's chat font size, set by useChatFontSize — while the
-   rest of the app keeps the scale of 1. */
+   Declared again on what the user reads at the size they chose — the chat, and
+   what reads like it (`.text-scale`: a file as it renders, a sheet's contents),
+   both set by useChatFontSize — so that there it is computed with that size,
+   while the rest of the app keeps the scale of 1. */
 :root,
-.chat-text {
+.chat-text,
+.text-scale {
   --fs-2xs: calc(10.5px * var(--font-scale));
   --fs-xs: calc(11.5px * var(--font-scale));
   --fs-sm: calc(12px * var(--font-scale));
@@ -530,6 +532,12 @@
   --font-scale: var(--chat-font-scale, 1.1);
   /* Sizes in em inside the chat follow the preference too. */
   font-size: calc(16px * var(--font-scale));
+}
+/* What reads like the chat rather than the chrome around it — a file as it
+   renders, a sheet's contents: the type scale above is recomputed with the
+   user's text size, and their sizes and the em inside them follow it. */
+.text-scale {
+  --font-scale: var(--chat-font-scale, 1.1);
 }
 
 * {
