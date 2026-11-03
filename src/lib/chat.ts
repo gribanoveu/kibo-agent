@@ -320,6 +320,13 @@ export async function contextUsage(chatId: string, messages: LlmMessage[]): Prom
 /** What the agent is allowed to be. Mirrors `domain::conversation_mode`. */
 export type ConversationMode = "agent" | "plan" | "ask";
 
+/** The modes as the user sees them, on the composer's chip. The values are what `domain::conversation_mode` deserializes. */
+export const CONVERSATION_MODES: { value: ConversationMode; label: string; hint: string }[] = [
+  { value: "agent", label: "Agent", hint: "Reads, edits files and runs commands" },
+  { value: "plan", label: "Plan", hint: "Reads only and writes a plan" },
+  { value: "ask", label: "Ask", hint: "Answers questions, changes nothing" },
+];
+
 /**
  * Chooses the mode for the turns that follow.
  *

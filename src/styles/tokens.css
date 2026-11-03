@@ -478,6 +478,12 @@
   --wc-zoom: #28c840;
   --wc-close-windows: #c42b1c;
   --wc-close-windows-text: #fff;
+
+  /* The logo's own orange, the one in `logo.svg`, in every theme: a brand
+     mark that took each palette's accent would not be the same mark. Its
+     letters are ink and do follow the text colour — the file's navy would
+     vanish on a dark panel. */
+  --logo-accent: #e9532c;
 }
 
 /* What floats over the panels — menus, popovers — one step off them. The

@@ -1,5 +1,5 @@
 import { FolderGit2 } from "lucide-react";
-import logo from "../assets/kibo-agent-pixel.png";
+import { KiboBrand } from "./KiboBrand";
 import { UsageStrip } from "./UsageHeatmap";
 import "./ChatEmptyState.css";
 
@@ -15,7 +15,7 @@ export function ChatEmptyState({ workspace, onOpenRepo }: Props) {
 
   return (
     <div className="chat-empty">
-      <img className="chat-empty-logo" src={logo} alt="" />
+      <KiboBrand />
       <h2 className="chat-empty-title">
         {workspace ? "Start the conversation" : "Nothing is open"}
       </h2>
