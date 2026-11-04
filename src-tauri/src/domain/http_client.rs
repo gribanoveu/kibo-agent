@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
+use super::http_scripts::ScriptReport;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -34,6 +35,8 @@ pub enum HttpError {
     MaskWithoutValue(String),
     #[error("{0} auth is kept from Postman and not sent yet")]
     UnsupportedAuth(String),
+    #[error("{0}")]
+    Script(String),
     #[error("a {0} body is kept from Postman and not sent yet")]
     UnsupportedBody(String),
     #[error("the host is fixed by the environment — pass a path")]
@@ -244,6 +247,17 @@ pub struct Prepared {
     pub shown: Outgoing,
 }
 
+impl Prepared {
+    /// With a secret's value masked wherever it stands: a script that read one and
+    /// wrote it into a header wrote text, which `shown` has no way to tell from a value.
+    pub fn hidden(&self, scope: &Scope) -> Prepared {
+        let shown = &self.shown;
+        let headers = shown.headers.iter().map(|(k, v)| (scope.hide(k), scope.hide(v))).collect();
+        let shown = Outgoing { method: shown.method.clone(), url: scope.hide(&shown.url), headers, body: shown.body.as_deref().map(|b| scope.hide(b)) };
+        Prepared { sent: self.sent.clone(), shown }
+    }
+}
+
 /// What came back: a response, 4xx and 5xx too, or why none did. The body is apart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -286,6 +300,9 @@ pub struct SavedResponse {
     /// Bytes, a picture's too; the store keeps them beside the rest, not in JSON.
     #[serde(skip)]
     pub body: Vec<u8>,
+    /// What the send's scripts said; a response from before them has none.
+    #[serde(default, skip_serializing_if = "ScriptReport::is_empty")]
+    pub scripts: ScriptReport,
 }
 
 /// A response as the window gets it: the body as text when it is UTF-8, and its size either way.
@@ -297,12 +314,13 @@ pub struct ResponseView {
     pub outcome: Outcome,
     pub body: Option<String>,
     pub size: usize,
+    pub scripts: ScriptReport,
 }
 
 impl From<SavedResponse> for ResponseView {
     fn from(saved: SavedResponse) -> ResponseView {
         let size = saved.body.len();
-        ResponseView { at: saved.at, environment: saved.environment, outcome: saved.outcome, body: String::from_utf8(saved.body).ok(), size }
+        ResponseView { at: saved.at, environment: saved.environment, outcome: saved.outcome, body: String::from_utf8(saved.body).ok(), size, scripts: saved.scripts }
     }
 }
 
@@ -746,8 +764,30 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_copied_as_text_is_masked_where_it_shows_and_goes_out_as_it_is() {
+        let secret = vec![Variable { key: "t".into(), value: "s3cr3t".into(), secret: true, enabled: true }];
+        let scope = Scope::new(&[&secret]);
+        let out = Outgoing { method: "POST".into(), url: "http://a.test/s3cr3t".into(), headers: vec![("X-s3cr3t".into(), "Bearer s3cr3t".into())], body: Some("k=s3cr3t".into()) };
+        let hidden = Prepared { sent: out.clone(), shown: out.clone() }.hidden(&scope);
+        assert_eq!(hidden.sent, out);
+        assert!(!format!("{:?}", hidden.shown).contains("s3cr3t"), "{:?}", hidden.shown);
+    }
+
+    #[test]
+    fn a_response_saved_before_scripts_reads_and_a_report_does_not_say_changed_twice() {
+        let old: SavedResponse = serde_json::from_str(r#"{"at": 1, "environment": null, "outcome": {"kind": "failed", "error": "x"}}"#).unwrap();
+        assert!(old.scripts.is_empty());
+        assert!(!serde_json::to_string(&old).unwrap().contains("scripts"), "nothing to say, nothing written");
+        let line = crate::domain::http_scripts::ConsoleLine { level: "log".into(), text: "hi".into() };
+        let said = ScriptReport { console: vec![line], changed: true, ..Default::default() };
+        let saved = SavedResponse { scripts: said.clone(), ..old };
+        let read: SavedResponse = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(read.scripts, ScriptReport { changed: false, ..said });
+    }
+
+    #[test]
     fn a_body_that_is_not_text_reaches_the_window_as_its_size() {
-        let saved = |body: Vec<u8>| SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: String::new() }, body };
+        let saved = |body: Vec<u8>| SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: String::new() }, body, scripts: Default::default() };
         let view = ResponseView::from(saved(vec![0x89, b'P', b'N', b'G', 0xff]));
         assert_eq!((view.body, view.size), (None, 5));
         let view = ResponseView::from(saved("é".into()));

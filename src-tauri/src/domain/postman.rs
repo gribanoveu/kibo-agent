@@ -11,7 +11,13 @@ use serde_json::{Map, Value};
 
 use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable};
 
-/// What a v2.1 file names in `info.schema`.
+/// A collection's scripts, for trust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptsDigest {
+    pub hash: String,
+    pub count: usize,
+}
+
 const SCHEMA: &str = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
 
 pub struct Collection {
@@ -193,6 +199,11 @@ impl Collection {
         ids
     }
 
+    /// The name of the item `id`, as `pm.info.requestName` says it.
+    pub fn item_name(&self, id: &str) -> Option<String> {
+        Some(text_of(self.chain(id)?.last()?.get("name")))
+    }
+
     /// A request's address as written, `{{baseUrl}}` and all: what history lists it by.
     pub fn written_url(&self, id: &str) -> Option<String> {
         let request = self.chain(id)?.last()?.get("request")?;
@@ -244,6 +255,34 @@ impl Collection {
         let root = self.root.as_object()?;
         let mut path = vec![root];
         walk(root.get("item")?.as_array()?, id, &mut path).then_some(path)
+    }
+
+    /// The scripts that run for request `id` at `listen` (`prerequest` or `test`), in
+    /// Postman's order: the collection's, each folder's going down, the request's own.
+    pub fn scripts(&self, id: &str, listen: &str) -> Result<Vec<String>, HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        Ok(chain.iter().flat_map(|level| scripts_of(level)).filter(|(at, _)| *at == listen).map(|(_, code)| code).collect())
+    }
+
+    /// How many scripts the collection has, anywhere, and a hash of them all: trust
+    /// is given to these scripts, and any change asks again. `None` when it has none.
+    pub fn scripts_digest(&self) -> Option<ScriptsDigest> {
+        fn walk(level: &Map<String, Value>, hasher: &mut blake3::Hasher, count: &mut usize) {
+            for (listen, code) in scripts_of(level) {
+                // Each with its length: no field can be written to read as the next.
+                for field in [level.get("id").and_then(Value::as_str).unwrap_or_default(), &listen, &code] {
+                    hasher.update(&field.len().to_le_bytes());
+                    hasher.update(field.as_bytes());
+                }
+                *count += 1;
+            }
+            for child in level.get("item").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                walk(child, hasher, count);
+            }
+        }
+        let (mut hasher, mut count) = (blake3::Hasher::new(), 0);
+        walk(self.root.as_object()?, &mut hasher, &mut count);
+        (count > 0).then(|| ScriptsDigest { hash: hasher.finalize().to_hex().to_string(), count })
     }
 
     /// The collection's own variables; a `secret` one is masked as an environment's is.
@@ -490,8 +529,24 @@ fn plain(text: &str) -> Filled {
     Filled { sent: text.into(), shown: text.into() }
 }
 
+/// A level's scripts that would run, as `(listen, code)`.
+fn scripts_of(level: &Map<String, Value>) -> Vec<(String, String)> {
+    let events = level.get("event").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    events
+        .iter()
+        .filter(|e| e.get("disabled") != Some(&Value::Bool(true)))
+        .filter_map(|e| {
+            let code = match e.get("script")?.get("exec")? {
+                Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+                other => text_of(Some(other)),
+            };
+            (!code.trim().is_empty()).then(|| Some((e.get("listen")?.as_str()?.to_string(), code))).flatten()
+        })
+        .collect()
+}
+
 /// A value as text: Postman writes most as strings, some as numbers or `true`.
-fn text_of(v: Option<&Value>) -> String {
+pub(crate) fn text_of(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(s)) => s.clone(),
@@ -604,6 +659,42 @@ mod tests {
 
     fn header<'a>(o: &'a Outgoing, name: &str) -> Option<&'a str> {
         o.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn a_script_changed_at_any_level_changes_the_hash() {
+        let digest = |root: &str, folder: &str, request: &str| {
+            let event = |code: &str| json!([{"listen": "test", "script": {"exec": [code]}}]);
+            let item = json!({"id": "r", "name": "R", "event": event(request), "request": "http://a.test"});
+            let file = json!({"info": {"name": "C", "schema": SCHEMA}, "event": event(root), "item": [{"id": "f", "name": "F", "event": event(folder), "item": [item]}]});
+            Collection::parse(&file.to_string()).unwrap().scripts_digest().unwrap()
+        };
+        let base = digest("1", "2", "3");
+        assert_eq!(base.count, 3);
+        assert_eq!(base, digest("1", "2", "3"));
+        for changed in [digest("9", "2", "3"), digest("1", "9", "3"), digest("1", "2", "9")] {
+            assert_ne!(base.hash, changed.hash);
+        }
+        let fields = |id: &str, listen: &str| {
+            let item = json!({"id": id, "name": "R", "event": [{"listen": listen, "script": {"exec": ["1"]}}], "request": "http://a.test"});
+            let file = json!({"info": {"name": "C", "schema": SCHEMA}, "item": [item]});
+            Collection::parse(&file.to_string()).unwrap().scripts_digest().unwrap().hash
+        };
+        assert_ne!(fields("a", "test"), fields("at", "est"), "one field cannot be written to read as the next");
+    }
+
+    #[test]
+    fn a_script_turned_off_or_empty_does_not_run_and_asks_for_no_trust() {
+        let with = |event: Value| {
+            let file = json!({"info": {"name": "C", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"}, "item": [{"id": "r", "name": "R", "event": [event], "request": "http://a.test"}]});
+            Collection::parse(&file.to_string()).unwrap()
+        };
+        let off = with(json!({"listen": "test", "disabled": true, "script": {"exec": ["1"]}}));
+        assert_eq!((off.scripts_digest(), off.scripts("r", "test").unwrap()), (None, Vec::new()));
+        let empty = with(json!({"listen": "test", "script": {"exec": ["  ", ""]}}));
+        assert_eq!((empty.scripts_digest(), empty.scripts("r", "test").unwrap()), (None, Vec::new()));
+        let on = with(json!({"listen": "test", "script": {"exec": ["1"]}}));
+        assert_eq!((on.scripts_digest().map(|d| d.count), on.scripts("r", "test").unwrap()), (Some(1), vec!["1".to_string()]));
     }
 
     #[test]
