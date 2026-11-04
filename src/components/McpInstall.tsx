@@ -65,13 +65,15 @@ const RESULT_OPTIONS: Option<"cleared" | "kept">[] = [
  */
 const NEW_SERVER: McpServerFields = { ...EMPTY_SERVER, exposure: "deferred" };
 
-type Step = "paste" | "connection" | "tools" | "review";
+type Step = "paste" | "connection" | "tools" | "secrets" | "review";
 
-// In the order the screen walks them.
+// In the order the screen walks them. `secrets` is only there when the entry
+// holds a placeholder to fill.
 const STEPS: { id: Step; label: string }[] = [
   { id: "paste", label: "Paste" },
   { id: "connection", label: "Connection" },
   { id: "tools", label: "Tools" },
+  { id: "secrets", label: "Secrets" },
   { id: "review", label: "Review" },
 ];
 
@@ -153,9 +155,15 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const entry = writtenFile && isObject(writtenFile.mcpServers) ? writtenFile.mcpServers[typed] : undefined;
   const secrets = "text" in written ? entrySecrets(written.text, typed) : [];
   const secretsFilled = secrets.every((secret) => secretValues[secret]?.trim());
+  // The block the chosen transport does not keep: a server at a URL never runs
+  // env, and a command server never sends headers.
+  const leftOut = fields.transport === "url" ? Boolean(fields.env.trim()) : Boolean(fields.headers.trim());
 
-  const steps = name === null ? STEPS : STEPS.filter((s) => s.id !== "paste");
-  const at = steps.findIndex((s) => s.id === step);
+  const steps = STEPS.filter((s) => (s.id !== "paste" || name === null) && (s.id !== "secrets" || secrets.length > 0));
+  // A placeholder typed away while this step was behind it takes the step
+  // with it: what is shown is a step the strip still has.
+  const shown: Step = steps.some((s) => s.id === step) ? step : "review";
+  const at = steps.findIndex((s) => s.id === shown);
   const go = (next: Step) => {
     setProblem(null);
     setStep(next);
@@ -176,10 +184,12 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
 
   // Nothing is written over a file that was never read: an unreadable file is
   // empty here, and saving would leave its servers behind.
+  // The step after this one: the fields, how its tools are reached, the
+  // placeholders to fill — the last only when the entry holds any.
   const next = () => {
     if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
-    go(step === "connection" ? "tools" : "review");
+    go(shown === "connection" ? "tools" : shown === "tools" && secrets.length > 0 ? "secrets" : "review");
   };
 
   const install = async () => {
@@ -194,11 +204,11 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   };
 
   const submit = () => {
-    if (step === "paste") {
+    if (shown === "paste") {
       if (draft.trim()) read();
       return;
     }
-    if (step === "review") return void install();
+    if (shown === "review") return void install();
     next();
   };
 
@@ -206,6 +216,11 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
     setProblem(null);
     setFields((f) => ({ ...f, [key]: e.target.value }));
   };
+
+  // A tool name may hold only A-Z, 0-9, _ and -, so a name typed with anything
+  // else would reach the agent as a row of underscores: it is not taken.
+  const setName = (e: { target: { value: string } }) =>
+    set("name")({ target: { value: e.target.value.replace(/[^\x20-\x7e]/g, "") } });
 
   return (
     <form
@@ -221,7 +236,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             key={id}
             type="button"
             className="mcp-install-step"
-            aria-current={step === id ? "step" : undefined}
+            aria-current={shown === id ? "step" : undefined}
             title={i > at ? "Fill this step in first" : undefined}
             disabled={i > at}
             onClick={() => go(id)}
@@ -235,7 +250,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
       {/* Any refusal, wherever it came from, stands here until the next move. */}
       {(problem ?? error) && <p className="entry-error">{problem ?? error}</p>}
 
-      {step === "paste" && (
+      {shown === "paste" && (
         <div className="mcp-install-paste">
           <p className="modal-note">
             Paste a server as its README prints it: a whole <code>{'{"mcpServers": {…}}'}</code>, a bare{" "}
@@ -274,16 +289,16 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         </div>
       )}
 
-      {step === "connection" && (
+      {shown === "connection" && (
         <>
           <div className="mcp-install-columns">
             <section className="mcp-install-col" aria-label="How it runs">
               <h4 className="mcp-install-head">How it runs</h4>
-              <Field label="Name" hint="A–Z, 0–9 and - stay, anything else becomes _; the name is lowercased.">
-                <input className="entry-input" value={fields.name} onChange={set("name")} autoFocus={name === null} />
+              <Field label="Name" hint="A–Z, 0–9 and - stay, anything else becomes _; the name is lowercased. Its tools put their own name after this prefix.">
+                <input className="entry-input" value={fields.name} onChange={setName} autoFocus={name === null} />
                 <code className="mcp-install-key">
                   {`mcp__${key || "<name>"}__`}
-                  <span className="mcp-install-key-tool">{"<tool>"}</span>
+                  <span className="mcp-install-key-tool">…</span>
                 </code>
               </Field>
               {key && !/[a-z0-9]/.test(key) && (
@@ -310,6 +325,13 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
                   onPick={(transport) => setFields((f) => ({ ...f, transport: transport as McpServerFields["transport"] }))}
                 />
               </Field>
+              {leftOut && (
+                <p className="mcp-install-warn">
+                  {fields.transport === "url"
+                    ? "A server at a URL takes headers, not environment variables: the env it came with is not written."
+                    : "A command server takes environment variables, not headers: the headers it came with are not written."}
+                </p>
+              )}
               {fields.transport === "command" ? (
                 <>
                   <Field label="Command" hint="A whole command line works too — npx -y server-github is split into command and args.">
@@ -351,7 +373,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         </>
       )}
 
-      {step === "tools" && (
+      {shown === "tools" && (
         <div className="mcp-install-columns">
           <section className="mcp-install-col">
             <h4 className="mcp-install-head">How the model reaches its tools</h4>
@@ -377,7 +399,30 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         </div>
       )}
 
-      {step === "review" && (
+      {shown === "secrets" && (
+        <>
+          <p className="mcp-install-note">
+            The entry carries these placeholders. Each is written into {path || "the file"} in place of its own{" "}
+            <code>{"${…}"}</code>, and kept nowhere else.
+          </p>
+          <div className="mcp-install-secrets">
+            {secrets.map((secret) => (
+              <Field key={secret} label={secret}>
+                <input
+                  className="entry-input mono"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={secretValues[secret] ?? ""}
+                  onChange={(e) => setSecretValues((v) => ({ ...v, [secret]: e.target.value }))}
+                />
+              </Field>
+            ))}
+          </div>
+        </>
+      )}
+
+      {shown === "review" && (
         <>
           <p className="mcp-install-note">
             {previous !== null ? (
@@ -392,28 +437,6 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             )}
           </p>
           {entry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(entry, null, 2)}</pre>}
-          {secrets.length > 0 && (
-            <>
-              <div className="mcp-install-secrets">
-                {secrets.map((secret) => (
-                  <Field key={secret} label={secret}>
-                    <input
-                      className="entry-input mono"
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={secretValues[secret] ?? ""}
-                      onChange={(e) => setSecretValues((v) => ({ ...v, [secret]: e.target.value }))}
-                    />
-                  </Field>
-                ))}
-              </div>
-              <p className="modal-note">
-                Each is written into {path || "the file"} in place of its own <code>{"${…}"}</code>, and kept nowhere
-                else.
-              </p>
-            </>
-          )}
           <p className="modal-note">
             The app writes {path || "the file"} in its own layout: spacing and key order typed there by hand are not
             kept. It starts with the next Agent turn.
@@ -422,7 +445,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
       )}
 
       <div className="mcp-install-actions">
-        {step === "paste" && (
+        {shown === "paste" && (
           <>
             <button className="btn btn-primary" type="submit" disabled={!draft.trim()}>
               Continue
@@ -439,9 +462,9 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             </button>
           </>
         )}
-        {(step === "connection" || step === "tools") && (
+        {(shown === "connection" || shown === "tools" || shown === "secrets") && (
           <>
-            <button className="btn btn-primary" type="submit">
+            <button className="btn btn-primary" type="submit" disabled={shown === "secrets" && !secretsFilled}>
               Next
             </button>
             {at > 0 && (
@@ -451,12 +474,12 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             )}
           </>
         )}
-        {step === "review" && (
+        {shown === "review" && (
           <>
             <button className="btn btn-primary" type="submit" disabled={saving || !secretsFilled}>
               {name !== null ? "Save" : previous !== null ? "Replace" : "Install"}
             </button>
-            <button className="btn btn-ghost" type="button" onClick={() => go("tools")}>
+            <button className="btn btn-ghost" type="button" onClick={() => go(steps[at - 1].id)}>
               Back
             </button>
           </>

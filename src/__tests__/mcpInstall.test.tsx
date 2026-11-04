@@ -119,16 +119,29 @@ describe("installing a server", () => {
     mount({ text: text({ mcpServers: { GitHub: { command: "gh" } } }) });
     fireEvent.click(button("Start from scratch"));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "My Server.v2" } });
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__my_server_v2__<tool>");
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__my_server_v2__…");
     expect(screen.queryByText(/Clashes with the server/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "github" } });
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__<tool>");
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__…");
     expect(screen.getByText(/Clashes with the server/)).toBeTruthy();
+  });
 
-    // Nothing of a Cyrillic name can be in a tool name.
-    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Имя" } });
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp_______<tool>");
+  test("a name a tool cannot carry is not taken, and a pasted one says so", () => {
+    mount();
+    fireEvent.click(button("Start from scratch"));
+    const field = screen.getByLabelText(/^Name/) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "Имя" } });
+    expect(field.value).toBe("");
+    fireEvent.change(field, { target: { value: "gh-Имя" } });
+    expect(field.value).toBe("gh-");
+  });
+
+  test("a pasted name with nothing of it in a tool name says so", () => {
+    mount();
+    paste(text({ mcpServers: { "Имя": { command: "npx" } } }));
+    fireEvent.click(button("Continue"));
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp_______…");
     expect(screen.getByText(/Nothing of this name survives/)).toBeTruthy();
   });
 
@@ -138,6 +151,11 @@ describe("installing a server", () => {
     fireEvent.click(button("Continue"));
     expect(screen.getByText(/Line 1, column 1/)).toBeTruthy();
     expect(screen.queryByLabelText(/^Name/)).toBeNull();
+  });
+
+  test("a server at a URL says the env it came with is not written", () => {
+    mount({ name: "web", text: text({ mcpServers: { web: { url: "https://x/mcp", env: { TOKEN: "t" } } } }) });
+    expect(screen.getByText(/takes headers, not environment variables/)).toBeTruthy();
   });
 
   test("a pasted name already in the file is replaced, not refused", async () => {
@@ -204,6 +222,8 @@ describe("installing a server", () => {
     next();
 
     expect(screen.getByRole("button", { name: /Tools/ })).toBeTruthy();
+    // No placeholders in the entry: no step to fill them on.
+    expect(screen.queryByRole("button", { name: /Secrets/ })).toBeNull();
     expect(radio(/^Found with toolSearch/).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText(/Only the server's name goes in every request/)).toBeTruthy();
     expect(screen.getByText(/Every tool, with its name and description/)).toBeTruthy();
@@ -286,25 +306,28 @@ describe("installing a server", () => {
     expect(saved).toEqual([]);
   });
 
-  test("a ${NAME} in the entry is asked for at the review, and goes into the file", async () => {
+  test("a ${NAME} in the entry is asked for on its step, and goes into the file", async () => {
     const { saved } = mount();
-    // The same placeholder twice is one field, filled into both.
-    paste(text({ mcpServers: { gh: { command: "npx", env: { TOKEN: "${GITHUB_TOKEN}", ORG: "${GITHUB_TOKEN}" } } } }));
+    paste(text({ mcpServers: { gh: { command: "npx", env: { TOKEN: "${GITHUB_TOKEN}", ORG: "${GITHUB_ORG}" } } } }));
     fireEvent.click(button("Continue"));
     next();
     next();
 
-    // The entry keeps the placeholder; the value is asked for beside it.
-    expect(document.querySelector(".mcp-install-entry")?.textContent).toContain("${GITHUB_TOKEN}");
-    expect((button("Install") as HTMLButtonElement).disabled).toBe(true);
+    // A step of its own, one field per name, and it is not passed while empty.
+    expect(screen.getByRole("button", { name: /Secrets/ })).toBeTruthy();
+    expect(document.querySelectorAll('input[type="password"]')).toHaveLength(2);
+    expect((button("Next") as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText("GITHUB_TOKEN"), { target: { value: " t " } });
-    expect((button("Install") as HTMLButtonElement).disabled).toBe(false);
+    expect((button("Next") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("GITHUB_ORG"), { target: { value: "o" } });
+    expect((button("Next") as HTMLButtonElement).disabled).toBe(false);
 
+    next();
     await act(async () => {
       fireEvent.click(button("Install"));
     });
-    expect(JSON.parse(saved[0]).mcpServers.gh.env).toEqual({ TOKEN: "t", ORG: "t" });
+    expect(JSON.parse(saved[0]).mcpServers.gh.env).toEqual({ TOKEN: "t", ORG: "o" });
   });
 
   test("Edit as JSON hands the dialog over to the file", () => {
