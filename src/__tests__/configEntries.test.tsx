@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import {
   EMPTY_HOOK,
   EMPTY_SERVER,
+  pastedServers,
   readHook,
   readMcpServer,
   removeHook,
@@ -44,6 +45,7 @@ describe("an MCP server", () => {
       timeoutSecs: "",
       exposure: "direct",
       keepResults: false,
+      extra: { disabled: true },
     });
     expect(readMcpServer(MCP, "nope")).toBeNull();
   });
@@ -142,6 +144,84 @@ describe("an MCP server", () => {
     expect(Object.keys(file.mcpServers)).toEqual(["fs", "docs"]);
     expect(file.other).toBe(1);
     expect(removeMcpServer(MCP, "nope")).toBeNull();
+  });
+});
+
+describe("a pasted server", () => {
+  const pasted = (snippet: string) => {
+    const result = pastedServers(snippet);
+    if ("error" in result) throw new Error(result.error);
+    return result.servers;
+  };
+
+  test("is read from a whole file, a bare map, or a fragment cut out of one", () => {
+    const entry = { command: "npx", args: ["-y", "server-github"] };
+    for (const snippet of [
+      text({ mcpServers: { github: entry } }),
+      text({ github: entry }),
+      `"github": ${JSON.stringify(entry)},`,
+    ]) {
+      expect(pasted(snippet)).toEqual([
+        { name: "github", fields: { ...EMPTY_SERVER, name: "github", command: "npx", args: "-y\nserver-github" } },
+      ]);
+    }
+  });
+
+  test("an entry with no name of its own comes back nameless, for the form to ask", () => {
+    expect(pasted('{"command": "npx", "args": ["-y", "x"]}')).toEqual([
+      { name: "", fields: { ...EMPTY_SERVER, command: "npx", args: "-y\nx" } },
+    ]);
+    expect(pasted('{"url": "https://a.example/mcp"}')).toEqual([
+      { name: "", fields: { ...EMPTY_SERVER, transport: "url", url: "https://a.example/mcp" } },
+    ]);
+  });
+
+  test("several come back in the order the paste has them", () => {
+    const servers = pasted(text({ mcpServers: { a: { command: "a" }, b: { url: "https://b.example/mcp" } } }));
+    expect(servers.map((server) => server.name)).toEqual(["a", "b"]);
+    expect(servers[1].fields.transport).toBe("url");
+  });
+
+  test("what the form has no field for comes with it", () => {
+    const [server] = pasted(
+      text({ mcpServers: { kb: { command: "kb", disabled: true, toolExposure: { find: "direct" } } } }),
+    );
+    expect(server.fields.extra).toEqual({ disabled: true, toolExposure: { find: "direct" } });
+  });
+
+  test("says what is wrong rather than filling anything", () => {
+    expect(pastedServers(" ")).toEqual({ error: "Paste a server's JSON first" });
+    expect(pastedServers("{}")).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ foo: 1 }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ github: {} }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ mcpServers: {} }))).toEqual({ error: "Nothing to read: the snippet holds no servers" });
+    expect(pastedServers(text({ mcpServers: { a: 1 } }))).toEqual({ error: "Not an MCP server: a is not an object" });
+    expect(pastedServers('{"mcpServers": {')).toMatchObject({ error: expect.stringContaining("Line 1, column") });
+  });
+
+  test("is written with the keys the form has no field for", () => {
+    const [server] = pasted(
+      text({ mcpServers: { kb: { command: "kb-server", disabled: true, toolExposure: { find: "direct" } } } }),
+    );
+    expect(written(writeMcpServer(MCP, null, server.fields)).mcpServers.kb).toEqual({
+      command: "kb-server",
+      disabled: true,
+      toolExposure: { find: "direct" },
+    });
+  });
+
+  test("pasting over a name replaces that entry where it stands", () => {
+    const [server] = pasted(text({ mcpServers: { github: { command: "uvx", args: ["gh"] } } }));
+    const file = written(writeMcpServer(MCP, "github", server.fields));
+    expect(Object.keys(file.mcpServers)).toEqual(["github", "fs", "docs"]);
+    // The file's own key the form cannot show is kept, as it is on an edit...
+    expect(file.mcpServers.github).toEqual({ command: "uvx", args: ["gh"], disabled: true });
+    // ...unless the paste says otherwise.
+    const [fresh] = pasted(text({ mcpServers: { github: { command: "uvx", disabled: false } } }));
+    expect(written(writeMcpServer(MCP, "github", fresh.fields)).mcpServers.github).toEqual({
+      command: "uvx",
+      disabled: false,
+    });
   });
 });
 

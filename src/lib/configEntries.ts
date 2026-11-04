@@ -5,7 +5,7 @@
 // untouched.
 
 import type { McpExposure } from "./mcp";
-import { isObject, parseFile, stringify, type Json } from "./configSnippets";
+import { isObject, jsonError, parseFile, parseLoose, snippetServers, stringify, type Json } from "./configSnippets";
 
 export type Written = { text: string } | { error: string };
 
@@ -39,6 +39,8 @@ export type McpServerFields = {
   exposure: McpExposure;
   /** Its results are never cleared to save context; `false`, the default, is written as nothing. */
   keepResults: boolean;
+  /** Everything the form has no field for — `disabled`, `type`, another client's keys — carried as it came. */
+  extra: Json;
 };
 
 const EXPOSURES: McpExposure[] = ["direct", "deferred", "hidden"];
@@ -55,6 +57,7 @@ export const EMPTY_SERVER: McpServerFields = {
   timeoutSecs: "",
   exposure: "direct",
   keepResults: false,
+  extra: {},
 };
 
 const pairs = (value: unknown, separator: string) =>
@@ -62,10 +65,11 @@ const pairs = (value: unknown, separator: string) =>
     .map(([key, v]) => `${key}${separator}${String(v)}`)
     .join("\n");
 
-export function readMcpServer(text: string, name: string): McpServerFields | null {
-  const servers = parseFile(text)?.mcpServers;
-  const server = isObject(servers) ? servers[name] : undefined;
-  if (!isObject(server)) return null;
+/** The keys the form writes itself; anything else an entry carries stays in `extra`. */
+const OWNED = ["command", "args", "env", "url", "headers", "weight", "timeoutSecs", "exposure", "keepResults"] as const;
+
+/** One entry of `mcpServers` as the form's fields, whichever way it was read. */
+export function serverFields(name: string, server: Json): McpServerFields {
   const url = typeof server.url === "string" ? server.url : "";
   return {
     name,
@@ -79,7 +83,14 @@ export function readMcpServer(text: string, name: string): McpServerFields | nul
     timeoutSecs: server.timeoutSecs === undefined ? "" : String(server.timeoutSecs),
     exposure: EXPOSURES.find((e) => e === server.exposure) ?? "direct",
     keepResults: server.keepResults === true,
+    extra: Object.fromEntries(Object.entries(server).filter(([key]) => !(OWNED as readonly string[]).includes(key))),
   };
+}
+
+export function readMcpServer(text: string, name: string): McpServerFields | null {
+  const servers = parseFile(text)?.mcpServers;
+  const server = isObject(servers) ? servers[name] : undefined;
+  return isObject(server) ? serverFields(name, server) : null;
 }
 
 const lines = (text: string) =>
@@ -144,7 +155,9 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   const timeoutSecs = positive(fields.timeoutSecs, "Timeout");
   for (const n of [weight, timeoutSecs]) if (isObject(n)) return n as { error: string };
 
-  const kept = previous !== null && isObject(servers[previous]) ? servers[previous] : {};
+  // What the form has no field for comes from the file it edits, or — for an
+  // entry just pasted in — from the snippet.
+  const kept = previous !== null && isObject(servers[previous]) ? { ...servers[previous], ...fields.extra } : fields.extra;
   const { command: _c, args: _a, env: _e, url: _u, headers: _h, weight: _w, timeoutSecs: _t, exposure: _x, keepResults: _k, ...rest } = kept;
   // A `type` saying the entry is at a URL would contradict a command; one at
   // a URL gets its own `type` from `transport`.
@@ -162,6 +175,36 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   if (at < 0) entries.push([name, server]);
   else entries[at] = [name, server];
   return { text: stringify({ ...file, mcpServers: Object.fromEntries(entries) }) };
+}
+
+/** A server read from a pasted snippet, before anything is written. */
+export type PastedServer = { name: string; fields: McpServerFields };
+
+/**
+ * The servers a pasted snippet holds, as the fields the form edits. The snippet
+ * is the one the whole-file editor takes (`parseLoose`): a whole
+ * `{"mcpServers": {…}}`, a bare `{"github": {…}}`, or `"github": {…},` cut out
+ * of one. An entry with no name of its own comes back as `""`, which the form
+ * then asks for.
+ */
+export function pastedServers(text: string): { servers: PastedServer[] } | { error: string } {
+  if (!text.trim()) return { error: "Paste a server's JSON first" };
+  const snippet = parseLoose(text);
+  if (snippet === undefined) {
+    const problem = jsonError(text);
+    const at = problem?.line ? `Line ${problem.line}, column ${problem.column}: ` : "";
+    return { error: `${at}${problem?.message ?? "Not valid JSON"}` };
+  }
+  const found = snippetServers(snippet);
+  if (!found) return { error: "Not an MCP server: its entry needs a command or a url" };
+  const entries = Object.entries(found.servers);
+  if (entries.length === 0) return { error: "Nothing to read: the snippet holds no servers" };
+  const servers: PastedServer[] = [];
+  for (const [name, server] of entries) {
+    if (!isObject(server)) return { error: `Not an MCP server: ${name || "the entry"} is not an object` };
+    servers.push({ name, fields: serverFields(name, server) });
+  }
+  return { servers };
 }
 
 export function removeMcpServer(text: string, name: string): string | null {
