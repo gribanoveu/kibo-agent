@@ -140,17 +140,9 @@
   line-height: 1.5;
 }
 .mcp-install-actions {
-  /* Stays at the bottom of the dialog while a step scrolls: a two-column
-     step and the review both run past a short window. */
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 -16px -16px;
-  padding: 10px 16px 16px;
-  background: var(--bg-panel);
 }
 .mcp-install-json {
   margin-left: auto;
