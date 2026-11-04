@@ -53,7 +53,8 @@ import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
-import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
+import { HookForm } from "./components/ConfigEntryForm";
+import { McpInstall } from "./components/McpInstall";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
@@ -1020,15 +1021,16 @@ export default function App() {
 
       <Modal
         title={mcpDialog === "json" || mcpDialog === null ? "MCP servers" : mcpDialog.entry ?? "Add an MCP server"}
-        wide={mcpDialog === "json"}
+        wide
         open={mcpEditing}
         onClose={() => setMcpDialog(null)}
       >
         {mcpDialog !== null && mcpDialog !== "json" ? (
-          <McpServerForm
+          <McpInstall
             key={mcpDialog.entry ?? ""}
             name={mcpDialog.entry}
             text={mcp.view?.text}
+            path={mcp.view?.path ?? ""}
             error={mcp.error}
             onSave={mcp.save}
             onClose={() => setMcpDialog(null)}

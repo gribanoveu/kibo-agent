@@ -1,0 +1,155 @@
+.mcp-install {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* The steps are a strip, not a list down the side: the screen is wide and the
+   work goes left to right. */
+.mcp-install-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-install-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.mcp-install-step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.mcp-install-step[aria-current="step"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.mcp-install-step:disabled {
+  cursor: default;
+}
+.mcp-install-step-num {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.mcp-install-step[aria-current="step"] .mcp-install-step-num {
+  background: var(--accent);
+  color: var(--bg-panel);
+}
+.mcp-install-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mcp-install-text {
+  width: 100%;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+.mcp-install-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-install-found {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-install-found-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-install-found-row:hover {
+  border-color: var(--accent);
+}
+.mcp-install-found-row span {
+  overflow: hidden;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Two columns: how it runs on the left, what the agent gets on the right. */
+.mcp-install-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: 20px;
+}
+.mcp-install-col {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+.mcp-install-head {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.mcp-install-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.mcp-install-entry {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.mcp-install-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-install-json {
+  margin-left: auto;
+}
+/* A window too narrow for two columns puts them one under the other. */
+@media (max-width: 760px) {
+  .mcp-install-columns {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import {
   EMPTY_HOOK,
   EMPTY_SERVER,
@@ -11,7 +11,7 @@ import {
   writeHook,
   writeMcpServer,
 } from "../lib/configEntries";
-import { HookForm, McpServerForm } from "../components/ConfigEntryForm";
+import { HookForm } from "../components/ConfigEntryForm";
 
 // One server or one hook, edited through a form and written back into the
 // same file: its order and the keys the form has no field for survive.
@@ -288,71 +288,8 @@ describe("a hook", () => {
   });
 });
 
-describe("the forms", () => {
-  test("a server form saves the file with the server in it and closes", async () => {
-    const saved: string[] = [];
-    let closed = false;
-    render(
-      <McpServerForm
-        name="fs"
-        text={MCP}
-        error={null}
-        onSave={async (t) => (saved.push(t), true)}
-        onClose={() => (closed = true)}
-        onEditJson={() => {}}
-      />,
-    );
-    expect((screen.getByLabelText(/^Command/) as HTMLInputElement).value).toBe("fs-server");
-    fireEvent.change(screen.getByLabelText(/^Arguments/), { target: { value: "--root\n/tmp" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(JSON.parse(saved[0]).mcpServers.fs).toEqual({ command: "fs-server", args: ["--root", "/tmp"], type: "stdio" });
-    expect(closed).toBe(true);
-  });
-
-  test("a server form switches to a URL and saves the server that way", async () => {
-    const saved: string[] = [];
-    render(
-      <McpServerForm name="fs" text={MCP} error={null} onSave={async (t) => (saved.push(t), true)} onClose={() => {}} onEditJson={() => {}} />,
-    );
-    expect(screen.queryByLabelText(/^URL/)).toBeNull();
-    fireEvent.click(screen.getByText("A command"));
-    fireEvent.click(screen.getByRole("option", { name: /At a URL/ }));
-    expect(screen.queryByLabelText(/^Command/)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: "https://c.example/mcp" } });
-    fireEvent.change(screen.getByLabelText(/^Headers/), { target: { value: "Authorization: Bearer x" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(JSON.parse(saved[0]).mcpServers.fs).toEqual({
-      type: "http",
-      url: "https://c.example/mcp",
-      headers: { Authorization: "Bearer x" },
-    });
-  });
-
-  test("an HTTP server opens in the form as one", () => {
-    render(<McpServerForm name="docs" text={MCP} error={null} onSave={async () => true} onClose={() => {}} onEditJson={() => {}} />);
-    expect((screen.getByLabelText(/^URL/) as HTMLInputElement).value).toBe("https://mcp.example.com/mcp");
-    expect((screen.getByLabelText(/^Headers/) as HTMLTextAreaElement).value).toBe("Authorization: Bearer t\nX-Team: a");
-  });
-
-  test("a problem the form can see is shown, and nothing is saved", async () => {
-    const saved: string[] = [];
-    render(
-      <McpServerForm name={null} text={MCP} error={null} onSave={async (t) => (saved.push(t), true)} onClose={() => {}} onEditJson={() => {}} />,
-    );
-    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "fs" } });
-    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "x" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(screen.getByText("There is already a server called fs")).toBeTruthy();
-    expect(saved).toEqual([]);
-  });
-
-  test("a hook form hides the tools field for Stop, and hands over to the JSON editor", () => {
+describe("the hook form", () => {
+  test("hides the tools field for Stop, and hands over to the JSON editor", () => {
     let json = 0;
     render(<HookForm index={3} text={HOOKS} error={null} onSave={async () => true} onClose={() => {}} onEditJson={() => json++} />);
     expect(screen.queryByLabelText(/^Tools/)).toBeNull();
