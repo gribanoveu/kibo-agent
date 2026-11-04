@@ -3,11 +3,6 @@
   flex-direction: column;
   gap: 12px;
 }
-.entry-error {
-  margin: 0;
-  font-size: var(--fs-xs);
-  color: var(--red);
-}
 .entry-actions {
   display: flex;
   align-items: center;

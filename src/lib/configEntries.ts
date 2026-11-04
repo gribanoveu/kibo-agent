@@ -65,6 +65,20 @@ const pairs = (value: unknown, separator: string) =>
     .map(([key, v]) => `${key}${separator}${String(v)}`)
     .join("\n");
 
+/** A key of its own, not one every object inherits: a server may be called `constructor`. */
+const own = (servers: Json, name: string) => Object.prototype.hasOwnProperty.call(servers, name);
+
+/**
+ * The entry a write takes the place of: the one being edited, or the one the
+ * typed name already names — a pasted server whose name is in the file replaces
+ * it where it stands, as the file editor's own paste does.
+ */
+export function previousEntry(text: string, edited: string | null, typed: string): string | null {
+  if (edited !== null) return edited;
+  const servers = parseFile(text)?.mcpServers;
+  return isObject(servers) && typed && own(servers, typed) ? typed : null;
+}
+
 /** The keys the form writes itself; anything else an entry carries stays in `extra`. */
 const OWNED = ["command", "args", "env", "url", "headers", "weight", "timeoutSecs", "exposure", "keepResults"] as const;
 
@@ -147,7 +161,7 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   const name = fields.name.trim();
   if (!name) return { error: "The server needs a name" };
   const servers = isObject(file.mcpServers) ? file.mcpServers : {};
-  if (name !== previous && name in servers) return { error: `There is already a server called ${name}` };
+  if (name !== previous && own(servers, name)) return { error: `There is already a server called ${name}` };
 
   const how = transport(fields);
   if ("error" in how) return how as { error: string };
@@ -157,7 +171,7 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
 
   // What the form has no field for comes from the file it edits, or — for an
   // entry just pasted in — from the snippet.
-  const kept = previous !== null && isObject(servers[previous]) ? { ...servers[previous], ...fields.extra } : fields.extra;
+  const kept = previous !== null && own(servers, previous) && isObject(servers[previous]) ? { ...servers[previous], ...fields.extra } : fields.extra;
   const { command: _c, args: _a, env: _e, url: _u, headers: _h, weight: _w, timeoutSecs: _t, exposure: _x, keepResults: _k, ...rest } = kept;
   // A `type` saying the entry is at a URL would contradict a command; one at
   // a URL gets its own `type` from `transport`.
@@ -202,6 +216,12 @@ export function pastedServers(text: string): { servers: PastedServer[] } | { err
   const servers: PastedServer[] = [];
   for (const [name, server] of entries) {
     if (!isObject(server)) return { error: `Not an MCP server: ${name || "the entry"} is not an object` };
+    // A value the fields cannot hold would be dropped on the way in, so the
+    // paste is refused instead: `args` one per line, `env` and `headers` as
+    // objects are the shapes the entry is written in.
+    if (server.args !== undefined && !Array.isArray(server.args)) return { error: `${name || "The entry"}: args must be a list` };
+    if (server.env !== undefined && !isObject(server.env)) return { error: `${name || "The entry"}: env must be an object` };
+    if (server.headers !== undefined && !isObject(server.headers)) return { error: `${name || "The entry"}: headers must be an object` };
     servers.push({ name, fields: serverFields(name, server) });
   }
   return { servers };
@@ -209,7 +229,7 @@ export function pastedServers(text: string): { servers: PastedServer[] } | { err
 
 export function removeMcpServer(text: string, name: string): string | null {
   const file = parseFile(text);
-  if (!file || !isObject(file.mcpServers) || !(name in file.mcpServers)) return null;
+  if (!file || !isObject(file.mcpServers) || !own(file.mcpServers, name)) return null;
   const { [name]: _gone, ...servers } = file.mcpServers;
   return stringify({ ...file, mcpServers: servers });
 }

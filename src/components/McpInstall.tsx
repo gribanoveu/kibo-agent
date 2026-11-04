@@ -4,6 +4,7 @@ import { Field } from "./EntryField";
 import {
   EMPTY_SERVER,
   pastedServers,
+  previousEntry,
   readMcpServer,
   writeMcpServer,
   type McpServerFields,
@@ -65,12 +66,10 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const file = parseFile(text ?? "");
-  const inFile = file && isObject(file.mcpServers) ? file.mcpServers : {};
   const typed = fields.name.trim();
   // A pasted name that is already in the file replaces that entry where it
   // stands, as the file editor's own paste does.
-  const previous = name ?? (typed && typed in inFile ? typed : null);
+  const previous = previousEntry(text ?? "", name, typed);
   const written = writeMcpServer(text ?? "", previous, fields);
   const writtenFile = "text" in written ? parseFile(written.text) : null;
   const entry = writtenFile && isObject(writtenFile.mcpServers) ? writtenFile.mcpServers[typed] : undefined;
@@ -95,17 +94,30 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
     if ("servers" in result && result.servers.length === 1) pick(result.servers[0]);
   };
 
+  // Nothing is written over a file that was never read: an unreadable file is
+  // empty here, and saving would leave its servers behind.
   const next = () => {
+    if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
     go("review");
   };
 
   const install = async () => {
+    if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
     setSaving(true);
     const stored = await onSave(written.text);
     setSaving(false);
     if (stored) onClose();
+  };
+
+  const submit = () => {
+    if (step === "paste") {
+      if (draft.trim()) read();
+      return;
+    }
+    if (step === "connection") return next();
+    void install();
   };
 
   const set = (key: keyof McpServerFields) => (e: { target: { value: string } }) => {
@@ -114,7 +126,13 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   };
 
   return (
-    <div className="mcp-install">
+    <form
+      className="mcp-install"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
       <nav className="mcp-install-steps" aria-label="Steps">
         {steps.map(({ id, label }, i) => (
           <button
@@ -122,6 +140,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             type="button"
             className="mcp-install-step"
             aria-current={step === id ? "step" : undefined}
+            title={i > at ? "Fill this step in first" : undefined}
             disabled={i > at}
             onClick={() => go(id)}
           >
@@ -130,6 +149,9 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           </button>
         ))}
       </nav>
+
+      {/* Any refusal, wherever it came from, stands here until the next move. */}
+      {(problem ?? error) && <p className="entry-error">{problem ?? error}</p>}
 
       {step === "paste" && (
         <div className="mcp-install-paste">
@@ -260,7 +282,6 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
               </Field>
             </section>
           </div>
-          {problem && <p className="entry-error">{problem}</p>}
         </>
       )}
 
@@ -278,7 +299,6 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
               </>
             )}
           </p>
-          {error && <p className="entry-error">{error}</p>}
           {entry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(entry, null, 2)}</pre>}
           <p className="modal-note">
             The app writes {path || "the file"} in its own layout: spacing and key order typed there by hand are not
@@ -290,7 +310,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
       <div className="mcp-install-actions">
         {step === "paste" && (
           <>
-            <button className="btn btn-primary" type="button" disabled={!draft.trim()} onClick={read}>
+            <button className="btn btn-primary" type="submit" disabled={!draft.trim()}>
               Continue
             </button>
             <button
@@ -307,7 +327,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         )}
         {step === "connection" && (
           <>
-            <button className="btn btn-primary" type="button" onClick={next}>
+            <button className="btn btn-primary" type="submit">
               Next
             </button>
             {at > 0 && (
@@ -319,7 +339,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         )}
         {step === "review" && (
           <>
-            <button className="btn btn-primary" type="button" disabled={saving} onClick={() => void install()}>
+            <button className="btn btn-primary" type="submit" disabled={saving}>
               {name !== null ? "Save" : previous !== null ? "Replace" : "Install"}
             </button>
             <button className="btn btn-ghost" type="button" onClick={() => go("connection")}>
@@ -331,6 +351,6 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           Edit as JSON
         </button>
       </div>
-    </div>
+    </form>
   );
 }

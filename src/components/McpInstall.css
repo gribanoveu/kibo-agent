@@ -140,15 +140,25 @@
   line-height: 1.5;
 }
 .mcp-install-actions {
+  /* Stays at the bottom of the dialog while a step scrolls: a two-column
+     step and the review both run past a short window. */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
+  margin: 0 -16px -16px;
+  padding: 10px 16px 16px;
+  background: var(--bg-panel);
 }
 .mcp-install-json {
   margin-left: auto;
 }
-/* A window too narrow for two columns puts them one under the other. */
-@media (max-width: 760px) {
+/* The dialog is `min(880px, 100%)`, so the columns only have their 880 px
+   while the window is at least ~920 px wide: below that they go one under the
+   other. */
+@media (max-width: 920px) {
   .mcp-install-columns {
     grid-template-columns: 1fr;
   }

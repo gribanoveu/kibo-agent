@@ -4,6 +4,7 @@ import {
   EMPTY_HOOK,
   EMPTY_SERVER,
   pastedServers,
+  previousEntry,
   readHook,
   readMcpServer,
   removeHook,
@@ -139,6 +140,14 @@ describe("an MCP server", () => {
     expect(writeMcpServer("{", null, { ...EMPTY_SERVER, name: "x", command: "c" })).toMatchObject({ error: expect.stringContaining("not valid JSON") });
   });
 
+  test("a name every object inherits is not a server in the file", () => {
+    expect(previousEntry(text({ mcpServers: {} }), null, "constructor")).toBeNull();
+    expect(previousEntry(text({ mcpServers: { github: {} } }), null, "github")).toBe("github");
+    expect(previousEntry(text({ mcpServers: { github: {} } }), "other", "github")).toBe("other");
+    expect("text" in writeMcpServer("{}", null, { ...EMPTY_SERVER, name: "constructor", command: "c" })).toBe(true);
+    expect(removeMcpServer(MCP, "constructor")).toBeNull();
+  });
+
   test("is removed by name, the rest untouched", () => {
     const file = JSON.parse(removeMcpServer(MCP, "github")!);
     expect(Object.keys(file.mcpServers)).toEqual(["fs", "docs"]);
@@ -195,6 +204,11 @@ describe("a pasted server", () => {
     expect(pastedServers(text({ foo: 1 }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
     expect(pastedServers(text({ github: {} }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
     expect(pastedServers(text({ mcpServers: {} }))).toEqual({ error: "Nothing to read: the snippet holds no servers" });
+    expect(pastedServers(text({ mcpServers: { git: { command: "npx", args: "-y x" } } }))).toEqual({ error: "git: args must be a list" });
+    expect(pastedServers(text({ mcpServers: { git: { command: "npx", env: ["TOKEN=t"] } } }))).toEqual({ error: "git: env must be an object" });
+    expect(pastedServers(text({ mcpServers: { git: { url: "https://x", headers: "a: b" } } }))).toEqual({
+      error: "git: headers must be an object",
+    });
     expect(pastedServers(text({ mcpServers: { a: 1 } }))).toEqual({ error: "Not an MCP server: a is not an object" });
     expect(pastedServers('{"mcpServers": {')).toMatchObject({ error: expect.stringContaining("Line 1, column") });
   });

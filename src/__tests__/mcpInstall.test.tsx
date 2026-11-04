@@ -16,19 +16,18 @@ const PATH = "/home/me/.kibo/mcp.json";
 function mount(props: Partial<Parameters<typeof McpInstall>[0]> = {}) {
   const saved: string[] = [];
   const closed = { done: false };
-  render(
-    <McpInstall
-      name={null}
-      text={MCP}
-      path={PATH}
-      error={null}
-      onSave={async (t) => (saved.push(t), true)}
-      onClose={() => (closed.done = true)}
-      onEditJson={() => {}}
-      {...props}
-    />,
-  );
-  return { saved, closed };
+  const all = {
+    name: null as string | null,
+    text: MCP as string | undefined,
+    path: PATH,
+    error: null as string | null,
+    onSave: async (t: string) => (saved.push(t), true),
+    onClose: () => (closed.done = true),
+    onEditJson: () => {},
+    ...props,
+  };
+  const { rerender } = render(<McpInstall {...all} />);
+  return { saved, closed, rerender: (next: Partial<typeof all>) => rerender(<McpInstall {...all} {...next} />) };
 }
 
 const button = (name: string) => screen.getByRole("button", { name });
@@ -108,7 +107,9 @@ describe("installing a server", () => {
   });
 
   test("a pasted name already in the file is replaced, not refused", async () => {
-    const { saved } = mount();
+    const { saved } = mount({
+      text: text({ mcpServers: { alpha: { command: "a" }, github: { command: "npx" }, omega: { command: "o" } } }),
+    });
     paste(text({ mcpServers: { github: { command: "uvx" } } }));
     fireEvent.click(button("Continue"));
     fireEvent.click(button("Next"));
@@ -117,8 +118,17 @@ describe("installing a server", () => {
     await act(async () => {
       fireEvent.click(button("Replace"));
     });
-    expect(Object.keys(JSON.parse(saved[0]).mcpServers)).toEqual(["github"]);
+    // Where it stood, not at the end of the file.
+    expect(Object.keys(JSON.parse(saved[0]).mcpServers)).toEqual(["alpha", "github", "omega"]);
     expect(JSON.parse(saved[0]).mcpServers.github).toEqual({ command: "uvx" });
+  });
+
+  test("a paste whose args are not a list is refused rather than written short", () => {
+    mount();
+    paste(text({ mcpServers: { git: { command: "npx", args: "-y server-git" } } }));
+    fireEvent.click(button("Continue"));
+    expect(screen.getByText("git: args must be a list")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Name/)).toBeNull();
   });
 
   test("editing opens where the fields are, and writes the file back", async () => {
@@ -148,6 +158,65 @@ describe("installing a server", () => {
     expect(value(/^Name/)).toBe("mine");
     fireEvent.click(button("Back"));
     expect(screen.getByLabelText("MCP server JSON")).toBeTruthy();
+  });
+
+  test("the agent's side of the entry: environment, weight, timeout and results", async () => {
+    const { saved } = mount();
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "kb" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "kb-server" } });
+    fireEvent.change(screen.getByLabelText(/^Environment/), { target: { value: "TOKEN=t" } });
+    fireEvent.change(screen.getByLabelText(/^Weight/), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText(/^Timeout/), { target: { value: "30" } });
+    fireEvent.click(button("Cleared when the context fills"));
+    fireEvent.click(screen.getByRole("option", { name: /^Kept/ }));
+
+    fireEvent.click(button("Next"));
+    await act(async () => {
+      fireEvent.click(button("Install"));
+    });
+    expect(JSON.parse(saved[0]).mcpServers.kb).toEqual({
+      command: "kb-server",
+      env: { TOKEN: "t" },
+      weight: 5,
+      timeoutSecs: 30,
+      keepResults: true,
+    });
+  });
+
+  test("a file that was never read is not written over", () => {
+    const { saved } = mount({ text: undefined });
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "mine-server" } });
+    fireEvent.click(button("Next"));
+    expect(screen.getByText(/has not been read yet/)).toBeTruthy();
+    expect(saved).toEqual([]);
+  });
+
+  test("a file that broke under the screen is not written over", async () => {
+    const { saved, closed, rerender } = mount();
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "mine-server" } });
+    fireEvent.click(button("Next"));
+
+    // The file was rewritten by another client while the review was open.
+    rerender({ text: "{" });
+    await act(async () => {
+      fireEvent.click(button("Install"));
+    });
+    expect(screen.getByText(/not valid JSON/)).toBeTruthy();
+    expect(saved).toEqual([]);
+    expect(closed.done).toBe(false);
+
+    // And the read never came back at all.
+    rerender({ text: undefined });
+    await act(async () => {
+      fireEvent.click(button("Install"));
+    });
+    expect(screen.getByText(/has not been read yet/)).toBeTruthy();
+    expect(saved).toEqual([]);
   });
 
   test("Edit as JSON hands the dialog over to the file", () => {
