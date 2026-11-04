@@ -5,8 +5,9 @@
 //! out of Tauri's state, hands them over with the window's sink, and does
 //! nothing else (`docs/34-architecture-audit.md`, #5).
 
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -32,7 +33,7 @@ use crate::domain::web_search::WebSetupError;
 use crate::infra::kube_changes::ChangeStore;
 use crate::infra::kube_client::{ClusterApi, Clusters};
 use crate::infra::prototype_store;
-use crate::services::llm_chat::{Place, Turn, TurnError};
+use crate::services::llm_chat::{Frozen, Place, Turn, TurnError};
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
 use crate::services::{features, kubeconfigs, llm_session, plain_chat, project_rules, prototype_versions, skills, web_search};
@@ -92,6 +93,10 @@ pub struct FolderTurn<'a> {
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub take_steering: &'a (dyn Fn() -> Vec<SteeringNote> + Sync),
     pub notes_typed: &'a (dyn Fn() -> u64 + Sync),
+    /// The other chats running beside this one in the folder, asked live.
+    pub parallel: &'a (dyn Fn() -> Vec<String> + Sync),
+    /// Recorded when this chat moved to its worktree; the PR offer reads it.
+    pub worktree_base: Option<&'a str>,
 }
 
 /// Puts a turn in the open folder together and hands it to `run`. Blocking:
@@ -140,11 +145,19 @@ pub fn run_in_folder(
         false => None,
     };
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
+    let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
+    let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone(), parallel });
 
     let turn = Turn {
         events: folder.events,
         session: &session,
-        place: Place::Folder { scope: &scope, mode: folder.mode, web: web.as_ref() },
+        place: Place::Folder {
+            scope: &scope,
+            mode: folder.mode,
+            web: web.as_ref(),
+            parallel: folder.parallel,
+            worktree_base: folder.worktree_base,
+        },
         approval: &approval,
         cancelled: folder.cancelled,
         sleep: &sleep,
@@ -157,6 +170,7 @@ pub fn run_in_folder(
         knowledge_overview: knowledge_overview.as_ref(),
         skills: &skills,
         rules: &rules,
+        frozen: Some(&frozen),
         log_call: &log_call,
         plan: folder.plan,
         worktree_of: worktree_of.as_deref(),
@@ -174,6 +188,19 @@ pub fn run_in_folder(
         fork: false,
     };
     Ok(run(&turn)?)
+}
+
+/// The part of each chat's prompt its first turn in a folder read
+/// ([`Frozen`]), by chat and folder.
+// ponytail: in memory, so a restart freezes the files as they are then — one
+// miss on a chat whose files changed before it; kept in chats.db if that shows.
+static FROZEN: Mutex<BTreeMap<(String, PathBuf), Arc<Frozen>>> = Mutex::new(BTreeMap::new());
+
+/// What `chat_id`'s prompt says of the files in `workspace`: what its first
+/// turn there read, `now` when this is that turn.
+fn frozen_for(chat_id: &str, workspace: &Path, now: Frozen) -> Arc<Frozen> {
+    let mut frozen = FROZEN.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(frozen.entry((chat_id.to_string(), workspace.to_path_buf())).or_insert_with(|| Arc::new(now)))
 }
 
 /// What a chat turn is: its role and cluster from the window, the rest from
@@ -452,6 +479,8 @@ mod tests {
                 cancelled: &no,
                 take_steering: &none,
                 notes_typed: &zero,
+                parallel: &Vec::<String>::new,
+                worktree_base: None,
             };
             run_in_folder(folder, FolderHandles::default(), |turn| {
                 ask(turn.session);
@@ -529,6 +558,8 @@ mod tests {
                     cancelled: &no,
                     take_steering: &none,
                     notes_typed: &zero,
+                    parallel: &Vec::<String>::new,
+                worktree_base: None,
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
@@ -536,6 +567,7 @@ mod tests {
                     assert_eq!(turn.session.provider_id, "local");
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
+                    assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules && f.knowledge.as_ref() == turn.knowledge_overview), "the folder's turn is frozen");
                     assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Plan, web: None, .. }));
                     seen = Some((turn.board.is_some(), turn.mongo.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
@@ -574,6 +606,19 @@ mod tests {
             mcp_for_turn(Some(&servers), ConversationMode::Agent, &root, &|| false);
             assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
         });
+    }
+
+    /// A chat keeps what its first turn in a folder read; another chat, or
+    /// the same chat in another folder, starts from the files as they are.
+    #[test]
+    fn a_chat_keeps_the_files_its_first_turn_read() {
+        use crate::domain::project_rules::RuleFile;
+        let read = |text: &str| Frozen { rules: vec![RuleFile::new("AGENTS.md", text)], knowledge: None, parallel: None };
+        let (one, two) = (temp_dir("frozen-one"), temp_dir("frozen-two"));
+        assert_eq!(*frozen_for("frozen-chat", &one, read("first")), read("first"));
+        assert_eq!(*frozen_for("frozen-chat", &one, read("edited")), read("first"), "the chat's own is kept");
+        assert_eq!(*frozen_for("frozen-chat", &two, read("edited")), read("edited"), "another folder is its own");
+        assert_eq!(*frozen_for("frozen-other", &one, read("edited")), read("edited"), "another chat is its own");
     }
 
     /// Each turn reads the folder's git aliases, keeping what the session

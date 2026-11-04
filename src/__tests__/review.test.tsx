@@ -65,6 +65,19 @@ describe("the finding card", () => {
     suggestion: "amount / rate",
   };
 
+  test("its text is Markdown, drawn as an answer's is — bold, a list, `code`", () => {
+    render(
+      <FindingCard
+        finding={{ ...finding, title: "**Divides** by `zero`", body: "Panics on every call:\n\n- with `fee`\n- with a zero rate" }}
+      />,
+    );
+    expect(document.querySelector(".review-finding-title .md-strong")?.textContent).toBe("Divides");
+    expect([...document.querySelectorAll(".review-body .md-li")].map((li) => li.textContent)).toEqual(["with fee", "with a zero rate"]);
+    expect(document.querySelector(".review-body .md-code-inline")?.textContent).toBe("fee");
+    // Nothing of the markup itself is left on screen.
+    expect(document.querySelector(".review-finding")?.textContent).not.toContain("**");
+  });
+
   test("says what, where and why; Fix asks for it, the place opens the file", () => {
     const fixed: string[] = [];
     const opened: string[] = [];

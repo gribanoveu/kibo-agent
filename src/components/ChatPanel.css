@@ -602,7 +602,7 @@ button.turn-processes:hover {
   align-items: center;
   gap: 6px;
   margin: -4px 0 8px;
-  font-size: 0.85em;
+  font-size: var(--fs-xs);
   color: var(--amber);
 }
 

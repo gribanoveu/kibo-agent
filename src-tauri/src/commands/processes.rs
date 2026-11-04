@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::domain::background::{BackgroundProcesses, ProcessChanged, ProcessEventSink, ProcessInfo};
+use super::blocking;
+use crate::domain::background::{BackgroundProcesses, ProcessChanged, ProcessEventSink, ProcessInfo, ProcessView, TAIL_BYTES};
 use crate::domain::command_exec::collapse_redraws;
 use crate::infra::background::Processes;
 
@@ -20,58 +20,55 @@ pub fn process_event_sink<R: Runtime>(app: &AppHandle<R>) -> ProcessEventSink {
     })
 }
 
-/// How much of each process's output the tab shows: its last screenfuls.
-const TAIL_BYTES: usize = 8 * 1024;
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProcessView {
-    #[serde(flatten)]
-    pub info: ProcessInfo,
-    pub tail: String,
-}
-
-fn views(processes: &Processes) -> Vec<ProcessView> {
-    // Newest first: the one just started is the one being watched.
-    processes
-        .list()
+/// The open chat's, stored ones included — what another chat started is not
+/// this one's to show — or, for `None`, every one running or kept since
+/// launch: switching folders stops them all.
+fn views(processes: &Processes, chat: Option<&str>) -> Vec<ProcessView> {
+    let listed = match chat {
+        Some(chat) => processes.list_for(chat),
+        None => processes
+            .list()
+            .into_iter()
+            .map(|info| ProcessView { tail: processes.tail(info.id, TAIL_BYTES).unwrap_or_default(), info })
+            .collect(),
+    };
+    // Newest first: the one just started is the one being watched. The tail
+    // as a terminal would show it: a countdown is its last value, not every one.
+    listed
         .into_iter()
         .rev()
-        .map(|info| ProcessView { tail: shown_tail(processes, info.id), info })
+        .map(|view| ProcessView { tail: collapse_redraws(&view.tail).into_owned(), info: view.info })
         .collect()
-}
-
-/// As a terminal would show it: a countdown is its last value, not every one.
-fn shown_tail(processes: &Processes, id: u32) -> String {
-    collapse_redraws(&processes.tail(id, TAIL_BYTES).unwrap_or_default()).into_owned()
 }
 
 /// Read when the tab opens and on each [`PROCESS_EVENT`].
 #[tauri::command]
-pub fn processes_list(processes: State<'_, Arc<Processes>>) -> Vec<ProcessView> {
-    views(&processes)
+pub async fn processes_list(chat_id: Option<String>, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
+    let processes = Arc::clone(&processes);
+    blocking(move || Ok::<_, String>(views(&processes, chat_id.as_deref()))).await
 }
 
 /// The ones still running, newest first and without their output: the chat's
 /// count, read on each [`PROCESS_EVENT`] — a tick of output costs no tails.
 #[tauri::command]
-pub fn processes_running(processes: State<'_, Arc<Processes>>) -> Vec<ProcessInfo> {
-    running(&processes)
+pub fn processes_running(chat_id: String, processes: State<'_, Arc<Processes>>) -> Vec<ProcessInfo> {
+    running(&processes, &chat_id)
 }
 
-fn running(processes: &Processes) -> Vec<ProcessInfo> {
-    processes.list().into_iter().rev().filter(ProcessInfo::running).collect()
+fn running(processes: &Processes, chat: &str) -> Vec<ProcessInfo> {
+    processes.running_for(chat).into_iter().rev().collect()
 }
 
 /// The model is told at its next round that the user stopped it.
 #[tauri::command]
-pub fn process_stop(id: u32, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
-    stop(&processes, id)
+pub async fn process_stop(id: u32, chat_id: String, processes: State<'_, Arc<Processes>>) -> Result<Vec<ProcessView>, String> {
+    let processes = Arc::clone(&processes);
+    blocking(move || stop(&processes, id, &chat_id)).await
 }
 
-fn stop(processes: &Processes, id: u32) -> Result<Vec<ProcessView>, String> {
+fn stop(processes: &Processes, id: u32, chat: &str) -> Result<Vec<ProcessView>, String> {
     processes.stop_by_user(id).map_err(|e| e.to_string())?;
-    Ok(views(processes))
+    Ok(views(processes, Some(chat)))
 }
 
 #[cfg(all(test, unix))]
@@ -102,42 +99,53 @@ mod tests {
 
     #[test]
     fn the_tab_lists_newest_first_with_what_each_wrote() {
-        let processes = Processes::default();
+        let processes = Arc::new(Processes::default());
+        let chat = processes.for_chat("c");
         let dir = crate::testing::temp_dir("cmd-processes");
-        processes.start(&Shell::default(), "printf 'zero\\rfirst\\n'; sleep 30", &dir, ".").unwrap();
-        processes.start(&Shell::default(), "sleep 30", &dir, "sub").unwrap();
+        chat.start(&Shell::default(), "printf 'zero\\rfirst\\n'; sleep 30", &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", &dir, "sub").unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !views(&processes)[1].tail.contains("first") {
+        while !views(&processes, Some("c"))[1].tail.contains("first") {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let shown = views(&processes);
+        let shown = views(&processes, Some("c"));
         assert_eq!(shown.iter().map(|v| v.info.id).collect::<Vec<_>>(), [2, 1]);
         assert_eq!(shown[0].info.cwd, "sub");
         let json = serde_json::to_value(&shown[1]).unwrap();
         assert_eq!((json["id"].clone(), json["tail"].clone()), (serde_json::json!(1), serde_json::json!("first\n")));
+
+        processes.for_chat("other").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        assert_eq!(views(&processes, Some("c")).len(), 2);
+        // Switching folders asks for every one: it stops them all.
+        assert_eq!(views(&processes, None).len(), 3);
     }
 
     #[test]
     fn the_chat_counts_only_what_still_runs() {
-        let processes = Processes::default();
+        let processes = Arc::new(Processes::default());
+        let (chat, other) = (processes.for_chat("c"), processes.for_chat("other"));
         let dir = crate::testing::temp_dir("cmd-processes-running");
-        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        other.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
         processes.stop(2).unwrap();
-        assert_eq!(running(&processes).iter().map(|p| p.id).collect::<Vec<_>>(), [3, 1]);
+        assert_eq!(running(&processes, "c").iter().map(|p| p.id).collect::<Vec<_>>(), [3, 1]);
     }
 
     /// The tab's Stop is the user's: the model hears of it at its next round.
     #[test]
     fn a_stop_from_the_tab_is_told_to_the_model() {
-        let processes = Processes::default();
+        let processes = Arc::new(Processes::default());
         let dir = crate::testing::temp_dir("cmd-processes-stop");
-        processes.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        let shown = stop(&processes, 1).unwrap();
+        processes.for_chat("c").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.for_chat("other").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        let shown = stop(&processes, 1, "c").unwrap();
+        // Answered with the open chat's list, which the tab draws as it is.
+        assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].info.state, crate::domain::background::ProcessState::Stopped);
         assert_eq!(processes.take_ended().len(), 1);
-        assert!(stop(&processes, 7).unwrap_err().contains("no background process #7"));
+        assert!(stop(&processes, 7, "c").unwrap_err().contains("no background process #7"));
     }
 }

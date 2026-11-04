@@ -96,6 +96,23 @@ describe("the context meter", () => {
     expect(screen.getByText("The last request actually cost 10k, none of it reported as cached.")).toBeTruthy();
   });
 
+  /// A session's spend runs into millions; 2040k is a number to count digits in.
+  test("says millions as millions", () => {
+    const spent = (n: number) => {
+      const { unmount } = render(
+        <ContextMeter context={context()} usage={null} running={false} onCompact={() => {}} spent={n} />,
+      );
+      openMeter();
+      const shown = screen.getByText("Session tokens").nextElementSibling?.textContent;
+      unmount();
+      return shown;
+    };
+    expect(spent(999_000)).toBe("999k");
+    expect(spent(999_600)).toBe("1M");
+    expect(spent(2_040_000)).toBe("2.04M");
+    expect(spent(6_087_000)).toBe("6.09M");
+  });
+
   test("closes on Escape", () => {
     meter();
     openMeter();

@@ -17,6 +17,8 @@ export type OverviewProps = {
   /** `null` until the first estimate arrives. */
   context: ContextUsage | null;
   usage: ChatUsage | null;
+  /** Live agent turns across all chats, including ones waiting for approval. */
+  activeTurns: number;
   /** Every model call of the open chat, in tokens — helpers, title and checks included; `null` until read. */
   spent: number | null;
   servers: McpServerItem[];
@@ -24,6 +26,10 @@ export type OverviewProps = {
   processes: ProcessInfo[];
   agents: AgentInfo[];
   onOpenProcess: (id: number) => void;
+  /** The Background card's heading: Terminal, on its Processes tab. */
+  onOpenProcesses: () => void;
+  /** The Agent turns card's heading: Terminal, on its Agents tab. */
+  onOpenAgents: () => void;
   onOpenAgent: (agent: AgentFocus) => void;
   onOpenPanel: (tab: AsideTab) => void;
 };
@@ -45,19 +51,23 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
   }
 }
 
-/** The open session at a glance: how full the model's window is, which MCP
-    servers are on, what runs in the background, and what the folder holds
-    against its last commit. The folder and branch are over the message box. Each section leads to the pane that does something about it. */
+/** The open session at a glance: live agent turns, how full the model's window
+    is, which MCP servers are on, what runs in the background, and what the folder
+    holds against its last commit. The folder and branch are over the message box.
+    Each section leads to the pane that does something about it. */
 export function OverviewPanel({
   branch,
   changes,
   context,
   usage,
+  activeTurns,
   spent,
   servers,
   processes,
   agents,
   onOpenProcess,
+  onOpenProcesses,
+  onOpenAgents,
   onOpenAgent,
   onOpenPanel,
 }: OverviewProps) {
@@ -72,6 +82,17 @@ export function OverviewPanel({
           <ContextDetails context={context} cache={usage} spent={spent} />
         </section>
       )}
+
+      <section className="overview-card">
+        <button type="button" className="overview-head overview-link" title="Show the helper agents this chat ran" onClick={onOpenAgents}>
+          Agent turns
+          <span className="overview-count">{activeTurns}</span>
+          <ChevronRight size={13} className="overview-chev" />
+        </button>
+        <p className="overview-empty">
+          {activeTurns ? `${activeTurns} active across chats.` : "No agent turns are active."}
+        </p>
+      </section>
 
       <section className="overview-card">
         <button type="button" className="overview-head overview-link" onClick={() => onOpenPanel("mcp")}>
@@ -98,7 +119,7 @@ export function OverviewPanel({
       </section>
 
       <section className="overview-card">
-        <button type="button" className="overview-head overview-link" onClick={() => onOpenPanel("terminal")}>
+        <button type="button" className="overview-head overview-link" onClick={onOpenProcesses}>
           Background
           <span className="overview-count">{busyProcesses.length + busyAgents.length}</span>
           <ChevronRight size={13} className="overview-chev" />
@@ -116,7 +137,7 @@ export function OverviewPanel({
             ))}
             {busyAgents.map((agent) => (
               <li key={`a${agent.id}`}>
-                <button type="button" className="overview-row" title={agent.task} onClick={() => onOpenAgent({ id: agent.id, task: agent.task })}>
+                <button type="button" className="overview-row" title={agent.task} data-sheet-opener onClick={() => onOpenAgent({ id: agent.id, task: agent.task })}>
                   <Telescope size={14} />
                   <span className="overview-name">{briefTitle(agent.task)}</span>
                   <span className="overview-status ok">running</span>

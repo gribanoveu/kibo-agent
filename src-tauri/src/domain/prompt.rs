@@ -60,7 +60,7 @@ See the current text of what you change before you edit it, every time — a rea
 
 Prefer one thorough pass over a question. If a reasonable choice can be inferred — a filename, a helper's name, where a function belongs — make it, act, and say in one clause that you made it. Ask only when the answer would change what you build and no reading can settle it, or when the action is irreversible or high-risk.
 
-Do not narrate routine calls. Say what you found and what it means.
+Open with one phrase on what you are about to do and why — before the first call, not a list of the calls. After that, do not narrate routine calls: say what you found and what it means, and add a line only where a finding changes the plan, a step goes wrong, or the user has to decide something.
 
 When a call fails, report the failure.
 
@@ -160,6 +160,8 @@ You can research, change the repository and run commands.
 
 For a request of three or more steps, keep `todo`: a short outline of them, each ticked off once it is done and checked. When the work needs a plan of its own — a long task, one that reads more than you can keep in view at once — write it with `writePlan`: the plan is the work itself, and what you find goes into it as you go: names, paths, line numbers, decisions.
 
+The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
+
 When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step — the next part of a larger task — you may end with one short question naming it: \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
         // Written against the failure the mode exists to prevent: an agent
         // that answers "here is the plan" and has already applied half of it.
@@ -227,6 +229,8 @@ pub struct TurnContext<'a> {
     pub rules: &'a [RuleFile],
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
+    /// The parallel-session warning as this chat's first turn froze it.
+    pub parallel: Option<&'a str>,
     /// The language the user asked replies in; `None` asks nothing.
     pub language: Option<&'a str>,
     /// What the connected MCP servers say about using their tools, and
@@ -267,7 +271,26 @@ pub fn context_block(ctx: &TurnContext) -> String {
             main.display(),
         ));
     }
+    if let Some(parallel) = ctx.parallel {
+        text.push('\n');
+        text.push_str(parallel);
+    }
     text
+}
+
+/// The shared-tree etiquette, named for the chats running beside this one.
+/// Kept whole in `Frozen`: the prompt never follows a session starting or ending.
+pub fn parallel_block(chats: &[String]) -> Option<String> {
+    let (first, rest) = chats.split_first()?;
+    let names = std::iter::once(first).chain(rest).map(|title| format!("\"{}\"", title.replace(['\n', '\r'], " "))).collect::<Vec<_>>().join(", ");
+    Some(format!(
+        "- Other agent turns are running in this folder right now (chat {names}). Their edits can land while you work: \
+         a file you read earlier may have changed since, and a write that finds it changed is refused — re-read the file \
+         and apply your change to what is there now. Never revert, delete or commit changes you did not make; branches and \
+         the git index are shared — do not run git checkout, switch, restore, reset, clean, rebase or merge. If your task is \
+         likely to touch the same files, offer the user a move of this chat to a separate worktree (offer `worktree`) and \
+         carry on there."
+    ))
 }
 
 /// How to read a checklist row, said wherever the rows are shown.
@@ -617,10 +640,23 @@ mod tests {
             skills: &[],
             rules: &[],
             worktree_of: None,
+            parallel: None,
             language: None,
             mcp_servers: &[],
             knowledge: None,
         }
+    }
+
+    #[test]
+    fn a_parallel_chat_is_named_with_the_shared_tree_rules() {
+        assert_eq!(parallel_block(&[]), None);
+        let block = parallel_block(&["Fix\nlogin".into()]).expect("a running neighbour is named");
+        assert!(block.contains("chat \"Fix login\""), "{block}");
+        assert!(block.contains("do not run git checkout") && block.contains("reset") && block.contains("merge"), "{block}");
+        assert!(block.contains("offer `worktree`"), "{block}");
+        let workspace = PathBuf::from("/tmp/p");
+        let parallel = Some(block.as_str());
+        assert!(context_block(&TurnContext { parallel, ..ctx(&workspace) }).contains(&block));
     }
 
     /// A server's instructions are their own message, said to be the

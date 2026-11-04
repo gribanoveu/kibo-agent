@@ -1,0 +1,18 @@
+/* The letters' own height, following the chat's font scale; the width follows
+   the wordmark's proportions. */
+.kibo-brand {
+  display: block;
+  align-self: center;
+  flex: none;
+  height: calc(var(--fs-lg) * 3);
+  width: auto;
+  margin-bottom: 12px;
+}
+.kibo-brand-ink {
+  fill: var(--text);
+}
+/* The logo's own orange rather than the theme's accent: a brand mark that took
+   each palette's hue would not be the same mark. */
+.kibo-brand-accent {
+  fill: var(--logo-accent);
+}

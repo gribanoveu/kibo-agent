@@ -80,19 +80,19 @@
   background: var(--bg-active);
 }
 .ctx-part--instructions {
-  background: var(--purple);
+  background: var(--ctx-instructions);
 }
 .ctx-part--tools {
-  background: var(--text-faint);
+  background: var(--ctx-tools);
 }
 .ctx-part--skills {
-  background: var(--green);
+  background: var(--ctx-skills);
 }
 .ctx-part--mcp {
-  background: var(--amber);
+  background: var(--ctx-mcp);
 }
 .ctx-part--conversation {
-  background: var(--accent);
+  background: var(--ctx-conversation);
 }
 .ctx-total {
   margin: 6px 0 10px;

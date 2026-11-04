@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
 import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
-import { CATALOG, type CatalogEntry, certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { builtinSourceOf, isBuiltIn, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import "./ProviderSettings.css";
 import "./Segmented.css";
 import { matches } from "../lib/shortcuts";
@@ -28,6 +29,9 @@ const BLANK = {
   temperature: "",
   topP: "",
   cert: "",
+  // Not drawn anywhere in the form: a provider the app carries brings the
+  // headers its gateway wants, and a stored one keeps whatever it has.
+  headers: {} as Record<string, string>,
   supportsImages: false,
 };
 
@@ -42,8 +46,12 @@ type Props = {
   settings: LlmSettings | null;
   busy: boolean;
   error: string | null;
-  /** Resolves to whether it was stored — the form says so rather than making it a guess. */
-  onSave: (provider: ProviderConfig, apiKey: string | null) => void | Promise<boolean>;
+  /**
+   * Resolves to whether it was stored — the form says so rather than making it
+   * a guess. `renamedFrom` is the id the form was opened on, when the user
+   * typed another name for it.
+   */
+  onSave: (provider: ProviderConfig, apiKey: string | null, renamedFrom: string | null) => void | Promise<boolean>;
   onRemove: (id: string) => void;
   onSelect: (id: string) => void;
   /** Moves the key the API keys are sealed under between `~/.kibo` and the system keychain. */
@@ -69,6 +77,7 @@ const fromConfig = (config: ProviderConfig): Draft => ({
   temperature: sampling(config.temperature),
   topP: sampling(config.topP),
   cert: config.trustedCertPem ?? "",
+  headers: config.requestHeaders ?? {},
   supportsImages: config.supportsImages ?? false,
 });
 
@@ -134,6 +143,9 @@ export function ProviderSettings({
     temperature: draft.temperature === "" ? null : Number(draft.temperature),
     topP: draft.topP === "" ? null : Number(draft.topP),
     trustedCertPem: draft.cert.trim() || null,
+    // Carried through the draft rather than left on `chosen`: a provider the
+    // app carries brings them, and a save must not drop them.
+    requestHeaders: draft.headers,
     supportsImages: draft.supportsImages,
   });
 
@@ -142,7 +154,7 @@ export function ProviderSettings({
     // sends on Enter, and a settings box that quietly does nothing looks
     // exactly like a settings box that saved.
     e?.preventDefault();
-    const ok = await onSave(config(), apiKey);
+    const ok = await onSave(config(), apiKey, chosen?.id ?? null);
     setSaved(ok !== false);
   };
 
@@ -221,15 +233,23 @@ export function ProviderSettings({
           <section className="provider-card">
             <h4 className="provider-card-title">
               Known providers
-              <span className="provider-count">{CATALOG.length}</span>
+              <span className="provider-count">{KNOWN_PROVIDERS.length}</span>
             </h4>
             <Catalog
+              entries={KNOWN_PROVIDERS}
               baseUrl={draft.baseUrl.trim()}
               onPick={(entry) =>
                 edit({
                   id: freeName(entry.id, providers.map((p) => p.id)),
                   kind: entry.kind,
                   baseUrl: entry.baseUrl,
+                  // A provider the app carries comes with its gateway's
+                  // certificate; a plain catalog one starts without, so a
+                  // certificate belongs to the entry that brought it.
+                  cert: entry.trustedCertPem ?? "",
+                  // Same rule for the headers: they belong to the entry that
+                  // brought them, not to the one picked before it.
+                  headers: entry.requestHeaders ?? {},
                 })
               }
             />
@@ -417,7 +437,11 @@ export function ProviderSettings({
           </p>
         </section>
 
-        <Certificate pem={draft.cert} onChange={(cert) => edit({ cert })} />
+        <Certificate
+          pem={draft.cert}
+          source={builtinSourceOf(draft.cert)?.name}
+          onChange={(cert) => edit({ cert })}
+        />
 
         <div className="provider-foot">
           <button className="btn btn-primary" type="submit" disabled={busy}>
@@ -556,17 +580,27 @@ function ModelList({
 }
 
 /**
- * The known providers, searched by name. Picking one fills the name, protocol
- * and base URL, all still editable — a URL with `${…}` in it wants the user's
- * own account or host put there.
+ * The known providers, searched by name — the app's own rows first, then the
+ * catalog generated from models.dev. Picking one fills the name, protocol and
+ * base URL, all still editable — a URL with `${…}` in it wants the user's own
+ * account or host put there — and a row that carries a certificate fills that
+ * too.
  */
-function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: CatalogEntry) => void }) {
+function Catalog({
+  entries,
+  baseUrl,
+  onPick,
+}: {
+  entries: BuiltinProvider[];
+  baseUrl: string;
+  onPick: (entry: BuiltinProvider) => void;
+}) {
   const [query, setQuery] = useState("");
   // Several providers share a URL (a plan and its API), so the row picked is
   // remembered; it stays marked only while the URL is still its own.
   const [picked, setPicked] = useState<string | null>(null);
-  const shown = filterBy(CATALOG, query, (entry) => `${entry.name} ${entry.id}`);
-  const pick = (entry: CatalogEntry) => {
+  const shown = filterBy(entries, query, (entry) => `${entry.name} ${entry.id}`);
+  const pick = (entry: BuiltinProvider) => {
     setPicked(entry.id);
     onPick(entry);
   };
@@ -578,7 +612,7 @@ function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: Catalog
         <input
           type="search"
           value={query}
-          placeholder={`Search ${CATALOG.length} providers`}
+          placeholder={`Search ${entries.length} providers`}
           onChange={(e) => setQuery(e.target.value)}
           // Enter picks the first match rather than saving the form.
           onKeyDown={(e) => {
@@ -608,6 +642,7 @@ function Catalog({ baseUrl, onPick }: { baseUrl: string; onPick: (entry: Catalog
               )}
               <span className="model-name">{entry.name}</span>
               <span className="model-hint">{entry.baseUrl.replace(/^https:\/\//, "")}</span>
+              {isBuiltIn(entry.id) && <span className="model-note">built in</span>}
             </button>
           );
         })}
@@ -669,7 +704,16 @@ function Slider({
  * or a self-signed server. Loaded from a file or pasted; shown as a count, and
  * as text only when asked.
  */
-function Certificate({ pem, onChange }: { pem: string; onChange: (pem: string) => void }) {
+function Certificate({
+  pem,
+  source,
+  onChange,
+}: {
+  pem: string;
+  /** The built-in provider this certificate came with, when it is one of its own. */
+  source?: string;
+  onChange: (pem: string) => void;
+}) {
   const file = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
@@ -717,7 +761,9 @@ function Certificate({ pem, onChange }: { pem: string; onChange: (pem: string) =
       <p className={`provider-cert-state${pem.trim() ? " set" : ""}`}>
         {pem.trim()
           ? count
-            ? `${count} certificate${count === 1 ? "" : "s"} — trusted instead of the public roots`
+            ? source
+              ? `${count} certificate${count === 1 ? "" : "s"} — the one ${source} comes with, trusted instead of the public roots`
+              : `${count} certificate${count === 1 ? "" : "s"} — trusted instead of the public roots`
             : "No certificate found in this text"
           : "None — the server is checked against the public roots"}
       </p>

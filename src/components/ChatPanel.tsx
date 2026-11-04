@@ -212,10 +212,10 @@ function ToolRow({
         )}
       </button>
       {/* Unfolded rather than instead of it, as a process row does: the
-          answer stays readable here after the Agents tab has forgotten the run. */}
+          answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
-        <button type="button" className="tool-open-agent" onClick={() => onOpenAgent(shown.agent!)}>
-          Show in Agents
+        <button type="button" className="tool-open-agent" data-sheet-opener onClick={() => onOpenAgent(shown.agent!)}>
+          Show run
           <ArrowUpRight size={12} aria-hidden />
         </button>
       )}
@@ -232,10 +232,12 @@ function ToolRow({
   );
 }
 
+const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
+
 function ApprovalCard({
   block,
   onDecide,
-  preview = previewCalls,
+  preview = previewInOpenWorkspace,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
@@ -580,7 +582,8 @@ type Run = { kind: "run"; id: string; blocks: Block[] };
  * line — the answer is what the reader came for, the work behind it is a click
  * away. Approvals stay out: they wait for an answer and must be seen. So do a
  * review's findings: they are what the work was for. An offer is drawn after
- * the answer, not here.
+ * the answer, not here. Thinking with no calls to its name folds too: a line
+ * of its own, like a run's.
  */
 function fold(blocks: Block[]): (Block | Run)[] {
   const out: (Block | Run)[] = [];
@@ -597,10 +600,7 @@ function fold(blocks: Block[]): (Block | Run)[] {
       out.push({ kind: "run", id: `run:${block.id}`, blocks: [block] });
     }
   }
-  // Thinking alone is not a run of work: it keeps its own fold.
-  return out.flatMap((item) =>
-    item.kind === "run" && !item.blocks.some((b) => b.kind === "tool") ? item.blocks : [item],
-  );
+  return out;
 }
 
 /** How long one step stays on the folded line before the next may replace it. */
@@ -637,9 +637,10 @@ function ToolRun({
             {step}…
           </span>
         ) : (
-          <span className="tool-run-text">{describeRun(tools)}</span>
+          // A run that is only thinking has no calls to describe.
+          <span className="tool-run-text">{tools.length > 0 ? describeRun(tools) : "Thinking"}</span>
         )}
-        {live && (
+        {live && tools.length > 0 && (
           <span className="tool-run-count">
             {tools.length} {tools.length === 1 ? "call" : "calls"}
           </span>
@@ -690,7 +691,7 @@ type Props = {
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
   onOpenProcess?: (id: number) => void;
-  /** Opens the Agents tab on the helper run an `explore` call was. */
+  /** Opens the helper run an `explore` call was, in the sheet over the chat. */
   onOpenAgent?: OpenAgent;
   /** Background processes still running, newest first — counted beside the turn's clock. */
   runningProcesses?: number[];
@@ -705,6 +706,8 @@ type Props = {
   onRewind?: (bubbleId: string) => void;
   /** Puts a request to fix a review's finding into the message box. */
   onFix?: (text: string) => void;
+  /** Previews approval calls in this chat's own checkout. */
+  preview?: PreviewCalls;
   /** Sends what an offer under the last answer offered, as the user's message. */
   onOffer?: (kind: OfferKind) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
@@ -853,6 +856,7 @@ export function ChatPanel({
   onBranch,
   onRewind,
   onFix,
+  preview,
   onOffer,
   onAnswerQuestion,
   headSlot = null,
@@ -978,6 +982,7 @@ export function ChatPanel({
               onRewind={onRewind}
               onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
+              preview={preview}
               onOffer={onOffer}
               checklist={checklist}
             />

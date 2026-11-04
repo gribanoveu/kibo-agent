@@ -88,6 +88,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The folder is off the open chat's branch: the way back, said in amber. */
+.folder-tab-away {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  cursor: pointer;
+}
+.folder-tab-away svg {
+  flex: none;
+}
+.folder-tab-away:hover {
+  text-decoration: underline;
+}
+.folder-tab-away:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
 /* A switch, not an action: on, the next branch picked starts a worktree. */
 .folder-tab-worktree {
   display: inline-flex;

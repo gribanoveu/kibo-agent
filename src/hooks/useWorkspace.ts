@@ -11,9 +11,9 @@ export function useWorkspace() {
   // user just chose: only then is its last conversation reopened too.
   const [resumed, setResumed] = useState(false);
 
-  const open = useCallback(async (next: string) => {
+  const open = useCallback(async (next: string, keepRunning = false) => {
     try {
-      setPath(await openWorkspace(next.trim()));
+      setPath(await openWorkspace(next.trim(), keepRunning));
       setError(null);
       return true;
     } catch (e) {

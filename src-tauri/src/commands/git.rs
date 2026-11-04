@@ -128,6 +128,7 @@ pub async fn git_branches(state: State<'_, Arc<AgentState>>) -> Result<Vec<Branc
 /// way — it never overwrites them.
 #[tauri::command]
 pub async fn git_checkout(branch: String, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
+    state.ensure_tree_is_idle()?;
     in_repo(&state, move |root| git_branches::checkout(&root, &branch)).await
 }
 
@@ -262,7 +263,7 @@ mod tests {
             let path = git_branches::add_worktree(&main, &head, "t", &temp_dir("cmd-worktree-remove-home")).unwrap();
             let shown = |dir: &Path| dir.canonicalize().unwrap().display().to_string();
             let save = |id: &str, folder: &str| {
-                chat_store::save(id, folder, &[], &serde_json::json!([]), &[], None, None).unwrap();
+                chat_store::save(id, folder, &[], &serde_json::json!([]), &[], None, None, None).unwrap();
             };
             save("in-worktree", &shown(&path));
             save("in-main", &shown(&main));

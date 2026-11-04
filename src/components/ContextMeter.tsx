@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 import "./ContextMeter.css";
+import { compactTokens } from "../lib/usage";
 import { matches } from "../lib/shortcuts";
 
 // How full the model's window is, as a ring beside the send button; a click opens
@@ -13,13 +14,11 @@ import { matches } from "../lib/shortcuts";
 // This is the backend's estimate; the provider's own count for the last
 // request goes next to it rather than implying the two agree.
 
-const compact = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
-
 // Zero is also what a provider that reports nothing sends, so it is not
 // called a miss.
 const cacheNote = ({ promptTokens, cachedTokens = 0 }: ChatUsage) =>
   cachedTokens && promptTokens
-    ? `, ${compact(cachedTokens)} of it (${Math.round((cachedTokens / promptTokens) * 100)}%) from the cache`
+    ? `, ${compactTokens(cachedTokens)} of it (${Math.round((cachedTokens / promptTokens) * 100)}%) from the cache`
     : ", none of it reported as cached";
 
 // Of the last request; a dash where nothing was reported as cached, for the same reason.
@@ -77,12 +76,12 @@ export function ContextDetails({
             ))}
           </div>
           <p className="ctx-total">
-            {compact(context.total)} of {compact(context.limit)} tokens
+            {compactTokens(context.total)} of {compactTokens(context.limit)} tokens
           </p>
         </>
       ) : (
         <p className="ctx-total">
-          About {compact(context.total)} tokens in the next request. The model's window is not known —
+          About {compactTokens(context.total)} tokens in the next request. The model's window is not known —
           set it in Settings → Models.
         </p>
       )}
@@ -94,7 +93,7 @@ export function ContextDetails({
               <i className={`ctx-dot ctx-part--${key}`} />
               {label}
             </dt>
-            <dd>{compact(context[key])}</dd>
+            <dd>{compactTokens(context[key])}</dd>
           </div>
         ))}
         {cache !== undefined && (
@@ -112,7 +111,7 @@ export function ContextDetails({
               <i className="ctx-dot ctx-dot--spent" />
               Session tokens
             </dt>
-            <dd>{spent === null ? "—" : compact(spent)}</dd>
+            <dd>{spent === null ? "—" : compactTokens(spent)}</dd>
           </div>
         )}
       </dl>
@@ -184,11 +183,11 @@ export function ContextMeter({ context, usage, running, onCompact, up = false, s
         <div className={`ctx-pop${up ? " up" : ""}`} role="dialog" aria-label="Context">
           <ContextDetails context={context} spent={spent}>
             {context.compactsAt && (
-              <p className="ctx-note">Folds the older part on its own at {compact(context.compactsAt)}.</p>
+              <p className="ctx-note">Folds the older part on its own at {compactTokens(context.compactsAt)}.</p>
             )}
             {usage && (
               <p className="ctx-note">
-                The last request actually cost {compact(usage.promptTokens)}
+                The last request actually cost {compactTokens(usage.promptTokens)}
                 {cacheNote(usage)}.
               </p>
             )}

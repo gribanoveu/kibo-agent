@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- 2026-11-03 The terminal opens under the message box, as wide as the chat, and keeps the height it was dragged to; Overview's Background and Agent turns cards still open it on the background processes and the helper agents
+- 2026-11-02 Renaming a provider renames it: a save under another name no longer leaves the old one beside it, and the key and the pin come along instead of a second `alfagen` beside `alfagen-2`
+- 2026-11-03 New app icon, with a transparent background around its rounded square; the empty Agent and Chat screens carry the "kibo" wordmark instead of the pixel dog head — the logo's own orange in every theme, its letters in the theme's ink
+
+## v0.11.0 — 2026-11-03
+
+- 2026-11-02 Run several Agent or Chat mode conversations at once with live status in the chat list; Agent chats also show their active-turn count in Overview, and when two tasks share a checkout the agent can offer to move its chat to a clean worktree and later offer a pull request back into the recorded base
+- 2026-11-02 The card an MCP server asks through reads at its own size instead of the chat's — its message no longer stands twice the label above it — and its Send and Decline are drawn as the app's buttons rather than as bare text
+- 2026-11-02 A review's card is drawn as Markdown, as an answer is — a finding's title, what it says and the reviewer's summary get bold, lists, links and `code` instead of the characters as written, and a fenced block in one reads as a block
+- 2026-11-02 The text size chosen in Settings is no longer the chat's alone: a file as it renders, and what the sheets over a page hold — a helper agent's run, a knowledge document, a skill, a feature — read at that size too
+- 2026-11-02 The agent says what it is about to do, and why, before its first tool call, and speaks up mid-task when something it found changes the plan — instead of narrating every call or saying nothing
+- 2026-11-01 A half-written message stays in the chat it was typed in: switching to another chat, going between Agent and Chat or closing the window no longer carries it to the next chat or throws it away — and deleting the chat deletes it too
+- 2026-11-01 Tide, a light palette in DeepSeek's brand blue: its near-white page and #4d6bfe accent, a step darker so links clear 4.5:1
+- 2026-11-01 Clay, a third light palette with as little blue as a palette can carry — paper-toned ground, warm greys, rust accent — and the same or better contrast, AAA for body text
+- 2026-11-01 Six palettes, each under a name of its own — Linen and Chalk light, Ember, Basalt, Iris and Fjord dark — instead of borrowing other editors' theme names
+- 2026-11-01 AlfaGen, the bank's gateway, is offered as a provider with its certificate already trusted — nothing to find and paste — and OpenAI, Anthropic, DeepSeek and Ollama now stand at the top of the list instead of somewhere among two hundred
+- 2026-10-30 The agent's opening thought folds into a "Thinking" line in the run list, like "Ran a command", instead of standing alone above the answer — click it to read the whole thought
+- 2026-10-30 Messages waiting while the agent works line up with the message box and say when they are read — "Next step" or "After this turn" — and a long one opens whole on a click
+- 2026-10-30 Millions of tokens read as millions — Session tokens in the context meter and a helper agent's run say 2.04M rather than 2040k — and a picture the composer refused can be closed
+- 2026-10-30 Each chat keeps its own git branch: going back to a chat after another one switched the folder shows the folder's branch with the chat's own beside it, one click from switching back. A started chat can switch its branch between turns too — not while the agent works — and a Worktree tick is dropped when you open another chat
+- 2026-10-30 A chat keeps its helper agents' runs and its background commands: reopened later or after a restart, its Processes and Agents tabs and the Background card still show what each helper did and answered and how each command ended, with the last of its output. Deleting a chat deletes that record and stops what it left running
+- 2026-10-30 A helper agent's run opens in a sheet over the right side of the chat — from its explore row, Overview's Background card or the Agents tab — with the brief, its steps as they happen, what it cost, its answer and Stop; Escape or a click elsewhere closes it
+- 2026-10-29 Editing AGENTS.md, a `remember` note or a knowledge document mid-chat no longer resends the whole conversation at full price: the agent's prompt stays as the chat began and the change reaches it as a short note, and `/init` and the agent keep progress out of AGENTS.md
+- 2026-10-29 The Background card in Overview opens the Terminal on its Processes tab, and it, the Processes and the Agents tabs show only what the open chat started — the "N ended" count follows you to another chat or folder instead of piling up since launch
 - 2026-10-28 Let the agent read your MongoDB: turn on "Open to the agent" for a connection on the MongoDB page, and in any mode — and in the assistant chat — the agent finds a collection by its name, looks at its fields, finds, counts and aggregates documents and lists indexes; it writes nothing, and fields named like passwords or tokens reach it as `<redacted>`
 - 2026-10-27 Choose which microphone a call is recorded from in the Meetings page's recording settings; the choice is kept, and while that microphone is unplugged the system's default records instead
 - 2026-10-27 Semantic search puts the right code first far more often: the active model reads the index's first 30 results against the query and reorders them, at the cost of a few seconds a search

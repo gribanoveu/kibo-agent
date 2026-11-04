@@ -113,6 +113,8 @@ mod tests {
             branched_from: None,
             role: None,
             kube: None,
+            worktree_base: None,
+            git_branch: None,
         }
     }
 

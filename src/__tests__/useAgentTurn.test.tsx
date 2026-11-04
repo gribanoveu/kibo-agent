@@ -141,9 +141,10 @@ describe("making room before a turn", () => {
       await result.current.send("and b.rs");
     });
 
+    const chatId = calls.find((call) => call.command === "chat_start")?.args.chatId;
     expect(calls.filter((call) => call.command === "chat_steer").map((call) => call.args)).toEqual([
-      { text: "Review a.rs line by line", shown: "/review a.rs" },
-      { text: "and b.rs", shown: null },
+      { text: "Review a.rs line by line", shown: "/review a.rs", chatId },
+      { text: "and b.rs", shown: null, chatId },
     ]);
   });
 
@@ -236,7 +237,7 @@ describe("making room before a turn", () => {
 
     expect(folded).toBe(false);
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
-      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/^compact-/), chatId: expect.any(String) } },
+      { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/\/compact-1$/), chatId: expect.any(String) } },
     ]);
   });
 });
@@ -315,7 +316,10 @@ describe("the session's tokens", () => {
         reads: {},
       },
     };
-    results.chat_resume = done("written");
+    results.chat_resume = {
+      status: "done",
+      value: { text: "written", truncated: false, todos: [], history: [{ role: "assistant", content: "written" }] },
+    };
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => {
       await result.current.send("write it");
@@ -326,6 +330,51 @@ describe("the session's tokens", () => {
     await waitFor(() => expect(saved().length).toBeGreaterThan(0));
     expect(calls.find((call) => call.command === "chat_resume")?.args.chatId).toBe(sentId());
     expect(saved().every((call) => call.args.id === sentId())).toBe(true);
+    // The resume is the same turn on the one channel: the start's id, not a new one.
+    const startedId = calls.find((call) => call.command === "chat_start")?.args.turnId;
+    expect(startedId).toBe(`${sentId()}/turn-1`);
+    expect(calls.find((call) => call.command === "chat_resume")?.args.turnId).toBe(startedId);
+  });
+
+  test("a resume gets the plan written before its approval card, not the previous turn's", async () => {
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [], plan: "# Old" };
+    results.chat_start = (args: Record<string, unknown>) => {
+      emit({ turnId: args.turnId, seq: 1, round: 1, type: "toolCall", payload: { id: "p1", name: "writePlan", arguments: JSON.stringify({ content: "# Current" }) } });
+      emit({ turnId: args.turnId, seq: 2, round: 1, type: "toolResult", payload: { id: "p1", result: { result: "planWritten", lines: 1 } } });
+      return {
+        status: "pendingApproval",
+        value: { history: [], round: 1, budgetUsed: 1, eventSeq: 3, calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }], todos: [], reads: {} },
+      };
+    };
+    results.chat_resume = done("written");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("kept"));
+    await act(async () => result.current.send("plan it"));
+    expect(result.current.turn.status).toBe("awaitingApproval");
+
+    await act(async () => result.current.decide([{ id: "w1", approved: true }]));
+    expect(calls.find((call) => call.command === "chat_resume")?.args.plan).toBe("# Current");
+  });
+
+  test("a refused resume keeps the approval card and its checkpoint", async () => {
+    const checkpoint = {
+      history: [],
+      round: 1,
+      budgetUsed: 1,
+      eventSeq: 3,
+      calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }],
+      todos: [],
+      reads: {},
+    };
+    results.chat_start = { status: "pendingApproval", value: checkpoint };
+    results.chat_resume = new Error("the parallel-turns limit");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    await act(async () => result.current.decide([{ id: "w1", approved: true }]));
+
+    expect(result.current.turn.status).toBe("awaitingApproval");
+    expect(result.current.turn.checkpoint).toEqual(checkpoint);
+    expect(result.current.error).toContain("parallel-turns limit");
   });
 
   /// Two reads in flight, the first landing last: the total drawn is the
@@ -375,7 +424,10 @@ describe("the context estimate", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await waitFor(() => expect(result.current.context?.total).toBe(4_000));
-    expect(calls).toContainEqual({ command: "chat_context_usage", args: { messages: [] } });
+    expect(calls).toContainEqual({
+      command: "chat_context_usage",
+      args: { chatId: expect.any(String), messages: [] },
+    });
   });
 
   /// It is an estimate over the history, so it has to be asked again once the
@@ -392,9 +444,11 @@ describe("the context estimate", () => {
       await result.current.compact(true);
     });
 
+    const chatId = calls.find((call) => call.command === "chat_compact")?.args.chatId;
+    expect(chatId).toEqual(expect.any(String));
     expect(calls).toContainEqual({
       command: "chat_context_usage",
-      args: { messages: [{ role: "user", content: "summary" }] },
+      args: { chatId, messages: [{ role: "user", content: "summary" }] },
     });
   });
 });
@@ -523,6 +577,12 @@ describe("saving", () => {
 
     expect(result.current.turn.status).toBe("awaitingApproval");
     expect(saved()).toEqual([]);
+
+    await act(async () => {
+      await result.current.send("after the card");
+    });
+    expect(result.current.queued.map((item) => item.text)).toEqual(["after the card"]);
+    expect(calls.filter((call) => call.command === "chat_start")).toHaveLength(1);
   });
 
   test("starting a new chat leaves the old one where it is", async () => {
@@ -890,6 +950,71 @@ describe("the queue", () => {
 
   const started = () => calls.filter((call) => call.command === "chat_start");
 
+  /// Stop reaches the running turn's own chat: with two chats side by side a
+  /// stop without the id would end both — or the wrong one.
+  test("stop is sent for the running turn's chat", async () => {
+    const turn = heldTurn();
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+
+    await act(async () => result.current.cancel());
+    expect(calls.find((call) => call.command === "chat_cancel")?.args).toEqual({ chatId: started()[0].args.chatId });
+
+    await act(async () => turn.end("cancelled"));
+  });
+
+  /// Two sessions side by side count turns from one — the chat's key in the
+  /// id is what keeps an event of the one out of the other's transcript.
+  test("another session's events stay out of the transcript, and the id carries its chat", async () => {
+    const ends = new Map<string, (outcome: unknown) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.set(args.turnId as string, (status) => resolve({ ...done("ok")(args), status })));
+    const first = renderHook(() => useAgentTurn());
+    const second = renderHook(() => useAgentTurn());
+
+    act(() => void first.result.current.send("one"));
+    await waitFor(() => expect(first.result.current.turn.status).toBe("running"));
+    act(() => void second.result.current.send("two"));
+    await waitFor(() => expect(second.result.current.turn.status).toBe("running"));
+
+    const [a, b] = started().map((call) => call.args);
+    expect(a.turnId).toBe(`${a.chatId}/turn-1`);
+    expect(b.turnId).toBe(`${b.chatId}/turn-1`);
+
+    const said = (hook: typeof first) => hook.result.current.turn.blocks.filter((block) => block.kind === "message").map((block) => block.text);
+    act(() => emit({ turnId: b.turnId, seq: 1, round: 1, type: "delta", payload: { delta: "the other's answer" } }));
+    expect(said(second)).toEqual(["the other's answer"]);
+    expect(said(first)).toEqual([]);
+
+    await act(async () => {
+      ends.get(a.turnId as string)?.("done");
+      ends.get(b.turnId as string)?.("done");
+    });
+  });
+
+  /// The count is the chat's, not the instance's: two sessions that open the
+  /// same saved chat still mint different ids on the one channel.
+  test("two sessions of one saved chat mint different turn ids", async () => {
+    results.chat_load = { id: "shared-chat", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_start = done("ok");
+    const first = renderHook(() => useAgentTurn());
+    const second = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await first.result.current.open("shared-chat");
+      await second.result.current.open("shared-chat");
+    });
+    await act(async () => {
+      await first.result.current.send("one");
+    });
+    await act(async () => {
+      await second.result.current.send("two");
+    });
+
+    expect(started().map((call) => call.args.turnId)).toEqual(["shared-chat/turn-1", "shared-chat/turn-2"]);
+  });
+
   test("a message queued mid-turn is sent as the next turn once this one is done, not steered", async () => {
     const turn = heldTurn();
     const { result } = renderHook(() => useAgentTurn());
@@ -980,7 +1105,7 @@ describe("the queue", () => {
     results.chat_cancel_steer = true;
 
     await act(() => result.current.withdraw("note-1"));
-    expect(calls.find((call) => call.command === "chat_cancel_steer")?.args).toEqual({ id: "note-1" });
+    expect(calls.find((call) => call.command === "chat_cancel_steer")?.args).toEqual({ id: "note-1", chatId: started()[0].args.chatId });
     expect(given).toEqual(["use the helper"]);
     expect(result.current.steered).toEqual([]);
   });
@@ -1038,24 +1163,383 @@ describe("the queue", () => {
     expect(given).toEqual([]);
   });
 
-  /// The turn, its answer and its queue belong to the chat on screen: a new
-  /// chat would take them over, so it waits for the turn to stop.
-  test("a new chat is refused while the turn runs, and the queue stays", async () => {
-    heldTurn();
+  /// A new chat gets an empty queue; the running chat keeps its own, ready
+  /// when it is opened again.
+  test("a new chat leaves the running turn and its queue in their own session", async () => {
+    const turn = heldTurn();
     const given: string[] = [];
     const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
     act(() => void result.current.send("fix it"));
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     act(() => result.current.queue("one"));
+    const original = started()[0].args.chatId as string;
 
     let left: boolean | undefined;
     act(() => {
       left = result.current.reset();
     });
-    expect(left).toBe(false);
-    expect(result.current.turn.status).toBe("running");
+    expect(left).toBe(true);
+    expect(result.current.turn.status).toBe("idle");
+    expect(result.current.queued).toEqual([]);
     expect(given).toEqual([]);
+
+    await act(async () => {
+      await result.current.open(original);
+    });
+    expect(result.current.turn.status).toBe("running");
     expect(result.current.queued.map((q) => q.text)).toEqual(["one"]);
+    await act(async () => turn.end("cancelled"));
+  });
+});
+
+describe("parallel sessions", () => {
+  test("two chats run, receive events and save their full transcripts independently", async () => {
+    results.chat_load = { id: "b", title: "B", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    const argsByChat = new Map<string, Record<string, unknown>>();
+    const ends = new Map<string, (status: string) => void>();
+    results.chat_start = (args: Record<string, unknown>) => {
+      argsByChat.set(args.chatId as string, args);
+      return new Promise((resolve) => {
+        ends.set(args.chatId as string, (status) => resolve({ ...done(`answer ${args.chatId === "b" ? "B" : "A"}`)(args), status }));
+      });
+    };
+    const { result } = renderHook(() => useAgentTurn());
+
+    let aSending = Promise.resolve();
+    act(() => {
+      aSending = result.current.send("task A");
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const a = calls.find((call) => call.command === "chat_start")!.args;
+    const aId = a.chatId as string;
+
+    await act(async () => {
+      await result.current.open("b");
+    });
+    let bSending = Promise.resolve();
+    act(() => {
+      bSending = result.current.send("task B");
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    expect(result.current.chatActivity).toMatchObject({ [aId]: "running", b: "running" });
+
+    act(() => emit({ turnId: a.turnId, seq: 1, round: 1, type: "delta", payload: { delta: "answer A" } }));
+    expect(result.current.turn.blocks.some((block) => block.kind === "message" && block.text === "answer A")).toBe(false);
+    await act(async () => {
+      ends.get(aId)?.("done");
+      await aSending;
+    });
+    await waitFor(() => expect(result.current.chatActivity[aId]).toBe("finished"));
+    expect(result.current.chatActivity.b).toBe("running");
+    expect(result.current.chatId).toBe("b");
+    expect(result.current.turn.status).toBe("running");
+    await waitFor(() => {
+      const write = saved().filter((call) => call.args.id === aId).at(-1);
+      expect(write?.args.messages).toHaveLength(2);
+    });
+
+    const b = calls.filter((call) => call.command === "chat_start")[1].args;
+    act(() => emit({ turnId: b.turnId, seq: 1, round: 1, type: "delta", payload: { delta: "answer B" } }));
+    await act(async () => {
+      ends.get("b")?.("done");
+      await bSending;
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+
+    const loads = calls.filter((call) => call.command === "chat_load").length;
+    await act(async () => {
+      await result.current.open(aId);
+    });
+    expect(calls.filter((call) => call.command === "chat_load")).toHaveLength(loads);
+    expect(result.current.chatActivity[aId]).toBeUndefined();
+    expect(result.current.turn.blocks).toMatchObject([
+      { kind: "user", text: "task A" },
+      { kind: "message", text: "answer A" },
+    ]);
+    await act(async () => {
+      await result.current.open("b");
+    });
+    expect(result.current.turn.blocks).toMatchObject([
+      { kind: "user", text: "task B" },
+      { kind: "message", text: "answer B" },
+    ]);
+
+    for (const [id, task, answer] of [[aId, "task A", "answer A"], ["b", "task B", "answer B"]]) {
+      const write = saved().filter((call) => call.args.id === id).at(-1)!;
+      expect(write.args.messages).toEqual([
+        { role: "user", content: task },
+        { role: "assistant", content: answer },
+      ]);
+      expect(write.args.blocks).toMatchObject([
+        { kind: "user", text: task },
+        { kind: "message", text: answer },
+      ]);
+    }
+    expect(argsByChat.size).toBe(2);
+  });
+
+  test("a running chat cannot be discarded, and a discarded one is not saved back", async () => {
+    let end: (outcome: unknown) => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => {
+        end = () => resolve(done("done")(args));
+      });
+    let firstWrite: (value: unknown) => void = () => {};
+    let writeCount = 0;
+    results.chat_save = () => ++writeCount === 1 ? new Promise((resolve) => (firstWrite = resolve)) : Promise.resolve({});
+    const { result } = renderHook(() => useAgentTurn());
+    let sending = Promise.resolve();
+    act(() => {
+      sending = result.current.send("task");
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    const id = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+
+    let refused = false;
+    let refusal = Promise.resolve(false);
+    act(() => {
+      refusal = result.current.discard(id).then((discarded) => {
+        refused = true;
+        return discarded;
+      });
+    });
+    await act(async () => Promise.resolve());
+    expect(refused).toBe(true);
+    expect(await refusal).toBe(false);
+    await act(async () => firstWrite({}));
+
+    await act(async () => {
+      end(undefined);
+      await sending;
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+    const writes = saved().length;
+    let discarded: boolean | undefined;
+    await act(async () => {
+      discarded = await result.current.discard(id);
+    });
+    expect(discarded).toBe(true);
+    expect(result.current.chatId).toBeNull();
+    await act(async () => {});
+    expect(saved()).toHaveLength(writes);
+  });
+
+  test("a load that lands after a newer open or a new chat does not replace it", async () => {
+    const pending = new Map<string, (record: unknown) => void>();
+    results.chat_load = (args: Record<string, unknown>) =>
+      new Promise((resolve) => pending.set(args.id as string, resolve));
+    const record = (id: string) => ({ id, title: id, createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] });
+    const { result } = renderHook(() => useAgentTurn());
+
+    let openingA = Promise.resolve(true);
+    let openingB = Promise.resolve(true);
+    act(() => {
+      openingA = result.current.open("a");
+      openingB = result.current.open("b");
+    });
+    await waitFor(() => expect(pending.size).toBe(2));
+    await act(async () => {
+      pending.get("b")?.(record("b"));
+      await openingB;
+    });
+    expect(result.current.chatId).toBe("b");
+    await act(async () => {
+      pending.get("a")?.(record("a"));
+      await openingA;
+    });
+    expect(result.current.chatId).toBe("b");
+
+    let openingC = Promise.resolve(true);
+    act(() => {
+      openingC = result.current.open("c");
+    });
+    await waitFor(() => expect(pending.has("c")).toBe(true));
+    act(() => result.current.reset());
+    await act(async () => {
+      pending.get("c")?.(record("c"));
+      await openingC;
+    });
+    expect(result.current.chatId).toBeNull();
+    expect(result.current.turn.blocks).toEqual([]);
+
+    let openingD = Promise.resolve(true);
+    act(() => {
+      openingD = result.current.open("d");
+    });
+    await waitFor(() => expect(pending.has("d")).toBe(true));
+    expect(await result.current.discard("d")).toBe(true);
+    await act(async () => {
+      pending.get("d")?.(record("d"));
+      await openingD;
+    });
+    expect(result.current.chatId).toBeNull();
+  });
+
+  test("notes withdrawn after switching wait together in their own chat's draft", async () => {
+    let end: (outcome: unknown) => void = () => {};
+    const cancelled = new Map<string, (value: boolean) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => {
+        end = () => resolve({ ...done("done")(args), status: "cancelled" });
+      });
+    let notes = 0;
+    results.chat_steer = () => `note-${++notes}`;
+    results.chat_cancel_steer = (args: Record<string, unknown>) =>
+      new Promise((resolve) => cancelled.set(args.id as string, resolve));
+    results.chat_load = { id: "b", title: "B", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    const given: string[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    act(() => void result.current.send("task A"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+    await act(async () => {
+      await result.current.send("use the helper");
+      await result.current.send("update the docs");
+    });
+
+    const withdrawing: Promise<void>[] = [];
+    act(() => {
+      withdrawing.push(result.current.withdraw("note-1"), result.current.withdraw("note-2"));
+    });
+    await waitFor(() => expect(cancelled.size).toBe(2));
+    await act(async () => result.current.open("b"));
+    await act(async () => {
+      cancelled.get("note-1")?.(true);
+      cancelled.get("note-2")?.(true);
+      await Promise.all(withdrawing);
+    });
+    expect(given).toEqual([]);
+    expect(result.current.draft).toBeNull();
+
+    await act(async () => result.current.open(a));
+    expect(result.current.draft?.text).toBe("use the helper\n\nupdate the docs");
+    await act(async () => end(undefined));
+  });
+
+  test("a failed start closes its event subscription", async () => {
+    results.chat_start = new Error("provider said no");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("task"));
+    expect(result.current.turn.status).toBe("done");
+    expect(listeners.size).toBe(0);
+  });
+
+  test("compaction ending in the background is not a finished turn", async () => {
+    let finish: (value: unknown) => void = () => {};
+    results.chat_load = { id: "a", title: "A", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_compact = (args: Record<string, unknown>) => {
+      emit({ turnId: args.turnId, seq: 1, round: 0, type: "historyCompacting" });
+      return new Promise((resolve) => (finish = resolve));
+    };
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("a"));
+    let compacting = Promise.resolve(false);
+    act(() => {
+      compacting = result.current.compact(true);
+    });
+    await waitFor(() => expect(result.current.turn.blocks[0]).toMatchObject({ kind: "compaction", status: "running" }));
+    act(() => result.current.reset());
+    await act(async () => {
+      finish({ history: [], folded: 2 });
+      await compacting;
+    });
+    expect(result.current.chatActivity.a).not.toBe("finished");
+  });
+
+  test("stop all reaches both the background and the active turn", async () => {
+    results.chat_load = { id: "b", title: "B", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    const ends = new Map<string, (status: string) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.set(args.chatId as string, (status) => resolve({ ...done("done")(args), status })));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("task A"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+    await act(async () => result.current.open("b"));
+    act(() => void result.current.send("task B"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+
+    await act(async () => result.current.cancelAll());
+    expect(calls.filter((call) => call.command === "chat_cancel").map((call) => call.args)).toEqual([
+      { chatId: a },
+      { chatId: "b" },
+    ]);
+    await act(async () => {
+      ends.get(a)?.("cancelled");
+      ends.get("b")?.("cancelled");
+    });
+  });
+
+  test("a chat's saves run in order and keep their own snapshots", async () => {
+    const ends: (() => void)[] = [];
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.push(() => resolve(done("answer")(args))));
+    const writes: ((value: unknown) => void)[] = [];
+    results.chat_save = () => new Promise((resolve) => writes.push(resolve));
+    const { result } = renderHook(() => useAgentTurn());
+    let sending = Promise.resolve();
+    act(() => {
+      sending = result.current.send("task");
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    await act(async () => {
+      ends[0]();
+      await sending;
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+    await act(async () => Promise.resolve());
+    expect(saved()).toHaveLength(1);
+
+    let secondSending = Promise.resolve();
+    act(() => {
+      secondSending = result.current.send("next task");
+    });
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    await act(async () => writes[0]({}));
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    expect(saved()[1].args.messages).toEqual([
+      { role: "user", content: "task" },
+      { role: "assistant", content: "answer" },
+    ]);
+    expect(saved()[1].args.blocks).toMatchObject([{ kind: "user", text: "task" }]);
+    expect(saved()[1].args.blocks).toHaveLength(1);
+    await act(async () => writes[1]({}));
+    await act(async () => {
+      ends[1]();
+      await secondSending;
+    });
+    await waitFor(() => expect(saved()).toHaveLength(3));
+    await act(async () => writes[2]({}));
+  });
+
+  test("deleting a chat waits for a save already in flight", async () => {
+    results.chat_start = done("done");
+    let written: (value: unknown) => void = () => {};
+    results.chat_save = () => new Promise((resolve) => (written = resolve));
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("task"));
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    const id = saved()[0].args.id as string;
+
+    let settled = false;
+    let deleting = Promise.resolve(false);
+    act(() => {
+      deleting = result.current.discard(id).then((discarded) => {
+        settled = true;
+        return discarded;
+      });
+    });
+    await act(async () => Promise.resolve());
+    expect(settled).toBe(false);
+    expect(result.current.chatId).toBe(id);
+
+    await act(async () => {
+      written({});
+      expect(await deleting).toBe(true);
+    });
+    expect(result.current.chatId).toBeNull();
   });
 });
 
@@ -1196,8 +1680,12 @@ describe("rewinding", () => {
     await act(async () => {
       preview = await result.current.previewRewind("user:1");
     });
-    // The open folder: no chat named.
-    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({ changes: [bChange] });
+    // The agent chat names its own record, not a Chat-mode record.
+    expect(calls.find((call) => call.command === "rewind_preview")?.args).toEqual({
+      changes: [bChange],
+      chatId: undefined,
+      agentChatId: "kept",
+    });
     expect(preview).toMatchObject({ unrecorded: 1, files: [{ path: "b.rs" }] });
   });
 
@@ -1213,7 +1701,11 @@ describe("rewinding", () => {
       await result.current.rewind("user:0");
     });
 
-    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({ changes: [aChange, bChange] });
+    expect(calls.find((call) => call.command === "rewind_apply")?.args).toEqual({
+      changes: [aChange, bChange],
+      chatId: undefined,
+      agentChatId: "kept",
+    });
     expect(result.current.chatId).toBe("kept");
     expect(result.current.draft?.text).toBe("first");
     expect(result.current.turn.blocks).toMatchObject([
@@ -1325,7 +1817,7 @@ describe("reviewing", () => {
       await result.current.review();
     });
     const call = calls.find((c) => c.command === "review_start");
-    expect(call?.args).toEqual({ turnId: expect.stringMatching(/^turn-/), chatId: expect.any(String), messages: [], todos: [], plan: null, handed: false });
+    expect(call?.args).toEqual({ turnId: expect.stringMatching(/\/turn-1$/), chatId: expect.any(String), messages: [], todos: [], plan: null, handed: false });
     expect(result.current.turn.status).toBe("done");
     expect(result.current.turn.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
     await waitFor(() => expect(saved()).toHaveLength(1));
@@ -1336,9 +1828,9 @@ describe("reviewing", () => {
     ]);
   });
 
-  /// It is a turn like any other: what is typed steers it, and leaving
-  /// waits for it, as it would for a message's turn.
-  test("while a review runs, a message steers it and the chat cannot be left", async () => {
+  /// A review is a turn like any other: steering and its transcript stay with
+  /// its own session when another chat is opened.
+  test("while a review runs, a message steers it and a new chat can open", async () => {
     let finish: (value: unknown) => void = () => {};
     results.review_start = new Promise((resolve) => (finish = resolve));
     results.chat_steer = "note-1";
@@ -1352,12 +1844,14 @@ describe("reviewing", () => {
       await result.current.send("and check the tests");
     });
     expect(calls.find((c) => c.command === "chat_steer")?.args).toMatchObject({ text: "and check the tests" });
-    let left: boolean | undefined;
-    act(() => {
-      left = result.current.reset();
+    const original = calls.find((c) => c.command === "review_start")!.args.chatId as string;
+    act(() => result.current.reset());
+    expect(result.current.turn.status).toBe("idle");
+
+    await act(async () => {
+      expect(await result.current.open(original)).toBe(true);
     });
-    expect(left).toBe(false);
-    expect(await result.current.open("other")).toBe(false);
+    expect(result.current.turn.status).toBe("running");
     await act(async () => {
       finish(reviewed("done")({ messages: [] }));
       await running;

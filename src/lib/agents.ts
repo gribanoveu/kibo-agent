@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri, requireBackend } from "./backend";
+import { compactTokens } from "./usage";
 
 // Helper agents: `explore` runs, for the Agents tab.
 
@@ -40,23 +41,23 @@ export function briefTitle(task: string): string {
   return asked ?? lines[0] ?? "";
 }
 
-/** Newest first. */
-export async function agentsList(): Promise<AgentInfo[]> {
+/** The runs chat `chatId` started, newest first. */
+export async function agentsList(chatId: string): Promise<AgentInfo[]> {
   if (!inTauri()) return [];
-  return invoke<AgentInfo[]>("agents_list");
+  return invoke<AgentInfo[]>("agents_list", { chatId });
 }
 
-/** The helper ends at its next check; the turn that started it is told and carries on. */
-export async function stopAgent(id: number): Promise<AgentInfo[]> {
+/** The helper ends at its next check; the turn that started it is told and carries on. Answers with chat `chatId`'s list. */
+export async function stopAgent(id: number, chatId: string): Promise<AgentInfo[]> {
   requireBackend();
-  return invoke<AgentInfo[]>("agent_stop", { id });
+  return invoke<AgentInfo[]>("agent_stop", { id, chatId });
 }
 
 /** What a run cost: `38k tokens · 90% cached`; nothing while nothing is reported. */
 export function tokensSpent(tokens: AgentTokens): string {
   const total = tokens.prompt + tokens.completion;
   if (!total) return "";
-  const shown = total >= 1000 ? `${Math.round(total / 1000)}k` : `${total}`;
+  const shown = compactTokens(total);
   const cached = tokens.prompt ? Math.round((tokens.cached / tokens.prompt) * 100) : 0;
   return cached ? `${shown} tokens · ${cached}% cached` : `${shown} tokens`;
 }
@@ -64,4 +65,10 @@ export function tokensSpent(tokens: AgentTokens): string {
 /** How a run stands, in a word or two. */
 export function agentStatus(state: AgentState): string {
   return state.state === "failed" ? "failed" : state.state;
+}
+
+/** A step as the helper logged it, `readFile src/auth.rs`: the tool, then what it was called on. */
+export function splitStep(step: string): { tool: string; on: string } {
+  const space = step.indexOf(" ");
+  return space < 0 ? { tool: step, on: "" } : { tool: step.slice(0, space), on: step.slice(space + 1) };
 }

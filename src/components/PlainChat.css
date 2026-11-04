@@ -30,50 +30,7 @@
   gap: 10px;
   text-align: center;
 }
-/* As large as the agent's on its empty chat. */
-.plain-welcome-mascot {
-  position: relative;
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 8px;
-}
-.plain-welcome-logo {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-/* The role's icon in a thought cloud over Kibo's head; out of the flow, so
-   Kibo stays exactly where the agent's is. */
-.plain-welcome-cloud {
-  position: absolute;
-  top: -36px;
-  /* Kibo's head fills its box: further right, the cloud clears its ear. */
-  left: calc(100% - 2px);
-  width: 72px;
-  height: 58px;
-  color: var(--accent);
-}
-.plain-cloud-shape {
-  position: absolute;
-  inset: 0;
-  overflow: visible;
-}
-/* A 2px stroke under the fill leaves a 1px edge round the whole cloud. */
-.plain-cloud-edge {
-  fill: var(--border);
-  stroke: var(--border);
-  stroke-width: 2px;
-}
-.plain-cloud-fill {
-  fill: var(--bg-panel-soft);
-}
-/* Centred on the cloud's body, not on its box with the trail in it. */
-.plain-welcome-cloud > .lucide {
-  position: absolute;
-  left: 38px;
-  top: 25px;
-  transform: translate(-50%, -50%);
-}
+/* As in the agent's empty chat: the logo, then the greeting. */
 .plain-welcome h2 {
   font-size: var(--fs-lg);
   font-weight: 600;
@@ -84,13 +41,14 @@
   line-height: 1.6;
   color: var(--text-faint);
 }
-/* One per row, whatever their length: the block's height is what keeps Kibo in place. */
+/* One per row, whatever their length: the block's height is what keeps the
+   empty chat's parts in place. */
 .plain-suggest {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 7px;
-  /* Makes the block as tall as the agent's, so Kibo stays put across modes. */
+  /* Makes the block as tall as the agent's, so the empty chat sits where it does. */
   margin-top: 7px;
 }
 .plain-suggest button {
@@ -332,8 +290,6 @@
 /* Why a pasted or dropped picture was not taken. */
 .plain-attach-error {
   margin: 0 0 8px;
-  color: var(--red);
-  font-size: var(--fs-sm);
 }
 
 /* Files held over the window: the box says it takes them, wherever they are

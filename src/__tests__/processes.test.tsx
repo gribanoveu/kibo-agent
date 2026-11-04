@@ -13,6 +13,7 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === "processes_list") return Promise.resolve(structuredClone(listed));
+    if (command === "processes_running") return Promise.resolve(listed.filter((p) => p.state.state === "running"));
     if (command === "process_stop") {
       listed = listed.map((p) => (p.id === args!.id ? { ...p, state: { state: "stopped" as const } } : p));
       return Promise.resolve(structuredClone(listed));
@@ -37,7 +38,7 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { useProcesses } = await import("../hooks/useProcesses");
+const { useProcesses, useRunningProcesses } = await import("../hooks/useProcesses");
 const { ProcessList } = await import("../components/ProcessList");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
@@ -51,7 +52,7 @@ beforeEach(() => {
 
 describe("useProcesses", () => {
   test("asks when the tab opens and when a process changes, not on a timer, and not once it closes", async () => {
-    const { result, rerender } = renderHook(({ visible }) => useProcesses(visible), { initialProps: { visible: false } });
+    const { result, rerender } = renderHook(({ visible }) => useProcesses(visible, "c"), { initialProps: { visible: false } });
     const asked = () => calls.filter((c) => c.command === "processes_list").length;
     await settle();
     expect(calls).toEqual([]);
@@ -75,11 +76,48 @@ describe("useProcesses", () => {
   });
 
   test("a stop is settled by what the backend says", async () => {
-    const { result } = renderHook(() => useProcesses(true));
+    const { result } = renderHook(() => useProcesses(true, "c"));
     await settle();
     await act(() => result.current.stop(2));
-    expect(calls.at(-1)).toEqual({ command: "process_stop", args: { id: 2 } });
+    expect(calls.at(-1)).toEqual({ command: "process_stop", args: { id: 2, chatId: "c" } });
     expect(result.current.processes[0].state).toEqual({ state: "stopped" });
+  });
+
+  // Overview's "N ended" stayed the same from chat to chat while every chat's were listed.
+  test("lists the open chat's, reads again for another chat, and nothing for a chat not started", async () => {
+    const { result, rerender } = renderHook(({ chat }) => useProcesses(true, chat), { initialProps: { chat: "a" as string | null } });
+    await settle();
+    expect(calls).toEqual([{ command: "processes_list", args: { chatId: "a" } }]);
+
+    listed = [listed[1]];
+    rerender({ chat: "b" });
+    // Till b's list arrives, a's is not shown under it.
+    expect(result.current.processes).toEqual([]);
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "processes_list", args: { chatId: "b" } });
+    expect(result.current.processes.map((p) => p.id)).toEqual([1]);
+
+    rerender({ chat: null });
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(result.current.processes).toEqual([]);
+  });
+});
+
+describe("useRunningProcesses", () => {
+  test("counts the open chat's, read again for another chat", async () => {
+    const { result, rerender } = renderHook(({ chat }) => useRunningProcesses(chat), { initialProps: { chat: "a" as string | null } });
+    await settle();
+    expect(calls).toEqual([{ command: "processes_running", args: { chatId: "a" } }]);
+    expect(result.current.map((p) => p.id)).toEqual([2]);
+    rerender({ chat: "b" });
+    expect(result.current).toEqual([]);
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "processes_running", args: { chatId: "b" } });
+    rerender({ chat: null });
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(result.current).toEqual([]);
   });
 });
 

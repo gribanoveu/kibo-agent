@@ -13,7 +13,7 @@ export const PANEL_LIMITS: Record<PanelKey, { min: number; max: number; initial:
   sidebar: { min: 180, max: 420, initial: 248, rail: 58 },
   // Changes' "Generate description" and "Commit" side by side: 246.
   aside: { min: 260, max: 560, initial: 300 },
-  // A height: the lower pane of the right column. Like the side panel it stops
+  // A height: the terminal under the message box. Like the side panel it stops
   // at its minimum — it closes from its own button, never by dragging.
   bottom: { min: 120, max: 640, initial: 240 },
   // The file viewer beside the chat; it closes from its own button. Its

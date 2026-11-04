@@ -160,6 +160,21 @@ describe("the plan through a conversation", () => {
     expect(lastSave()?.plan).toBe("# Draft, corrected");
   });
 
+  test("a branch switched between turns is saved with the chat at once, and a chat not started saves nothing", async () => {
+    let saved = 0;
+    const { result } = renderHook(() => useAgentTurn({ onSaved: () => saved++ }));
+    act(() => result.current.saveBranch());
+    await act(async () => {});
+    expect(calls.filter((c) => c.command === "chat_save")).toHaveLength(0);
+
+    await act(async () => result.current.send("go"));
+    const before = calls.filter((c) => c.command === "chat_save").length;
+    const told = saved;
+    await act(async () => result.current.saveBranch());
+    expect(calls.filter((c) => c.command === "chat_save")).toHaveLength(before + 1);
+    expect(saved).toBe(told + 1);
+  });
+
   test("a reopened chat brings its plan and its checklist; a new chat has neither", async () => {
     record = {
       id: "c1",

@@ -102,7 +102,10 @@ export function useAttachments(enabled: boolean) {
   };
   const take = () => takeNamed().map((one) => one.image);
 
-  return { images, error, dragging, paste, remove, take, takeNamed };
+  /** The user closed the note; the next picture says again if it fails. */
+  const clearError = () => setError(null);
+
+  return { images, error, dragging, paste, remove, take, takeNamed, clearError };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

@@ -1,5 +1,6 @@
 import { Bot, SearchCheck, Wrench } from "lucide-react";
 import type { Finding, Review } from "../lib/finding";
+import { Markdown } from "./Markdown";
 import "./ReviewCard.css";
 
 type Props = {
@@ -10,11 +11,6 @@ type Props = {
   onFix?: (text: string) => void;
 };
 
-/** Model text with `code` in backticks, the code drawn as code. */
-export function Prose({ text }: { text: string }) {
-  return <>{text.split("`").map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : part))}</>;
-}
-
 export const lines = (f: Finding) => (f.startLine === f.endLine ? `${f.startLine}` : `${f.startLine}-${f.endLine}`);
 
 /** One problem a review reported, where it stands in the turn: what, where, why, and Fix. */
@@ -24,9 +20,9 @@ export function FindingCard({ finding, onOpenFile, onFix }: Props) {
     <div className="review-finding">
       <div className="review-finding-head">
         <span className={`review-severity ${finding.severity}`}>{finding.severity}</span>
-        <span className="review-finding-title">
-          <Prose text={finding.title} />
-        </span>
+        <div className="review-finding-title">
+          <Markdown text={finding.title} streaming={false} />
+        </div>
         {onFix && (
           <button
             type="button"
@@ -46,9 +42,9 @@ export function FindingCard({ finding, onOpenFile, onFix }: Props) {
       ) : (
         <span className="review-path">{place}</span>
       )}
-      <p className="review-body">
-        <Prose text={finding.body} />
-      </p>
+      <div className="review-body">
+        <Markdown text={finding.body} streaming={false} />
+      </div>
       {finding.suggestion && <pre className="review-suggestion">{finding.suggestion}</pre>}
     </div>
   );
@@ -86,7 +82,8 @@ export function ReviewReport({
           <button
             type="button"
             className="review-fix"
-            title="Open the subagent in the Agents tab"
+            title="Open the subagent's run"
+            data-sheet-opener
             onClick={() => onOpenAgent({ id: review.agent, task: "Review the uncommitted changes" })}
           >
             <Bot size={12} />
@@ -95,9 +92,9 @@ export function ReviewReport({
         )}
       </div>
       {review.summary && (
-        <p className="review-report-summary">
-          <Prose text={review.summary} />
-        </p>
+        <div className="review-report-summary">
+          <Markdown text={review.summary} streaming={false} />
+        </div>
       )}
       {review.findings.map((finding) => (
         <FindingCard

@@ -1,21 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
-import logo from "../assets/kibo-chat-pixel.png";
+import { KiboBrand } from "./KiboBrand";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
+import { ErrorNote } from "./ErrorNote";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useArrival } from "../hooks/useArrival";
+import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
 import { rememberNamespace } from "../lib/kube";
@@ -24,7 +26,7 @@ import "./PlainChat.css";
 const WRITES_OFF = "read";
 const WRITES_ON = "changes";
 
-/** Each role's sign: in Kibo's cloud on the empty chat and on the role's tab. */
+/** Each role's sign, on its chip above the message box and in the role's menu. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
@@ -39,28 +41,6 @@ const ROLE_WELCOME: Record<ChatRoleId, string> = {
   prototype:
     "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
 };
-
-// A thought cloud: overlapping circles, then the bubbles trailing to the head.
-const CLOUD = [
-  [24, 24, 13],
-  [38, 17, 15],
-  [53, 25, 12],
-  [31, 35, 10],
-  [46, 36, 10],
-  [12, 47, 4.5],
-  [5, 54, 2.5],
-] as const;
-
-/** Drawn twice — outlines, then fills over them — so only the outer edge shows. */
-function Cloud() {
-  const circles = CLOUD.map(([cx, cy, r]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} />);
-  return (
-    <svg className="plain-cloud-shape" viewBox="0 0 72 58">
-      <g className="plain-cloud-edge">{circles}</g>
-      <g className="plain-cloud-fill">{circles}</g>
-    </svg>
-  );
-}
 
 type Props = {
   chat: PlainChatState;
@@ -120,7 +100,9 @@ export function PlainChat({
   onRewind,
   pages,
 }: Props) {
-  const [draft, setDraft] = useState("");
+  // The box belongs to this chat, as the agent's does: what was typed here
+  // waits here while another chat is open, and comes back with this one.
+  const [draft, setDraft, take] = useChatDraft(chatDraftKey("chat", chat.chatId));
   // A Prototype chat keeps pictures in its folder for any model: one that
   // cannot see them still names them on the page.
   const attachments = useAttachments(imagesEnabled || chat.role === "prototype");
@@ -161,7 +143,9 @@ export function PlainChat({
     if (attached.length > 0) pages?.onShowAssets();
     void chat.send(draft, attached, pages?.pointed ?? null, imagesEnabled);
     pages?.onUnpoint();
-    setDraft("");
+    // The chat gets its id as the message goes: the draft to clear is this one,
+    // not the one the box is about to show.
+    take();
   };
   // Pointed at in the preview: the message box is where the request about it is written.
   const pointed = pages?.pointed ?? null;
@@ -179,13 +163,7 @@ export function PlainChat({
         <div ref={scrollRef} className="plain-thread chat-text">
           {empty ? (
             <div className="plain-welcome">
-              <div className="plain-welcome-mascot">
-                <img className="plain-welcome-logo" src={logo} alt="" />
-                <span className="plain-welcome-cloud" aria-hidden>
-                  <Cloud />
-                  <RoleIcon size={22} />
-                </span>
-              </div>
+              <KiboBrand />
               <h2>{greeting}</h2>
               <p>{ROLE_WELCOME[chat.role]}</p>
               <div className="plain-suggest">
@@ -366,9 +344,7 @@ export function PlainChat({
             </div>
           )}
           {attachments.error && (
-            <p className="plain-attach-error" role="alert">
-              {attachments.error}
-            </p>
+            <ErrorNote className="plain-attach-error" message={attachments.error} onClose={attachments.clearError} />
           )}
           <textarea
             ref={input}

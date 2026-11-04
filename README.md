@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/kibo-agent-pixel.png" width="160" alt="Kibo Agent">
+  <img src="logo.svg" width="300" alt="Kibo">
 </p>
 
 <h1 align="center">Kibo Agent</h1>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Kibo Agent: chat, file preview, changes and terminal">
+  <img src="docs/screenshot-2026-11.png" alt="Kibo Agent: the chat list, an empty agent chat and the side panel with context, connectors and changes">
 </p>
 
 ---
@@ -29,7 +29,7 @@
 - **A real terminal and background processes.** A genuine PTY with xterm.js. Dev servers and watchers live between turns, and the agent reads their output.
 - **Context as a budget.** A turn's budget is weighed by tool cost. History compacts itself, and old results are replaced with stubs. History is append-only, so the provider's prompt cache holds across rounds.
 - **Extensions.** MCP servers, local or at a URL over Streamable HTTP (a Claude Desktop or Cursor config pastes in as is), skills, and hooks in the Claude Code format.
-- **Themes.** Separate light and dark palettes — Apple's colours, One Dark, Latte — and every key in one registry, listed from the account menu.
+- **Themes.** Separate light and dark palettes — Linen, Chalk, Clay and Tide light, Ember, Basalt, Iris and Fjord dark — and every key in one registry, listed from the account menu.
 
 ## Your data stays yours
 

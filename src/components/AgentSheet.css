@@ -1,0 +1,99 @@
+/* One helper run in full (AgentRun), in the sheet over the chat. The sheet
+   (PageSheet) is placed against the nearest positioned box: `.main` here. */
+.agent-detail {
+  --state: var(--text-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agent-detail.running {
+  --state: var(--green);
+}
+.agent-detail.failed {
+  --state: var(--amber);
+}
+.agent-task {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.agent-id,
+.agent-state {
+  font-family: var(--font-mono);
+}
+.agent-state {
+  color: var(--state);
+}
+.agent-detail-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.agent-detail-stop:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+/* The tools called, a line each, the newest at the bottom and in view. */
+.agent-steps {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  max-height: 18em;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.agent-steps li {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.agent-steps b {
+  flex: none;
+  font-weight: 500;
+  color: var(--text);
+}
+.agent-steps span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The one under way. */
+.agent-steps li.now b {
+  color: var(--green);
+}
+.agent-reason {
+  color: var(--amber);
+  font-size: var(--fs-sm);
+}
+.agent-answer {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.agent-waiting {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}

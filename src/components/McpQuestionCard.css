@@ -25,8 +25,13 @@
 .mcp-question.closed .mcp-question-label {
   color: var(--text-faint);
 }
+/* The body of the card, at the size of the labels and buttons around it: the
+   card is part of a run of calls, not prose in the chat, and it inherits the
+   chat's 16px otherwise. */
 .mcp-question-message {
   color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 .mcp-question-url {
@@ -77,8 +82,15 @@
   font-size: var(--fs-xs);
   cursor: pointer;
 }
+.mcp-question-choice button:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+/* The chosen one, not merely outlined: a border alone read as one more
+   button beside the other. */
 .mcp-question-choice button.active {
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text);
 }
 .mcp-question-actions {

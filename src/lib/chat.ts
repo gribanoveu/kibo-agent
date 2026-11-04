@@ -112,9 +112,9 @@ export const CHAT_TURN_EVENT = "chat:turn-event";
 
 // ------------------------------------------------------------- the commands
 
-export async function openWorkspace(path: string): Promise<string> {
+export async function openWorkspace(path: string, keepRunning = false): Promise<string> {
   requireBackend();
-  return invoke<string>("workspace_open", { path });
+  return invoke<string>("workspace_open", { path, keepRunning });
 }
 
 export async function currentWorkspace(): Promise<string | null> {
@@ -232,25 +232,25 @@ export async function resumeChat(
   return invoke<Outcome>("chat_resume", { turnId, chatId, checkpoint, decisions, plan });
 }
 
-/** Returns at once; the turn stops at its next checkpoint. */
-export async function cancelChat(): Promise<void> {
+/** Returns at once; the turn stops at its next checkpoint. Another chat's turn is not its to stop. */
+export async function cancelChat(chatId: string): Promise<void> {
   requireBackend();
-  return invoke<void>("chat_cancel");
+  return invoke<void>("chat_cancel", { chatId });
 }
 
 /**
  * Queues a mid-turn note and returns its id, which is what withdraws it.
  * `shown` is what the transcript shows in place of `text` — a `/` command.
  */
-export async function steer(text: string, shown?: string): Promise<string> {
+export async function steer(text: string, shown: string | undefined, chatId: string): Promise<string> {
   requireBackend();
-  return invoke<string>("chat_steer", { text, shown: shown ?? null });
+  return invoke<string>("chat_steer", { text, shown: shown ?? null, chatId });
 }
 
 /** `false` means a round already took it — what is said to the model cannot be unsaid. */
-export async function cancelSteer(id: string): Promise<boolean> {
+export async function cancelSteer(id: string, chatId: string): Promise<boolean> {
   requireBackend();
-  return invoke<boolean>("chat_cancel_steer", { id });
+  return invoke<boolean>("chat_cancel_steer", { id, chatId });
 }
 
 export async function alwaysAllow(tool: string): Promise<void> {
@@ -312,13 +312,20 @@ export type ContextUsage = {
   compactsAt: number | null;
 };
 
-export async function contextUsage(messages: LlmMessage[]): Promise<ContextUsage> {
+export async function contextUsage(chatId: string, messages: LlmMessage[]): Promise<ContextUsage> {
   requireBackend();
-  return invoke<ContextUsage>("chat_context_usage", { messages });
+  return invoke<ContextUsage>("chat_context_usage", { chatId, messages });
 }
 
 /** What the agent is allowed to be. Mirrors `domain::conversation_mode`. */
 export type ConversationMode = "agent" | "plan" | "ask";
+
+/** The modes as the user sees them, on the composer's chip. The values are what `domain::conversation_mode` deserializes. */
+export const CONVERSATION_MODES: { value: ConversationMode; label: string; hint: string }[] = [
+  { value: "agent", label: "Agent", hint: "Reads, edits files and runs commands" },
+  { value: "plan", label: "Plan", hint: "Reads only and writes a plan" },
+  { value: "ask", label: "Ask", hint: "Answers questions, changes nothing" },
+];
 
 /**
  * Chooses the mode for the turns that follow.
@@ -385,9 +392,9 @@ export type ToolPreview =
   | { kind: "nothing" };
 
 /** One round trip for the whole card: it shows every call the round asked for. */
-export async function previewCalls(calls: PendingToolCall[]): Promise<ToolPreview[]> {
+export async function previewCalls(chatId: string, calls: PendingToolCall[]): Promise<ToolPreview[]> {
   if (!inTauri()) return calls.map(() => ({ kind: "nothing" }) as ToolPreview);
-  return invoke<ToolPreview[]>("chat_preview", { calls });
+  return invoke<ToolPreview[]>("chat_preview", { chatId, calls });
 }
 
 // ---------------------------------------------------------------- review
@@ -428,9 +435,9 @@ export type FileRewind = {
 };
 
 /** What putting `changes` back would do, file by file. Touches nothing. */
-export async function rewindPreview(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
+export async function rewindPreview(changes: FileChange[], chatId?: string, agentChatId?: string): Promise<FileRewind[]> {
   requireBackend();
-  return invoke<FileRewind[]>("rewind_preview", { changes, chatId });
+  return invoke<FileRewind[]>("rewind_preview", { changes, chatId, agentChatId });
 }
 
 /**
@@ -447,7 +454,7 @@ export async function branchSummary(messages: LlmMessage[], chatId: string): Pro
  * Puts them back, each file checked again right before it is written: in the
  * agent's open folder, or — `chatId` given — in that Chat-mode chat's own.
  */
-export async function rewindApply(changes: FileChange[], chatId?: string): Promise<FileRewind[]> {
+export async function rewindApply(changes: FileChange[], chatId?: string, agentChatId?: string): Promise<FileRewind[]> {
   requireBackend();
-  return invoke<FileRewind[]>("rewind_apply", { changes, chatId });
+  return invoke<FileRewind[]>("rewind_apply", { changes, chatId, agentChatId });
 }

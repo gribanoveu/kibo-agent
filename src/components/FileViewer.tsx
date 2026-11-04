@@ -390,7 +390,7 @@ export function FileViewer({
           view.new === null ? (
             <div className="file-viewer-note">Deleted — nothing to preview.</div>
           ) : (
-            <div className="file-viewer-preview">
+            <div className="file-viewer-preview text-scale">
               {diagram ? (
                 <PlantumlPreview text={draft?.text ?? view.new} />
               ) : language === "asciidoc" ? (

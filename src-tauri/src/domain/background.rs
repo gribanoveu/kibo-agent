@@ -26,6 +26,9 @@ pub const MAX_RUNNING: usize = 5;
 pub const MAX_BUFFER_BYTES: usize = 1 << 20;
 /// Finished processes kept for reading, oldest dropped first.
 pub const MAX_FINISHED: usize = 20;
+/// How much of each process's output the tab shows, and a stored one keeps:
+/// its last screenfuls.
+pub const TAIL_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +65,16 @@ impl ProcessInfo {
         };
         format!("#{} `{}` {how}", self.id, self.command)
     }
+}
+
+/// A process as the Terminal tab shows it: how it stands, and the last of
+/// what it wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessView {
+    #[serde(flatten)]
+    pub info: ProcessInfo,
+    pub tail: String,
 }
 
 /// What `readOutput` returns: everything the process wrote since the model

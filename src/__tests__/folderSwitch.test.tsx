@@ -9,9 +9,12 @@ import type { TerminalInfo } from "../lib/terminal";
 
 let processes: ProcessView[] = [];
 let terminals: TerminalInfo[] = [];
+let asked: Record<string, unknown>[] = [];
 mock.module("@tauri-apps/api/core", () => ({
-  invoke: (command: string) =>
-    Promise.resolve(command === "processes_list" ? processes : command === "terminal_list" ? terminals : null),
+  invoke: (command: string, args?: Record<string, unknown>) => {
+    if (command === "processes_list") asked.push(args ?? {});
+    return Promise.resolve(command === "processes_list" ? processes : command === "terminal_list" ? terminals : null);
+  },
   transformCallback: (callback: unknown) => callback,
 }));
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
@@ -52,6 +55,8 @@ describe("switching folders", () => {
     expect(went).toBe(0);
     const blocked = result.current.blocked;
     expect(blocked?.kind === "processes" && blocked.processes.map((p) => p.command)).toEqual(["bun run dev"]);
+    // Every chat's, not the open one's: the switch stops them all.
+    expect(asked.at(-1)).toEqual({ chatId: null });
   });
 
   test("an open shell asks too; one whose shell has ended does not", async () => {

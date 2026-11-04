@@ -22,6 +22,7 @@ pub fn write_file(
     reads: &mut ReadFiles,
 ) -> Result<ToolResult, ToolError> {
     let path = resolve_writable(scope, &args.path)?;
+    let _write = super::file_mutation_lock();
     if path.is_dir() {
         return Err(ToolError::NotAFile(args.path.clone()));
     }
@@ -45,6 +46,8 @@ pub fn write_file(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(ToolError::Io(e)),
     };
+    #[cfg(test)]
+    std::thread::yield_now();
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(ToolError::Io)?;
@@ -208,6 +211,58 @@ mod tests {
 
         assert!(matches!(err, ToolError::FileChangedSinceRead(_)));
         assert_eq!(on_disk(&root, "a.txt"), "edited by a human\n", "left untouched");
+    }
+
+    /// PS-4: another turn in the same folder may land between this turn's read
+    /// and write. The stale write is refused; a fresh read makes it legal.
+    #[test]
+    fn a_parallel_session_stale_write_is_refused_then_a_fresh_read_allows_it() {
+        let (scope, root, mut reads) = fixture("write-parallel-stale");
+        std::fs::write(root.join("a.txt"), "original\n").expect("writable");
+        agent_reads(&scope, &mut reads, "a.txt", None);
+
+        std::fs::write(root.join("a.txt"), "edited by a parallel session\n").expect("writable");
+
+        let err = write_file(&scope, &write_args("a.txt", "agent version\n"), &mut reads)
+            .expect_err("changed by the other turn");
+        assert!(matches!(err, ToolError::FileChangedSinceRead(_)), "{err}");
+        assert!(err.to_string().contains("another running agent"), "{err}");
+        assert_eq!(on_disk(&root, "a.txt"), "edited by a parallel session\n", "left untouched");
+
+        agent_reads(&scope, &mut reads, "a.txt", None);
+        write_file(&scope, &write_args("a.txt", "agent version\n"), &mut reads)
+            .expect("a fresh read vouches for the current file");
+        assert_eq!(on_disk(&root, "a.txt"), "agent version\n");
+    }
+
+    #[test]
+    fn two_agents_cannot_both_pass_the_fresh_read_check_before_either_writes() {
+        let (scope, root, _) = fixture("write-parallel-race");
+        for round in 0..16 {
+            std::fs::write(root.join("a.txt"), "original\n").expect("writable");
+            let mut reads_a = ReadFiles::default();
+            let mut reads_b = ReadFiles::default();
+            agent_reads(&scope, &mut reads_a, "a.txt", None);
+            agent_reads(&scope, &mut reads_b, "a.txt", None);
+            let start = std::sync::Barrier::new(2);
+            let (a, b) = std::thread::scope(|threads| {
+                let a = threads.spawn(|| {
+                    start.wait();
+                    write_file(&scope, &write_args("a.txt", "from a\n"), &mut reads_a)
+                });
+                let b = threads.spawn(|| {
+                    start.wait();
+                    write_file(&scope, &write_args("a.txt", "from b\n"), &mut reads_b)
+                });
+                (a.join().unwrap(), b.join().unwrap())
+            });
+
+            assert_eq!([&a, &b].into_iter().filter(|result| result.is_ok()).count(), 1, "round {round}: {a:?} {b:?}");
+            for refused in [&a, &b].into_iter().filter_map(|result| result.as_ref().err()) {
+                assert!(matches!(refused, ToolError::FileChangedSinceRead(_)), "round {round}: {refused}");
+            }
+            assert!(matches!(on_disk(&root, "a.txt").as_str(), "from a\n" | "from b\n"), "round {round}");
+        }
     }
 
     /// After writing, the agent knows precisely what is there. Refusing its

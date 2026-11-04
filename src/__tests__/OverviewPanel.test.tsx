@@ -20,13 +20,30 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   servers: [],
   processes: [],
   agents: [],
+  activeTurns: 0,
   onOpenProcess: () => {},
+  onOpenProcesses: () => {},
+  onOpenAgents: () => {},
   onOpenAgent: () => {},
   onOpenPanel: () => {},
   ...over,
 });
 
 describe("Overview", () => {
+  test("counts live agent turns as they start and finish", () => {
+    const { rerender } = render(<OverviewPanel {...props()} />);
+    expect(screen.getByText("No agent turns are active.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props({ activeTurns: 2 })} />);
+    expect(screen.getByText("2 active across chats.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props({ activeTurns: 1 })} />);
+    expect(screen.getByText("1 active across chats.")).toBeTruthy();
+
+    rerender(<OverviewPanel {...props()} />);
+    expect(screen.getByText("No agent turns are active.")).toBeTruthy();
+  });
+
   test("lists the MCP servers that are on, with what they are doing", () => {
     const tools = [{ name: "a", description: "" }, { name: "b", description: "" }];
     render(
@@ -74,7 +91,23 @@ describe("Overview", () => {
     fireEvent.click(screen.getByText("bun run dev"));
     fireEvent.click(screen.getByText("Find the ranking code"));
     expect(opened).toEqual([1, { id: 7, task: "Find the ranking code" }]);
+    expect(screen.getByText("Find the ranking code").closest("[data-sheet-opener]")).toBeTruthy();
     expect(screen.getByText("2 ended")).toBeTruthy();
+  });
+
+  // Terminal alone would open on whichever of its tabs was picked last.
+  test("the Background heading asks for the processes, not just the Terminal", () => {
+    const opened: string[] = [];
+    render(<OverviewPanel {...props({ onOpenProcesses: () => opened.push("processes"), onOpenPanel: (tab) => opened.push(tab) })} />);
+    fireEvent.click(screen.getByText("Background"));
+    expect(opened).toEqual(["processes"]);
+  });
+
+  test("the Agent turns heading asks for the helpers", () => {
+    const opened: string[] = [];
+    render(<OverviewPanel {...props({ onOpenAgents: () => opened.push("agents"), onOpenPanel: (tab) => opened.push(tab) })} />);
+    fireEvent.click(screen.getByText("Agent turns"));
+    expect(opened).toEqual(["agents"]);
   });
 
   test("says when there is nothing to count", () => {

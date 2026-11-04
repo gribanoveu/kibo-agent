@@ -78,6 +78,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px 16px 20px;
+  /* What a sheet holds follows the user's text size (`.text-scale` brings the
+     scale, tokens.css): text with no size of its own — a document's body, a
+     list — reads at it too, as the chat's does. */
+  font-size: calc(16px * var(--font-scale));
 }
 
 /* A panel over the page rather than beside it (PageSheet): flush with the

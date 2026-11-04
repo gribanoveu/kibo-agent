@@ -6,6 +6,10 @@
 //! the exit. A process that exits on its own has its group killed as well,
 //! for the same reason `process_runner` does it — something it left behind
 //! would otherwise hold the pipes and run on unseen.
+//!
+//! A chat's processes go to its [`RunLog`] when they start and when they end,
+//! with the last of their output, and are listed from there once they are
+//! gone from here — after a restart, or pushed out past [`MAX_FINISHED`].
 
 use std::io::Read;
 use std::path::Path;
@@ -16,8 +20,9 @@ use std::time::Duration;
 
 use crate::domain::background::{
     BackgroundError, BackgroundProcesses, Feed, OutputBuffer, ProcessChanged, ProcessEventSink, ProcessInfo,
-    ProcessOutput, ProcessState, MAX_FINISHED, MAX_RUNNING,
+    ProcessOutput, ProcessState, ProcessView, MAX_FINISHED, MAX_RUNNING, TAIL_BYTES,
 };
+use crate::domain::runs::{self, NoLog, RunKind, RunLog};
 use crate::domain::command_exec::{truncate_output, Shell, MAX_OUTPUT_CHARS};
 use crate::sync::lock;
 
@@ -32,6 +37,7 @@ pub struct Processes {
     registry: Arc<Mutex<Registry>>,
     /// Told of every start, output, end and stop.
     changed: ProcessEventSink,
+    log: Arc<dyn RunLog>,
 }
 
 /// Nobody listening — tests, and anything built before the window is.
@@ -57,6 +63,23 @@ struct Entry {
     streams: usize,
     /// Its end has been told to the model, or needs no telling.
     reported: bool,
+    /// The chat whose turn started it; `None` outside one.
+    chat: Option<String>,
+}
+
+impl Entry {
+    fn view(&self) -> ProcessView {
+        ProcessView { info: self.info.clone(), tail: self.buffer.tail(TAIL_BYTES).to_string() }
+    }
+}
+
+/// Writes process `id` to the log as it stands, if a chat started it.
+/// Outside the lock: the log is a database.
+fn save(registry: &Mutex<Registry>, log: &Arc<dyn RunLog>, id: u32) {
+    let saved = lock(registry).entry(id).ok().and_then(|e| Some((e.chat.clone()?, e.view())));
+    if let Some((chat, view)) = saved {
+        log.save_process(&chat, &view);
+    }
 }
 
 impl Registry {
@@ -67,7 +90,13 @@ impl Registry {
 
 impl Processes {
     pub fn new(changed: ProcessEventSink) -> Self {
-        Self { registry: Arc::default(), changed }
+        Self::with_log(changed, Arc::new(NoLog))
+    }
+
+    /// Numbered on from the last process `log` holds, and a chat's saved there.
+    pub fn with_log(changed: ProcessEventSink, log: Arc<dyn RunLog>) -> Self {
+        let registry = Registry { next_id: log.last_id(RunKind::Process), entries: Vec::new() };
+        Self { registry: Arc::new(Mutex::new(registry)), changed, log }
     }
 
     /// Stops one the user asked to stop, from the Terminal tab. Unlike the
@@ -80,6 +109,38 @@ impl Processes {
     /// moving the model's place.
     pub fn tail(&self, id: u32, max_bytes: usize) -> Result<String, BackgroundError> {
         Ok(lock(&self.registry).entry(id)?.buffer.tail(max_bytes).to_string())
+    }
+
+    /// The ones the chat `chat` started, oldest first, with the last of what
+    /// each wrote: the tab and Overview show the open chat's, not every
+    /// chat's since launch — and its stored ones, from before a restart too.
+    pub fn list_for(&self, chat: &str) -> Vec<ProcessView> {
+        let live = lock(&self.registry).entries.iter().filter(|e| e.chat.as_deref() == Some(chat)).map(Entry::view).collect();
+        runs::merge(self.log.processes(chat), live, |p| p.info.id, runs::process_cut_short)
+    }
+
+    /// The ones of `chat` still running, oldest first — the registry's alone:
+    /// nothing stored runs.
+    pub fn running_for(&self, chat: &str) -> Vec<ProcessInfo> {
+        lock(&self.registry)
+            .entries
+            .iter()
+            .filter(|e| e.info.running() && e.chat.as_deref() == Some(chat))
+            .map(|e| e.info.clone())
+            .collect()
+    }
+
+    /// The chat was deleted: what it left running is stopped, as nothing
+    /// lists it any more. Not reported — there is no conversation to tell.
+    pub fn stop_chat(&self, chat: &str) {
+        for info in self.running_for(chat) {
+            let _ = self.stop_inner(info.id, true);
+        }
+    }
+
+    /// What a turn of `chat` starts through: recorded as that chat's.
+    pub fn for_chat(self: &Arc<Self>, chat: &str) -> ChatProcesses {
+        ChatProcesses { processes: Arc::clone(self), chat: chat.to_string() }
     }
 
     /// The workspace changed or the app is quitting. Nothing is reported:
@@ -98,6 +159,7 @@ impl Processes {
             }
         }
         for id in stopped {
+            save(&self.registry, &self.log, id);
             (self.changed)(ProcessChanged { id });
         }
     }
@@ -118,6 +180,7 @@ impl Processes {
             (entry.info.clone(), stopped)
         };
         if stopped {
+            save(&self.registry, &self.log, id);
             (self.changed)(ProcessChanged { id });
         }
         Ok(info)
@@ -145,14 +208,15 @@ impl Processes {
         command: &str,
         shown_cwd: &str,
         backlog: &str,
+        chat: Option<&str>,
     ) -> (ProcessInfo, [Feed; 2]) {
         registry.next_id += 1;
         let id = registry.next_id;
         let info = ProcessInfo { id, command: command.to_string(), cwd: shown_cwd.to_string(), state: ProcessState::Running };
         let mut buffer = OutputBuffer::default();
         buffer.push(backlog);
-        registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false });
-        watch(&self.registry, &self.changed, id);
+        registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false, chat: chat.map(str::to_string) });
+        watch(&self.registry, &self.changed, &self.log, id);
 
         // Forget the oldest finished ones past the limit.
         let finished = registry.entries.iter().filter(|e| !e.info.running()).count();
@@ -180,8 +244,8 @@ fn end(child: &mut Child) {
     let _ = child.wait();
 }
 
-impl BackgroundProcesses for Processes {
-    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+impl Processes {
+    fn start_in(&self, chat: Option<&str>, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
         let mut registry = lock(&self.registry);
         room(&registry)?;
 
@@ -196,17 +260,19 @@ impl BackgroundProcesses for Processes {
         let mut child = process.spawn().map_err(|e| BackgroundError::NotStarted(format!("{}: {e}", shell.program)))?;
 
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let (info, [out, err]) = self.register(&mut registry, child, command, shown_cwd, "");
+        let (info, [out, err]) = self.register(&mut registry, child, command, shown_cwd, "", chat);
         // Under the lock still: a reader's first chunk waits for the entry.
         read_into(stdout, out);
         read_into(stderr, err);
         drop(registry);
+        save(&self.registry, &self.log, info.id);
         (self.changed)(ProcessChanged { id: info.id });
         Ok(info)
     }
 
-    fn adopt(
+    fn adopt_in(
         &self,
+        chat: Option<&str>,
         mut child: Child,
         command: &str,
         shown_cwd: &str,
@@ -217,10 +283,21 @@ impl BackgroundProcesses for Processes {
             end(&mut child);
             return Err(full);
         }
-        let adopted = self.register(&mut registry, child, command, shown_cwd, backlog);
+        let adopted = self.register(&mut registry, child, command, shown_cwd, backlog, chat);
         drop(registry);
+        save(&self.registry, &self.log, adopted.0.id);
         (self.changed)(ProcessChanged { id: adopted.0.id });
         Ok(adopted)
+    }
+}
+
+impl BackgroundProcesses for Processes {
+    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+        self.start_in(None, shell, command, cwd, shown_cwd)
+    }
+
+    fn adopt(&self, child: Child, command: &str, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
+        self.adopt_in(None, child, command, shown_cwd, backlog)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
@@ -240,16 +317,59 @@ impl BackgroundProcesses for Processes {
     }
 
     fn take_ended(&self) -> Vec<ProcessInfo> {
+        self.take_ended_in(None)
+    }
+}
+
+impl Processes {
+    /// [`BackgroundProcesses::take_ended`], of chat `chat`'s only; `None` takes every one.
+    fn take_ended_in(&self, chat: Option<&str>) -> Vec<ProcessInfo> {
         let mut registry = lock(&self.registry);
         registry
             .entries
             .iter_mut()
-            .filter(|e| !e.info.running() && !e.reported)
+            .filter(|e| !e.info.running() && !e.reported && (chat.is_none() || e.chat.as_deref() == chat))
             .map(|e| {
                 e.reported = true;
                 e.info.clone()
             })
             .collect()
+    }
+}
+
+/// One chat's way into the processes: what it starts is that chat's, for
+/// the tab to list. The model still sees and stops every one — a server one
+/// chat started is there for the next — but is told only of its own chat's
+/// ends: another's is told there, at that chat's next turn, where its card
+/// opens a process the tab lists.
+pub struct ChatProcesses {
+    processes: Arc<Processes>,
+    chat: String,
+}
+
+impl BackgroundProcesses for ChatProcesses {
+    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+        self.processes.start_in(Some(&self.chat), shell, command, cwd, shown_cwd)
+    }
+
+    fn adopt(&self, child: Child, command: &str, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
+        self.processes.adopt_in(Some(&self.chat), child, command, shown_cwd, backlog)
+    }
+
+    fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
+        self.processes.read(id)
+    }
+
+    fn stop(&self, id: u32) -> Result<ProcessInfo, BackgroundError> {
+        self.processes.stop(id)
+    }
+
+    fn list(&self) -> Vec<ProcessInfo> {
+        self.processes.list()
+    }
+
+    fn take_ended(&self) -> Vec<ProcessInfo> {
+        self.processes.take_ended_in(Some(&self.chat))
     }
 }
 
@@ -294,14 +414,16 @@ fn read_into(mut pipe: Option<impl Read + Send + 'static>, mut feed: Feed) {
 /// Each tick: has it exited, and has it written anything since the last one.
 /// Either is one signal. After the exit it keeps ticking until the pipes are
 /// drained, so the last of the output is signalled too. A stop ends it
-/// without a signal — the stop sends its own.
-fn watch(registry: &Arc<Mutex<Registry>>, changed: &ProcessEventSink, id: u32) {
+/// without a signal — the stop sends its own. The exit is saved to the log,
+/// and again once drained, with the last of the output.
+fn watch(registry: &Arc<Mutex<Registry>>, changed: &ProcessEventSink, log: &Arc<dyn RunLog>, id: u32) {
     let registry = Arc::clone(registry);
     let changed = Arc::clone(changed);
+    let log = Arc::clone(log);
     let mut seen = 0;
     thread::spawn(move || loop {
         thread::sleep(POLL);
-        let (signal, done) = {
+        let (signal, exited, done) = {
             let mut registry = lock(&registry);
             let Ok(entry) = registry.entry(id) else { return };
             if entry.info.state == ProcessState::Stopped {
@@ -327,8 +449,11 @@ fn watch(registry: &Arc<Mutex<Registry>>, changed: &ProcessEventSink, id: u32) {
                     }
                 }
             }
-            (wrote || exited, entry.child.is_none() && entry.streams == 0)
+            (wrote || exited, exited, entry.child.is_none() && entry.streams == 0)
         };
+        if exited || done {
+            save(&registry, &log, id);
+        }
         if signal {
             changed(ProcessChanged { id });
         }
@@ -354,6 +479,79 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// The tab shows the open chat's; the model, every one.
+    #[test]
+    fn what_a_chat_starts_is_listed_for_that_chat_only() {
+        let processes = Arc::new(Processes::default());
+        let (mine, theirs) = (processes.for_chat("a"), processes.for_chat("b"));
+        let dir = temp_dir("bg-chat");
+        mine.start(&Shell::default(), "printf hi; sleep 30", &dir, ".").unwrap();
+        theirs.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        start(&processes, "sleep 30");
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let _feeds = mine.adopt(child, "sleep 30", ".", "so far").unwrap();
+        let ids = |chat| processes.list_for(chat).iter().map(|p| p.info.id).collect::<Vec<_>>();
+        assert_eq!((ids("a"), ids("b"), ids("c")), (vec![1, 4], vec![2], vec![]));
+
+        assert_eq!(mine.list().len(), 4);
+        assert_eq!(mine.read(4).unwrap().output, "so far");
+        processes.stop_by_user(1).unwrap();
+        processes.stop_by_user(2).unwrap();
+        // Each chat is told of its own ends; another's waits for that chat's turn.
+        let ended = |chat: &ChatProcesses| chat.take_ended().iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!((ended(&mine), ended(&theirs)), (vec![1], vec![2]));
+        assert_eq!(mine.stop(4).unwrap().state, ProcessState::Stopped);
+        // The model's own stop: it knows, so it is not told again.
+        assert!(mine.take_ended().is_empty());
+        processes.stop_all();
+    }
+
+    /// Saved as each starts and ends, with the last of its output; listed
+    /// back after a restart, and numbered on.
+    #[test]
+    fn a_chats_processes_are_saved_and_listed_back_after_a_restart() {
+        use crate::domain::runs::{MemoryLog, RunLog};
+        let log = Arc::new(MemoryLog::default());
+        let dir = temp_dir("bg-log");
+        let states = |chat| log.processes(chat).iter().map(|p| (p.info.id, p.info.state)).collect::<Vec<_>>();
+        {
+            let before = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
+            let chat = before.for_chat("a");
+            chat.start(&Shell::default(), "echo built; exit 2", &dir, ".").unwrap();
+            let serving = chat.start(&Shell::default(), "echo serving; sleep 30", &dir, ".").unwrap();
+            assert_eq!(states("a"), [(1, ProcessState::Running), (2, ProcessState::Running)], "saved as they start");
+            start(&before, "sleep 30");
+            chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+            until("the exit, saved drained", || log.processes("a")[0].tail.contains("built") && !log.processes("a")[0].info.running());
+            until("the output", || before.tail(serving.id, 100).unwrap().contains("serving"));
+            before.stop_by_user(serving.id).unwrap();
+            assert_eq!(log.processes("a")[1].tail, "serving\n");
+        }
+        // The quit stopped the last one, and saved it so.
+        assert_eq!(
+            states("a"),
+            [(1, ProcessState::Exited { code: Some(2) }), (2, ProcessState::Stopped), (4, ProcessState::Stopped)],
+            "the one outside a chat is not saved"
+        );
+
+        let after = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
+        let next = after.for_chat("a").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        after.for_chat("b").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        assert_eq!(next.id, 5, "numbered on from the log");
+        let listed = after.list_for("a");
+        assert_eq!(listed.iter().map(|p| p.info.id).collect::<Vec<_>>(), [1, 2, 4, 5]);
+        assert_eq!(listed[0].tail, "built\n");
+        assert_eq!(after.running_for("a").iter().map(|p| p.id).collect::<Vec<_>>(), [5]);
+
+        // The chat deleted: what it left running stops, untold.
+        after.stop_chat("a");
+        assert!(after.running_for("a").is_empty());
+        assert_eq!(after.running_for("b").len(), 1);
+        assert_eq!(states("a").last(), Some(&(5, ProcessState::Stopped)));
+        assert!(after.take_ended().is_empty());
+        after.stop_all();
     }
 
     #[test]
@@ -495,10 +693,11 @@ mod tests {
             buffer: OutputBuffer::default(),
             streams: 1,
             reported: false,
+            chat: None,
         });
         let heard = Arc::new(Mutex::new(0));
         let count = Arc::clone(&heard);
-        watch(&registry, &(Arc::new(move |_| *count.lock().unwrap() += 1) as ProcessEventSink), 1);
+        watch(&registry, &(Arc::new(move |_| *count.lock().unwrap() += 1) as ProcessEventSink), &(Arc::new(NoLog) as Arc<dyn RunLog>), 1);
 
         thread::sleep(POLL * 2);
         assert_eq!(*heard.lock().unwrap(), 0, "nothing new, nothing said");

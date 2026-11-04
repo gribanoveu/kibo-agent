@@ -101,7 +101,7 @@ export function McpQuestionCard({
         {question.mode === "url" ? (
           <button
             type="button"
-            className="btn primary"
+            className="btn btn-primary"
             disabled={!open}
             onClick={() => {
               void openExternal(question.url).catch(() => {});
@@ -111,11 +111,11 @@ export function McpQuestionCard({
             Open in browser
           </button>
         ) : (
-          <button type="button" className="btn primary" disabled={!open || values === null} onClick={() => values && answer({ action: "accept", content: values })}>
+          <button type="button" className="btn btn-primary" disabled={!open || values === null} onClick={() => values && answer({ action: "accept", content: values })}>
             Send
           </button>
         )}
-        <button type="button" className="btn" disabled={!open} onClick={() => answer({ action: "decline" })}>
+        <button type="button" className="btn btn-ghost" disabled={!open} onClick={() => answer({ action: "decline" })}>
           Decline
         </button>
       </div>

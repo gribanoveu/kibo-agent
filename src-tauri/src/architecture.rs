@@ -320,3 +320,30 @@ fn every_tools_rewind_flag_matches_the_window() {
 fn code_ts(text: &str) -> impl Iterator<Item = &str> {
     text.lines().map(str::trim).filter(|line| !line.starts_with("//"))
 }
+
+/// The version the About box shows and the one a gateway reads in
+/// `User-Agent: Kibo-Agent/{version}` come from two files: the first is the
+/// bundle's, which the window reads with `getVersion()` (`src/lib/window.ts`);
+/// the second is `env!("CARGO_PKG_VERSION")`, the crate's. One release commit
+/// bumps both (`release: 0.10.0`), and nothing else ties them — a bump that
+/// touches only the first leaves an app telling every gateway it is older than
+/// its own About box says.
+///
+/// Not covered: a build from `main`, whose workflow overrides the bundle's
+/// version and only that (`.github/workflows/build-release.yml`), so there the
+/// two differ on purpose until the header reads its version at run time.
+#[test]
+fn the_version_in_the_window_is_the_one_the_build_sends() {
+    let conf = fs::read_to_string(crate_dir().join("tauri.conf.json")).unwrap();
+    let bundle = conf
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("\"version\": \""))
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_default();
+    assert!(!bundle.is_empty(), "no version in tauri.conf.json: its shape changed?");
+    assert_eq!(
+        bundle,
+        env!("CARGO_PKG_VERSION"),
+        "src-tauri/tauri.conf.json and src-tauri/Cargo.toml are bumped together"
+    );
+}

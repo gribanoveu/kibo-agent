@@ -9,13 +9,6 @@
   padding: 24px 28px;
 }
 
-.chat-empty-logo {
-  /* The head fills its square, with no margin of its own drawn in. */
-  width: 72px;
-  height: 72px;
-  margin-bottom: 8px;
-}
-
 .chat-empty-title {
   font-size: var(--fs-lg);
   font-weight: 600;

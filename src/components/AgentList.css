@@ -15,8 +15,8 @@
 }
 
 /* A line per run: the state's dot, what it was asked, what it is doing now —
-   the last tool it called — or how it ended. Open, the whole brief, what it
-   cost, the tools it called and its answer. Named `agent-run`, not `agent`:
+   the last tool it called — or how it ended. A click opens the run in the
+   sheet over the chat (AgentSheet.css). Named `agent-run`, not `agent`:
    CSS is global, and the chat's `.role.agent` is one. */
 .agent-run {
   --state: var(--text-faint);
@@ -27,9 +27,6 @@
 }
 .agent-run.failed {
   --state: var(--amber);
-}
-.agent-run.open {
-  background: var(--bg-panel-soft);
 }
 .agent-head {
   display: flex;
@@ -108,82 +105,4 @@
 .agent-chev {
   flex: none;
   color: var(--text-faint);
-  transition: transform 0.15s;
-}
-.agent-run.open .agent-chev {
-  transform: rotate(90deg);
-}
-.agent-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 4px 10px 10px 23px;
-}
-.agent-task {
-  max-height: 10em;
-  overflow: auto;
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--text);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.agent-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-}
-.agent-id,
-.agent-state {
-  font-family: var(--font-mono);
-}
-.agent-state {
-  color: var(--state);
-}
-/* The tools called, a line each, the newest at the bottom and in view. */
-.agent-steps {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  max-height: 14em;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  line-height: 1.6;
-  color: var(--text-dim);
-}
-.agent-steps li {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  white-space: nowrap;
-}
-.agent-steps b {
-  flex: none;
-  font-weight: 500;
-  color: var(--text);
-}
-.agent-steps span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* The one under way. */
-.agent-steps li.now b {
-  color: var(--green);
-}
-.agent-reason {
-  color: var(--amber);
-  font-size: var(--fs-sm);
-}
-.agent-answer {
-  font-size: var(--fs-sm);
-  color: var(--text);
-}
-.agent-waiting {
-  color: var(--text-faint);
-  font-size: var(--fs-sm);
 }

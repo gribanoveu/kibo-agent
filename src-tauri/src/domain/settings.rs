@@ -47,8 +47,12 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
     /// Extra headers on every request to this provider — a gateway's own
-    /// tracing or routing headers. `$uuid` as a value is replaced per request
-    /// (see `infra::llm_providers::openai_compatible`).
+    /// tracing or routing headers. Two placeholders are replaced per request
+    /// (see `infra::llm_providers::openai_compatible`): `$uuid`, which stands
+    /// for the whole value, and `$appVersion`, which is replaced where it stands
+    /// so that `Kibo-Agent/$appVersion` names the client and its version — the
+    /// version of the build that sends it, not of the day the settings were
+    /// written.
     #[serde(default)]
     pub request_headers: HashMap<String, String>,
     /// `None` sends the parameter not at all, which is the only safe default
@@ -113,16 +117,18 @@ pub struct LlmSettings {
     pub turn_limits: TurnLimits,
 }
 
-/// The ceilings of one agent turn's tool loop, raised by a user who knows a
+/// The ceilings of the agent's turns, raised by a user who knows a
 /// task needs more — a long refactor, a big review — and lowered to keep a
 /// model on a short leash.
 ///
-/// Two of them, and the second is not a duplicate of the first: `budget` is
-/// counted in `ToolName::loop_weight` units, so sixty cheap reads and sixty
-/// repository-wide searches are not the same amount of work, and it is the
-/// one that binds in practice. `rounds` is the backstop beside it — a tool
-/// whose weight is misconfigured to zero would otherwise make the loop
-/// unstoppable.
+/// `rounds` and `budget` bound one turn, and the second is not a duplicate
+/// of the first: `budget` is counted in `ToolName::loop_weight` units, so
+/// sixty cheap reads and sixty repository-wide searches are not the same
+/// amount of work, and it is the one that binds in practice. `rounds` is
+/// the backstop beside it — a tool whose weight is misconfigured to zero
+/// would otherwise make the loop unstoppable. `parallel` bounds the window
+/// instead: how many chats' turns may run at once before a start is refused
+/// outright (docs/45-parallel-sessions.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TurnLimits {
@@ -130,6 +136,8 @@ pub struct TurnLimits {
     pub rounds: u32,
     /// Weighted tool calls.
     pub budget: u32,
+    /// Chats whose turns may run at once; a start past the limit is refused.
+    pub parallel: u32,
 }
 
 impl Default for TurnLimits {
@@ -138,7 +146,9 @@ impl Default for TurnLimits {
         // the heaviest — documenting a repository — 71 rounds and ~410 budget.
         // 60/250 stopped those mid-work; this keeps a margin over them and
         // still ends a model going round in circles.
-        Self { rounds: 100, budget: 500 }
+        // Parallel: past three the bottleneck is the human reading the
+        // answers, not the runtime.
+        Self { rounds: 100, budget: 500, parallel: 3 }
     }
 }
 
@@ -505,9 +515,9 @@ impl From<AppDirError> for String {
 #[error("{0}")]
 pub struct RecentFoldersError(pub String);
 
-/// Why the saved API keys cannot be read. Not "no key": that one is
-/// `Ok(None)`, and reading this as it sent providers a request without a key
-/// that came back 401 with nothing to say why.
+/// Why the saved API keys cannot be read — or the file they are in cannot be
+/// written. Not "no key": that one is `Ok(None)`, and reading this as it sent
+/// providers a request without a key that came back 401 with nothing to say why.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CredentialsError {
     #[error(transparent)]
@@ -521,6 +531,8 @@ pub enum CredentialsError {
     Foreign(String),
     #[error("{0} is damaged — save the API keys again")]
     Damaged(String),
+    #[error("could not save the API keys: {0}")]
+    Save(String),
 }
 
 impl From<CredentialsError> for String {
@@ -541,6 +553,14 @@ pub enum SettingsError {
     Parse(#[source] serde_json::Error),
     #[error("failed to serialize settings: {0}")]
     Serialize(#[source] serde_json::Error),
+    /// A rename onto a name another provider already has: two providers of one
+    /// name is a list nothing can tell apart, keys included.
+    #[error("there is already a provider called {0} — remove it, or give this one another name")]
+    NameTaken(String),
+    /// The key store a rename asked to move a key in refused: nothing was
+    /// renamed, so the user can retry once it is reachable.
+    #[error(transparent)]
+    Credentials(#[from] CredentialsError),
 }
 
 #[cfg(test)]

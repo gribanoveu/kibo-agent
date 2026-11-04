@@ -37,6 +37,15 @@ use crate::infra::app_dir;
 
 const FILE: &str = "chats.db";
 
+/// A record update is read-modify-write: relocating a chat and saving its last
+/// turn must not each write back a whole record read before the other finished.
+/// Saves are once a turn, so one process-wide lock is cheaper than a per-chat
+/// registry; a per-chat lock is the way past if that ever becomes contention.
+fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 3000;
@@ -64,6 +73,18 @@ CREATE TABLE IF NOT EXISTS suggestions (
   used        INTEGER NOT NULL DEFAULT 0,
   sent        TEXT
 );
+CREATE TABLE IF NOT EXISTS runs (
+  kind        TEXT NOT NULL,
+  id          INTEGER NOT NULL,
+  chat_id     TEXT NOT NULL,
+  version     INTEGER NOT NULL,
+  started_at  INTEGER NOT NULL,
+  ended_at    INTEGER,
+  state       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
+);
+CREATE INDEX IF NOT EXISTS runs_chat ON runs(chat_id, kind, id);
 ";
 
 pub(crate) fn store(e: rusqlite::Error) -> ChatError {
@@ -71,6 +92,11 @@ pub(crate) fn store(e: rusqlite::Error) -> ChatError {
 }
 
 pub(crate) fn open() -> Result<Connection, ChatError> {
+    // Opening checks and, on an older database, changes the schema. Two first
+    // turns may open together; serialize that short setup so neither sees the
+    // other's schema write as `database is locked` or a duplicate column.
+    static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _opening = OPEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = app_dir::ensure().map_err(ChatError::AppDir)?.join(FILE);
     let conn = Connection::open(&path).map_err(store)?;
     #[cfg(unix)]
@@ -88,6 +114,9 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     add_column(&conn, "role", "TEXT")?;
     // Null until the model has named the chat, and for good when it could not.
     add_column(&conn, "generated_title", "TEXT")?;
+    // The branch a chat works on, listed so the window can tell it from the
+    // folder's without loading the transcript.
+    add_column(&conn, "git_branch", "TEXT")?;
     Ok(conn)
 }
 
@@ -118,7 +147,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
     rename_summary_titles(&conn, workspace)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, COALESCE(generated_title, title), updated_at, branched_from, archived, role FROM chats
+            "SELECT id, COALESCE(generated_title, title), updated_at, branched_from, archived, role, git_branch FROM chats
              WHERE workspace = ?1 AND schema_version <= ?2
              ORDER BY updated_at DESC, id",
         )
@@ -133,6 +162,7 @@ pub fn list(workspace: &str) -> Result<Vec<ChatSummary>, ChatError> {
                 archived: row.get(4)?,
                 // A role a newer build wrote is no sign, not an error.
                 role: row.get::<_, Option<String>>(5)?.and_then(|role| serde_json::from_value(serde_json::Value::String(role)).ok()),
+                git_branch: row.get(6)?,
             })
         })
         .map_err(store)?;
@@ -207,11 +237,29 @@ pub fn save(
     todos: &[Task],
     plan: Option<&str>,
     branched_from: Option<&str>,
+    git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
+    // An existing chat keeps its checkout: a save already in flight when the
+    // chat moved to a worktree must not write the old folder or its branch back.
+    let (workspace, worktree_base, git_branch) = match load(id) {
+        Ok(record) => {
+            let branch = if record.workspace == workspace {
+                git_branch.map(str::to_string)
+            } else {
+                crate::infra::git_head::current_branch(Path::new(&record.workspace)).or(record.git_branch)
+            };
+            (record.workspace, record.worktree_base, branch)
+        }
+        Err(ChatError::NotFound(_)) => (workspace.to_string(), None, git_branch.map(str::to_string)),
+        Err(e) => return Err(e),
+    };
+    #[cfg(test)]
+    std::thread::yield_now();
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
-        workspace: workspace.to_string(),
+        workspace,
         title: chat_record::derive_title(messages, blocks),
         created_at: 0,
         updated_at: 0,
@@ -222,6 +270,8 @@ pub fn save(
         branched_from: branched_from.map(str::to_string),
         role: None,
         kube: None,
+        worktree_base,
+        git_branch,
     })
 }
 
@@ -235,6 +285,7 @@ pub fn save_plain(
     messages: &[LlmMessage],
     blocks: &Value,
 ) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
     upsert(ChatRecord {
         schema_version: CHAT_SCHEMA_VERSION,
         id: id.to_string(),
@@ -249,7 +300,21 @@ pub fn save_plain(
         branched_from: None,
         role: Some(role),
         kube,
+        worktree_base: None,
+        git_branch: None,
     })
+}
+
+/// Moves only the chat's own record; the worktree has already been made.
+pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, ChatError> {
+    let _write = write_lock();
+    let mut record = load(id)?;
+    #[cfg(test)]
+    std::thread::yield_now();
+    record.workspace = workspace.to_string();
+    record.worktree_base = Some(base.to_string());
+    record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
+    upsert(record)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
@@ -276,8 +341,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     // it starts with its first message.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, generated_title)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, (SELECT generated_title FROM chats WHERE id = ?7))
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7))
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -286,7 +351,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
            updated_at = excluded.updated_at,
            branched_from = excluded.branched_from,
            body = excluded.body,
-           role = excluded.role",
+           role = excluded.role,
+           git_branch = excluded.git_branch",
         params![
             record.id,
             record.workspace,
@@ -297,6 +363,7 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
             record.branched_from,
             body,
             record.role.and_then(|role| serde_json::to_value(role).ok()?.as_str().map(str::to_string)),
+            record.git_branch,
         ],
     )
     .map_err(store)?;
@@ -341,9 +408,12 @@ pub fn set_generated_title(id: &str, title: &str) -> Result<bool, ChatError> {
         .map_err(store)
 }
 
+/// The chat, and the record of its helper runs and processes (`run_store`).
 pub fn delete(id: &str) -> Result<(), ChatError> {
     chat_record::check_id(id)?;
-    match open()?.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
+    let conn = open()?;
+    conn.execute("DELETE FROM runs WHERE chat_id = ?1", params![id]).map_err(store)?;
+    match conn.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
         0 => Err(ChatError::NotFound(id.to_string())),
         _ => Ok(()),
     }
@@ -351,12 +421,19 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
 
 /// Every chat about `workspace` — a folder that is gone with them. How many.
 pub fn delete_in(workspace: &str) -> Result<usize, ChatError> {
-    open()?.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
+    let conn = open()?;
+    conn.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+        .map_err(store)?;
+    conn.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agents::{AgentInfo, AgentState};
+    use crate::domain::background::{ProcessInfo, ProcessState, ProcessView};
+    use crate::domain::runs::RunLog;
+    use crate::infra::run_store::RunStore;
     use crate::testing::with_app_dir;
 
     fn blocks(text: &str) -> Value {
@@ -375,6 +452,7 @@ mod tests {
             &blocks(said),
             &[],
             Some("# Plan"),
+            None,
             None,
         )
         .unwrap()
@@ -405,7 +483,7 @@ mod tests {
     #[test]
     fn a_compacted_chat_keeps_its_name() {
         with_app_dir("chat-store-compacted-title", || {
-            let saved = save("one", "/repo", &compacted(), &blocks("why is a token dropped?"), &[], None, None)
+            let saved = save("one", "/repo", &compacted(), &blocks("why is a token dropped?"), &[], None, None, None)
                 .unwrap();
             assert_eq!(saved.title, "why is a token dropped?");
         });
@@ -417,7 +495,7 @@ mod tests {
     fn a_chat_named_after_its_summary_is_named_again() {
         with_app_dir("chat-store-summary-title", || {
             for (id, workspace) in [("one", "/repo"), ("two", "/other")] {
-                save(id, workspace, &compacted(), &blocks("why is a token dropped?"), &[], None, None).unwrap();
+                save(id, workspace, &compacted(), &blocks("why is a token dropped?"), &[], None, None, None).unwrap();
                 open()
                     .unwrap()
                     .execute("UPDATE chats SET title = ?1 WHERE id = ?2", params![SUMMARY_PREFIX, id])
@@ -441,7 +519,15 @@ mod tests {
             save_one("three", "/wt/main-10", "c");
             save_one("four", "/repo", "d");
 
+            let ran = |chat: &str| {
+                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), cwd: ".".into(), state: ProcessState::Stopped };
+                RunStore.save_process(chat, &ProcessView { info, tail: String::new() });
+            };
+            let runs = |chat: &str| RunStore.processes(chat).len();
+            ran("one");
+            ran("three");
             assert_eq!(delete_in("/wt/main-1").unwrap(), 2);
+            assert_eq!((runs("one"), runs("three")), (0, 1), "a gone chat's runs go with it");
             assert!(list("/wt/main-1").unwrap().is_empty());
             assert_eq!(list("/wt/main-10").unwrap().len(), 1);
             assert_eq!(list("/repo").unwrap().len(), 1);
@@ -540,6 +626,7 @@ mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -593,13 +680,78 @@ mod tests {
     fn a_branch_says_where_it_came_from() {
         with_app_dir("chat-store-branch", || {
             save_one("one", "/repo", "first");
-            save("two", "/repo", &[LlmMessage::user("first")], &blocks("first"), &[], None, Some("one")).unwrap();
+            save("two", "/repo", &[LlmMessage::user("first")], &blocks("first"), &[], None, Some("one"), None).unwrap();
 
             let listed = list("/repo").unwrap();
             let from = |id: &str| listed.iter().find(|c| c.id == id).unwrap().branched_from.clone();
             assert_eq!(from("one"), None);
             assert_eq!(from("two").as_deref(), Some("one"));
             assert_eq!(load("two").unwrap().branched_from.as_deref(), Some("one"));
+        });
+    }
+
+    /// Each chat keeps the git branch it was last saved on: another chat of the
+    /// same folder moving to another branch does not move it, and its own next
+    /// save does.
+    #[test]
+    fn a_chat_keeps_its_own_git_branch() {
+        with_app_dir("chat-store-git-branch", || {
+            let said = |id: &str, branch: Option<&str>| {
+                save(id, "/repo", &[LlmMessage::user("hi")], &blocks("hi"), &[], None, None, branch).unwrap()
+            };
+            assert_eq!(said("a", Some("main")).git_branch.as_deref(), Some("main"));
+            said("b", Some("feature"));
+
+            let branch_of = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().git_branch;
+            assert_eq!(branch_of("a").as_deref(), Some("main"));
+            assert_eq!(branch_of("b").as_deref(), Some("feature"));
+            assert_eq!(load("a").unwrap().git_branch.as_deref(), Some("main"));
+
+            said("a", Some("feature"));
+            assert_eq!(branch_of("a").as_deref(), Some("feature"));
+            said("a", None);
+            assert_eq!(branch_of("a"), None);
+        });
+    }
+
+    #[test]
+    fn a_save_already_in_flight_cannot_move_a_chat_back_from_its_worktree() {
+        with_app_dir("chat-store-save-after-move", || {
+            save_one("one", "/repo", "first");
+            relocate("one", "/repo-worktree", "main").unwrap();
+
+            save_one("one", "/repo", "finished meanwhile");
+
+            let record = load("one").unwrap();
+            assert_eq!(record.workspace, "/repo-worktree");
+            assert_eq!(record.worktree_base.as_deref(), Some("main"));
+        });
+    }
+
+    #[test]
+    fn concurrent_save_and_relocate_keep_both_the_transcript_and_the_worktree() {
+        with_app_dir("chat-store-save-relocate-race", || {
+            for round in 0..16 {
+                let id = format!("race-{round}");
+                save_one(&id, "/repo", "first");
+                let start = std::sync::Barrier::new(2);
+                std::thread::scope(|threads| {
+                    threads.spawn(|| {
+                        start.wait();
+                        save_one(&id, "/repo", "finished meanwhile");
+                    });
+                    threads.spawn(|| {
+                        start.wait();
+                        relocate(&id, "/repo-worktree", "main").unwrap();
+                    });
+                });
+
+                let record = load(&id).unwrap();
+                assert_eq!(record.workspace, "/repo-worktree", "round {round}");
+                assert_eq!(record.worktree_base.as_deref(), Some("main"), "round {round}");
+                assert_eq!(record.messages, vec![LlmMessage::user("finished meanwhile")], "round {round}");
+                assert_eq!(record.blocks, blocks("finished meanwhile"), "round {round}");
+            }
         });
     }
 
@@ -618,7 +770,7 @@ mod tests {
             assert_eq!(title("gone").unwrap(), None);
             assert_eq!(list("/repo").unwrap()[0].title, "Lost token");
 
-            save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one")).unwrap();
+            save("two", "/repo", &[LlmMessage::user("q")], &blocks("q"), &[], None, Some("one"), None).unwrap();
             save_one("three", "/repo", "untouched");
             let title = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().title;
             assert_eq!(title("two"), "Lost token", "a branch starts with its original's name");
@@ -630,7 +782,14 @@ mod tests {
     fn a_deleted_chat_is_gone() {
         with_app_dir("chat-store-delete", || {
             save_one("one", "/repo", "first");
+            save_one("two", "/repo", "second");
+            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None };
+            RunStore.save_agent("one", &run(1));
+            RunStore.save_agent("two", &run(2));
             delete("one").unwrap();
+            assert!(RunStore.agents("one").is_empty(), "its runs go with it");
+            assert_eq!(RunStore.agents("two").len(), 1);
+            delete("two").unwrap();
 
             assert!(list("/repo").unwrap().is_empty());
             assert!(matches!(load("one"), Err(ChatError::NotFound(_))));
@@ -693,6 +852,7 @@ mod tests {
             let listed = list("/repo").unwrap();
             assert_eq!(listed.len(), 1);
             assert!(!listed[0].archived);
+            assert_eq!(listed[0].git_branch, None);
             set_archived("old", true).unwrap();
             assert!(list("/repo").unwrap()[0].archived);
         });
@@ -736,7 +896,7 @@ mod tests {
         with_app_dir("chat-store-bad-id", || {
             assert!(matches!(load("../settings"), Err(ChatError::BadId(_))));
             assert!(matches!(
-                save("../settings", "/repo", &[], &Value::Null, &[], None, None),
+                save("../settings", "/repo", &[], &Value::Null, &[], None, None, None),
                 Err(ChatError::BadId(_))
             ));
         });

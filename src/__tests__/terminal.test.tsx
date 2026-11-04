@@ -1,5 +1,8 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { useState } from "react";
+import type { AgentInfo } from "../lib/agents";
+import type { AgentFocus } from "../lib/describeTool";
 import type { TerminalInfo } from "../lib/terminal";
 
 // The Terminal tab: the user's own shells, a tab each, and the agent's
@@ -10,6 +13,7 @@ import type { TerminalInfo } from "../lib/terminal";
 let listed: TerminalInfo[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let nextId = 10;
+let runs: AgentInfo[] = [];
 
 class FakeChannel {
   static made: FakeChannel[] = [];
@@ -25,7 +29,7 @@ mock.module("@tauri-apps/api/core", () => ({
     calls.push({ command, args });
     if (command === "terminal_list") return Promise.resolve(structuredClone(listed));
     if (command === "processes_list") return Promise.resolve([]);
-    if (command === "agents_list") return Promise.resolve([]);
+    if (command === "agents_list") return Promise.resolve(structuredClone(runs));
     if (command === "terminal_open") {
       const opened: TerminalInfo = { id: nextId++, shell: "zsh", state: { state: "running" } };
       listed.push(opened);
@@ -149,7 +153,7 @@ describe("useTerminals", () => {
 
 describe("TerminalPanel", () => {
   const panel = (props: Partial<Parameters<typeof TerminalPanel>[0]> = {}) => (
-    <TerminalPanel active workspace="/work/kibo" processFocus={null} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
+    <TerminalPanel active workspace="/work/kibo" chatId="c" processFocus={null} agentsFocus={null} onOpenAgent={() => {}} onFocusTaken={() => {}} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
   );
 
   test("opening the tab with no shell gives one, and draws it", async () => {
@@ -182,12 +186,18 @@ describe("TerminalPanel", () => {
     expect(screen.getByText(/No background processes/)).toBeTruthy();
   });
 
-  test("a helper run asked for from the chat shows the Agents tab", async () => {
-    const { rerender } = render(panel());
+  test("a row in the Agents tab opens its run over the chat", async () => {
+    runs = [{ id: 1, task: "t", state: { state: "done" }, steps: ["grep needle"], tokens: { prompt: 0, cached: 0, completion: 0 }, answer: "found" }];
+    const opened: AgentFocus[] = [];
+    render(panel({ onOpenAgent: (agent) => opened.push(agent) }));
     await settle();
     await settle();
-    rerender(panel({ agentFocus: { id: 1, task: "t" } }));
-    expect(screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await settle();
+    fireEvent.click(screen.getByText("t"));
+    expect(opened).toEqual([{ id: 1, task: "t" }]);
+    // Shown in the sheet, not unfolded here.
+    expect(screen.queryByText("found")).toBeNull();
   });
 
   /// The pane has no heading of its own: the strip's end closes it, and only
@@ -247,6 +257,46 @@ describe("TerminalPanel", () => {
     await settle();
     rerender(panel({ processFocus: { id: 4 } }));
     expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  // Overview's Agent turns card, as the Background card asks for the processes.
+  test("the agent turns asked for shows the helpers", async () => {
+    listed = [{ id: 1, shell: "zsh", state: { state: "running" } }];
+    const { rerender } = render(panel());
+    await settle();
+    rerender(panel({ agentsFocus: {} }));
+    expect(screen.getByRole("tab", { name: /^Agents/ }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  // The Background card's ask, as the pane is drawn: the shell it opens
+  // meanwhile does not take the processes' place.
+  test("opened for the process list, it stays on the list while its first shell opens", async () => {
+    render(panel({ processFocus: { id: null } }));
+    await settle();
+    await settle();
+    expect(asked("terminal_open")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  // Drawn anew each time it opens: an ask still held by App would be taken again.
+  test("an ask is taken once: App lets go, the pane keeps it, and opened again it shows a shell", async () => {
+    listed = [{ id: 1, shell: "zsh", state: { state: "running" } }];
+    // App: holds the ask till told it was taken.
+    let held: { id: number | null } | null = null;
+    function Host() {
+      const [focus, setFocus] = useState<{ id: number | null } | null>({ id: null });
+      held = focus;
+      return panel({ processFocus: focus, onFocusTaken: () => setFocus(null) });
+    }
+    const { unmount } = render(<Host />);
+    await settle();
+    await settle();
+    expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
+    expect(held).toBeNull();
+    unmount();
+    render(panel());
+    await settle();
+    expect(screen.getByRole("tab", { name: "zsh" }).getAttribute("aria-selected")).toBe("true");
   });
 
   /** What a screen of terminal `id` pastes at its prompt — the screen hook is

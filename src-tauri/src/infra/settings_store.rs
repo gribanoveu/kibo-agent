@@ -87,7 +87,7 @@ mod tests {
                 }],
                 debug_logging: true,
                 reply_language: crate::domain::settings::ReplyLanguage::Russian,
-                turn_limits: crate::domain::settings::TurnLimits { rounds: 120, budget: 600 },
+                turn_limits: crate::domain::settings::TurnLimits { rounds: 120, budget: 600, parallel: 4 },
             },
             skills: crate::domain::settings::OptOut { disabled: vec!["release".to_string()] },
             skill_sources: crate::domain::settings::OptOut { disabled: vec!["agents".to_string()] },
