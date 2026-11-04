@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-04 Overview no longer carries an Agent turns card: what is running and what ended is under Background, and a chat's helper agents are still listed in the Terminal's Agents tab
 - 2026-11-04 An opened picture closes: clicking a thumbnail in a message draws the viewer over the whole window instead of inside the thread it was sent in, whose bottom fade cut it off — and its Close button is now where it can be reached
 - 2026-11-04 A helper agent's panel opens on what it did and answered: the brief it was given — a review's is a whole diff — folds under "Brief" instead of a wall of prompt above its steps and answer
 - 2026-11-04 A helper agent's answer opens the files it names: a path in its panel is a link that opens the file beside the chat, as one in an answer is

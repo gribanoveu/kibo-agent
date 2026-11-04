@@ -159,9 +159,6 @@ export default function App() {
   // Which background process a chat row asked the Terminal tab to show — `null`
   // for the list. The row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number | null } | null>(null);
-  // Overview's Agent turns card asked for the helper agents. An empty ask, a new
-  // object each time, so the same one is never taken twice.
-  const [agentsFocus, setAgentsFocus] = useState<object | null>(null);
   // The helper run opened in a sheet over the chat, with the chat it is from:
   // another chat's sheet is not drawn over this one.
   const [agentShown, setAgentShown] = useState<{ run: AgentFocus; chatId: string | null } | null>(null);
@@ -540,17 +537,9 @@ export default function App() {
   };
   // A chat row, Overview or the Agents tab: the run opens over the chat.
   const openAgent = (run: AgentFocus) => setAgentShown({ run, chatId: agent.chatId });
-  // Overview's Agent turns card: the Terminal, on its helpers.
-  const openAgents = () => {
-    openTab("terminal");
-    setAgentsFocus({});
-  };
   // Held only till Terminal takes it, as `terminalPaste` is: the pane is drawn
   // anew each time it opens, and an ask still held would be taken again.
-  const focusTaken = useCallback(() => {
-    setProcessFocus(null);
-    setAgentsFocus(null);
-  }, []);
+  const focusTaken = useCallback(() => setProcessFocus(null), []);
 
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
@@ -559,7 +548,6 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
-    agentsFocus,
     chatId: agent.chatId,
     onOpenAgent: openAgent,
     onFocusTaken: focusTaken,
@@ -599,12 +587,10 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
-      activeTurns: activities.filter((activity) => activity === "running" || activity === "awaitingApproval").length,
       spent: agent.spent,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
-      onOpenAgents: openAgents,
       onOpenAgent: openAgent,
       onOpenPanel: openTab,
     },

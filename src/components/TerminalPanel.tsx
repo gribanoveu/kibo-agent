@@ -17,8 +17,6 @@ type Props = {
   workspace: string | null;
   /** The background process a chat row asked to see — `null` for the list, as the Background card asks; a new object each ask. */
   processFocus: { id: number | null } | null;
-  /** Overview's Agent turns card asked for the helper agents; an empty ask, a new object each time. */
-  agentsFocus: object | null;
   /** The open chat: only what it started is listed. `null` before its first message. */
   chatId: string | null;
   /** Opens a helper run in the sheet over the chat. */
@@ -66,11 +64,11 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
 /**
  * The Terminal tab, under the message box: the user's own shells, a tab each,
  * and the agent's background processes and helper agents as the last two tabs —
- * what Overview's Background and Agent turns cards open it on. Opening the pane
+ * what Overview's Background card opens it on. Opening the pane
  * gives a shell, as a terminal window does — once per folder, not again after
  * the last is closed.
  */
-export function TerminalPanel({ active, workspace, chatId, processFocus, agentsFocus, onOpenAgent, onFocusTaken, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
+export function TerminalPanel({ active, workspace, chatId, processFocus, onOpenAgent, onFocusTaken, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
   const { processes, error: processError, stop } = useProcesses(active, chatId);
   const { agents, error: agentError, stop: stopAgent } = useAgents(active, chatId);
   const shells = useTerminals(active);
@@ -112,12 +110,6 @@ export function TerminalPanel({ active, workspace, chatId, processFocus, agentsF
     setProcessAsk(processFocus);
     onFocusTaken();
   }, [processFocus]);
-
-  useEffect(() => {
-    if (!agentsFocus) return;
-    setPicked("agents");
-    onFocusTaken();
-  }, [agentsFocus]);
 
   // A picked shell that was closed falls back to the newest one left.
   const newest = shells.terminals[shells.terminals.length - 1];
