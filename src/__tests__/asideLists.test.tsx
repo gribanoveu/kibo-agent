@@ -158,6 +158,7 @@ describe("the side panel", () => {
     onNotify: () => {},
     commitDraft: { message: "", onMessage: () => {} },
     processFocus: null,
+    agentsFocus: null,
     onFocusTaken: () => {},
     chatId: null,
     chatBlocks: [],

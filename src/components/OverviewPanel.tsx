@@ -28,6 +28,8 @@ export type OverviewProps = {
   onOpenProcess: (id: number) => void;
   /** The Background card's heading: Terminal, on its Processes tab. */
   onOpenProcesses: () => void;
+  /** The Agent turns card's heading: Terminal, on its Agents tab. */
+  onOpenAgents: () => void;
   onOpenAgent: (agent: AgentFocus) => void;
   onOpenPanel: (tab: AsideTab) => void;
 };
@@ -65,6 +67,7 @@ export function OverviewPanel({
   agents,
   onOpenProcess,
   onOpenProcesses,
+  onOpenAgents,
   onOpenAgent,
   onOpenPanel,
 }: OverviewProps) {
@@ -81,10 +84,11 @@ export function OverviewPanel({
       )}
 
       <section className="overview-card">
-        <h3 className="overview-head">
+        <button type="button" className="overview-head overview-link" title="Show the helper agents this chat ran" onClick={onOpenAgents}>
           Agent turns
           <span className="overview-count">{activeTurns}</span>
-        </h3>
+          <ChevronRight size={13} className="overview-chev" />
+        </button>
         <p className="overview-empty">
           {activeTurns ? `${activeTurns} active across chats.` : "No agent turns are active."}
         </p>

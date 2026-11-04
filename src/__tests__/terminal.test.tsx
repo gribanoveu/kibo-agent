@@ -153,7 +153,7 @@ describe("useTerminals", () => {
 
 describe("TerminalPanel", () => {
   const panel = (props: Partial<Parameters<typeof TerminalPanel>[0]> = {}) => (
-    <TerminalPanel active workspace="/work/kibo" chatId="c" processFocus={null} onOpenAgent={() => {}} onFocusTaken={() => {}} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
+    <TerminalPanel active workspace="/work/kibo" chatId="c" processFocus={null} agentsFocus={null} onOpenAgent={() => {}} onFocusTaken={() => {}} terminalPaste={null} onTerminalPasted={() => {}} onAddToChat={() => {}} {...props} />
   );
 
   test("opening the tab with no shell gives one, and draws it", async () => {
@@ -257,6 +257,15 @@ describe("TerminalPanel", () => {
     await settle();
     rerender(panel({ processFocus: { id: 4 } }));
     expect(screen.getByRole("tab", { name: "Processes" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  // Overview's Agent turns card, as the Background card asks for the processes.
+  test("the agent turns asked for shows the helpers", async () => {
+    listed = [{ id: 1, shell: "zsh", state: { state: "running" } }];
+    const { rerender } = render(panel());
+    await settle();
+    rerender(panel({ agentsFocus: {} }));
+    expect(screen.getByRole("tab", { name: /^Agents/ }).getAttribute("aria-selected")).toBe("true");
   });
 
   // The Background card's ask, as the pane is drawn: the shell it opens
