@@ -254,6 +254,7 @@ describe("a server's key", () => {
   test("is the name lowercased, keeping only what a tool name may hold", () => {
     expect(serverKey("My Server.v2")).toBe("my_server_v2");
     expect(serverKey("git-hub")).toBe("git-hub");
+    expect(serverKey("Имя")).toBe("___");
     expect(serverKey("")).toBe("");
   });
 

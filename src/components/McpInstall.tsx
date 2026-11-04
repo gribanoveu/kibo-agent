@@ -279,13 +279,18 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           <div className="mcp-install-columns">
             <section className="mcp-install-col" aria-label="How it runs">
               <h4 className="mcp-install-head">How it runs</h4>
-              <Field label="Name" hint="Letters and digits stay, anything else becomes _; the name is lowercased.">
+              <Field label="Name" hint="A–Z, 0–9 and - stay, anything else becomes _; the name is lowercased.">
                 <input className="entry-input" value={fields.name} onChange={set("name")} autoFocus={name === null} />
                 <code className="mcp-install-key">
                   {`mcp__${key || "<name>"}__`}
                   <span className="mcp-install-key-tool">{"<tool>"}</span>
                 </code>
               </Field>
+              {key && !/[a-z0-9]/.test(key) && (
+                <p className="mcp-install-warn">
+                  Nothing of this name survives in a tool name: it becomes <b>{key}</b> — use A–Z, 0–9 or -.
+                </p>
+              )}
               {clash && (
                 <p className="mcp-install-warn">
                   Clashes with the server <b>{clash}</b> in the file: both become <b>{key}</b> in tool names — rename

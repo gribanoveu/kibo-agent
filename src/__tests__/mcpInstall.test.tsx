@@ -125,6 +125,11 @@ describe("installing a server", () => {
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "github" } });
     expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__<tool>");
     expect(screen.getByText(/Clashes with the server/)).toBeTruthy();
+
+    // Nothing of a Cyrillic name can be in a tool name.
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Имя" } });
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp_______<tool>");
+    expect(screen.getByText(/Nothing of this name survives/)).toBeTruthy();
   });
 
   test("a paste that is not a server says where it breaks and stays", () => {
