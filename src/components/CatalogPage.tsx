@@ -541,13 +541,17 @@ function hookLines(text: string): { event: string; matcher: string; command: str
 
 /** A server is a command the app will run, or an address it will send to;
     a hook is a command run on tool calls with no card to approve it. Either is
-    shown whole and installed only from here — a server with its secrets typed in. */
+    shown whole and installed only from here — a server with its secrets typed
+    in, on a step of their own so the entry is read before the tokens are. */
 function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall: (secrets: Record<string, string>) => void; onClose: () => void }) {
   const { item } = entry;
   const preview = useCatalogPreview(keyOf(entry));
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [step, setStep] = useState<"entry" | "secrets">("entry");
   const read = preview?.read;
   const ready = !!read && filled(read.secrets, secrets);
+  // The step is there only when the entry has a placeholder to fill.
+  const askSecrets = !!read && read.secrets.length > 0;
   const hooks = item.kind === "hooks" && read ? hookLines(read.text) : null;
 
   return (
@@ -556,33 +560,62 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
       open
       onClose={onClose}
       footer={
-        <>
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="button" className="btn btn-primary" disabled={!ready} onClick={() => onInstall(secrets)}>
-            Install
-          </button>
-        </>
+        step === "secrets" ? (
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setStep("entry")}>
+              Back
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!ready} onClick={() => onInstall(secrets)}>
+              Install
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>
+              Cancel
+            </button>
+            {askSecrets ? (
+              <button type="button" className="btn btn-primary" onClick={() => setStep("secrets")}>
+                Next
+              </button>
+            ) : (
+              <button type="button" className="btn btn-primary" disabled={!ready} onClick={() => onInstall(secrets)}>
+                Install
+              </button>
+            )}
+          </>
+        )
       }
     >
-      {item.kind === "hooks" ? (
-        <p className="catalog-detail-confirm">
-          Adds these hooks to {item.target}. From the next Agent turn each command runs on every tool call its <b>matcher</b> names, with no card to approve it:
-        </p>
-      ) : (
-        <p className="catalog-detail-confirm">
-          Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
-          sends to:
-        </p>
+      {askSecrets && (
+        <div className="catalog-steps" aria-label="Steps">
+          <span className="catalog-step" aria-current={step === "entry" ? "step" : undefined}>
+            1 What goes in
+          </span>
+          <span className="catalog-step" aria-current={step === "secrets" ? "step" : undefined}>
+            2 Secrets
+          </span>
+        </div>
       )}
-      {preview?.error ? (
-        <div className="catalog-detail-error">{preview.error}</div>
-      ) : !read ? (
-        <div className="catalog-detail-note">Reading…</div>
+      {step === "secrets" ? (
+        <SecretFields names={read?.secrets ?? []} values={secrets} onChange={setSecrets} target={item.target} />
       ) : (
         <>
-          {hooks ? (
+          {item.kind === "hooks" ? (
+            <p className="catalog-detail-confirm">
+              Adds these hooks to {item.target}. From the next Agent turn each command runs on every tool call its <b>matcher</b> names, with no card to approve it:
+            </p>
+          ) : (
+            <p className="catalog-detail-confirm">
+              Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
+              sends to:
+            </p>
+          )}
+          {preview?.error ? (
+            <div className="catalog-detail-error">{preview.error}</div>
+          ) : !read ? (
+            <div className="catalog-detail-note">Reading…</div>
+          ) : hooks ? (
             hooks.map(({ event, matcher, command }, i) => (
               <div key={i} className="catalog-hook">
                 <div className="catalog-hook-when">
@@ -594,7 +627,6 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
           ) : (
             <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
           )}
-          <SecretFields names={read.secrets} values={secrets} onChange={setSecrets} target={item.target} />
         </>
       )}
       <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>

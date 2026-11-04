@@ -212,20 +212,33 @@ describe("the catalog page", () => {
     expect(screen.getByText(/The app ships a runbook named crashloop/)).toBeTruthy();
   });
 
-  test("a server is installed from a dialog that shows it whole and asks for its secrets", async () => {
+  test("a server is installed from a dialog that shows it whole, then asks for its secrets", async () => {
     answer = [own];
     calls = [];
     render(<CatalogPage openPane={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Install GitHub" }));
     const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
     expect(await within(dialog).findByText(/api\.example\/mcp/)).toBeTruthy();
+    // The entry is read first; the tokens are a step of their own.
+    expect(within(dialog).getByText("1 What goes in")).toBeTruthy();
+    expect(within(dialog).queryByLabelText("GITHUB_TOKEN")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+
     const install = within(dialog).getByRole("button", { name: "Install" }) as HTMLButtonElement;
     expect(install.disabled).toBe(true);
     fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "  " } });
     expect(install.disabled).toBe(true);
     fireEvent.change(within(dialog).getByLabelText("GITHUB_TOKEN"), { target: { value: "ghp_1" } });
+    expect(install.disabled).toBe(false);
     expect(calls.filter(([c]) => c === "catalog_install")).toHaveLength(0);
-    fireEvent.click(install);
+
+    // Back to the entry and on again: what was typed is still there.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    expect(within(dialog).queryByLabelText("GITHUB_TOKEN")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+    expect((within(dialog).getByLabelText("GITHUB_TOKEN") as HTMLInputElement).value).toBe("ghp_1");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
     await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_install", { source: own.url, kind: "mcp", id: "github", secrets: { GITHUB_TOKEN: "ghp_1" } }]));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
