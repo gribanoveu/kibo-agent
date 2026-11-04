@@ -151,10 +151,16 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const key = serverKey(typed);
   const clash = keyClash(text ?? "", previous, typed);
   const written = writeMcpServer(text ?? "", previous, fields);
-  const writtenFile = "text" in written ? parseFile(written.text) : null;
+  const writtenText = "text" in written ? written.text : "";
+  const writtenFile = writtenText ? parseFile(writtenText) : null;
   const entry = writtenFile && isObject(writtenFile.mcpServers) ? writtenFile.mcpServers[typed] : undefined;
-  const secrets = "text" in written ? entrySecrets(written.text, typed) : [];
+  const secrets = writtenText ? entrySecrets(writtenText, typed) : [];
   const secretsFilled = secrets.every((secret) => secretValues[secret]?.trim());
+  // The entry the file will get: what the step before was given is already in
+  // place of its placeholder, and that is what the review shows.
+  const filled = secrets.length > 0 ? fillSecrets(writtenText, typed, secretValues) : written;
+  const finalFile = parseFile("text" in filled ? filled.text : "");
+  const finalEntry = finalFile && isObject(finalFile.mcpServers) ? finalFile.mcpServers[typed] : entry;
   // The block the chosen transport does not keep: a server at a URL never runs
   // env, and a command server never sends headers.
   const leftOut = fields.transport === "url" ? Boolean(fields.env.trim()) : Boolean(fields.headers.trim());
@@ -195,7 +201,6 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const install = async () => {
     if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
-    const filled = secrets.length > 0 ? fillSecrets(written.text, typed, secretValues) : written;
     if ("error" in filled) return setProblem(filled.error);
     setSaving(true);
     const stored = await onSave(filled.text);
@@ -294,11 +299,11 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           <div className="mcp-install-columns">
             <section className="mcp-install-col" aria-label="How it runs">
               <h4 className="mcp-install-head">How it runs</h4>
-              <Field label="Name" hint="A–Z, 0–9 and - stay, anything else becomes _; the name is lowercased. Its tools put their own name after this prefix.">
+              <Field label="Name" hint="A–Z, 0–9 and - stay, anything else becomes _; the name is lowercased. `tool` is the tool's own name, which the server lists once it starts.">
                 <input className="entry-input" value={fields.name} onChange={setName} autoFocus={name === null} />
                 <code className="mcp-install-key">
-                  {`mcp__${key || "<name>"}__`}
-                  <span className="mcp-install-key-tool">…</span>
+                  {`mcp__${key || "name"}__`}
+                  <span className="mcp-install-key-tool">tool</span>
                 </code>
               </Field>
               {key && !/[a-z0-9]/.test(key) && (
@@ -338,7 +343,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
                     <input className="entry-input mono" value={fields.command} onChange={set("command")} placeholder="npx" />
                   </Field>
                   <Field label="Arguments" hint="One per line.">
-                    <textarea className="entry-input mono" rows={3} value={fields.args} onChange={set("args")} />
+                    <textarea className="entry-input mono mcp-install-area" value={fields.args} onChange={set("args")} />
                   </Field>
                 </>
               ) : (
@@ -347,7 +352,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
                     <input className="entry-input mono" value={fields.url} onChange={set("url")} placeholder="https://example.com/mcp" />
                   </Field>
                   <Field label="Headers" hint="Name: value, one per line — Authorization: Bearer … for a token. Stored in the file as it is.">
-                    <textarea className="entry-input mono" rows={2} value={fields.headers} onChange={set("headers")} spellCheck={false} />
+                    <textarea className="entry-input mono mcp-install-area" value={fields.headers} onChange={set("headers")} spellCheck={false} />
                   </Field>
                 </>
               )}
@@ -357,7 +362,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
               <h4 className="mcp-install-head">How the agent uses it</h4>
               {fields.transport === "command" && (
                 <Field label="Environment" hint="KEY=VALUE, one per line. Stored in the file as it is — it may hold tokens.">
-                  <textarea className="entry-input mono" rows={2} value={fields.env} onChange={set("env")} spellCheck={false} />
+                  <textarea className="entry-input mono mcp-install-area" value={fields.env} onChange={set("env")} spellCheck={false} />
                 </Field>
               )}
               <div className="entry-row">
@@ -436,7 +441,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
               </>
             )}
           </p>
-          {entry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(entry, null, 2)}</pre>}
+          {finalEntry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(finalEntry, null, 2)}</pre>}
           <p className="modal-note">
             The app writes {path || "the file"} in its own layout: spacing and key order typed there by hand are not
             kept. It starts with the next Agent turn.

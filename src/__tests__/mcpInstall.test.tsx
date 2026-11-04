@@ -119,11 +119,11 @@ describe("installing a server", () => {
     mount({ text: text({ mcpServers: { GitHub: { command: "gh" } } }) });
     fireEvent.click(button("Start from scratch"));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "My Server.v2" } });
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__my_server_v2__…");
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__my_server_v2__tool");
     expect(screen.queryByText(/Clashes with the server/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "github" } });
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__…");
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__tool");
     expect(screen.getByText(/Clashes with the server/)).toBeTruthy();
   });
 
@@ -141,7 +141,7 @@ describe("installing a server", () => {
     mount();
     paste(text({ mcpServers: { "Имя": { command: "npx" } } }));
     fireEvent.click(button("Continue"));
-    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp_______…");
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp_______tool");
     expect(screen.getByText(/Nothing of this name survives/)).toBeTruthy();
   });
 
@@ -324,6 +324,10 @@ describe("installing a server", () => {
     expect((button("Next") as HTMLButtonElement).disabled).toBe(false);
 
     next();
+    // The review shows the entry as it will be written: the values are in place.
+    const shownEntry = document.querySelector(".mcp-install-entry")?.textContent ?? "";
+    expect(shownEntry).toContain('"TOKEN": "t"');
+    expect(shownEntry).not.toContain("${GITHUB_TOKEN}");
     await act(async () => {
       fireEvent.click(button("Install"));
     });

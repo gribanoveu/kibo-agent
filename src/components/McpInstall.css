@@ -142,6 +142,12 @@
   font-size: var(--fs-xs);
   line-height: 1.4;
 }
+/* One per line, and tall enough for a few of them: the height is the same on
+   every step, so a longer list scrolls instead of pushing the columns about. */
+.mcp-install-area {
+  height: 96px;
+  resize: vertical;
+}
 /* A choice with the reason for it: three ways to reach a server's tools, two
    things to do with its results. */
 .mcp-install-choices {
