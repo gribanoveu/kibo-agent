@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-04 An MCP server installs from a screen of its own: paste the JSON its README prints and the fields fill in — a paste that holds several servers lists them to choose from, and a name already in mcp.json is replaced where it stands — the fields sit in two columns, and the last step shows the entry that goes into the file before it does
 - 2026-11-04 Overview no longer carries an Agent turns card: what is running and what ended is under Background, and a chat's helper agents are still listed in the Terminal's Agents tab
 - 2026-11-04 An opened picture closes: clicking a thumbnail in a message draws the viewer over the whole window instead of inside the thread it was sent in, whose bottom fade cut it off — and its Close button is now where it can be reached
 - 2026-11-04 A helper agent's panel opens on what it did and answered: the brief it was given — a review's is a whole diff — folds under "Brief" instead of a wall of prompt above its steps and answer
