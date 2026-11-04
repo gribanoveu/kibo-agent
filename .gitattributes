@@ -5,6 +5,9 @@
 # are as they are on purpose.
 * text=auto eol=lf
 
+# Postman's sandbox as `scripts/build-postman-sandbox.ts` wrote it, kept byte for byte.
+src-tauri/postman-sandbox/*.js -text linguist-generated
+
 src-tauri/models/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
 src-tauri/models/**/tokenizer.json filter=lfs diff=lfs merge=lfs -text
 src-tauri/bench/agent-tasks/** -text

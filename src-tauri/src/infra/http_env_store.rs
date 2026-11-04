@@ -2,6 +2,7 @@
 //! as MongoDB's connections are (`mongo_store`): one blob, everything in it.
 //! The window gets an environment only through `Environment::for_window`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::domain::http_client::{Environment, HttpError, Variable};
+use crate::domain::http_scripts::{apply, Change};
 use crate::infra::app_dir;
 use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
@@ -34,12 +36,17 @@ fn path() -> Result<PathBuf, HttpError> {
 struct Stored {
     environments: Vec<Environment>,
     globals: Vec<Variable>,
+    /// What scripts wrote to collection variables, by collection: Postman's current
+    /// values. A token does not belong in a collection's open file, or its export.
+    #[serde(default)]
+    collections: BTreeMap<String, Vec<Variable>>,
 }
 
 impl Drop for Stored {
     fn drop(&mut self) {
         self.environments.iter_mut().for_each(wipe);
         wipe_all(&mut self.globals);
+        self.collections.values_mut().for_each(|v| wipe_all(v));
     }
 }
 
@@ -135,8 +142,48 @@ pub fn set_globals(globals: Vec<Variable>) -> Result<(), HttpError> {
     save(&stored)
 }
 
+/// What scripts wrote to each collection's variables.
+pub fn collection_values() -> Result<BTreeMap<String, Vec<Variable>>, HttpError> {
+    Ok(load()?.collections.clone())
+}
+
+/// A send's scripts' changes, each over what is stored now: another send may have
+/// written since this one read. An environment deleted meanwhile takes its changes with it.
+pub fn write_changes(environment: Option<(&str, &[Change])>, globals: &[Change], collection: (&str, &[Change])) -> Result<(), HttpError> {
+    let _held = writing();
+    let mut stored = load()?;
+    if let Some((id, changes)) = environment {
+        if let Some(found) = stored.environments.iter_mut().find(|e| e.id == id) {
+            apply(&mut found.variables, changes);
+        }
+    }
+    apply(&mut stored.globals, globals);
+    let (id, changes) = collection;
+    if !changes.is_empty() {
+        apply(stored.collections.entry(id.to_string()).or_default(), changes);
+    }
+    save(&stored)
+}
+
+/// A collection deleted leaves no values behind.
+pub fn forget_collection(id: &str) -> Result<(), HttpError> {
+    let _held = writing();
+    let mut stored = load()?;
+    if let Some(mut values) = stored.collections.remove(id) {
+        wipe_all(&mut values);
+        return save(&stored);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_store_written_before_scripts_reads() {
+        let stored: super::Stored = serde_json::from_str(r#"{"environments": [], "globals": []}"#).unwrap();
+        assert!(stored.collections.is_empty());
+    }
+
     use super::*;
     use crate::testing::with_app_dir;
 

@@ -251,6 +251,7 @@ mod tests {
 
     fn response(status: u16, body: &[u8]) -> SavedResponse {
         SavedResponse {
+            scripts: Default::default(),
             at: 1_761_700_000_000,
             environment: Some("test".into()),
             outcome: Outcome::Response { status, headers: vec![("Content-Type".into(), "application/json".into())], url: "https://api/x".into(), redirects: vec![], elapsed_ms: 42 },
