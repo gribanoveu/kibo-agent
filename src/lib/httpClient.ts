@@ -433,17 +433,24 @@ function itemsFrom(v: unknown): Item[] {
 }
 
 /** A stored collection as the page draws it. */
-export function collectionFrom(view: { id: string; file: unknown; error: string | null }): Collection {
+export function collectionFrom(view: { id: string; file: unknown; error: string | null; current?: EnvVariable[] }): Collection {
   const file = obj(view.file);
+  // Over the file's, for Preview only: the page never writes `variables` back.
+  const current = (view.current ?? []).map(({ key, value, secret }) => (secret ? { key, value, secret } : { key, value }));
   return {
     id: view.id,
     name: view.error === null ? text(obj(file.info).name) : view.id,
     auth: authFrom(file.auth),
     // A `secret` one masked in Preview and named in cURL, as the backend masks it in history.
-    variables: pairsFrom(file.variable).map((v, i) => {
-      const row = obj(list(file.variable)[i]);
-      return row.type === "secret" || row.secret === true ? { ...v, secret: true } : v;
-    }),
+    variables: [
+      ...pairsFrom(file.variable)
+        .map((v, i) => {
+          const row = obj(list(file.variable)[i]);
+          return row.type === "secret" || row.secret === true ? { ...v, secret: true } : v;
+        })
+        .filter((v) => !current.some(({ key }) => key === v.key)),
+      ...current,
+    ],
     items: itemsFrom(file.item),
     scripts: scriptsFrom(file.event),
     ...(view.error === null ? {} : { error: view.error }),

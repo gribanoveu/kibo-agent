@@ -19,6 +19,7 @@ import {
   Loader2,
   Lock,
   LockOpen,
+  Minus,
   MoreHorizontal,
   Plus,
   Rows2,
@@ -41,7 +42,7 @@ import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { HttpHistoryEntry, HttpOutcome } from "../lib/httpCommands";
+import type { HttpHistoryEntry, HttpOutcome, HttpScriptReport, HttpTestResult } from "../lib/httpCommands";
 import {
   requestsUnder,
   METHODS,
@@ -103,7 +104,7 @@ export function HttpPage() {
   useShortcuts({
     // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
     httpSend: () => {
-      if (renaming || deleting || shownProblem || sheet || !http.active) return false;
+      if (renaming || deleting || shownProblem || http.asking || sheet || !http.active) return false;
       http.send(http.active);
     },
   });
@@ -315,6 +316,7 @@ export function HttpPage() {
               onEdit={http.edit}
               onPasteCurl={(command) => http.pasteCurl(openTab.request, command).catch((e) => setFailed(`The command was not read: ${e}`))}
               onSend={() => http.send(openTab.request.id)}
+              onAskScripts={() => http.sendAskingScripts(openTab.request.id)}
             />
           ) : (
             <p className="http-quiet http-empty">Pick a request on the left, or import a Postman collection.</p>
@@ -368,6 +370,29 @@ export function HttpPage() {
         <p className="http-confirm">{deleting?.what}</p>
       </Modal>
       <Modal
+        title={`Run the scripts of “${http.asking?.name ?? ""}”?`}
+        open={http.asking !== null}
+        onClose={() => http.answerScripts("cancel")}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => http.answerScripts("cancel")}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => http.answerScripts("without")}>
+              Send without scripts
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => http.answerScripts("run")}>
+              Run scripts
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">
+          This collection has {http.asking?.count === 1 ? "1 script" : `${http.asking?.count ?? 0} scripts`}. A script reads every variable, secrets too, and can send them anywhere with
+          pm.sendRequest. Run them only if you trust where the collection came from — a request's Scripts tab shows them. If they change, you will be asked again.
+        </p>
+      </Modal>
+      <Modal
         title="Not done"
         open={shownProblem !== null}
         onClose={dismiss}
@@ -406,7 +431,7 @@ type TreeProps = { expanded: Set<string>; toggle: (id: string) => void; active: 
 /** Says a collection or request carries Postman scripts — on hover, in words. */
 function ScriptsMark() {
   return (
-    <span className="http-tree-mark" title="Has Postman scripts — they show in a request's Scripts tab and do not run yet" aria-label="Has Postman scripts">
+    <span className="http-tree-mark" title="Has Postman scripts — a request's Scripts tab shows them" aria-label="Has Postman scripts">
       <FileCode2 size={12} />
     </span>
   );
@@ -706,6 +731,7 @@ function RequestView({
   onEdit,
   onPasteCurl,
   onSend,
+  onAskScripts,
 }: {
   collection: Collection;
   request: HttpRequest;
@@ -716,6 +742,7 @@ function RequestView({
   onEdit: (r: HttpRequest) => void;
   onPasteCurl: (command: string) => void;
   onSend: () => void;
+  onAskScripts: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
   // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
@@ -846,7 +873,7 @@ function RequestView({
           onResize={resize}
           onResizeEnd={(px) => px && (stacked ? setHeight : setWidth)(Math.round(px))}
         />
-        <ResponseView sent={sent} scripts={scripts} />
+        <ResponseView sent={sent} scripts={scripts} onAskScripts={onAskScripts} />
       </div>
     </div>
   );
@@ -1092,8 +1119,8 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
           </button>
         ))}
         <span className="http-spacer" />
-        <span className="http-quiet" title="The request goes without them until scripts run (HC-5)">
-          not run yet
+        <span className="http-quiet" title="A collection's scripts run once you trust them, which the first send asks">
+          run on Send
         </span>
       </div>
       <div className="http-code-box http-code-box-fill">
@@ -1112,9 +1139,47 @@ function receivedAt(at: number): string {
   return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
 }
 
-function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: boolean }) {
+/** What the scripts of a send said: the tests, what stopped them, their console. */
+function ScriptResults({ report, scripts }: { report: HttpScriptReport; scripts: boolean }) {
+  const { tests, console: lines, error } = report;
+  if (!tests.length && !lines.length && !error) return <p className="http-quiet">{scripts ? "No pm.test ran in this request's scripts." : "This request has no scripts."}</p>;
+  return (
+    <>
+      {error && <p className="http-error">{error}</p>}
+      {tests.length > 0 && (
+        <ul className="http-tests" aria-label="Tests">
+          {tests.map((t, i) => (
+            // By place: two tests can share a name.
+            <li key={i} className={`http-test http-test-${testState(t)}`}>
+              {t.skipped ? <Minus size={13} /> : t.passed ? <Check size={13} /> : <X size={13} />}
+              <span>
+                {t.name}
+                {t.error && <span className="http-test-error">{t.error}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {lines.length > 0 && (
+        <ol className="http-console" aria-label="Console">
+          {lines.map((line, i) => (
+            <li key={i} className={`http-mono http-console-${line.level}`}>
+              {line.text}
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
+  );
+}
+
+const testState = (t: HttpTestResult) => (t.skipped ? "skipped" : t.passed ? "passed" : "failed");
+
+function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined; scripts: boolean; onAskScripts: () => void }) {
   const [tab, setTab] = useState<ResTab>("body");
   const view = sent?.view;
+  const report = view?.scripts;
+  const failed = (report?.tests.filter((t) => testState(t) === "failed").length ?? 0) + (report?.error ? 1 : 0);
   const response = view?.outcome.kind === "response" ? view.outcome : null;
   const contentType = response ? contentTypeOf(response.headers) : "";
   // Undefined when there is no text to show: nothing came back, or not text.
@@ -1124,7 +1189,7 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
   const tabs: [ResTab, string, ReactNode][] = [
     ["body", "Response", null],
     ["headers", "Headers", count(response?.headers.length)],
-    ["tests", "Tests", null],
+    ["tests", "Tests", failed ? <span className="http-count http-count-failed">{failed} failed</span> : count(report?.tests.length)],
   ];
   return (
     <section className="http-response" aria-label="Response" aria-busy={sent?.busy}>
@@ -1138,6 +1203,8 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
           ))}
         </div>
         <span className="http-spacer" />
+        {/* A script can wait on a timer or on pm.sendRequest for up to a minute. */}
+        {sent?.busy && scripts && <span className="http-quiet">Scripts may be waiting…</span>}
         {sent?.busy && <Loader2 size={13} className="http-spin" />}
         {response && <span className={`http-status http-tone-${statusTone(response.status)}`}>{response.status}</span>}
         {view && (
@@ -1161,10 +1228,14 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
         {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
         {view?.outcome.kind === "failed" && <p className="http-error">{view.outcome.error}</p>}
         {!view && !sent?.busy && !sent?.notSent && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
-        {response?.status === 401 && scripts && (
+        {report?.notRun && (
           <p className="http-note">
             <FileCode2 size={13} />
-            This request has Postman scripts, which do not run yet: if one of them gets the token, the request went without it.
+            <span>The collection's scripts did not run: if one of them gets a token, the request went without it.</span>
+            <span className="http-spacer" />
+            <button type="button" className="http-bar-button" onClick={onAskScripts}>
+              Send with scripts…
+            </button>
           </p>
         )}
         {response?.redirects && <p className="http-quiet http-mono" title="Redirected through">{[...response.redirects, response.url].join(" → ")}</p>}
@@ -1189,7 +1260,7 @@ function ResponseView({ sent, scripts }: { sent: Sent | undefined; scripts: bool
             </tbody>
           </table>
         )}
-        {response && tab === "tests" && <p className="http-quiet">{scripts ? "Scripts are not run yet — no tests." : "No pm.test in this request's scripts."}</p>}
+        {report && tab === "tests" && <ScriptResults report={report} scripts={scripts} />}
       </div>
     </section>
   );

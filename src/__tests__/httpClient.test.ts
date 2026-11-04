@@ -349,6 +349,13 @@ describe("a Postman file read and written back", () => {
     expect(collectionFrom({ id: "bad", file: null, error: "not JSON" })).toMatchObject({ name: "bad", items: [], error: "not JSON" });
   });
 
+  test("what scripts wrote lies over the file's variables, a secret staying one", () => {
+    const file = { info: { name: "C" }, variable: [{ key: "a", value: "file" }, { key: "b", value: "kept" }, { key: "off", value: "x", disabled: true }] };
+    const row = (key: string, value: string, secret = false) => ({ key, value, secret, enabled: true });
+    const { variables } = collectionFrom({ id: "c", file, error: null, current: [row("a", "script"), row("off", "on"), row("t", "•••", true)] });
+    expect(variables).toEqual([{ key: "b", value: "kept" }, { key: "a", value: "script" }, { key: "off", value: "on" }, { key: "t", value: "•••", secret: true }]);
+  });
+
   test("a request not edited goes back as it came, to the byte", () => {
     for (const id of ["r", "s", "g"]) expect(requestToPostman(request(id))).toEqual(findSource(id));
     // A method written in lower case reads as upper, and is still not an edit.

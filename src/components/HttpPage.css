@@ -500,6 +500,55 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
+.http-count-failed {
+  color: var(--red);
+}
+.http-tests,
+.http-console {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+.http-test {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 0;
+  color: var(--text);
+}
+.http-test svg {
+  flex: none;
+  margin-top: 2px;
+}
+.http-test-passed svg {
+  color: var(--green);
+}
+.http-test-failed svg {
+  color: var(--red);
+}
+.http-test-skipped {
+  color: var(--text-dim);
+}
+.http-test-error {
+  display: block;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.http-console {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.http-console-error {
+  color: var(--red);
+}
+.http-console-warn {
+  color: var(--amber);
+}
 .http-dot {
   width: 5px;
   height: 5px;

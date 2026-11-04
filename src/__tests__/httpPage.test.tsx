@@ -39,6 +39,16 @@ const ENTRY: HttpHistoryEntry = {
 
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let holdSends = false;
+let trust: { hash: string | null; count: number; trusted: boolean } = { hash: null, count: 0, trusted: false };
+let answer: HttpResponseView;
+const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseView => ({
+  at: 1,
+  environment: null,
+  outcome: { kind: "response", status: 200, headers: [], url: "http://x", elapsedMs: 5 },
+  body: "ok",
+  size: 2,
+  scripts: { notRun: false, tests: [], console: [], changed: false, ...scripts },
+});
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -46,10 +56,11 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null }]);
     if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
+    if (command === "http_script_trust") return Promise.resolve(trust);
     if (command === "http_collection_new") return Promise.resolve({ id: "c2", file: { info: { name: args!.name }, item: [] }, error: null });
     if (command === "http_send") {
       if (args!.requestId === "r3") return Promise.reject("a formdata body is kept from Postman and not sent yet");
-      return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(null);
+      return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(answer);
     }
     if (command === "http_environment_save") {
       const env = args!.environment as Environment;
@@ -86,6 +97,8 @@ beforeEach(() => {
   localStorage.clear();
   calls = [];
   holdSends = false;
+  trust = { hash: null, count: 0, trusted: false };
+  answer = reported({});
 });
 
 describe("the HTTP page", () => {
@@ -136,7 +149,88 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(window, { code: "Enter", key: "Enter", ...MOD });
     expect(sendButton().disabled).toBe(true);
-    expect(called("http_send")).toEqual([{ collection: "c", requestId: "r2", request: "{{baseUrl}}/health", environment: null }]);
+    await waitFor(() => expect(called("http_send")).toEqual([{ collection: "c", requestId: "r2", request: "{{baseUrl}}/health", environment: null }]));
+  });
+
+  test("the first send of scripts not trusted asks, naming the collection, what they can reach and how many", async () => {
+    trust = { hash: "h1", count: 3, trusted: false };
+    await shown("r2");
+    await act(async () => fireEvent.click(sendButton()));
+    expect((await screen.findByText(/Run the scripts of “Orders API”/)) !== null).toBe(true);
+    expect(screen.getByText(/3 scripts\. A script reads every variable, secrets too/) !== null).toBe(true);
+    fireEvent.keyDown(window, { code: "Enter", key: "Enter", ...MOD });
+    expect(called("http_script_trust").length).toBe(1);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Run scripts" })));
+    await waitFor(() => expect(called("http_script_trust_set")).toEqual([{ collection: "c", hash: "h1" }]));
+  });
+
+  test("the question can be left: Cancel sends nothing, the other button sends without them", async () => {
+    trust = { hash: "h1", count: 1, trusted: false };
+    await shown("r2");
+    await act(async () => fireEvent.click(sendButton()));
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Cancel" })));
+    expect(called("http_send")).toEqual([]);
+    await act(async () => fireEvent.click(sendButton()));
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Send without scripts" })));
+    await waitFor(() => expect(called("http_send").length).toBe(1));
+    expect(called("http_script_trust_set")).toEqual([]);
+  });
+
+  test("scripts that did not run say so, and the note's button asks again", async () => {
+    answer = reported({ notRun: true });
+    await shown("r2");
+    await act(async () => fireEvent.click(sendButton()));
+    expect((await screen.findByText(/The collection's scripts did not run/)) !== null).toBe(true);
+    trust = { hash: "h1", count: 1, trusted: false };
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send with scripts…" })));
+    expect((await screen.findByText(/Run the scripts of/)) !== null).toBe(true);
+  });
+
+  test("the Tests tab counts what failed and shows each test, what stopped the scripts and the console", async () => {
+    answer = reported({
+      tests: [
+        { name: "is ok", passed: true, skipped: false },
+        { name: "has id", passed: false, skipped: false, error: "expected undefined to exist" },
+        { name: "later", passed: false, skipped: true },
+      ],
+      console: [{ level: "warn", text: "slow" }],
+      error: "Script ran out of time",
+    });
+    await shown("r2");
+    await act(async () => fireEvent.click(sendButton()));
+    const tab = await screen.findByRole("tab", { name: /Tests/ });
+    expect(tab.textContent).toContain("2 failed");
+    fireEvent.click(tab);
+    const row = (name: string) => screen.getByText(name).closest("li")?.className ?? "";
+    expect(row("is ok")).toContain("http-test-passed");
+    expect(row("has id")).toContain("http-test-failed");
+    expect(row("later")).toContain("http-test-skipped");
+    expect(screen.getByText("expected undefined to exist") !== null).toBe(true);
+    expect(screen.getByText("Script ran out of time") !== null).toBe(true);
+    expect(screen.getByText("slow").className).toContain("http-console-warn");
+  });
+
+  test("tests that passed are counted; a request with no scripts says so", async () => {
+    answer = reported({ tests: [{ name: "is ok", passed: true, skipped: false }] });
+    await shown("r2");
+    await act(async () => fireEvent.click(sendButton()));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Tests/ }).textContent).toBe("Tests1"));
+    answer = reported({});
+    await act(async () => fireEvent.click(sendButton()));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Tests/ }).textContent).toBe("Tests"));
+    fireEvent.click(screen.getByRole("tab", { name: /Tests/ }));
+    expect(screen.getByText("This request has no scripts.") !== null).toBe(true);
+  });
+
+  test("while a request with scripts is out the page says a script may be waiting; one without says nothing", async () => {
+    holdSends = true;
+    await shown("r1");
+    await act(async () => fireEvent.click(sendButton()));
+    expect((await screen.findByText("Scripts may be waiting…")) !== null).toBe(true);
+    fireEvent.click(screen.getByText("Orders API"));
+    fireEvent.click(screen.getByText("Health"));
+    await act(async () => fireEvent.click(sendButton()));
+    expect(screen.queryByText("Scripts may be waiting…") === null).toBe(true);
   });
 
   test("a deleted request keeps its history, with nothing to open", async () => {

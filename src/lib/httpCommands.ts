@@ -18,6 +18,33 @@ export type HttpOutcome =
     }
   | { kind: "failed"; error: string };
 
+/** `pm.test` and `tests[…]`, as the Tests tab shows them. */
+export interface HttpTestResult {
+  name: string;
+  passed: boolean;
+  skipped: boolean;
+  error?: string;
+}
+
+/** What a send's scripts said, kept with the response. */
+export interface HttpScriptReport {
+  /** The collection has scripts, and they did not run: it is not trusted. */
+  notRun: boolean;
+  tests: HttpTestResult[];
+  console: { level: string; text: string }[];
+  /** A test script that threw or ran out of time. The response stands. */
+  error?: string;
+  /** A variable was written, by this send: the page reads them again. */
+  changed: boolean;
+}
+
+/** Whether a collection's scripts run; `hash` is null when it has none. */
+export interface HttpScriptTrust {
+  hash: string | null;
+  count: number;
+  trusted: boolean;
+}
+
 /** A request's response as the page shows it. `body` is null when it is not text; `size` is its bytes either way. */
 export interface HttpResponseView {
   /** Unix milliseconds. */
@@ -27,6 +54,7 @@ export interface HttpResponseView {
   outcome: HttpOutcome;
   body: string | null;
   size: number;
+  scripts: HttpScriptReport;
 }
 
 /** A collection's Postman file as stored, or why it does not read. */
@@ -34,6 +62,8 @@ export interface HttpCollectionView {
   id: string;
   file: unknown | null;
   error: string | null;
+  /** What scripts wrote to its variables, which lie over the file's. */
+  current: EnvVariable[];
 }
 
 /** One send in the log: the request as it left, a secret masked, and what came back — a body cut at 256 KB. */
@@ -148,6 +178,18 @@ export async function deleteHttpEnvironment(id: string): Promise<void> {
 export async function listHttpHistory(): Promise<HttpHistoryEntry[]> {
   requireBackend();
   return invoke<HttpHistoryEntry[]>("http_history_list");
+}
+
+/** Whether the collection's scripts run, asked before a send. */
+export async function httpScriptTrust(collection: string): Promise<HttpScriptTrust> {
+  requireBackend();
+  return invoke<HttpScriptTrust>("http_script_trust", { collection });
+}
+
+/** Trusts the scripts `hash` names; rejects when they have changed since. */
+export async function trustHttpScripts(collection: string, hash: string): Promise<void> {
+  requireBackend();
+  await invoke("http_script_trust_set", { collection, hash });
 }
 
 /** A pasted `curl …` as a Postman `request` object; rejects with what it could not read. */
