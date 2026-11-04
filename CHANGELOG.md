@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
+
 - 2026-11-03 The terminal opens under the message box, as wide as the chat, and keeps the height it was dragged to; Overview's Background and Agent turns cards still open it on the background processes and the helper agents
 - 2026-11-02 Renaming a provider renames it: a save under another name no longer leaves the old one beside it, and the key and the pin come along instead of a second `alfagen` beside `alfagen-2`
 - 2026-11-03 New app icon, with a transparent background around its rounded square; the empty Agent and Chat screens carry the "kibo" wordmark instead of the pixel dog head — the logo's own orange in every theme, its letters in the theme's ink
