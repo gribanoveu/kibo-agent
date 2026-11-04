@@ -198,6 +198,15 @@ describe("the resize handle", () => {
     }
     expect(ends).toEqual([111, 333, 222]);
   });
+
+  /// The pointer stays the handle's for the whole drag — released outside the
+  /// window too — so a drag is never left half-finished, the resize cursor on.
+  test("holds the pointer for the whole drag", () => {
+    render(<PanelResizeHandle ariaLabel="beside" onResize={() => {}} onResizeEnd={() => {}} />);
+    const handle = screen.getByRole("separator", { name: "beside" });
+    fireEvent.pointerDown(handle, { pointerId: 3, clientX: 10 });
+    expect(handle.hasPointerCapture(3)).toBe(true);
+  });
 });
 
 describe("the columns", () => {

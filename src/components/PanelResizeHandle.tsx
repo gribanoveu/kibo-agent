@@ -85,6 +85,13 @@ export function PanelResizeHandle({
 
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    // A panel may hold a frame of its own — a prototype's page in the preview,
+    // a rendered file in the viewer's place — and a frame hears the pointer
+    // for the page in it, not this document: the drag would stop the moment
+    // the cursor crossed in, and its pointerup would be lost with it, leaving
+    // the resize cursor on the window. Captured, every move of this drag comes
+    // back here, over the page too.
+    event.currentTarget.setPointerCapture(event.pointerId);
     last.current = axisRef.current === "y" ? event.clientY : event.clientX;
     activeRef.current = true;
     setActive(true);

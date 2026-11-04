@@ -47,3 +47,10 @@ body.is-resizing .sidebar,
 body.is-resizing .dock-column {
   transition: none;
 }
+
+/* A panel's own frame — a prototype's page — hears the pointer for the page in
+   it, not for this window: a drag that crossed into one would stop at its edge
+   and take the pointerup with it, the resize cursor left on the window. */
+body.is-resizing iframe {
+  pointer-events: none;
+}

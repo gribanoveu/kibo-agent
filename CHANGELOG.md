@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-04 A panel that holds a page of its own — a prototype in the preview — drags by its edge again: the page inside no longer takes the pointer for itself, which stopped the drag at the panel's edge and left the resize cursor on the window
 - 2026-11-04 Installing a server from the catalog asks for its `${NAME}` secrets on a step of their own, after the entry it is about to write — the dialog only has that step when there is something to fill
 - 2026-11-04 An MCP server installs from a screen of its own: paste the JSON its README prints and the fields fill in — a paste that holds several servers lists them to choose from, and a name already in mcp.json is replaced where it stands — the fields sit in two columns, a step of their own says how the model reaches the server's tools and what happens to its results, and the last shows the entry that goes into the file, secrets already in place, before it does — a new server's tools are found with toolSearch until you say otherwise — and the name shows the prefix its tools will get, `mcp__name__tool`, with a warning when another server in the file already has it, and a word when nothing of the name survives it — Cyrillic is not typed into the name at all — and a `${NAME}` in its env or headers is asked for on a step of its own, as the catalog does, and written into the file in its place, nowhere else
 - 2026-11-04 Overview no longer carries an Agent turns card: what is running and what ended is under Background, and a chat's helper agents are still listed in the Terminal's Agents tab
