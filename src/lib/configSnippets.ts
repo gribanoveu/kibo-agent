@@ -88,7 +88,7 @@ export type Json = Record<string, unknown>;
 export const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** A snippet as READMEs print it: a whole object, or just `"name": {…},` cut out of one. */
-function parseLoose(text: string): unknown {
+export function parseLoose(text: string): unknown {
   const trimmed = text.trim().replace(/,$/, "");
   for (const candidate of [trimmed, `{${trimmed}}`]) {
     try {
@@ -112,6 +112,23 @@ export function parseFile(text: string): Json | null {
 
 export const stringify = (file: Json) => `${JSON.stringify(file, null, 2)}\n`;
 
+/**
+ * The servers a pasted snippet holds, by name: `{"mcpServers": {…}}`, a bare
+ * `{"github": {…}}`, or one entry with no name of its own. `unnamed` is that
+ * last one — the file's paste has no place for it, and the install screen asks
+ * for the name it lacks.
+ */
+export function snippetServers(snippet: unknown): { servers: Json; unnamed: boolean } | null {
+  if (!isObject(snippet)) return null;
+  if (isObject(snippet.mcpServers)) return { servers: snippet.mcpServers, unnamed: false };
+  const values = Object.values(snippet);
+  if (values.length > 0 && values.every((v) => isObject(v) && ("command" in v || "url" in v))) {
+    return { servers: snippet, unnamed: false };
+  }
+  if ("command" in snippet || "url" in snippet) return { servers: { "": snippet }, unnamed: true };
+  return null;
+}
+
 export type Merged = { text: string; message: string };
 
 /**
@@ -120,16 +137,13 @@ export type Merged = { text: string; message: string };
  * name is replaced, and the message says so. Anything else is not a snippet.
  */
 export function mergeMcp(current: string, pasted: string): Merged | null {
-  const snippet = parseLoose(pasted);
-  if (!isObject(snippet)) return null;
-  const servers = isObject(snippet.mcpServers)
-    ? snippet.mcpServers
-    : Object.values(snippet).every((v) => isObject(v) && ("command" in v || "url" in v))
-      ? snippet
-      : null;
-  const names = Object.keys(servers ?? {});
+  const found = snippetServers(parseLoose(pasted));
   const file = parseFile(current);
-  if (!servers || names.length === 0 || !file) return null;
+  // An entry with no name of its own has no name to go under in the file.
+  if (!found || found.unnamed || !file) return null;
+  const { servers } = found;
+  const names = Object.keys(servers);
+  if (names.length === 0) return null;
 
   const existing = isObject(file.mcpServers) ? file.mcpServers : {};
   const replaced = names.filter((name) => name in existing);

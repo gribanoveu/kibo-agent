@@ -338,6 +338,10 @@ pre.catalog-detail-text {
   font-size: var(--fs-md);
   line-height: 1.5;
 }
+/* The install dialog's step strip, at the same distance as the text below. */
+.catalog-install-steps {
+  margin-bottom: 12px;
+}
 
 /* The install dialog's server entry: short, but a long one scrolls rather than pushing Install off. */
 pre.catalog-server-entry {

@@ -1,0 +1,46 @@
+/* The steps of a dialog, one look for every screen that has them: a strip,
+   not a list down the side — the work goes left to right. */
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.step[aria-current="step"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.step:disabled {
+  cursor: default;
+}
+.step-num {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.step[aria-current="step"] .step-num {
+  background: var(--accent);
+  color: var(--bg-panel);
+}

@@ -53,7 +53,8 @@ import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
-import { McpServerForm, HookForm } from "./components/ConfigEntryForm";
+import { HookForm } from "./components/ConfigEntryForm";
+import { McpInstall } from "./components/McpInstall";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
@@ -159,9 +160,6 @@ export default function App() {
   // Which background process a chat row asked the Terminal tab to show — `null`
   // for the list. The row and the tab are in different subtrees, so it passes through here.
   const [processFocus, setProcessFocus] = useState<{ id: number | null } | null>(null);
-  // Overview's Agent turns card asked for the helper agents. An empty ask, a new
-  // object each time, so the same one is never taken twice.
-  const [agentsFocus, setAgentsFocus] = useState<object | null>(null);
   // The helper run opened in a sheet over the chat, with the chat it is from:
   // another chat's sheet is not drawn over this one.
   const [agentShown, setAgentShown] = useState<{ run: AgentFocus; chatId: string | null } | null>(null);
@@ -540,17 +538,9 @@ export default function App() {
   };
   // A chat row, Overview or the Agents tab: the run opens over the chat.
   const openAgent = (run: AgentFocus) => setAgentShown({ run, chatId: agent.chatId });
-  // Overview's Agent turns card: the Terminal, on its helpers.
-  const openAgents = () => {
-    openTab("terminal");
-    setAgentsFocus({});
-  };
   // Held only till Terminal takes it, as `terminalPaste` is: the pane is drawn
   // anew each time it opens, and an ask still held would be taken again.
-  const focusTaken = useCallback(() => {
-    setProcessFocus(null);
-    setAgentsFocus(null);
-  }, []);
+  const focusTaken = useCallback(() => setProcessFocus(null), []);
 
   // What every pane is drawn from, whichever dock it sits in.
   const panes: Omit<PaneContext, "active"> = {
@@ -559,7 +549,6 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     processFocus,
-    agentsFocus,
     chatId: agent.chatId,
     onOpenAgent: openAgent,
     onFocusTaken: focusTaken,
@@ -599,12 +588,10 @@ export default function App() {
       changes: changeTotals,
       context: agent.context,
       usage: agent.turn.usage,
-      activeTurns: activities.filter((activity) => activity === "running" || activity === "awaitingApproval").length,
       spent: agent.spent,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
-      onOpenAgents: openAgents,
       onOpenAgent: openAgent,
       onOpenPanel: openTab,
     },
@@ -733,7 +720,9 @@ export default function App() {
             />
           )}
           {bottomPane}
-          {agentShown && agentShown.chatId === agent.chatId && <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} />}
+          {agentShown && agentShown.chatId === agent.chatId && (
+            <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
+          )}
         </>
       ) : (
         <PlainChat
@@ -1032,15 +1021,16 @@ export default function App() {
 
       <Modal
         title={mcpDialog === "json" || mcpDialog === null ? "MCP servers" : mcpDialog.entry ?? "Add an MCP server"}
-        wide={mcpDialog === "json"}
+        wide
         open={mcpEditing}
         onClose={() => setMcpDialog(null)}
       >
         {mcpDialog !== null && mcpDialog !== "json" ? (
-          <McpServerForm
+          <McpInstall
             key={mcpDialog.entry ?? ""}
             name={mcpDialog.entry}
             text={mcp.view?.text}
+            path={mcp.view?.path ?? ""}
             error={mcp.error}
             onSave={mcp.save}
             onClose={() => setMcpDialog(null)}

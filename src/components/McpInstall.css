@@ -1,0 +1,185 @@
+.mcp-install {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mcp-install-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mcp-install-text {
+  width: 100%;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+.mcp-install-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-install-found {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-install-found-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-install-found-row:hover {
+  border-color: var(--accent);
+}
+.mcp-install-found-row span {
+  overflow: hidden;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Two columns: how it runs on the left, what the agent gets on the right. */
+.mcp-install-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: 20px;
+}
+.mcp-install-col {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+.mcp-install-head {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.mcp-install-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+/* The tool prefix the typed name makes, under the field it comes from. */
+.mcp-install-key {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.mcp-install-key-tool {
+  color: var(--text-faint);
+}
+.mcp-install-warn {
+  margin: 0;
+  color: var(--amber);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+/* One per line, and tall enough for a few of them: the height is the same on
+   every step, so a longer list scrolls instead of pushing the columns about. */
+.mcp-install-area {
+  height: 96px;
+  resize: vertical;
+}
+/* A choice with the reason for it: three ways to reach a server's tools, two
+   things to do with its results. */
+.mcp-install-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-install-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-install-choice:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+/* Outlined alone read as one more button beside the others: the chosen one is
+   filled. */
+.mcp-install-choice.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+.mcp-install-choice-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.mcp-install-choice-text {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.mcp-install-choice.active .mcp-install-choice-text {
+  color: var(--text-dim);
+}
+/* One password field per `${NAME}` the entry holds, at the review. */
+.mcp-install-secrets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mcp-install-secrets .entry-field {
+  min-width: 200px;
+}
+.mcp-install-entry {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.mcp-install-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-install-json {
+  margin-left: auto;
+}
+/* The dialog is `min(880px, 100%)`, so the columns only have their 880 px
+   while the window is at least ~920 px wide: below that they go one under the
+   other. */
+@media (max-width: 920px) {
+  .mcp-install-columns {
+    grid-template-columns: 1fr;
+  }
+}
