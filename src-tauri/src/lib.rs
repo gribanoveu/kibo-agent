@@ -253,6 +253,8 @@ pub fn run() {
             commands::http::http_environment_save,
             commands::http::http_environment_delete,
             commands::http::http_history_list,
+            commands::http::http_script_trust,
+            commands::http::http_script_trust_set,
             commands::http::http_parse_curl,
             commands::artifacts::artifact_list,
             commands::artifacts::artifact_free_space,

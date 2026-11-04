@@ -10,14 +10,18 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::http_client::{Environment, HistoryEntry, HttpError, ResponseView, SavedResponse, Scope, Variable};
+use crate::domain::http_client::{Environment, HistoryEntry, HttpError, Outcome, Prepared, ResponseView, SavedResponse, Scope, Variable};
+use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, Collection, Imported};
-use crate::infra::{http_agent, http_client, http_collections, http_env_store};
+use crate::infra::postman_sandbox::{Ran, Sandbox, LIMITS};
+use crate::infra::{http_agent, http_client, http_collections, http_env_store, settings_store};
 
 /// Sends a collection's request — `edited`, the page's unsaved `request`, in
 /// place of the stored one — into `environment`. What came back is on disk, as
 /// the request's last response and in history, before the window gets it.
-/// A variable found nowhere fails here, before anything is sent.
+/// A variable found nowhere fails here, before anything is sent. So does a
+/// pre-request script that fails: what it was for — a token, say — did not happen.
+/// What scripts wrote is kept either way.
 pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, environment: Option<&str>) -> Result<ResponseView, HttpError> {
     let mut collection = http_collections::get(collection_id)?;
     if let Some(edited) = edited {
@@ -25,27 +29,213 @@ pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, enviro
         item.insert("request".into(), edited);
     }
     let environment = environment.map(http_env_store::get).transpose()?;
-    let globals = http_env_store::globals()?;
-    let variables = collection.variables();
-    let own = environment.as_ref().map(|e| e.variables.as_slice()).unwrap_or_default();
-    let scope = Scope::new(&[&globals, &variables, own]);
-    let prepared = collection.prepare(request_id, &scope)?;
+    let values = http_env_store::collection_values()?;
+    let before = ScriptVars {
+        globals: http_env_store::globals()?,
+        collection: overlaid(collection.variables(), values.get(collection_id).map(Vec::as_slice).unwrap_or_default()),
+        environment: environment.as_ref().map(|e| e.variables.clone()).unwrap_or_default(),
+        local: Vec::new(),
+    };
+    let mut report = ScriptReport::default();
+    let mut scripts = Scripts::new(&collection, collection_id, request_id, environment.as_ref(), before.clone(), &mut report)?;
+    let sent = exchange(&mut collection, collection_id, request_id, environment.as_ref(), &mut scripts);
+    let mask = scripts.mask();
+    let after = scripts.vars;
+    match write_variables(&before, &after, collection_id, environment.as_ref()) {
+        Ok(changed) => report.changed = changed,
+        Err(e) => {
+            report.error.get_or_insert(format!("What the scripts wrote was not kept: {e}"));
+        }
+    }
+    let sent = sent.map_err(|e| match e {
+        HttpError::Script(why) => HttpError::Script(mask.hide(&why)),
+        other => other,
+    })?;
+    save(collection_id, request_id, sent, report.hidden(&mask))
+}
 
+/// A request through its scripts, and what came back with its secrets hidden.
+fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, environment: Option<&Environment>, scripts: &mut Scripts) -> Result<Sent, HttpError> {
+    // The last to start, not the last past its scripts: one can wait a minute there.
     let key = format!("{collection_id}/{request_id}");
     let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
     latest().insert(key.clone(), ticket);
-    let (outcome, body) = http_client::send(&prepared.sent, environment.as_ref().and_then(|e| e.trusted_cert.as_deref()));
-    let outcome = outcome.hidden(&scope);
+    scripts.before_sending(collection, request_id)?;
+    let prepared = collection.prepare(request_id, &scripts.vars.scope())?;
+    let (outcome, body) = http_client::send(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
     let at = chrono::Utc::now().timestamp_millis();
-    let name = environment.map(|e| e.name);
+    let name = environment.map(|e| e.name.clone());
     let written = collection.written_url(request_id).unwrap_or_default();
-    // The request went out: a store that fails now must not hide what came back.
-    let mut entry = HistoryEntry::new(at, name.clone(), None, written, &prepared, outcome.clone(), &body);
-    entry.request_id = Some(request_id.into());
+    remember(at, name.clone(), written, Some(request_id), &prepared, &outcome, &body, &scripts.mask());
+    scripts.after_response(&prepared, &outcome, &body);
+    // What the test scripts learned counts too: a token they stored is a secret's value.
+    let outcome = outcome.hidden(&scripts.mask());
+    Ok(Sent { key, ticket, saved: SavedResponse { at, environment: name, outcome, body, scripts: ScriptReport::default() } })
+}
+
+/// A request that went out, on its way to the store.
+struct Sent {
+    key: String,
+    ticket: u64,
+    saved: SavedResponse,
+}
+
+/// A store that fails now must not hide what came back: the request went out.
+#[allow(clippy::too_many_arguments)]
+fn remember(at: i64, environment: Option<String>, written: String, request_id: Option<&str>, prepared: &Prepared, outcome: &Outcome, body: &[u8], scope: &Scope) {
+    let mut entry = HistoryEntry::new(at, environment, None, scope.hide(&written), &prepared.hidden(scope), outcome.clone().hidden(scope), body);
+    entry.request_id = request_id.map(str::to_string);
     if let Err(e) = http_collections::record(entry) {
         eprintln!("http: a send not written to history: {e}");
     }
-    let saved = SavedResponse { at, environment: name, outcome, body };
+}
+
+/// Whether a variable was written.
+fn write_variables(before: &ScriptVars, after: &ScriptVars, collection_id: &str, environment: Option<&Environment>) -> Result<bool, HttpError> {
+    let (globals, values, own) = (changes(&before.globals, &after.globals), changes(&before.collection, &after.collection), changes(&before.environment, &after.environment));
+    let own = environment.map(|e| (e.id.as_str(), own.as_slice())).filter(|(_, c)| !c.is_empty());
+    if globals.is_empty() && values.is_empty() && own.is_none() {
+        return Ok(false);
+    }
+    http_env_store::write_changes(own, &globals, (collection_id, &values))?;
+    Ok(true)
+}
+
+/// A send's scripts: none, when the collection has none or is not trusted.
+struct Scripts<'a> {
+    /// The variables as the send found them, and as the scripts have left them.
+    start: ScriptVars,
+    vars: ScriptVars,
+    report: &'a mut ScriptReport,
+    environment: Option<&'a Environment>,
+    /// What runs before the request and after it, in order.
+    before: Vec<String>,
+    after: Vec<String>,
+    sandbox: Option<Sandbox>,
+    name: String,
+}
+
+impl<'a> Scripts<'a> {
+    fn new(collection: &Collection, id: &str, request_id: &str, environment: Option<&'a Environment>, vars: ScriptVars, report: &'a mut ScriptReport) -> Result<Scripts<'a>, HttpError> {
+        let digest = collection.scripts_digest();
+        let trusted = digest.as_ref().is_some_and(|d| is_trusted(id, &d.hash));
+        report.not_run = digest.is_some() && !trusted;
+        let (before, after) = if trusted { (collection.scripts(request_id, "prerequest")?, collection.scripts(request_id, "test")?) } else { Default::default() };
+        let name = collection.item_name(request_id).unwrap_or_default();
+        Ok(Scripts { start: vars.clone(), vars, report, environment, before, after, sandbox: None, name })
+    }
+
+    fn mask(&self) -> Scope {
+        ScriptVars::mask(&[&self.start, &self.vars])
+    }
+
+    /// One script over the variables as the last one left them.
+    fn run(&mut self, listen: &str, code: &str, request: &Value, response: Option<&Value>) -> Result<Ran, HttpError> {
+        if self.sandbox.is_none() {
+            self.sandbox = Some(Sandbox::boot(LIMITS)?);
+        }
+        let (scope, mask) = (self.vars.scope(), self.mask());
+        let environment = self.environment;
+        let context = self.vars.context(request, response);
+        let sandbox = self.sandbox.as_ref().expect("booted above");
+        let ran = sandbox.run(listen, code, &self.name, context, &mut |sub| sub_request(sub, &scope, &mask, environment))?;
+        self.vars.absorb(&ran.result);
+        self.report.tests.extend(ran.tests.iter().cloned());
+        self.report.console.extend(ran.console.iter().cloned());
+        Ok(ran)
+    }
+
+    /// The pre-request scripts, each changing the request the next one gets.
+    fn before_sending(&mut self, collection: &mut Collection, request_id: &str) -> Result<(), HttpError> {
+        for code in std::mem::take(&mut self.before) {
+            let item = collection.item_mut(request_id).ok_or_else(|| HttpError::NoSuchItem(request_id.into()))?;
+            let request = item.get("request").cloned().unwrap_or_default();
+            let ran = self.run("prerequest", &code, &request_for_script(&request), None)?;
+            if let Some(after) = ran.result.get("request") {
+                item.insert("request".into(), request_after(&request, after));
+            }
+            if let Some(error) = ran.error {
+                return Err(HttpError::Script(format!("A pre-request script failed, and nothing was sent: {error}")));
+            }
+            if ran.skip_request {
+                return Err(HttpError::Script("A pre-request script skipped the request.".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// The test scripts, when there is a response to test. One that fails is said
+    /// beside the response, which stands; the rest still run, as in Postman.
+    fn after_response(&mut self, prepared: &Prepared, outcome: &Outcome, body: &[u8]) {
+        let Outcome::Response { status, headers, elapsed_ms, .. } = outcome else { return };
+        let (request, response) = (request_sent(&prepared.sent), response_for(*status, headers, body, *elapsed_ms));
+        for code in std::mem::take(&mut self.after) {
+            match self.run("test", &code, &request, Some(&response)) {
+                Ok(ran) => {
+                    if let Some(error) = ran.error {
+                        self.report.error.get_or_insert(error);
+                    }
+                }
+                // Past a limit the sandbox is not used again.
+                Err(e) => {
+                    self.report.error = Some(e.to_string());
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// `pm.sendRequest`: the same sender and the same history as the page's own requests.
+fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option<&Environment>) -> Result<Value, HttpError> {
+    let request = request_after(&Value::Null, request);
+    let written = request.get("url").map(|u| u.get("raw").unwrap_or(u)).and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut one = Collection::new("sub-request", "sub-request");
+    one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request}))?;
+    let prepared = one.prepare("sub-request", scope)?;
+    let (outcome, body) = http_client::send(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
+    let at = chrono::Utc::now().timestamp_millis();
+    remember(at, environment.map(|e| e.name.clone()), written, None, &prepared, &outcome, &body, mask);
+    match outcome {
+        Outcome::Response { status, headers, elapsed_ms, .. } => Ok(response_for(status, &headers, &body, elapsed_ms)),
+        Outcome::Failed { error } => Err(HttpError::Script(error)),
+    }
+}
+
+/// Settings that cannot be read trust nothing.
+fn is_trusted(collection: &str, hash: &str) -> bool {
+    settings_store::load().unwrap_or_default().http_script_trust.get(collection).is_some_and(|trusted| trusted == hash)
+}
+
+/// Whether a collection's scripts run, for the window to ask before the first send.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptTrust {
+    /// Of the scripts as they are now; none when there are none to trust.
+    pub hash: Option<String>,
+    pub count: usize,
+    pub trusted: bool,
+}
+
+pub fn script_trust(collection: &str) -> Result<ScriptTrust, HttpError> {
+    let digest = http_collections::get(collection)?.scripts_digest();
+    let trusted = digest.as_ref().is_some_and(|d| is_trusted(collection, &d.hash));
+    Ok(digest.map_or(ScriptTrust { hash: None, count: 0, trusted: false }, |d| ScriptTrust { hash: Some(d.hash), count: d.count, trusted }))
+}
+
+/// Trust in the scripts the window showed: `hash` is theirs, so an import that
+/// changed them since is not trusted by an answer about the old ones.
+pub fn trust_scripts(collection: &str, hash: &str) -> Result<(), HttpError> {
+    if http_collections::get(collection)?.scripts_digest().is_none_or(|d| d.hash != hash) {
+        return Err(HttpError::Script("The collection's scripts changed — look at them again.".into()));
+    }
+    settings_store::update(|s| s.http_script_trust.insert(collection.to_string(), hash.to_string())).map_err(|e| HttpError::Store(e.to_string()))?;
+    Ok(())
+}
+
+fn save(collection_id: &str, request_id: &str, sent: Sent, report: ScriptReport) -> Result<ResponseView, HttpError> {
+    let Sent { key, ticket, saved } = sent;
+    let saved = SavedResponse { scripts: report, ..saved };
     // Held through the write, so a later send that ends first is not overwritten by this one.
     let latest = latest();
     if latest.get(&key) == Some(&ticket) {
@@ -108,6 +298,8 @@ pub struct CollectionView {
     pub id: String,
     pub file: Option<Value>,
     pub error: Option<String>,
+    /// What scripts wrote to its variables, which lie over the file's.
+    pub current: Vec<Variable>,
 }
 
 /// Every collection, as the page opens — when the responses of requests no
@@ -120,11 +312,23 @@ pub fn collections() -> Result<Vec<CollectionView>, HttpError> {
     if let Err(e) = http_collections::prune_responses(&known) {
         eprintln!("http: saved responses not pruned: {e}");
     }
+    // Sealed apart: a store that does not open must not take the collections with it.
+    let mut values = http_env_store::collection_values().unwrap_or_else(|e| {
+        eprintln!("http: script values not read: {e}");
+        Default::default()
+    });
     Ok(all
         .into_iter()
-        .map(|(id, collection)| match collection {
-            Ok(c) => CollectionView { id, file: Some(c.json().clone()), error: None },
-            Err(e) => CollectionView { id, file: None, error: Some(e.to_string()) },
+        .map(|(id, collection)| {
+            let current = values.remove(&id).unwrap_or_default();
+            match collection {
+                Ok(c) => {
+                    let mine = c.variables();
+                    let shown = current.iter().map(|v| Variable { secret: mine.iter().any(|m| m.key == v.key && m.secret), ..v.clone() }.for_window()).collect();
+                    CollectionView { id, file: Some(c.json().clone()), error: None, current: shown }
+                }
+                Err(e) => CollectionView { id, file: None, error: Some(e.to_string()), current: Vec::new() },
+            }
         })
         .collect())
 }
@@ -133,7 +337,7 @@ pub fn new_collection(name: &str) -> Result<CollectionView, HttpError> {
     let id = uuid::Uuid::new_v4().to_string();
     let collection = Collection::new(&id, name);
     http_collections::save(&id, &collection)?;
-    Ok(CollectionView { id, file: Some(collection.json().clone()), error: None })
+    Ok(CollectionView { id, file: Some(collection.json().clone()), error: None, current: Vec::new() })
 }
 
 /// Held while a collection file is written or deleted.
@@ -156,7 +360,10 @@ fn change<T>(id: &str, edit: impl FnOnce(&mut Collection) -> Result<T, HttpError
 /// Under the edits' lock: one that read the file before would write it back after.
 pub fn delete_collection(id: &str) -> Result<(), HttpError> {
     let _held = writing();
-    http_collections::delete(id)
+    http_collections::delete(id)?;
+    http_env_store::forget_collection(id)?;
+    settings_store::update(|s| s.http_script_trust.remove(id)).map_err(|e| HttpError::Store(e.to_string()))?;
+    Ok(())
 }
 
 /// The page's edit of a request, the rest of the file as it was.
@@ -273,7 +480,7 @@ mod tests {
         with_app_dir("http-prune", || {
             let ImportedAs::Collection { id, .. } = import(PROBE).unwrap() else { panic!("a collection") };
             let request = http_collections::get(&id).unwrap().request_ids()[0].clone();
-            let saved = SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: "x".into() }, body: Vec::new() };
+            let saved = SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: "x".into() }, body: Vec::new(), scripts: Default::default() };
             http_collections::save_response(&id, &request, &saved).unwrap();
             http_collections::save_response(&id, "removed-request", &saved).unwrap();
             http_collections::save_response("removed-collection", "r", &saved).unwrap();
@@ -358,7 +565,7 @@ mod tests {
             add_item(&id, None, json!({"id": "f", "name": "F", "item": []})).unwrap();
             add_item(&id, Some("f"), json!({"id": "in", "name": "In", "request": {"url": "/a"}})).unwrap();
             add_item(&id, None, json!({"id": "out", "name": "Out", "request": {"url": "/b"}})).unwrap();
-            let saved = SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: "x".into() }, body: Vec::new() };
+            let saved = SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: "x".into() }, body: Vec::new(), scripts: Default::default() };
             http_collections::save_response(&id, "in", &saved).unwrap();
             http_collections::save_response(&id, "out", &saved).unwrap();
             delete_item(&id, "f").unwrap();
@@ -454,6 +661,36 @@ mod tests {
             "variable": [{"key": "sum", "value": "0"}]
         });
         http_collections::add(&Collection::parse(&collection.to_string()).unwrap()).unwrap()
+    }
+
+    fn event(listen: &str, code: &str) -> Value {
+        json!({"listen": listen, "script": {"type": "text/javascript", "exec": code.lines().collect::<Vec<_>>()}})
+    }
+
+    /// A collection with scripts at each level: `events` on the collection, the
+    /// folder and the request, in that order.
+    fn scripted(on_collection: Vec<Value>, on_folder: Vec<Value>, on_request: Vec<Value>) -> String {
+        let collection = json!({
+            "info": {"name": "Scripted", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "folder", "name": "Folder", "event": on_folder, "item": [
+                {"id": "order", "name": "Order", "event": on_request, "request": {"method": "POST", "url": {"raw": "{{baseUrl}}/orders"}, "body": {"mode": "raw", "raw": "{}"}}},
+            ]}],
+            "event": on_collection,
+            "variable": [{"key": "fromFile", "value": "file"}, {"key": "apiKey", "value": "", "type": "secret"}],
+        });
+        http_collections::add(&Collection::parse(&collection.to_string()).unwrap()).unwrap()
+    }
+
+    fn trust(id: &str) {
+        trust_scripts(id, &script_trust(id).unwrap().hash.unwrap()).unwrap();
+    }
+
+    fn env_value(key: &str) -> Option<String> {
+        http_env_store::get("stage").unwrap().variables.into_iter().find(|v| v.key == key).map(|v| v.value)
+    }
+
+    fn global(key: &str) -> Option<String> {
+        http_env_store::globals().unwrap().into_iter().find(|v| v.key == key).map(|v| v.value)
     }
 
     fn stage(base: String) -> String {
@@ -611,6 +848,384 @@ mod tests {
             assert_eq!(send(&collection, "order", None, Some("gone")), Err(HttpError::NoEnvironment("gone".into())));
             assert_eq!(last_response(&collection, "order").unwrap(), None);
             assert!(http_collections::history().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_script_that_changes_a_header_changes_what_is_sent() {
+        with_app_dir("http-script-header", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.request.headers.add({key: 'X-Trace', value: pm.environment.get('baseUrl').length + ''});\npm.request.url.addQueryParams('from=script');\npm.request.body.update('{\"changed\":1}');")]);
+            trust(&id);
+            let base = format!("http://127.0.0.1:{port}");
+            let length = base.len();
+            stage(base);
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(view.scripts.error, None);
+            assert!(matches!(view.outcome, Outcome::Response { .. }), "{:?}", view.outcome);
+            let wire = wire(&seen);
+            assert!(wire.contains(&format!("x-trace: {length}")) || wire.contains(&format!("X-Trace: {length}")), "{wire}");
+            assert!(wire.starts_with("POST /orders?from=script "), "{wire}");
+            assert!(wire.ends_with("{\"changed\":1}"), "{wire}");
+        });
+    }
+
+    #[test]
+    fn scripts_run_collection_folder_request_and_each_sees_the_last_ones_writes() {
+        with_app_dir("http-script-order", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            let step = |name: &str| format!("pm.globals.set('order', (pm.globals.get('order') || '') + '{name}');");
+            let id = scripted(
+                vec![event("prerequest", &step("c")), event("test", &step("C"))],
+                vec![event("prerequest", &step("f")), event("test", &step("F"))],
+                vec![event("prerequest", &step("r")), event("test", &step("R"))],
+            );
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(global("order").as_deref(), Some("cfrCFR"));
+        });
+    }
+
+    #[test]
+    fn without_trust_no_script_runs_and_a_changed_script_asks_again() {
+        with_app_dir("http-script-trust", || {
+            let (port, _seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.globals.set('ran', 'yes');")]);
+            stage(format!("http://127.0.0.1:{port}"));
+
+            let status = script_trust(&id).unwrap();
+            assert_eq!((status.count, status.trusted), (1, false));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert!(view.scripts.not_run);
+            assert_eq!(global("ran"), None, "the request went without its script");
+
+            trust(&id);
+            assert!(script_trust(&id).unwrap().trusted);
+            assert!(!send(&id, "order", None, Some("stage")).unwrap().scripts.not_run);
+            assert_eq!(global("ran").as_deref(), Some("yes"));
+
+            let old = script_trust(&id).unwrap().hash.unwrap();
+            change(&id, |c| {
+                let item = c.item_mut("order").unwrap();
+                item.insert("event".into(), json!([event("prerequest", "pm.globals.set('ran', 'changed');")]));
+                Ok(())
+            })
+            .unwrap();
+            assert!(!script_trust(&id).unwrap().trusted, "another script, another answer");
+            assert!(send(&id, "order", None, Some("stage")).unwrap().scripts.not_run);
+            assert_eq!(global("ran").as_deref(), Some("yes"));
+            assert!(trust_scripts(&id, &old).is_err(), "an answer about the old scripts is no answer about these");
+        });
+    }
+
+    #[test]
+    fn a_collection_with_no_scripts_has_nothing_to_trust() {
+        with_app_dir("http-script-none", || {
+            let id = shop();
+            assert_eq!(script_trust(&id).unwrap(), ScriptTrust { hash: None, count: 0, trusted: false });
+            assert!(trust_scripts(&id, "anything").is_err());
+        });
+    }
+
+    #[test]
+    fn what_scripts_write_outlives_the_send_and_stays_out_of_the_collections_file() {
+        with_app_dir("http-script-vars", || {
+            let (port, _seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
+            let code = "pm.globals.set('access_token', 't-1');\npm.environment.set('seen', pm.collectionVariables.get('fromFile'));\npm.collectionVariables.set('fromFile', 'script');\npm.collectionVariables.set('token', 'c-1');\npm.variables.set('local', 'gone');\npm.environment.unset('baseUrl2');";
+            let id = scripted(vec![], vec![], vec![event("prerequest", code)]);
+            trust(&id);
+            let file = http_collections::get(&id).unwrap().json().clone();
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+
+            assert!(view.scripts.changed);
+            assert_eq!(global("access_token").as_deref(), Some("t-1"));
+            assert_eq!(env_value("seen").as_deref(), Some("file"));
+            assert_eq!(env_value("local"), None);
+            assert_eq!(http_collections::get(&id).unwrap().json(), &file, "the file is as it came");
+            let listed = collections().unwrap().into_iter().find(|c| c.id == id).unwrap();
+            assert_eq!(listed.current.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect::<Vec<_>>(), vec![("fromFile", "script"), ("token", "c-1")]);
+
+            // The next send reads what this one wrote.
+            change(&id, |c| {
+                c.item_mut("order").unwrap().insert("event".into(), json!([event("prerequest", "pm.environment.set('again', pm.collectionVariables.get('token') + pm.globals.get('access_token'));")]));
+                Ok(())
+            })
+            .unwrap();
+            trust(&id);
+            send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(env_value("again").as_deref(), Some("c-1t-1"));
+
+            delete_collection(&id).unwrap();
+            assert!(!http_env_store::collection_values().unwrap().contains_key(&id));
+            assert!(!settings_store::load().unwrap().http_script_trust.contains_key(&id));
+        });
+    }
+
+    #[test]
+    fn a_script_that_writes_nothing_says_so() {
+        with_app_dir("http-script-quiet", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.environment.set('baseUrl', pm.environment.get('baseUrl'));")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            assert!(!send(&id, "order", None, Some("stage")).unwrap().scripts.changed);
+        });
+    }
+
+    #[test]
+    fn send_request_goes_out_and_into_history_with_a_secret_masked() {
+        with_app_dir("http-script-sub", || {
+            let token = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{\"access_token\":\"x\"}";
+            let (port, seen) = serve(vec![reply(token), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
+            let code = "pm.request.headers.add({key: 'X-Own', value: pm.environment.get('token')});\npm.sendRequest({url: pm.environment.get('baseUrl') + '/token?k=' + pm.environment.get('token'), method: 'POST', header: {'X-Key': pm.environment.get('token')}, body: {mode: 'urlencoded', urlencoded: [{key: 'grant_type', value: 'client_credentials'}]}}, (err, res) => { pm.globals.set('access_token', res.json().access_token); });";
+            let id = scripted(vec![], vec![], vec![event("prerequest", code)]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            send(&id, "order", None, Some("stage")).unwrap();
+
+            let first = wire(&seen);
+            assert!(first.starts_with("POST /token?k=s3cr3t-t0k "), "{first}");
+            assert!(first.ends_with("grant_type=client_credentials"), "{first}");
+            assert!(wire(&seen).starts_with("POST /orders "));
+            assert_eq!(global("access_token").as_deref(), Some("x"));
+
+            let history = http_collections::history().unwrap();
+            assert_eq!(history.len(), 2);
+            let sub = history.iter().find(|h| h.request_id.is_none()).expect("the script's own request is in history");
+            assert!(sub.request.url.ends_with("/token?k=•••"), "{}", sub.request.url);
+            assert!(!serde_json::to_string(&history).unwrap().contains("s3cr3t-t0k"), "{history:?}");
+        });
+    }
+
+    #[test]
+    fn a_pre_request_script_that_fails_sends_nothing_and_keeps_what_it_wrote() {
+        with_app_dir("http-script-throw", || {
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.globals.set('step', '1');\nthrow new Error('no ' + pm.environment.get('token'));")]);
+            trust(&id);
+            stage("http://127.0.0.1:9".into());
+            let error = send(&id, "order", None, Some("stage")).unwrap_err().to_string();
+            assert!(error.contains("nothing was sent"), "{error}");
+            assert!(error.contains("Error: no •••"), "{error}");
+            assert_eq!(global("step").as_deref(), Some("1"));
+            assert!(http_collections::history().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn skipping_the_request_sends_nothing() {
+        with_app_dir("http-script-skip", || {
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.execution.skipRequest();")]);
+            trust(&id);
+            stage("http://127.0.0.1:9".into());
+            assert!(send(&id, "order", None, Some("stage")).unwrap_err().to_string().contains("skipped"));
+            assert!(http_collections::history().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn tests_are_kept_with_the_response_and_a_test_that_throws_leaves_it_standing() {
+        with_app_dir("http-script-tests", || {
+            let (port, _seen) = serve_once("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 8\r\n\r\n{\"id\":7}");
+            let first = "pm.test('created', () => pm.response.to.have.status(201));\npm.test('id is ' + pm.response.json().id, () => pm.expect(pm.response.json().id).to.eql(8));\nconsole.log(pm.environment.get('token'), pm.request.url.toString());\nthrow new Error('after the tests');";
+            let second = "pm.globals.set('second', 'ran');";
+            let id = scripted(vec![], vec![event("test", first)], vec![event("test", second)]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert!(matches!(view.outcome, Outcome::Response { status: 201, .. }));
+            assert_eq!(view.scripts.tests.iter().map(|t| (t.name.as_str(), t.passed)).collect::<Vec<_>>(), vec![("created", true), ("id is 7", false)]);
+            assert_eq!(view.scripts.error.as_deref(), Some("Error: after the tests"));
+            assert_eq!(global("second").as_deref(), Some("ran"), "the next script still runs");
+            assert!(view.scripts.console[0].text.starts_with("••• http://127.0.0.1"), "{:?}", view.scripts.console);
+            assert_eq!(last_response(&id, "order").unwrap().unwrap().scripts.tests.len(), 2, "the saved response has them too");
+        });
+    }
+
+    #[test]
+    fn with_no_response_there_is_nothing_to_test() {
+        with_app_dir("http-script-down", || {
+            let id = scripted(vec![], vec![], vec![event("test", "pm.globals.set('tested', 'yes');")]);
+            trust(&id);
+            stage("http://127.0.0.1:9".into());
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert!(matches!(view.outcome, Outcome::Failed { .. }));
+            assert_eq!(global("tested"), None);
+            assert_eq!(view.scripts.error, None);
+        });
+    }
+
+    #[test]
+    fn a_script_that_changes_nothing_changes_nothing_on_the_wire() {
+        with_app_dir("http-script-same-wire", || {
+            let answer = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+            let (port, seen) = serve(vec![reply(answer), reply(answer)]);
+            let file = |events: Value| {
+                let request = json!({"method": "POST", "url": {"raw": format!("http://u:p@127.0.0.1:{port}/x?a=1&b#h")}, "header": [{"key": "X-On", "value": "1"}, {"key": "X-Off", "value": "0", "disabled": true}],
+                    "body": {"mode": "raw", "raw": "{\"a\":1}", "options": {"raw": {"language": "json"}}}});
+                let file = json!({"info": {"name": "C", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"}, "item": [{"id": "order", "name": "Order", "event": events, "request": request}]});
+                http_collections::add(&Collection::parse(&file.to_string()).unwrap()).unwrap()
+            };
+            let (plain, scripted) = (file(json!([])), file(json!([event("prerequest", "1;")])));
+            trust(&scripted);
+            send(&plain, "order", None, None).unwrap();
+            send(&scripted, "order", None, None).unwrap();
+            assert_eq!(wire(&seen), wire(&seen));
+        });
+    }
+
+    #[test]
+    fn a_later_send_wins_though_the_first_is_still_in_its_scripts() {
+        with_app_dir("http-script-race", || {
+            let reply_with = |text: &str| reply(&format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}", text.len()));
+            let (port, _seen) = serve(vec![reply_with("second"), reply_with("first")]);
+            let id = scripted(vec![], vec![], vec![event("prerequest", "setTimeout(() => {}, pm.globals.has('quick') ? 0 : 600);")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let first = {
+                let id = id.clone();
+                std::thread::spawn(move || send(&id, "order", None, Some("stage")).unwrap())
+            };
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            http_env_store::write_changes(None, &[("quick".into(), Some("1".into()))], ("", &[])).unwrap();
+            assert_eq!(send(&id, "order", None, Some("stage")).unwrap().body.as_deref(), Some("second"));
+            assert_eq!(first.join().unwrap().body.as_deref(), Some("first"));
+            assert_eq!(last_response(&id, "order").unwrap().unwrap().body.as_deref(), Some("second"));
+        });
+    }
+
+    #[test]
+    fn a_secret_a_script_replaced_or_covered_is_still_masked_everywhere() {
+        with_app_dir("http-script-old-secret", || {
+            let answer = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+            let (port, _seen) = serve(vec![reply(answer), reply(answer)]);
+            let code = "const old = pm.environment.get('token');\npm.globals.set('copy', old);\npm.request.headers.add({key: 'X-Old', value: old});\npm.environment.set('token', 'n3w-t0k3n');\npm.variables.set('token', 'plain');";
+            let next = "pm.sendRequest(pm.environment.get('baseUrl') + '/' + pm.globals.get('copy'), () => {});";
+            let id = scripted(vec![], vec![event("prerequest", code)], vec![event("prerequest", next)]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            send(&id, "order", None, Some("stage")).unwrap();
+            let history = serde_json::to_string(&http_collections::history().unwrap()).unwrap();
+            assert!(!history.contains("s3cr3t-t0k"), "{history}");
+        });
+        with_app_dir("http-script-old-secret-error", || {
+            let code = "const old = pm.environment.get('token');\npm.environment.set('token', 'new');\nthrow new Error(old);";
+            let id = scripted(vec![], vec![], vec![event("prerequest", code)]);
+            trust(&id);
+            stage("http://127.0.0.1:9".into());
+            let error = send(&id, "order", None, Some("stage")).unwrap_err().to_string();
+            assert!(!error.contains("s3cr3t-t0k") && error.contains("•••"), "{error}");
+        });
+    }
+
+    #[test]
+    fn what_scripts_wrote_and_could_not_keep_is_said() {
+        with_app_dir("http-script-unkept", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("test", "setTimeout(() => pm.globals.set('late', '1'), 400);")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let sent = std::thread::spawn(move || send(&id, "order", None, Some("stage")).unwrap());
+            seen.recv().unwrap();
+            let store = http_collections::dir().unwrap().join("environments.enc");
+            std::fs::write(&store, b"not sealed").unwrap();
+            let view = sent.join().unwrap();
+            assert!(view.scripts.error.as_deref().is_some_and(|e| e.contains("not kept")), "{:?}", view.scripts);
+            assert!(!view.scripts.changed);
+        });
+    }
+
+    #[test]
+    fn a_loop_without_end_in_a_pre_request_script_sends_nothing() {
+        with_app_dir("http-script-loop", || {
+            let id = scripted(vec![], vec![], vec![event("prerequest", "while (true) {}")]);
+            trust(&id);
+            stage("http://127.0.0.1:9".into());
+            assert_eq!(send(&id, "order", None, Some("stage")).unwrap_err().to_string(), "a script ran out of time");
+            assert!(http_collections::history().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_test_script_past_the_limit_stops_the_rest_and_the_response_stands() {
+        with_app_dir("http-script-test-loop", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![event("test", "while (true) {}")], vec![event("test", "pm.globals.set('after', 'ran');")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert!(matches!(view.outcome, Outcome::Response { status: 200, .. }));
+            assert_eq!(view.scripts.error.as_deref(), Some("a script ran out of time"));
+            assert_eq!(global("after"), None);
+        });
+    }
+
+    #[test]
+    fn what_a_test_script_makes_a_secret_is_masked_in_the_address_it_came_from() {
+        with_app_dir("http-script-learned", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("test", "pm.environment.set('token', 'orders');")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(env_value("token").as_deref(), Some("orders"));
+            assert!(!serde_json::to_string(&view.outcome).unwrap().contains("orders"), "{:?}", view.outcome);
+        });
+    }
+
+    #[test]
+    fn a_collections_secret_a_script_wrote_reaches_the_window_masked() {
+        with_app_dir("http-script-current", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.collectionVariables.set('apiKey', 's3cr3t-k3y');\npm.collectionVariables.set('open', 'plain');")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            send(&id, "order", None, Some("stage")).unwrap();
+            let all = collections().unwrap();
+            let current = &all.iter().find(|c| c.id == id).unwrap().current;
+            assert!(current.iter().any(|v| v.key == "apiKey" && v.secret && v.value != "s3cr3t-k3y"), "{current:?}");
+            assert!(current.iter().any(|v| v.key == "open" && v.value == "plain"), "{current:?}");
+        });
+    }
+
+    #[test]
+    fn a_script_s_request_that_fails_reaches_its_callback_as_an_error() {
+        with_app_dir("http-script-sub-down", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let code = format!("pm.sendRequest('http://127.0.0.1:{}/', (err, res) => pm.globals.set('said', err ? 'failed' : 'answered'));", closed_port());
+            let id = scripted(vec![], vec![], vec![event("prerequest", &code)]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(global("said").as_deref(), Some("failed"));
+        });
+    }
+
+    #[test]
+    fn a_test_script_sees_the_request_as_it_left() {
+        with_app_dir("http-script-sent", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let id = scripted(vec![], vec![], vec![event("test", "pm.test('body', () => pm.expect(pm.request.body.raw).to.eql('{}'));")]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(view.scripts.tests.iter().map(|t| t.passed).collect::<Vec<_>>(), vec![true], "{:?}", view.scripts.tests);
+        });
+    }
+
+    #[test]
+    fn a_secret_a_script_replaces_stays_hidden_old_and_new() {
+        with_app_dir("http-script-secret", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let code = "console.log(pm.environment.get('token'));\npm.environment.set('token', 'n3w-t0k3n');\nconsole.log(pm.environment.get('token'));";
+            let id = scripted(vec![], vec![], vec![event("prerequest", code)]);
+            trust(&id);
+            stage(format!("http://127.0.0.1:{port}"));
+            let view = send(&id, "order", None, Some("stage")).unwrap();
+            assert_eq!(view.scripts.console.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["•••", "•••"]);
+            let stored = http_env_store::get("stage").unwrap();
+            assert!(stored.variables.iter().any(|v| v.key == "token" && v.secret && v.value == "n3w-t0k3n"), "still a secret, with its new value");
         });
     }
 }

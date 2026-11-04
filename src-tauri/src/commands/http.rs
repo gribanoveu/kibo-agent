@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::domain::http_client::{parse_curl, Environment, HistoryEntry, ResponseView};
 use crate::infra::{http_collections, http_env_store};
-use crate::services::http_client::{self, CollectionView, Environments, ImportedAs};
+use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptTrust};
 
 use super::blocking;
 
@@ -99,6 +99,18 @@ pub async fn http_environment_delete(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn http_history_list() -> Result<Vec<HistoryEntry>, String> {
     blocking(http_collections::history).await
+}
+
+/// Whether the collection's scripts run; the page asks before its first send.
+#[tauri::command]
+pub async fn http_script_trust(collection: String) -> Result<ScriptTrust, String> {
+    blocking(move || http_client::script_trust(&collection)).await
+}
+
+/// Trust in the scripts `hash` names, the ones `http_script_trust` said.
+#[tauri::command]
+pub async fn http_script_trust_set(collection: String, hash: String) -> Result<(), String> {
+    blocking(move || http_client::trust_scripts(&collection, &hash)).await
 }
 
 /// A pasted `curl …` as a Postman `request`; nothing is read or sent.
