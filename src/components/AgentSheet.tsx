@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Bot, Square } from "lucide-react";
+import { Bot, ChevronRight, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { PageSheet } from "./Page";
 import { useAgents } from "../hooks/useAgents";
@@ -30,15 +30,33 @@ function Steps({ steps, running }: { steps: string[]; running: boolean }) {
   );
 }
 
-/** One helper run in full: the whole brief, how it stands and what it cost,
-    the tools it called — the last one what it is doing now — and what it
-    answered, with Stop while it runs. */
-export function AgentRun({ agent: a, onStop }: { agent: AgentInfo; onStop: (id: number) => void }) {
+/** One helper run in full: the brief it was given, folded, how it stands and
+    what it cost, the tools it called — the last one what it is doing now — and
+    what it answered, with Stop while it runs. */
+export function AgentRun({
+  agent: a,
+  onStop,
+  onOpenFile,
+}: {
+  agent: AgentInfo;
+  onStop: (id: number) => void;
+  /** A file the answer names, as the chat opens one; without it the link is plain text. */
+  onOpenFile?: (link: string) => void;
+}) {
   const running = a.state.state === "running";
   const spent = tokensSpent(a.tokens);
   return (
     <div className={`agent-detail ${a.state.state}`}>
-      <div className="agent-task">{a.task}</div>
+      {/* The brief is a prompt, not an answer — a review's wraps a whole diff in
+          `<changes>`, which Markdown would take for HTML and lose — so it is
+          shown as written. Folded, so the panel opens on the run itself. */}
+      <details className="agent-brief">
+        <summary title="What the agent asked it, as written">
+          <ChevronRight className="chev" size={12} aria-hidden />
+          Brief
+        </summary>
+        <div className="agent-task">{a.task}</div>
+      </details>
       <div className="agent-meta">
         <span className="agent-id">#{a.id}</span>
         <span className="agent-state">{agentStatus(a.state)}</span>
@@ -58,7 +76,7 @@ export function AgentRun({ agent: a, onStop }: { agent: AgentInfo; onStop: (id: 
       {a.state.state === "failed" && <div className="agent-reason">{a.state.reason}</div>}
       {a.answer && (
         <div className="agent-answer">
-          <Markdown text={a.answer} streaming={false} />
+          <Markdown text={a.answer} streaming={false} onOpenFile={onOpenFile} />
         </div>
       )}
     </div>
@@ -72,18 +90,20 @@ type Props = {
       The task may be only the start of the brief — the review card knows no more. */
   run: AgentFocus;
   onClose: () => void;
+  /** A link to a file in the answer opens it, as one in the chat does. */
+  onOpenFile?: (link: string) => void;
 };
 
 /** A helper run opened from the chat, Overview or the Agents tab, in a sheet
     over the chat's right side. Read while it is open, and again each time the
     backend says a run changed, so a running one moves on under the user's eyes. */
-export function AgentSheet({ chatId, run, onClose }: Props) {
+export function AgentSheet({ chatId, run, onClose, onOpenFile }: Props) {
   const { agents, loaded, error, stop } = useAgents(true, chatId);
   const agent = agents.find((a) => a.id === run.id && a.task.startsWith(run.task));
   return (
     <PageSheet icon={Bot} title="Agent" label={briefTitle(run.task)} onClose={onClose}>
       {agent ? (
-        <AgentRun agent={agent} onStop={stop} />
+        <AgentRun agent={agent} onStop={stop} onOpenFile={onOpenFile} />
       ) : (
         <div className="agent-detail">
           <div className="agent-task">{run.task}</div>

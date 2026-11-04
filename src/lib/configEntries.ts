@@ -5,7 +5,7 @@
 // untouched.
 
 import type { McpExposure } from "./mcp";
-import { isObject, parseFile, stringify, type Json } from "./configSnippets";
+import { isObject, jsonError, parseFile, parseLoose, snippetServers, stringify, type Json } from "./configSnippets";
 
 export type Written = { text: string } | { error: string };
 
@@ -39,6 +39,8 @@ export type McpServerFields = {
   exposure: McpExposure;
   /** Its results are never cleared to save context; `false`, the default, is written as nothing. */
   keepResults: boolean;
+  /** Everything the form has no field for — `disabled`, `type`, another client's keys — carried as it came. */
+  extra: Json;
 };
 
 const EXPOSURES: McpExposure[] = ["direct", "deferred", "hidden"];
@@ -55,6 +57,7 @@ export const EMPTY_SERVER: McpServerFields = {
   timeoutSecs: "",
   exposure: "direct",
   keepResults: false,
+  extra: {},
 };
 
 const pairs = (value: unknown, separator: string) =>
@@ -62,10 +65,100 @@ const pairs = (value: unknown, separator: string) =>
     .map(([key, v]) => `${key}${separator}${String(v)}`)
     .join("\n");
 
-export function readMcpServer(text: string, name: string): McpServerFields | null {
+/** A key of its own, not one every object inherits: a server may be called `constructor`. */
+const own = (servers: Json, name: string) => Object.prototype.hasOwnProperty.call(servers, name);
+
+/**
+ * The entry a write takes the place of: the one being edited, or the one the
+ * typed name already names — a pasted server whose name is in the file replaces
+ * it where it stands, as the file editor's own paste does.
+ */
+export function previousEntry(text: string, edited: string | null, typed: string): string | null {
+  if (edited !== null) return edited;
   const servers = parseFile(text)?.mcpServers;
-  const server = isObject(servers) ? servers[name] : undefined;
-  if (!isObject(server)) return null;
+  return isObject(servers) && typed && own(servers, typed) ? typed : null;
+}
+
+/** The server's part of a tool name, as `domain::mcp::server_key` forms it: `mcp__<key>__<tool>`. */
+export function serverKey(name: string): string {
+  return Array.from(name, (c) => (/[A-Za-z0-9-]/.test(c) ? c.toLowerCase() : "_")).join("");
+}
+
+/**
+ * Another server in the file whose tools would take the same prefix, if there
+ * is one: a name is lowercased and what a tool name may not hold becomes `_`,
+ * so two spellings of one server become one prefix there.
+ */
+export function keyClash(text: string, previous: string | null, typed: string): string | null {
+  const key = serverKey(typed);
+  if (!key) return null;
+  const servers = parseFile(text)?.mcpServers;
+  if (!isObject(servers)) return null;
+  return Object.keys(servers).find((other) => other !== previous && serverKey(other) === key) ?? null;
+}
+
+/** `${NAME}` as the catalog reads one: a letter or `_`, then letters, digits or `_`. */
+const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/** A block's values in the order the backend reads them — its maps are sorted by key. */
+const valuesOf = (block: unknown) =>
+  isObject(block) ? Object.keys(block).sort().map((key) => String(block[key])) : [];
+
+const entryIn = (text: string, name: string): Json | null => {
+  const servers = parseFile(text)?.mcpServers;
+  const entry = isObject(servers) && own(servers, name) ? servers[name] : undefined;
+  return isObject(entry) ? entry : null;
+};
+
+/**
+ * The `${NAME}` placeholders in an entry's `env` and `headers` values, each
+ * once, in the order they come — the catalog's convention, which fills them in
+ * at install: nothing reads them when a server starts.
+ */
+export function entrySecrets(text: string, name: string): string[] {
+  const entry = entryIn(text, name);
+  if (!entry) return [];
+  const names: string[] = [];
+  for (const value of [...valuesOf(entry.env), ...valuesOf(entry.headers)]) {
+    for (const match of value.matchAll(PLACEHOLDER)) if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/**
+ * The file with every `${NAME}` in the entry's `env` and `headers` replaced by
+ * its value, trimmed — a token pasted with its newline is the token. In one
+ * pass, so a value that itself holds `${…}` stays as typed. Refused while one
+ * is empty, or has a control character: a line break in a header is another
+ * header.
+ */
+export function fillSecrets(text: string, name: string, secrets: Record<string, string>): Written {
+  const file = parseFile(text);
+  const entry = entryIn(text, name);
+  if (!file || !entry) return { error: `The file has no server called ${name}` };
+  let problem: string | null = null;
+  const valueOf = (secret: string) => {
+    const value = secrets[secret]?.trim() ?? "";
+    if (!value) problem ??= `${secret} is not filled in`;
+    else if (/\p{Cc}/u.test(value)) problem ??= `${secret} has a line break or another control character in it — paste the value alone`;
+    return value;
+  };
+  const fill = (block: unknown) =>
+    isObject(block)
+      ? Object.fromEntries(
+          Object.entries(block).map(([key, value]) => [key, typeof value === "string" ? value.replace(PLACEHOLDER, (_, secret: string) => valueOf(secret)) : value]),
+        )
+      : block;
+  const filled: Json = { ...entry, env: fill(entry.env), headers: fill(entry.headers) };
+  const written = stringify({ ...file, mcpServers: { ...(file.mcpServers as Json), [name]: filled } });
+  return problem ? { error: problem } : { text: written };
+}
+
+/** The keys the form writes itself; anything else an entry carries stays in `extra`. */
+const OWNED = ["command", "args", "env", "url", "headers", "weight", "timeoutSecs", "exposure", "keepResults"] as const;
+
+/** One entry of `mcpServers` as the form's fields, whichever way it was read. */
+export function serverFields(name: string, server: Json): McpServerFields {
   const url = typeof server.url === "string" ? server.url : "";
   return {
     name,
@@ -79,7 +172,14 @@ export function readMcpServer(text: string, name: string): McpServerFields | nul
     timeoutSecs: server.timeoutSecs === undefined ? "" : String(server.timeoutSecs),
     exposure: EXPOSURES.find((e) => e === server.exposure) ?? "direct",
     keepResults: server.keepResults === true,
+    extra: Object.fromEntries(Object.entries(server).filter(([key]) => !(OWNED as readonly string[]).includes(key))),
   };
+}
+
+export function readMcpServer(text: string, name: string): McpServerFields | null {
+  const servers = parseFile(text)?.mcpServers;
+  const server = isObject(servers) ? servers[name] : undefined;
+  return isObject(server) ? serverFields(name, server) : null;
 }
 
 const lines = (text: string) =>
@@ -136,7 +236,7 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   const name = fields.name.trim();
   if (!name) return { error: "The server needs a name" };
   const servers = isObject(file.mcpServers) ? file.mcpServers : {};
-  if (name !== previous && name in servers) return { error: `There is already a server called ${name}` };
+  if (name !== previous && own(servers, name)) return { error: `There is already a server called ${name}` };
 
   const how = transport(fields);
   if ("error" in how) return how as { error: string };
@@ -144,7 +244,9 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   const timeoutSecs = positive(fields.timeoutSecs, "Timeout");
   for (const n of [weight, timeoutSecs]) if (isObject(n)) return n as { error: string };
 
-  const kept = previous !== null && isObject(servers[previous]) ? servers[previous] : {};
+  // What the form has no field for comes from the file it edits, or — for an
+  // entry just pasted in — from the snippet.
+  const kept = previous !== null && own(servers, previous) && isObject(servers[previous]) ? { ...servers[previous], ...fields.extra } : fields.extra;
   const { command: _c, args: _a, env: _e, url: _u, headers: _h, weight: _w, timeoutSecs: _t, exposure: _x, keepResults: _k, ...rest } = kept;
   // A `type` saying the entry is at a URL would contradict a command; one at
   // a URL gets its own `type` from `transport`.
@@ -164,9 +266,49 @@ export function writeMcpServer(text: string, previous: string | null, fields: Mc
   return { text: stringify({ ...file, mcpServers: Object.fromEntries(entries) }) };
 }
 
+/** A server read from a pasted snippet, before anything is written. */
+export type PastedServer = { name: string; fields: McpServerFields };
+
+/**
+ * The servers a pasted snippet holds, as the fields the form edits. The snippet
+ * is the one the whole-file editor takes (`parseLoose`): a whole
+ * `{"mcpServers": {…}}`, a bare `{"github": {…}}`, or `"github": {…},` cut out
+ * of one. An entry with no name of its own comes back as `""`, which the form
+ * then asks for. `exposure` is the screen's default for a snippet that says
+ * nothing about it — a README rarely does.
+ */
+export function pastedServers(
+  text: string,
+  exposure?: McpExposure,
+): { servers: PastedServer[] } | { error: string } {
+  if (!text.trim()) return { error: "Paste a server's JSON first" };
+  const snippet = parseLoose(text);
+  if (snippet === undefined) {
+    const problem = jsonError(text);
+    const at = problem?.line ? `Line ${problem.line}, column ${problem.column}: ` : "";
+    return { error: `${at}${problem?.message ?? "Not valid JSON"}` };
+  }
+  const found = snippetServers(snippet);
+  if (!found) return { error: "Not an MCP server: its entry needs a command or a url" };
+  const entries = Object.entries(found.servers);
+  if (entries.length === 0) return { error: "Nothing to read: the snippet holds no servers" };
+  const servers: PastedServer[] = [];
+  for (const [name, server] of entries) {
+    if (!isObject(server)) return { error: `Not an MCP server: ${name || "the entry"} is not an object` };
+    // A value the fields cannot hold would be dropped on the way in, so the
+    // paste is refused instead: `args` one per line, `env` and `headers` as
+    // objects are the shapes the entry is written in.
+    if (server.args !== undefined && !Array.isArray(server.args)) return { error: `${name || "The entry"}: args must be a list` };
+    if (server.env !== undefined && !isObject(server.env)) return { error: `${name || "The entry"}: env must be an object` };
+    if (server.headers !== undefined && !isObject(server.headers)) return { error: `${name || "The entry"}: headers must be an object` };
+    servers.push({ name, fields: exposure && server.exposure === undefined ? { ...serverFields(name, server), exposure } : serverFields(name, server) });
+  }
+  return { servers };
+}
+
 export function removeMcpServer(text: string, name: string): string | null {
   const file = parseFile(text);
-  if (!file || !isObject(file.mcpServers) || !(name in file.mcpServers)) return null;
+  if (!file || !isObject(file.mcpServers) || !own(file.mcpServers, name)) return null;
   const { [name]: _gone, ...servers } = file.mcpServers;
   return stringify({ ...file, mcpServers: servers });
 }
