@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import {
   EMPTY_HOOK,
   EMPTY_SERVER,
+  entrySecrets,
+  fillSecrets,
   keyClash,
   pastedServers,
   previousEntry,
@@ -262,6 +264,44 @@ describe("a server's key", () => {
     expect(keyClash(file, "db", "github")).toBe("GitHub");
     expect(keyClash(file, null, "  ")).toBeNull();
     expect(keyClash("{", null, "github")).toBeNull();
+  });
+});
+
+describe("a secret in an entry", () => {
+  const file = text({
+    mcpServers: {
+      gh: {
+        command: "npx",
+        args: ["${NOT_A_SECRET}"],
+        env: { Z: "${B}", A: "${A}-${B}", BAD: "${1}", RAW: "${" },
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+    },
+  });
+
+  test("is a ${NAME} of env or headers, each once, in the order the backend reads them", () => {
+    expect(entrySecrets(file, "gh")).toEqual(["A", "B", "GITHUB_TOKEN"]);
+    expect(entrySecrets(file, "nope")).toEqual([]);
+  });
+
+  test("is filled in trimmed, in one pass, and refused while empty or with a line break", () => {
+    const filled = written(fillSecrets(file, "gh", { A: " a ", B: "b", GITHUB_TOKEN: " t\n" })).mcpServers.gh;
+    expect(filled.env).toEqual({ Z: "b", A: "a-b", BAD: "${1}", RAW: "${" });
+    expect(filled.headers).toEqual({ Authorization: "Bearer t" });
+    // Only env and headers are filled: a command, an argument or a url is text.
+    expect(filled.args).toEqual(["${NOT_A_SECRET}"]);
+
+    // A value that itself holds ${…} stays as typed.
+    const nested = written(fillSecrets(file, "gh", { A: "x", B: "y", GITHUB_TOKEN: "${A}" })).mcpServers.gh;
+    expect(nested.headers).toEqual({ Authorization: "Bearer ${A}" });
+
+    expect(fillSecrets(file, "gh", { A: "a", B: "b", GITHUB_TOKEN: "  " })).toEqual({
+      error: "GITHUB_TOKEN is not filled in",
+    });
+    expect(fillSecrets(file, "gh", { A: "a", B: "b", GITHUB_TOKEN: "a\nb" })).toEqual({
+      error: "GITHUB_TOKEN has a line break or another control character in it — paste the value alone",
+    });
+    expect(fillSecrets(file, "nope", {})).toEqual({ error: "The file has no server called nope" });
   });
 });
 

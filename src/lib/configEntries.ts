@@ -97,6 +97,63 @@ export function keyClash(text: string, previous: string | null, typed: string): 
   return Object.keys(servers).find((other) => other !== previous && serverKey(other) === key) ?? null;
 }
 
+/** `${NAME}` as the catalog reads one: a letter or `_`, then letters, digits or `_`. */
+const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/** A block's values in the order the backend reads them — its maps are sorted by key. */
+const valuesOf = (block: unknown) =>
+  isObject(block) ? Object.keys(block).sort().map((key) => String(block[key])) : [];
+
+const entryIn = (text: string, name: string): Json | null => {
+  const servers = parseFile(text)?.mcpServers;
+  const entry = isObject(servers) && own(servers, name) ? servers[name] : undefined;
+  return isObject(entry) ? entry : null;
+};
+
+/**
+ * The `${NAME}` placeholders in an entry's `env` and `headers` values, each
+ * once, in the order they come — the catalog's convention, which fills them in
+ * at install: nothing reads them when a server starts.
+ */
+export function entrySecrets(text: string, name: string): string[] {
+  const entry = entryIn(text, name);
+  if (!entry) return [];
+  const names: string[] = [];
+  for (const value of [...valuesOf(entry.env), ...valuesOf(entry.headers)]) {
+    for (const match of value.matchAll(PLACEHOLDER)) if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/**
+ * The file with every `${NAME}` in the entry's `env` and `headers` replaced by
+ * its value, trimmed — a token pasted with its newline is the token. In one
+ * pass, so a value that itself holds `${…}` stays as typed. Refused while one
+ * is empty, or has a control character: a line break in a header is another
+ * header.
+ */
+export function fillSecrets(text: string, name: string, secrets: Record<string, string>): Written {
+  const file = parseFile(text);
+  const entry = entryIn(text, name);
+  if (!file || !entry) return { error: `The file has no server called ${name}` };
+  let problem: string | null = null;
+  const valueOf = (secret: string) => {
+    const value = secrets[secret]?.trim() ?? "";
+    if (!value) problem ??= `${secret} is not filled in`;
+    else if (/\p{Cc}/u.test(value)) problem ??= `${secret} has a line break or another control character in it — paste the value alone`;
+    return value;
+  };
+  const fill = (block: unknown) =>
+    isObject(block)
+      ? Object.fromEntries(
+          Object.entries(block).map(([key, value]) => [key, typeof value === "string" ? value.replace(PLACEHOLDER, (_, secret: string) => valueOf(secret)) : value]),
+        )
+      : block;
+  const filled: Json = { ...entry, env: fill(entry.env), headers: fill(entry.headers) };
+  const written = stringify({ ...file, mcpServers: { ...(file.mcpServers as Json), [name]: filled } });
+  return problem ? { error: problem } : { text: written };
+}
+
 /** The keys the form writes itself; anything else an entry carries stays in `extra`. */
 const OWNED = ["command", "args", "env", "url", "headers", "weight", "timeoutSecs", "exposure", "keepResults"] as const;
 

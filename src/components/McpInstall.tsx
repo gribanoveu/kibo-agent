@@ -3,6 +3,8 @@ import { Dropdown } from "./Dropdown";
 import { Field } from "./EntryField";
 import {
   EMPTY_SERVER,
+  entrySecrets,
+  fillSecrets,
   keyClash,
   pastedServers,
   previousEntry,
@@ -134,6 +136,9 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const [found, setFound] = useState<{ servers: PastedServer[] } | { error: string } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // What each `${NAME}` in the entry is given, asked for at the review and
+  // kept nowhere but the file it goes into.
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
 
   const typed = fields.name.trim();
   // A pasted name that is already in the file replaces that entry where it
@@ -146,6 +151,8 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const written = writeMcpServer(text ?? "", previous, fields);
   const writtenFile = "text" in written ? parseFile(written.text) : null;
   const entry = writtenFile && isObject(writtenFile.mcpServers) ? writtenFile.mcpServers[typed] : undefined;
+  const secrets = "text" in written ? entrySecrets(written.text, typed) : [];
+  const secretsFilled = secrets.every((secret) => secretValues[secret]?.trim());
 
   const steps = name === null ? STEPS : STEPS.filter((s) => s.id !== "paste");
   const at = steps.findIndex((s) => s.id === step);
@@ -178,8 +185,10 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const install = async () => {
     if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
+    const filled = secrets.length > 0 ? fillSecrets(written.text, typed, secretValues) : written;
+    if ("error" in filled) return setProblem(filled.error);
     setSaving(true);
-    const stored = await onSave(written.text);
+    const stored = await onSave(filled.text);
     setSaving(false);
     if (stored) onClose();
   };
@@ -378,6 +387,28 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             )}
           </p>
           {entry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(entry, null, 2)}</pre>}
+          {secrets.length > 0 && (
+            <>
+              <div className="mcp-install-secrets">
+                {secrets.map((secret) => (
+                  <Field key={secret} label={secret}>
+                    <input
+                      className="entry-input mono"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={secretValues[secret] ?? ""}
+                      onChange={(e) => setSecretValues((v) => ({ ...v, [secret]: e.target.value }))}
+                    />
+                  </Field>
+                ))}
+              </div>
+              <p className="modal-note">
+                Each is written into {path || "the file"} in place of its own <code>{"${…}"}</code>, and kept nowhere
+                else.
+              </p>
+            </>
+          )}
           <p className="modal-note">
             The app writes {path || "the file"} in its own layout: spacing and key order typed there by hand are not
             kept. It starts with the next Agent turn.
@@ -417,7 +448,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         )}
         {step === "review" && (
           <>
-            <button className="btn btn-primary" type="submit" disabled={saving}>
+            <button className="btn btn-primary" type="submit" disabled={saving || !secretsFilled}>
               {name !== null ? "Save" : previous !== null ? "Replace" : "Install"}
             </button>
             <button className="btn btn-ghost" type="button" onClick={() => go("tools")}>

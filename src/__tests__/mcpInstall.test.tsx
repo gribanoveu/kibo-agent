@@ -281,6 +281,27 @@ describe("installing a server", () => {
     expect(saved).toEqual([]);
   });
 
+  test("a ${NAME} in the entry is asked for at the review, and goes into the file", async () => {
+    const { saved } = mount();
+    // The same placeholder twice is one field, filled into both.
+    paste(text({ mcpServers: { gh: { command: "npx", env: { TOKEN: "${GITHUB_TOKEN}", ORG: "${GITHUB_TOKEN}" } } } }));
+    fireEvent.click(button("Continue"));
+    next();
+    next();
+
+    // The entry keeps the placeholder; the value is asked for beside it.
+    expect(document.querySelector(".mcp-install-entry")?.textContent).toContain("${GITHUB_TOKEN}");
+    expect((button("Install") as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("GITHUB_TOKEN"), { target: { value: " t " } });
+    expect((button("Install") as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(button("Install"));
+    });
+    expect(JSON.parse(saved[0]).mcpServers.gh.env).toEqual({ TOKEN: "t", ORG: "t" });
+  });
+
   test("Edit as JSON hands the dialog over to the file", () => {
     let json = 0;
     mount({ onEditJson: () => json++ });

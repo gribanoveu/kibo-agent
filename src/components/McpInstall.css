@@ -185,6 +185,15 @@
 .mcp-install-choice.active .mcp-install-choice-text {
   color: var(--text-dim);
 }
+/* One password field per `${NAME}` the entry holds, at the review. */
+.mcp-install-secrets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mcp-install-secrets .entry-field {
+  min-width: 200px;
+}
 .mcp-install-entry {
   max-height: 320px;
   margin: 0;
