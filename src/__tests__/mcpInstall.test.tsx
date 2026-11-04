@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { McpInstall } from "../components/McpInstall";
 
-// Installing a server: a pasted snippet fills the fields, and the review shows
-// the entry that goes into the file. Editing opens the same screen where the
-// fields are — there is nothing to paste.
+// Installing a server: a pasted snippet fills the fields, the steps ask how it
+// runs and how the model reaches its tools, and the review shows the entry that
+// goes into the file. Editing opens the same screen where the fields are —
+// there is nothing to paste.
 
 const text = (value: unknown) => JSON.stringify(value, null, 2);
 const MCP = text({
@@ -31,8 +32,11 @@ function mount(props: Partial<Parameters<typeof McpInstall>[0]> = {}) {
 }
 
 const button = (name: string) => screen.getByRole("button", { name });
+const radio = (name: RegExp) => screen.getByRole("radio", { name });
 const paste = (value: string) => fireEvent.change(screen.getByLabelText("MCP server JSON"), { target: { value } });
 const value = (label: RegExp) => (screen.getByLabelText(label) as HTMLInputElement).value;
+/** On to the next step: the fields, then how its tools are reached. */
+const next = () => fireEvent.click(button("Next"));
 
 describe("installing a server", () => {
   test("a pasted server fills the fields, and the review shows what goes into the file", async () => {
@@ -44,18 +48,26 @@ describe("installing a server", () => {
     expect(value(/^Command/)).toBe("uvx");
     expect((screen.getByLabelText(/^Arguments/) as HTMLTextAreaElement).value).toBe("mcp-git");
 
-    fireEvent.click(button("Next"));
+    next();
+    next();
     const shown = document.querySelector(".mcp-install-entry")?.textContent ?? "";
     expect(shown).toContain('"command": "uvx"');
     // What the form has no field for goes in with the entry.
     expect(shown).toContain('"disabled": true');
+    // A snippet rarely says how its tools are reached: the screen's default goes in.
+    expect(shown).toContain('"exposure": "deferred"');
     expect(screen.getByText(/Adds the server/)).toBeTruthy();
     expect(screen.getByText(PATH)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(button("Install"));
     });
-    expect(JSON.parse(saved[0]).mcpServers.git).toEqual({ command: "uvx", args: ["mcp-git"], disabled: true });
+    expect(JSON.parse(saved[0]).mcpServers.git).toEqual({
+      command: "uvx",
+      args: ["mcp-git"],
+      disabled: true,
+      exposure: "deferred",
+    });
     // The rest of the file is left as it was.
     expect(JSON.parse(saved[0]).other).toBe(1);
     expect(closed.done).toBe(true);
@@ -71,12 +83,17 @@ describe("installing a server", () => {
     expect(value(/^Name/)).toBe("beta");
     expect(value(/^URL/)).toBe("https://b.example/mcp");
 
-    fireEvent.click(button("Next"));
+    next();
+    next();
     await act(async () => {
       fireEvent.click(button("Install"));
     });
     expect(saved).toHaveLength(1);
-    expect(JSON.parse(saved[0]).mcpServers.beta).toEqual({ type: "http", url: "https://b.example/mcp" });
+    expect(JSON.parse(saved[0]).mcpServers.beta).toEqual({
+      type: "http",
+      url: "https://b.example/mcp",
+      exposure: "deferred",
+    });
   });
 
   test("start from scratch goes to the fields empty, and a problem is said there", () => {
@@ -88,13 +105,13 @@ describe("installing a server", () => {
     expect((screen.getByRole("button", { name: /Review/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: /Paste/ }) as HTMLButtonElement).disabled).toBe(false);
 
-    fireEvent.click(button("Next"));
+    next();
     expect(screen.getByText("The server needs a name")).toBeTruthy();
     expect(screen.queryByText(/Adds the server/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
     expect(screen.queryByText("The server needs a name")).toBeNull();
-    fireEvent.click(button("Next"));
+    next();
     expect(screen.getByText("The server needs a command to start it")).toBeTruthy();
   });
 
@@ -124,7 +141,8 @@ describe("installing a server", () => {
     });
     paste(text({ mcpServers: { github: { command: "uvx" } } }));
     fireEvent.click(button("Continue"));
-    fireEvent.click(button("Next"));
+    next();
+    next();
     expect(screen.getByText(/Replaces the server/)).toBeTruthy();
 
     await act(async () => {
@@ -132,7 +150,7 @@ describe("installing a server", () => {
     });
     // Where it stood, not at the end of the file.
     expect(Object.keys(JSON.parse(saved[0]).mcpServers)).toEqual(["alpha", "github", "omega"]);
-    expect(JSON.parse(saved[0]).mcpServers.github).toEqual({ command: "uvx" });
+    expect(JSON.parse(saved[0]).mcpServers.github).toEqual({ command: "uvx", exposure: "deferred" });
   });
 
   test("a paste whose args are not a list is refused rather than written short", () => {
@@ -151,7 +169,8 @@ describe("installing a server", () => {
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     expect(value(/^Command/)).toBe("npx");
 
-    fireEvent.click(button("Next"));
+    next();
+    next();
     expect(screen.getByText(/Replaces the server/)).toBeTruthy();
     await act(async () => {
       fireEvent.click(button("Save"));
@@ -164,12 +183,41 @@ describe("installing a server", () => {
     fireEvent.click(button("Start from scratch"));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
     fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "mine-server" } });
-    fireEvent.click(button("Next"));
+    next();
 
     fireEvent.click(button("Back"));
     expect(value(/^Name/)).toBe("mine");
     fireEvent.click(button("Back"));
     expect(screen.getByLabelText("MCP server JSON")).toBeTruthy();
+  });
+
+  test("the tools step starts on toolSearch and says what each way costs", () => {
+    mount();
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "kb" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "kb-server" } });
+    next();
+
+    expect(screen.getByRole("button", { name: /Tools/ })).toBeTruthy();
+    expect(radio(/^Found with toolSearch/).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/Only the server's name goes in every request/)).toBeTruthy();
+    expect(screen.getByText(/Every tool, with its name and description/)).toBeTruthy();
+    expect(screen.getByText(/None of them is offered/)).toBeTruthy();
+    expect(screen.getByText(/Every result stays for the whole conversation/)).toBeTruthy();
+  });
+
+  test("declared to the model writes no exposure key, hidden writes its own", async () => {
+    const { saved } = mount();
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "kb" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "kb-server" } });
+    next();
+    fireEvent.click(radio(/^Declared to the model/));
+    next();
+    await act(async () => {
+      fireEvent.click(button("Install"));
+    });
+    expect(JSON.parse(saved[0]).mcpServers.kb).toEqual({ command: "kb-server" });
   });
 
   test("the agent's side of the entry: environment, weight, timeout and results", async () => {
@@ -180,10 +228,10 @@ describe("installing a server", () => {
     fireEvent.change(screen.getByLabelText(/^Environment/), { target: { value: "TOKEN=t" } });
     fireEvent.change(screen.getByLabelText(/^Weight/), { target: { value: "5" } });
     fireEvent.change(screen.getByLabelText(/^Timeout/), { target: { value: "30" } });
-    fireEvent.click(button("Cleared when the context fills"));
-    fireEvent.click(screen.getByRole("option", { name: /^Kept/ }));
+    next();
+    fireEvent.click(radio(/^Kept/));
 
-    fireEvent.click(button("Next"));
+    next();
     await act(async () => {
       fireEvent.click(button("Install"));
     });
@@ -193,6 +241,7 @@ describe("installing a server", () => {
       weight: 5,
       timeoutSecs: 30,
       keepResults: true,
+      exposure: "deferred",
     });
   });
 
@@ -201,7 +250,7 @@ describe("installing a server", () => {
     fireEvent.click(button("Start from scratch"));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
     fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "mine-server" } });
-    fireEvent.click(button("Next"));
+    next();
     expect(screen.getByText(/has not been read yet/)).toBeTruthy();
     expect(saved).toEqual([]);
   });
@@ -211,7 +260,8 @@ describe("installing a server", () => {
     fireEvent.click(button("Start from scratch"));
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "mine" } });
     fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "mine-server" } });
-    fireEvent.click(button("Next"));
+    next();
+    next();
 
     // The file was rewritten by another client while the review was open.
     rerender({ text: "{" });
@@ -254,7 +304,8 @@ describe("installing a server", () => {
     );
     paste(text({ mcpServers: { git: { command: "uvx" } } }));
     fireEvent.click(button("Continue"));
-    fireEvent.click(button("Next"));
+    next();
+    next();
 
     await act(async () => {
       fireEvent.click(button("Install"));

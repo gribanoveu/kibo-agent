@@ -159,8 +159,8 @@ describe("an MCP server", () => {
 });
 
 describe("a pasted server", () => {
-  const pasted = (snippet: string) => {
-    const result = pastedServers(snippet);
+  const pasted = (snippet: string, exposure?: "direct" | "deferred" | "hidden") => {
+    const result = pastedServers(snippet, exposure);
     if ("error" in result) throw new Error(result.error);
     return result.servers;
   };
@@ -198,6 +198,13 @@ describe("a pasted server", () => {
       text({ mcpServers: { kb: { command: "kb", disabled: true, toolExposure: { find: "direct" } } } }),
     );
     expect(server.fields.extra).toEqual({ disabled: true, toolExposure: { find: "direct" } });
+  });
+
+  test("a snippet that says nothing about its tools takes the screen's default", () => {
+    expect(pasted('{"mcpServers": {"git": {"command": "npx"}}}', "deferred")[0].fields.exposure).toBe("deferred");
+    expect(pasted('{"mcpServers": {"git": {"command": "npx", "exposure": "hidden"}}}', "deferred")[0].fields.exposure).toBe(
+      "hidden",
+    );
   });
 
   test("says what is wrong rather than filling anything", () => {

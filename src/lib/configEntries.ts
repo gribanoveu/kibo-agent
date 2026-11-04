@@ -217,9 +217,13 @@ export type PastedServer = { name: string; fields: McpServerFields };
  * is the one the whole-file editor takes (`parseLoose`): a whole
  * `{"mcpServers": {…}}`, a bare `{"github": {…}}`, or `"github": {…},` cut out
  * of one. An entry with no name of its own comes back as `""`, which the form
- * then asks for.
+ * then asks for. `exposure` is the screen's default for a snippet that says
+ * nothing about it — a README rarely does.
  */
-export function pastedServers(text: string): { servers: PastedServer[] } | { error: string } {
+export function pastedServers(
+  text: string,
+  exposure?: McpExposure,
+): { servers: PastedServer[] } | { error: string } {
   if (!text.trim()) return { error: "Paste a server's JSON first" };
   const snippet = parseLoose(text);
   if (snippet === undefined) {
@@ -240,7 +244,7 @@ export function pastedServers(text: string): { servers: PastedServer[] } | { err
     if (server.args !== undefined && !Array.isArray(server.args)) return { error: `${name || "The entry"}: args must be a list` };
     if (server.env !== undefined && !isObject(server.env)) return { error: `${name || "The entry"}: env must be an object` };
     if (server.headers !== undefined && !isObject(server.headers)) return { error: `${name || "The entry"}: headers must be an object` };
-    servers.push({ name, fields: serverFields(name, server) });
+    servers.push({ name, fields: exposure && server.exposure === undefined ? { ...serverFields(name, server), exposure } : serverFields(name, server) });
   }
   return { servers };
 }

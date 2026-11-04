@@ -142,6 +142,49 @@
   font-size: var(--fs-xs);
   line-height: 1.4;
 }
+/* A choice with the reason for it: three ways to reach a server's tools, two
+   things to do with its results. */
+.mcp-install-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-install-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-install-choice:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+/* Outlined alone read as one more button beside the others: the chosen one is
+   filled. */
+.mcp-install-choice.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+.mcp-install-choice-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.mcp-install-choice-text {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.mcp-install-choice.active .mcp-install-choice-text {
+  color: var(--text-dim);
+}
 .mcp-install-entry {
   max-height: 320px;
   margin: 0;

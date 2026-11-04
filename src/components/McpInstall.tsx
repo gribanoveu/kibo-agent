@@ -16,24 +16,60 @@ import { isObject, parseFile } from "../lib/configSnippets";
 import "./McpInstall.css";
 
 // Installing a server, or editing one: a snippet pasted from a README fills the
-// fields, the fields sit in two columns, and the last step shows the entry that
-// goes into mcp.json. What is written is the file the JSON editor edits — the
-// screen is a way in, not a second copy.
+// fields, the steps go across — how it runs, how the model reaches its tools,
+// the entry itself — and the last shows what goes into mcp.json. What is
+// written is the file the JSON editor edits: a way in, not a second copy.
 
 const TRANSPORTS: Record<McpServerFields["transport"], string> = { command: "A command", url: "At a URL" };
-const RESULTS = { cleared: "Cleared when the context fills", kept: "Kept" };
-const EXPOSURES: Record<McpServerFields["exposure"], string> = {
-  direct: "Declared to the model",
-  deferred: "Found with toolSearch",
-  hidden: "Hidden",
-};
 
-type Step = "paste" | "connection" | "review";
+type Option<T extends string> = { value: T; title: string; text: string };
+
+// In the order the step offers them: the one a new server starts on first.
+const EXPOSURE_OPTIONS: Option<McpServerFields["exposure"]>[] = [
+  {
+    value: "deferred",
+    title: "Found with toolSearch",
+    text: "Only the server's name goes in every request. When the model needs one of its tools, it searches for it, calls what the search finds, and keeps it for the rest of the conversation. A server of many tools costs almost nothing until one is used — the default for a new server.",
+  },
+  {
+    value: "direct",
+    title: "Declared to the model",
+    text: "Every tool, with its name and description, goes in every request like the app's own. The model sees them at once and never searches. Costs their place in the context in every round, used or not.",
+  },
+  {
+    value: "hidden",
+    title: "Hidden",
+    text: "None of them is offered. Single tools can still be switched on in the server's row in the MCP tab — for a server of which only one or two calls should be within reach.",
+  },
+];
+
+const RESULT_OPTIONS: Option<"cleared" | "kept">[] = [
+  {
+    value: "cleared",
+    title: "Cleared when the context fills",
+    text: "Once the request fills most of the model's window, the oldest results are dropped as any tool's are, and the model calls the tool again when it needs them. A long conversation stays inside the window, at the price of a repeated call now and then.",
+  },
+  {
+    value: "kept",
+    title: "Kept",
+    text: "Every result stays for the whole conversation — for a server that answers with templates, rules or a style guide the model follows, which would otherwise be fetched again every few rounds. Costs the context they take all the way down.",
+  },
+];
+
+/**
+ * A server typed in from scratch starts with its tools found by search: a
+ * README's snippet rarely says, and declaring a whole server's tools in every
+ * request is the expensive way to begin.
+ */
+const NEW_SERVER: McpServerFields = { ...EMPTY_SERVER, exposure: "deferred" };
+
+type Step = "paste" | "connection" | "tools" | "review";
 
 // In the order the screen walks them.
 const STEPS: { id: Step; label: string }[] = [
   { id: "paste", label: "Paste" },
   { id: "connection", label: "Connection" },
+  { id: "tools", label: "Tools" },
   { id: "review", label: "Review" },
 ];
 
@@ -57,10 +93,41 @@ type Props = {
 const commandLine = (fields: McpServerFields) =>
   fields.transport === "url" ? fields.url : [fields.command, ...fields.args.split("\n")].filter(Boolean).join(" ");
 
+/** One way of doing something, and the reason it is worth taking. */
+function Choice<T extends string>({
+  label,
+  value,
+  options,
+  onPick,
+}: {
+  label: string;
+  value: T;
+  options: Option<T>[];
+  onPick: (value: T) => void;
+}) {
+  return (
+    <div className="mcp-install-choices" role="radiogroup" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={option.value === value}
+          className={`mcp-install-choice${option.value === value ? " active" : ""}`}
+          onClick={() => onPick(option.value)}
+        >
+          <span className="mcp-install-choice-title">{option.title}</span>
+          <span className="mcp-install-choice-text">{option.text}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function McpInstall({ name, text, path, error, onSave, onClose, onEditJson }: Props) {
   const [step, setStep] = useState<Step>(name === null ? "paste" : "connection");
   const [fields, setFields] = useState<McpServerFields>(
-    () => (name !== null && text ? readMcpServer(text, name) : null) ?? EMPTY_SERVER,
+    () => (name !== null && text ? readMcpServer(text, name) : null) ?? NEW_SERVER,
   );
   const [draft, setDraft] = useState("");
   // What the last paste held, or why it held nothing.
@@ -95,7 +162,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   // A paste that holds one server goes on by itself; several are listed to
   // choose from, since the fields hold one.
   const read = () => {
-    const result = pastedServers(draft);
+    const result = pastedServers(draft, NEW_SERVER.exposure);
     setFound(result);
     if ("servers" in result && result.servers.length === 1) pick(result.servers[0]);
   };
@@ -105,7 +172,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   const next = () => {
     if (text === undefined) return setProblem(error ?? "The MCP file has not been read yet");
     if ("error" in written) return setProblem(written.error);
-    go("review");
+    go(step === "connection" ? "tools" : "review");
   };
 
   const install = async () => {
@@ -122,8 +189,8 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
       if (draft.trim()) read();
       return;
     }
-    if (step === "connection") return next();
-    void install();
+    if (step === "review") return void install();
+    next();
   };
 
   const set = (key: keyof McpServerFields) => (e: { target: { value: string } }) => {
@@ -265,40 +332,35 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
                   <input className="entry-input" inputMode="numeric" value={fields.timeoutSecs} onChange={set("timeoutSecs")} />
                 </Field>
               </div>
-              <Field label="Its tools" menu hint="Single tools are switched in the server's row in the MCP tab.">
-                <Dropdown
-                  below
-                  title="How the model reaches its tools"
-                  label={EXPOSURES[fields.exposure]}
-                  value={fields.exposure}
-                  options={[
-                    { value: "direct", label: EXPOSURES.direct, hint: "In every request, like a built-in tool" },
-                    {
-                      value: "deferred",
-                      label: EXPOSURES.deferred,
-                      hint: "Only the server's name in every request; the model searches for the tools it needs",
-                    },
-                    { value: "hidden", label: EXPOSURES.hidden, hint: "None, but those switched on in the tab" },
-                  ]}
-                  onPick={(exposure) => setFields((f) => ({ ...f, exposure: exposure as McpServerFields["exposure"] }))}
-                />
-              </Field>
-              <Field label="Its results" menu hint="Keep them for a server that answers with templates or rules the model follows.">
-                <Dropdown
-                  below
-                  title="What happens to its results as the context fills"
-                  label={fields.keepResults ? RESULTS.kept : RESULTS.cleared}
-                  value={fields.keepResults ? "kept" : "cleared"}
-                  options={[
-                    { value: "cleared", label: RESULTS.cleared, hint: "Old ones are cleared like any tool's, and called again when needed" },
-                    { value: "kept", label: RESULTS.kept, hint: "Never cleared — for instructions rather than data" },
-                  ]}
-                  onPick={(value) => setFields((f) => ({ ...f, keepResults: value === "kept" }))}
-                />
-              </Field>
             </section>
           </div>
         </>
+      )}
+
+      {step === "tools" && (
+        <div className="mcp-install-columns">
+          <section className="mcp-install-col">
+            <h4 className="mcp-install-head">How the model reaches its tools</h4>
+            <Choice
+              label="How the model reaches its tools"
+              value={fields.exposure}
+              options={EXPOSURE_OPTIONS}
+              onPick={(exposure) => setFields((f) => ({ ...f, exposure }))}
+            />
+            <p className="mcp-install-note">
+              The server's own tools, and a switch on each of them, are in its row in the MCP tab once it starts.
+            </p>
+          </section>
+          <section className="mcp-install-col">
+            <h4 className="mcp-install-head">What happens to its results</h4>
+            <Choice
+              label="What happens to its results as the context fills"
+              value={fields.keepResults ? "kept" : "cleared"}
+              options={RESULT_OPTIONS}
+              onPick={(value) => setFields((f) => ({ ...f, keepResults: value === "kept" }))}
+            />
+          </section>
+        </div>
       )}
 
       {step === "review" && (
@@ -333,7 +395,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
               className="btn btn-ghost"
               type="button"
               onClick={() => {
-                setFields(EMPTY_SERVER);
+                setFields(NEW_SERVER);
                 go("connection");
               }}
             >
@@ -341,7 +403,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             </button>
           </>
         )}
-        {step === "connection" && (
+        {(step === "connection" || step === "tools") && (
           <>
             <button className="btn btn-primary" type="submit">
               Next
@@ -358,7 +420,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
             <button className="btn btn-primary" type="submit" disabled={saving}>
               {name !== null ? "Save" : previous !== null ? "Replace" : "Install"}
             </button>
-            <button className="btn btn-ghost" type="button" onClick={() => go("connection")}>
+            <button className="btn btn-ghost" type="button" onClick={() => go("tools")}>
               Back
             </button>
           </>
