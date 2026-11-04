@@ -12,6 +12,34 @@
 .agent-detail.failed {
   --state: var(--amber);
 }
+/* The brief, folded: the prompt as written, which can be a whole review's diff. */
+.agent-brief > summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.agent-brief > summary::-webkit-details-marker {
+  display: none;
+}
+.agent-brief > summary:hover {
+  color: var(--text);
+}
+.agent-brief > summary .chev {
+  flex: none;
+  transition: transform 0.15s;
+}
+.agent-brief[open] > summary {
+  margin-bottom: 6px;
+}
+.agent-brief[open] > summary .chev {
+  transform: rotate(90deg);
+}
 .agent-task {
   font-size: var(--fs-sm);
   line-height: 1.5;

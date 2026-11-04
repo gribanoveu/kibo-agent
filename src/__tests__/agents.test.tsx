@@ -165,13 +165,18 @@ describe("the agent sheet", () => {
     </>
   );
 
-  test("the whole brief, how it stands, what it cost, the tools it called — the last one under way — and Stop while it runs", async () => {
+  test("the brief, folded, how it stands, what it cost, the tools it called — the last one under way — and Stop while it runs", async () => {
     const brief = "Repository: /work/kibo\nGoal: Where is the token refreshed?\nLook under src/auth.";
     listed[0] = { ...listed[0], task: brief };
     render(sheet({ id: 2, task: brief }));
     await settle();
     expect(screen.getByRole("complementary", { name: "Where is the token refreshed?" })).toBeTruthy();
-    expect(document.querySelector(".agent-task")?.textContent).toBe(brief);
+    // The prompt, as written, out of the way until asked for: a review's is a whole diff.
+    const fold = document.querySelector("details.agent-brief")!;
+    expect(fold.hasAttribute("open")).toBe(false);
+    expect(fold.querySelector(".agent-task")?.textContent).toBe(brief);
+    fireEvent.click(screen.getByText("Brief"));
+    expect(fold.hasAttribute("open")).toBe(true);
     expect(screen.getByText("#2")).toBeTruthy();
     expect(screen.getByText("running")).toBeTruthy();
     expect(screen.getByText("2 steps")).toBeTruthy();
@@ -211,6 +216,41 @@ describe("the agent sheet", () => {
     await settle();
     expect(screen.getByText("2 steps")).toBeTruthy();
     expect(screen.queryByText("This run is no longer listed.")).toBeNull();
+  });
+
+  test("its answer is read as the Markdown it is, and a file it names opens as one in the chat does", async () => {
+    listed[1] = {
+      ...listed[1],
+      answer: [
+        "## Tests",
+        "",
+        "Covered in **`tests/parser.rs`** — see [tests/parser.rs](tests/parser.rs#L12).",
+        "",
+        "- one",
+        "- two",
+        "",
+        "```rust",
+        "fn parse() {}",
+        "```",
+      ].join("\n"),
+    };
+    const opened: string[] = [];
+    render(
+      <AgentSheet
+        chatId="c"
+        run={{ id: 1, task: "Which tests cover the parser?" }}
+        onClose={() => {}}
+        onOpenFile={(link) => opened.push(link)}
+      />,
+    );
+    await settle();
+    const answer = document.querySelector(".agent-answer")!;
+    expect(answer.querySelector("h2.md-h2")?.textContent).toBe("Tests");
+    expect(answer.querySelector("strong.md-strong code.md-code-inline")?.textContent).toBe("tests/parser.rs");
+    expect([...answer.querySelectorAll("li.md-li")].map((li) => li.textContent)).toEqual(["one", "two"]);
+    expect(answer.querySelector(".md-code")?.getAttribute("data-lang")).toBe("rust");
+    fireEvent.click(answer.querySelector("a.md-link")!);
+    expect(opened).toEqual(["tests/parser.rs#L12"]);
   });
 
   test("a failed run says why", async () => {

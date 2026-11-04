@@ -733,7 +733,9 @@ export default function App() {
             />
           )}
           {bottomPane}
-          {agentShown && agentShown.chatId === agent.chatId && <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} />}
+          {agentShown && agentShown.chatId === agent.chatId && (
+            <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
+          )}
         </>
       ) : (
         <PlainChat
