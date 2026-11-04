@@ -3,52 +3,6 @@
   flex-direction: column;
   gap: 14px;
 }
-/* The steps are a strip, not a list down the side: the screen is wide and the
-   work goes left to right. */
-.mcp-install-steps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.mcp-install-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 3px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-pill);
-  background: none;
-  color: var(--text-faint);
-  font-family: var(--font-ui);
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-.mcp-install-step:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.mcp-install-step[aria-current="step"] {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.mcp-install-step:disabled {
-  cursor: default;
-}
-.mcp-install-step-num {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--bg-panel-soft);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-}
-.mcp-install-step[aria-current="step"] .mcp-install-step-num {
-  background: var(--accent);
-  color: var(--bg-panel);
-}
 .mcp-install-paste {
   display: flex;
   flex-direction: column;

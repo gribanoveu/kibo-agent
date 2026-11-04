@@ -338,23 +338,9 @@ pre.catalog-detail-text {
   font-size: var(--fs-md);
   line-height: 1.5;
 }
-/* The install dialog's steps: what goes in, then the secrets it asks for. */
-.catalog-steps {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* The install dialog's step strip, at the same distance as the text below. */
+.catalog-install-steps {
   margin-bottom: 12px;
-}
-.catalog-step {
-  padding: 3px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-pill);
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-}
-.catalog-step[aria-current="step"] {
-  border-color: var(--accent);
-  color: var(--text);
 }
 
 /* The install dialog's server entry: short, but a long one scrolls rather than pushing Install off. */

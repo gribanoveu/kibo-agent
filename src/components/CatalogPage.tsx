@@ -1,6 +1,7 @@
 import { useState, type ComponentType, type KeyboardEvent } from "react";
 import { DeepSeekIcon } from "./DeepSeekIcon";
 import { MongoIcon } from "./MongoIcon";
+import { Steps } from "./Steps";
 import {
   ArrowRight,
   BookOpen,
@@ -539,6 +540,15 @@ function hookLines(text: string): { event: string; matcher: string; command: str
   }
 }
 
+type InstallStep = "entry" | "secrets";
+
+// The install dialog's steps; the second is only there when the entry holds a
+// `${NAME}` to fill.
+const INSTALL_STEPS: { id: InstallStep; label: string }[] = [
+  { id: "entry", label: "What goes in" },
+  { id: "secrets", label: "Secrets" },
+];
+
 /** A server is a command the app will run, or an address it will send to;
     a hook is a command run on tool calls with no card to approve it. Either is
     shown whole and installed only from here — a server with its secrets typed
@@ -547,7 +557,7 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
   const { item } = entry;
   const preview = useCatalogPreview(keyOf(entry));
   const [secrets, setSecrets] = useState<Record<string, string>>({});
-  const [step, setStep] = useState<"entry" | "secrets">("entry");
+  const [step, setStep] = useState<InstallStep>("entry");
   const read = preview?.read;
   const ready = !!read && filled(read.secrets, secrets);
   // The step is there only when the entry has a placeholder to fill.
@@ -588,13 +598,8 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
       }
     >
       {askSecrets && (
-        <div className="catalog-steps" aria-label="Steps">
-          <span className="catalog-step" aria-current={step === "entry" ? "step" : undefined}>
-            1 What goes in
-          </span>
-          <span className="catalog-step" aria-current={step === "secrets" ? "step" : undefined}>
-            2 Secrets
-          </span>
+        <div className="catalog-install-steps">
+          <Steps steps={INSTALL_STEPS} current={step} onGo={setStep} />
         </div>
       )}
       {step === "secrets" ? (

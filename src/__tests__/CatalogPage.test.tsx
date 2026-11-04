@@ -220,7 +220,7 @@ describe("the catalog page", () => {
     const dialog = screen.getByRole("dialog", { name: "Install GitHub?" });
     expect(await within(dialog).findByText(/api\.example\/mcp/)).toBeTruthy();
     // The entry is read first; the tokens are a step of their own.
-    expect(within(dialog).getByText("1 What goes in")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /What goes in/ })).toBeTruthy();
     expect(within(dialog).queryByLabelText("GITHUB_TOKEN")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
 

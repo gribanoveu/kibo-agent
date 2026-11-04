@@ -201,6 +201,19 @@ describe("installing a server", () => {
     expect(JSON.parse(saved[0]).mcpServers.github).toEqual({ command: "npx", args: ["-y", "server-github"] });
   });
 
+  test("a step behind can be clicked back to", () => {
+    mount();
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "kb" } });
+    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "kb-server" } });
+    next();
+    expect(button("3 Tools").getAttribute("aria-current")).toBe("step");
+
+    fireEvent.click(button("2 Connection"));
+    expect(button("2 Connection").getAttribute("aria-current")).toBe("step");
+    expect(value(/^Name/)).toBe("kb");
+  });
+
   test("back keeps what was typed", () => {
     mount();
     fireEvent.click(button("Start from scratch"));

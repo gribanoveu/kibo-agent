@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Dropdown } from "./Dropdown";
 import { Field } from "./EntryField";
+import { Steps } from "./Steps";
 import {
   EMPTY_SERVER,
   entrySecrets,
@@ -235,22 +236,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
         submit();
       }}
     >
-      <nav className="mcp-install-steps" aria-label="Steps">
-        {steps.map(({ id, label }, i) => (
-          <button
-            key={id}
-            type="button"
-            className="mcp-install-step"
-            aria-current={shown === id ? "step" : undefined}
-            title={i > at ? "Fill this step in first" : undefined}
-            disabled={i > at}
-            onClick={() => go(id)}
-          >
-            <span className="mcp-install-step-num">{i + 1}</span>
-            {label}
-          </button>
-        ))}
-      </nav>
+      <Steps steps={steps} current={shown} onGo={go} />
 
       {/* Any refusal, wherever it came from, stands here until the next move. */}
       {(problem ?? error) && <p className="entry-error">{problem ?? error}</p>}
