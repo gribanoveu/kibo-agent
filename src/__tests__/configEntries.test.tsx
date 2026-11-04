@@ -3,12 +3,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import {
   EMPTY_HOOK,
   EMPTY_SERVER,
+  keyClash,
   pastedServers,
   previousEntry,
   readHook,
   readMcpServer,
   removeHook,
   removeMcpServer,
+  serverKey,
   writeHook,
   writeMcpServer,
 } from "../lib/configEntries";
@@ -236,6 +238,23 @@ describe("a pasted server", () => {
       command: "uvx",
       disabled: false,
     });
+  });
+});
+
+describe("a server's key", () => {
+  test("is the name lowercased, keeping only what a tool name may hold", () => {
+    expect(serverKey("My Server.v2")).toBe("my_server_v2");
+    expect(serverKey("git-hub")).toBe("git-hub");
+    expect(serverKey("")).toBe("");
+  });
+
+  test("clashes with another server spelled differently, not with itself", () => {
+    const file = text({ mcpServers: { GitHub: { command: "gh" }, db: { command: "db" } } });
+    expect(keyClash(file, null, "github")).toBe("GitHub");
+    expect(keyClash(file, "GitHub", "github")).toBeNull();
+    expect(keyClash(file, "db", "github")).toBe("GitHub");
+    expect(keyClash(file, null, "  ")).toBeNull();
+    expect(keyClash("{", null, "github")).toBeNull();
   });
 });
 

@@ -79,6 +79,24 @@ export function previousEntry(text: string, edited: string | null, typed: string
   return isObject(servers) && typed && own(servers, typed) ? typed : null;
 }
 
+/** The server's part of a tool name, as `domain::mcp::server_key` forms it: `mcp__<key>__<tool>`. */
+export function serverKey(name: string): string {
+  return Array.from(name, (c) => (/[A-Za-z0-9-]/.test(c) ? c.toLowerCase() : "_")).join("");
+}
+
+/**
+ * Another server in the file whose tools would take the same prefix, if there
+ * is one: a name is lowercased and what a tool name may not hold becomes `_`,
+ * so two spellings of one server become one prefix there.
+ */
+export function keyClash(text: string, previous: string | null, typed: string): string | null {
+  const key = serverKey(typed);
+  if (!key) return null;
+  const servers = parseFile(text)?.mcpServers;
+  if (!isObject(servers)) return null;
+  return Object.keys(servers).find((other) => other !== previous && serverKey(other) === key) ?? null;
+}
+
 /** The keys the form writes itself; anything else an entry carries stays in `extra`. */
 const OWNED = ["command", "args", "env", "url", "headers", "weight", "timeoutSecs", "exposure", "keepResults"] as const;
 

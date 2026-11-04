@@ -126,6 +126,22 @@
   font-size: var(--fs-sm);
   line-height: 1.45;
 }
+/* The tool prefix the typed name makes, under the field it comes from. */
+.mcp-install-key {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.mcp-install-key-tool {
+  color: var(--text-faint);
+}
+.mcp-install-warn {
+  margin: 0;
+  color: var(--amber);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
 .mcp-install-entry {
   max-height: 320px;
   margin: 0;

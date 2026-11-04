@@ -98,6 +98,18 @@ describe("installing a server", () => {
     expect(screen.getByText("The server needs a command to start it")).toBeTruthy();
   });
 
+  test("the name shows the tool prefix it makes, and warns when another server takes it", () => {
+    mount({ text: text({ mcpServers: { GitHub: { command: "gh" } } }) });
+    fireEvent.click(button("Start from scratch"));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "My Server.v2" } });
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__my_server_v2__<tool>");
+    expect(screen.queryByText(/Clashes with the server/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "github" } });
+    expect(document.querySelector(".mcp-install-key")?.textContent).toBe("mcp__github__<tool>");
+    expect(screen.getByText(/Clashes with the server/)).toBeTruthy();
+  });
+
   test("a paste that is not a server says where it breaks and stays", () => {
     mount();
     paste("npx -y server-github");

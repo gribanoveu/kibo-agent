@@ -3,9 +3,11 @@ import { Dropdown } from "./Dropdown";
 import { Field } from "./EntryField";
 import {
   EMPTY_SERVER,
+  keyClash,
   pastedServers,
   previousEntry,
   readMcpServer,
+  serverKey,
   writeMcpServer,
   type McpServerFields,
   type PastedServer,
@@ -70,6 +72,10 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
   // A pasted name that is already in the file replaces that entry where it
   // stands, as the file editor's own paste does.
   const previous = previousEntry(text ?? "", name, typed);
+  // What the agent will call this server's tools, and whose prefix it takes
+  // away from if another server in the file is spelled differently.
+  const key = serverKey(typed);
+  const clash = keyClash(text ?? "", previous, typed);
   const written = writeMcpServer(text ?? "", previous, fields);
   const writtenFile = "text" in written ? parseFile(written.text) : null;
   const entry = writtenFile && isObject(writtenFile.mcpServers) ? writtenFile.mcpServers[typed] : undefined;
@@ -197,9 +203,19 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           <div className="mcp-install-columns">
             <section className="mcp-install-col" aria-label="How it runs">
               <h4 className="mcp-install-head">How it runs</h4>
-              <Field label="Name" hint="How the agent's tools are named: mcp__name__tool.">
+              <Field label="Name" hint="Letters and digits stay, anything else becomes _; the name is lowercased.">
                 <input className="entry-input" value={fields.name} onChange={set("name")} autoFocus={name === null} />
+                <code className="mcp-install-key">
+                  {`mcp__${key || "<name>"}__`}
+                  <span className="mcp-install-key-tool">{"<tool>"}</span>
+                </code>
               </Field>
+              {clash && (
+                <p className="mcp-install-warn">
+                  Clashes with the server <b>{clash}</b> in the file: both become <b>{key}</b> in tool names — rename
+                  one, or its tools will not be offered.
+                </p>
+              )}
               <Field label="Runs" menu>
                 <Dropdown
                   below
