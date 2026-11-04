@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { type ImagePart, imageUrl } from "../lib/images";
 import { Modal } from "./Modal";
@@ -44,14 +45,17 @@ export function ImageThumbs({ images, onRemove, align = "start" }: Props) {
           </li>
         ))}
       </ul>
-      <Modal
-        title={shown ? `Image · ${shown.width}×${shown.height}` : ""}
-        open={shown !== null}
-        onClose={() => setOpen(null)}
-        wide
-      >
-        {shown && <img className="image-full" src={imageUrl(shown)} alt="" />}
-      </Modal>
+      {/* Out of the thread and into the window: the thread fades its own bottom
+          out with a mask, and a fixed panel drawn inside it is held to the
+          thread's box and cut off with that fade — the viewer's Close button
+          with it. The same escape a diagram takes (Markdown.tsx). */}
+      {shown &&
+        createPortal(
+          <Modal title={`Image · ${shown.width}×${shown.height}`} open onClose={() => setOpen(null)} wide>
+            <img className="image-full" src={imageUrl(shown)} alt="" />
+          </Modal>,
+          document.body,
+        )}
     </>
   );
 }
