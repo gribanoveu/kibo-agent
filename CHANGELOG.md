@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
 - 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
 - 2026-11-04 A panel that holds a page of its own — a prototype in the preview — drags by its edge again: the page inside no longer takes the pointer for itself, which stopped the drag at the panel's edge and left the resize cursor on the window
 - 2026-11-04 Installing a server from the catalog asks for its `${NAME}` secrets on a step of their own, after the entry it is about to write — the dialog only has that step when there is something to fill
