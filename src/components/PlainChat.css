@@ -250,6 +250,16 @@
   color: var(--text);
 }
 
+/* The attach button and the send button are pushed right together: the meter
+   takes the room before them, or the pair takes it itself. */
+.plain-composer-bar .attach-images {
+  margin-left: auto;
+}
+.plain-meter + .attach-images,
+.attach-images + .plain-send {
+  margin-left: 0;
+}
+
 /* The element pointed at in a Prototype chat's preview, to go with the next
    message: its selector on one line, cut short, with a way to drop it. */
 .plain-pointed {

@@ -24,6 +24,9 @@ export type Attached = { image: ImagePart; name: string };
 export function useAttachments(enabled: boolean) {
   const [images, setImages] = useState<ImagePart[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** Pictures being read and sanitized: one placeholder each, where they land. */
+  const [preparing, setPreparing] = useState<number[]>([]);
+  const preparingSeq = useRef(0);
   /** Files are being held over the window: the box says it takes them. */
   const [dragging, setDragging] = useState(false);
   // The list as of now, for the checks between awaits: state seen from inside
@@ -39,23 +42,39 @@ export function useAttachments(enabled: boolean) {
       setError("This model is set to text only — turn images on in Settings → Models.");
       return;
     }
+    if (held.current.length >= MAX_IMAGES) {
+      setError(`Up to ${MAX_IMAGES} images in one message.`);
+      return;
+    }
     setError(null);
-    for (const source of sources) {
-      if (held.current.length >= MAX_IMAGES) {
-        setError(`Up to ${MAX_IMAGES} images in one message.`);
-        break;
-      }
-      try {
-        const part = await source.prepare();
-        // Checked again: another paste may have filled the box meanwhile.
-        if (held.current.length >= MAX_IMAGES) {
-          setError(`Up to ${MAX_IMAGES} images in one message.`);
-          break;
+    // A placeholder per file from the first moment: the backend reads and
+    // sanitizes each, and a big screenshot takes a moment to come back.
+    const placeholders = sources.map(() => ++preparingSeq.current);
+    setPreparing((ids) => [...ids, ...placeholders]);
+    try {
+      for (const [at, source] of sources.entries()) {
+        try {
+          if (held.current.length >= MAX_IMAGES) {
+            setError(`Up to ${MAX_IMAGES} images in one message.`);
+            break;
+          }
+          const part = await source.prepare();
+          // Checked again: another paste may have filled the box meanwhile.
+          if (held.current.length >= MAX_IMAGES) {
+            setError(`Up to ${MAX_IMAGES} images in one message.`);
+            break;
+          }
+          hold([...held.current, { image: part, name: source.name }]);
+        } catch (e) {
+          setError(`${source.name}: ${e}`);
+        } finally {
+          // Its picture has landed, or the error says why there is none.
+          setPreparing((ids) => ids.filter((one) => one !== placeholders[at]));
         }
-        hold([...held.current, { image: part, name: source.name }]);
-      } catch (e) {
-        setError(`${source.name}: ${e}`);
       }
+    } finally {
+      // What the limit stopped before reaching never gets a picture.
+      setPreparing((ids) => ids.filter((one) => !placeholders.includes(one)));
     }
   };
 
@@ -74,16 +93,20 @@ export function useAttachments(enabled: boolean) {
   };
 
   // Every dropped file goes to the backend, which reads its content: one that
-  // is not a PNG or JPEG comes back as a sentence naming it.
+  // is not a PNG or JPEG comes back as a sentence naming it. Files picked in
+  // the platform's dialog come the same way — by path.
+  const attach = (paths: string[]) => {
+    if (paths.length === 0) return;
+    void add(paths.map((path) => ({ name: fileName(path), prepare: () => prepareImageFile(path) })));
+  };
+
   useEffect(
     () =>
       onFileDrop((drop) => {
         setDragging(drop.type === "over");
-        if (drop.type === "drop") {
-          void add(drop.paths.map((path) => ({ name: fileName(path), prepare: () => prepareImageFile(path) })));
-        }
+        if (drop.type === "drop") attach(drop.paths);
       }),
-    // `add` reads `enabled` and refs only; a new one per render changes nothing else.
+    // `attach` reads `enabled` and refs only; a new one per render changes nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [enabled],
   );
@@ -121,7 +144,7 @@ export function useAttachments(enabled: boolean) {
   /** The user closed the note; the next picture says again if it fails. */
   const clearError = () => setError(null);
 
-  return { images, error, dragging, paste, remove, take, takeNamed, restore, clearError };
+  return { images, error, dragging, preparing: preparing.length, paste, remove, take, takeNamed, restore, attach, clearError };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

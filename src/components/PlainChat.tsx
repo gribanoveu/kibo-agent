@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
+import { AttachImagesButton } from "./AttachImagesButton";
 import { Dropdown } from "./Dropdown";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
@@ -105,7 +106,8 @@ export function PlainChat({
   const [draft, setDraft, take] = useChatDraft(chatDraftKey("chat", chat.chatId));
   // A Prototype chat keeps pictures in its folder for any model: one that
   // cannot see them still names them on the page.
-  const attachments = useAttachments(imagesEnabled || chat.role === "prototype");
+  const takesPictures = imagesEnabled || chat.role === "prototype";
+  const attachments = useAttachments(takesPictures);
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
@@ -333,7 +335,7 @@ export function PlainChat({
               Drop to attach
             </div>
           )}
-          <ImageThumbs images={attachments.images} onRemove={attachments.remove} />
+          <ImageThumbs images={attachments.images} preparing={attachments.preparing} onRemove={attachments.remove} />
           {pointed && (
             <div className="plain-pointed" title={pointed.text || pointed.selector}>
               <MousePointerClick size={12} />
@@ -399,6 +401,10 @@ export function PlainChat({
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
             )}
+            {/* Beside the send button, as in the agent's box — a picture can
+                be chosen instead of pasted. Nothing to attach while the box is
+                held until the answer. */}
+            {takesPictures && <AttachImagesButton onPick={attachments.attach} disabled={chat.busy} />}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
                 <Square size={14} />

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-04 A picture is attached with a button beside Send, in the agent's chat and in Chat mode, instead of pasting or dropping it — the button is there only for a model set to see pictures, and the picker offers PNG and JPEG only — a picture still being read and sanitized shows a spinner in its place in the row until it lands
 - 2026-11-04 A message sent into a turn that is already running takes its pictures with it: a screenshot attached to the note reaches the model with the note and is drawn on its bubble, and a note taken back before a round reads it brings its picture home to the box — a message held for after the turn carries its pictures too, as does one typed while an approval card shows
 - 2026-11-04 A panel that holds a page of its own — a prototype in the preview — drags by its edge again: the page inside no longer takes the pointer for itself, which stopped the drag at the panel's edge and left the resize cursor on the window
 - 2026-11-04 Installing a server from the catalog asks for its `${NAME}` secrets on a step of their own, after the entry it is about to write — the dialog only has that step when there is something to fill

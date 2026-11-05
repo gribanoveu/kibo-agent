@@ -37,9 +37,9 @@ afterEach(() => {
 });
 
 /** Only what the chat on screen reads: a conversation that has not started. */
-const state = (chatId: string | null, send: (text: string) => void = () => {}) => ({
+const state = (chatId: string | null, send: (text: string) => void = () => {}, role: "assistant" | "prototype" = "assistant") => ({
   chatId,
-  role: "assistant" as const,
+  role,
   roles: [{ id: "assistant" as const, name: "Assistant", description: "Answers in text" }],
   turn: { blocks: [], status: "done" as const, usage: null },
   busy: false,
@@ -61,10 +61,16 @@ type Chat = Parameters<typeof PlainChat>[0]["chat"];
 type Kube = Parameters<typeof PlainChat>[0]["kube"];
 
 /** The chat as `PlainChat` is drawn for it — `state` stands in for `usePlainChat`. */
-const chatScreen = (chatId: string | null, send?: (text: string) => void) => (
+const chatScreen = (
+  chatId: string | null,
+  send?: (text: string) => void,
+  imagesEnabled = false,
+  role: "assistant" | "prototype" = "assistant",
+) => (
   <PlainChat
-    chat={state(chatId, send) as unknown as Chat}
+    chat={state(chatId, send, role) as unknown as Chat}
     focus={0}
+    imagesEnabled={imagesEnabled}
     models={{ choices: [], current: null }}
     onModel={() => {}}
     onEffort={() => {}}
@@ -79,6 +85,21 @@ const box = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 const type = (text: string) => fireEvent.change(box(), { target: { value: text } });
 
 describe("Chat mode's box", () => {
+  /// Chat mode's box takes pictures as the agent's does, and offers them the
+  /// same way: a button beside send, for a model that sees them — and for a
+  /// Prototype chat, which keeps them in its folder for any model.
+  test("a picture can be chosen beside send, when the box takes them", () => {
+    const { rerender } = render(chatScreen("a"));
+    expect(screen.queryByRole("button", { name: "Attach a picture" })).toBeNull();
+
+    rerender(chatScreen("a", undefined, true));
+    const attach = screen.getByRole("button", { name: "Attach a picture" });
+    expect(attach.nextElementSibling?.getAttribute("title")).toBe("Send");
+
+    rerender(chatScreen("a", undefined, false, "prototype"));
+    expect(screen.getByRole("button", { name: "Attach a picture" })).toBeTruthy();
+  });
+
   test("each chat finds its own text, and only its own", () => {
     const { rerender } = render(chatScreen("a"));
     type("про первый");
