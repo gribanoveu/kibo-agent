@@ -406,6 +406,12 @@
 .knowledge-doc-text {
   padding: 12px;
   overflow: auto;
+  /* A document is set as the Catalog's details beside it are: at the sheet's
+     scale (`.text-scale`), its text at --fs-md rather than the 16px the sheet
+     body gives prose — the Markdown's paragraphs and headings came out larger
+     than everything else in the panel. `.md-*` sizes are in em, so they follow
+     from here. */
+  font-size: var(--fs-md);
 }
 .knowledge-field {
   display: flex;
