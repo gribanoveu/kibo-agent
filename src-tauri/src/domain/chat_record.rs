@@ -91,6 +91,10 @@ pub struct ChatRecord {
     /// pick never moves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kube: Option<KubePin>,
+    /// The branch this chat's worktree started from; `None` outside one moved
+    /// there by the parallel-session offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base: Option<String>,
     /// The git branch its folder had checked out when it was last saved — the
     /// branch the chat works on. The folder is shared by all its chats, so
     /// another chat's switch moves the folder, never this.
@@ -258,6 +262,7 @@ mod tests {
             branched_from: None,
             role: None,
             kube: None,
+            worktree_base: None,
             git_branch: None,
         }
     }

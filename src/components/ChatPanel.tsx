@@ -232,10 +232,12 @@ function ToolRow({
   );
 }
 
+const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
+
 function ApprovalCard({
   block,
   onDecide,
-  preview = previewCalls,
+  preview = previewInOpenWorkspace,
 }: {
   block: Extract<Block, { kind: "approval" }>;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
@@ -704,6 +706,8 @@ type Props = {
   onRewind?: (bubbleId: string) => void;
   /** Puts a request to fix a review's finding into the message box. */
   onFix?: (text: string) => void;
+  /** Previews approval calls in this chat's own checkout. */
+  preview?: PreviewCalls;
   /** Sends what an offer under the last answer offered, as the user's message. */
   onOffer?: (kind: OfferKind) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
@@ -852,6 +856,7 @@ export function ChatPanel({
   onBranch,
   onRewind,
   onFix,
+  preview,
   onOffer,
   onAnswerQuestion,
   headSlot = null,
@@ -977,6 +982,7 @@ export function ChatPanel({
               onRewind={onRewind}
               onAnswerQuestion={onAnswerQuestion}
               onFix={onFix}
+              preview={preview}
               onOffer={onOffer}
               checklist={checklist}
             />
@@ -1036,7 +1042,8 @@ function UserBubble({
       )}
       {block.text && <div className="bubble">{block.text}</div>}
       <div className="bubble-foot">
-        <CopyAction text={block.text} />
+        {/* A picture sent alone has no words to copy. */}
+        {block.text && <CopyAction text={block.text} />}
         {offered && (
           <button
             type="button"
@@ -1099,9 +1106,12 @@ function renderBlock(
       // kept for it so nothing moves.
       return (
         <div className="user-msg" key={block.id}>
-          <div className="bubble">{block.text}</div>
+          <ImageThumbs images={block.images ?? []} align="end" />
+          {/* A picture sent alone has no words to put in a bubble. */}
+          {block.text && <div className="bubble">{block.text}</div>}
           <div className="bubble-foot">
-            <CopyAction text={block.text} />
+            {/* A picture sent alone has no words to copy. */}
+            {block.text && <CopyAction text={block.text} />}
             Sent while the agent was working
           </div>
         </div>

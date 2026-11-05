@@ -10,9 +10,12 @@
 //! and `chat_resume` receives the whole checkpoint, which is what makes a
 //! paused turn survive a reload, a crash, or being picked up by a different
 //! window. What *is* resident is only what a running turn needs to be reached
-//! from outside while it runs: the stop flag, the queue of notes typed at it,
-//! the workspace it acts on, and the standing approval policy.
+//! from outside while it runs — and that is resident **per chat**: each
+//! chat's turns are reached through their own `SessionHandle`, so two chats'
+//! turns can run side by side without one's stop or steering note touching
+//! the other's.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,6 +24,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::compaction::{ContextUsage, RequestFrame};
+use crate::domain::image::ImagePart;
 use crate::domain::prompt::TurnContext;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::settings::{RememberScope, WebSearchPlace};
@@ -47,25 +51,17 @@ use crate::services::workspace_index::WorkspaceIndex;
 use super::chat_events::chat_event_sink;
 use super::workspace_events::index_event_sink;
 
+/// What a running turn of one chat is reached through while it runs: its stop
+/// flag, the notes typed at it, and its side of the next-prompt journal. One
+/// per chat, so a chat's turn never shares any of this with another chat's.
 #[derive(Default)]
-pub struct AgentState {
-    /// One in-flight turn at a time, so one flag needs no turn id to
+pub(crate) struct SessionHandle {
+    /// One in-flight turn per chat, so one flag needs no turn id to
     /// disambiguate. Reset by `chat_start` and deliberately *not* by
     /// `chat_resume` — a stop pressed while an approval card was showing has
     /// to survive until the resumed turn reads it.
     cancel: AtomicBool,
     steering: SteeringQueue,
-    workspace: Mutex<Option<PathBuf>>,
-    /// Grows as the user answers "always allow"; not persisted, because a
-    /// saved "never ask me" is a brake released a month ago and forgotten.
-    approval: Mutex<ApprovalPolicy>,
-    /// What the window's mode chip says right now. Resident rather than sent
-    /// with each turn for the same reason as the approval policy: a paused
-    /// turn is resumed from a checkpoint that predates the chip, and a mode
-    /// threaded through both entry points would have to be re-sent correctly
-    /// by the caller at the one moment it is easiest to forget. Not persisted
-    /// — a mode is a decision about this conversation, not about the app.
-    mode: Mutex<ConversationMode>,
     /// The running turn's signals for the next-prompt journal. Resident
     /// because a turn outlives one command: what came before a pause for
     /// approval still counts after the resume.
@@ -74,34 +70,42 @@ pub struct AgentState {
     /// from the running one, so a queued message that starts the next turn
     /// before that call arrives does not wipe it.
     finished_turn: Mutex<Option<(String, FinishedTurn)>>,
+    /// Its own checkout while the turn runs: the mark and the root cannot
+    /// disagree because one lock holds both. Only turns in the same checkout
+    /// share files and a git index.
+    running_root: Mutex<Option<PathBuf>>,
+    /// A paused turn still owns the chat's history until its card is resumed.
+    paused: AtomicBool,
 }
 
-impl AgentState {
-    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
-        self.workspace
-            .lock()
-            .map_err(|_| "workspace lock poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "no folder is open".to_string())
-    }
+/// Counted while a chat's turn runs; clears itself on drop, however the turn
+/// ended — finished, paused, stopped, refused or lost to a panicked thread.
+pub(crate) struct RunningTurn(Arc<SessionHandle>);
 
-    fn mode(&self) -> ConversationMode {
-        // A poisoned lock loses the chip's setting, not the turn. Falling back
-        // to the default would silently widen it, so the last successful read
-        // is not available — `Agent` is the default and the honest answer is
-        // to say the mode could not be read.
-        self.mode
-            .lock()
-            .map_or(ConversationMode::default(), |mode| *mode)
+impl std::fmt::Debug for RunningTurn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunningTurn")
+    }
+}
+
+impl Drop for RunningTurn {
+    fn drop(&mut self) {
+        *self.0.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+impl SessionHandle {
+    fn is_running(&self) -> bool {
+        self.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some()
     }
 
     // The next-prompt journal's side of a turn. A poisoned lock costs the
     // journal one row, never the turn.
 
     /// A fresh turn, in the mode it starts in. A resume is not one.
-    fn begin_turn(&self) {
+    fn begin_turn(&self, mode: ConversationMode) {
         if let Ok(mut features) = self.next_prompt.lock() {
-            *features = TurnFeatures::new(self.mode());
+            *features = TurnFeatures::new(mode);
         }
     }
 
@@ -127,6 +131,170 @@ impl AgentState {
             None
         }
     }
+}
+
+#[derive(Default)]
+pub struct AgentState {
+    /// Each chat's handle, made on first ask. The workspace, the approval
+    /// policy and the mode stay shared: the folder is the window's, and the
+    /// policy and the chip are decisions about the conversation in it, not
+    /// about one chat's turn.
+    /// ponytail: handles are never pruned — the map grows by one entry per
+    /// chat touched in a window's run. An LRU is the way past that if a long
+    /// run ever shows it.
+    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    workspace: Mutex<Option<PathBuf>>,
+    /// Grows as the user answers "always allow"; not persisted, because a
+    /// saved "never ask me" is a brake released a month ago and forgotten.
+    approval: Mutex<ApprovalPolicy>,
+    /// What the window's mode chip says right now. Resident rather than sent
+    /// with each turn for the same reason as the approval policy: a paused
+    /// turn is resumed from a checkpoint that predates the chip, and a mode
+    /// threaded through both entry points would have to be re-sent correctly
+    /// by the caller at the one moment it is easiest to forget. Not persisted
+    /// — a mode is a decision about this conversation, not about the app.
+    mode: Mutex<ConversationMode>,
+}
+
+impl AgentState {
+    /// The handle `chat_id`'s turns are reached through, made on first ask.
+    pub(crate) fn session(&self, chat_id: &str) -> Arc<SessionHandle> {
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(sessions.entry(chat_id.to_string()).or_default())
+    }
+
+    /// Marks `chat_id`'s turn as running and hands back the guard that clears
+    /// it. Refused when that chat's turn already runs or waits on its card —
+    /// one chat, one owned history — and when `limit` turns run already.
+    pub(crate) fn begin_running(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
+        self.begin_running_inner(chat_id, limit, workspace, false)
+    }
+
+    fn begin_resume(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
+        self.begin_running_inner(chat_id, limit, workspace, true)
+    }
+
+    fn begin_running_inner(&self, chat_id: &str, limit: u32, workspace: &std::path::Path, resume: bool) -> Result<RunningTurn, String> {
+        // A hand-edited zero would refuse every turn; one always runs.
+        let limit = limit.max(1);
+        let _tree = crate::domain::command_risk::git_tree_lock();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handle = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
+        if handle.is_running() {
+            return Err("this chat's turn is already running".to_string());
+        }
+        if !resume && handle.paused.load(Ordering::SeqCst) {
+            return Err("this chat's turn is waiting for approval — resume or stop it first".to_string());
+        }
+        let running = sessions.values().filter(|s| s.is_running()).count() as u32;
+        if running >= limit {
+            return Err(format!(
+                "{running} turns are already running — the parallel-turns limit. \
+                 Wait for one to finish, or raise it in Settings"
+            ));
+        }
+        *handle.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.to_path_buf());
+        handle.paused.store(false, Ordering::SeqCst);
+        Ok(RunningTurn(handle))
+    }
+
+    /// Titles of the other chats running in this checkout, live for the prompt's
+    /// standing note and the command guard. A linked worktree is another checkout.
+    fn parallel_chats(&self, chat_id: &str, workspace: &std::path::Path) -> Vec<String> {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let running: Vec<String> = sessions
+            .iter()
+            .filter(|(id, session)| {
+                id.as_str() != chat_id
+                    && session.is_running()
+                    && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        drop(sessions);
+        running.into_iter().map(|id| crate::infra::chat_store::title(&id).ok().flatten().unwrap_or(id)).collect()
+    }
+
+    fn running_turns(&self) -> usize {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions.values().filter(|session| session.is_running()).count()
+    }
+
+    pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
+        if self.session(chat_id).is_running() {
+            Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Automatic cleanup never removes a checkout another turn is still using.
+    pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
+        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        !sessions.values().any(|session| {
+            session.is_running()
+                && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+        })
+    }
+
+    /// A checkout moves every chat's folder, so none may be running in it.
+    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
+        if self.running_turns() == 0 {
+            Ok(())
+        } else {
+            Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
+        }
+    }
+
+    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
+        self.workspace
+            .lock()
+            .map_err(|_| "workspace lock poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "no folder is open".to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_workspace_for_test(&self, workspace: PathBuf) {
+        *self.workspace.lock().unwrap() = Some(workspace);
+    }
+
+    /// The checkout this chat belongs to, not whichever folder is open now.
+    /// An unsaved chat has no record yet and starts in the open folder.
+    pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
+        let record = match crate::infra::chat_store::load(chat_id) {
+            Ok(record) => Some(record),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let Some(record) = record else { return Ok((self.workspace()?, None)) };
+        let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
+            .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
+        if !root.is_dir() {
+            return Err(format!("the chat's folder {} is not a folder", record.workspace));
+        }
+        Ok((root, record.worktree_base))
+    }
+
+    /// Prompt measuring also works before any folder is open, as it did for
+    /// an unsaved chat; a saved chat still reads only its own checkout.
+    fn chat_prompt_workspace(&self, chat_id: &str) -> Result<Option<PathBuf>, String> {
+        match crate::infra::chat_store::load(chat_id) {
+            Ok(_) => self.chat_workspace(chat_id).map(|(root, _)| Some(root)),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.workspace().ok()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn mode(&self) -> ConversationMode {
+        // A poisoned lock loses the chip's setting, not the turn. Falling back
+        // to the default would silently widen it, so the last successful read
+        // is not available — `Agent` is the default and the honest answer is
+        // to say the mode could not be read.
+        self.mode
+            .lock()
+            .map_or(ConversationMode::default(), |mode| *mode)
+    }
 
     fn approval(&self) -> Result<ApprovalPolicy, String> {
         Ok(self
@@ -148,6 +316,7 @@ impl AgentState {
 #[tauri::command]
 pub async fn workspace_open(
     path: String,
+    keep_running: Option<bool>,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
@@ -166,12 +335,15 @@ pub async fn workspace_open(
         .workspace
         .lock()
         .map_err(|_| "workspace lock poisoned".to_string())? = Some(resolved.clone());
-    // They ran in the folder that was open, for the conversation about it.
-    if let Some(processes) = app.try_state::<Arc<Processes>>() {
-        processes.stop_all();
-    }
-    if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
-        terminals.close_all();
+    // A chat moved to its worktree must not stop the neighbouring chat's
+    // processes. Ordinary folder switches keep the old behaviour.
+    if keep_running != Some(true) {
+        if let Some(processes) = app.try_state::<Arc<Processes>>() {
+            processes.stop_all();
+        }
+        if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
+            terminals.close_all();
+        }
     }
 
     let shown = resolved.display().to_string();
@@ -294,12 +466,17 @@ pub async fn chat_start<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let session = state.session(&chat_id);
+    // Admission before anything about the session is touched: a refused
+    // start must leave the running turn's stop flag and journal alone.
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
-    state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn();
+    session.cancel.store(false, Ordering::SeqCst);
+    session.begin_turn(state.mode());
     crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
     .await
@@ -318,7 +495,10 @@ pub async fn chat_resume<R: Runtime>(
     plan: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let session = state.session(&chat_id);
+    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
     .await
@@ -330,10 +510,11 @@ pub async fn chat_resume<R: Runtime>(
 /// trip beats one per call. Nothing here runs anything.
 #[tauri::command]
 pub async fn chat_preview(
+    chat_id: String,
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
-    let workspace = state.workspace()?;
+    let (workspace, _) = state.chat_workspace(&chat_id)?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -379,7 +560,8 @@ pub async fn chat_compact<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
-    let frame = next_request_frame(&app, &state);
+    let workspace = state.chat_prompt_workspace(&chat_id)?;
+    let frame = next_request_frame(&app, &state, workspace);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
     // IPC loop freezes every other command for its duration.
@@ -432,13 +614,15 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>, chat_id: String) -> 
 #[tauri::command]
 pub async fn chat_context_usage(
     messages: Vec<LlmMessage>,
+    chat_id: String,
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
+    let workspace = state.chat_prompt_workspace(&chat_id)?;
     let state = Arc::clone(&state);
     super::blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state), &messages))
+        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, workspace), &messages))
     })
     .await
 }
@@ -448,8 +632,7 @@ pub async fn chat_context_usage(
 /// MCP servers only as they run now, since none is started to be measured,
 /// and the shell by name, since probing it runs it. Without an open folder,
 /// the prompt a turn there would have.
-fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> RequestFrame {
-    let workspace = state.workspace().ok();
+fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
     let root = workspace.as_deref();
     let mode = state.mode();
     let skills = crate::services::skills::enabled_catalog(root).unwrap_or_default();
@@ -462,9 +645,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
     let features = crate::services::features::enabled();
-    let knowledge = root
-        .filter(|_| features.is_on(crate::domain::features::Feature::Knowledge))
-        .and_then(|root| crate::services::knowledge::overview(root).ok());
+    let knowledge = root.and_then(|root| crate::services::knowledge::overview_offered(&features, root));
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -474,6 +655,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState) -> Req
             skills: &skills,
             rules: &rules,
             worktree_of: worktree_of.as_deref(),
+            parallel: None,
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
@@ -496,7 +678,7 @@ pub async fn next_prompt_log(
     user: String,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<String>, String> {
-    let Some(finished) = state.take_finished(&turn_id) else {
+    let Some(finished) = state.session(&chat_id).take_finished(&turn_id) else {
         return Ok(None);
     };
     let input = finished.model_input(&user, &home());
@@ -513,8 +695,6 @@ fn home() -> String {
     dirs::home_dir().map(|home| home.display().to_string()).unwrap_or_default()
 }
 
-/// Asks the running turn to stop. Returns at once: the turn notices at its
-/// next checkpoint, which is never more than one tool call away.
 /// The window's answer to an MCP server's question, by the id the question
 /// came with. A question no longer open — its call stopped — is said to be.
 #[tauri::command]
@@ -526,27 +706,47 @@ pub fn chat_answer_mcp_question(id: String, answer: McpAnswer, questions: State<
     }
 }
 
+/// Asks the running turn of `chat_id` to stop. Returns at once: the turn
+/// notices at its next checkpoint, which is never more than one tool call
+/// away. Another chat's turn is not its to stop.
 #[tauri::command]
-pub fn chat_cancel(state: State<'_, Arc<AgentState>>) {
-    state.cancel.store(true, Ordering::SeqCst);
+pub fn chat_cancel(chat_id: String, state: State<'_, Arc<AgentState>>) {
+    let session = state.session(&chat_id);
+    session.cancel.store(true, Ordering::SeqCst);
+    session.paused.store(false, Ordering::SeqCst);
 }
 
 /// Queues something the user typed while the turn was running. The id comes
 /// back so the same note can be withdrawn before a round takes it. `shown`
-/// is what the transcript shows in place of `text` — a `/` command.
+/// is what the transcript shows in place of `text` — a `/` command — and
+/// `images` are the pictures attached to it, sent to the model with the note
+/// and drawn on its bubble.
+///
+/// A ponytail: the pictures ride as this command's arguments, up to ten of
+/// them at a megabyte each, and it is one of the few commands left synchronous
+/// — the body is a `Vec::push`, and where Tauri reads the arguments is its
+/// own. It has not been felt as a freeze; the ceiling is ten screenshots
+/// typed into a running turn at once, and the way past it is to hand them over
+/// by an id the turn already holds instead of through the call.
 #[tauri::command]
-pub fn chat_steer(text: String, shown: Option<String>, state: State<'_, Arc<AgentState>>) -> String {
-    let note = SteeringNote { shown, ..SteeringNote::user(text) };
+pub fn chat_steer(
+    text: String,
+    shown: Option<String>,
+    images: Option<Vec<ImagePart>>,
+    chat_id: String,
+    state: State<'_, Arc<AgentState>>,
+) -> String {
+    let note = SteeringNote { shown, images: images.unwrap_or_default(), ..SteeringNote::user(text) };
     let id = note.id.clone();
-    state.steering.push(note);
+    state.session(&chat_id).steering.push(note);
     id
 }
 
 /// `false` means the note is already gone — a round picked it up while the
 /// user was reaching for cancel.
 #[tauri::command]
-pub fn chat_cancel_steer(id: String, state: State<'_, Arc<AgentState>>) -> bool {
-    state.steering.cancel(&id)
+pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<AgentState>>) -> bool {
+    state.session(&chat_id).steering.cancel(&id)
 }
 
 /// "Always allow this tool", from an approval card. Lasts as long as the app
@@ -641,10 +841,12 @@ fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The open folder's search, for the turn's tools. `None` when no folder's
-/// index is open — or when `setup` never ran, as under a mock runtime.
-fn searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
-    app.try_state::<Arc<WorkspaceIndex>>()?.searcher()
+/// The chat folder's search, for the turn's tools. A background chat never
+/// searches through the index of a folder opened after its turn started.
+fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<CodeSearchFn> {
+    let index = app.try_state::<Arc<WorkspaceIndex>>()?;
+    let current = index.current()?;
+    (current.root() == workspace).then(|| index.searcher()).flatten()
 }
 
 /// The MongoDB page's clients, as the agent's `mongo` tool reads through them.
@@ -677,8 +879,9 @@ pub async fn review_start<R: Runtime>(
     handed: bool,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    let workspace = state.workspace()?;
-    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&workspace))
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let diff_workspace = workspace.clone();
+    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&diff_workspace))
         .await
         .map_err(|e| format!("reading the change failed: {e}"))?
         .map_err(|e| e.to_string())?;
@@ -688,9 +891,11 @@ pub async fn review_start<R: Runtime>(
     }
     let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
     let desk = Arc::new(ReviewDesk::new(kept));
-    state.cancel.store(false, Ordering::SeqCst);
-    state.begin_turn();
-    run_off_the_event_loop(app, state, turn_id, chat_id, plan, move |turn| {
+    let session = state.session(&chat_id);
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
+    session.cancel.store(false, Ordering::SeqCst);
+    session.begin_turn(state.mode());
+    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::review(turn, messages, todos, &brief, desk, handed)
     })
     .await
@@ -711,14 +916,32 @@ fn chats_own(
     )
 }
 
+/// How many turns may run at once, from the settings. An unreadable settings
+/// file costs the user's chosen limit, not the turn — the default stands in.
+pub(crate) fn parallel_limit() -> u32 {
+    crate::infra::settings_store::load()
+        .map(|settings| settings.llm.turn_limits.parallel)
+        .unwrap_or_else(|_| crate::domain::settings::TurnLimits::default().parallel)
+}
+
 /// Off the event loop because the whole turn is synchronous — provider calls,
 /// tool calls and a process runner — and holding the IPC loop for minutes
-/// freezes every other command, including the one that stops it.
+/// freezes every other command, including the one that stops it. Everything
+/// the running turn is reached through is the chat's own `session`, so a turn
+/// of another chat running alongside neither stops it nor reads its notes.
+///
+/// `running` is the admission the caller took before touching the session;
+/// the guard lives here until the turn ends and clears the mark on any way
+/// out — finished, paused, stopped, refused or lost to a panicked thread.
 async fn run_off_the_event_loop<R, F>(
     app: AppHandle<R>,
     state: Arc<AgentState>,
+    session: Arc<SessionHandle>,
+    running: RunningTurn,
     turn_id: String,
     chat_id: String,
+    workspace: PathBuf,
+    worktree_base: Option<String>,
     plan: Option<String>,
     run: F,
 ) -> Result<ChatStreamOutcome, String>
@@ -726,16 +949,16 @@ where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let workspace = state.workspace()?;
     let approval = state.approval()?;
     let mode = state.mode();
+    let _running = running;
     let (processes, agents) = chats_own(
         app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes)),
         app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
         &chat_id,
     );
     let handles = FolderHandles {
-        search: searcher_of(&app),
+        search: searcher_of(&app, &workspace),
         knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
@@ -753,14 +976,15 @@ where
 
     tauri::async_runtime::spawn_blocking(move || {
         let emit = chat_event_sink(&app, turn_id.clone());
-        let observed = Arc::clone(&state);
+        let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
             observed.observe(&event.event);
             emit(event)
         });
-        let cancelled = || state.cancel.load(Ordering::SeqCst);
-        let take_steering = || state.steering.take();
-        let notes_typed = || state.steering.typed();
+        let cancelled = || session.cancel.load(Ordering::SeqCst);
+        let take_steering = || session.steering.take();
+        let notes_typed = || session.steering.typed();
+        let parallel = || state.parallel_chats(&chat_id, &workspace);
         let folder = FolderTurn {
             chat_id: &chat_id,
             workspace: &workspace,
@@ -771,9 +995,12 @@ where
             cancelled: &cancelled,
             take_steering: &take_steering,
             notes_typed: &notes_typed,
+            parallel: &parallel,
+            worktree_base: worktree_base.as_deref(),
         };
         let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
-        state.end_turn(turn_id, &outcome);
+        session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
+        session.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
     .await
@@ -798,6 +1025,7 @@ mod tests {
     }
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
+    use std::path::Path;
 
     /// So is a compaction's summary, "Compact now" or before a message.
     #[test]
@@ -831,10 +1059,118 @@ mod tests {
         Arc::new(AgentState::default())
     }
 
-    fn next_prompt_turn(state: &AgentState, id: &str, events: &[ChatEventPayload]) {
-        events.iter().for_each(|event| state.observe(event));
+    #[test]
+    fn a_background_chat_saves_under_its_own_checkout() {
+        crate::testing::with_app_dir("cmd-chat-save-own-root", || {
+            let own = temp_dir("cmd-chat-save-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-save-other").canonicalize().unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other);
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            tauri::async_runtime::block_on(super::super::chat_history::chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("hi"), LlmMessage::assistant("done")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, own.display().to_string());
+        });
+    }
+
+    #[test]
+    fn preview_and_resume_read_the_saved_chats_checkout() {
+        crate::testing::with_app_dir("cmd-chat-resume-own-root", || {
+            crate::testing::spending_provider("done", 10, 2);
+            let own = temp_dir("cmd-chat-resume-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-resume-other").canonicalize().unwrap();
+            std::fs::write(own.join("a.txt"), "own\n").unwrap();
+            std::fs::write(other.join("a.txt"), "other\n").unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other);
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            let call = PendingToolCall {
+                id: "w1".into(),
+                name: "writeFile".into(),
+                arguments: r#"{"path":"a.txt","content":"after\n"}"#.into(),
+                requires_confirmation: true,
+                reason: None,
+            };
+            let shown = tauri::async_runtime::block_on(chat_preview("c1".into(), vec![call], app.state())).unwrap();
+            let ToolPreview::Diff { diff, .. } = &shown[0] else { panic!("a write has a diff: {shown:?}") };
+            assert!(diff.unified_diff.contains("own"), "{}", diff.unified_diff);
+            assert!(!diff.unified_diff.contains("other"), "{}", diff.unified_diff);
+
+            let read = LlmToolCall { id: "w1".into(), name: "readFile".into(), arguments: r#"{"path":"a.txt"}"#.into() };
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("hi"), LlmMessage::tool_requests(vec![read])],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: r#"{"path":"a.txt"}"#.into(), requires_confirmation: true, reason: None }],
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            let outcome = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                checkpoint,
+                vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }],
+                None,
+            ));
+            let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("resume failed: {outcome:?}") };
+            let result = done.history.iter().find(|message| message.tool_call_id.as_deref() == Some("w1")).unwrap();
+            let content = result.content.as_deref().unwrap();
+            assert!(content.contains("own\n"), "{content}");
+            assert!(!content.contains("other"), "{content}");
+        });
+    }
+
+    #[test]
+    fn compaction_measures_the_saved_chats_prompt_not_the_open_folders() {
+        crate::testing::with_app_dir("cmd-chat-compact-own-root", || {
+            crate::testing::spending_provider("the earlier part", 10, 2);
+            let own = temp_dir("cmd-chat-compact-own").canonicalize().unwrap();
+            let other = temp_dir("cmd-chat-compact-other").canonicalize().unwrap();
+            std::fs::write(own.join("AGENTS.md"), "x".repeat(1_000_000)).unwrap();
+            crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let state = state();
+            state.set_workspace_for_test(other.clone());
+            let app = tauri::test::mock_app();
+            let other_frame = next_request_frame(app.handle(), &state, Some(other));
+            let own_frame = next_request_frame(app.handle(), &state, Some(own));
+            app.manage(state);
+            let mut history: Vec<_> = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i}")) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
+            // Just under the threshold without the saved folder's rules, just
+            // over with them: only the chat's own frame can trigger this pass.
+            let limit = Some(crate::domain::settings::DEFAULT_CONTEXT_LIMIT);
+            let baseline = ContextUsage::new(other_frame, &history, limit);
+            let threshold = baseline.compacts_at.unwrap();
+            history[0] = LlmMessage::user("x".repeat((threshold - baseline.total + 1) * 4));
+            assert!(ContextUsage::new(other_frame, &history, limit).total < threshold);
+            let own_usage = ContextUsage::new(own_frame, &history, limit);
+            assert!(own_usage.total >= threshold);
+
+            let compacted = tauri::async_runtime::block_on(chat_compact(history, false, "t1".into(), "c1".into(), app.handle().clone(), app.state()));
+            assert!(compacted.expect("the saved folder's large frame compacts").is_some());
+        });
+    }
+
+    fn next_prompt_turn(session: &SessionHandle, id: &str, events: &[ChatEventPayload]) {
+        events.iter().for_each(|event| session.observe(event));
         let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new(), limit_reached: None };
-        state.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
+        session.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
     }
 
     fn said(text: &str) -> ChatEventPayload {
@@ -846,12 +1182,13 @@ mod tests {
     #[test]
     fn the_next_prompt_journal_takes_a_finished_turn_once_and_only_by_its_id() {
         let state = state();
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-2", &[said("ok")]);
+        let session = state.session("c1");
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-2", &[said("ok")]);
 
-        assert!(state.take_finished("turn-1").is_none());
-        assert!(state.take_finished("turn-2").is_some(), "another turn's is left where it was");
-        assert!(state.take_finished("turn-2").is_none());
+        assert!(session.take_finished("turn-1").is_none());
+        assert!(session.take_finished("turn-2").is_some(), "another turn's is left where it was");
+        assert!(session.take_finished("turn-2").is_none());
     }
 
     /// A new turn starts from nothing, in the mode it starts in — and does
@@ -859,15 +1196,574 @@ mod tests {
     #[test]
     fn a_new_turn_starts_the_next_prompt_signals_afresh() {
         let state = state();
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-1", &[said("first")]);
+        let session = state.session("c1");
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-1", &[said("first")]);
         *state.mode.lock().unwrap() = ConversationMode::Plan;
-        state.begin_turn();
-        next_prompt_turn(&state, "turn-2", &[said("second")]);
+        session.begin_turn(state.mode());
+        next_prompt_turn(&session, "turn-2", &[said("second")]);
 
-        let input = state.take_finished("turn-2").expect("journaled").model_input("u", "");
+        let input = session.take_finished("turn-2").expect("journaled").model_input("u", "");
         assert!(input.starts_with("<mode>plan"), "{input}");
         assert!(input.ends_with("<agent>second"), "{input}");
+    }
+
+    /// Each chat is reached through its own handle: one chat's stop says
+    /// nothing to another's turn, a note waits in the queue it was typed at,
+    /// and each chat journals its own finished turn.
+    #[test]
+    fn one_chats_turn_is_reached_without_touching_anothers() {
+        let state = state();
+        let one = state.session("c1");
+        let other = state.session("c2");
+
+        one.cancel.store(true, Ordering::SeqCst);
+        assert!(one.cancel.load(Ordering::SeqCst));
+        assert!(!other.cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
+
+        one.steering.push(SteeringNote::user("use the helper"));
+        assert!(other.steering.take().is_empty(), "not the other chat's note");
+        assert_eq!(one.steering.take().len(), 1);
+
+        other.begin_turn(state.mode());
+        next_prompt_turn(&other, "turn-1", &[said("done")]);
+        assert!(one.take_finished("turn-1").is_none(), "not the one chat's turn to journal");
+        assert!(other.take_finished("turn-1").is_some());
+    }
+
+    /// The commands route by chat id: a stop, a note and its withdrawal land
+    /// on that chat's handle and no other.
+    #[test]
+    fn the_commands_reach_their_own_chats_handle() {
+        let state = state();
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+
+        state.session("c1").paused.store(true, Ordering::SeqCst);
+        chat_cancel("c1".into(), app.state());
+        assert!(state.session("c1").cancel.load(Ordering::SeqCst));
+        assert!(!state.session("c1").paused.load(Ordering::SeqCst), "stop releases a chat whose card was lost");
+        assert!(!state.session("c2").cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
+
+        let id = chat_steer("use the helper".into(), None, None, "c2".into(), app.state());
+        assert!(state.session("c1").steering.take().is_empty(), "not the other chat's note");
+        assert!(!chat_cancel_steer(id.clone(), "c1".into(), app.state()), "the note is not the one chat's");
+        assert!(chat_cancel_steer(id, "c2".into(), app.state()));
+        assert!(state.session("c2").steering.take().is_empty());
+    }
+
+    /// A picture attached to the note rides on the note itself: the round that
+    /// takes it sends both, and the bubble draws what was attached.
+    #[test]
+    fn a_note_carries_the_pictures_attached_to_it() {
+        let state = state();
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+        let picture = ImagePart {
+            media_type: crate::domain::image::ImageMediaType::Png,
+            data: "AA".into(),
+            width: 3,
+            height: 4,
+        };
+
+        chat_steer(String::new(), None, Some(vec![picture.clone()]), "c1".into(), app.state());
+        let taken = state.session("c1").steering.take();
+
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].images, vec![picture]);
+        assert!(taken[0].text.is_empty(), "a picture alone is the whole note");
+    }
+
+    /// A stop left over from the chat's last turn is cleared when its fresh
+    /// turn starts — the whole way from the command, or "stop while the
+    /// approval card shows" would end the resumed turn's successor instead.
+    #[test]
+    fn a_fresh_turn_clears_its_chats_leftover_stop() {
+        crate::testing::with_app_dir("cmd-chat-fresh-turn", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-fresh").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+            ));
+            let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("the leftover stop ended the fresh turn: {outcome:?}") };
+            assert_eq!(done.result.text, "hello");
+        });
+    }
+
+    /// Journaling asks the chat's own session: another chat's id finds
+    /// nothing there, and the turn's own chat journals it once.
+    #[test]
+    fn the_journal_is_the_chats_own() {
+        crate::testing::with_app_dir("cmd-chat-journal-own", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-journal").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "{outcome:?}");
+
+            let other = tauri::async_runtime::block_on(next_prompt_log("c2".into(), "t1".into(), "hi".into(), app.state()));
+            assert!(matches!(other, Ok(None)), "another chat has nothing to journal: {other:?}");
+            let own = tauri::async_runtime::block_on(next_prompt_log("c1".into(), "t1".into(), "hi".into(), app.state()));
+            assert!(matches!(own, Ok(Some(_))), "the turn's own chat journals it: {own:?}");
+        });
+    }
+
+    /// A resume deliberately does not clear the stop: pressed while the
+    /// approval card was showing, it ends the resumed turn — and it is the
+    /// resumed chat's own handle that says so.
+    #[test]
+    fn a_resumed_turn_reads_its_own_chats_stop() {
+        crate::testing::with_app_dir("cmd-chat-resume-stop", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-resume").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let call = |id: &str| LlmToolCall { id: id.into(), name: "readFile".into(), arguments: "{\"path\":\"a.txt\"}".into() };
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("hi"), LlmMessage::tool_requests(vec![call("w1")])],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{\"path\":\"a.txt\"}".into(), requires_confirmation: true, reason: None }],
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            // Pressed while the card was showing; another chat's stop says
+            // nothing here either way.
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                checkpoint,
+                vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }],
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
+        });
+    }
+
+    /// `/review` runs under its own chat's handle: a fresh review clears its
+    /// own chat's leftover stop, and no other chat's.
+    #[test]
+    fn a_review_runs_under_its_own_chats_handle() {
+        crate::testing::with_app_dir("cmd-chat-review-own", || {
+            crate::testing::spending_provider("Nothing wrong.", 10, 2);
+            let root = temp_dir("cmd-chat-review").canonicalize().unwrap();
+            std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+            let repo = git2::Repository::init(&root).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.rs")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("T", "t@example.com").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
+            std::fs::write(root.join("a.rs"), "fn a() { 1 }\n").unwrap();
+
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(root);
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            state.session("c1").cancel.store(true, Ordering::SeqCst);
+            state.session("c2").cancel.store(true, Ordering::SeqCst);
+
+            let outcome = tauri::async_runtime::block_on(review_start(
+                app.handle().clone(),
+                app.state(),
+                "tr".into(),
+                "c1".into(),
+                vec![LlmMessage::user("/review")],
+                Vec::new(),
+                None,
+                false,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "the cleared stop lets it run: {outcome:?}");
+            assert!(!state.session("c1").cancel.load(Ordering::SeqCst), "its own chat's stop is the one cleared");
+            assert!(state.session("c2").cancel.load(Ordering::SeqCst), "another chat's stop is not the review's to clear");
+        });
+    }
+
+    /// One chat, one turn; the limit counts across chats; a guard's drop
+    /// frees its slot.
+    #[test]
+    fn a_chat_runs_one_turn_and_the_limit_counts_across_chats() {
+        let state = state();
+        let root = Path::new("/repo");
+        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
+        let refused = state.begin_running("c1", 3, root).expect_err("the same chat refuses");
+        assert!(refused.contains("already running"), "{refused}");
+
+        let two = state.begin_running("c2", 2, root).expect("another chat's turn runs beside it");
+        let over = state.begin_running("c3", 2, root).expect_err("the limit binds across chats");
+        assert!(over.contains("limit"), "{over}");
+
+        drop(one);
+        state.begin_running("c3", 2, root).expect("a finished turn frees its slot");
+        drop(two);
+
+        // A hand-edited zero in the settings still lets one turn run.
+        state.begin_running("c4", 0, root).expect("a zero limit still runs one");
+    }
+
+    #[test]
+    fn a_paused_turn_refuses_a_fresh_start_until_it_is_resumed() {
+        crate::testing::with_app_dir("cmd-paused-chat-turn", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let root = temp_dir("cmd-paused-chat-root").canonicalize().unwrap();
+            state.set_workspace_for_test(root.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let session = state.session("c1");
+            let running = state.begin_running("c1", 3, &root).expect("the first turn runs");
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("go")],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: Vec::new(),
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                session,
+                running,
+                "t1".into(),
+                "c1".into(),
+                root.clone(),
+                None,
+                None,
+                move |_| Ok(ChatStreamOutcome::PendingApproval(checkpoint)),
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::PendingApproval(_))), "{outcome:?}");
+
+            let refused = state.begin_running("c1", 3, &root).expect_err("a fresh start cannot orphan the card");
+            assert!(refused.contains("waiting for approval"), "{refused}");
+            drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
+            state.begin_running("c1", 3, &root).expect("after the resume ends, a fresh turn may start");
+        });
+    }
+
+    #[test]
+    fn turn_admission_waits_for_a_tree_mutation() {
+        let state = state();
+        let tree = crate::domain::command_risk::git_tree_lock();
+        let (admitted, wait) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            threads.spawn(|| {
+                let guard = state.begin_running("c1", 3, Path::new("/repo")).expect("turn runs after the mutation");
+                admitted.send(()).unwrap();
+                drop(guard);
+            });
+            assert!(wait.recv_timeout(std::time::Duration::from_millis(50)).is_err(), "admission crossed the tree lock");
+            drop(tree);
+            wait.recv_timeout(std::time::Duration::from_secs(1)).expect("admission resumes with the lock");
+        });
+    }
+
+    #[test]
+    fn parallel_chats_are_scoped_to_their_checkout() {
+        let state = state();
+        let root = Path::new("/repo");
+        let linked = Path::new("/repo-worktree");
+        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
+        let two = state.begin_running("c2", 3, root).expect("the second turn runs");
+        let three = state.begin_running("c3", 3, linked).expect("a worktree turn runs");
+        assert_eq!(state.parallel_chats("c1", root), vec!["c2"]);
+        assert_eq!(state.parallel_chats("c3", linked), Vec::<String>::new());
+        drop(two);
+        assert_eq!(state.parallel_chats("c1", root), Vec::<String>::new());
+        drop(one);
+        drop(three);
+    }
+
+    #[test]
+    fn a_checkout_waits_for_every_running_turn() {
+        let state = state();
+        state.ensure_tree_is_idle().expect("an idle tree can be switched");
+        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
+        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
+        assert!(refused.contains("worktree"), "{refused}");
+        drop(running);
+        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
+    }
+
+    /// The turn's thread dying with the guard frees the mark all the same —
+    /// the Drop, not the happy path, is what the next start relies on.
+    #[test]
+    fn a_panicked_turn_frees_its_slot() {
+        let state = state();
+        let root = Path::new("/repo");
+        let guard = state.begin_running("c1", 3, root).expect("the turn runs");
+        std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("the turn's thread died");
+        })
+        .join()
+        .expect_err("the thread panicked");
+        state.begin_running("c1", 3, root).expect("a panicked turn frees its slot");
+    }
+
+    /// A refused start is only a refusal: the running turn's stop flag — a
+    /// Stop already pressed, waiting for the next checkpoint — survives it.
+    #[test]
+    fn a_refused_start_leaves_the_running_turn_alone() {
+        crate::testing::with_app_dir("cmd-refused-keeps-stop", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-refused-keeps-stop-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                state.session("c1").cancel.store(true, Ordering::SeqCst);
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c1", "t2", "go"));
+                assert!(refused.contains("already running"), "{refused}");
+                assert!(state.session("c1").cancel.load(Ordering::SeqCst), "the refused start kept the stop");
+
+                provider.open();
+                // Done or Cancelled — either way the refusal kept the stop.
+                assert!(first.join().expect("the first turn's thread").is_ok());
+            });
+        });
+    }
+
+    /// A provider that holds every answer until `open` is called and says
+    /// through `arrived` as each request comes in — what a test keeps a turn
+    /// mid-flight with. The server itself is `gated_server` beside the
+    /// providers: network code lives there (`data_policy`).
+    struct HeldProvider {
+        port: u16,
+        arrived: std::sync::mpsc::Receiver<()>,
+        gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl HeldProvider {
+        fn start() -> Self {
+            let (arrived_tx, arrived) = std::sync::mpsc::channel::<()>();
+            let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            let port = crate::infra::llm_providers::gated_server(
+                crate::testing::spending_reply("hello", 10, 2),
+                Arc::clone(&gate),
+                arrived_tx,
+            );
+            Self { port, arrived, gate }
+        }
+
+        /// The settings' only provider is this server, key included.
+        fn install(&self) {
+            crate::testing::spending_provider_on(self.port);
+        }
+
+        /// One request has reached the provider — the turn is mid-flight.
+        fn wait_request(&self) {
+            self.arrived
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the turn never asked the provider");
+        }
+
+        fn open(&self) {
+            let (lock, cvar) = &*self.gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+    }
+
+    /// The refusal F-8 kept is gone: two chats' turns run at once, each to
+    /// its own outcome, each counted under its own chat.
+    #[test]
+    fn two_chats_turns_run_at_once() {
+        crate::testing::with_app_dir("cmd-two-turns", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-two-turns-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            // The mock App itself does not cross threads; its handles do.
+            let first_handle = app.handle().clone();
+            let second_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "one"));
+                let second = scope.spawn(move || start_turn(&second_handle, "c2", "t2", "two"));
+                // Both requests in before either is answered: truly concurrent.
+                provider.wait_request();
+                provider.wait_request();
+                provider.open();
+
+                let one = first.join().expect("the first turn's thread");
+                let two = second.join().expect("the second turn's thread");
+                assert!(matches!(one, Ok(ChatStreamOutcome::Done(_))), "{one:?}");
+                assert!(matches!(two, Ok(ChatStreamOutcome::Done(_))), "{two:?}");
+            });
+            assert_eq!(crate::testing::chat_tokens("c1"), 12);
+            assert_eq!(crate::testing::chat_tokens("c2"), 12);
+        });
+    }
+
+    /// `chat_start` through a handle of the test's mock app — the shape the
+    /// concurrency tests need, a handle per thread.
+    fn start_turn(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        chat: &str,
+        turn: &str,
+        said: &str,
+    ) -> Result<ChatStreamOutcome, String> {
+        tauri::async_runtime::block_on(chat_start(
+            app.clone(),
+            app.state(),
+            turn.into(),
+            chat.into(),
+            vec![LlmMessage::user(said)],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    /// A start — or a resume — that is expected to refuse, waited on with a
+    /// timeout. A start that unexpectedly runs would block on the provider's
+    /// closed gate and hang the test with it, so the refusal has to arrive
+    /// in time. The side thread is detached: only a mutant ever strands it.
+    fn expect_refusal<F>(run: F) -> String
+    where
+        F: FnOnce() -> Result<ChatStreamOutcome, String> + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Err(refusal)) => refusal,
+            Ok(Ok(outcome)) => panic!("expected a refusal, the turn ran: {outcome:?}"),
+            Err(_) => panic!("no refusal within 10 s — the start is running, not refusing"),
+        }
+    }
+
+    /// A second start of the same chat — or a resume of it — refuses while
+    /// its turn runs, and runs once that turn has finished: the running mark
+    /// goes with the turn, not with the chat.
+    #[test]
+    fn a_second_turn_of_the_same_chat_waits_for_the_first() {
+        crate::testing::with_app_dir("cmd-same-chat-turn", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-same-chat-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c1", "t2", "go"));
+                assert!(refused.contains("already running"), "{refused}");
+
+                let checkpoint = PendingApproval {
+                    history: vec![
+                        LlmMessage::user("go"),
+                        LlmMessage::tool_requests(vec![LlmToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{}".into() }]),
+                    ],
+                    round: 1,
+                    budget_used: 0,
+                    event_seq: 0,
+                    calls: vec![PendingToolCall { id: "w1".into(), name: "readFile".into(), arguments: "{}".into(), requires_confirmation: true, reason: None }],
+                    todos: Vec::new(),
+                    reads: Default::default(),
+                };
+                // The command takes a `State`, which does not cross threads;
+                // its body is this, with the Arc it clones from the State.
+                let resume_handle = app.handle().clone();
+                let resume_state = Arc::clone(&state);
+                let resumed = expect_refusal(move || {
+                    let workspace = resume_state.workspace()?;
+                    let session = resume_state.session("c1");
+                    let running = resume_state.begin_running("c1", parallel_limit(), &workspace)?;
+                    tauri::async_runtime::block_on(run_off_the_event_loop(
+                        resume_handle,
+                        resume_state,
+                        session,
+                        running,
+                        "t1".into(),
+                        "c1".into(),
+                        workspace,
+                        None,
+                        None,
+                        move |turn| llm_chat::resume(turn, checkpoint, vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }]),
+                    ))
+                });
+                assert!(resumed.contains("already running"), "{resumed}");
+
+                provider.open();
+                assert!(matches!(first.join().expect("the first turn's thread"), Ok(ChatStreamOutcome::Done(_))));
+
+                let again = start_turn(app.handle(), "c1", "t3", "go");
+                assert!(matches!(again, Ok(ChatStreamOutcome::Done(_))), "finished, the chat starts again: {again:?}");
+            });
+        });
+    }
+
+    /// Past the limit a start refuses with why, and the limit is the
+    /// settings', not a constant.
+    #[test]
+    fn the_parallel_limit_refuses_the_extra_turn() {
+        crate::testing::with_app_dir("cmd-parallel-limit", || {
+            let provider = HeldProvider::start();
+            provider.install();
+            crate::infra::settings_store::update(|s| s.llm.turn_limits.parallel = 1).expect("settings");
+            let state = state();
+            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-parallel-limit-ws").canonicalize().unwrap());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let first_handle = app.handle().clone();
+            std::thread::scope(|scope| {
+                let first = scope.spawn(move || start_turn(&first_handle, "c1", "t1", "go"));
+                provider.wait_request();
+
+                let second_handle = app.handle().clone();
+                let refused = expect_refusal(move || start_turn(&second_handle, "c2", "t2", "go"));
+                assert!(refused.contains("limit"), "{refused}");
+
+                provider.open();
+                assert!(matches!(first.join().expect("the first turn's thread"), Ok(ChatStreamOutcome::Done(_))));
+            });
+        });
     }
 
     #[test]
@@ -1003,13 +1899,14 @@ mod tests {
     #[test]
     fn a_note_can_be_withdrawn_until_a_round_takes_it() {
         let state = state();
+        let session = state.session("c1");
         let note = SteeringNote::user("actually, use the helper");
         let id = note.id.clone();
-        state.steering.push(note);
+        session.steering.push(note);
 
-        assert!(state.steering.cancel(&id));
-        assert!(state.steering.take().is_empty());
-        assert!(!state.steering.cancel(&id), "already gone");
+        assert!(session.steering.cancel(&id));
+        assert!(session.steering.take().is_empty());
+        assert!(!session.steering.cancel(&id), "already gone");
     }
 
     /// A stop is remembered until a fresh turn clears it — that is what makes
@@ -1018,11 +1915,12 @@ mod tests {
     #[test]
     fn a_stop_survives_until_the_next_fresh_turn() {
         let state = state();
-        state.cancel.store(true, Ordering::SeqCst);
-        assert!(state.cancel.load(Ordering::SeqCst));
+        let session = state.session("c1");
+        session.cancel.store(true, Ordering::SeqCst);
+        assert!(session.cancel.load(Ordering::SeqCst));
 
-        state.cancel.store(false, Ordering::SeqCst);
-        assert!(!state.cancel.load(Ordering::SeqCst));
+        session.cancel.store(false, Ordering::SeqCst);
+        assert!(!session.cancel.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -1038,14 +1936,16 @@ mod tests {
             }
         }
         let app = tauri::test::mock_app();
-        assert!(searcher_of(app.handle()).is_none(), "no index state at all");
+        let root = temp_dir("cmd-search-repo");
+        assert!(searcher_of(app.handle(), &root).is_none(), "no index state at all");
 
         let index = Arc::new(WorkspaceIndex::new(temp_dir("cmd-search-index"), Arc::new(NoModel)));
         tauri::Manager::manage(&app, Arc::clone(&index));
-        assert!(searcher_of(app.handle()).is_none(), "no folder open");
+        assert!(searcher_of(app.handle(), &root).is_none(), "no folder open");
 
-        index.open(&temp_dir("cmd-search-repo"), Arc::new(|_| {})).unwrap();
-        assert!(searcher_of(app.handle()).is_some());
+        index.open(&root, Arc::new(|_| {})).unwrap();
+        assert!(searcher_of(app.handle(), &root).is_some());
+        assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
     }
 
     /// The snapshot names the folder the way the events do, and says why

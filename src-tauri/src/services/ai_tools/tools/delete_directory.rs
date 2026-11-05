@@ -21,6 +21,7 @@ pub fn delete_directory(
     args: &DeleteArgs,
 ) -> Result<ToolResult, ToolError> {
     let path = resolve_existing(scope, &args.path)?;
+    let _write = super::file_mutation_lock();
     if !path.is_dir() {
         return Err(ToolError::NotFound(args.path.clone()));
     }

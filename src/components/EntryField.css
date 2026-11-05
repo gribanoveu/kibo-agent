@@ -1,0 +1,49 @@
+.entry-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.entry-label {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.entry-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+.entry-input {
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  padding: 6px 10px;
+  resize: vertical;
+}
+.entry-input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.entry-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.entry-row {
+  display: flex;
+  gap: 12px;
+}
+.entry-field .dropdown-wrap {
+  align-self: flex-start;
+}
+/* Under the field it is about: moved here with the field, since the install
+   screen shows one too. */
+.entry-error {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--red);
+}

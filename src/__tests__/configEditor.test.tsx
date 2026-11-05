@@ -49,6 +49,8 @@ describe("a pasted MCP snippet", () => {
   test("is not a snippet when it is not one, or when the file is broken", () => {
     expect(mergeMcp(EMPTY_MCP, "npx -y server-github")).toBeNull();
     expect(mergeMcp(EMPTY_MCP, '{"name": "github"}')).toBeNull();
+    // One entry with no name of its own has no name to go under in the file.
+    expect(mergeMcp(EMPTY_MCP, '{"command": "npx"}')).toBeNull();
     expect(mergeMcp(EMPTY_MCP, '{"mcpServers": {}}')).toBeNull();
     expect(mergeMcp('{"mcpServers": {', JSON.stringify({ github: GITHUB }))).toBeNull();
     expect(servers(mergeMcp("", JSON.stringify({ github: GITHUB }))!.text)).toEqual({ github: GITHUB });

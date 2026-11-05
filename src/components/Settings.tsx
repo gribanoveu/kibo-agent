@@ -210,7 +210,7 @@ export function Settings({
           <>
             <h3 className="settings-title">Agent</h3>
             {/* Keyed on the saved values, so a save or a reset redraws the fields from them. */}
-            <TurnLimitsFields key={`${turnLimits.rounds}/${turnLimits.budget}`} limits={turnLimits} onSave={onTurnLimits} />
+            <TurnLimitsFields key={`${turnLimits.rounds}/${turnLimits.budget}/${turnLimits.parallel}`} limits={turnLimits} onSave={onTurnLimits} />
             <ShellSettings />
           </>
         )}
@@ -267,8 +267,8 @@ export function Settings({
               </section>
             ))}
             <div className="modal-field">
-              <label>Chat text size</label>
-              <div className="segmented" role="radiogroup" aria-label="Chat text size">
+              <label>Text size</label>
+              <div className="segmented" role="radiogroup" aria-label="Text size">
                 {(Object.keys(FONT_SIZES) as FontSize[]).map((name) => (
                   <button
                     key={name}
@@ -496,23 +496,35 @@ const LIMIT_FIELDS: { key: keyof TurnLimits; label: string; hint: string }[] = [
     label: "Tool budget per turn",
     hint: "Weighted calls: a file read costs 1, a search across the repository more.",
   },
+  {
+    key: "parallel",
+    label: "Parallel turns",
+    hint: "Chats whose turns may run at once; a start past the limit is refused.",
+  },
 ];
 
 /**
- * The two ceilings of a turn, saved as a field is left. An empty field or a
- * zero is not a limit: it goes back to the saved value.
+ * The ceilings of the agent's turns, saved as a field is left. An empty
+ * field or a zero is not a limit: it goes back to the saved value.
  */
 function TurnLimitsFields({ limits, onSave }: { limits: TurnLimits; onSave: (limits: TurnLimits) => void }) {
-  const [draft, setDraft] = useState({ rounds: String(limits.rounds), budget: String(limits.budget) });
+  const [draft, setDraft] = useState({
+    rounds: String(limits.rounds),
+    budget: String(limits.budget),
+    parallel: String(limits.parallel),
+  });
   const commit = () => {
-    const next = { rounds: Number(draft.rounds), budget: Number(draft.budget) };
-    if (next.rounds < 1 || next.budget < 1) {
-      setDraft({ rounds: String(limits.rounds), budget: String(limits.budget) });
-    } else if (next.rounds !== limits.rounds || next.budget !== limits.budget) {
+    const next = { rounds: Number(draft.rounds), budget: Number(draft.budget), parallel: Number(draft.parallel) };
+    if (next.rounds < 1 || next.budget < 1 || next.parallel < 1) {
+      setDraft({ rounds: String(limits.rounds), budget: String(limits.budget), parallel: String(limits.parallel) });
+    } else if (next.rounds !== limits.rounds || next.budget !== limits.budget || next.parallel !== limits.parallel) {
       onSave(next);
     }
   };
-  const isDefault = limits.rounds === DEFAULT_TURN_LIMITS.rounds && limits.budget === DEFAULT_TURN_LIMITS.budget;
+  const isDefault =
+    limits.rounds === DEFAULT_TURN_LIMITS.rounds &&
+    limits.budget === DEFAULT_TURN_LIMITS.budget &&
+    limits.parallel === DEFAULT_TURN_LIMITS.parallel;
 
   return (
     <>

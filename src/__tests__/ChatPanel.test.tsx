@@ -957,6 +957,20 @@ describe("a message with pictures", () => {
     panel(state([{ kind: "user", id: "u0", text: "hi" }]));
     expect(screen.queryAllByRole("img")).toHaveLength(0);
   });
+
+  /// A note typed while the agent works is a message too: a screenshot
+  /// attached to it is drawn on its bubble, and alone it needs no bubble.
+  test("a note sent mid-turn shows the picture attached to it", () => {
+    panel(state([{ kind: "steer", id: "steer:n1", text: "why red?", images: [picture] }]));
+    expect(screen.getByAltText("Image 1, 30×20")).toBeTruthy();
+    expect(screen.getByText("why red?")).toBeTruthy();
+  });
+
+  test("a note that is only a picture has no empty bubble", () => {
+    const { container } = panel(state([{ kind: "steer", id: "steer:n2", text: "", images: [picture] }]));
+    expect(screen.getByAltText("Image 1, 30×20")).toBeTruthy();
+    expect(container.querySelector(".user-msg .bubble")).toBeNull();
+  });
 });
 
 describe("a call with no body of its own", () => {

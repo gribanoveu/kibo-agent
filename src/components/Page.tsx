@@ -81,7 +81,8 @@ export function PageSheet({ icon: Icon, title, label, onClose, children }: Panel
           <X size={14} />
         </button>
       </div>
-      <div className="page-sheet-body">{children}</div>
+      {/* `text-scale`: what a sheet holds reads at the user's text size, as the chat does. */}
+      <div className="page-sheet-body text-scale">{children}</div>
     </aside>
   );
 }

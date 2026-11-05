@@ -10,12 +10,15 @@ import { playSound, preloadSounds } from "../lib/sounds";
  * switched on its own in Settings.
  */
 export function useTurnAlerts({
+  sessionKey,
   status,
   failed,
   queued = 0,
   chatTitle,
   prefs,
 }: {
+  /** The chat the status belongs to: another chat's status is not this one's turn ending. */
+  sessionKey: string;
   status: TurnStatus;
   /** Whether the turn that just ended ended in an error. */
   failed: boolean;
@@ -24,7 +27,7 @@ export function useTurnAlerts({
   chatTitle: string | null;
   prefs: AlertPrefs;
 }) {
-  const last = useRef(status);
+  const last = useRef({ sessionKey, status });
   const anySound = prefs.sound.done || prefs.sound.failed;
 
   useEffect(() => {
@@ -32,13 +35,17 @@ export function useTurnAlerts({
   }, [anySound]);
 
   useEffect(() => {
-    const attention = attentionFor(last.current, status, failed);
-    last.current = status;
+    const previous = last.current;
+    last.current = { sessionKey, status };
+    // A chat opened, not a turn that ended: the status it opens with is where it
+    // was left, however recently another chat was working.
+    if (previous.sessionKey !== sessionKey) return;
+    const attention = attentionFor(previous.status, status, failed);
     if (!attention || (attention === "done" && queued > 0)) return;
     // Neither may break the chat: no audio device, or no notification
     // permission, only means the user is not told this way.
     const sound = soundFor(attention, prefs);
     if (sound) playSound(sound).catch(() => {});
     if (prefs.notify[attention]) notifyInBackground(chatTitle || "Kibo Agent", ATTENTION_TEXT[attention]).catch(() => {});
-  }, [status, failed, queued, chatTitle, prefs]);
+  }, [sessionKey, status, failed, queued, chatTitle, prefs]);
 }

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
+import type { ImagePart } from "../lib/images";
 
 // The chip is the only way to reach `chat_set_mode`, and what it says has to
 // be what the backend was actually told — a label reading "Plan" over a turn
@@ -30,6 +32,7 @@ const { modelChoices } = await import("../hooks/useLlmSettings");
 afterEach(() => {
   calls.length = 0;
   refuse = false;
+  localStorage.clear();
 });
 
 function composer(
@@ -40,6 +43,7 @@ function composer(
 ) {
   return render(
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
@@ -132,6 +136,7 @@ describe("telling the backend", () => {
 });
 
 const { useBackendSetting } = await import("../hooks/useBackendSetting");
+const { chatDraftKey, readChatDraft } = await import("../hooks/useChatDraft");
 const { act, renderHook } = await import("@testing-library/react");
 
 describe("holding the chosen mode", () => {
@@ -174,13 +179,16 @@ describe("holding the chosen mode", () => {
 
 describe("text handed to the box", () => {
   const withDraft = (
-    draft: { text: string; seq: number } | null,
-    quote: { text: string; seq: number } | null = null,
+    draft: { text: string; seq: number; images?: ImagePart[] } | null,
+    quote: { text: string; seq: number; images?: ImagePart[] } | null = null,
+    imagesEnabled = true,
   ) => (
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
+      imagesEnabled={imagesEnabled}
       conversation="agent"
       onConversation={() => {}}
       unattended={false}
@@ -197,6 +205,65 @@ describe("text handed to the box", () => {
     />
   );
 
+  /// A draft put back into a chat that already holds its pictures puts them
+  /// back rather than adding a second copy — the draft stays as it is, so it
+  /// arrives again each time the chat is opened.
+  test("a draft's pictures land once, however often it arrives", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft({ text: "look", seq: 1, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+
+    rerender(withDraft({ text: "look", seq: 2, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+  });
+
+  /// A draft is the whole of what was there, pictures included: one without
+  /// any does not leave the box's behind to ride with its message.
+  test("a draft without pictures empties the box", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "look", seq: 1, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+
+    rerender(withDraft({ text: "try again", seq: 2 }));
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  /// A note taken out of a running turn comes home with its picture: the
+  /// words were never sent, so neither were the pixels.
+  test("pictures come back with the text a note was taken back with", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "look at this", seq: 1, images: [picture] }));
+    expect(screen.getByAltText("Image 1, 10×5")).toBeTruthy();
+  });
+
+  /// The box takes no pictures from a model set to text only, and a note
+  /// coming back is no exception: it says where to turn them on instead.
+  test("pictures handed back to a text-only model are refused, with the reason", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "", seq: 1, images: [picture] }, false));
+    expect(screen.getByRole("alert").textContent).toContain("Settings → Models");
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  /// The box holds what one message can carry. What comes back over that is
+  /// said — the message it came from has already been cleared, so it cannot
+  /// be left out in silence.
+  test("pictures that do not fit are said, not dropped without a word", () => {
+    const ten: ImagePart[] = Array.from({ length: 10 }, (_, n) => ({ mediaType: "image/png", data: `P${n}`, width: 1, height: 1 }));
+    const two: ImagePart[] = Array.from({ length: 2 }, (_, n) => ({ mediaType: "image/png", data: `Q${n}`, width: 1, height: 1 }));
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "", seq: 1, images: ten }));
+    expect(screen.getAllByRole("img")).toHaveLength(10);
+
+    rerender(withDraft(null, { text: "", seq: 2, images: two }));
+    expect(screen.getAllByRole("img")).toHaveLength(10);
+    expect(screen.getByRole("alert").textContent).toContain("2 pictures did not fit");
+  });
+
   /// A branch gives its message back; the same text twice is two branches.
   test("replaces what was typed, each time it is handed", () => {
     const { rerender } = render(withDraft(null));
@@ -209,16 +276,19 @@ describe("text handed to the box", () => {
     expect(box.value).toBe("try this");
   });
 
-  /// The box is drawn anew when the mode changes; what it was handed before
-  /// was already used, and the user may have sent or cleared it since.
-  test("a box drawn anew does not take what was handed to the one before it", () => {
+  /// The box is drawn anew when the mode changes. What was handed before is
+  /// not applied again — the user may have typed over it since — and what it
+  /// was left holding is the draft it comes back with.
+  test("a box drawn anew keeps what was left in it, not the text handed before", () => {
     const draft = { text: "try this", seq: 1 };
     const quote = { text: "1 failed", seq: 1 };
     const first = render(withDraft(null));
     first.rerender(withDraft(draft, quote));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "edited" } });
     first.unmount();
+
     render(withDraft(draft, quote));
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("edited");
   });
 
   /// A terminal selection is added to the message, not put in its place.
@@ -260,6 +330,7 @@ describe("the model chip", () => {
     let loads = 0;
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -292,6 +363,7 @@ describe("the model chip", () => {
     const picked: (string | null)[] = [];
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -321,6 +393,7 @@ describe("the model chip", () => {
   test("the context ring sits in the bar, beside the send button", () => {
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -356,6 +429,7 @@ describe("slash commands", () => {
     ];
     render(
       <Composer
+        draftKey="draft"
         onSend={(text) => sent.push(text)}
         onStop={() => {}}
         running={false}
@@ -495,6 +569,7 @@ describe("slash commands", () => {
     let asked = 0;
     render(
       <Composer
+        draftKey="draft"
         onSend={() => {}}
         onStop={() => {}}
         running={false}
@@ -580,6 +655,7 @@ describe("slash commands", () => {
 describe("the box's focus", () => {
   const withFocus = (focus: number) => (
     <Composer
+      draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
@@ -616,24 +692,33 @@ describe("the box's focus", () => {
 describe("the queue", () => {
   function queueing(
     running: boolean,
-    queued: { id: number; text: string }[] = [],
-    steered: { id: string; text: string }[] = [],
+    queued: { id: number; text: string; images?: ImagePart[] }[] = [],
+    steered: { id: string; text: string; images?: ImagePart[] }[] = [],
   ) {
     const sent: string[] = [];
     const held: string[] = [];
+    const heldPictures: ImagePart[][] = [];
     const taken: number[] = [];
     const withdrawn: string[] = [];
     const ran: string[] = [];
-    render(
+    // The box's whole state, so a test can hand it a picture the way a
+    // taken-back note does — through `quote`, which only new values apply.
+    const build = (quote: { text: string; seq: number; images?: ImagePart[] } | null = null) => (
       <Composer
+        draftKey="draft"
         onSend={(text) => sent.push(text)}
-        onQueue={(text) => held.push(text)}
+        onQueue={(text, images) => {
+          held.push(text);
+          heldPictures.push(images);
+        }}
         queued={queued}
         onUnqueue={(id) => taken.push(id)}
         steered={steered}
         onWithdraw={(id) => withdrawn.push(id)}
         onStop={() => {}}
         running={running}
+        imagesEnabled
+        quote={quote}
         conversation="agent"
         onConversation={() => {}}
         unattended={false}
@@ -646,15 +731,41 @@ describe("the queue", () => {
         usage={null}
         onCompact={() => {}}
         commands={[{ name: "compact", hint: "Fold", run: (args: string) => ran.push(args) }]}
-      />,
+      />
     );
+    const view = render(build());
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
     const altEnter = (text: string) => {
       fireEvent.change(box, { target: { value: text } });
       fireEvent.keyDown(box, { code: "Enter", key: "Enter", altKey: true });
     };
-    return { sent, held, taken, withdrawn, ran, box, altEnter };
+    return { ...view, build, sent, held, heldPictures, taken, withdrawn, ran, box, altEnter };
   }
+
+  /// A message held for after the turn carries its pictures too: left in the
+  /// box they would ride along with whatever is typed next.
+  test("a held message takes its pictures with it", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { build, rerender, held, heldPictures, altEnter } = queueing(true);
+    rerender(build({ text: "", seq: 1, images: [picture] }));
+    expect(screen.getByAltText("Image 1, 4×3")).toBeTruthy();
+
+    altEnter("look at this");
+    expect(held).toEqual(["look at this"]);
+    expect(heldPictures).toEqual([[picture]]);
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  /// With nothing typed around it, the held message is the picture.
+  test("a picture alone can be held for after the turn", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { build, rerender, held, heldPictures, altEnter } = queueing(true);
+    rerender(build({ text: "", seq: 1, images: [picture] }));
+
+    altEnter("");
+    expect(held).toEqual([""]);
+    expect(heldPictures).toEqual([[picture]]);
+  });
 
   test("Alt+Enter during a turn holds the message instead of steering with it", () => {
     const { sent, held, box, altEnter } = queueing(true);
@@ -700,6 +811,30 @@ describe("the queue", () => {
     expect(taken).toEqual([]);
   });
 
+  /// A note can be a picture with nothing typed around it: the row has to
+  /// say something, and what it says is that it is a picture.
+  test("a note that is only a picture is listed as one", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    queueing(true, [], [{ id: "n-1", text: "", images: [picture] }]);
+    expect(screen.getByRole("button", { name: "A picture" })).toBeTruthy();
+  });
+
+  test("a note of several pictures says how many", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const two: ImagePart = { mediaType: "image/png", data: "PNG", width: 5, height: 3 };
+    queueing(true, [], [{ id: "n-1", text: "", images: [picture, two] }]);
+    expect(screen.getByRole("button", { name: "2 pictures" })).toBeTruthy();
+  });
+
+  /// What was typed stays first and the picture is said after it, in a note
+  /// and in a held message alike.
+  test("a row with words says it carries a picture too", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    queueing(true, [{ id: 1, text: "then the docs", images: [picture] }], [{ id: "n-1", text: "why red?", images: [picture] }]);
+    expect(screen.getByRole("button", { name: "why red? · a picture" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "then the docs · a picture" })).toBeTruthy();
+  });
+
   /// When a row is read is said on it, not in a tooltip; a long one opens
   /// whole on a click, one at a time.
   test("a row says when it is read, and opens whole on a click", () => {
@@ -714,5 +849,148 @@ describe("the queue", () => {
     expect([note.getAttribute("aria-expanded"), queued.getAttribute("aria-expanded")]).toEqual(["false", "true"]);
     fireEvent.click(queued);
     expect(queued.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("the draft a chat keeps", () => {
+  const boxFor = (key: string, onSend: (text: string) => void = () => {}) => (
+    <Composer
+      draftKey={key}
+      onSend={onSend}
+      onStop={() => {}}
+      running={false}
+      conversation="agent"
+      onConversation={() => {}}
+      unattended={false}
+      onUnattended={() => {}}
+      models={{ choices: [], current: null }}
+      onModel={() => {}}
+      onEffort={() => {}}
+      onLoadModels={() => {}}
+      context={null}
+      usage={null}
+      onCompact={() => {}}
+    />
+  );
+  const type = (text: string) => fireEvent.change(screen.getByRole("textbox"), { target: { value: text } });
+  const value = () => (screen.getByRole("textbox") as HTMLTextAreaElement).value;
+
+  /// The box belongs to a chat, not to the window: what was typed in one waits
+  /// there, and the next chat starts with its own text — nothing or its own.
+  test("each chat finds its own text, and only its own", () => {
+    const a = chatDraftKey("agent", "a");
+    const b = chatDraftKey("agent", "b");
+    const { rerender } = render(boxFor(a));
+
+    type("про первый");
+    rerender(boxFor(b));
+    expect(value()).toBe("");
+
+    type("про второй");
+    rerender(boxFor(a));
+    expect(value()).toBe("про первый");
+    rerender(boxFor(b));
+    expect(value()).toBe("про второй");
+  });
+
+  /// A chat not saved yet is one slot per mode: what was typed in a new chat is
+  /// in the next new one, and not in a chat opened from the list.
+  test("a chat opened from the list does not take the new chat's text", () => {
+    const { rerender } = render(boxFor(chatDraftKey("agent", null)));
+    type("новый чат");
+    rerender(boxFor(chatDraftKey("agent", "a")));
+    expect(value()).toBe("");
+    rerender(boxFor(chatDraftKey("agent", null)));
+    expect(value()).toBe("новый чат");
+  });
+
+  /// Sent, the text is the turn's: nothing is kept for the next visit.
+  test("a message sent leaves no draft behind", () => {
+    const sent: string[] = [];
+    const key = chatDraftKey("agent", "a");
+    const { rerender } = render(boxFor(key, (text) => sent.push(text)));
+    type("сделай");
+    expect(readChatDraft(key)).toBe("сделай");
+    fireEvent.keyDown(screen.getByRole("textbox"), { code: "Enter", key: "Enter" });
+    expect(sent).toEqual(["сделай"]);
+    expect(readChatDraft(key)).toBe("");
+
+    rerender(boxFor(chatDraftKey("agent", "b")));
+    rerender(boxFor(key));
+    expect(value()).toBe("");
+  });
+
+  /// A draft is not being typed: one that starts like a command opens no menu
+  /// where the box appears, and asks for no list of commands, until a key is
+  /// pressed — the same as a menu closed with Escape.
+  test("a restored draft does not open the command menu by itself", () => {
+    let asked = 0;
+    const key = chatDraftKey("agent", "a");
+    localStorage.setItem(key, "/rev");
+    render(
+      <Composer
+        draftKey={key}
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+        commands={[{ name: "review", hint: "Review a file", run: () => {} }]}
+        onCommandsOpen={() => asked++}
+      />,
+    );
+    expect(value()).toBe("/rev");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(asked).toBe(0);
+
+    type("/revi");
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    expect(asked).toBe(1);
+  });
+
+  /// A command can start another chat — `/fork` does. What was in the box
+  /// belongs to the chat it was typed in, and the box it moves to is not that
+  /// one, so the draft goes with the message the command sent.
+  test("a command that starts another chat leaves no draft behind", () => {
+    const first = chatDraftKey("agent", "a");
+    function Forking() {
+      const [key, setKey] = useState(first);
+      return (
+        <Composer
+          draftKey={key}
+          onSend={() => {}}
+          onStop={() => {}}
+          running={false}
+          conversation="agent"
+          onConversation={() => {}}
+          unattended={false}
+          onUnattended={() => {}}
+          models={{ choices: [], current: null }}
+          onModel={() => {}}
+          onEffort={() => {}}
+          onLoadModels={() => {}}
+          context={null}
+          usage={null}
+          onCompact={() => {}}
+          commands={[{ name: "fork", hint: "Copy the chat", run: () => setKey(chatDraftKey("agent", null)) }]}
+        />
+      );
+    }
+    render(<Forking />);
+    type("/fork");
+    expect(readChatDraft(first)).toBe("/fork");
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { code: "Enter", key: "Enter" });
+    expect(readChatDraft(first)).toBe("");
+    expect(value()).toBe("");
   });
 });

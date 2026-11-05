@@ -309,6 +309,15 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
+.catalog-detail-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
 .catalog-detail-file {
   margin: 0 0 8px;
   padding-top: 14px;
@@ -337,6 +346,10 @@ pre.catalog-detail-text {
   color: var(--text-dim);
   font-size: var(--fs-md);
   line-height: 1.5;
+}
+/* The install dialog's step strip, at the same distance as the text below. */
+.catalog-install-steps {
+  margin-bottom: 12px;
 }
 
 /* The install dialog's server entry: short, but a long one scrolls rather than pushing Install off. */

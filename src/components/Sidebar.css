@@ -139,36 +139,37 @@
   flex: none;
 }
 /* A mode is where the work happens, a page something beside it: the modes'
-   rows are a little taller, their icons in a box of their own. */
+   rows are a little taller and read in full ink, the pages' in dim. Every
+   icon in the top block — "+", modes, pages — sits on one column. */
 .mode-switch:not(.sidebar-pages) .mode-opt {
-  height: 34px;
-  padding: 0 6px;
+  height: 32px;
   color: var(--text);
 }
 .mode-tile {
   flex: none;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 14px;
   color: var(--text-dim);
 }
 .sidebar-pages-head {
   flex: 0 0 100%;
   box-sizing: border-box;
-  margin-top: 8px;
-  padding: 12px 8px 2px;
-  border-top: 1px solid var(--border-soft);
+  /* The heading alone parts the pages from the modes: a rule as well would
+     cut the block in two. */
+  margin-top: 10px;
+  padding: 0 8px 2px;
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
-/* On the rail the heading is only its line between the two groups. */
+/* On the rail, with no words to show, the heading is a line between the two groups. */
 .window.collapsed .sidebar-pages-head {
   flex: none;
   width: 28px;
   height: 0;
   margin: 0;
   padding: 0;
+  border-top: 1px solid var(--border-soft);
   overflow: hidden;
 }
 .window.collapsed .mode-opt {
@@ -226,6 +227,30 @@
 .chat.active {
   background: var(--bg-active);
   color: var(--text);
+}
+.chat > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+.chat .chat-activity {
+  color: var(--text-faint);
+}
+.chat .chat-activity-running {
+  color: var(--accent);
+  animation: chat-activity-spin 0.9s linear infinite;
+}
+.chat .chat-activity-awaiting {
+  color: var(--accent);
+}
+@keyframes chat-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat .chat-activity-running {
+    animation: none;
+  }
 }
 
 /* "Chats" and the filter over the list. */

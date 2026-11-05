@@ -93,6 +93,10 @@ pub struct FolderTurn<'a> {
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub take_steering: &'a (dyn Fn() -> Vec<SteeringNote> + Sync),
     pub notes_typed: &'a (dyn Fn() -> u64 + Sync),
+    /// The other chats running beside this one in the folder, asked live.
+    pub parallel: &'a (dyn Fn() -> Vec<String> + Sync),
+    /// Recorded when this chat moved to its worktree; the PR offer reads it.
+    pub worktree_base: Option<&'a str>,
 }
 
 /// Puts a turn in the open folder together and hands it to `run`. Blocking:
@@ -135,18 +139,21 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
-    // A base that cannot be read costs the prompt its block; the tools say why when called.
-    let knowledge_overview = match features.is_on(Feature::Knowledge) {
-        true => crate::services::knowledge::overview(workspace).ok(),
-        false => None,
-    };
+    let knowledge_overview = crate::services::knowledge::overview_offered(&features, workspace);
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
-    let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone() });
+    let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
+    let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone(), parallel });
 
     let turn = Turn {
         events: folder.events,
         session: &session,
-        place: Place::Folder { scope: &scope, mode: folder.mode, web: web.as_ref() },
+        place: Place::Folder {
+            scope: &scope,
+            mode: folder.mode,
+            web: web.as_ref(),
+            parallel: folder.parallel,
+            worktree_base: folder.worktree_base,
+        },
         approval: &approval,
         cancelled: folder.cancelled,
         sleep: &sleep,
@@ -468,6 +475,8 @@ mod tests {
                 cancelled: &no,
                 take_steering: &none,
                 notes_typed: &zero,
+                parallel: &Vec::<String>::new,
+                worktree_base: None,
             };
             run_in_folder(folder, FolderHandles::default(), |turn| {
                 ask(turn.session);
@@ -545,6 +554,8 @@ mod tests {
                     cancelled: &no,
                     take_steering: &none,
                     notes_typed: &zero,
+                    parallel: &Vec::<String>::new,
+                worktree_base: None,
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
@@ -598,7 +609,7 @@ mod tests {
     #[test]
     fn a_chat_keeps_the_files_its_first_turn_read() {
         use crate::domain::project_rules::RuleFile;
-        let read = |text: &str| Frozen { rules: vec![RuleFile::new("AGENTS.md", text)], knowledge: None };
+        let read = |text: &str| Frozen { rules: vec![RuleFile::new("AGENTS.md", text)], knowledge: None, parallel: None };
         let (one, two) = (temp_dir("frozen-one"), temp_dir("frozen-two"));
         assert_eq!(*frozen_for("frozen-chat", &one, read("first")), read("first"));
         assert_eq!(*frozen_for("frozen-chat", &one, read("edited")), read("first"), "the chat's own is kept");

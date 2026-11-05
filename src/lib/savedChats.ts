@@ -48,6 +48,8 @@ export type ChatRecord = {
   role?: ChatRoleId | null;
   /** The cluster a Kubernetes chat is pinned to. */
   kube?: KubePin | null;
+  /** The branch this chat's worktree was created from. */
+  worktreeBase?: string | null;
 };
 
 /** Chats of the open folder, newest first. No folder, no backend: no rows. */
@@ -103,6 +105,12 @@ export async function nextPromptSent(id: string, text: string): Promise<void> {
 export async function exportChat(id: string, path: string): Promise<void> {
   requireBackend();
   return invoke("chat_export", { id, path });
+}
+
+/** Moves this saved agent chat to its own clean worktree; resolves to its folder. */
+export async function moveChatToWorktree(id: string): Promise<string> {
+  requireBackend();
+  return invoke<string>("chat_move_to_worktree", { id });
 }
 
 export async function setChatArchived(id: string, archived: boolean): Promise<void> {

@@ -175,6 +175,8 @@ describe("FileViewer", () => {
     await open({ path: "docs/README.md", side: "worktree" });
     expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
     expect(document.querySelector(".file-viewer-preview h1")?.textContent).toBe("Title");
+    // A file as it reads follows the user's text size, as the chat does.
+    expect(document.querySelector(".file-viewer-preview")?.classList.contains("text-scale")).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "File" }));
     expect(rows()).toHaveLength(3);
   });

@@ -31,7 +31,7 @@ export type PageDef = {
   /** The row's tooltip, read on the rail where the label is hidden. */
   title: string;
   icon: typeof Store;
-  /** The panes' column stays beside the page (MCP, Skills, Terminal…), in either mode;
+  /** The panes' column stays beside the page (MCP, Skills…), in either mode;
       without it the page takes everything right of the sidebar. */
   dock: boolean;
   /** The feature it belongs to (`lib/features.ts`): listed only while that is on. */

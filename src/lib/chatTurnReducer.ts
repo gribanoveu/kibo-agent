@@ -34,7 +34,7 @@ export type Block =
     }
   | { kind: "message"; id: string; round: number; text: string }
   | { kind: "reasoning"; id: string; round: number; text: string }
-  | { kind: "steer"; id: string; text: string }
+  | { kind: "steer"; id: string; text: string; images?: ImagePart[] }
   /** Something the app did to the conversation, said out loud. */
   | { kind: "notice"; id: string; text: string }
   /** A pass folding older history into a summary: under way, done, or given up on. */
@@ -468,7 +468,12 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number, model?: str
         ...state,
         blocks: [
           ...state.blocks,
-          { kind: "steer", id: `steer:${event.payload.id}`, text: event.payload.text },
+          {
+            kind: "steer",
+            id: `steer:${event.payload.id}`,
+            text: event.payload.text,
+            ...(event.payload.images?.length ? { images: event.payload.images } : {}),
+          },
         ],
       };
 

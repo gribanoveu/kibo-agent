@@ -62,9 +62,11 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
 }
 
 /**
- * The Terminal tab: the user's own shells, a tab each, and the agent's
- * background processes and helper agents as the last two tabs. Opening the pane gives a shell, as a
- * terminal window does — once per folder, not again after the last is closed.
+ * The Terminal tab, under the message box: the user's own shells, a tab each,
+ * and the agent's background processes and helper agents as the last two tabs —
+ * what Overview's Background card opens it on. Opening the pane
+ * gives a shell, as a terminal window does — once per folder, not again after
+ * the last is closed.
  */
 export function TerminalPanel({ active, workspace, chatId, processFocus, onOpenAgent, onFocusTaken, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
   const { processes, error: processError, stop } = useProcesses(active, chatId);

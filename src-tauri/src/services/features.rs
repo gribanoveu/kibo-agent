@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
-use crate::domain::features::{Feature, Features};
+use crate::domain::features::{Feature, FeatureError, Features};
 use crate::domain::settings::AppSettings;
 use crate::infra::{app_dir, settings_store, voices_store};
 use crate::services::ai_tools::tools::tool_definitions;
@@ -23,6 +23,8 @@ pub struct FeatureView {
     pub on: bool,
     /// What the model is given, as it is told.
     pub tools: Vec<FeatureTool>,
+    /// Whether the model gets them while the feature is on.
+    pub tools_on: bool,
     /// Where the model is given them: a chat's role, a mode in a folder.
     pub places: Vec<String>,
     /// Its file, as a path under the home folder reads; `None` for a feature with none.
@@ -39,7 +41,8 @@ pub struct FeatureTool {
 /// What a turn reads once: an unreadable settings file is the defaults, as for
 /// every setting a turn reads.
 pub fn enabled() -> Features {
-    Features::from_settings(&settings_store::load().unwrap_or_default().features)
+    let settings = settings_store::load().unwrap_or_default();
+    Features::from_settings(&settings.features).without_tools_of(&settings.feature_tools)
 }
 
 pub fn list() -> Vec<FeatureView> {
@@ -47,11 +50,17 @@ pub fn list() -> Vec<FeatureView> {
     views(&settings, app_dir::dir().ok().as_deref())
 }
 
-pub fn set(id: &str, on: bool) -> Result<(), String> {
-    let feature = Feature::from_id(id).ok_or_else(|| format!("no feature \"{id}\""))?;
-    settings_store::update(|s| s.features.insert(feature.manifest().id.to_string(), on))
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+pub fn set(id: &str, on: bool) -> Result<(), FeatureError> {
+    let feature = Feature::from_id(id).ok_or_else(|| FeatureError::Unknown(id.to_string()))?;
+    settings_store::update(|s| s.features.insert(feature.manifest().id.to_string(), on))?;
+    Ok(())
+}
+
+/// Whether the model gets the feature's tools; the feature stays as it is.
+pub fn set_tools(id: &str, on: bool) -> Result<(), FeatureError> {
+    let feature = Feature::from_id(id).ok_or_else(|| FeatureError::Unknown(id.to_string()))?;
+    settings_store::update(|s| s.feature_tools.set_enabled(feature.manifest().id, on))?;
+    Ok(())
 }
 
 /// Removes the feature's file or folder. Only while it is off: the model could be
@@ -100,6 +109,7 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 description: manifest.description.to_string(),
                 on: on.is_on(feature),
                 tools,
+                tools_on: settings.feature_tools.is_enabled(manifest.id),
                 places: places(manifest.tools),
                 data: manifest.data.map(|file| format!("~/.kibo/{file}")),
                 has_data: data_path(feature, app_dir).is_some_and(|path| path.exists()),
@@ -151,6 +161,25 @@ mod tests {
         use crate::domain::tools::ToolName;
         assert_eq!(places(&[ToolName::RunCommand]), ["Agent"]);
         assert_eq!(places(&[ToolName::KubeList]), ["Kubernetes chat"]);
+    }
+
+    #[test]
+    fn the_tools_are_kept_from_the_model_and_the_feature_stays_on() {
+        use crate::domain::tools::ToolName;
+        crate::testing::with_app_dir("features-tools", || {
+            set("mongodb", true).unwrap();
+            assert!(enabled().offers(ToolName::Mongo));
+
+            set_tools("mongodb", false).unwrap();
+            assert!(enabled().is_on(Feature::Mongodb) && !enabled().offers(ToolName::Mongo));
+            let mongo = list().into_iter().find(|f| f.id == "mongodb").unwrap();
+            assert!(mongo.on && !mongo.tools_on);
+            assert!(list().iter().filter(|f| f.id != "mongodb").all(|f| f.tools_on), "the others keep theirs");
+
+            set_tools("mongodb", true).unwrap();
+            assert!(enabled().offers(ToolName::Mongo));
+            assert!(set_tools("nope", false).is_err());
+        });
     }
 
     #[test]

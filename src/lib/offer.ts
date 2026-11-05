@@ -4,19 +4,26 @@ import type { Block } from "./chatTurnReducer";
 // accepted — its arguments say what and why. It is drawn after the answer,
 // not where the call was made.
 
-export type OfferKind = "review" | "commit";
+export type OfferKind = "review" | "commit" | "worktree" | "pullRequest";
 
 export type Offer = { kind: OfferKind; reason: string };
 
 /** What pressing a commit offer sends. */
 export const COMMIT_REQUEST = "Commit the changes.";
+/** A PR is requested, never pushed by the offer button itself. */
+export const PULL_REQUEST = "Create a pull request from this worktree branch into its recorded base. Push and create it with confirmed commands.";
 
 /** The offer a settled `offer` call made; `null` for any other block, or one refused. */
 export function offerOf(block: Block): Offer | null {
   if (block.kind !== "tool" || block.name !== "offer") return null;
   // A refused or unfinished call has no result to say it was offered.
   const result = block.result as { result?: string; kind?: string } | undefined;
-  if (result?.result !== "offered" || (result.kind !== "review" && result.kind !== "commit")) return null;
+  if (
+    result?.result !== "offered" ||
+    (result.kind !== "review" && result.kind !== "commit" && result.kind !== "worktree" && result.kind !== "pullRequest")
+  ) {
+    return null;
+  }
   let args: Partial<Record<string, unknown>>;
   try {
     args = JSON.parse(block.arguments);

@@ -57,7 +57,7 @@ describe("what a change of status asks of the user", () => {
 type Props = Parameters<typeof useTurnAlerts>[0];
 
 const ALL_ON = DEFAULT_ALERTS;
-const base: Props = { status: "running", failed: false, chatTitle: "Fix login", prefs: ALL_ON };
+const base: Props = { sessionKey: "chat-a", status: "running", failed: false, chatTitle: "Fix login", prefs: ALL_ON };
 
 /** A hook that starts at `initial` and is moved through `steps`, each a change to the props before it. */
 const run = (steps: Partial<Props>[], initial: Partial<Props> = {}) => {
@@ -130,6 +130,26 @@ describe("calling the user back", () => {
     await settle();
     expect(shown).toHaveLength(2);
     expect(played).toEqual(["done"]);
+  });
+
+  test("a chat opened while another runs was not finished just now", async () => {
+    run([{ sessionKey: "chat-b", status: "done" }], { status: "running" });
+    await settle();
+    expect(played).toEqual([]);
+    expect(shown).toEqual([]);
+  });
+
+  test("a card waiting in the chat that was opened is not news either", async () => {
+    run([{ sessionKey: "chat-b", status: "awaitingApproval" }], { status: "running" });
+    await settle();
+    expect(played).toEqual([]);
+    expect(shown).toEqual([]);
+  });
+
+  test("the chat opened is heard once its own turn ends", async () => {
+    run([{ sessionKey: "chat-b", status: "done" }, { status: "running" }, { status: "done" }], { status: "running" });
+    expect(played).toEqual(["done"]);
+    await waitFor(() => expect(shown.map((n) => n.body)).toEqual(["The agent has finished."]));
   });
 
   test("changing the settings after the end is not a second alert", async () => {

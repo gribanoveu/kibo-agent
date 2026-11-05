@@ -12,6 +12,9 @@ export const APP_MODES = ["agent", "chat"] as const;
 export type AppMode = (typeof APP_MODES)[number];
 export const isAppMode = (value: unknown): value is AppMode => APP_MODES.includes(value as AppMode);
 
+/** What the sidebar says about a chat's live agent session. */
+export type ChatActivity = "running" | "awaitingApproval" | "finished";
+
 export type PanelItem = {
   id: string;
   badge: string;

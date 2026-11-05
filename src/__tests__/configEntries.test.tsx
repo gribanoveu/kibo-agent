@@ -1,16 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import {
   EMPTY_HOOK,
   EMPTY_SERVER,
+  entrySecrets,
+  fillSecrets,
+  keyClash,
+  pastedServers,
+  previousEntry,
   readHook,
   readMcpServer,
   removeHook,
   removeMcpServer,
+  serverKey,
   writeHook,
   writeMcpServer,
 } from "../lib/configEntries";
-import { HookForm, McpServerForm } from "../components/ConfigEntryForm";
+import { HookForm } from "../components/ConfigEntryForm";
 
 // One server or one hook, edited through a form and written back into the
 // same file: its order and the keys the form has no field for survive.
@@ -44,6 +50,7 @@ describe("an MCP server", () => {
       timeoutSecs: "",
       exposure: "direct",
       keepResults: false,
+      extra: { disabled: true },
     });
     expect(readMcpServer(MCP, "nope")).toBeNull();
   });
@@ -137,11 +144,165 @@ describe("an MCP server", () => {
     expect(writeMcpServer("{", null, { ...EMPTY_SERVER, name: "x", command: "c" })).toMatchObject({ error: expect.stringContaining("not valid JSON") });
   });
 
+  test("a name every object inherits is not a server in the file", () => {
+    expect(previousEntry(text({ mcpServers: {} }), null, "constructor")).toBeNull();
+    expect(previousEntry(text({ mcpServers: { github: {} } }), null, "github")).toBe("github");
+    expect(previousEntry(text({ mcpServers: { github: {} } }), "other", "github")).toBe("other");
+    expect("text" in writeMcpServer("{}", null, { ...EMPTY_SERVER, name: "constructor", command: "c" })).toBe(true);
+    expect(removeMcpServer(MCP, "constructor")).toBeNull();
+  });
+
   test("is removed by name, the rest untouched", () => {
     const file = JSON.parse(removeMcpServer(MCP, "github")!);
     expect(Object.keys(file.mcpServers)).toEqual(["fs", "docs"]);
     expect(file.other).toBe(1);
     expect(removeMcpServer(MCP, "nope")).toBeNull();
+  });
+});
+
+describe("a pasted server", () => {
+  const pasted = (snippet: string, exposure?: "direct" | "deferred" | "hidden") => {
+    const result = pastedServers(snippet, exposure);
+    if ("error" in result) throw new Error(result.error);
+    return result.servers;
+  };
+
+  test("is read from a whole file, a bare map, or a fragment cut out of one", () => {
+    const entry = { command: "npx", args: ["-y", "server-github"] };
+    for (const snippet of [
+      text({ mcpServers: { github: entry } }),
+      text({ github: entry }),
+      `"github": ${JSON.stringify(entry)},`,
+    ]) {
+      expect(pasted(snippet)).toEqual([
+        { name: "github", fields: { ...EMPTY_SERVER, name: "github", command: "npx", args: "-y\nserver-github" } },
+      ]);
+    }
+  });
+
+  test("an entry with no name of its own comes back nameless, for the form to ask", () => {
+    expect(pasted('{"command": "npx", "args": ["-y", "x"]}')).toEqual([
+      { name: "", fields: { ...EMPTY_SERVER, command: "npx", args: "-y\nx" } },
+    ]);
+    expect(pasted('{"url": "https://a.example/mcp"}')).toEqual([
+      { name: "", fields: { ...EMPTY_SERVER, transport: "url", url: "https://a.example/mcp" } },
+    ]);
+  });
+
+  test("several come back in the order the paste has them", () => {
+    const servers = pasted(text({ mcpServers: { a: { command: "a" }, b: { url: "https://b.example/mcp" } } }));
+    expect(servers.map((server) => server.name)).toEqual(["a", "b"]);
+    expect(servers[1].fields.transport).toBe("url");
+  });
+
+  test("what the form has no field for comes with it", () => {
+    const [server] = pasted(
+      text({ mcpServers: { kb: { command: "kb", disabled: true, toolExposure: { find: "direct" } } } }),
+    );
+    expect(server.fields.extra).toEqual({ disabled: true, toolExposure: { find: "direct" } });
+  });
+
+  test("a snippet that says nothing about its tools takes the screen's default", () => {
+    expect(pasted('{"mcpServers": {"git": {"command": "npx"}}}', "deferred")[0].fields.exposure).toBe("deferred");
+    expect(pasted('{"mcpServers": {"git": {"command": "npx", "exposure": "hidden"}}}', "deferred")[0].fields.exposure).toBe(
+      "hidden",
+    );
+  });
+
+  test("says what is wrong rather than filling anything", () => {
+    expect(pastedServers(" ")).toEqual({ error: "Paste a server's JSON first" });
+    expect(pastedServers("{}")).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ foo: 1 }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ github: {} }))).toEqual({ error: "Not an MCP server: its entry needs a command or a url" });
+    expect(pastedServers(text({ mcpServers: {} }))).toEqual({ error: "Nothing to read: the snippet holds no servers" });
+    expect(pastedServers(text({ mcpServers: { git: { command: "npx", args: "-y x" } } }))).toEqual({ error: "git: args must be a list" });
+    expect(pastedServers(text({ mcpServers: { git: { command: "npx", env: ["TOKEN=t"] } } }))).toEqual({ error: "git: env must be an object" });
+    expect(pastedServers(text({ mcpServers: { git: { url: "https://x", headers: "a: b" } } }))).toEqual({
+      error: "git: headers must be an object",
+    });
+    expect(pastedServers(text({ mcpServers: { a: 1 } }))).toEqual({ error: "Not an MCP server: a is not an object" });
+    expect(pastedServers('{"mcpServers": {')).toMatchObject({ error: expect.stringContaining("Line 1, column") });
+  });
+
+  test("is written with the keys the form has no field for", () => {
+    const [server] = pasted(
+      text({ mcpServers: { kb: { command: "kb-server", disabled: true, toolExposure: { find: "direct" } } } }),
+    );
+    expect(written(writeMcpServer(MCP, null, server.fields)).mcpServers.kb).toEqual({
+      command: "kb-server",
+      disabled: true,
+      toolExposure: { find: "direct" },
+    });
+  });
+
+  test("pasting over a name replaces that entry where it stands", () => {
+    const [server] = pasted(text({ mcpServers: { github: { command: "uvx", args: ["gh"] } } }));
+    const file = written(writeMcpServer(MCP, "github", server.fields));
+    expect(Object.keys(file.mcpServers)).toEqual(["github", "fs", "docs"]);
+    // The file's own key the form cannot show is kept, as it is on an edit...
+    expect(file.mcpServers.github).toEqual({ command: "uvx", args: ["gh"], disabled: true });
+    // ...unless the paste says otherwise.
+    const [fresh] = pasted(text({ mcpServers: { github: { command: "uvx", disabled: false } } }));
+    expect(written(writeMcpServer(MCP, "github", fresh.fields)).mcpServers.github).toEqual({
+      command: "uvx",
+      disabled: false,
+    });
+  });
+});
+
+describe("a server's key", () => {
+  test("is the name lowercased, keeping only what a tool name may hold", () => {
+    expect(serverKey("My Server.v2")).toBe("my_server_v2");
+    expect(serverKey("git-hub")).toBe("git-hub");
+    expect(serverKey("Имя")).toBe("___");
+    expect(serverKey("")).toBe("");
+  });
+
+  test("clashes with another server spelled differently, not with itself", () => {
+    const file = text({ mcpServers: { GitHub: { command: "gh" }, db: { command: "db" } } });
+    expect(keyClash(file, null, "github")).toBe("GitHub");
+    expect(keyClash(file, "GitHub", "github")).toBeNull();
+    expect(keyClash(file, "db", "github")).toBe("GitHub");
+    expect(keyClash(file, null, "  ")).toBeNull();
+    expect(keyClash("{", null, "github")).toBeNull();
+  });
+});
+
+describe("a secret in an entry", () => {
+  const file = text({
+    mcpServers: {
+      gh: {
+        command: "npx",
+        args: ["${NOT_A_SECRET}"],
+        env: { Z: "${B}", A: "${A}-${B}", BAD: "${1}", RAW: "${" },
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+    },
+  });
+
+  test("is a ${NAME} of env or headers, each once, in the order the backend reads them", () => {
+    expect(entrySecrets(file, "gh")).toEqual(["A", "B", "GITHUB_TOKEN"]);
+    expect(entrySecrets(file, "nope")).toEqual([]);
+  });
+
+  test("is filled in trimmed, in one pass, and refused while empty or with a line break", () => {
+    const filled = written(fillSecrets(file, "gh", { A: " a ", B: "b", GITHUB_TOKEN: " t\n" })).mcpServers.gh;
+    expect(filled.env).toEqual({ Z: "b", A: "a-b", BAD: "${1}", RAW: "${" });
+    expect(filled.headers).toEqual({ Authorization: "Bearer t" });
+    // Only env and headers are filled: a command, an argument or a url is text.
+    expect(filled.args).toEqual(["${NOT_A_SECRET}"]);
+
+    // A value that itself holds ${…} stays as typed.
+    const nested = written(fillSecrets(file, "gh", { A: "x", B: "y", GITHUB_TOKEN: "${A}" })).mcpServers.gh;
+    expect(nested.headers).toEqual({ Authorization: "Bearer ${A}" });
+
+    expect(fillSecrets(file, "gh", { A: "a", B: "b", GITHUB_TOKEN: "  " })).toEqual({
+      error: "GITHUB_TOKEN is not filled in",
+    });
+    expect(fillSecrets(file, "gh", { A: "a", B: "b", GITHUB_TOKEN: "a\nb" })).toEqual({
+      error: "GITHUB_TOKEN has a line break or another control character in it — paste the value alone",
+    });
+    expect(fillSecrets(file, "nope", {})).toEqual({ error: "The file has no server called nope" });
   });
 });
 
@@ -208,71 +369,8 @@ describe("a hook", () => {
   });
 });
 
-describe("the forms", () => {
-  test("a server form saves the file with the server in it and closes", async () => {
-    const saved: string[] = [];
-    let closed = false;
-    render(
-      <McpServerForm
-        name="fs"
-        text={MCP}
-        error={null}
-        onSave={async (t) => (saved.push(t), true)}
-        onClose={() => (closed = true)}
-        onEditJson={() => {}}
-      />,
-    );
-    expect((screen.getByLabelText(/^Command/) as HTMLInputElement).value).toBe("fs-server");
-    fireEvent.change(screen.getByLabelText(/^Arguments/), { target: { value: "--root\n/tmp" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(JSON.parse(saved[0]).mcpServers.fs).toEqual({ command: "fs-server", args: ["--root", "/tmp"], type: "stdio" });
-    expect(closed).toBe(true);
-  });
-
-  test("a server form switches to a URL and saves the server that way", async () => {
-    const saved: string[] = [];
-    render(
-      <McpServerForm name="fs" text={MCP} error={null} onSave={async (t) => (saved.push(t), true)} onClose={() => {}} onEditJson={() => {}} />,
-    );
-    expect(screen.queryByLabelText(/^URL/)).toBeNull();
-    fireEvent.click(screen.getByText("A command"));
-    fireEvent.click(screen.getByRole("option", { name: /At a URL/ }));
-    expect(screen.queryByLabelText(/^Command/)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: "https://c.example/mcp" } });
-    fireEvent.change(screen.getByLabelText(/^Headers/), { target: { value: "Authorization: Bearer x" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(JSON.parse(saved[0]).mcpServers.fs).toEqual({
-      type: "http",
-      url: "https://c.example/mcp",
-      headers: { Authorization: "Bearer x" },
-    });
-  });
-
-  test("an HTTP server opens in the form as one", () => {
-    render(<McpServerForm name="docs" text={MCP} error={null} onSave={async () => true} onClose={() => {}} onEditJson={() => {}} />);
-    expect((screen.getByLabelText(/^URL/) as HTMLInputElement).value).toBe("https://mcp.example.com/mcp");
-    expect((screen.getByLabelText(/^Headers/) as HTMLTextAreaElement).value).toBe("Authorization: Bearer t\nX-Team: a");
-  });
-
-  test("a problem the form can see is shown, and nothing is saved", async () => {
-    const saved: string[] = [];
-    render(
-      <McpServerForm name={null} text={MCP} error={null} onSave={async (t) => (saved.push(t), true)} onClose={() => {}} onEditJson={() => {}} />,
-    );
-    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "fs" } });
-    fireEvent.change(screen.getByLabelText(/^Command/), { target: { value: "x" } });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Save"));
-    });
-    expect(screen.getByText("There is already a server called fs")).toBeTruthy();
-    expect(saved).toEqual([]);
-  });
-
-  test("a hook form hides the tools field for Stop, and hands over to the JSON editor", () => {
+describe("the hook form", () => {
+  test("hides the tools field for Stop, and hands over to the JSON editor", () => {
     let json = 0;
     render(<HookForm index={3} text={HOOKS} error={null} onSave={async () => true} onClose={() => {}} onEditJson={() => json++} />);
     expect(screen.queryByLabelText(/^Tools/)).toBeNull();

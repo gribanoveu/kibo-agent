@@ -66,17 +66,21 @@ pub fn with_app_dir<T>(label: &str, f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// Makes `local` the only provider, served by a thread on this machine that
-/// answers every request with `reply` and a usage of `prompt` and `completion`
-/// tokens. Call it inside `with_app_dir`: it writes the settings and the key.
-/// For tests of what a call is counted under — none of them reaches a network.
-pub fn spending_provider(reply: &str, prompt: u32, completion: u32) {
+/// The event-stream body the spending stub answers every request with:
+/// `reply` as the content, then a usage of `prompt` and `completion` tokens.
+pub fn spending_reply(reply: &str, prompt: u32, completion: u32) -> String {
     let content = serde_json::json!({ "choices": [{ "delta": { "content": reply } }] });
     let usage = serde_json::json!({
         "choices": [],
         "usage": { "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion },
     });
-    let port = crate::infra::llm_providers::stub_server(format!("data: {content}\n\ndata: {usage}\n\ndata: [DONE]\n\n"));
+    format!("data: {content}\n\ndata: {usage}\n\ndata: [DONE]\n\n")
+}
+
+/// Points the settings' only provider at a server of the test's own on
+/// `port`, with a key for it. For tests that hold the provider's answer —
+/// a turn mid-flight is theirs to release.
+pub fn spending_provider_on(port: u16) {
     let mut settings = crate::infra::settings_store::load().expect("settings");
     settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
         id: "local".into(),
@@ -86,6 +90,14 @@ pub fn spending_provider(reply: &str, prompt: u32, completion: u32) {
     }];
     crate::infra::settings_store::save(&settings).expect("saves");
     crate::infra::llm_credentials_store::save_api_key("local", "sk").expect("key");
+}
+
+/// Makes `local` the only provider, served by a thread on this machine that
+/// answers every request with `reply` and a usage of `prompt` and `completion`
+/// tokens. Call it inside `with_app_dir`: it writes the settings and the key.
+/// For tests of what a call is counted under — none of them reaches a network.
+pub fn spending_provider(reply: &str, prompt: u32, completion: u32) {
+    spending_provider_on(crate::infra::llm_providers::stub_server(spending_reply(reply, prompt, completion)));
 }
 
 /// What `chat` has been counted as spending, every day together.

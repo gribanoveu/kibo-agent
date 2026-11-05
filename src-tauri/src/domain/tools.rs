@@ -1210,6 +1210,9 @@ pub struct ToolDeps<'a> {
     /// The background processes; `None` where there are none to have, and
     /// `runCommand` with `background` says so.
     pub processes: Option<std::sync::Arc<dyn crate::domain::background::BackgroundProcesses>>,
+    /// A git tree mutation stays in the foreground while its admission lock is
+    /// held: returning a live background process would release the guard early.
+    pub tree_mutation: bool,
     /// The user's own terminals; `None` where there are none to have.
     pub terminals: Option<std::sync::Arc<dyn crate::domain::terminal::UserTerminals>>,
     /// A review worker's files and findings, for `reportFinding`; `None`
@@ -1243,6 +1246,10 @@ pub struct ToolDeps<'a> {
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
+    /// Other turns in this checkout, for the worktree offer.
+    pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
+    /// The base recorded when this chat moved to its worktree.
+    pub worktree_base: Option<&'a str>,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -1396,11 +1403,13 @@ pub enum ToolError {
     /// agent has seen it.
     #[error("read {0} in full before deleting it — a file you have not read may not be what you expect; an outline is not a read")]
     DeleteNotReadInFull(String),
-    /// The file moved under the agent between the read and the write. The
+    /// The file moved under the agent between the read and the change. The
     /// classic loss: the agent read, a person edited in their own editor, the
-    /// agent wrote its stale copy over the top.
-    #[error("{0} changed on disk since you read it — read it again before writing, or your change will overwrite someone else's")]
+    /// agent changed its stale copy over the top.
+    #[error("{0} changed on disk since you read it — read it again before changing it: another running agent or a person may have edited it, and changing it from what you last saw would overwrite their work")]
     FileChangedSinceRead(String),
+    #[error("git {0} would change the shared working tree while another agent turn is running — wait for it to finish, or work in a separate worktree")]
+    GitTreeDuringParallel(String),
     /// A git read failed. Carried as a string so git types stay out of the
     /// tool boundary.
     /// Addressed to the model, which still has `grep` and `listFiles`.
@@ -1470,6 +1479,9 @@ pub enum ToolError {
     /// when it was on.
     #[error("the tool `{tool}` belongs to {feature}, which is turned off — tell the user they can turn it on on the Catalog page")]
     FeatureOff { tool: String, feature: String },
+    /// A tool of a feature that is on, kept from the model on its Catalog panel.
+    #[error("the user keeps the tools of {feature}, `{tool}` among them, from you — tell them they can give them to you on {feature}'s panel on the Catalog page")]
+    ToolsKept { tool: String, feature: String },
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -2321,6 +2333,8 @@ pub enum OfferKind {
     #[default]
     Review,
     Commit,
+    Worktree,
+    PullRequest,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.

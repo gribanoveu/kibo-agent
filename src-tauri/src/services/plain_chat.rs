@@ -358,6 +358,24 @@ mod tests {
         assert!(!path.exists(), "nothing was written");
     }
 
+    /// The board on, its tools kept from the model: not offered, and a call
+    /// from memory is told where they are given back, not to turn on what is on.
+    #[test]
+    fn a_board_call_with_its_tools_kept_is_refused_and_says_where_to_give_them_back() {
+        let path = crate::testing::temp_dir("plain-chat-board-kept").join("board.json");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(path.clone()), Arc::new(|_| {})));
+        let mut chat = chat(vec![calls("board", r#"{"op":"add","title":"x"}"#), said("No board here.")], None);
+        chat.board = Some(board);
+        let kept = crate::domain::settings::OptOut { disabled: vec!["board".to_string()] };
+        chat.features = crate::domain::features::Features::from_settings(&[("board".to_string(), true)].into()).without_tools_of(&kept);
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни")]));
+
+        assert!(chat.asked()[0].tools.is_empty());
+        let result = tool_result(&done.history);
+        assert!(result.contains("panel on the Catalog page") && !result.contains("turned off"), "{result}");
+        assert!(!path.exists(), "nothing was written");
+    }
+
     /// The meter is the estimate of what a turn sends: the role's prompt, its
     /// tools and the conversation, no more and no less.
     #[test]

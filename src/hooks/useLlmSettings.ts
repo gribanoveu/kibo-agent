@@ -38,9 +38,12 @@ export function useLlmSettings() {
   );
 
   const save = useCallback(
-    (provider: ProviderConfig, apiKey: string | null) =>
+    (provider: ProviderConfig, apiKey: string | null, renamedFrom: string | null = null) =>
       guard(async () => {
-        await saveProvider(provider);
+        // `renamedFrom` is the name the form was opened on: a provider saved
+        // under another one is that provider renamed, not a second one beside
+        // the one it was renamed from.
+        await saveProvider(provider, renamedFrom);
         // Only when the user typed one: an untouched field means "leave the
         // stored key alone", and sending its empty value would delete it.
         if (apiKey !== null) await saveApiKey(provider.id, apiKey);

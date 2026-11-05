@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Loader2, X } from "lucide-react";
 import { type ImagePart, imageUrl } from "../lib/images";
 import { Modal } from "./Modal";
 import "./ImageThumbs.css";
 
 type Props = {
   images: ImagePart[];
+  /** How many more are being sanitized right now. Each has a placeholder at
+      the end of the row — where its picture will land — so the wait is seen
+      rather than the row moving in later. */
+  preparing?: number;
   /** Given, each picture can be taken off — the composer's; the transcript's cannot. */
   onRemove?: (index: number) => void;
   /** `end` lines the row up on the right, under a user's message. */
@@ -13,9 +18,9 @@ type Props = {
 };
 
 /** A row of pictures, each opened whole on click. */
-export function ImageThumbs({ images, onRemove, align = "start" }: Props) {
+export function ImageThumbs({ images, preparing = 0, onRemove, align = "start" }: Props) {
   const [open, setOpen] = useState<number | null>(null);
-  if (images.length === 0) return null;
+  if (images.length === 0 && preparing === 0) return null;
   const shown = open === null ? null : (images[open] ?? null);
   return (
     <>
@@ -43,15 +48,30 @@ export function ImageThumbs({ images, onRemove, align = "start" }: Props) {
             )}
           </li>
         ))}
+        {/* The pictures still being read and sanitized: as tall as a thumbnail,
+            so the row keeps its height when they land. */}
+        {Array.from({ length: preparing }, (_, at) => (
+          <li
+            key={`preparing-${at}`}
+            className="image-thumb-pending"
+            aria-label={`Preparing a picture ${at + 1}`}
+            title="Preparing…"
+          >
+            <Loader2 size={16} className="image-thumb-spin" aria-hidden="true" />
+          </li>
+        ))}
       </ul>
-      <Modal
-        title={shown ? `Image · ${shown.width}×${shown.height}` : ""}
-        open={shown !== null}
-        onClose={() => setOpen(null)}
-        wide
-      >
-        {shown && <img className="image-full" src={imageUrl(shown)} alt="" />}
-      </Modal>
+      {/* Out of the thread and into the window: the thread fades its own bottom
+          out with a mask, and a fixed panel drawn inside it is held to the
+          thread's box and cut off with that fade — the viewer's Close button
+          with it. The same escape a diagram takes (Markdown.tsx). */}
+      {shown &&
+        createPortal(
+          <Modal title={`Image · ${shown.width}×${shown.height}`} open onClose={() => setOpen(null)} wide>
+            <img className="image-full" src={imageUrl(shown)} alt="" />
+          </Modal>,
+          document.body,
+        )}
     </>
   );
 }
