@@ -171,11 +171,13 @@ export default function App() {
   const [terminalPaste, setTerminalPaste] = useState<{ command: string } | null>(null);
   const pasteInTerminal = useCallback((command: string) => setTerminalPaste({ command }), []);
   const terminalPasted = useCallback(() => setTerminalPaste(null), []);
-  // A terminal selection on its way to the composer, from the other subtree.
-  const [quote, setQuote] = useState<{ text: string; seq: number } | null>(null);
+  // A terminal selection on its way to the composer, from the other subtree —
+  // and pictures a note carried back out of a running turn.
+  const [quote, setQuote] = useState<{ text: string; seq: number; images?: ImagePart[] } | null>(null);
   // Text put into the box: a message not sent after all (the composer had
-  // cleared the box), a terminal selection, a fix to ask for.
-  const giveBack = (text: string) => setQuote((last) => ({ text, seq: (last?.seq ?? 0) + 1 }));
+  // cleared the box), a terminal selection, a fix to ask for — with the
+  // pictures that were going to be sent with it.
+  const giveBack = (text: string, images: ImagePart[] = []) => setQuote((last) => ({ text, images, seq: (last?.seq ?? 0) + 1 }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Which section it opens at: Models, unless something sent the user elsewhere.
   const [settingsAt, setSettingsAt] = useState<SettingsSection | undefined>();
@@ -268,6 +270,7 @@ export default function App() {
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
   useTurnAlerts({
+    sessionKey: agent.sessionKey,
     status: agent.turn.status,
     failed: agent.error !== null,
     queued: agent.queued.length,
@@ -472,11 +475,13 @@ export default function App() {
   // command's prompt — with the reply language said at its end.
   const send = async (text: string, command?: string, images: ImagePart[] = []) => {
     const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
-    if (!workspace.path && !(await workspace.pick())) return;
+    // The composer has already cleared the box: a picker closed without a
+    // folder gives the message back rather than losing it.
+    if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
     // With Worktree ticked the first message is where the worktree is made:
     // sent here, it would be worked on in the folder the user meant to keep out of.
     if (unstarted && branchPicker.worktree && branchPicker.base) {
-      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text);
+      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text, images);
       return;
     }
     agent.send(text, sent, images);

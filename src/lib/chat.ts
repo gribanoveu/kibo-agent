@@ -84,7 +84,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "delta"; payload: { delta: string } }
   | { type: "reasoning"; payload: { delta: string } }
   | { type: "retrying"; payload: { attempt: number; maxAttempts: number; delaySeconds: number } }
-  | { type: "steeringApplied"; payload: { id: string; text: string } }
+  | { type: "steeringApplied"; payload: { id: string; text: string; images?: ImagePart[] } }
   | { type: "historyCompacting" }
   | { type: "historyCompacted"; payload: { folded: number } }
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
@@ -240,11 +240,17 @@ export async function cancelChat(chatId: string): Promise<void> {
 
 /**
  * Queues a mid-turn note and returns its id, which is what withdraws it.
- * `shown` is what the transcript shows in place of `text` — a `/` command.
+ * `shown` is what the transcript shows in place of `text` — a `/` command —
+ * and `images` are the pictures attached to it.
  */
-export async function steer(text: string, shown: string | undefined, chatId: string): Promise<string> {
+export async function steer(
+  text: string,
+  shown: string | undefined,
+  chatId: string,
+  images: ImagePart[] = [],
+): Promise<string> {
   requireBackend();
-  return invoke<string>("chat_steer", { text, shown: shown ?? null, chatId });
+  return invoke<string>("chat_steer", { text, shown: shown ?? null, images, chatId });
 }
 
 /** `false` means a round already took it — what is said to the model cannot be unsaid. */

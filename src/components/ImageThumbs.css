@@ -12,6 +12,31 @@
 .image-thumbs li {
   position: relative;
 }
+/* A picture still being read and sanitized: as tall as a thumbnail, so the
+   row keeps its height when it lands — its width follows the picture. */
+.image-thumb-pending {
+  width: 72px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel-soft);
+  color: var(--text-faint);
+}
+.image-thumb-spin {
+  animation: image-thumb-spin 0.9s linear infinite;
+}
+@keyframes image-thumb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-thumb-spin {
+    animation: none;
+  }
+}
 .image-thumb {
   display: block;
   padding: 0;
