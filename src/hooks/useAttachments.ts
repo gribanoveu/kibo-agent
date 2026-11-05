@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { pickImages } from "../lib/dialog";
 import { type ImagePart, prepareImage, prepareImageFile } from "../lib/images";
 import { onFileDrop } from "../lib/window";
 
@@ -18,10 +19,11 @@ export type Attached = { image: ImagePart; name: string };
  * `enabled` is whether the model turns go to is set to see them; when it is
  * not, a picture is refused with a sentence saying where to change that.
  *
- * Files dropped anywhere on the window come here while the box is on screen:
- * a drop aimed at the conversation above it means the same thing.
+ * `key` is the box's owner — one chat's unsent pictures do not travel to the
+ * next. Files dropped anywhere on the window come here while the box is on
+ * screen: a drop aimed at the conversation above it means the same thing.
  */
-export function useAttachments(enabled: boolean) {
+export function useAttachments(enabled: boolean, key?: string) {
   const [images, setImages] = useState<ImagePart[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** Pictures being read and sanitized: one placeholder each, where they land. */
@@ -32,10 +34,26 @@ export function useAttachments(enabled: boolean) {
   // The list as of now, for the checks between awaits: state seen from inside
   // `add` is the render's, not what an earlier picture of the same paste added.
   const held = useRef<Attached[]>([]);
+  /** The box these pictures belong to; another one starts with nothing. */
+  const box = useRef(key);
+  /** Bumped when the box changes hands: a picture read for the chat before does not land in this one. */
+  const epoch = useRef(0);
+  /** Pictures still being read, so a message can wait for the whole of itself. */
+  const inFlight = useRef(new Set<Promise<unknown>>());
   const hold = (next: Attached[]) => {
     held.current = next;
     setImages(next.map((one) => one.image));
   };
+
+  useEffect(() => {
+    if (box.current === key) return;
+    box.current = key;
+    epoch.current += 1;
+    held.current = [];
+    setImages([]);
+    setPreparing([]);
+    setError(null);
+  }, [key]);
 
   const add = async (sources: Source[]) => {
     if (!enabled) {
@@ -51,6 +69,7 @@ export function useAttachments(enabled: boolean) {
     // sanitizes each, and a big screenshot takes a moment to come back.
     const placeholders = sources.map(() => ++preparingSeq.current);
     setPreparing((ids) => [...ids, ...placeholders]);
+    const mine = epoch.current;
     try {
       for (const [at, source] of sources.entries()) {
         try {
@@ -59,6 +78,9 @@ export function useAttachments(enabled: boolean) {
             break;
           }
           const part = await source.prepare();
+          // Another chat opened while it was read: the picture belongs to the
+          // box it was attached in, and that one is not on screen any more.
+          if (epoch.current !== mine) break;
           // Checked again: another paste may have filled the box meanwhile.
           if (held.current.length >= MAX_IMAGES) {
             setError(`Up to ${MAX_IMAGES} images in one message.`);
@@ -78,13 +100,21 @@ export function useAttachments(enabled: boolean) {
     }
   };
 
+  /** Reads `sources` and keeps the promise, so a message can wait for all of them. */
+  const run = (sources: Source[]) => {
+    const work = add(sources);
+    inFlight.current.add(work);
+    const done = () => inFlight.current.delete(work);
+    void work.then(done, done);
+  };
+
   /** A paste's files: pictures are taken in and kept out of the box as
       anything else; without one, the paste goes on as usual. */
   const paste = (files: File[], e: { preventDefault: () => void }) => {
     const pictures = files.filter((file) => file.type.startsWith("image/"));
     if (pictures.length === 0) return;
     e.preventDefault();
-    void add(
+    run(
       pictures.map((file) => ({
         name: file.name || "The image",
         prepare: async () => prepareImage(new Uint8Array(await file.arrayBuffer())),
@@ -97,7 +127,20 @@ export function useAttachments(enabled: boolean) {
   // the platform's dialog come the same way — by path.
   const attach = (paths: string[]) => {
     if (paths.length === 0) return;
-    void add(paths.map((path) => ({ name: fileName(path), prepare: () => prepareImageFile(path) })));
+    run(paths.map((path) => ({ name: fileName(path), prepare: () => prepareImageFile(path) })));
+  };
+
+  /**
+   * The platform's picture picker, with the user's sidebar and their idea of
+   * where their screenshots live. A dialog that refuses is a sentence in the
+   * box, not a click that does nothing.
+   */
+  const pick = async () => {
+    try {
+      attach(await pickImages());
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   useEffect(
@@ -125,26 +168,54 @@ export function useAttachments(enabled: boolean) {
   };
   const take = () => takeNamed().map((one) => one.image);
 
+  /** Waits for every picture being read: a message goes whole, never with the half of it that landed. */
+  const settle = async () => {
+    while (inFlight.current.size > 0) await Promise.all([...inFlight.current]);
+  };
+
   /** Pictures put back into the box — a note taken back before a round read
       it comes home with what was attached to it. `replace` puts them in place
-      of what the box holds, as a draft does with its text. */
+      of what the box holds, as a draft does with its text — and with no
+      pictures it empties the box. What does not fit is said, never dropped
+      without a word: the message it came from has already been cleared. */
   const restore = (images: ImagePart[], replace = false) => {
-    if (images.length === 0) return;
+    if (images.length === 0) {
+      if (!replace) return;
+      hold([]);
+      setError(null);
+      return;
+    }
     if (!enabled) {
-      setError("This model is set to text only — turn images on in Settings → Models.");
+      setError("This model is set to text only — turn images on in Settings → Models to attach the pictures that came back with the message.");
       return;
     }
     const room = replace ? MAX_IMAGES : MAX_IMAGES - held.current.length;
-    if (room < images.length) setError(`Up to ${MAX_IMAGES} images in one message.`);
-    if (room <= 0) return;
-    const put = images.slice(0, room).map((image) => ({ image, name: "The image" }));
+    const put = images.slice(0, Math.max(room, 0)).map((image) => ({ image, name: "The image" }));
+    const dropped = images.length - put.length;
+    if (dropped > 0) setError(`${dropped === 1 ? "One picture" : `${dropped} pictures`} did not fit: up to ${MAX_IMAGES} in one message.`);
+    else setError(null);
+    if (put.length === 0) return;
     hold(replace ? put : [...held.current, ...put]);
   };
 
   /** The user closed the note; the next picture says again if it fails. */
   const clearError = () => setError(null);
 
-  return { enabled, images, error, dragging, preparing: preparing.length, paste, remove, take, takeNamed, restore, attach, clearError };
+  return {
+    enabled,
+    images,
+    error,
+    dragging,
+    preparing: preparing.length,
+    paste,
+    remove,
+    take,
+    takeNamed,
+    restore,
+    pick,
+    settle,
+    clearError,
+  };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

@@ -201,7 +201,8 @@ impl SteeringNote {
     }
 
     /// What goes into the history. A note that is only a picture says so — the
-    /// prefix alone would end in a colon and nothing.
+    /// prefix alone would end in a colon and nothing. A note with neither is
+    /// never sent at all: `apply_steering` skips it.
     pub fn prefixed(&self) -> String {
         let text = if self.text.trim().is_empty() {
             match self.images.len() {
@@ -265,7 +266,10 @@ pub enum ChatEventPayload {
     /// Carries the id so the front end can retire that queued note by
     /// identity rather than by matching its text. `text` is the note as the
     /// transcript shows it — its `shown`, when it has one — and `images` are
-    /// the pictures it carried, for the bubble to draw.
+    /// the pictures it carried, for the bubble to draw. They come back with
+    /// the event rather than being read from the window's own copy of the
+    /// note: a round can take the note before the command's answer reaches the
+    /// window, and then this is the only place the pictures are.
     SteeringApplied {
         id: String,
         text: String,

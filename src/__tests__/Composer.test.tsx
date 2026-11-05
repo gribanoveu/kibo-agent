@@ -218,6 +218,18 @@ describe("text handed to the box", () => {
     expect(screen.getAllByRole("img")).toHaveLength(1);
   });
 
+  /// A draft is the whole of what was there, pictures included: one without
+  /// any does not leave the box's behind to ride with its message.
+  test("a draft without pictures empties the box", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "look", seq: 1, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+
+    rerender(withDraft({ text: "try again", seq: 2 }));
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
   /// A note taken out of a running turn comes home with its picture: the
   /// words were never sent, so neither were the pixels.
   test("pictures come back with the text a note was taken back with", () => {
@@ -235,6 +247,21 @@ describe("text handed to the box", () => {
     rerender(withDraft(null, { text: "", seq: 1, images: [picture] }, false));
     expect(screen.getByRole("alert").textContent).toContain("Settings → Models");
     expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  /// The box holds what one message can carry. What comes back over that is
+  /// said — the message it came from has already been cleared, so it cannot
+  /// be left out in silence.
+  test("pictures that do not fit are said, not dropped without a word", () => {
+    const ten: ImagePart[] = Array.from({ length: 10 }, (_, n) => ({ mediaType: "image/png", data: `P${n}`, width: 1, height: 1 }));
+    const two: ImagePart[] = Array.from({ length: 2 }, (_, n) => ({ mediaType: "image/png", data: `Q${n}`, width: 1, height: 1 }));
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "", seq: 1, images: ten }));
+    expect(screen.getAllByRole("img")).toHaveLength(10);
+
+    rerender(withDraft(null, { text: "", seq: 2, images: two }));
+    expect(screen.getAllByRole("img")).toHaveLength(10);
+    expect(screen.getByRole("alert").textContent).toContain("2 pictures did not fit");
   });
 
   /// A branch gives its message back; the same text twice is two branches.
@@ -797,6 +824,15 @@ describe("the queue", () => {
     const two: ImagePart = { mediaType: "image/png", data: "PNG", width: 5, height: 3 };
     queueing(true, [], [{ id: "n-1", text: "", images: [picture, two] }]);
     expect(screen.getByRole("button", { name: "2 pictures" })).toBeTruthy();
+  });
+
+  /// What was typed stays first and the picture is said after it, in a note
+  /// and in a held message alike.
+  test("a row with words says it carries a picture too", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    queueing(true, [{ id: 1, text: "then the docs", images: [picture] }], [{ id: "n-1", text: "why red?", images: [picture] }]);
+    expect(screen.getByRole("button", { name: "why red? · a picture" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "then the docs · a picture" })).toBeTruthy();
   });
 
   /// When a row is read is said on it, not in a tooltip; a long one opens

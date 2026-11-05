@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // Chat mode's box belongs to its chat, as the agent's does: what is typed in
 // one chat is not in the next, and comes back with the chat it was typed in.
@@ -11,6 +11,8 @@ const calls: { command: string; args: unknown }[] = [];
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
     calls.push({ command, args });
+    // A pasted picture, sanitized: what the backend answers with.
+    if (command === "image_prepare") return Promise.resolve({ mediaType: "image/png", data: "PNG", width: 4, height: 3 });
     return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
@@ -102,6 +104,16 @@ describe("Chat mode's box", () => {
 
     rerender(chatScreen("a", undefined, false, "prototype"));
     expect(screen.getByRole("button", { name: "Attach a picture" })).toBeTruthy();
+  });
+
+  /// A picture is a message of its own here too: with nothing typed, the send
+  /// button is the way to send it — not only Enter.
+  test("a picture alone can be sent with the button", async () => {
+    render(chatScreen("a", undefined, true));
+    fireEvent.paste(box(), { clipboardData: { files: [new File([new Uint8Array([1])], "shot.png", { type: "image/png" })] } });
+
+    await waitFor(() => expect(screen.getByAltText("Image 1, 4×3")).toBeTruthy());
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   test("each chat finds its own text, and only its own", () => {

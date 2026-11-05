@@ -475,7 +475,9 @@ export default function App() {
   // command's prompt — with the reply language said at its end.
   const send = async (text: string, command?: string, images: ImagePart[] = []) => {
     const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
-    if (!workspace.path && !(await workspace.pick())) return;
+    // The composer has already cleared the box: a picker closed without a
+    // folder gives the message back rather than losing it.
+    if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
     // With Worktree ticked the first message is where the worktree is made:
     // sent here, it would be worked on in the folder the user meant to keep out of.
     if (unstarted && branchPicker.worktree && branchPicker.base) {

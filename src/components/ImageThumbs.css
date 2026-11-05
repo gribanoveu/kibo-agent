@@ -12,8 +12,8 @@
 .image-thumbs li {
   position: relative;
 }
-/* A picture still being read and sanitized: the size of a thumbnail, so the row
-   it will land in does not move when it does. */
+/* A picture still being read and sanitized: as tall as a thumbnail, so the
+   row keeps its height when it lands — its width follows the picture. */
 .image-thumb-pending {
   width: 72px;
   height: 56px;

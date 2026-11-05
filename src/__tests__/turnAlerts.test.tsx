@@ -146,9 +146,10 @@ describe("calling the user back", () => {
     expect(shown).toEqual([]);
   });
 
-  test("the chat opened is heard once its own turn ends", () => {
+  test("the chat opened is heard once its own turn ends", async () => {
     run([{ sessionKey: "chat-b", status: "done" }, { status: "running" }, { status: "done" }], { status: "running" });
     expect(played).toEqual(["done"]);
+    await waitFor(() => expect(shown.map((n) => n.body)).toEqual(["The agent has finished."]));
   });
 
   test("changing the settings after the end is not a second alert", async () => {

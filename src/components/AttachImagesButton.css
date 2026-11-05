@@ -11,11 +11,7 @@
   color: var(--text-dim);
   cursor: pointer;
 }
-.attach-images:hover:not(:disabled) {
+.attach-images:hover {
   background: var(--bg-hover);
   color: var(--accent);
-}
-.attach-images:disabled {
-  opacity: 0.4;
-  cursor: default;
 }

@@ -255,8 +255,8 @@
 .plain-composer-bar .attach-images {
   margin-left: auto;
 }
-.plain-meter + .attach-images,
-.attach-images + .plain-send {
+.plain-composer-bar .plain-meter + .attach-images,
+.plain-composer-bar .attach-images + .plain-send {
   margin-left: 0;
 }
 

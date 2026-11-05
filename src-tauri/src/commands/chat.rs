@@ -723,6 +723,13 @@ pub fn chat_cancel(chat_id: String, state: State<'_, Arc<AgentState>>) {
 /// is what the transcript shows in place of `text` — a `/` command — and
 /// `images` are the pictures attached to it, sent to the model with the note
 /// and drawn on its bubble.
+///
+/// A ponytail: the pictures ride as this command's arguments, up to ten of
+/// them at a megabyte each, and it is one of the few commands left synchronous
+/// — the body is a `Vec::push`, and where Tauri reads the arguments is its
+/// own. It has not been felt as a freeze; the ceiling is ten screenshots
+/// typed into a running turn at once, and the way past it is to hand them over
+/// by an id the turn already holds instead of through the call.
 #[tauri::command]
 pub fn chat_steer(
     text: String,

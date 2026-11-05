@@ -441,6 +441,9 @@ export function useAgentTurn({
       session.sentNotes = [];
       const stopped = session.turn.status === "cancelled" || session.error !== null;
       // What the turn never read — and, stopped, what never got its turn.
+      // Each message comes back whole, words and pictures, but the box has one
+      // row for pictures: their words are joined and the pictures go together,
+      // which is as close to pairing them again as the box can come.
       const back = stopped ? [...unread, ...session.queued] : unread;
       const said = back.map((item) => item.text).filter((text) => text.trim());
       const pictures = back.flatMap((item) => item.images ?? []);

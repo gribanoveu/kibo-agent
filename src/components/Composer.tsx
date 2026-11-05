@@ -119,7 +119,9 @@ export function Composer({
   const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
   const [openRow, setOpenRow] = useState<string | null>(null);
-  const attachments = useAttachments(boxTakesPictures(imagesEnabled));
+  /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
+  const waiting = useRef(false);
+  const attachments = useAttachments(boxTakesPictures(imagesEnabled), draftKey);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
   // The menu follows the text: shown while a name is being typed, until
@@ -162,8 +164,9 @@ export function Composer({
 
   useArrival(draft, (draft) => {
     setText(draft.text);
-    // A draft replaces what was typed, pictures included.
-    if (draft.images) attachments.restore(draft.images, true);
+    // A draft replaces what was typed, pictures included — a picture left in
+    // the box would otherwise ride along with the returned message.
+    attachments.restore(draft.images ?? [], true);
     area.current?.focus();
     requestAnimationFrame(grow);
   });
@@ -174,7 +177,8 @@ export function Composer({
 
   useArrival(quote, (quote) => {
     // A note taken back with only its picture has nothing to add to the text.
-    if (quote.text) setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${quote.text}` : quote.text!));
+    const said = quote.text;
+    if (said) setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${said}` : said));
     attachments.restore(quote.images ?? []);
     area.current?.focus();
     requestAnimationFrame(grow);
@@ -195,28 +199,46 @@ export function Composer({
     clear();
   };
 
-  const send = () => {
-    // A note steering a running turn takes its pictures with it: a screenshot
-    // is often the whole point of the note.
-    const pictures = attachments.images.length > 0;
-    if (!text.trim() && !pictures) return;
+  const send = async () => {
     const typed = commandFor(commands, text);
     if (typed) return run(typed.command, typed.args);
-    onSend(text, pictures ? attachments.take() : []);
-    clear();
+    if (waiting.current) return;
+    if (!text.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
+    // What is said is what was in the box at the keystroke. A picture still
+    // being read is part of it: the box waits for the picture rather than
+    // sending the words alone and leaving it to ride with the next message.
+    const message = text;
+    waiting.current = true;
+    try {
+      if (attachments.preparing > 0) await attachments.settle();
+      const pictures = attachments.take();
+      if (!message.trim() && pictures.length === 0) return;
+      onSend(message, pictures);
+      clear();
+    } finally {
+      waiting.current = false;
+    }
   };
-
 
   // A `/` command is not queued: it runs now, as with Enter — the queue holds
   // text for the model, and a command's expansion belongs to the moment it runs.
-  const queue = () => {
+  const queue = async () => {
     if (!running || !onQueue || commandFor(commands, text)) return send();
-    // A held message takes its pictures too: left in the box they would ride
-    // along with whatever is typed next.
-    const pictures = attachments.images.length > 0;
-    if (!text.trim() && !pictures) return;
-    onQueue(text, pictures ? attachments.take() : []);
-    clear();
+    if (waiting.current) return;
+    if (!text.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
+    // A held message takes its pictures too — a picture still being read is
+    // waited for, never left in the box to ride with the next message.
+    const message = text;
+    waiting.current = true;
+    try {
+      if (attachments.preparing > 0) await attachments.settle();
+      const pictures = attachments.take();
+      if (!message.trim() && pictures.length === 0) return;
+      onQueue(message, pictures);
+      clear();
+    } finally {
+      waiting.current = false;
+    }
   };
 
   const complete = (command: SlashCommand) => {
@@ -356,10 +378,10 @@ export function Composer({
               }
               if (matches(e, "queue")) {
                 e.preventDefault();
-                queue();
+                void queue();
               } else if (matches(e, "send")) {
                 e.preventDefault();
-                send();
+                void send();
               }
             }}
           />
@@ -439,7 +461,7 @@ export function Composer({
           {/* The button is the hook's own answer, not a second copy of the rule:
               whatever the box refuses to paste, drop or bring back, it does not
               offer to pick either. */}
-          {attachments.enabled && <AttachImagesButton onPick={attachments.attach} />}
+          {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}
           {/* One button, two jobs: while a turn runs the only thing worth doing
               with it is stopping — and a send button that does nothing during a
               turn is worse than no button. */}

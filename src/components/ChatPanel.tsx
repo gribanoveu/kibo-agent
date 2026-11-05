@@ -1042,7 +1042,8 @@ function UserBubble({
       )}
       {block.text && <div className="bubble">{block.text}</div>}
       <div className="bubble-foot">
-        <CopyAction text={block.text} />
+        {/* A picture sent alone has no words to copy. */}
+        {block.text && <CopyAction text={block.text} />}
         {offered && (
           <button
             type="button"
@@ -1109,7 +1110,8 @@ function renderBlock(
           {/* A picture sent alone has no words to put in a bubble. */}
           {block.text && <div className="bubble">{block.text}</div>}
           <div className="bubble-foot">
-            <CopyAction text={block.text} />
+            {/* A picture sent alone has no words to copy. */}
+            {block.text && <CopyAction text={block.text} />}
             Sent while the agent was working
           </div>
         </div>

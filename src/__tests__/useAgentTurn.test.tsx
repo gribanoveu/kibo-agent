@@ -1113,6 +1113,21 @@ describe("the queue", () => {
     expect(started()).toHaveLength(1);
   });
 
+  /// A message that was only a picture has no words to come back with: the
+  /// call says so, rather than being skipped for its empty text.
+  test("a queued picture with no words comes back as one", async () => {
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    const turn = heldTurn();
+    const given: { text: string; images?: unknown[] }[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text, images) => given.push({ text, images }) }));
+    act(() => void result.current.send("fix it"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    act(() => result.current.queue("", [picture]));
+
+    await act(async () => turn.end("cancelled"));
+    await waitFor(() => expect(given).toEqual([{ text: "", images: [picture] }]));
+  });
+
   test("a row taken out goes back, and the rest stays", async () => {
     heldTurn();
     const given: string[] = [];
@@ -1125,6 +1140,20 @@ describe("the queue", () => {
     act(() => result.current.unqueue(result.current.queued[0].id));
     expect(given).toEqual(["one"]);
     expect(result.current.queued.map((q) => q.text)).toEqual(["two"]);
+  });
+
+  /// A row is taken back whole: the words and the picture that went with it.
+  test("a row taken out takes its picture with it", () => {
+    heldTurn();
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
+    const given: { text: string; images?: unknown[] }[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text, images) => given.push({ text, images }) }));
+    act(() => void result.current.send("fix it"));
+    act(() => result.current.queue("later", [picture]));
+
+    act(() => result.current.unqueue(result.current.queued[0].id));
+    expect(given).toEqual([{ text: "later", images: [picture] }]);
+    expect(result.current.queued).toEqual([]);
   });
 
   /** Starts a held turn and sends `note` into it; the backend calls it `note-1`. */
@@ -1485,13 +1514,14 @@ describe("parallel sessions", () => {
     results.chat_cancel_steer = (args: Record<string, unknown>) =>
       new Promise((resolve) => cancelled.set(args.id as string, resolve));
     results.chat_load = { id: "b", title: "B", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
-    const given: string[] = [];
-    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text) => given.push(text) }));
+    const given: { text: string; images?: unknown[] }[] = [];
+    const { result } = renderHook(() => useAgentTurn({ onGiveBack: (text, images) => given.push({ text, images }) }));
     act(() => void result.current.send("task A"));
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+    const picture = { mediaType: "image/png" as const, data: "PNG", width: 2, height: 2 };
     await act(async () => {
-      await result.current.send("use the helper");
+      await result.current.send("use the helper", undefined, [picture]);
       await result.current.send("update the docs");
     });
 
@@ -1511,6 +1541,8 @@ describe("parallel sessions", () => {
 
     await act(async () => result.current.open(a));
     expect(result.current.draft?.text).toBe("use the helper\n\nupdate the docs");
+    // The picture went with its words, not lost on the way to the draft.
+    expect(result.current.draft?.images).toEqual([picture]);
     await act(async () => end(undefined));
   });
 

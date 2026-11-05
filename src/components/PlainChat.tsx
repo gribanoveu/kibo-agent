@@ -104,11 +104,15 @@ export function PlainChat({
 }: Props) {
   // The box belongs to this chat, as the agent's does: what was typed here
   // waits here while another chat is open, and comes back with this one.
-  const [draft, setDraft, take] = useChatDraft(chatDraftKey("chat", chat.chatId));
+  const draftKey = chatDraftKey("chat", chat.chatId);
+  const [draft, setDraft, take] = useChatDraft(draftKey);
   // One rule for both boxes, in `boxTakesPictures`: the hook's `enabled` is
-  // what the button, the paste, the drop and the give-back all follow.
-  const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role));
+  // what the button, the paste, the drop and the give-back all follow. Its
+  // `key` is what keeps one chat's attached pictures off the next one's.
+  const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role), draftKey);
   const input = useRef<HTMLTextAreaElement>(null);
+  /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
+  const waiting = useRef(false);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
   // The chat's own cluster: its kubeconfig from Settings, and what its pin resolves to.
@@ -139,15 +143,26 @@ export function PlainChat({
     scrollToBottom();
   }, [chat.chatId, sent, scrollToBottom]);
 
-  const send = () => {
-    if (chat.busy || (!draft.trim() && attachments.images.length === 0)) return;
-    const attached = attachments.takeNamed();
-    if (attached.length > 0) pages?.onShowAssets();
-    void chat.send(draft, attached, pages?.pointed ?? null, imagesEnabled);
-    pages?.onUnpoint();
-    // The chat gets its id as the message goes: the draft to clear is this one,
-    // not the one the box is about to show.
-    take();
+  const send = async () => {
+    if (chat.busy || waiting.current) return;
+    if (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
+    // What is sent is what was in the box at the keystroke; a picture still
+    // being read is waited for, so it does not end up in the next message.
+    const message = draft;
+    waiting.current = true;
+    try {
+      if (attachments.preparing > 0) await attachments.settle();
+      const attached = attachments.takeNamed();
+      if (!message.trim() && attached.length === 0) return;
+      if (attached.length > 0) pages?.onShowAssets();
+      void chat.send(message, attached, pages?.pointed ?? null, imagesEnabled);
+      pages?.onUnpoint();
+      // The chat gets its id as the message goes: the draft to clear is this one,
+      // not the one the box is about to show.
+      take();
+    } finally {
+      waiting.current = false;
+    }
   };
   // Pointed at in the preview: the message box is where the request about it is written.
   const pointed = pages?.pointed ?? null;
@@ -359,7 +374,7 @@ export function PlainChat({
             onKeyDown={(e) => {
               if (matches(e, "send")) {
                 e.preventDefault();
-                send();
+                void send();
               }
             }}
           />
@@ -404,13 +419,19 @@ export function PlainChat({
             {/* Beside the send button, as in the agent's box — a picture can
                 be chosen instead of pasted, under the same rule: the hook
                 decides, and there is no button when it refuses. */}
-            {attachments.enabled && <AttachImagesButton onPick={attachments.attach} disabled={chat.busy} />}
+            {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
                 <Square size={14} />
               </button>
             ) : (
-              <button type="button" className="plain-send" title="Send" disabled={chat.busy || !draft.trim()} onClick={send}>
+              <button
+                type="button"
+                className="plain-send"
+                title="Send"
+                disabled={chat.busy || (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0)}
+                onClick={send}
+              >
                 <SendHorizontal size={16} />
               </button>
             )}

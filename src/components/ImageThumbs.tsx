@@ -48,10 +48,15 @@ export function ImageThumbs({ images, preparing = 0, onRemove, align = "start" }
             )}
           </li>
         ))}
-        {/* The pictures still being read and sanitized: same size as a
-            thumbnail, so the row does not jump when they land. */}
+        {/* The pictures still being read and sanitized: as tall as a thumbnail,
+            so the row keeps its height when they land. */}
         {Array.from({ length: preparing }, (_, at) => (
-          <li key={`preparing-${at}`} className="image-thumb-pending" aria-label="Preparing a picture" title="Preparing…">
+          <li
+            key={`preparing-${at}`}
+            className="image-thumb-pending"
+            aria-label={`Preparing a picture ${at + 1}`}
+            title="Preparing…"
+          >
             <Loader2 size={16} className="image-thumb-spin" aria-hidden="true" />
           </li>
         ))}
