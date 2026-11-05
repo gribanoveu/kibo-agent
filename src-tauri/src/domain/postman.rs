@@ -7,9 +7,11 @@
 
 use base64::Engine;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use rand::Rng;
 use serde_json::{Map, Value};
 
-use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable};
+use super::http_auth::OAuth2;
+use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
 
 /// A collection's scripts, for trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +34,9 @@ pub enum Auth {
     Bearer { token: String },
     Basic { username: String, password: String },
     ApiKey { key: String, value: String, in_query: bool },
-    /// `oauth2`, `digest` and the rest: kept in the file, not sent yet.
+    Digest { username: String, password: String },
+    OAuth2(OAuth2),
+    /// `hawk`, `ntlm` and the rest: kept in the file, not sent yet.
     Other(String),
 }
 
@@ -317,6 +321,11 @@ impl Collection {
 
     /// The request `id` as it leaves, and as it is shown with secrets masked.
     pub fn prepare(&self, id: &str, scope: &Scope) -> Result<Prepared, HttpError> {
+        self.prepare_with(id, scope, None)
+    }
+
+    /// The same with `token`, got for its `oauth2`, in place of the one the file saved.
+    pub fn prepare_with(&self, id: &str, scope: &Scope, token: Option<&str>) -> Result<Prepared, HttpError> {
         let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
         let item = chain.last().ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
         let request = item.get("request").ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
@@ -333,7 +342,7 @@ impl Collection {
             && item.get("protocolProfileBehavior").and_then(|p| p.get("disableBodyPruning")) != Some(&Value::Bool(true));
         let body = request.get("body").filter(|b| !pruned && b.get("disabled") != Some(&Value::Bool(true)));
         let mode = body.and_then(|b| b.get("mode")).and_then(Value::as_str);
-        if let Some(other) = mode.filter(|m| !matches!(*m, "raw" | "urlencoded")) {
+        if let Some(other) = mode.filter(|m| !matches!(*m, "raw" | "urlencoded" | "formdata")) {
             return Err(HttpError::UnsupportedBody(other.into()));
         }
 
@@ -379,6 +388,25 @@ impl Collection {
                     out.header(key, value);
                 }
             }
+            Auth::Digest { username, password } if !has_authorization => {
+                let (user, pass) = (fill(&username)?, fill(&password)?);
+                out.sent.digest = Some((user.sent, pass.sent));
+            }
+            Auth::OAuth2(oauth) if oauth.in_query || !has_authorization => {
+                let sent = match token {
+                    Some(token) => token.to_string(),
+                    None => fill(&oauth.access_token)?.sent,
+                };
+                // Masked even when written plainly: a token is one whichever way it got here.
+                let token = Filled { sent, shown: SECRET_MASK.into() };
+                // Postman sends no auth at all for an empty token.
+                if !token.sent.is_empty() && oauth.in_query {
+                    out.query(plain("access_token"), token);
+                } else if !token.sent.is_empty() {
+                    let with_prefix = |t: &str| if oauth.prefix.is_empty() { t.to_string() } else { format!("{} {t}", oauth.prefix) };
+                    out.header(plain("Authorization"), Filled { sent: with_prefix(&token.sent), shown: with_prefix(&token.shown) });
+                }
+            }
             _ => {}
         }
 
@@ -403,6 +431,29 @@ impl Collection {
                     form.shown += &format!("{sep}{}={}", encode_form(&k.shown), encode_form(&v.shown));
                 }
                 out.body(form, "application/x-www-form-urlencoded");
+            }
+            (Some("formdata"), Some(b)) => {
+                let boundary = form_boundary();
+                let mut form = Filled::default();
+                for f in b.get("formdata").and_then(Value::as_array).into_iter().flatten() {
+                    let key = f.get("key").and_then(Value::as_str).unwrap_or_default();
+                    if key.is_empty() || f.get("disabled") == Some(&Value::Bool(true)) {
+                        continue;
+                    }
+                    let file = f.get("type").and_then(Value::as_str) == Some("file");
+                    if file && has_src(f) {
+                        return Err(HttpError::UnsupportedBody("formdata file".into()));
+                    }
+                    let (k, v) = (fill(key)?, if file { Filled::default() } else { fill(&text_of(f.get("value")))? });
+                    let content_type = f.get("contentType").and_then(Value::as_str).filter(|t| !t.is_empty() && !file);
+                    let part = |name: &str, value: &str| form_part(&boundary, name, value, file, content_type);
+                    form.sent += &part(&k.sent, &v.sent);
+                    form.shown += &part(&k.shown, &v.shown);
+                }
+                let end = format!("--{boundary}--\r\n");
+                form.sent += &end;
+                form.shown += &end;
+                out.form(form, &boundary);
             }
             _ => {}
         }
@@ -492,7 +543,7 @@ struct Both {
 
 impl Both {
     fn new(method: &str, url: Filled) -> Both {
-        let make = |url: String| Outgoing { method: method.into(), url, headers: Vec::new(), body: None };
+        let make = |url: String| Outgoing { method: method.into(), url, headers: Vec::new(), body: None, digest: None };
         Both { sent: make(url.sent), shown: make(url.shown) }
     }
 
@@ -520,6 +571,19 @@ impl Both {
         self.shown.body = Some(body.shown);
     }
 
+    /// A multipart body. A `Content-Type` written without a boundary, as people
+    /// write one by hand, gets it: without one the server cannot read the parts.
+    fn form(&mut self, body: Filled, boundary: &str) {
+        for out in [&mut self.sent, &mut self.shown] {
+            for (_, value) in out.headers.iter_mut().filter(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                if value.to_ascii_lowercase().starts_with("multipart/") && !value.contains("boundary=") {
+                    *value = format!("{value}; boundary={boundary}");
+                }
+            }
+        }
+        self.body(body, &format!("multipart/form-data; boundary={boundary}"));
+    }
+
     fn done(self) -> Prepared {
         Prepared { sent: self.sent, shown: self.shown }
     }
@@ -527,6 +591,31 @@ impl Both {
 
 fn plain(text: &str) -> Filled {
     Filled { sent: text.into(), shown: text.into() }
+}
+
+/// As the `form-data` package writes one, which is what Postman sends: 26 dashes and 24 digits.
+fn form_boundary() -> String {
+    let digits: String = (0..24).map(|_| char::from(b'0' + rand::thread_rng().gen_range(0..10u8))).collect();
+    format!("{}{digits}", "-".repeat(26))
+}
+
+/// A `formdata` row's file: a path, or several. One never picked has no `src`.
+fn has_src(row: &Value) -> bool {
+    match row.get("src") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(path)) => !path.is_empty(),
+        Some(Value::Array(paths)) => !paths.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// One part of a multipart body. A file not picked goes as Postman sends it: `filename=""`, nothing in it (HC-0).
+fn form_part(boundary: &str, name: &str, value: &str, file: bool, content_type: Option<&str>) -> String {
+    // As browsers write a name: a quote or a line break would end the header.
+    let name = name.replace('"', "%22").replace('\r', "%0D").replace('\n', "%0A");
+    let filename = if file { "; filename=\"\"" } else { "" };
+    let content_type = content_type.map(|t| format!("Content-Type: {t}\r\n")).unwrap_or_default();
+    format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"{filename}\r\n{content_type}\r\n{value}\r\n")
 }
 
 /// A level's scripts that would run, as `(listen, code)`.
@@ -584,8 +673,28 @@ fn auth_of(v: &Value) -> Option<Auth> {
         "bearer" => Auth::Bearer { token: param("token") },
         "basic" => Auth::Basic { username: param("username"), password: param("password") },
         "apikey" => Auth::ApiKey { key: param("key"), value: param("value"), in_query: param("in") == "query" },
+        "digest" => Auth::Digest { username: param("username"), password: param("password") },
+        "oauth2" => Auth::OAuth2(OAuth2 {
+            access_token: param("accessToken"),
+            // Absent is Postman's default; written empty, the token goes alone.
+            prefix: if has(v, kind, "headerPrefix") { param("headerPrefix").trim().to_string() } else { "Bearer".into() },
+            in_query: param("addTokenTo") == "queryParams",
+            grant: param("grant_type"),
+            token_url: param("accessTokenUrl"),
+            refresh_url: param("refreshTokenUrl"),
+            client_id: param("clientId"),
+            client_secret: param("clientSecret"),
+            scope: param("scope"),
+            username: param("username"),
+            password: param("password"),
+            client_in_body: param("client_authentication") == "body",
+        }),
         other => Auth::Other(other.into()),
     })
+}
+
+fn has(auth: &Value, kind: &str, name: &str) -> bool {
+    auth.get(kind).and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|r| r.get("key").and_then(Value::as_str) == Some(name)))
 }
 
 /// What Postman sets for a raw body's language when the request sets no Content-Type.
@@ -602,7 +711,7 @@ fn content_type(language: &str) -> &'static str {
 /// `encodeURIComponent`, as the window encodes a form.
 pub(crate) const FORM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
 
-fn encode_form(text: &str) -> String {
+pub(crate) fn encode_form(text: &str) -> String {
     utf8_percent_encode(text, FORM).to_string()
 }
 
@@ -800,13 +909,198 @@ mod tests {
         assert!(line.starts_with(&format!("GET {} ", query.url.trim_start_matches("http://127.0.0.1:8099"))), "{}", query.url);
     }
 
+    /// One request in a collection of its own: `request` over `POST http://a.test/x`.
+    fn one(request: Value) -> Collection {
+        let mut base = json!({"method": "POST", "url": "http://a.test/x"});
+        base.as_object_mut().unwrap().extend(request.as_object().unwrap().clone());
+        let file = json!({"info": {"name": "C", "schema": SCHEMA}, "item": [{"id": "r", "name": "R", "request": base}]});
+        Collection::parse(&file.to_string()).unwrap()
+    }
+
+    fn form(rows: Value) -> Collection {
+        one(json!({"body": {"mode": "formdata", "formdata": rows}}))
+    }
+
+    fn boundary_of(o: &Outgoing) -> String {
+        header(o, "Content-Type").unwrap().split("boundary=").nth(1).unwrap().to_string()
+    }
+
+    #[test]
+    fn formdata_goes_as_postman_sent_it() {
+        let c = probe();
+        let sent = prepare(&c, "formdata-file", &[var("baseUrl", "http://127.0.0.1:8099")]).unwrap().sent;
+        let theirs = wire_header("03-formdata-file", "Content-Type");
+        let boundary = theirs.split("boundary=").nth(1).unwrap();
+        let ours = boundary_of(&sent);
+        assert_eq!(sent.body.unwrap().replace(&ours, boundary), wire_body("03-formdata-file"));
+        assert_eq!(sent.headers.last().map(|(k, _)| k.as_str()), Some("Content-Type"), "after the user's, as Postman's");
+    }
+
+    #[test]
+    fn a_form_part_by_part() {
+        let c = form(json!([
+            {"key": "file", "type": "file", "value": "not a part of a file row"},
+            {"key": "off", "value": "1", "type": "text", "disabled": true},
+            {"key": "", "value": "no name", "type": "text"},
+            {"key": "description", "type": "text", "value": "test upload"},
+            {"key": "meta", "type": "text", "value": "{}", "contentType": "application/json"},
+            {"key": "no src", "type": "file", "src": []},
+            {"key": "null src", "type": "file", "src": null}
+        ]));
+        let sent = c.prepare("r", &Scope::default()).unwrap().sent;
+        let b = boundary_of(&sent);
+        let expected = format!(
+            "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"description\"\r\n\r\ntest upload\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"meta\"\r\nContent-Type: application/json\r\n\r\n{{}}\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"no src\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"null src\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}--\r\n"
+        );
+        assert_eq!(sent.body.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn a_boundary_is_postmans_shape_new_each_time_and_the_same_in_what_is_shown() {
+        let c = form(json!([{"key": "a", "value": "1"}]));
+        let (one, two) = (c.prepare("r", &Scope::default()).unwrap(), c.prepare("r", &Scope::default()).unwrap());
+        let b = boundary_of(&one.sent);
+        assert_eq!(b.len(), 50);
+        assert!(b.starts_with(&"-".repeat(26)) && b[26..].bytes().all(|d| d.is_ascii_digit()), "{b}");
+        assert_ne!(b, boundary_of(&two.sent));
+        assert_eq!(b, boundary_of(&one.shown));
+        assert!(one.shown.body.unwrap().contains(&b));
+    }
+
+    #[test]
+    fn a_form_fills_its_variables_and_masks_its_secrets() {
+        let c = form(json!([{"key": "{{k}}", "value": "{{token}}"}, {"key": "x", "value": "{{nowhere}}"}]));
+        let vars = [var("k", "name"), Variable { secret: true, ..var("token", "t0k") }];
+        let scope = Scope::new(&[&vars[..]]);
+        assert_eq!(c.prepare("r", &scope), Err(HttpError::UnknownVariables(vec!["nowhere".into()])));
+        let c = form(json!([{"key": "{{k}}", "value": "{{token}}"}]));
+        let done = c.prepare("r", &scope).unwrap();
+        assert!(done.sent.body.as_deref().unwrap().contains("name=\"name\"\r\n\r\nt0k\r\n"));
+        assert!(done.shown.body.as_deref().unwrap().contains("name=\"name\"\r\n\r\n•••\r\n"));
+    }
+
+    #[test]
+    fn a_name_cannot_end_its_header() {
+        let sent = form(json!([{"key": "a\"b\r\nX: 1", "value": "v"}])).prepare("r", &Scope::default()).unwrap().sent;
+        assert!(sent.body.unwrap().contains("name=\"a%22b%0D%0AX: 1\"\r\n"));
+    }
+
+    #[test]
+    fn a_real_file_is_refused_by_name_and_one_turned_off_is_not() {
+        let refused = Err(HttpError::UnsupportedBody("formdata file".into()));
+        assert_eq!(form(json!([{"key": "f", "type": "file", "src": "/etc/hosts"}])).prepare("r", &Scope::default()), refused);
+        assert_eq!(form(json!([{"key": "f", "type": "file", "src": ["/etc/hosts"]}])).prepare("r", &Scope::default()), refused);
+        assert!(form(json!([{"key": "f", "type": "file", "src": ""}])).prepare("r", &Scope::default()).is_ok());
+        assert!(form(json!([{"key": "f", "type": "file", "src": "/etc/hosts", "disabled": true}])).prepare("r", &Scope::default()).is_ok());
+        assert!(form(json!([{"key": "f", "type": "text", "src": "/etc/hosts"}])).prepare("r", &Scope::default()).is_ok(), "src on a text row means nothing");
+    }
+
+    #[test]
+    fn a_multipart_type_written_by_hand_gets_the_boundary_and_another_stays() {
+        let with = |value: &str| {
+            let c = one(json!({"header": [{"key": "content-type", "value": value}], "body": {"mode": "formdata", "formdata": [{"key": "a", "value": "1"}]}}));
+            c.prepare("r", &Scope::default()).unwrap()
+        };
+        let by_hand = with("multipart/form-data");
+        let b = by_hand.sent.body.as_deref().unwrap().lines().next().unwrap().strip_prefix("--").unwrap().to_string();
+        assert_eq!(header(&by_hand.sent, "content-type"), Some(format!("multipart/form-data; boundary={b}").as_str()));
+        assert_eq!(header(&by_hand.shown, "content-type"), Some(format!("multipart/form-data; boundary={b}").as_str()));
+        assert_eq!(by_hand.sent.headers.len(), 1, "not a second one");
+        assert_eq!(header(&with("multipart/form-data; boundary=mine").sent, "content-type"), Some("multipart/form-data; boundary=mine"), "the user's own");
+        assert_eq!(header(&with("text/plain").sent, "content-type"), Some("text/plain"));
+    }
+
+    #[test]
+    fn a_token_written_plainly_is_shown_masked() {
+        let done = oauth(json!([{"key": "accessToken", "value": "pasted"}])).prepare("r", &Scope::default()).unwrap();
+        assert_eq!(header(&done.sent, "authorization"), Some("Bearer pasted"));
+        assert_eq!(header(&done.shown, "authorization"), Some(format!("Bearer {SECRET_MASK}").as_str()));
+    }
+
+    fn oauth(rows: Value) -> Collection {
+        one(json!({"auth": {"type": "oauth2", "oauth2": rows}}))
+    }
+
+    #[test]
+    fn oauth2_reads_its_settings_as_postman_writes_them() {
+        let c = oauth(json!([
+            {"key": "accessToken", "value": "t"}, {"key": "grant_type", "value": "password_credentials"}, {"key": "accessTokenUrl", "value": "http://a.test/token"},
+            {"key": "refreshTokenUrl", "value": "http://a.test/refresh"}, {"key": "clientId", "value": "id"}, {"key": "clientSecret", "value": "s"}, {"key": "scope", "value": "read"},
+            {"key": "username", "value": "u"}, {"key": "password", "value": "p"}, {"key": "client_authentication", "value": "body"}, {"key": "addTokenTo", "value": "queryParams"}, {"key": "headerPrefix", "value": "Token"}
+        ]));
+        let expected = OAuth2 {
+            access_token: "t".into(), prefix: "Token".into(), in_query: true, grant: "password_credentials".into(), token_url: "http://a.test/token".into(), refresh_url: "http://a.test/refresh".into(),
+            client_id: "id".into(), client_secret: "s".into(), scope: "read".into(), username: "u".into(), password: "p".into(), client_in_body: true,
+        };
+        assert_eq!(c.auth_for("r").unwrap(), Auth::OAuth2(expected));
+        let Auth::OAuth2(plain) = oauth(json!([])).auth_for("r").unwrap() else { panic!("oauth2") };
+        assert_eq!((plain.prefix.as_str(), plain.in_query, plain.client_in_body), ("Bearer", false, false));
+    }
+
+    #[test]
+    fn a_saved_token_goes_as_postman_sent_it() {
+        let c = probe();
+        let sent = prepare(&c, "oauth2", &[var("baseUrl", "http://a.test"), var("access_token", "t0k")]).unwrap().sent;
+        assert_eq!(header(&sent, "Authorization"), Some("Bearer t0k"));
+        // The one difference from wire 10, on purpose: a variable found nowhere stops the send.
+        assert_eq!(prepare(&c, "oauth2", &[var("baseUrl", "http://a.test")]), Err(HttpError::UnknownVariables(vec!["access_token".into()])));
+    }
+
+    #[test]
+    fn oauth2_goes_where_it_is_told_with_the_prefix_it_is_told() {
+        let token = |rows: Value| oauth(rows).prepare("r", &Scope::default()).unwrap().sent;
+        let t = json!({"key": "accessToken", "value": "t"});
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": "Token"}])).headers, vec![("Authorization".to_string(), "Token t".to_string())]);
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": ""}])).headers, vec![("Authorization".to_string(), "t".to_string())], "written empty, the token goes alone");
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": " Token "}])).headers, vec![("Authorization".to_string(), "Token t".to_string())], "trimmed, as Postman does");
+        let query = token(json!([t, {"key": "addTokenTo", "value": "queryParams"}]));
+        assert_eq!((query.url.as_str(), query.headers.len()), ("http://a.test/x?access_token=t", 0));
+        assert_eq!(token(json!([])).headers, vec![], "no token, no auth, as Postman");
+        assert_eq!(token(json!([{"key": "accessToken", "value": ""}, {"key": "addTokenTo", "value": "queryParams"}])).url, "http://a.test/x");
+    }
+
+    #[test]
+    fn a_token_got_for_the_send_takes_the_files_place_and_is_masked() {
+        let c = oauth(json!([{"key": "accessToken", "value": "{{nowhere}}"}]));
+        let done = c.prepare_with("r", &Scope::default(), Some("fresh")).unwrap();
+        assert_eq!(header(&done.sent, "Authorization"), Some("Bearer fresh"));
+        assert_eq!(header(&done.shown, "Authorization"), Some("Bearer •••"));
+        let c = oauth(json!([{"key": "addTokenTo", "value": "queryParams"}]));
+        let done = c.prepare_with("r", &Scope::default(), Some("fresh")).unwrap();
+        assert_eq!((done.sent.url.as_str(), done.shown.url.as_str()), ("http://a.test/x?access_token=fresh", "http://a.test/x?access_token=•••"));
+    }
+
+    #[test]
+    fn an_authorization_written_by_hand_stands_over_oauth2_and_digest() {
+        let header_row = json!([{"key": "authorization", "value": "Mine"}]);
+        let c = one(json!({"header": header_row, "auth": {"type": "oauth2", "oauth2": [{"key": "accessToken", "value": "t"}]}}));
+        assert_eq!(c.prepare("r", &Scope::default()).unwrap().sent.headers, vec![("authorization".to_string(), "Mine".to_string())]);
+        let c = one(json!({"header": header_row, "auth": {"type": "digest", "digest": [{"key": "username", "value": "u"}]}}));
+        assert_eq!(c.prepare("r", &Scope::default()).unwrap().sent.digest, None);
+    }
+
+    #[test]
+    fn digest_goes_to_the_sender_alone() {
+        let c = one(json!({"auth": {"type": "digest", "digest": [{"key": "username", "value": "{{u}}"}, {"key": "password", "value": "{{p}}"}]}}));
+        let vars = [var("u", "ann"), Variable { secret: true, ..var("p", "pw-secret") }];
+        let done = c.prepare("r", &Scope::new(&[&vars[..]])).unwrap();
+        assert_eq!(done.sent.digest, Some(("ann".to_string(), "pw-secret".to_string())));
+        assert!(done.sent.headers.is_empty(), "as wire 08: the first goes without");
+        assert_eq!(done.shown.digest, None);
+        assert!(!serde_json::to_string(&done.sent).unwrap().contains("pw-secret"), "nothing written out holds it");
+        let scope = Scope::default();
+        assert_eq!(c.prepare("r", &scope), Err(HttpError::UnknownVariables(vec!["u".into(), "p".into()])));
+    }
+
     #[test]
     fn what_is_kept_from_postman_but_not_sent_is_named() {
         let c = probe();
-        assert_eq!(prepare(&c, "formdata-file", &[]), Err(HttpError::UnsupportedBody("formdata".into())));
         assert_eq!(prepare(&c, "graphql", &[]), Err(HttpError::UnsupportedBody("graphql".into())));
-        assert_eq!(prepare(&c, "digest-auth", &[]), Err(HttpError::UnsupportedAuth("digest".into())));
-        assert_eq!(prepare(&c, "oauth2", &[]), Err(HttpError::UnsupportedAuth("oauth2".into())));
         assert_eq!(c.prepare("nope", &Scope::default()), Err(HttpError::NoSuchItem("nope".into())));
         assert_eq!(c.prepare(&id_of(&c, "Body Types"), &Scope::default()), Err(HttpError::NoSuchItem(id_of(&c, "Body Types"))), "a folder is not sent");
     }

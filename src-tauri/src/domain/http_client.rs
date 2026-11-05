@@ -35,6 +35,8 @@ pub enum HttpError {
     MaskWithoutValue(String),
     #[error("{0} auth is kept from Postman and not sent yet")]
     UnsupportedAuth(String),
+    #[error("OAuth 2.0: {0}")]
+    OAuth2(String),
     #[error("{0}")]
     Script(String),
     #[error("a {0} body is kept from Postman and not sent yet")]
@@ -238,6 +240,29 @@ pub struct Outgoing {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// `digest`'s user and password, to answer a challenge with: only the sender
+    /// sees them. What is shown and stored has no such field.
+    #[serde(skip)]
+    pub digest: Option<(String, String)>,
+}
+
+/// Where a send's cookies live, across sends and per domain.
+pub trait CookieJar {
+    /// The `Cookie` value for `url`, none when no cookie goes there.
+    fn header_for(&self, url: &str) -> Option<String>;
+    /// What `url` answered with: its `Set-Cookie` values.
+    fn take(&self, url: &str, set_cookies: &[String]);
+}
+
+/// A cookie as the page lists it: its value stays in the store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieRow {
+    pub domain: String,
+    pub path: String,
+    pub name: String,
+    /// In milliseconds; none for one that lasts until the jar is cleared.
+    pub expires_at: Option<i64>,
 }
 
 /// The request to send, and the same request to show — in Preview and history — with secrets masked.
@@ -253,7 +278,7 @@ impl Prepared {
     pub fn hidden(&self, scope: &Scope) -> Prepared {
         let shown = &self.shown;
         let headers = shown.headers.iter().map(|(k, v)| (scope.hide(k), scope.hide(v))).collect();
-        let shown = Outgoing { method: shown.method.clone(), url: scope.hide(&shown.url), headers, body: shown.body.as_deref().map(|b| scope.hide(b)) };
+        let shown = Outgoing { method: shown.method.clone(), url: scope.hide(&shown.url), headers, body: shown.body.as_deref().map(|b| scope.hide(b)), digest: None };
         Prepared { sent: self.sent.clone(), shown }
     }
 }
@@ -733,7 +758,7 @@ mod tests {
     }
 
     fn sent(body: &str) -> HistoryEntry {
-        let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()) };
+        let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()), digest: None };
         let prepared = Prepared { sent: out("Bearer t0k"), shown: out("Bearer •••") };
         let outcome = Outcome::Response { status: 200, headers: vec![], url: "https://api/x".into(), redirects: vec![], elapsed_ms: 1 };
         HistoryEntry::new(1, None, None, "{{baseUrl}}/x".into(), &prepared, outcome, body.as_bytes())
@@ -767,7 +792,7 @@ mod tests {
     fn a_secret_copied_as_text_is_masked_where_it_shows_and_goes_out_as_it_is() {
         let secret = vec![Variable { key: "t".into(), value: "s3cr3t".into(), secret: true, enabled: true }];
         let scope = Scope::new(&[&secret]);
-        let out = Outgoing { method: "POST".into(), url: "http://a.test/s3cr3t".into(), headers: vec![("X-s3cr3t".into(), "Bearer s3cr3t".into())], body: Some("k=s3cr3t".into()) };
+        let out = Outgoing { method: "POST".into(), url: "http://a.test/s3cr3t".into(), headers: vec![("X-s3cr3t".into(), "Bearer s3cr3t".into())], body: Some("k=s3cr3t".into()), digest: None };
         let hidden = Prepared { sent: out.clone(), shown: out.clone() }.hidden(&scope);
         assert_eq!(hidden.sent, out);
         assert!(!format!("{:?}", hidden.shown).contains("s3cr3t"), "{:?}", hidden.shown);
