@@ -270,6 +270,7 @@ export default function App() {
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
   useTurnAlerts({
+    sessionKey: agent.sessionKey,
     status: agent.turn.status,
     failed: agent.error !== null,
     queued: agent.queued.length,

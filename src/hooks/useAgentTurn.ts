@@ -758,6 +758,8 @@ export function useAgentTurn({
   return {
     turn: current.turn,
     chatId: current.chatId,
+    /** The session's identity: `chatId` is null until a fresh chat is first saved. */
+    sessionKey: current.key,
     chatActivity,
     spent,
     error: current.error,
