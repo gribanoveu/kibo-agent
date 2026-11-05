@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-05 Meetings tell people apart more reliably: a few noisy moments in a recording no longer leave two people sharing one speaker
 - 2026-11-05 A picture attached for a message is that message's: the box waits for one still being read instead of sending the words without it, another chat opens with an empty box, a message coming back says which of its pictures did not fit rather than dropping them silently, and a draft without pictures clears the field — Chat mode's Send also sends a picture with nothing typed, and the attach button no longer greys out while a turn runs
 - 2026-11-05 Opening a chat that had already finished, while the agent was still working in another, played the finish sound and showed its notification as if that chat had just ended — a status belongs to the chat it came from, and an approval card waiting in the chat opened is no longer announced either
 - 2026-11-04 A picture is attached with a button beside Send, in the agent's chat and in Chat mode, instead of pasting or dropping it — the button follows one rule for every box: a model set to see pictures, or a Prototype chat, whose pictures are the page's assets whatever the model — and the picker offers PNG and JPEG only — a picture still being read and sanitized shows a spinner in its place in the row until it lands
