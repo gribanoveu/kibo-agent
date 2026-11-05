@@ -917,6 +917,8 @@ const HERE_MARGIN: f32 = 2.0;
 /// recorded call has each side on its own track, at `rate`: a word is the
 /// call's where the call speaks and the microphone is no louder than the call
 /// would make it — without headphones the microphone hears the speakers too.
+/// Where the call is quiet the word is the louder track's: a word is there, so
+/// a quiet "и" in someone's sentence is theirs while the microphone is quieter still.
 /// How much it hears them is the recording's own: the microphone's level over
 /// its quiet, as a share of the call's, the median of everywhere the call speaks.
 pub fn said_here(words: &[Word], mic: &[f32], call: &[f32], rate: u32) -> Vec<bool> {
@@ -936,7 +938,11 @@ pub fn said_here(words: &[Word], mic: &[f32], call: &[f32], rate: u32) -> Vec<bo
         .iter()
         .map(|w| {
             let (m, c) = (mean(&mic, w), mean(&call, w));
-            c <= floor || m > HERE_MARGIN * (echo * c + room)
+            if c <= floor {
+                m >= c
+            } else {
+                m > HERE_MARGIN * (echo * c + room)
+            }
         })
         .collect()
 }
@@ -1372,6 +1378,17 @@ mod tests {
         // A word past the end of the sound reads as silence, not a panic.
         assert_eq!(said_here(&[word(9.0, 9.5, "после")], &mic, &call, 10), [true]);
         assert_eq!(said_here(&words[..1], &[], &[], 10), [true]);
+    }
+
+    #[test]
+    fn a_quiet_word_of_the_call_stays_the_calls_while_the_microphone_is_quieter() {
+        // They speak, drop to a word far under their loud speech with you silent, and then you speak.
+        let (mic, call) = tracks(&[(0.0, 0.4, 20), (0.001, 0.01, 10), (0.5, 0.0, 10)]);
+        let words = [word(2.2, 2.6, "и"), word(3.2, 3.6, "я")];
+        assert_eq!(said_here(&words, &mic, &call, 10), [false, true]);
+        // The same quiet call under a word of yours as quiet: the louder track has it.
+        let (mic, call) = tracks(&[(0.0, 0.4, 20), (0.02, 0.01, 10)]);
+        assert_eq!(said_here(&words[..1], &mic, &call, 10), [true]);
     }
 
     #[test]
