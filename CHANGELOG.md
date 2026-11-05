@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-05 A feature's panel in the Catalog has a switch for its tools: the MongoDB page can stay while the model no longer gets `mongo` — in chats and in folders alike — and the same goes for the Board, DeepSeek search and the knowledge base; a call from memory is told where the tools are given back
 - 2026-11-05 A recorded call keeps its sentences whole: a quiet word of someone on the call stays theirs instead of landing on you as a one-word line
 - 2026-11-05 Meetings tell people apart more reliably: a few noisy moments in a recording no longer leave two people sharing one speaker
 - 2026-11-05 A picture attached for a message is that message's: the box waits for one still being read instead of sending the words without it, another chat opens with an empty box, a message coming back says which of its pictures did not fit rather than dropping them silently, and a draft without pictures clears the field — Chat mode's Send also sends a picture with nothing typed, and the attach button no longer greys out while a turn runs

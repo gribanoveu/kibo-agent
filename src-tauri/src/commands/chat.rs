@@ -645,9 +645,7 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
     let features = crate::services::features::enabled();
-    let knowledge = root
-        .filter(|_| features.is_on(crate::domain::features::Feature::Knowledge))
-        .and_then(|root| crate::services::knowledge::overview(root).ok());
+    let knowledge = root.and_then(|root| crate::services::knowledge::overview_offered(&features, root));
     context_compaction::request_frame(
         &TurnContext {
             mode,

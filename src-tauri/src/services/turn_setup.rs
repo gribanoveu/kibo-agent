@@ -139,11 +139,7 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
-    // A base that cannot be read costs the prompt its block; the tools say why when called.
-    let knowledge_overview = match features.is_on(Feature::Knowledge) {
-        true => crate::services::knowledge::overview(workspace).ok(),
-        false => None,
-    };
+    let knowledge_overview = crate::services::knowledge::overview_offered(&features, workspace);
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
     let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone(), parallel });

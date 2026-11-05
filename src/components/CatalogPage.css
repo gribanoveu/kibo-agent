@@ -309,6 +309,15 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
+.catalog-detail-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
 .catalog-detail-file {
   margin: 0 0 8px;
   padding-top: 14px;

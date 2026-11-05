@@ -22,7 +22,7 @@ pub fn features_list() -> Vec<FeatureView> {
 /// Takes effect from the next turn: a running one keeps what it started with.
 #[tauri::command]
 pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
-    features::set(&id, on)?;
+    features::set(&id, on).map_err(|e| e.to_string())?;
     // Off, its clients go: each keeps a pool and a heartbeat to the user's servers. Off the main
     // thread: the lock waits on a client being made, which can be an SRV lookup.
     if !on && id == Feature::Mongodb.manifest().id {
@@ -32,6 +32,15 @@ pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Resu
     // A kill and a wait for the recognition process: off the main thread.
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || notes.feature_set(&id, on));
+    let _ = app.emit(FEATURES_EVENT, ());
+    Ok(features::list())
+}
+
+/// Whether the model gets the feature's tools, from the next turn. Its page
+/// and clients stay: the window still uses them.
+#[tauri::command]
+pub fn features_set_tools<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
+    features::set_tools(&id, on).map_err(|e| e.to_string())?;
     let _ = app.emit(FEATURES_EVENT, ());
     Ok(features::list())
 }

@@ -25,6 +25,7 @@ import { Modal } from "./Modal";
 import { Page, PageSheet } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
+import { Switch } from "./Switch";
 import type { FeatureView } from "../lib/features";
 import type { CatalogEntry, CatalogKind, CatalogSource } from "../lib/catalog";
 import "./CatalogPage.css";
@@ -350,12 +351,14 @@ function FeatureDetails({
   feature,
   error,
   onSet,
+  onSetTools,
   onDeleteData,
   onClose,
 }: {
   feature: FeatureView;
   error: string | null;
   onSet: (on: boolean) => void;
+  onSetTools: (on: boolean) => void;
   onDeleteData: () => void;
   onClose: () => void;
 }) {
@@ -383,6 +386,12 @@ function FeatureDetails({
             ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
             : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
         </p>
+      )}
+      {feature.tools.length > 0 && (
+        <label className="catalog-detail-switch">
+          <span>Tools for the model</span>
+          <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
+        </label>
       )}
 
       <dl className="catalog-detail-facts">
@@ -736,6 +745,7 @@ export function CatalogPage() {
             feature={shownFeature}
             error={features.error}
             onSet={(on) => void features.set(shownFeature.id, on)}
+            onSetTools={(on) => void features.setTools(shownFeature.id, on)}
             onDeleteData={() => void features.deleteData(shownFeature.id)}
             onClose={() => setOpenFeature(null)}
           />
