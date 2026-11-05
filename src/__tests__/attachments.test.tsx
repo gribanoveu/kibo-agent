@@ -12,8 +12,10 @@ let refusal: string | null = null;
 const part = (n: number): ImagePart => ({ mediaType: "image/png", data: `PNG${n}`, width: 10 + n, height: 5 });
 
 const dropped: string[] = [];
-/** How long the mocked backend takes to answer a pasted picture, in ms. */
-let slow = 0;
+/** Pictures whose sanitizing waits for `release()`, instead of a timer. */
+let manual = false;
+const waiting: (() => void)[] = [];
+const release = () => waiting.shift()?.();
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
@@ -27,7 +29,7 @@ mock.module("@tauri-apps/api/core", () => ({
     const bytes = Array.from(args as Uint8Array);
     prepared.push(bytes);
     const answer = () => (refusal ? Promise.reject(refusal) : Promise.resolve(part(bytes[0])));
-    return slow > 0 ? new Promise<void>((resolve) => setTimeout(resolve, slow)).then(answer) : answer();
+    return manual ? new Promise<void>((resolve) => waiting.push(resolve)).then(answer) : answer();
   },
   transformCallback: (callback: unknown) => callback,
 }));
@@ -68,7 +70,8 @@ afterEach(() => {
   dropped.length = 0;
   pickerAsked.length = 0;
   picked = [];
-  slow = 0;
+  manual = false;
+  waiting.length = 0;
   refusal = null;
   // The box keeps its text per chat, and every box here is the same chat.
   localStorage.clear();
@@ -288,7 +291,7 @@ describe("attaching a picture", () => {
   /// A picture being read and sanitized has a placeholder where it will land:
   /// the row does not appear out of nowhere a moment later.
   test("a picture being prepared waits as a placeholder, then becomes one", async () => {
-    slow = 15;
+    manual = true;
     const { paste } = box();
     paste([picture(1), picture(2)]);
     expect(screen.getAllByLabelText("Preparing a picture")).toHaveLength(2);
@@ -296,21 +299,27 @@ describe("attaching a picture", () => {
 
     // One by one: the placeholder of the first turns into its picture while the
     // second is still being read.
+    await waitFor(() => expect(prepared).toHaveLength(1));
+    await act(async () => release());
     await waitFor(() => expect(thumbs()).toHaveLength(1));
     expect(screen.getAllByLabelText("Preparing a picture")).toHaveLength(1);
 
+    await waitFor(() => expect(prepared).toHaveLength(2));
+    await act(async () => release());
     await waitFor(() => expect(thumbs()).toHaveLength(2));
     expect(screen.queryAllByLabelText("Preparing a picture")).toHaveLength(0);
   });
 
   /// A refused picture takes its placeholder with it; the error names the file.
   test("a refused picture leaves no placeholder behind", async () => {
-    slow = 15;
+    manual = true;
     refusal = "this file is not supported: save the image as PNG or JPEG";
     const { paste } = box();
     paste([picture(1)]);
     expect(screen.getAllByLabelText("Preparing a picture")).toHaveLength(1);
 
+    await waitFor(() => expect(prepared).toHaveLength(1));
+    await act(async () => release());
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not supported"));
     expect(screen.queryAllByLabelText("Preparing a picture")).toHaveLength(0);
     expect(thumbs()).toHaveLength(0);

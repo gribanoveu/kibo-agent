@@ -85,9 +85,9 @@ const box = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 const type = (text: string) => fireEvent.change(box(), { target: { value: text } });
 
 describe("Chat mode's box", () => {
-  /// Chat mode's box takes pictures as the agent's does, and offers them the
-  /// same way: a button beside send, for a model that sees them — and for a
-  /// Prototype chat, which keeps them in its folder for any model.
+  /// One rule for every box (`boxTakesPictures`): a model that sees pictures,
+  /// and a Prototype chat, whose pictures are the page's assets whatever the
+  /// model can see.
   test("a picture can be chosen beside send, when the box takes them", () => {
     const { rerender } = render(chatScreen("a"));
     expect(screen.queryByRole("button", { name: "Attach a picture" })).toBeNull();
@@ -95,6 +95,10 @@ describe("Chat mode's box", () => {
     rerender(chatScreen("a", undefined, true));
     const attach = screen.getByRole("button", { name: "Attach a picture" });
     expect(attach.nextElementSibling?.getAttribute("title")).toBe("Send");
+
+    // Text only: an assistant chat takes none; a Prototype chat keeps its assets.
+    rerender(chatScreen("a", undefined, false));
+    expect(screen.queryByRole("button", { name: "Attach a picture" })).toBeNull();
 
     rerender(chatScreen("a", undefined, false, "prototype"));
     expect(screen.getByRole("button", { name: "Attach a picture" })).toBeTruthy();

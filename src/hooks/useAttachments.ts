@@ -144,7 +144,7 @@ export function useAttachments(enabled: boolean) {
   /** The user closed the note; the next picture says again if it fails. */
   const clearError = () => setError(null);
 
-  return { images, error, dragging, preparing: preparing.length, paste, remove, take, takeNamed, restore, attach, clearError };
+  return { enabled, images, error, dragging, preparing: preparing.length, paste, remove, take, takeNamed, restore, attach, clearError };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

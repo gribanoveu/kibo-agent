@@ -7,7 +7,7 @@ import { SlashMenu } from "./SlashMenu";
 import { commandFor, pendingHint, suggestCommands, typingCommandName, type SlashCommand } from "../lib/slashCommands";
 import { matches, shortcutText } from "../lib/shortcuts";
 import { CONVERSATION_MODES, type ChatUsage, type ContextUsage, type ConversationMode } from "../lib/chat";
-import type { ImagePart } from "../lib/images";
+import { boxTakesPictures, type ImagePart } from "../lib/images";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
@@ -119,7 +119,7 @@ export function Composer({
   const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
   const [openRow, setOpenRow] = useState<string | null>(null);
-  const attachments = useAttachments(imagesEnabled);
+  const attachments = useAttachments(boxTakesPictures(imagesEnabled));
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
   // The menu follows the text: shown while a name is being typed, until
@@ -436,11 +436,10 @@ export function Composer({
               <ContextMeter context={context} usage={usage} running={running} onCompact={onCompact} up />
             </span>
           )}
-          {/* Beside the send button: the same pictures, chosen instead of
-              pasted. A model set to text only gets no button — pasting there is
-              refused with a word on where to change that, and a picker that
-              opens only to refuse its answer would be worse. */}
-          {imagesEnabled && <AttachImagesButton onPick={attachments.attach} />}
+          {/* The button is the hook's own answer, not a second copy of the rule:
+              whatever the box refuses to paste, drop or bring back, it does not
+              offer to pick either. */}
+          {attachments.enabled && <AttachImagesButton onPick={attachments.attach} />}
           {/* One button, two jobs: while a turn runs the only thing worth doing
               with it is stopping — and a send button that does nothing during a
               turn is worse than no button. */}

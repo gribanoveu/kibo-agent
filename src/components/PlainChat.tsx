@@ -9,6 +9,7 @@ import { KiboBrand } from "./KiboBrand";
 import { matches } from "../lib/shortcuts";
 import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
+import { boxTakesPictures } from "../lib/images";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
@@ -104,10 +105,9 @@ export function PlainChat({
   // The box belongs to this chat, as the agent's does: what was typed here
   // waits here while another chat is open, and comes back with this one.
   const [draft, setDraft, take] = useChatDraft(chatDraftKey("chat", chat.chatId));
-  // A Prototype chat keeps pictures in its folder for any model: one that
-  // cannot see them still names them on the page.
-  const takesPictures = imagesEnabled || chat.role === "prototype";
-  const attachments = useAttachments(takesPictures);
+  // One rule for both boxes, in `boxTakesPictures`: the hook's `enabled` is
+  // what the button, the paste, the drop and the give-back all follow.
+  const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role));
   const input = useRef<HTMLTextAreaElement>(null);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
@@ -402,9 +402,9 @@ export function PlainChat({
               </span>
             )}
             {/* Beside the send button, as in the agent's box — a picture can
-                be chosen instead of pasted. Nothing to attach while the box is
-                held until the answer. */}
-            {takesPictures && <AttachImagesButton onPick={attachments.attach} disabled={chat.busy} />}
+                be chosen instead of pasted, under the same rule: the hook
+                decides, and there is no button when it refuses. */}
+            {attachments.enabled && <AttachImagesButton onPick={attachments.attach} disabled={chat.busy} />}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
                 <Square size={14} />
