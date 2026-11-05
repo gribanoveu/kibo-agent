@@ -128,6 +128,15 @@ taken down by about the 12 dB limit and not further, the length kept. It needs t
 cd src-tauri && cargo test --release denoise_live -- --ignored --nocapture
 ```
 
+Dictation has one too: a phrase in a macOS voice through GigaAM and Silero, the tone that
+says "speak" opening no phrase, a thrown-away dictation leaving nothing in the next. It needs
+the models (`bun scripts/fetch-meeting-models.ts`); run it after touching
+`dictation_sidecar.rs` or dictation's models in `infra/speech.rs`:
+
+```bash
+cd src-tauri && cargo test dictation_live -- --ignored --nocapture
+```
+
 ## Mutation testing
 
 New backend code is not done when `cargo test` is green — the tests have to be shown to

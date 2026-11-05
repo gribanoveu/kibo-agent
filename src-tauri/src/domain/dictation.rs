@@ -25,10 +25,10 @@ const HEADER_BYTES: usize = 5;
 const TAG_AUDIO: u8 = 1;
 const TAG_FINISH: u8 = 2;
 const TAG_CANCEL: u8 = 3;
-/// The most samples one [`Frame::Audio`] may carry, half a minute of sound:
-/// past it a length is a stream out of step, not to be believed. Sound that
-/// waited longer goes as several frames.
-pub const LONGEST_AUDIO: usize = 1 << 19;
+/// The most samples one [`Frame::Audio`] may carry, half a minute of sound. A
+/// frame carries a tick's worth: past this a length is a stream out of step,
+/// not to be believed.
+const LONGEST_AUDIO: usize = 1 << 19;
 const LONGEST_FRAME_BYTES: usize = LONGEST_AUDIO * 2;
 
 /// What the message box hears of a dictation, on its channel.
@@ -72,6 +72,28 @@ pub enum DictationError {
     FrameTooLong(usize),
     #[error("the dictation stream has sound of {0} bytes, half a sample short")]
     BrokenSound(usize),
+    #[error("this build has no speech models in it — run `bun scripts/fetch-meeting-models.ts` and build again")]
+    ModelsMissing,
+    #[error("the {0} model did not load")]
+    ModelFailed(&'static str),
+}
+
+/// What makes text of a phrase's sound.
+pub trait PhraseRecognizer {
+    fn recognize(&self, samples: &[f32]) -> String;
+}
+
+/// What finds where phrases begin and end in sound as it comes.
+pub trait PhraseDetector {
+    fn accept(&self, samples: &[f32]);
+    /// Whether a phrase is open now.
+    fn speaking(&self) -> bool;
+    /// The oldest phrase ended and not yet taken, taken out.
+    fn next_phrase(&self) -> Option<Vec<f32>>;
+    /// What is open ends here, as a phrase.
+    fn flush(&self);
+    /// Everything heard is forgotten, phrases not yet taken too.
+    fn reset(&self);
 }
 
 /// What the app tells the recognition process. Its stdin closing is the app gone.

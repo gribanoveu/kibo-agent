@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use sherpa_onnx::{
-    LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeechDenoiser, OfflineSpeechDenoiserConfig, SpeakerEmbeddingExtractor,
-    SpeakerEmbeddingExtractorConfig,
+    LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeechDenoiser, OfflineSpeechDenoiserConfig, SileroVadModelConfig,
+    SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig, VadModelConfig, VoiceActivityDetector,
 };
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as AudioError;
@@ -20,6 +20,7 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
+use crate::domain::dictation::{DictationError, PhraseDetector, PhraseRecognizer};
 use crate::domain::meeting::{self, MeetingError, Recognized, Segment, Sound, Stage, Word};
 use crate::domain::recording;
 use crate::infra::app_dir;
@@ -61,6 +62,93 @@ pub fn has_models(dir: &Path) -> bool {
     MODEL_FILES.iter().all(|f| dir.join(f).is_file())
 }
 
+/// What dictation loads of them: GigaAM, and Silero to find the phrases.
+/// A list of its own, or a build older than Silero would lose Meeting notes.
+pub const DICTATION_FILES: [&str; 5] = [MODEL_FILES[0], MODEL_FILES[1], MODEL_FILES[2], MODEL_FILES[3], "silero_vad.onnx"];
+/// A pause this long ends a phrase (`docs/52-voice-input.md`, decision 3).
+const PHRASE_PAUSE_SECONDS: f32 = 0.6;
+/// Past this Silero takes any short pause for the end. It does not cut speech
+/// with no dip in it: `dictation_sidecar` does that, a little later.
+const LONGEST_PHRASE_SECONDS: f32 = 20.0;
+/// Shorter sound opens no phrase: the tone that says "speak" is shorter.
+const SHORTEST_SPEECH_SECONDS: f32 = 0.25;
+/// Silero's window, in samples.
+const VAD_WINDOW: i32 = 512;
+/// The sound of an open phrase Silero can hold, in seconds: past what is ever open.
+const VAD_BUFFER_SECONDS: f32 = 60.0;
+
+/// GigaAM over one phrase at a time.
+pub struct Phrases(OfflineRecognizer);
+
+impl PhraseRecognizer for Phrases {
+    fn recognize(&self, samples: &[f32]) -> String {
+        // A few samples abort the process inside onnxruntime.
+        if samples.len() < VAD_WINDOW as usize {
+            return String::new();
+        }
+        let stream = self.0.create_stream();
+        stream.accept_waveform(SAMPLE_RATE as i32, samples);
+        self.0.decode(&stream);
+        stream.get_result().map(|r| r.text).unwrap_or_default()
+    }
+}
+
+/// Silero VAD.
+pub struct Silero(VoiceActivityDetector);
+
+impl PhraseDetector for Silero {
+    /// A window at a time: a call decides once, whatever its length, so
+    /// sound given in larger pieces loses the starts of phrases and glues them.
+    fn accept(&self, samples: &[f32]) {
+        samples.chunks(VAD_WINDOW as usize).for_each(|window| self.0.accept_waveform(window));
+    }
+
+    fn speaking(&self) -> bool {
+        self.0.detected()
+    }
+
+    fn next_phrase(&self) -> Option<Vec<f32>> {
+        let phrase = self.0.front()?.samples().to_vec();
+        self.0.pop();
+        Some(phrase)
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+    }
+
+    fn reset(&self) {
+        self.0.reset();
+    }
+}
+
+/// Dictation's two models, from `models`.
+pub fn dictation_models(models: &Path) -> Result<(Phrases, Silero), DictationError> {
+    if !DICTATION_FILES.iter().all(|f| models.join(f).is_file()) {
+        return Err(DictationError::ModelsMissing);
+    }
+    let recognizer = recognizer(models, threads()).map_err(|_| DictationError::ModelFailed("speech"))?;
+    let config = VadModelConfig {
+        silero_vad: SileroVadModelConfig {
+            model: path(models, DICTATION_FILES[4]),
+            threshold: 0.5,
+            min_silence_duration: PHRASE_PAUSE_SECONDS,
+            min_speech_duration: SHORTEST_SPEECH_SECONDS,
+            window_size: VAD_WINDOW,
+            max_speech_duration: LONGEST_PHRASE_SECONDS,
+        },
+        sample_rate: SAMPLE_RATE as i32,
+        num_threads: 1,
+        ..Default::default()
+    };
+    let detector = VoiceActivityDetector::create(&config, VAD_BUFFER_SECONDS).ok_or(DictationError::ModelFailed("voice activity"))?;
+    Ok((Phrases(recognizer), Silero(detector)))
+}
+
+fn threads() -> i32 {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS) as i32
+}
+
 /// Every utterance of `audio`, speakers numbered by who spoke first, and their
 /// voices. The sound the models heard is written to `keep` — the meeting's own
 /// copy, so the original file is not needed after. A [`Sound::Call`] has its
@@ -72,7 +160,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
     if !has_models(models) {
         return Err(MeetingError::ModelsMissing);
     }
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS) as i32;
+    let threads = threads();
     progress(Stage::Decode, 0, 1);
     let (tracks, rate) = decode_tracks(audio, sound != Sound::Import)?;
     let tracks = tracks.into_iter().map(|t| to_16k(t, rate)).collect::<Result<Vec<_>, _>>()?;

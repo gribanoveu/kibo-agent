@@ -6,5 +6,8 @@ fn main() {
     if args.first().map(String::as_str) == Some(kibo_agent_lib::meeting_sidecar::FLAG) {
         std::process::exit(kibo_agent_lib::meeting_sidecar::main(&args[1..]));
     }
+    if args.first().map(String::as_str) == Some(kibo_agent_lib::dictation_sidecar::FLAG) {
+        std::process::exit(kibo_agent_lib::dictation_sidecar::main(&args[1..]));
+    }
     kibo_agent_lib::run()
 }
