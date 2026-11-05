@@ -10,9 +10,12 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::http_client::{Environment, HistoryEntry, HttpError, Outcome, Prepared, ResponseView, SavedResponse, Scope, Variable};
+use crate::domain::http_auth::{refusal, OAuth2, Token};
+use crate::domain::http_client::{Environment, HistoryEntry, HttpError, Outcome, Outgoing, Prepared, ResponseView, SavedResponse, Scope, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
-use crate::domain::postman::{environment_to_postman, read_import, Collection, Imported};
+use crate::domain::postman::{environment_to_postman, read_import, Auth, Collection, Imported};
+use crate::infra::http_client::NoCookies;
+use crate::infra::http_cookies::StoredJar;
 use crate::infra::postman_sandbox::{Ran, Sandbox, LIMITS};
 use crate::infra::{http_agent, http_client, http_collections, http_env_store, settings_store};
 
@@ -49,6 +52,7 @@ pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, enviro
     }
     let sent = sent.map_err(|e| match e {
         HttpError::Script(why) => HttpError::Script(mask.hide(&why)),
+        HttpError::OAuth2(why) => HttpError::OAuth2(mask.hide(&why)),
         other => other,
     })?;
     save(collection_id, request_id, sent, report.hidden(&mask))
@@ -61,8 +65,28 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
     latest().insert(key.clone(), ticket);
     scripts.before_sending(collection, request_id)?;
-    let prepared = collection.prepare(request_id, &scripts.vars.scope())?;
-    let (outcome, body) = http_client::send(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
+    let cert = environment.and_then(|e| e.trusted_cert.as_deref());
+    let scope = scripts.vars.scope();
+    let held = oauth_token(collection, collection_id, request_id, &scope, cert)?;
+    if let Some(held) = &held {
+        scripts.keep_secret(&held.access);
+    }
+    let mut prepared = collection.prepare_with(request_id, &scope, held.as_ref().map(|h| h.access.as_str()))?;
+    let (mut outcome, mut body) = deliver(&prepared.sent, cert);
+    // Once: a token just got that is refused is not one the next will fix.
+    if let Some(stale) = held.filter(|h| !h.fresh && matches!(outcome, Outcome::Response { status: 401, .. })) {
+        match renewed(&stale, collection_id, cert) {
+            Ok(access) => {
+                scripts.keep_secret(&access);
+                prepared = collection.prepare_with(request_id, &scope, Some(&access))?;
+                (outcome, body) = deliver(&prepared.sent, cert);
+            }
+            // The 401 stands, and says why the next request will meet one too.
+            Err(e) => {
+                scripts.report.error.get_or_insert(e.to_string());
+            }
+        }
+    }
     let at = chrono::Utc::now().timestamp_millis();
     let name = environment.map(|e| e.name.clone());
     let written = collection.written_url(request_id).unwrap_or_default();
@@ -71,6 +95,93 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     // What the test scripts learned counts too: a token they stored is a secret's value.
     let outcome = outcome.hidden(&scripts.mask());
     Ok(Sent { key, ticket, saved: SavedResponse { at, environment: name, outcome, body, scripts: ScriptReport::default() } })
+}
+
+/// Through the sender, with the jar: what a send and a script's `pm.sendRequest` have in common.
+fn deliver(request: &Outgoing, cert: Option<&str>) -> (Outcome, Vec<u8>) {
+    http_client::send(request, cert, &StoredJar)
+}
+
+/// The token a send goes with, and what it would take to get another.
+struct Held {
+    oauth: OAuth2,
+    key: String,
+    access: String,
+    /// Got for this send: a 401 is not about its age.
+    fresh: bool,
+}
+
+/// Held from reading a token to storing the next: two sends at once would each
+/// spend the one `refresh_token`, and the second would be refused.
+// ponytail: one lock for all collections, so a token endpoint that hangs holds every `oauth2` send for up to a minute; per key if that is ever met.
+fn renewing() -> MutexGuard<'static, ()> {
+    static RENEWING: Mutex<()> = Mutex::new(());
+    RENEWING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// The token for a request's `oauth2`: the one kept, renewed if it is past its time; else
+/// the one the file saved; else a new one. None where Kibo cannot get one: the file's goes as it is.
+fn oauth_token(collection: &Collection, collection_id: &str, request_id: &str, scope: &Scope, cert: Option<&str>) -> Result<Option<Held>, HttpError> {
+    let Auth::OAuth2(oauth) = collection.auth_for(request_id)? else { return Ok(None) };
+    // With an empty token, only what was written by hand is left: that stands, and the client's secret stays home.
+    let written = collection.prepare_with(request_id, scope, Some(""))?.sent.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+    if written && !oauth.in_query {
+        return Ok(None);
+    }
+    if !oauth.can_fetch() {
+        if oauth.access_token.is_empty() && !oauth.grant.is_empty() {
+            return Err(HttpError::OAuth2(oauth.why_no_token()));
+        }
+        return Ok(None);
+    }
+    let oauth = oauth.filled(scope)?;
+    let key = oauth.key();
+    let _held = renewing();
+    let (access, fresh) = match http_env_store::token(collection_id, &key)? {
+        Some(token) if !token.expired(now()) => (token.access, false),
+        Some(token) => (renew(&oauth, &key, collection_id, Some(token), cert)?, true),
+        None => match scope.fill(&oauth.access_token).map(|f| f.sent).ok().filter(|t| !t.is_empty()) {
+            Some(saved) => (saved, false),
+            None => (renew(&oauth, &key, collection_id, None, cert)?, true),
+        },
+    };
+    Ok(Some(Held { oauth, key, access, fresh }))
+}
+
+/// After a 401: another send may have renewed it already, and that one is good.
+fn renewed(stale: &Held, collection_id: &str, cert: Option<&str>) -> Result<String, HttpError> {
+    let _held = renewing();
+    let kept = http_env_store::token(collection_id, &stale.key)?;
+    if let Some(token) = kept.as_ref().filter(|t| t.access != stale.access) {
+        return Ok(token.access.clone());
+    }
+    renew(&stale.oauth, &stale.key, collection_id, kept, cert)
+}
+
+/// A token after `old`, by its `refresh_token` while that is good, else by the grant — and kept.
+fn renew(oauth: &OAuth2, key: &str, collection_id: &str, old: Option<Token>, cert: Option<&str>) -> Result<String, HttpError> {
+    let refresh = old.and_then(|t| t.refresh);
+    let refreshed = refresh.as_deref().map(|r| ask_token(&oauth.refresh_request(r), Some(r), cert));
+    let token = match refreshed {
+        Some(Ok(token)) => token,
+        _ => ask_token(&oauth.token_request(), None, cert)?,
+    };
+    let access = token.access.clone();
+    http_env_store::save_token(collection_id, key, token)?;
+    Ok(access)
+}
+
+/// Not through history: its body holds the client's secret, and its reply the token.
+fn ask_token(request: &Outgoing, refresh_before: Option<&str>, cert: Option<&str>) -> Result<Token, HttpError> {
+    match http_client::send(request, cert, &NoCookies) {
+        (Outcome::Response { status: 200..=299, .. }, body) => Token::from_reply(&body, now(), refresh_before),
+        (Outcome::Response { status, .. }, body) => Err(refusal(status, &body)),
+        (Outcome::Failed { error }, _) => Err(HttpError::OAuth2(format!("the token endpoint: {error}"))),
+    }
 }
 
 /// A request that went out, on its way to the store.
@@ -127,6 +238,11 @@ impl<'a> Scripts<'a> {
 
     fn mask(&self) -> Scope {
         ScriptVars::mask(&[&self.start, &self.vars])
+    }
+
+    /// A value no variable holds, a token got for this send, masked as a secret's is.
+    fn keep_secret(&mut self, value: &str) {
+        self.start.local.push(Variable { key: String::new(), value: value.into(), secret: true, enabled: true });
     }
 
     /// One script over the variables as the last one left them.
@@ -193,7 +309,7 @@ fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option
     let mut one = Collection::new("sub-request", "sub-request");
     one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request}))?;
     let prepared = one.prepare("sub-request", scope)?;
-    let (outcome, body) = http_client::send(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
+    let (outcome, body) = deliver(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
     let at = chrono::Utc::now().timestamp_millis();
     remember(at, environment.map(|e| e.name.clone()), written, None, &prepared, &outcome, &body, mask);
     match outcome {
@@ -448,11 +564,482 @@ mod tests {
     use crate::domain::http_client::{Environment, Outcome, Variable};
     use crate::domain::postman::Collection;
     use crate::infra::http_client::tests::{closed_port, reply, serve, Seen};
+    use crate::infra::http_cookies;
     use crate::testing::with_app_dir;
     use serde_json::json;
     use std::sync::mpsc::Receiver;
 
     const PROBE: &str = include_str!("../infra/testdata/postman/probe.postman_collection.json");
+
+    /// One `GET {{baseUrl}}/res` under `auth`.
+    fn guarded(auth: Value) -> String {
+        let collection = json!({
+            "info": {"name": "Guarded", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "res", "name": "Res", "request": {"method": "GET", "url": {"raw": "{{baseUrl}}/res"}, "auth": auth}}],
+        });
+        http_collections::add(&Collection::parse(&collection.to_string()).unwrap()).unwrap()
+    }
+
+    /// Client credentials against `{{baseUrl}}/token`, the secret being the environment's.
+    fn client_credentials(more: Value) -> Value {
+        let mut rows = vec![
+            json!({"key": "grant_type", "value": "client_credentials"}),
+            json!({"key": "accessTokenUrl", "value": "{{baseUrl}}/token"}),
+            json!({"key": "clientId", "value": "app"}),
+            json!({"key": "clientSecret", "value": "{{token}}"}),
+        ];
+        rows.extend(more.as_array().unwrap().iter().cloned());
+        json!({"type": "oauth2", "oauth2": rows})
+    }
+
+    fn answer(status: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len())
+    }
+
+    fn got(body: &str) -> String {
+        answer("200 OK", body)
+    }
+
+    fn head_of(seen: &Receiver<Seen>) -> String {
+        seen.recv_timeout(std::time::Duration::from_secs(5)).unwrap().head
+    }
+
+    fn nothing_more(seen: &Receiver<Seen>) {
+        assert!(seen.recv_timeout(std::time::Duration::from_millis(150)).is_err(), "a request too many");
+    }
+
+    fn status_of(view: &ResponseView) -> Option<u16> {
+        match view.outcome {
+            Outcome::Response { status, .. } => Some(status),
+            Outcome::Failed { .. } => None,
+        }
+    }
+
+    #[test]
+    fn a_token_is_got_kept_and_used_again() {
+        with_app_dir("http-oauth-keep", || {
+            let (port, seen) = serve(vec![reply(&got(r#"{"access_token": "tok-1", "expires_in": 3600}"#)), reply(&got("{}")), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            for _ in 0..2 {
+                assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            }
+            let token = seen.recv().unwrap();
+            assert!(token.head.starts_with("POST /token"), "{}", token.head);
+            assert_eq!(token.body, b"grant_type=client_credentials");
+            let client = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "app:s3cr3t-t0k");
+            assert!(token.head.contains(&client), "the client, with the environment's secret: {}", token.head);
+            for _ in 0..2 {
+                let head = head_of(&seen);
+                assert!(head.starts_with("GET /res") && head.to_ascii_lowercase().contains("authorization: bearer tok-1"), "{head}");
+            }
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn a_token_past_its_time_is_refreshed_before_the_send() {
+        with_app_dir("http-oauth-expired", || {
+            let (port, seen) = serve(vec![
+                reply(&got(r#"{"access_token": "old", "refresh_token": "r-1", "expires_in": 0}"#)),
+                reply(&got("{}")),
+                reply(&got(r#"{"access_token": "new", "expires_in": 3600}"#)),
+                reply(&got("{}")),
+            ]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            let (_, _, refresh, res) = (seen.recv().unwrap(), seen.recv().unwrap(), seen.recv().unwrap(), seen.recv().unwrap());
+            assert_eq!(refresh.body, b"grant_type=refresh_token&refresh_token=r-1");
+            assert!(res.head.to_ascii_lowercase().contains("bearer new"), "{}", res.head);
+            let key = key_of(&id, &env);
+            assert_eq!(http_env_store::token(&id, &key).unwrap().unwrap().refresh.as_deref(), Some("r-1"), "still good");
+        });
+    }
+
+    /// The name the collection's token is kept under.
+    fn key_of(id: &str, env: &str) -> String {
+        let collection = http_collections::get(id).unwrap();
+        let Auth::OAuth2(oauth) = collection.auth_for("res").unwrap() else { panic!("oauth2") };
+        let environment = http_env_store::get(env).unwrap();
+        oauth.filled(&Scope::new(&[&environment.variables[..]])).unwrap().key()
+    }
+
+    #[test]
+    fn a_refused_refresh_falls_back_on_the_grant() {
+        with_app_dir("http-oauth-refresh-refused", || {
+            let (port, seen) = serve(vec![
+                reply(&got(r#"{"access_token": "old", "refresh_token": "r-1", "expires_in": 0}"#)),
+                reply(&got("{}")),
+                reply(&answer("400 Bad Request", r#"{"error": "invalid_grant"}"#)),
+                reply(&got(r#"{"access_token": "new"}"#)),
+                reply(&got("{}")),
+            ]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            let bodies: Vec<Vec<u8>> = seen.iter().take(5).map(|s| s.body).collect();
+            assert_eq!(bodies[3], b"grant_type=client_credentials");
+        });
+    }
+
+    #[test]
+    fn a_401_renews_the_token_once_and_not_in_a_loop() {
+        with_app_dir("http-oauth-401", || {
+            let refused = answer("401 Unauthorized", "{}");
+            let (port, seen) = serve(vec![
+                reply(&got(r#"{"access_token": "one"}"#)),
+                reply(&got("{}")),
+                reply(&refused),
+                reply(&got(r#"{"access_token": "two"}"#)),
+                reply(&refused),
+                reply(&got(r#"{"access_token": "three"}"#)),
+                reply(&got("{}")),
+            ]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(401), "the second refusal stands");
+            let heads: Vec<String> = (0..5).map(|_| head_of(&seen)).collect();
+            assert!(heads[3].starts_with("POST /token"), "{}", heads[3]);
+            assert!(heads[4].to_ascii_lowercase().contains("bearer two"), "{}", heads[4]);
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn a_token_just_got_and_refused_is_not_renewed() {
+        with_app_dir("http-oauth-fresh-401", || {
+            let (port, seen) = serve(vec![reply(&got(r#"{"access_token": "one"}"#)), reply(&answer("401 Unauthorized", "{}")), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(401));
+            head_of(&seen);
+            head_of(&seen);
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn a_token_just_refreshed_and_refused_is_not_renewed() {
+        with_app_dir("http-oauth-refreshed-401", || {
+            let (port, seen) = serve(vec![
+                reply(&got(r#"{"access_token": "old", "refresh_token": "r-1", "expires_in": 0}"#)),
+                reply(&got("{}")),
+                reply(&got(r#"{"access_token": "new"}"#)),
+                reply(&answer("401 Unauthorized", "{}")),
+                reply(&got(r#"{"access_token": "again"}"#)),
+            ]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(401));
+            (0..4).for_each(|_| drop(head_of(&seen)));
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn only_a_401_renews_a_token() {
+        with_app_dir("http-oauth-403", || {
+            let (port, seen) = serve(vec![reply(&answer("403 Forbidden", "{}")), reply(&got(r#"{"access_token": "new"}"#))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "accessToken", "value": "from-file"}])));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(403));
+            head_of(&seen);
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn a_token_got_after_a_401_is_masked_as_the_first_was() {
+        with_app_dir("http-oauth-renew-masked", || {
+            let (port, _seen) = serve(vec![reply(&answer("401 Unauthorized", "{}")), reply(&got(r#"{"access_token": "tok-renewed"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "accessToken", "value": "from-file"}, {"key": "addTokenTo", "value": "queryParams"}])));
+            let view = send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&view), Some(200));
+            let text = serde_json::to_string(&http_collections::history().unwrap()).unwrap() + &serde_json::to_string(&view).unwrap();
+            assert!(!text.contains("tok-renewed"), "{text}");
+        });
+    }
+
+    #[test]
+    fn oauth2_with_nothing_filled_in_goes_without_a_token() {
+        with_app_dir("http-oauth-empty", || {
+            let (port, seen) = serve_once(&got("{}"));
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(json!({"type": "oauth2", "oauth2": []}));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            assert!(!head_of(&seen).to_ascii_lowercase().contains("authorization:"));
+        });
+    }
+
+    #[test]
+    fn the_files_token_goes_first_and_a_401_gets_a_new_one() {
+        with_app_dir("http-oauth-saved", || {
+            let (port, seen) = serve(vec![reply(&answer("401 Unauthorized", "{}")), reply(&got(r#"{"access_token": "new"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "accessToken", "value": "from-file"}])));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            assert!(head_of(&seen).to_ascii_lowercase().contains("bearer from-file"));
+            assert!(head_of(&seen).starts_with("POST /token"));
+            assert!(head_of(&seen).to_ascii_lowercase().contains("bearer new"));
+        });
+    }
+
+    #[test]
+    fn a_saved_variable_nowhere_does_not_stop_a_grant_that_can_get_a_token() {
+        with_app_dir("http-oauth-unknown", || {
+            let (port, seen) = serve(vec![reply(&got(r#"{"access_token": "new"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "accessToken", "value": "{{nowhere}}"}])));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            assert!(head_of(&seen).starts_with("POST /token"));
+        });
+    }
+
+    #[test]
+    fn a_failed_renewal_after_a_401_leaves_the_401_and_says_why() {
+        with_app_dir("http-oauth-renew-fails", || {
+            let (port, _seen) = serve(vec![reply(&answer("401 Unauthorized", "{}")), reply(&answer("400 Bad Request", r#"{"error": "invalid_client"}"#))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "accessToken", "value": "from-file"}])));
+            let view = send(&id, "res", None, Some(&env)).unwrap();
+            assert_eq!(status_of(&view), Some(401));
+            assert_eq!(view.scripts.error.as_deref(), Some("OAuth 2.0: the token endpoint answered 400: invalid_client"));
+        });
+    }
+
+    #[test]
+    fn a_token_endpoint_that_refuses_stops_the_send_and_its_words_are_masked() {
+        with_app_dir("http-oauth-refused", || {
+            let (port, seen) = serve(vec![reply(&answer("400 Bad Request", r#"{"error": "invalid_client", "error_description": "bad secret s3cr3t-t0k"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            assert_eq!(send(&id, "res", None, Some(&env)), Err(HttpError::OAuth2("the token endpoint answered 400: invalid_client — bad secret •••".into())));
+            head_of(&seen);
+            nothing_more(&seen);
+            assert_eq!(http_collections::history().unwrap().len(), 0);
+        });
+    }
+
+    #[test]
+    fn a_token_endpoint_that_is_down_is_named() {
+        with_app_dir("http-oauth-down", || {
+            let env = stage(format!("http://127.0.0.1:{}", closed_port()));
+            let id = guarded(client_credentials(json!([])));
+            let Err(HttpError::OAuth2(why)) = send(&id, "res", None, Some(&env)) else { panic!("an OAuth error") };
+            assert!(why.starts_with("the token endpoint: "), "{why}");
+        });
+    }
+
+    #[test]
+    fn no_token_shows_in_what_is_kept_and_the_token_request_is_not_in_history() {
+        with_app_dir("http-oauth-masked", || {
+            let (port, _seen) = serve(vec![reply(&got(r#"{"access_token": "tok-secret", "refresh_token": "ref-secret"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([{"key": "addTokenTo", "value": "queryParams"}])));
+            let view = send(&id, "res", None, Some(&env)).unwrap();
+            let Outcome::Response { url, .. } = &view.outcome else { panic!("{:?}", view.outcome) };
+            assert_eq!(url, &format!("http://127.0.0.1:{port}/res?access_token=•••"));
+            let history = http_collections::history().unwrap();
+            assert_eq!(history.len(), 1, "the request, not the token's");
+            let text = serde_json::to_string(&history).unwrap() + &serde_json::to_string(&http_collections::last_response(&id, "res").unwrap()).unwrap();
+            assert!(!text.contains("tok-secret") && !text.contains("ref-secret"), "{text}");
+            let raw = std::fs::read(http_collections::dir().unwrap().join("environments.enc")).unwrap();
+            assert!(!String::from_utf8_lossy(&raw).contains("tok-secret"), "sealed");
+            assert!(!serde_json::to_string(&http_collections::get(&id).unwrap().json()).unwrap().contains("tok-secret"), "the file stays as it was");
+        });
+    }
+
+    #[test]
+    fn a_grant_that_needs_a_browser_is_named_unless_a_token_was_saved() {
+        with_app_dir("http-oauth-browser", || {
+            let (port, seen) = serve_once(&got("{}"));
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let code = |rows: Value| json!({"type": "oauth2", "oauth2": rows});
+            let grant = json!({"key": "grant_type", "value": "authorization_code"});
+            let id = guarded(code(json!([grant])));
+            let Err(HttpError::OAuth2(why)) = send(&id, "res", None, Some(&env)) else { panic!("an OAuth error") };
+            assert!(why.contains("authorization_code"), "{why}");
+            let id = guarded(code(json!([grant, {"key": "accessToken", "value": "pasted"}])));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            assert!(head_of(&seen).to_ascii_lowercase().contains("bearer pasted"));
+
+            let id = guarded(code(json!([{"key": "grant_type", "value": "client_credentials"}])));
+            assert_eq!(send(&id, "res", None, Some(&env)), Err(HttpError::OAuth2("client_credentials needs a Token URL, or a token in Access token".into())));
+        });
+    }
+
+    /// `client_credentials` on a request with an `Authorization` of its own.
+    fn by_hand(more: Value) -> String {
+        let collection = json!({
+            "info": {"name": "By hand", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "res", "name": "Res", "request": {"method": "GET", "url": {"raw": "{{baseUrl}}/res"}, "header": [{"key": "authorization", "value": "Bearer mine"}], "auth": client_credentials(more)}}],
+        });
+        http_collections::add(&Collection::parse(&collection.to_string()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_authorization_written_by_hand_needs_no_token_unless_the_token_goes_in_the_query() {
+        with_app_dir("http-oauth-by-hand", || {
+            let (port, seen) = serve(vec![reply(&got("{}")), reply(&got(r#"{"access_token": "t"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = by_hand(json!([{"key": "accessToken", "value": "{{nowhere}}"}]));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            let head = head_of(&seen);
+            assert!(head.starts_with("GET /res") && head.to_ascii_lowercase().contains("bearer mine"), "{head}");
+
+            let id = by_hand(json!([{"key": "addTokenTo", "value": "queryParams"}]));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert!(head_of(&seen).starts_with("POST /token"));
+            assert!(head_of(&seen).starts_with("GET /res?access_token=t"));
+        });
+    }
+
+    #[test]
+    fn two_sends_with_a_lapsed_token_spend_its_refresh_token_once() {
+        with_app_dir("http-oauth-two-sends", || {
+            let renewed = got(r#"{"access_token": "new", "expires_in": 3600}"#);
+            let (port, seen) = serve(vec![Box::new(move |_| {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                renewed.clone().into_bytes()
+            })]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            let key = key_of(&id, &env);
+            http_env_store::save_token(&id, &key, Token { access: "old".into(), refresh: Some("r-1".into()), expires_at: Some(0) }).unwrap();
+            let collection = http_collections::get(&id).unwrap();
+            let environment = http_env_store::get(&env).unwrap();
+            let scope = Scope::new(&[&environment.variables[..]]);
+            let start = std::sync::Barrier::new(2);
+            std::thread::scope(|threads| {
+                for _ in 0..2 {
+                    threads.spawn(|| {
+                        start.wait();
+                        assert_eq!(oauth_token(&collection, &id, "res", &scope, None).unwrap().unwrap().access, "new");
+                    });
+                }
+            });
+            head_of(&seen);
+            nothing_more(&seen);
+        });
+    }
+
+    #[test]
+    fn a_collection_deleted_takes_its_tokens() {
+        with_app_dir("http-oauth-delete", || {
+            let (port, _seen) = serve(vec![reply(&got(r#"{"access_token": "one"}"#)), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            let key = key_of(&id, &env);
+            assert!(http_env_store::token(&id, &key).unwrap().is_some());
+            delete_collection(&id).unwrap();
+            assert_eq!(http_env_store::token(&id, &key).unwrap(), None);
+        });
+    }
+
+    #[test]
+    fn a_token_another_send_renewed_is_taken_not_renewed_again() {
+        with_app_dir("http-oauth-race", || {
+            let held = Held { oauth: OAuth2::default(), key: "k".into(), access: "stale".into(), fresh: false };
+            http_env_store::save_token("c", "k", Token { access: "newer".into(), refresh: None, expires_at: None }).unwrap();
+            assert_eq!(renewed(&held, "c", None).unwrap(), "newer");
+        });
+    }
+
+    #[test]
+    fn a_cookie_from_a_response_goes_with_the_next_send_and_the_jar_lists_it() {
+        with_app_dir("http-cookies-send", || {
+            let (port, seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nset-cookie: sid=v-1; Path=/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(json!({"type": "noauth"}));
+            send(&id, "res", None, Some(&env)).unwrap();
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert!(!head_of(&seen).to_ascii_lowercase().contains("cookie:"));
+            assert!(head_of(&seen).to_ascii_lowercase().contains("cookie: sid=v-1"));
+            assert_eq!(http_cookies::list().unwrap().iter().map(|c| (c.domain.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("127.0.0.1", "sid")]);
+        });
+    }
+
+    #[test]
+    fn a_redirect_to_another_domain_takes_no_cookie_of_the_first() {
+        with_app_dir("http-cookies-foreign-hop", || {
+            let (other, elsewhere) = serve_once(&got("{}"));
+            let (port, _seen) = serve_once(&format!("HTTP/1.1 302 Found\r\nset-cookie: sid=v-1; Path=/\r\nlocation: http://localhost:{other}/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"));
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(json!({"type": "noauth"}));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            assert!(!head_of(&elsewhere).to_ascii_lowercase().contains("cookie:"));
+            assert_eq!(http_cookies::list().unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_token_request_takes_no_cookies_and_leaves_none() {
+        with_app_dir("http-cookies-token", || {
+            let (port, seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nset-cookie: from-token=1; Path=/\r\ncontent-length: 21\r\nconnection: close\r\n\r\n{\"access_token\": \"t\"}"), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            http_cookies_seed(port);
+            let id = guarded(client_credentials(json!([])));
+            send(&id, "res", None, Some(&env)).unwrap();
+            assert!(!head_of(&seen).to_ascii_lowercase().contains("cookie:"), "the session stays out of the token's business");
+            assert!(head_of(&seen).to_ascii_lowercase().contains("cookie: session=1"));
+            assert_eq!(http_cookies::list().unwrap().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["session"]);
+        });
+    }
+
+    fn http_cookies_seed(port: u16) {
+        use crate::domain::http_client::CookieJar;
+        StoredJar.take(&format!("http://127.0.0.1:{port}/"), &["session=1; Path=/".to_string()]);
+    }
+
+    #[test]
+    fn a_scripts_request_shares_the_jar() {
+        with_app_dir("http-cookies-script", || {
+            let (port, seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nset-cookie: from-script=1; Path=/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let code = format!("pm.sendRequest('http://127.0.0.1:{port}/login', function () {{}});");
+            let id = scripted(vec![], vec![], vec![event("prerequest", &code)]);
+            trust(&id);
+            send(&id, "order", None, Some(&env)).unwrap();
+            head_of(&seen);
+            assert!(head_of(&seen).to_ascii_lowercase().contains("cookie: from-script=1"));
+        });
+    }
+
+    #[test]
+    fn digest_goes_through_a_send_and_its_password_is_nowhere_kept() {
+        with_app_dir("http-digest-send", || {
+            let challenge = "HTTP/1.1 401 Unauthorized\r\nwww-authenticate: Digest realm=\"probe\", nonce=\"n1\", qop=\"auth\"\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            let (port, seen) = serve(vec![reply(challenge), reply(&got("{}"))]);
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let id = guarded(json!({"type": "digest", "digest": [{"key": "username", "value": "ann"}, {"key": "password", "value": "{{token}}"}]}));
+            assert_eq!(status_of(&send(&id, "res", None, Some(&env)).unwrap()), Some(200));
+            head_of(&seen);
+            assert!(head_of(&seen).contains("Digest username=\"ann\""));
+            assert!(!serde_json::to_string(&http_collections::history().unwrap()).unwrap().contains("s3cr3t-t0k"));
+        });
+    }
+
+    #[test]
+    fn formdata_reaches_the_stand_as_it_was_built() {
+        with_app_dir("http-formdata-send", || {
+            let (port, seen) = serve_once(&got("{}"));
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let mut c = Collection::new("c", "Forms");
+            c.add(None, json!({"id": "f", "name": "F", "request": {"method": "POST", "url": "{{baseUrl}}/up", "body": {"mode": "formdata", "formdata": [{"key": "a", "value": "1"}]}}})).unwrap();
+            let id = http_collections::add(&c).unwrap();
+            send(&id, "f", None, Some(&env)).unwrap();
+            let got = seen.recv().unwrap();
+            let boundary = got.head.split("boundary=").nth(1).unwrap().lines().next().unwrap().trim().to_string();
+            assert_eq!(String::from_utf8(got.body).unwrap(), format!("--{boundary}\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--{boundary}--\r\n"));
+        });
+    }
 
     #[test]
     fn each_kind_of_file_lands_in_its_store_and_a_secret_is_sealed() {

@@ -6,8 +6,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::domain::http_client::{parse_curl, Environment, HistoryEntry, ResponseView};
-use crate::infra::{http_collections, http_env_store};
+use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, ResponseView};
+use crate::infra::{http_collections, http_cookies, http_env_store};
 use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptTrust};
 
 use super::blocking;
@@ -105,6 +105,22 @@ pub async fn http_history_list() -> Result<Vec<HistoryEntry>, String> {
 #[tauri::command]
 pub async fn http_script_trust(collection: String) -> Result<ScriptTrust, String> {
     blocking(move || http_client::script_trust(&collection)).await
+}
+
+/// The cookie jar as the page lists it: no value crosses here.
+#[tauri::command]
+pub async fn http_cookies() -> Result<Vec<CookieRow>, String> {
+    blocking(http_cookies::list).await
+}
+
+#[tauri::command]
+pub async fn http_cookie_delete(domain: String, path: String, name: String) -> Result<(), String> {
+    blocking(move || http_cookies::delete(&domain, &path, &name)).await
+}
+
+#[tauri::command]
+pub async fn http_cookies_clear() -> Result<(), String> {
+    blocking(http_cookies::clear).await
 }
 
 /// Trust in the scripts `hash` names, the ones `http_script_trust` said.
