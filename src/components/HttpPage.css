@@ -660,6 +660,14 @@
   color: var(--text);
   font-size: var(--fs-sm);
 }
+.http-cookies td {
+  padding: 6px;
+}
+.http-pairs.http-cookies td:first-child,
+.http-pairs.http-cookies th:first-child {
+  width: auto;
+  text-align: left;
+}
 .http-pairs td input:not([type="checkbox"]):focus {
   background: var(--bg-hover);
 }

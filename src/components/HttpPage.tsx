@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Check,
   Columns2,
+  Cookie,
   Copy,
   Download,
   Eye,
@@ -38,6 +39,7 @@ import { Modal } from "./Modal";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
+import { useHttpCookies } from "../hooks/useHttpCookies";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
@@ -49,6 +51,7 @@ import {
   asHttpText,
   SECRET_MASK,
   effectiveAuth,
+  authParam,
   findRequest,
   hasScripts,
   paramsOf,
@@ -62,6 +65,7 @@ import {
   VARIABLE,
   variableParts,
   variableValue,
+  withAuthParam,
   withParams,
   type Auth,
   type Body,
@@ -84,7 +88,7 @@ import "./HttpPage.css";
 export function HttpPage() {
   const http = useHttpClient();
   const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
-  const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | null>(null);
+  const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | { kind: "cookies" } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggle = (id: string) =>
     setExpanded((s) => {
@@ -227,6 +231,10 @@ export function HttpPage() {
               </button>
             ))}
           </div>
+          <button type="button" className="http-bar-button" data-sheet-opener title="What each domain set, sent back with its next request" onClick={() => setSheet({ kind: "cookies" })}>
+            <Cookie size={13} />
+            Cookies
+          </button>
           <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={openHistory}>
             <History size={13} />
             History
@@ -255,6 +263,10 @@ export function HttpPage() {
                 setSheet(null);
               }}
             />
+          </PageSheet>
+        ) : sheet?.kind === "cookies" ? (
+          <PageSheet icon={Cookie} title="Cookies" label="Cookies kept by domain" onClose={() => setSheet(null)}>
+            <CookieList />
           </PageSheet>
         ) : null
       }
@@ -526,6 +538,49 @@ type Opening = { canOpen: (requestId: string) => boolean; onOpen: (requestId: st
 const pairs = (headers: [string, string][]): Pair[] => headers.map(([key, value]) => ({ key, value }));
 const contentTypeOf = (headers: [string, string][]) => headers.find(([key]) => key.toLowerCase() === "content-type")?.[1] ?? "";
 const statusOf = (outcome: HttpOutcome) => (outcome.kind === "response" ? outcome.status : null);
+
+/** The jar by domain: names and dates, no value leaves the backend. */
+function CookieList() {
+  const { cookies, problem, remove, clear } = useHttpCookies();
+  if (cookies === null) return <p className="http-quiet">{problem ?? "Reading…"}</p>;
+  if (cookies.length === 0) return <p className="http-quiet">No cookies yet. What a response sets goes back with the next request to its domain.</p>;
+  return (
+    <div className="http-form">
+      {problem && <p className="http-kept">{problem}</p>}
+      <table className="http-pairs http-cookies">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Name</th>
+            <th>Path</th>
+            <th>Expires</th>
+            <th aria-label="Remove" />
+          </tr>
+        </thead>
+        <tbody>
+          {cookies.map((c) => (
+            <tr key={`${c.domain} ${c.path} ${c.name}`}>
+              <td className="http-mono">{c.domain}</td>
+              <td className="http-mono">{c.name}</td>
+              <td className="http-mono">{c.path}</td>
+              <td>{c.expiresAt ? new Date(c.expiresAt).toLocaleString() : "When cleared"}</td>
+              <td>
+                <button type="button" className="http-icon-button" title={`Delete ${c.name}`} aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>
+                  <X size={13} />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div>
+        <button type="button" className="btn" onClick={clear}>
+          Clear all
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function HistoryList({ entries, ...opening }: { entries: HttpHistoryEntry[] | null } & Opening) {
   const [shown, setShown] = useState<string | null>(null);
@@ -949,6 +1004,14 @@ const AUTH_TYPES = [
   { value: "bearer", label: "Bearer token" },
   { value: "basic", label: "Basic auth" },
   { value: "apikey", label: "API key" },
+  { value: "digest", label: "Digest" },
+  { value: "oauth2", label: "OAuth 2.0" },
+];
+
+/** The grants Kibo gets a token by; anything else is shown as written, and takes a pasted token. */
+const GRANTS = [
+  { value: "client_credentials", label: "Client credentials" },
+  { value: "password_credentials", label: "Password" },
 ];
 
 function authLine(auth: Auth): string {
@@ -959,6 +1022,10 @@ function authLine(auth: Auth): string {
       return `Basic ${auth.username}:•••`;
     case "apikey":
       return `${auth.key}: ${auth.value} (${auth.in})`;
+    case "digest":
+      return `Digest ${authParam(auth, "username")}:•••`;
+    case "oauth2":
+      return `OAuth 2.0 ${authParam(auth, "grant_type")}`.trim();
     case "other":
       return `${auth.name} — kept from Postman`;
     default:
@@ -981,6 +1048,8 @@ function AuthEditor({
     if (type === "bearer") onChange({ type, token: "{{token}}" });
     else if (type === "basic") onChange({ type, username: "", password: "" });
     else if (type === "apikey") onChange({ type, key: "X-Api-Key", value: "{{apiKey}}", in: "header" });
+    else if (type === "digest") onChange({ type, params: [] });
+    else if (type === "oauth2") onChange({ type, params: [{ key: "grant_type", value: "client_credentials", type: "string" }] });
     else onChange({ type: type as "inherit" | "noauth" });
   };
   return (
@@ -996,7 +1065,7 @@ function AuthEditor({
       {auth.type === "inherit" && inherited && (
         <p className="http-quiet">
           From <strong>{inherited.from}</strong>: <span className="http-mono">{authLine(inherited.auth)}</span>
-          {inherited.auth.type === "other" && " — not sent yet, comes with HC-6"}
+          {inherited.auth.type === "other" && " — not sent yet"}
         </p>
       )}
       {auth.type === "bearer" && <Field label="Token" values={values} value={auth.token} onChange={(token) => onChange({ ...auth, token })} />}
@@ -1012,7 +1081,65 @@ function AuthEditor({
           <Field label="Value" values={values} value={auth.value} onChange={(value) => onChange({ ...auth, value })} />
         </>
       )}
+      {auth.type === "digest" && (
+        <>
+          <Field label="Username" values={values} value={authParam(auth, "username")} onChange={(v) => onChange(withAuthParam(auth, "username", v))} />
+          <Field label="Password" values={values} value={authParam(auth, "password")} onChange={(v) => onChange(withAuthParam(auth, "password", v))} />
+        </>
+      )}
+      {auth.type === "oauth2" && <OAuth2Editor auth={auth} values={values} onChange={onChange} />}
     </div>
+  );
+}
+
+function OAuth2Editor({ auth, values, onChange }: { auth: Extract<Auth, { params: unknown }>; values: ReadonlyMap<string, string>; onChange: (a: Auth) => void }) {
+  const param = (label: string, key: string) => <Field label={label} values={values} value={authParam(auth, key)} onChange={(v) => onChange(withAuthParam(auth, key, v))} />;
+  const pick = (label: string, key: string, options: { value: string; label: string }[], fallback: string) => {
+    const value = authParam(auth, key) || fallback;
+    return (
+      <div className="http-field-row">
+        <span className="http-label">{label}</span>
+        <Dropdown below label={options.find((o) => o.value === value)?.label ?? value} options={options} value={value} onPick={(v) => onChange(withAuthParam(auth, key, v))} />
+      </div>
+    );
+  };
+  const grant = authParam(auth, "grant_type");
+  const known = GRANTS.some((g) => g.value === grant);
+  return (
+    <>
+      {pick("Grant", "grant_type", GRANTS, grant)}
+      {!known && <p className="http-quiet">Kibo cannot get a token by this grant: it needs a browser. Put one below, as a secret variable to keep it out of the collection's file, or pick a grant above.</p>}
+      {param("Access token", "accessToken")}
+      {known && (
+        <>
+          {param("Token URL", "accessTokenUrl")}
+          {param("Client ID", "clientId")}
+          {param("Client secret", "clientSecret")}
+          {param("Scope", "scope")}
+          {grant === "password_credentials" && param("Username", "username")}
+          {grant === "password_credentials" && param("Password", "password")}
+          {pick(
+            "Client goes in",
+            "client_authentication",
+            [
+              { value: "header", label: "Basic auth header" },
+              { value: "body", label: "Request body" },
+            ],
+            "header",
+          )}
+        </>
+      )}
+      {pick(
+        "Token goes in",
+        "addTokenTo",
+        [
+          { value: "header", label: "Header" },
+          { value: "queryParams", label: "Query" },
+        ],
+        "header",
+      )}
+      {known && <p className="http-quiet">The token is got as the request goes, kept sealed, and renewed when it runs out or a 401 says so.</p>}
+    </>
   );
 }
 
@@ -1029,13 +1156,14 @@ const BODY_MODES = [
   { value: "none", label: "none" },
   { value: "raw", label: "raw" },
   { value: "urlencoded", label: "x-www-form-urlencoded" },
+  { value: "formdata", label: "form-data" },
 ];
 
 function BodyEditor({ body, values, marks, onChange }: { body: Body; values: ReadonlyMap<string, string>; marks: Extension; onChange: (b: Body) => void }) {
   if (body.mode === "other")
     return (
       <p className="http-kept">
-        A <strong>{body.name}</strong> body — kept from Postman as it came, not editable or sent yet (HC-6).
+        A <strong>{body.name}</strong> body — kept from Postman as it came, not editable or sent yet.
       </p>
     );
   return (
@@ -1049,7 +1177,7 @@ function BodyEditor({ body, values, marks, onChange }: { body: Body; values: Rea
             aria-checked={body.mode === m.value}
             className={`http-segment${body.mode === m.value ? " on" : ""}`}
             onClick={() =>
-              onChange(m.value === "raw" ? { mode: "raw", language: "json", raw: "" } : m.value === "urlencoded" ? { mode: "urlencoded", fields: [] } : { mode: "none" })
+              onChange(m.value === "raw" ? { mode: "raw", language: "json", raw: "" } : m.value === "urlencoded" || m.value === "formdata" ? { mode: m.value, fields: [] } : { mode: "none" })
             }
           >
             {m.label}
@@ -1087,6 +1215,8 @@ function BodyEditor({ body, values, marks, onChange }: { body: Body; values: Rea
         </div>
       )}
       {body.mode === "urlencoded" && <PairsTable rows={body.fields} keyLabel="Field" values={values} onChange={(fields) => onChange({ ...body, fields })} />}
+      {body.mode === "formdata" && <PairsTable rows={body.fields} keyLabel="Field" values={values} onChange={(fields) => onChange({ ...body, fields })} />}
+      {body.mode === "formdata" && body.fields.some((f) => f.file !== undefined) && <p className="http-quiet">A file field goes empty; one with a file picked in Postman is not sent yet.</p>}
     </div>
   );
 }

@@ -12,7 +12,7 @@ const FILE = {
     { id: "r1", name: "Create order", event: [{ listen: "prerequest", script: { exec: ["pm.environment.set('t', 1);"] } }], request: { method: "POST", url: "{{baseUrl}}/orders" } },
     { id: "r2", name: "Health", request: "{{baseUrl}}/health" },
     { id: "r4", name: "Me", request: { method: "GET", url: "{{baseUrl}}/me", auth: { type: "bearer", bearer: [{ key: "token", value: "{{apiToken}}" }] } } },
-    { id: "r3", name: "Upload", request: { method: "POST", url: "{{baseUrl}}/files", body: { mode: "formdata", formdata: [] } } },
+    { id: "r3", name: "Upload", request: { method: "POST", url: "{{baseUrl}}/files", body: { mode: "graphql", graphql: {} } } },
   ],
 };
 
@@ -40,6 +40,7 @@ const ENTRY: HttpHistoryEntry = {
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let holdSends = false;
 let trust: { hash: string | null; count: number; trusted: boolean } = { hash: null, count: 0, trusted: false };
+let jar: { domain: string; path: string; name: string; expiresAt?: number | null }[] = [];
 let answer: HttpResponseView;
 const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseView => ({
   at: 1,
@@ -57,9 +58,18 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
     if (command === "http_script_trust") return Promise.resolve(trust);
+    if (command === "http_cookies") return Promise.resolve(jar);
+    if (command === "http_cookie_delete") {
+      jar = jar.filter((c) => c.name !== args!.name);
+      return Promise.resolve(null);
+    }
+    if (command === "http_cookies_clear") {
+      jar = [];
+      return Promise.resolve(null);
+    }
     if (command === "http_collection_new") return Promise.resolve({ id: "c2", file: { info: { name: args!.name }, item: [] }, error: null });
     if (command === "http_send") {
-      if (args!.requestId === "r3") return Promise.reject("a formdata body is kept from Postman and not sent yet");
+      if (args!.requestId === "r3") return Promise.reject("a graphql body is kept from Postman and not sent yet");
       return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(answer);
     }
     if (command === "http_environment_save") {
@@ -98,10 +108,62 @@ beforeEach(() => {
   calls = [];
   holdSends = false;
   trust = { hash: null, count: 0, trusted: false };
+  jar = [];
   answer = reported({});
 });
 
 describe("the HTTP page", () => {
+  test("the jar lists what each domain set, and a cookie or all of them go", async () => {
+    jar = [
+      { domain: "a.test", path: "/", name: "sid", expiresAt: null },
+      { domain: "b.test", path: "/app", name: "theme", expiresAt: 1_900_000_000_000 },
+    ];
+    await shown();
+    fireEvent.click(screen.getByRole("button", { name: "Cookies" }));
+    expect((await screen.findByText("a.test")) !== null).toBe(true);
+    expect(screen.getByText("When cleared") !== null).toBe(true);
+    expect(screen.getByText("/app") !== null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete sid" }));
+    await waitFor(() => expect(called("http_cookie_delete")).toEqual([{ domain: "a.test", path: "/", name: "sid" }]));
+    await waitFor(() => expect(screen.queryByText("a.test") === null).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    expect((await screen.findByText(/No cookies yet/)) !== null).toBe(true);
+    expect(called("http_cookies_clear").length).toBe(1);
+  });
+
+  test("oauth2 is set up on the Auth tab and goes with the send", async () => {
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: "Auth" }));
+    fireEvent.click(screen.getByRole("button", { name: /Inherit/i }));
+    fireEvent.click(await screen.findByRole("option", { name: /OAuth 2.0/ }));
+    expect(screen.getByText("Client credentials") !== null).toBe(true);
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "{{baseUrl}}/token" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "app" } });
+    expect(screen.queryByLabelText("Username") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Client credentials" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Password" }));
+    expect(screen.getByLabelText("Username") !== null).toBe(true);
+
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(called("http_send").length).toBe(1));
+    const sent = called("http_send")[0]!.request as { auth: { type: string; oauth2: { key: string; value: string }[] } };
+    expect(sent.auth.type).toBe("oauth2");
+    expect(Object.fromEntries(sent.auth.oauth2.map((r) => [r.key, r.value]))).toEqual({ grant_type: "password_credentials", accessTokenUrl: "{{baseUrl}}/token", clientId: "app" });
+  });
+
+  test("a form is typed on the Body tab and goes with the send", async () => {
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: "Body" }));
+    fireEvent.click(screen.getByRole("radio", { name: "form-data" }));
+    fireEvent.change(screen.getByLabelText("Field"), { target: { value: "name" } });
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(called("http_send").length).toBe(1));
+    expect(called("http_send")[0]!.request).toMatchObject({ body: { mode: "formdata", formdata: [{ key: "name", value: "", type: "text" }] } });
+  });
+
   test("renaming selects the name once, and renames the collection on the backend", async () => {
     await shown();
     fireEvent.click(screen.getByLabelText("Actions for Orders API"));
@@ -321,6 +383,6 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Body/ }));
     expect(screen.getByText(/kept from Postman as it came/)).toBeDefined();
     await act(async () => fireEvent.click(sendButton()));
-    expect(await screen.findByText("a formdata body is kept from Postman and not sent yet")).toBeDefined();
+    expect(await screen.findByText("a graphql body is kept from Postman and not sent yet")).toBeDefined();
   });
 });

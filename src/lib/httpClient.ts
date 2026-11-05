@@ -18,14 +18,20 @@ export type Auth =
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
   | { type: "apikey"; key: string; value: string; in: "header" | "query" }
-  /** A type the page does not edit (`oauth2`, `digest`…), kept as it came. */
+  /** Postman's own rows: the ones the page does not show — `tokenName`, say — stay in them. */
+  | { type: "digest" | "oauth2"; params: Record<string, unknown>[] }
+  /** A type the page does not edit (`hawk`, `ntlm`…), kept as it came. */
   | { type: "other"; name: string };
+
+/** A `formdata` row. `file` marks a file field, holding its path; `""` is one never picked. */
+export type FormField = Pair & { file?: string };
 
 export type Body =
   | { mode: "none" }
   | { mode: "raw"; language: "json" | "text" | "xml"; raw: string }
   | { mode: "urlencoded"; fields: Pair[] }
-  /** `formdata`, `file`, `graphql` until HC-6: shown, kept, not sent. */
+  | { mode: "formdata"; fields: FormField[] }
+  /** `file`, `graphql`: shown, kept, not sent. */
   | { mode: "other"; name: string };
 
 export type Scripts = { prerequest?: string; test?: string };
@@ -134,6 +140,8 @@ export type Resolved = {
   url: string;
   headers: Pair[];
   body: string | null;
+  /** A `formdata` body's fields: `body` shows them, a cURL names them one by one. */
+  form: FormField[] | null;
   /** Variables nowhere in scope — the request is not sent while there are any. */
   missing: string[];
   /** The same, by where each is written. */
@@ -141,6 +149,24 @@ export type Resolved = {
   /** What is not sent as written: an auth or a body kept from Postman. */
   notes: string[];
 };
+
+/** A `digest` or `oauth2` setting by Postman's name for it; empty when it has none. */
+export function authParam(auth: { params: Record<string, unknown>[] }, key: string): string {
+  return text(auth.params.find((p) => key === p.key)?.value);
+}
+
+/** The auth with one setting changed, the rows it does not name as they were. */
+export function withAuthParam<A extends { params: Record<string, unknown>[] }>(auth: A, key: string, value: string): A {
+  const has = auth.params.some((p) => key === p.key);
+  return { ...auth, params: has ? auth.params.map((p) => (key === p.key ? { ...p, value } : p)) : [...auth.params, { key, value, type: "string" }] };
+}
+
+/** Whether Kibo gets the token itself as the request goes; anything else needs a browser. */
+export function fetchesToken(auth: { params: Record<string, unknown>[] }): boolean {
+  return fetchingGrant(auth) && authParam(auth, "accessTokenUrl") !== "";
+}
+
+const fetchingGrant = (auth: { params: Record<string, unknown>[] }) => ["client_credentials", "password_credentials"].includes(authParam(auth, "grant_type"));
 
 const hasHeader = (headers: Pair[], name: string) => headers.some(({ key }) => key.toLowerCase() === name.toLowerCase());
 
@@ -173,10 +199,31 @@ export function resolveRequest(collection: Collection, request: HttpRequest, env
     if (auth.in === "header") headers.push({ key: fill(auth.key), value: fill(auth.value) });
     else url += `${url.includes("?") ? "&" : "?"}${fill(auth.key)}=${fill(auth.value)}`;
   }
+  if (auth.type === "digest") {
+    fill(authParam(auth, "username"));
+    fill(authParam(auth, "password"));
+    if (!hasHeader(headers, "Authorization")) notes.push("digest auth answers the server's challenge, after a first request without it");
+  }
+  if (auth.type === "oauth2") {
+    const token = authParam(auth, "accessToken");
+    if (fetchesToken(auth)) {
+      for (const key of ["accessTokenUrl", "refreshTokenUrl", "clientId", "clientSecret", "scope", "username", "password"]) fill(authParam(auth, key));
+      notes.push("the OAuth 2.0 token is got or renewed as the request goes, and kept sealed");
+    } else if (token !== "") {
+      const filled = fill(token);
+      if (authParam(auth, "addTokenTo") === "queryParams") url += `${url.includes("?") ? "&" : "?"}access_token=${filled}`;
+      else if (!hasHeader(headers, "Authorization")) {
+        const prefix = auth.params.some((p) => "headerPrefix" === p.key) ? authParam(auth, "headerPrefix") : "Bearer";
+        headers.push({ key: "Authorization", value: prefix === "" ? filled : `${prefix} ${filled}` });
+      }
+    } else if (fetchingGrant(auth)) notes.push(`${authParam(auth, "grant_type")} needs a Token URL, or a token in Access token`);
+    else if (authParam(auth, "grant_type") !== "") notes.push(`Kibo cannot get a token by ${authParam(auth, "grant_type")}: put one into Access token`);
+  }
   if (auth.type === "other") notes.push(`${auth.name} auth is kept from Postman and not sent yet`);
 
   at = "body";
   let body: string | null = null;
+  let form: FormField[] | null = null;
   if (request.body.mode === "raw") {
     // Comments go first, as Postman sends a JSON body: a variable in a part commented out is not missing.
     body = fill(request.body.language === "json" ? stripJsonComments(request.body.raw) : request.body.raw);
@@ -190,11 +237,17 @@ export function resolveRequest(collection: Collection, request: HttpRequest, env
       .join("&");
     if (!hasHeader(headers, "Content-Type")) headers.push({ key: "Content-Type", value: "application/x-www-form-urlencoded" });
   }
+  if (request.body.mode === "formdata") {
+    form = request.body.fields.filter(({ key, disabled }) => !disabled && key !== "").map((f) => (f.file === undefined ? { key: fill(f.key), value: fill(f.value) } : { key: fill(f.key), value: "", file: f.file }));
+    body = form.map((f) => `${f.key}: ${f.file === undefined ? f.value : `<file ${f.file}>`}`).join("\n");
+    if (form.some((f) => f.file)) notes.push("a file in a form is kept from Postman and not sent yet");
+    if (!hasHeader(headers, "Content-Type")) headers.push({ key: "Content-Type", value: "multipart/form-data" });
+  }
   if (request.body.mode === "other") notes.push(`a ${request.body.name} body is kept from Postman and not sent yet`);
 
   const by = (p: Place) => [...missingIn[p]];
   const all = new Set([...missingIn.url, ...missingIn.headers, ...missingIn.auth, ...missingIn.body]);
-  return { method: request.method, url, headers, body, missing: [...all], missingIn: { url: by("url"), headers: by("headers"), auth: by("auth"), body: by("body") }, notes };
+  return { method: request.method, url, headers, body, form, missing: [...all], missingIn: { url: by("url"), headers: by("headers"), auth: by("auth"), body: by("body") }, notes };
 }
 
 /** One shell word, in single quotes. */
@@ -202,16 +255,20 @@ const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /** The request as a cURL command — a secret by its `{{name}}`, so the copy carries no token. */
 export function toCurl(r: Resolved): string {
-  const body = r.body !== null && r.body !== "";
+  const body = r.form === null && r.body !== null && r.body !== "";
   // curl's own method is GET, or POST with a body; HEAD is `-I`, as `-X HEAD` waits for a body that never comes.
-  const method = r.method === "HEAD" ? " -I" : r.method === (body ? "POST" : "GET") ? "" : ` -X ${r.method}`;
+  const method = r.method === "HEAD" ? " -I" : r.method === (body || r.form?.length ? "POST" : "GET") ? "" : ` -X ${r.method}`;
   const lines = [`curl${method} ${quote(r.url)}`];
   for (const h of r.headers) {
+    // curl writes this one itself, with its boundary.
+    if (r.form && /^content-type$/i.test(h.key)) continue;
     // Basic with a secret by its name is not encoded (base64 has no colon): curl encodes it once filled in.
     const basic = /^authorization$/i.test(h.key) ? /^Basic (.*:.*)$/.exec(h.value) : null;
     lines.push(basic ? `-u ${quote(basic[1])}` : `-H ${quote(`${h.key}: ${h.value}`)}`);
   }
   if (body) lines.push(`--data-raw ${quote(r.body!)}`);
+  // `--form-string`: with `-F`, a value starting with `@` reads a file.
+  for (const f of r.form ?? []) lines.push(f.file ? `-F ${quote(`${f.key}=@${f.file}`)}` : `--form-string ${quote(`${f.key}=${f.value}`)}`);
   return lines.join(" \\\n  ");
 }
 
@@ -375,6 +432,9 @@ function authFrom(v: unknown): Auth {
       return { type, username: field("username"), password: field("password") };
     case "apikey":
       return { type, key: field("key"), value: field("value"), in: field("in") === "query" ? "query" : "header" };
+    case "digest":
+    case "oauth2":
+      return { type, params: list(auth[type]).map(obj) };
     default:
       return { type: "other", name: type };
   }
@@ -387,6 +447,11 @@ function bodyFrom(v: unknown): Body {
     return { mode: "raw", language: language === "json" || language === "xml" ? language : "text", raw: text(body.raw) };
   }
   if (body.mode === "urlencoded") return { mode: "urlencoded", fields: pairsFrom(body.urlencoded) };
+  if (body.mode === "formdata") {
+    const path = (src: unknown) => (Array.isArray(src) ? src.map(text).join(", ") : text(src));
+    const rows = list(body.formdata).map(obj);
+    return { mode: "formdata", fields: pairsFrom(rows).map((pair, at) => (rows[at].type === "file" ? { ...pair, file: path(rows[at].src) } : pair)) };
+  }
   return typeof body.mode === "string" ? { mode: "other", name: body.mode } : { mode: "none" };
 }
 
@@ -474,6 +539,13 @@ function pairsOver(rows: Pair[], old: unknown): Json[] {
   });
 }
 
+/** A file row stays one when renamed: matched by key, it would come back as empty text. */
+const fileRow = (fields: FormField[]) => (row: Json, at: number): Json => {
+  const file = fields[at].file;
+  if (file === undefined) return { ...row, type: row.type ?? "text" };
+  return { ...row, type: "file", ...(row.src === undefined && file !== "" ? { src: file } : {}) };
+};
+
 function authToPostman(auth: Auth): Json | undefined {
   const strings = (rows: [string, string][]) => rows.map(([key, value]) => ({ key, value, type: "string" }));
   switch (auth.type) {
@@ -487,6 +559,9 @@ function authToPostman(auth: Auth): Json | undefined {
       return { type: "basic", basic: strings([["username", auth.username], ["password", auth.password]]) };
     case "apikey":
       return { type: "apikey", apikey: strings([["key", auth.key], ["value", auth.value], ["in", auth.in]]) };
+    case "digest":
+    case "oauth2":
+      return { type: auth.type, [auth.type]: auth.params };
     case "other":
       return { type: auth.name };
   }
@@ -508,6 +583,8 @@ function bodyToPostman(body: Body, old: unknown): unknown {
     }
     case "urlencoded":
       return { ...(was.mode === "urlencoded" ? was : {}), mode: "urlencoded", urlencoded: pairsOver(body.fields, was.urlencoded) };
+    case "formdata":
+      return { ...(was.mode === "formdata" ? was : {}), mode: "formdata", formdata: pairsOver(body.fields, was.formdata).map(fileRow(body.fields)) };
   }
 }
 

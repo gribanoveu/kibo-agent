@@ -24,6 +24,11 @@ import {
   withParams,
   paramsOf,
   withQuery,
+  authParam,
+  fetchesToken,
+  withAuthParam,
+  type Auth,
+  type Body,
   type Collection,
   type Environment,
   type HttpRequest,
@@ -101,10 +106,73 @@ describe("http client rules", () => {
         { key: "Content-Type", value: "application/json" },
       ],
       body: '{"t":"•••"}',
+      form: null,
       missing: [],
       missingIn: { url: [], headers: [], auth: [], body: [] },
       notes: [],
     });
+  });
+
+  const base = { id: "r", name: "R", method: "POST", url: "http://a.test/x", headers: [], auth: { type: "inherit" } as Auth, body: { mode: "none" } as Body, scripts: {} };
+  const bare: Collection = { id: "c", name: "C", auth: { type: "noauth" }, variables: [], items: [], scripts: {} };
+  const row = (key: string, value: string) => ({ key, value, type: "string" });
+  const oauth = (...params: Record<string, unknown>[]): Auth => ({ type: "oauth2", params });
+  const seen = (auth: Auth, env: Environment | null = null) => resolveRequest(bare, { ...base, auth }, env);
+
+  test("a saved token shows as it goes: prefix, none, or in the address; nothing without one", () => {
+    expect(seen(oauth(row("accessToken", "t"))).headers).toEqual([{ key: "Authorization", value: "Bearer t" }]);
+    expect(seen(oauth(row("accessToken", "t"), row("headerPrefix", "Token"))).headers).toEqual([{ key: "Authorization", value: "Token t" }]);
+    expect(seen(oauth(row("accessToken", "t"), row("headerPrefix", ""))).headers).toEqual([{ key: "Authorization", value: "t" }]);
+    const query = seen(oauth(row("accessToken", "t"), row("addTokenTo", "queryParams")));
+    expect([query.url, query.headers]).toEqual(["http://a.test/x?access_token=t", []]);
+    expect(seen(oauth()).headers).toEqual([]);
+    expect(seen(oauth(row("accessToken", "{{nowhere}}"))).missingIn.auth).toEqual(["nowhere"]);
+  });
+
+  test("a grant Kibo can fetch by says so, and its settings count as variables", () => {
+    const auth = oauth(row("grant_type", "client_credentials"), row("accessTokenUrl", "{{base}}/t"), row("clientSecret", "{{secret}}"), row("accessToken", "{{old}}"));
+    const r = seen(auth);
+    expect(r.headers).toEqual([]);
+    expect(r.missingIn.auth).toEqual(["base", "secret"]);
+    expect(r.notes).toEqual(["the OAuth 2.0 token is got or renewed as the request goes, and kept sealed"]);
+    expect(seen(oauth(row("grant_type", "authorization_code"))).notes).toEqual(["Kibo cannot get a token by authorization_code: put one into Access token"]);
+    expect(seen(oauth(row("grant_type", "client_credentials"))).notes).toEqual(["client_credentials needs a Token URL, or a token in Access token"]);
+    expect(fetchesToken({ params: [row("grant_type", "client_credentials")] })).toBe(false);
+    expect(fetchesToken({ params: [row("grant_type", "password_credentials"), row("accessTokenUrl", "u")] })).toBe(true);
+    expect(fetchesToken({ params: [row("grant_type", "authorization_code"), row("accessTokenUrl", "u")] })).toBe(false);
+  });
+
+  test("digest is said, and its variables count", () => {
+    const r = seen({ type: "digest", params: [row("username", "{{u}}"), row("password", "p")] });
+    expect(r.missingIn.auth).toEqual(["u"]);
+    expect(r.notes).toEqual(["digest auth answers the server's challenge, after a first request without it"]);
+    const written = resolveRequest(bare, { ...base, headers: [{ key: "authorization", value: "x" }], auth: { type: "digest", params: [] } }, null);
+    expect(written.notes).toEqual([]);
+  });
+
+  test("a form shows its fields, a file as one, and a cURL names them", () => {
+    const body: Body = {
+      mode: "formdata",
+      fields: [
+        { key: "a", value: "{{v}}" },
+        { key: "off", value: "1", disabled: true },
+        { key: "", value: "x" },
+        { key: "f", value: "", file: "" },
+      ],
+    };
+    const env = { id: "e", name: "E", variables: [{ key: "v", value: "@one", secret: false, enabled: true }] };
+    const r = resolveRequest(bare, { ...base, body }, env);
+    expect(r.body).toBe("a: @one\nf: <file >");
+    expect(r.headers).toEqual([{ key: "Content-Type", value: "multipart/form-data" }]);
+    expect(r.notes).toEqual([]);
+    expect(toCurl(r)).toBe("curl 'http://a.test/x' \\\n  --form-string 'a=@one' \\\n  --form-string 'f='");
+    expect(toCurl(resolveRequest(bare, { ...base, method: "POST", body: { mode: "formdata", fields: [] } }, null))).toBe("curl -X POST 'http://a.test/x'");
+
+    const kept = resolveRequest(bare, { ...base, method: "PUT", body: { mode: "formdata", fields: [{ key: "f", value: "", file: "/tmp/a.bin" }] } }, null);
+    expect(kept.notes).toEqual(["a file in a form is kept from Postman and not sent yet"]);
+    expect(toCurl(kept)).toBe("curl -X PUT 'http://a.test/x' \\\n  -F 'f=@/tmp/a.bin'");
+    const typed = resolveRequest(bare, { ...base, headers: [{ key: "content-type", value: "multipart/form-data" }], body: { mode: "formdata", fields: [] } }, null);
+    expect(typed.headers.length).toBe(1);
   });
 
   test("a missing variable is said where it is written: the address, a header, the auth or the body", () => {
@@ -321,13 +389,51 @@ describe("a Postman file read and written back", () => {
   const read = () => collectionFrom({ id: "c", file: structuredClone(FILE), error: null });
   const request = (id: string) => findRequest([read()], id)!.request;
 
+  test("oauth2 and digest settings change one by one, Postman's other rows staying", () => {
+    const source = { auth: { type: "oauth2", oauth2: [{ key: "tokenName", value: "mine", type: "string" }, { key: "refreshRequestParams", value: [], type: "any" }, { key: "clientId", value: "a", type: "string" }] } };
+    const read = requestFrom("o", "O", source);
+    const auth = read.auth as Extract<Auth, { params: unknown }>;
+    expect(authParam(auth, "clientId")).toBe("a");
+    expect(authParam(auth, "nothing")).toBe("");
+    const changed = withAuthParam(withAuthParam(auth, "clientId", "b"), "scope", "read");
+    const out = requestToPostman({ ...read, auth: changed }) as { auth: { oauth2: unknown[] } };
+    expect(out.auth).toEqual({
+      type: "oauth2",
+      oauth2: [{ key: "tokenName", value: "mine", type: "string" }, { key: "refreshRequestParams", value: [], type: "any" }, { key: "clientId", value: "b", type: "string" }, { key: "scope", value: "read", type: "string" }],
+    });
+    expect(requestToPostman({ ...read, auth: { type: "digest", params: [{ key: "username", value: "u" }] } })).toMatchObject({ auth: { type: "digest", digest: [{ key: "username", value: "u" }] } });
+  });
+
+  test("a form is read with its file fields and written back with their paths", () => {
+    const source = {
+      method: "POST",
+      url: "http://a.test/",
+      body: { mode: "formdata", formdata: [{ key: "t", type: "text", value: "1", description: "kept" }, { key: "f", type: "file", src: "/a.bin" }, { key: "m", type: "file", src: ["/b", "/c"] }, { key: "e", type: "file", value: "" }] },
+    };
+    const read = requestFrom("f", "F", source);
+    expect(read.body).toEqual({
+      mode: "formdata",
+      fields: [
+        { key: "t", value: "1" },
+        { key: "f", value: "", file: "/a.bin" },
+        { key: "m", value: "", file: "/b, /c" },
+        { key: "e", value: "", file: "" },
+      ],
+    });
+    const fields = [{ key: "t", value: "2" }, { key: "f", value: "", file: "/a.bin" }, { key: "new", value: "3" }];
+    const out = requestToPostman({ ...read, body: { mode: "formdata", fields } }) as { body: { formdata: unknown[] } };
+    expect(out.body.formdata).toEqual([{ key: "t", type: "text", value: "2", description: "kept" }, { key: "f", type: "file", src: "/a.bin", value: "" }, { key: "new", value: "3", type: "text" }]);
+    const renamed = requestToPostman({ ...read, body: { mode: "formdata", fields: [{ key: "g", value: "", file: "/a.bin" }, { key: "h", value: "", file: "" }] } }) as { body: { formdata: unknown[] } };
+    expect(renamed.body.formdata).toEqual([{ key: "g", value: "", type: "file", src: "/a.bin" }, { key: "h", value: "", type: "file" }]);
+  });
+
   test("what the page edits is read out of the file, the rest named and kept", () => {
     const c = read();
     expect(c.name).toBe("Shop");
     expect(c.auth).toEqual({ type: "bearer", token: "{{token}}" });
     expect(c.scripts).toEqual({ prerequest: "a();\nb();" });
     expect(c.variables).toEqual([{ key: "page", value: "1" }]);
-    expect(c.items[0]).toMatchObject({ kind: "folder", name: "Orders", auth: { type: "other", name: "oauth2" } });
+    expect(c.items[0]).toMatchObject({ kind: "folder", name: "Orders", auth: { type: "oauth2", params: [] } });
     const r = request("r");
     expect(r).toMatchObject({
       method: "POST",
@@ -342,7 +448,8 @@ describe("a Postman file read and written back", () => {
       scripts: { test: "pm.test();" },
     });
     expect(request("s")).toMatchObject({ method: "GET", url: "{{baseUrl}}/ping", body: { mode: "none" } });
-    expect(request("g")).toMatchObject({ method: "POST", auth: { type: "other", name: "digest" }, body: { mode: "other", name: "graphql" } });
+    expect(request("g")).toMatchObject({ method: "POST", auth: { type: "digest", params: [] }, body: { mode: "other", name: "graphql" } });
+    expect(requestFrom("h", "H", { auth: { type: "hawk", hawk: [] } }).auth).toEqual({ type: "other", name: "hawk" });
     const apikey = (where: string) => ({ type: "apikey", apikey: [{ key: "key", value: "k" }, { key: "value", value: "v" }, { key: "in", value: where }] });
     expect(requestFrom("a", "A", { auth: apikey("query") }).auth).toEqual({ type: "apikey", key: "k", value: "v", in: "query" });
     expect(requestFrom("a", "A", { auth: apikey("header") }).auth).toMatchObject({ in: "header" });

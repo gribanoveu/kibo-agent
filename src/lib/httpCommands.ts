@@ -180,6 +180,30 @@ export async function listHttpHistory(): Promise<HttpHistoryEntry[]> {
   return invoke<HttpHistoryEntry[]>("http_history_list");
 }
 
+/** A cookie in the jar. Its value stays in the backend. */
+export interface HttpCookie {
+  domain: string;
+  path: string;
+  name: string;
+  /** Unix milliseconds; absent for one that lasts until it is cleared. */
+  expiresAt?: number | null;
+}
+
+export async function listHttpCookies(): Promise<HttpCookie[]> {
+  requireBackend();
+  return invoke<HttpCookie[]>("http_cookies");
+}
+
+export async function deleteHttpCookie(cookie: Pick<HttpCookie, "domain" | "path" | "name">): Promise<void> {
+  requireBackend();
+  await invoke("http_cookie_delete", { domain: cookie.domain, path: cookie.path, name: cookie.name });
+}
+
+export async function clearHttpCookies(): Promise<void> {
+  requireBackend();
+  await invoke("http_cookies_clear");
+}
+
 /** Whether the collection's scripts run, asked before a send. */
 export async function httpScriptTrust(collection: string): Promise<HttpScriptTrust> {
   requireBackend();
