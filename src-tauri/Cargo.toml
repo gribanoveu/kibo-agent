@@ -40,6 +40,9 @@ rand = "0.8"
 dirs = "7.0.0"
 keyring = "3"
 ureq = { version = "3", features = ["json"] }
+cookie_store = { version = "0.22", default-features = false, features = ["serde_json"] }
+md-5 = "0.11"
+sha2 = "0.11"
 secrecy = "0.10"
 uuid = { version = "1", features = ["v4"] }
 http = "1"

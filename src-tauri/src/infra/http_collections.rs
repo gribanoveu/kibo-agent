@@ -260,7 +260,7 @@ mod tests {
     }
 
     fn entry(body: &str) -> HistoryEntry {
-        let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()) };
+        let out = |auth: &str| Outgoing { method: "POST".into(), url: "https://api/x".into(), headers: vec![("Authorization".into(), auth.into())], body: Some(body.into()), digest: None };
         let prepared = Prepared { sent: out("Bearer t0k-secret"), shown: out("Bearer •••") };
         HistoryEntry::new(1, None, None, "{{baseUrl}}/x".into(), &prepared, Outcome::Failed { error: "timed out".into() }, b"")
     }

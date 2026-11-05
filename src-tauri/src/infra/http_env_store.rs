@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::domain::http_auth::Token;
 use crate::domain::http_client::{Environment, HttpError, Variable};
 use crate::domain::http_scripts::{apply, Change};
 use crate::infra::app_dir;
@@ -40,6 +41,12 @@ struct Stored {
     /// values. A token does not belong in a collection's open file, or its export.
     #[serde(default)]
     collections: BTreeMap<String, Vec<Variable>>,
+    /// `oauth2` tokens Kibo got, by collection and `OAuth2::key`.
+    #[serde(default)]
+    tokens: BTreeMap<String, BTreeMap<String, Token>>,
+    /// The cookie jar, as `http_cookies` writes it.
+    #[serde(default)]
+    cookies: String,
 }
 
 impl Drop for Stored {
@@ -47,7 +54,14 @@ impl Drop for Stored {
         self.environments.iter_mut().for_each(wipe);
         wipe_all(&mut self.globals);
         self.collections.values_mut().for_each(|v| wipe_all(v));
+        self.tokens.values_mut().flat_map(BTreeMap::values_mut).for_each(wipe_token);
+        self.cookies.zeroize();
     }
+}
+
+fn wipe_token(token: &mut Token) {
+    token.access.zeroize();
+    token.refresh.zeroize();
 }
 
 /// Before an environment or globals leave the list: `Stored` wipes only what is still in it.
@@ -165,15 +179,46 @@ pub fn write_changes(environment: Option<(&str, &[Change])>, globals: &[Change],
     save(&stored)
 }
 
-/// A collection deleted leaves no values behind.
+/// The token kept for a collection's `oauth2` under `key`.
+pub fn token(collection: &str, key: &str) -> Result<Option<Token>, HttpError> {
+    Ok(load()?.tokens.get(collection).and_then(|tokens| tokens.get(key)).cloned())
+}
+
+pub fn save_token(collection: &str, key: &str, token: Token) -> Result<(), HttpError> {
+    let _held = writing();
+    let mut stored = load()?;
+    if let Some(mut old) = stored.tokens.entry(collection.to_string()).or_default().insert(key.to_string(), token) {
+        wipe_token(&mut old);
+    }
+    save(&stored)
+}
+
+/// The jar as `http_cookies` wrote it; empty before the first cookie.
+pub fn cookies() -> Result<String, HttpError> {
+    Ok(load()?.cookies.clone())
+}
+
+/// `edit` over the jar as it is now: two sends ending together each add to it.
+pub fn change_cookies(edit: impl FnOnce(&str) -> Result<String, HttpError>) -> Result<(), HttpError> {
+    let _held = writing();
+    let mut stored = load()?;
+    let mut old = std::mem::take(&mut stored.cookies);
+    stored.cookies = edit(&old)?;
+    old.zeroize();
+    save(&stored)
+}
+
+/// A collection deleted leaves no values or tokens behind.
 pub fn forget_collection(id: &str) -> Result<(), HttpError> {
     let _held = writing();
     let mut stored = load()?;
-    if let Some(mut values) = stored.collections.remove(id) {
-        wipe_all(&mut values);
-        return save(&stored);
+    let (values, tokens) = (stored.collections.remove(id), stored.tokens.remove(id));
+    if values.is_none() && tokens.is_none() {
+        return Ok(());
     }
-    Ok(())
+    wipe_all(&mut values.unwrap_or_default());
+    tokens.unwrap_or_default().values_mut().for_each(wipe_token);
+    save(&stored)
 }
 
 #[cfg(test)]
@@ -181,7 +226,7 @@ mod tests {
     #[test]
     fn a_store_written_before_scripts_reads() {
         let stored: super::Stored = serde_json::from_str(r#"{"environments": [], "globals": []}"#).unwrap();
-        assert!(stored.collections.is_empty());
+        assert!(stored.collections.is_empty() && stored.tokens.is_empty() && stored.cookies.is_empty());
     }
 
     use super::*;
