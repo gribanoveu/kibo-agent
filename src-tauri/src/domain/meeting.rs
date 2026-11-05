@@ -67,6 +67,10 @@ const EMBED_WINDOW_SECONDS: f32 = 1.5;
 const EMBED_HOP_SECONDS: f32 = 0.75;
 /// The eigengap is looked for among this many speakers at most.
 const MAX_SPEAKERS: usize = 10;
+/// K-means tries this many starts beside the farthest rows, each moved along
+/// the recording by [`KMEANS_STRIDE`] rows: a prime, so that no two repeat.
+const KMEANS_STARTS: usize = 20;
+const KMEANS_STRIDE: usize = 97;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Word {
@@ -768,27 +772,52 @@ fn merge_same_voices(unit: &[Vec<f64>], mut labels: Vec<usize>) -> Vec<usize> {
     }
 }
 
-/// K-means on the rows, started from the farthest-apart rows: the same input
-/// gives the same labels.
+/// K-means started from the farthest-apart rows and from rows spread over the
+/// recording, the tightest grouping kept. The farthest rows alone are outliers:
+/// a few windows of noise take a center, and two people share one (docs/36).
+/// The same input gives the same labels.
 fn kmeans(rows: &DMatrix<f64>, k: usize) -> Vec<usize> {
     let n = rows.nrows();
-    let dist = |i: usize, c: &[f64]| (0..rows.ncols()).map(|d| (rows[(i, d)] - c[d]).powi(2)).sum::<f64>();
+    let row = |i: usize| (0..rows.ncols()).map(|d| rows[(i, d)]).collect::<Vec<f64>>();
+    let spread = (0..KMEANS_STARTS).map(|t| (0..k).map(|c| row((c * n / k + t * KMEANS_STRIDE) % n)).collect::<Vec<_>>());
+    std::iter::once(farthest_rows(rows, k))
+        .chain(spread)
+        .map(|centers| lloyd(rows, centers))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or_else(|| vec![0; n], |(labels, _)| labels)
+}
+
+/// Row 0, then each time the row farthest from those taken.
+fn farthest_rows(rows: &DMatrix<f64>, k: usize) -> Vec<Vec<f64>> {
     let row = |i: usize| (0..rows.ncols()).map(|d| rows[(i, d)]).collect::<Vec<f64>>();
     let mut centers = vec![row(0)];
     while centers.len() < k {
-        let far = (0..n)
+        let far = (0..rows.nrows())
             .max_by(|&a, &b| {
-                let da = centers.iter().map(|c| dist(a, c)).fold(f64::MAX, f64::min);
-                let db = centers.iter().map(|c| dist(b, c)).fold(f64::MAX, f64::min);
+                let da = centers.iter().map(|c| distance(rows, a, c)).fold(f64::MAX, f64::min);
+                let db = centers.iter().map(|c| distance(rows, b, c)).fold(f64::MAX, f64::min);
                 da.total_cmp(&db)
             })
             .unwrap_or(0);
         centers.push(row(far));
     }
+    centers
+}
+
+/// Row `i`'s squared distance from `center`.
+fn distance(rows: &DMatrix<f64>, i: usize, center: &[f64]) -> f64 {
+    (0..rows.ncols()).map(|d| (rows[(i, d)] - center[d]).powi(2)).sum()
+}
+
+/// Lloyd's iterations from `centers`: each row's label, and how far the rows
+/// are from their centers, all together.
+fn lloyd(rows: &DMatrix<f64>, mut centers: Vec<Vec<f64>>) -> (Vec<usize>, f64) {
+    let n = rows.nrows();
+    let k = centers.len();
     let mut labels = vec![0; n];
     for _ in 0..50 {
         let next: Vec<usize> = (0..n)
-            .map(|i| (0..k).min_by(|&a, &b| dist(i, &centers[a]).total_cmp(&dist(i, &centers[b]))).unwrap_or(0))
+            .map(|i| (0..k).min_by(|&a, &b| distance(rows, i, &centers[a]).total_cmp(&distance(rows, i, &centers[b]))).unwrap_or(0))
             .collect();
         let settled = next == labels;
         labels = next;
@@ -802,7 +831,8 @@ fn kmeans(rows: &DMatrix<f64>, k: usize) -> Vec<usize> {
             break;
         }
     }
-    labels
+    let spread = (0..n).map(|i| distance(rows, i, &centers[labels[i]])).sum();
+    (labels, spread)
 }
 
 /// Labels renumbered by first appearance, so speaker 0 is whoever spoke first.
@@ -887,6 +917,8 @@ const HERE_MARGIN: f32 = 2.0;
 /// recorded call has each side on its own track, at `rate`: a word is the
 /// call's where the call speaks and the microphone is no louder than the call
 /// would make it — without headphones the microphone hears the speakers too.
+/// Where the call is quiet the word is the louder track's: a word is there, so
+/// a quiet "и" in someone's sentence is theirs while the microphone is quieter still.
 /// How much it hears them is the recording's own: the microphone's level over
 /// its quiet, as a share of the call's, the median of everywhere the call speaks.
 pub fn said_here(words: &[Word], mic: &[f32], call: &[f32], rate: u32) -> Vec<bool> {
@@ -906,7 +938,11 @@ pub fn said_here(words: &[Word], mic: &[f32], call: &[f32], rate: u32) -> Vec<bo
         .iter()
         .map(|w| {
             let (m, c) = (mean(&mic, w), mean(&call, w));
-            c <= floor || m > HERE_MARGIN * (echo * c + room)
+            if c <= floor {
+                m >= c
+            } else {
+                m > HERE_MARGIN * (echo * c + room)
+            }
         })
         .collect()
 }
@@ -968,6 +1004,25 @@ mod tests {
         assert_eq!(labels.iter().max(), Some(&2));
         assert!((0..30).all(|i| labels[i] == labels[i % 3]), "{labels:?}");
         assert_eq!(&labels[..3], [0, 1, 2], "numbered by who spoke first");
+    }
+
+    #[test]
+    fn a_stray_window_does_not_cost_two_people_their_own_cluster() {
+        // Three people one after another, a window of noise between the first
+        // two. The farthest rows take the noise, and so does the first spread
+        // start: from those alone two of the people share a center.
+        let (a, b, c, noise) = ([0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.2, -1.2]);
+        let rows: Vec<[f64; 2]> = [vec![a; 10], vec![noise], vec![b; 10], vec![c; 10]].concat();
+        let m = DMatrix::from_fn(rows.len(), 2, |i, d| rows[i][d]);
+        let people = |l: &[usize]| [l[0], l[11], l[21]];
+        let (alone, _) = lloyd(&m, farthest_rows(&m, 3));
+        let [x, y, z] = people(&alone);
+        assert!(x == y || x == z || y == z, "the case this test is for: {alone:?}");
+
+        let labels = kmeans(&m, 3);
+        let [x, y, z] = people(&labels);
+        assert!(x != y && x != z && y != z, "{labels:?}");
+        assert!((0..10).all(|i| labels[i] == x && labels[11 + i] == y && labels[21 + i] == z), "{labels:?}");
     }
 
     #[test]
@@ -1323,6 +1378,17 @@ mod tests {
         // A word past the end of the sound reads as silence, not a panic.
         assert_eq!(said_here(&[word(9.0, 9.5, "после")], &mic, &call, 10), [true]);
         assert_eq!(said_here(&words[..1], &[], &[], 10), [true]);
+    }
+
+    #[test]
+    fn a_quiet_word_of_the_call_stays_the_calls_while_the_microphone_is_quieter() {
+        // They speak, drop to a word far under their loud speech with you silent, and then you speak.
+        let (mic, call) = tracks(&[(0.0, 0.4, 20), (0.001, 0.01, 10), (0.5, 0.0, 10)]);
+        let words = [word(2.2, 2.6, "и"), word(3.2, 3.6, "я")];
+        assert_eq!(said_here(&words, &mic, &call, 10), [false, true]);
+        // The same quiet call under a word of yours as quiet: the louder track has it.
+        let (mic, call) = tracks(&[(0.0, 0.4, 20), (0.02, 0.01, 10)]);
+        assert_eq!(said_here(&words[..1], &mic, &call, 10), [true]);
     }
 
     #[test]
