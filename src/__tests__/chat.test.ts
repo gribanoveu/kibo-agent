@@ -91,8 +91,10 @@ describe("command wrappers", () => {
 
   test("each command is named once, here", async () => {
     invokeResult = true;
+    const picture = { mediaType: "image/png" as const, data: "AA", width: 3, height: 4 };
     await chat.cancelChat("c1");
     await chat.steer("use the helper", undefined, "c1");
+    await chat.steer("", undefined, "c1", [picture]);
     await chat.cancelSteer("note-1", "c1");
     await chat.alwaysAllow("writeFile");
     await chat.setUnattended(true);
@@ -101,13 +103,15 @@ describe("command wrappers", () => {
     expect(calls.map((c) => c.command)).toEqual([
       "chat_cancel",
       "chat_steer",
+      "chat_steer",
       "chat_cancel_steer",
       "approval_always_allow",
       "approval_set_unattended",
       "workspace_open",
     ]);
-    expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, chatId: "c1" });
-    expect(calls[5]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
+    expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, images: [], chatId: "c1" });
+    expect(calls[2]?.args).toEqual({ text: "", shown: null, images: [picture], chatId: "c1" });
+    expect(calls[6]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
   });
 });
 

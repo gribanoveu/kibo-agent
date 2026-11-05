@@ -24,6 +24,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::compaction::{ContextUsage, RequestFrame};
+use crate::domain::image::ImagePart;
 use crate::domain::prompt::TurnContext;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::settings::{RememberScope, WebSearchPlace};
@@ -719,10 +720,18 @@ pub fn chat_cancel(chat_id: String, state: State<'_, Arc<AgentState>>) {
 
 /// Queues something the user typed while the turn was running. The id comes
 /// back so the same note can be withdrawn before a round takes it. `shown`
-/// is what the transcript shows in place of `text` — a `/` command.
+/// is what the transcript shows in place of `text` — a `/` command — and
+/// `images` are the pictures attached to it, sent to the model with the note
+/// and drawn on its bubble.
 #[tauri::command]
-pub fn chat_steer(text: String, shown: Option<String>, chat_id: String, state: State<'_, Arc<AgentState>>) -> String {
-    let note = SteeringNote { shown, ..SteeringNote::user(text) };
+pub fn chat_steer(
+    text: String,
+    shown: Option<String>,
+    images: Option<Vec<ImagePart>>,
+    chat_id: String,
+    state: State<'_, Arc<AgentState>>,
+) -> String {
+    let note = SteeringNote { shown, images: images.unwrap_or_default(), ..SteeringNote::user(text) };
     let id = note.id.clone();
     state.session(&chat_id).steering.push(note);
     id
@@ -1231,11 +1240,33 @@ mod tests {
         assert!(!state.session("c1").paused.load(Ordering::SeqCst), "stop releases a chat whose card was lost");
         assert!(!state.session("c2").cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
 
-        let id = chat_steer("use the helper".into(), None, "c2".into(), app.state());
+        let id = chat_steer("use the helper".into(), None, None, "c2".into(), app.state());
         assert!(state.session("c1").steering.take().is_empty(), "not the other chat's note");
         assert!(!chat_cancel_steer(id.clone(), "c1".into(), app.state()), "the note is not the one chat's");
         assert!(chat_cancel_steer(id, "c2".into(), app.state()));
         assert!(state.session("c2").steering.take().is_empty());
+    }
+
+    /// A picture attached to the note rides on the note itself: the round that
+    /// takes it sends both, and the bubble draws what was attached.
+    #[test]
+    fn a_note_carries_the_pictures_attached_to_it() {
+        let state = state();
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+        let picture = ImagePart {
+            media_type: crate::domain::image::ImageMediaType::Png,
+            data: "AA".into(),
+            width: 3,
+            height: 4,
+        };
+
+        chat_steer(String::new(), None, Some(vec![picture.clone()]), "c1".into(), app.state());
+        let taken = state.session("c1").steering.take();
+
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].images, vec![picture]);
+        assert!(taken[0].text.is_empty(), "a picture alone is the whole note");
     }
 
     /// A stop left over from the chat's last turn is cleared when its fresh

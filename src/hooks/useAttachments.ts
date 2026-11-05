@@ -102,10 +102,26 @@ export function useAttachments(enabled: boolean) {
   };
   const take = () => takeNamed().map((one) => one.image);
 
+  /** Pictures put back into the box — a note taken back before a round read
+      it comes home with what was attached to it. `replace` puts them in place
+      of what the box holds, as a draft does with its text. */
+  const restore = (images: ImagePart[], replace = false) => {
+    if (images.length === 0) return;
+    if (!enabled) {
+      setError("This model is set to text only — turn images on in Settings → Models.");
+      return;
+    }
+    const room = replace ? MAX_IMAGES : MAX_IMAGES - held.current.length;
+    if (room < images.length) setError(`Up to ${MAX_IMAGES} images in one message.`);
+    if (room <= 0) return;
+    const put = images.slice(0, room).map((image) => ({ image, name: "The image" }));
+    hold(replace ? put : [...held.current, ...put]);
+  };
+
   /** The user closed the note; the next picture says again if it fails. */
   const clearError = () => setError(null);
 
-  return { images, error, dragging, paste, remove, take, takeNamed, clearError };
+  return { images, error, dragging, paste, remove, take, takeNamed, restore, clearError };
 }
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;

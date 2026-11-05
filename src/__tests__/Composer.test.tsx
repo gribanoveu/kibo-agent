@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
+import type { ImagePart } from "../lib/images";
 
 // The chip is the only way to reach `chat_set_mode`, and what it says has to
 // be what the backend was actually told — a label reading "Plan" over a turn
@@ -178,14 +179,16 @@ describe("holding the chosen mode", () => {
 
 describe("text handed to the box", () => {
   const withDraft = (
-    draft: { text: string; seq: number } | null,
-    quote: { text: string; seq: number } | null = null,
+    draft: { text: string; seq: number; images?: ImagePart[] } | null,
+    quote: { text: string; seq: number; images?: ImagePart[] } | null = null,
+    imagesEnabled = true,
   ) => (
     <Composer
       draftKey="draft"
       onSend={() => {}}
       onStop={() => {}}
       running={false}
+      imagesEnabled={imagesEnabled}
       conversation="agent"
       onConversation={() => {}}
       unattended={false}
@@ -201,6 +204,38 @@ describe("text handed to the box", () => {
       onCompact={() => {}}
     />
   );
+
+  /// A draft put back into a chat that already holds its pictures puts them
+  /// back rather than adding a second copy — the draft stays as it is, so it
+  /// arrives again each time the chat is opened.
+  test("a draft's pictures land once, however often it arrives", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft({ text: "look", seq: 1, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+
+    rerender(withDraft({ text: "look", seq: 2, images: [picture] }));
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+  });
+
+  /// A note taken out of a running turn comes home with its picture: the
+  /// words were never sent, so neither were the pixels.
+  test("pictures come back with the text a note was taken back with", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "look at this", seq: 1, images: [picture] }));
+    expect(screen.getByAltText("Image 1, 10×5")).toBeTruthy();
+  });
+
+  /// The box takes no pictures from a model set to text only, and a note
+  /// coming back is no exception: it says where to turn them on instead.
+  test("pictures handed back to a text-only model are refused, with the reason", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 10, height: 5 };
+    const { rerender } = render(withDraft(null));
+    rerender(withDraft(null, { text: "", seq: 1, images: [picture] }, false));
+    expect(screen.getByRole("alert").textContent).toContain("Settings → Models");
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
 
   /// A branch gives its message back; the same text twice is two branches.
   test("replaces what was typed, each time it is handed", () => {
@@ -630,25 +665,33 @@ describe("the box's focus", () => {
 describe("the queue", () => {
   function queueing(
     running: boolean,
-    queued: { id: number; text: string }[] = [],
-    steered: { id: string; text: string }[] = [],
+    queued: { id: number; text: string; images?: ImagePart[] }[] = [],
+    steered: { id: string; text: string; images?: ImagePart[] }[] = [],
   ) {
     const sent: string[] = [];
     const held: string[] = [];
+    const heldPictures: ImagePart[][] = [];
     const taken: number[] = [];
     const withdrawn: string[] = [];
     const ran: string[] = [];
-    render(
+    // The box's whole state, so a test can hand it a picture the way a
+    // taken-back note does — through `quote`, which only new values apply.
+    const build = (quote: { text: string; seq: number; images?: ImagePart[] } | null = null) => (
       <Composer
         draftKey="draft"
         onSend={(text) => sent.push(text)}
-        onQueue={(text) => held.push(text)}
+        onQueue={(text, images) => {
+          held.push(text);
+          heldPictures.push(images);
+        }}
         queued={queued}
         onUnqueue={(id) => taken.push(id)}
         steered={steered}
         onWithdraw={(id) => withdrawn.push(id)}
         onStop={() => {}}
         running={running}
+        imagesEnabled
+        quote={quote}
         conversation="agent"
         onConversation={() => {}}
         unattended={false}
@@ -661,15 +704,41 @@ describe("the queue", () => {
         usage={null}
         onCompact={() => {}}
         commands={[{ name: "compact", hint: "Fold", run: (args: string) => ran.push(args) }]}
-      />,
+      />
     );
+    const view = render(build());
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
     const altEnter = (text: string) => {
       fireEvent.change(box, { target: { value: text } });
       fireEvent.keyDown(box, { code: "Enter", key: "Enter", altKey: true });
     };
-    return { sent, held, taken, withdrawn, ran, box, altEnter };
+    return { ...view, build, sent, held, heldPictures, taken, withdrawn, ran, box, altEnter };
   }
+
+  /// A message held for after the turn carries its pictures too: left in the
+  /// box they would ride along with whatever is typed next.
+  test("a held message takes its pictures with it", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { build, rerender, held, heldPictures, altEnter } = queueing(true);
+    rerender(build({ text: "", seq: 1, images: [picture] }));
+    expect(screen.getByAltText("Image 1, 4×3")).toBeTruthy();
+
+    altEnter("look at this");
+    expect(held).toEqual(["look at this"]);
+    expect(heldPictures).toEqual([[picture]]);
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  /// With nothing typed around it, the held message is the picture.
+  test("a picture alone can be held for after the turn", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const { build, rerender, held, heldPictures, altEnter } = queueing(true);
+    rerender(build({ text: "", seq: 1, images: [picture] }));
+
+    altEnter("");
+    expect(held).toEqual([""]);
+    expect(heldPictures).toEqual([[picture]]);
+  });
 
   test("Alt+Enter during a turn holds the message instead of steering with it", () => {
     const { sent, held, box, altEnter } = queueing(true);
@@ -713,6 +782,21 @@ describe("the queue", () => {
     fireEvent.click(screen.getByRole("button", { name: "Take back to the message box" }));
     expect(withdrawn).toEqual(["n-1"]);
     expect(taken).toEqual([]);
+  });
+
+  /// A note can be a picture with nothing typed around it: the row has to
+  /// say something, and what it says is that it is a picture.
+  test("a note that is only a picture is listed as one", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    queueing(true, [], [{ id: "n-1", text: "", images: [picture] }]);
+    expect(screen.getByRole("button", { name: "A picture" })).toBeTruthy();
+  });
+
+  test("a note of several pictures says how many", () => {
+    const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
+    const two: ImagePart = { mediaType: "image/png", data: "PNG", width: 5, height: 3 };
+    queueing(true, [], [{ id: "n-1", text: "", images: [picture, two] }]);
+    expect(screen.getByRole("button", { name: "2 pictures" })).toBeTruthy();
   });
 
   /// When a row is read is said on it, not in a tooltip; a long one opens

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::command_exec::OutputStream;
+use crate::domain::image::ImagePart;
 use crate::domain::llm::{ChatStreamResult, ChatUsage, LlmMessage};
 use crate::domain::tools::{ReadFiles, Task, ToolResult};
 
@@ -183,6 +184,10 @@ pub struct SteeringNote {
     /// for the page of prompt the command stands for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown: Option<String>,
+    /// The pictures attached to the note: they join the history with it, at
+    /// the round it reaches, and the transcript draws them on its bubble.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImagePart>,
 }
 
 impl SteeringNote {
@@ -191,12 +196,23 @@ impl SteeringNote {
             id: uuid::Uuid::new_v4().to_string(),
             text: text.into(),
             shown: None,
+            images: Vec::new(),
         }
     }
 
-    /// What goes into the history.
+    /// What goes into the history. A note that is only a picture says so — the
+    /// prefix alone would end in a colon and nothing.
     pub fn prefixed(&self) -> String {
-        format!("{STEERING_PREFIX}{}", self.text)
+        let text = if self.text.trim().is_empty() {
+            match self.images.len() {
+                0 => "",
+                1 => "look at the picture attached",
+                _ => "look at the pictures attached",
+            }
+        } else {
+            &self.text
+        };
+        format!("{STEERING_PREFIX}{text}")
     }
 }
 
@@ -248,8 +264,14 @@ pub enum ChatEventPayload {
     /// A note the user typed mid-turn has been added to the conversation.
     /// Carries the id so the front end can retire that queued note by
     /// identity rather than by matching its text. `text` is the note as the
-    /// transcript shows it — its `shown`, when it has one.
-    SteeringApplied { id: String, text: String },
+    /// transcript shows it — its `shown`, when it has one — and `images` are
+    /// the pictures it carried, for the bubble to draw.
+    SteeringApplied {
+        id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImagePart>,
+    },
     /// A fresh round is starting.
     ///
     /// Stated outright rather than inferred from whatever came next. Before

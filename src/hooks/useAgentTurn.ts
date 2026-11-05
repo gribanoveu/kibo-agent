@@ -48,10 +48,10 @@ import type { ChatActivity } from "../types";
 // whole history, each resume its own checkpoint.
 
 /** A message waiting for the running turn to end, to be sent as the next one. */
-export type Queued = { id: number; text: string };
+export type Queued = { id: number; text: string; images?: ImagePart[] };
 
 /** A note typed into the running turn, until a round of it reads the note. */
-export type Steered = { id: string; text: string };
+export type Steered = { id: string; text: string; images?: ImagePart[] };
 
 type Session = {
   key: string;
@@ -66,7 +66,7 @@ type Session = {
   unsaved: boolean;
   turnId: number;
   branchedFrom: string | null;
-  draft: { text: string; seq: number } | null;
+  draft: { text: string; seq: number; images?: ImagePart[] } | null;
   compacting: boolean;
   queued: Queued[];
   queueSeq: number;
@@ -131,8 +131,9 @@ export function useAgentTurn({
   /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
   model?: string;
   onSaved?: () => void;
-  /** Queued text that will not be sent after all, for the composer to take back. */
-  onGiveBack?: (text: string) => void;
+  /** Queued text that will not be sent after all, for the composer to take back —
+      and the pictures a withdrawn note carried, which go back with it. */
+  onGiveBack?: (text: string, images?: ImagePart[]) => void;
   /** The session's total is read only while something shows it — the Overview. */
   spentShown?: boolean;
 } = {}) {
@@ -358,13 +359,16 @@ export function useAgentTurn({
       if (!trimmed && images.length === 0) return;
 
       if (session.turn.status === "running") {
-        const id = await steerCommand(content, content === trimmed ? undefined : trimmed, session.key);
-        session.sentNotes = [...session.sentNotes, { id, text: trimmed }];
+        const id = await steerCommand(content, content === trimmed ? undefined : trimmed, session.key, images);
+        const pictures = images.length > 0 ? { images } : {};
+        session.sentNotes = [...session.sentNotes, { id, text: trimmed, ...pictures }];
         changed(session);
         return;
       }
       if (session.turn.status === "awaitingApproval") {
-        session.queued = [...session.queued, { id: ++session.queueSeq, text: trimmed }];
+        // The box is handed over whole: a picture attached to it would
+        // otherwise be taken and dropped, with nothing saying so.
+        session.queued = [...session.queued, { id: ++session.queueSeq, text: trimmed, ...(images.length > 0 && { images }) }];
         changed(session);
         return;
       }
@@ -433,11 +437,14 @@ export function useAgentTurn({
       if (session !== active.current) continue;
       if (session.queued.length === 0 && session.sentNotes.length === 0) continue;
       const read = new Set(session.turn.blocks.flatMap((block) => (block.kind === "steer" ? [block.id] : [])));
-      const back = session.sentNotes.filter((note) => !read.has(`steer:${note.id}`)).map((note) => note.text);
+      const unread = session.sentNotes.filter((note) => !read.has(`steer:${note.id}`));
       session.sentNotes = [];
       const stopped = session.turn.status === "cancelled" || session.error !== null;
-      if (stopped) back.push(...session.queued.map((q) => q.text));
-      if (back.length > 0) giveBackRef.current?.(back.join("\n\n"));
+      // What the turn never read — and, stopped, what never got its turn.
+      const back = stopped ? [...unread, ...session.queued] : unread;
+      const said = back.map((item) => item.text).filter((text) => text.trim());
+      const pictures = back.flatMap((item) => item.images ?? []);
+      if (said.length > 0 || pictures.length > 0) giveBackRef.current?.(said.join("\n\n"), pictures);
       if (stopped || session.queued.length === 0) {
         session.queued = [];
         changed(session);
@@ -446,7 +453,7 @@ export function useAgentTurn({
       const [next, ...rest] = session.queued;
       session.queued = rest;
       changed(session);
-      void sendSession(session, next.text);
+      void sendSession(session, next.text, undefined, next.images ?? []);
     }
   }, [revision, changed, sendSession]);
 
@@ -516,11 +523,11 @@ export function useAgentTurn({
   );
 
   const queue = useCallback(
-    (text: string) => {
+    (text: string, images: ImagePart[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed && images.length === 0) return;
       const session = active.current;
-      session.queued = [...session.queued, { id: ++session.queueSeq, text: trimmed }];
+      session.queued = [...session.queued, { id: ++session.queueSeq, text: trimmed, ...(images.length > 0 && { images }) }];
       changed(session);
     },
     [changed],
@@ -532,7 +539,7 @@ export function useAgentTurn({
       const item = session.queued.find((q) => q.id === id);
       if (!item) return;
       session.queued = session.queued.filter((q) => q !== item);
-      giveBackRef.current?.(item.text);
+      giveBackRef.current?.(item.text, item.images);
       changed(session);
     },
     [changed],
@@ -548,10 +555,11 @@ export function useAgentTurn({
       changed(session);
       try {
         if (await cancelSteer(id, session.key)) {
-          if (session === active.current) giveBackRef.current?.(note.text);
+          if (session === active.current) giveBackRef.current?.(note.text, note.images);
           else {
             const text = session.draft ? `${session.draft.text}\n\n${note.text}` : note.text;
-            session.draft = { text, seq: (session.draft?.seq ?? previous) + 1 };
+            const images = [...(session.draft?.images ?? []), ...(note.images ?? [])];
+            session.draft = { text, seq: (session.draft?.seq ?? previous) + 1, ...(images.length > 0 && { images }) };
           }
           changed(session);
         }

@@ -64,10 +64,12 @@ type Sent = { text: string; images: ImagePart[] };
 
 function box({ imagesEnabled = true, running = false } = {}) {
   const sent: Sent[] = [];
+  const queued: Sent[] = [];
   render(
     <Composer
       draftKey="draft"
       onSend={(text, images) => sent.push({ text, images })}
+      onQueue={(text, images) => queued.push({ text, images })}
       imagesEnabled={imagesEnabled}
       onStop={() => {}}
       running={running}
@@ -88,7 +90,8 @@ function box({ imagesEnabled = true, running = false } = {}) {
   const paste = (files: File[]) => fireEvent.paste(area, { clipboardData: { files } });
   const type = (text: string) => fireEvent.change(area, { target: { value: text } });
   const enter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
-  return { sent, area, paste, type, enter };
+  const altEnter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter", altKey: true });
+  return { sent, queued, area, paste, type, enter, altEnter };
 }
 
 const thumbs = () => screen.queryAllByRole("img");
@@ -229,19 +232,38 @@ describe("attaching a picture", () => {
     expect(thumbs()).toHaveLength(MAX_IMAGES);
   });
 
-  /// A note steering a running turn is text; the picture waits in the box
-  /// for the next message rather than being lost or sent as a note.
-  test("while a turn runs, the words steer and the picture stays", async () => {
+  /// A note steering a running turn takes its picture with it: a screenshot
+  /// is often the whole point of the note.
+  test("while a turn runs, the words steer and the picture goes with them", async () => {
     const { sent, paste, type, enter } = box({ running: true });
     paste([picture(1)]);
     await waitFor(() => expect(thumbs()).toHaveLength(1));
     type("also check b");
     enter();
-    expect(sent).toEqual([{ text: "also check b", images: [] }]);
-    expect(thumbs()).toHaveLength(1);
-    // A picture alone is not a note.
+    expect(sent).toEqual([{ text: "also check b", images: [part(1)] }]);
+    expect(thumbs()).toHaveLength(0);
+  });
+
+  /// Nothing typed around it: the note is the picture.
+  test("a picture alone steers a running turn too", async () => {
+    const { sent, paste, enter } = box({ running: true });
+    paste([picture(2)]);
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
     enter();
-    expect(sent).toHaveLength(1);
+    expect(sent).toEqual([{ text: "", images: [part(2)] }]);
+  });
+
+  /// Alt+Enter holds the box for after the turn — pictures included: left in
+  /// the box they would ride along with whatever is typed next.
+  test("a picture held for after the turn goes with the message", async () => {
+    const { sent, queued, paste, type, altEnter } = box({ running: true });
+    paste([picture(3)]);
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
+    type("then look at this");
+    altEnter();
+    expect(queued).toEqual([{ text: "then look at this", images: [part(3)] }]);
+    expect(sent).toEqual([]);
+    expect(thumbs()).toHaveLength(0);
   });
 
   test("a thumbnail opens the picture whole", async () => {

@@ -30,20 +30,20 @@ type Props = {
   /** Drawn on the box's top edge — the folder the message will be worked on. */
   tab?: ReactNode;
   /** Sends the box, with the pictures attached to it. While a turn is running
-      the same box steers it instead, with its text only — the pictures stay
-      for the next message. */
+      the same box steers it instead, and the pictures go with the note. */
   onSend: (text: string, images: ImagePart[]) => void;
   /** Whether the model turns go to is set to see pictures; off, a pasted one
       is refused with a word on where to change that. */
   imagesEnabled?: boolean;
-  /** Holds the box until the running turn ends, to be sent as the next message. */
-  onQueue?: (text: string) => void;
+  /** Holds the box until the running turn ends, to be sent as the next message.
+      The pictures attached to it are held with it. */
+  onQueue?: (text: string, images: ImagePart[]) => void;
   /** What is waiting for the turn to end; a row taken out goes back to the box. */
-  queued?: { id: number; text: string }[];
+  queued?: { id: number; text: string; images?: ImagePart[] }[];
   onUnqueue?: (id: number) => void;
   /** Notes sent into the running turn that no round has read yet; one taken
-      back goes to the box. */
-  steered?: { id: string; text: string }[];
+      back goes to the box, with the pictures it carried. */
+  steered?: { id: string; text: string; images?: ImagePart[] }[];
   onWithdraw?: (id: string) => void;
   onStop: () => void;
   running: boolean;
@@ -55,10 +55,11 @@ type Props = {
   unattended: boolean;
   onUnattended: (unattended: boolean) => void;
   /** Text put into the box from outside — a branch hands back its message.
-      Replaces what was typed; `seq` makes the same text twice land twice. */
-  draft?: { text: string; seq: number } | null;
+      Replaces what was typed; `seq` makes the same text twice land twice, and
+      `images` come back with a note taken out of a running turn. */
+  draft?: { text: string; seq: number; images?: ImagePart[] } | null;
   /** Text added after what is typed — a selection from the terminal. */
-  quote?: { text: string; seq: number } | null;
+  quote?: { text: string; seq: number; images?: ImagePart[] } | null;
   /** Every configured `provider/model`, the one turns go to now, and its thinking level. */
   models: { choices: ModelChoice[]; current: ModelChoice | null; effort?: string | null };
   onModel: (choice: ModelChoice) => void;
@@ -160,6 +161,8 @@ export function Composer({
 
   useArrival(draft, (draft) => {
     setText(draft.text);
+    // A draft replaces what was typed, pictures included.
+    if (draft.images) attachments.restore(draft.images, true);
     area.current?.focus();
     requestAnimationFrame(grow);
   });
@@ -169,7 +172,9 @@ export function Composer({
   }, [focus]);
 
   useArrival(quote, (quote) => {
-    setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${quote.text}` : quote.text));
+    // A note taken back with only its picture has nothing to add to the text.
+    if (quote.text) setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${quote.text}` : quote.text!));
+    attachments.restore(quote.images ?? []);
     area.current?.focus();
     requestAnimationFrame(grow);
   });
@@ -190,8 +195,9 @@ export function Composer({
   };
 
   const send = () => {
-    // A note steering a running turn is text: the pictures wait for the next message.
-    const pictures = !running && attachments.images.length > 0;
+    // A note steering a running turn takes its pictures with it: a screenshot
+    // is often the whole point of the note.
+    const pictures = attachments.images.length > 0;
     if (!text.trim() && !pictures) return;
     const typed = commandFor(commands, text);
     if (typed) return run(typed.command, typed.args);
@@ -204,8 +210,11 @@ export function Composer({
   // text for the model, and a command's expansion belongs to the moment it runs.
   const queue = () => {
     if (!running || !onQueue || commandFor(commands, text)) return send();
-    if (!text.trim()) return;
-    onQueue(text);
+    // A held message takes its pictures too: left in the box they would ride
+    // along with whatever is typed next.
+    const pictures = attachments.images.length > 0;
+    if (!text.trim() && !pictures) return;
+    onQueue(text, pictures ? attachments.take() : []);
     clear();
   };
 
@@ -237,6 +246,16 @@ export function Composer({
     );
   };
 
+  /** What a row of the queue says: what was typed, and the pictures that go
+      with it — a row is a line, so they are counted rather than drawn. A note
+      can be a picture with nothing typed around it. */
+  const rowText = (text: string, images?: ImagePart[]) => {
+    const count = images?.length ?? 0;
+    if (count === 0) return text;
+    const said = count === 1 ? "a picture" : `${count} pictures`;
+    return text ? `${text} · ${said}` : `${said[0].toUpperCase()}${said.slice(1)}`;
+  };
+
   return (
     <div className="composer-wrap">
       {/* Above the folder tab, which sits on the box's edge. */}
@@ -245,13 +264,23 @@ export function Composer({
           {/* The notes first: they reach the agent at its next step, the
               queue only after the turn. */}
           {steered.map((note) =>
-            queueRow(`note-${note.id}`, <MessageSquareReply size={13} />, "Next step", note.text, "Take back to the message box", () =>
-              onWithdraw?.(note.id),
+            queueRow(
+              `note-${note.id}`,
+              <MessageSquareReply size={13} />,
+              "Next step",
+              rowText(note.text, note.images),
+              "Take back to the message box",
+              () => onWithdraw?.(note.id),
             ),
           )}
           {queued.map((item) =>
-            queueRow(`queued-${item.id}`, <CornerDownRight size={13} />, "After this turn", item.text, "Back to the message box", () =>
-              onUnqueue?.(item.id),
+            queueRow(
+              `queued-${item.id}`,
+              <CornerDownRight size={13} />,
+              "After this turn",
+              rowText(item.text, item.images),
+              "Back to the message box",
+              () => onUnqueue?.(item.id),
             ),
           )}
         </ul>

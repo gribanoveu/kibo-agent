@@ -1680,14 +1680,15 @@ fn apply_steering(
     notes: Vec<SteeringNote>,
 ) {
     for note in notes {
-        history.push(LlmMessage::user(note.prefixed()));
+        let prefixed = note.prefixed();
+        let SteeringNote { id, text, shown, images } = note;
+        // The pictures ride with the words: a note made of a screenshot alone
+        // is what the model is meant to look at this round.
+        history.push(LlmMessage::user_with_images(prefixed, images.clone()));
         events.emit(
             round,
-            Some(format!("steer:{}", note.id)),
-            ChatEventPayload::SteeringApplied {
-                id: note.id,
-                text: note.shown.unwrap_or(note.text),
-            },
+            Some(format!("steer:{id}")),
+            ChatEventPayload::SteeringApplied { id, text: shown.unwrap_or(text), images },
         );
     }
 }
@@ -5441,6 +5442,65 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, ["/review a.rs", "and b.rs"]);
+    }
+
+    /// A screenshot attached to the note is part of the note: the model is
+    /// sent it with the clarification, and the bubble is told to draw it.
+    #[test]
+    fn a_note_with_a_picture_sends_it_to_the_model() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+
+        let picture = ImagePart {
+            media_type: ImageMediaType::Jpeg,
+            data: "AA".into(),
+            width: 30,
+            height: 20,
+        };
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let sink: ChatEventSink = Arc::new(move |event| seen.lock().unwrap().push(event));
+        let events = Events::new(&sink, 0);
+        let mut history = Vec::new();
+        let note = SteeringNote { images: vec![picture.clone()], ..SteeringNote::user("why is it red?") };
+
+        apply_steering(&events, 2, &mut history, vec![note]);
+
+        assert_eq!(history.len(), 1, "one message, with both");
+        assert_eq!(history[0].images, vec![picture.clone()]);
+        assert!(
+            history[0].content.as_deref().unwrap_or_default().ends_with("why is it red?"),
+            "{:?}",
+            history[0].content
+        );
+        let applied: Vec<(String, Vec<ImagePart>)> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::SteeringApplied { text, images, .. } => Some((text.clone(), images.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(applied, [("why is it red?".to_string(), vec![picture])]);
+    }
+
+    /// The prefix alone ends in a colon and nothing: a note that is only a
+    /// picture says what to do with it.
+    #[test]
+    fn a_note_that_is_only_a_picture_says_what_it_is() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+
+        let picture = |n: u32| ImagePart {
+            media_type: ImageMediaType::Png,
+            data: "AA".into(),
+            width: n,
+            height: n,
+        };
+        let only_one = SteeringNote { images: vec![picture(1)], ..SteeringNote::user("  ") };
+        let two = SteeringNote { images: vec![picture(1), picture(2)], ..SteeringNote::user("") };
+
+        assert_eq!(only_one.prefixed(), format!("{STEERING_PREFIX}look at the picture attached"));
+        assert_eq!(two.prefixed(), format!("{STEERING_PREFIX}look at the pictures attached"));
     }
 
     /// A call's arguments reach the window once each: what is new since the
