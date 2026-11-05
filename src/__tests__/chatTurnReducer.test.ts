@@ -351,6 +351,21 @@ describe("the rest of the turn's state", () => {
     expect(kinds(state)).toEqual(["steer"]);
   });
 
+  /// A screenshot attached to the note is drawn on its bubble, and a note
+  /// without one has no field for pictures at all.
+  test("a note keeps the pictures sent with it", () => {
+    seq = 0;
+    const picture = { mediaType: "image/jpeg" as const, data: "J", width: 30, height: 20 };
+    const [withPictures] = run([
+      ev({ type: "steeringApplied", payload: { id: "n1", text: "why red?", images: [picture] } }),
+    ]).blocks;
+    expect(withPictures).toMatchObject({ kind: "steer", text: "why red?", images: [picture] });
+
+    seq = 0;
+    const [without] = run([ev({ type: "steeringApplied", payload: { id: "n2", text: "go on" } })]).blocks;
+    expect("images" in without).toBe(false);
+  });
+
   test("the user's own message opens the turn", () => {
     const state = appendUserMessage(emptyTurn(), "fix the NPE");
     expect(kinds(state)).toEqual(["user"]);

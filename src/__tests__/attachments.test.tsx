@@ -12,6 +12,10 @@ let refusal: string | null = null;
 const part = (n: number): ImagePart => ({ mediaType: "image/png", data: `PNG${n}`, width: 10 + n, height: 5 });
 
 const dropped: string[] = [];
+/** Pictures whose sanitizing waits for `release()`, instead of a timer. */
+let manual = false;
+const waiting: (() => void)[] = [];
+const release = () => waiting.shift()?.();
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
@@ -24,7 +28,8 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command !== "image_prepare") return Promise.resolve(null);
     const bytes = Array.from(args as Uint8Array);
     prepared.push(bytes);
-    return refusal ? Promise.reject(refusal) : Promise.resolve(part(bytes[0]));
+    const answer = () => (refusal ? Promise.reject(refusal) : Promise.resolve(part(bytes[0])));
+    return manual ? new Promise<void>((resolve) => waiting.push(resolve)).then(answer) : answer();
   },
   transformCallback: (callback: unknown) => callback,
 }));
@@ -44,6 +49,18 @@ mock.module("@tauri-apps/api/window", () => ({
 }));
 const emitDrop = (payload: Drop["payload"]) => act(() => onDrop!({ payload }));
 
+// The platform's picture picker: what it offered, and what it answers.
+let picked: string[] | null = [];
+let pickerRefusal: string | null = null;
+const pickerAsked: { filters?: { name: string; extensions: string[] }[] }[] = [];
+mock.module("@tauri-apps/plugin-dialog", () => ({
+  open: (options: { filters?: { name: string; extensions: string[] }[] }) => {
+    pickerAsked.push(options);
+    return pickerRefusal ? Promise.reject(pickerRefusal) : Promise.resolve(picked);
+  },
+  save: () => Promise.resolve(null),
+}));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 
 const { Composer } = await import("../components/Composer");
@@ -52,6 +69,11 @@ const { MAX_IMAGES } = await import("../hooks/useAttachments");
 afterEach(() => {
   prepared.length = 0;
   dropped.length = 0;
+  pickerAsked.length = 0;
+  picked = [];
+  pickerRefusal = null;
+  manual = false;
+  waiting.length = 0;
   refusal = null;
   // The box keeps its text per chat, and every box here is the same chat.
   localStorage.clear();
@@ -62,12 +84,16 @@ const picture = (n: number, type = "image/png") => new File([new Uint8Array([n])
 
 type Sent = { text: string; images: ImagePart[] };
 
-function box({ imagesEnabled = true, running = false } = {}) {
+function box({ imagesEnabled = true, running = false, draftKey = "draft" } = {}) {
   const sent: Sent[] = [];
-  render(
+  const queued: Sent[] = [];
+  // The box's whole state, so a test can open another chat — the key is what
+  // decides whose pictures the box is holding.
+  const build = (key = draftKey) => (
     <Composer
-      draftKey="draft"
+      draftKey={key}
       onSend={(text, images) => sent.push({ text, images })}
+      onQueue={(text, images) => queued.push({ text, images })}
       imagesEnabled={imagesEnabled}
       onStop={() => {}}
       running={running}
@@ -82,13 +108,15 @@ function box({ imagesEnabled = true, running = false } = {}) {
       context={null}
       usage={null}
       onCompact={() => {}}
-    />,
+    />
   );
+  const view = render(build());
   const area = screen.getByRole("textbox");
   const paste = (files: File[]) => fireEvent.paste(area, { clipboardData: { files } });
   const type = (text: string) => fireEvent.change(area, { target: { value: text } });
   const enter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
-  return { sent, area, paste, type, enter };
+  const altEnter = () => fireEvent.keyDown(area, { code: "Enter", key: "Enter", altKey: true });
+  return { sent, queued, area, paste, type, enter, altEnter, rerender: view.rerender, build };
 }
 
 const thumbs = () => screen.queryAllByRole("img");
@@ -114,6 +142,25 @@ describe("attaching a picture", () => {
     await waitFor(() => expect(thumbs()).toHaveLength(1));
     enter();
     expect(sent).toEqual([{ text: "", images: [part(2)] }]);
+  });
+
+  /// A picture still being read is part of the message: the box waits for it
+  /// rather than sending the words alone and leaving it for the next one — and
+  /// a second Enter is the same message, not a copy of it.
+  test("a message waits for a picture that is still being read", async () => {
+    manual = true;
+    const { sent, paste, type, enter } = box();
+    paste([picture(4)]);
+    expect(screen.getAllByLabelText(/Preparing a picture/)).toHaveLength(1);
+    type("look at this");
+    enter();
+    enter();
+    await act(async () => {});
+    expect(sent).toEqual([]);
+
+    await waitFor(() => expect(prepared).toHaveLength(1));
+    await act(async () => release());
+    await waitFor(() => expect(sent).toEqual([{ text: "look at this", images: [part(4)] }]));
   });
 
   /// Dropped anywhere on the window, the file goes to the backend by its
@@ -216,6 +263,8 @@ describe("attaching a picture", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(`Up to ${MAX_IMAGES}`));
     expect(thumbs()).toHaveLength(MAX_IMAGES);
     expect(prepared).toHaveLength(MAX_IMAGES);
+    // The ones the limit stopped before reaching leave no placeholder behind.
+    expect(screen.queryAllByLabelText(/Preparing a picture/)).toHaveLength(0);
   });
 
   /// Two pastes in quick succession share the limit: the second does not
@@ -229,19 +278,75 @@ describe("attaching a picture", () => {
     expect(thumbs()).toHaveLength(MAX_IMAGES);
   });
 
-  /// A note steering a running turn is text; the picture waits in the box
-  /// for the next message rather than being lost or sent as a note.
-  test("while a turn runs, the words steer and the picture stays", async () => {
+  /// A note steering a running turn takes its picture with it: a screenshot
+  /// is often the whole point of the note.
+  test("while a turn runs, the words steer and the picture goes with them", async () => {
     const { sent, paste, type, enter } = box({ running: true });
     paste([picture(1)]);
     await waitFor(() => expect(thumbs()).toHaveLength(1));
     type("also check b");
     enter();
-    expect(sent).toEqual([{ text: "also check b", images: [] }]);
-    expect(thumbs()).toHaveLength(1);
-    // A picture alone is not a note.
+    expect(sent).toEqual([{ text: "also check b", images: [part(1)] }]);
+    expect(thumbs()).toHaveLength(0);
+  });
+
+  /// Nothing typed around it: the note is the picture.
+  test("a picture alone steers a running turn too", async () => {
+    const { sent, paste, enter } = box({ running: true });
+    paste([picture(2)]);
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
     enter();
-    expect(sent).toHaveLength(1);
+    expect(sent).toEqual([{ text: "", images: [part(2)] }]);
+  });
+
+  /// Alt+Enter holds the box for after the turn — pictures included: left in
+  /// the box they would ride along with whatever is typed next.
+  test("a picture held for after the turn goes with the message", async () => {
+    const { sent, queued, paste, type, altEnter } = box({ running: true });
+    paste([picture(3)]);
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
+    type("then look at this");
+    altEnter();
+    expect(queued).toEqual([{ text: "then look at this", images: [part(3)] }]);
+    expect(sent).toEqual([]);
+    expect(thumbs()).toHaveLength(0);
+  });
+
+  /// A picture being read and sanitized has a placeholder where it will land:
+  /// the row does not appear out of nowhere a moment later.
+  test("a picture being prepared waits as a placeholder, then becomes one", async () => {
+    manual = true;
+    const { paste } = box();
+    paste([picture(1), picture(2)]);
+    expect(screen.getAllByLabelText(/Preparing a picture/)).toHaveLength(2);
+    expect(thumbs()).toHaveLength(0);
+
+    // One by one: the placeholder of the first turns into its picture while the
+    // second is still being read.
+    await waitFor(() => expect(prepared).toHaveLength(1));
+    await act(async () => release());
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
+    expect(screen.getAllByLabelText(/Preparing a picture/)).toHaveLength(1);
+
+    await waitFor(() => expect(prepared).toHaveLength(2));
+    await act(async () => release());
+    await waitFor(() => expect(thumbs()).toHaveLength(2));
+    expect(screen.queryAllByLabelText(/Preparing a picture/)).toHaveLength(0);
+  });
+
+  /// A refused picture takes its placeholder with it; the error names the file.
+  test("a refused picture leaves no placeholder behind", async () => {
+    manual = true;
+    refusal = "this file is not supported: save the image as PNG or JPEG";
+    const { paste } = box();
+    paste([picture(1)]);
+    expect(screen.getAllByLabelText(/Preparing a picture/)).toHaveLength(1);
+
+    await waitFor(() => expect(prepared).toHaveLength(1));
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not supported"));
+    expect(screen.queryAllByLabelText(/Preparing a picture/)).toHaveLength(0);
+    expect(thumbs()).toHaveLength(0);
   });
 
   test("a thumbnail opens the picture whole", async () => {
@@ -251,5 +356,80 @@ describe("attaching a picture", () => {
     await act(async () => fireEvent.click(screen.getByTitle("11×5 — click to open")));
     const dialog = screen.getByRole("dialog", { name: "Image · 11×5" });
     expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,PNG1");
+  });
+});
+
+describe("whose pictures the box holds", () => {
+  /// Pictures belong to the chat they were attached in: another chat opens
+  /// with an empty box, or a screenshot meant for one message would be sent
+  /// with another chat's.
+  test("another chat starts with an empty box", async () => {
+    const { paste, rerender, build } = box();
+    paste([picture(5)]);
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
+
+    rerender(build("another-chat"));
+    await waitFor(() => expect(thumbs()).toHaveLength(0));
+  });
+
+  /// A picture still being read when another chat opens belongs to the box it
+  /// was attached in: it does not land in the one now on screen.
+  test("a picture read for the chat before does not land in the next", async () => {
+    manual = true;
+    const { paste, rerender, build } = box();
+    paste([picture(6)]);
+    await waitFor(() => expect(prepared).toHaveLength(1));
+
+    rerender(build("another-chat"));
+    await act(async () => release());
+    await waitFor(() => expect(thumbs()).toHaveLength(0));
+    expect(screen.queryAllByLabelText(/Preparing a picture/)).toHaveLength(0);
+  });
+});
+
+describe("choosing a picture", () => {
+  const attachButton = () => screen.queryByRole("button", { name: "Attach a picture" });
+
+  /// The button is for a model that sees pictures, and it sits right before
+  /// the send button — the two things done with a finished message.
+  test("is beside the send button when the model takes pictures", () => {
+    box();
+    const attach = attachButton();
+    expect(attach).toBeTruthy();
+    expect(attach!.nextElementSibling?.getAttribute("title")).toBe("Send");
+  });
+
+  test("is not there for a model set to text only", () => {
+    box({ imagesEnabled: false });
+    expect(attachButton()).toBeNull();
+  });
+
+  /// PNG and JPEG are what sanitizing writes and what a provider accepts; the
+  /// picker offers nothing else, and the backend refuses the rest by content.
+  test("offers PNG and JPEG only, and attaches what comes back", async () => {
+    picked = ["/shots/1.png"];
+    box();
+    await act(async () => fireEvent.click(attachButton()!));
+
+    await waitFor(() => expect(thumbs()).toHaveLength(1));
+    expect(pickerAsked[0]?.filters).toEqual([{ name: "Pictures", extensions: ["png", "jpg", "jpeg"] }]);
+    expect(dropped).toEqual(["/shots/1.png"]);
+    expect(thumbs()[0].getAttribute("src")).toBe("data:image/png;base64,PNG1");
+  });
+
+  test("a cancelled picker attaches nothing", async () => {
+    picked = null;
+    box();
+    await act(async () => fireEvent.click(attachButton()!));
+    expect(thumbs()).toHaveLength(0);
+    expect(dropped).toEqual([]);
+  });
+
+  /// A dialog that refuses is said in the box, not a click that does nothing.
+  test("a picker that fails says why", async () => {
+    pickerRefusal = "the dialog could not open";
+    box();
+    await act(async () => fireEvent.click(attachButton()!));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("the dialog could not open"));
   });
 });

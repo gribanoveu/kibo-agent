@@ -1680,14 +1680,20 @@ fn apply_steering(
     notes: Vec<SteeringNote>,
 ) {
     for note in notes {
-        history.push(LlmMessage::user(note.prefixed()));
+        // Neither words nor pictures: `prefixed()` would hand the model the
+        // prefix and nothing after its colon, so there is nothing to send.
+        if note.text.trim().is_empty() && note.images.is_empty() {
+            continue;
+        }
+        let prefixed = note.prefixed();
+        let SteeringNote { id, text, shown, images } = note;
+        // The pictures ride with the words: a note made of a screenshot alone
+        // is what the model is meant to look at this round.
+        history.push(LlmMessage::user_with_images(prefixed, images.clone()));
         events.emit(
             round,
-            Some(format!("steer:{}", note.id)),
-            ChatEventPayload::SteeringApplied {
-                id: note.id,
-                text: note.shown.unwrap_or(note.text),
-            },
+            Some(format!("steer:{id}")),
+            ChatEventPayload::SteeringApplied { id, text: shown.unwrap_or(text), images },
         );
     }
 }
@@ -2379,7 +2385,7 @@ mod tests {
         StreamThenFail(&'static str, LlmError),
         /// Answers, and the user types while it does. The only way to queue a
         /// note *during* a turn when the provider is synchronous.
-        ReplyWhileTheUserTypes(ChatStreamResult, &'static str),
+        ReplyWhileTheUserTypes(ChatStreamResult, SteeringNote),
         /// Streams calls as providers do — each chunk every call of the
         /// round, its arguments whole so far — then answers.
         ReplyStreamingCalls(Vec<Vec<(&'static str, &'static str, &'static str)>>, ChatStreamResult),
@@ -2393,7 +2399,7 @@ mod tests {
                 text: answer.to_string(),
                 ..Default::default()
             },
-            note,
+            SteeringNote::user(note),
         )
     }
 
@@ -2403,7 +2409,7 @@ mod tests {
                 tool_calls: calls,
                 ..Default::default()
             },
-            note,
+            SteeringNote::user(note),
         )
     }
 
@@ -2516,7 +2522,7 @@ mod tests {
                 }
                 Step::ReplyWhileTheUserTypes(result, note) => {
                     if let Some(queue) = self.steering.lock().unwrap().as_ref() {
-                        queue.push(SteeringNote::user(note));
+                        queue.push(note);
                     }
                     if !result.text.is_empty() {
                         on_event(StreamEvent::Text(&result.text));
@@ -5441,6 +5447,115 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, ["/review a.rs", "and b.rs"]);
+    }
+
+    /// A screenshot attached to the note is part of the note: the model is
+    /// sent it with the clarification, and the bubble is told to draw it.
+    #[test]
+    fn a_note_with_a_picture_sends_it_to_the_model() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+
+        let picture = ImagePart {
+            media_type: ImageMediaType::Jpeg,
+            data: "AA".into(),
+            width: 30,
+            height: 20,
+        };
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let sink: ChatEventSink = Arc::new(move |event| seen.lock().unwrap().push(event));
+        let events = Events::new(&sink, 0);
+        let mut history = Vec::new();
+        let note = SteeringNote { images: vec![picture.clone()], ..SteeringNote::user("why is it red?") };
+
+        apply_steering(&events, 2, &mut history, vec![note]);
+
+        assert_eq!(history.len(), 1, "one message, with both");
+        assert_eq!(history[0].images, vec![picture.clone()]);
+        assert_eq!(
+            history[0].content.as_deref().unwrap_or_default(),
+            format!("{STEERING_PREFIX}why is it red?")
+        );
+        let applied: Vec<(String, Vec<ImagePart>)> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::SteeringApplied { text, images, .. } => Some((text.clone(), images.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(applied, [("why is it red?".to_string(), vec![picture])]);
+    }
+
+    /// The prefix alone ends in a colon and nothing: a note that is only a
+    /// picture says what to do with it.
+    #[test]
+    fn a_note_that_is_only_a_picture_says_what_it_is() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+
+        let picture = |n: u32| ImagePart {
+            media_type: ImageMediaType::Png,
+            data: "AA".into(),
+            width: n,
+            height: n,
+        };
+        let only_one = SteeringNote { images: vec![picture(1)], ..SteeringNote::user("  ") };
+        let two = SteeringNote { images: vec![picture(1), picture(2)], ..SteeringNote::user("") };
+
+        assert_eq!(only_one.prefixed(), format!("{STEERING_PREFIX}look at the picture attached"));
+        assert_eq!(two.prefixed(), format!("{STEERING_PREFIX}look at the pictures attached"));
+    }
+
+    /// A note with neither words nor pictures says nothing at all: no message
+    /// made of the prefix and a dangling colon, and no bubble to draw.
+    #[test]
+    fn a_note_with_nothing_in_it_is_not_sent() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let sink: ChatEventSink = Arc::new(move |event| seen.lock().unwrap().push(event));
+        let events = Events::new(&sink, 0);
+        let mut history = Vec::new();
+
+        apply_steering(&events, 1, &mut history, vec![SteeringNote::user("  ")]);
+
+        assert!(history.is_empty(), "{history:?}");
+        assert!(log.lock().unwrap().is_empty(), "nothing to announce either");
+    }
+
+    /// The queue between the command and the round is part of the way: a note
+    /// with a picture, typed mid-turn, reaches the model with it — not only
+    /// when `apply_steering` is handed the note directly.
+    #[test]
+    fn a_note_with_a_picture_reaches_the_model_with_it() {
+        use crate::domain::image::{ImageMediaType, ImagePart};
+
+        let picture = ImagePart {
+            media_type: ImageMediaType::Png,
+            data: "AA".into(),
+            width: 8,
+            height: 6,
+        };
+        let h = harness(
+            "steer-picture",
+            vec![
+                Step::ReplyWhileTheUserTypes(
+                    ChatStreamResult { text: "one".into(), ..Default::default() },
+                    SteeringNote { images: vec![picture.clone()], ..SteeringNote::user("look here") },
+                ),
+                text("two"),
+            ],
+        );
+
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+
+        let second = &h.provider.requests()[1];
+        let note = second
+            .messages
+            .iter()
+            .find(|m| m.role == LlmRole::User && m.content.as_deref().unwrap_or_default().starts_with(STEERING_PREFIX))
+            .expect("the note is sent to the model");
+        assert_eq!(note.images, vec![picture]);
     }
 
     /// A call's arguments reach the window once each: what is new since the

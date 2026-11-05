@@ -110,6 +110,16 @@
   background: var(--bg-hover);
 }
 
+/* The attach button and the send button are pushed right together: the meter
+   takes the room before them, or the pair takes it itself. */
+.composer .attach-images {
+  margin-left: auto;
+}
+.composer .composer-meter + .attach-images,
+.composer .attach-images + .send {
+  margin-left: 0;
+}
+
 .composer-wrap {
   flex: none;
   display: flex;
