@@ -43,6 +43,7 @@ pub mod hooks;
 pub mod agents;
 pub mod runs;
 pub mod board;
+pub mod dictation;
 pub mod meeting;
 pub mod mongo;
 pub mod voices;
