@@ -109,6 +109,11 @@ mongodb = { version = "3.9.1", features = ["sync"] }
 rquickjs = "0.14"
 
 
+# The C of QuickJS as release has it: unoptimized, MSVC's frames take the sandbox's bundle past
+# its stack limit while it loads, and every script test fails on Windows.
+[profile.dev.package.rquickjs-sys]
+opt-level = 2
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
