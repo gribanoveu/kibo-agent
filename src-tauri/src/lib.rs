@@ -404,6 +404,7 @@ pub fn run() {
             commands::meeting::meeting_auto_process_set,
             commands::features::features_list,
             commands::features::features_set,
+            commands::features::features_set_tools,
             commands::features::features_delete_data,
             commands::mongo::mongo_connections,
             commands::mongo::mongo_connection_save,

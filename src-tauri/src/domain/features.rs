@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::settings::{OptOut, SettingsError};
 use super::tools::ToolName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -23,6 +24,15 @@ pub enum Feature {
     VoiceMemory,
     Knowledge,
     Mongodb,
+}
+
+/// Why a choice on the Catalog was not saved.
+#[derive(Debug, thiserror::Error)]
+pub enum FeatureError {
+    #[error("no feature \"{0}\"")]
+    Unknown(String),
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
 }
 
 /// What a feature is and what it adds, for the filters and the Catalog's card.
@@ -130,6 +140,8 @@ impl Feature {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Features {
     on: Vec<Feature>,
+    /// On, but with their tools kept from the model.
+    tools_off: Vec<Feature>,
 }
 
 impl Features {
@@ -145,20 +157,29 @@ impl Features {
                 chosen.get(manifest.id).copied().unwrap_or(manifest.enabled_by_default)
             })
             .collect();
-        Self { on }
+        Self { on, tools_off: Vec::new() }
+    }
+
+    /// Keeps the tools of the features in `kept`, by id, from the model; each
+    /// stays on, with its page. Per feature, not per tool: the prompt names a
+    /// feature's tools together, and one of them gone would leave it promising it.
+    pub fn without_tools_of(mut self, kept: &OptOut) -> Self {
+        self.tools_off = Feature::ALL.iter().copied().filter(|f| !kept.is_enabled(f.manifest().id)).collect();
+        self
     }
 
     pub fn all() -> Self {
-        Self { on: Feature::ALL.to_vec() }
+        Self { on: Feature::ALL.to_vec(), tools_off: Vec::new() }
     }
 
     pub fn is_on(&self, feature: Feature) -> bool {
         self.on.contains(&feature)
     }
 
-    /// Whether `tool` may be offered: always, unless a feature that is off owns it.
+    /// Whether `tool` may be offered: always, unless a feature owns it that is
+    /// off or has its tools kept from the model.
     pub fn offers(&self, tool: ToolName) -> bool {
-        Feature::owning(tool).is_none_or(|f| self.is_on(f))
+        Feature::owning(tool).is_none_or(|f| self.is_on(f) && !self.tools_off.contains(&f))
     }
 }
 
@@ -216,5 +237,16 @@ mod tests {
             assert!(on.offers(tool), "{tool:?}");
         }
         assert!(!off.offers(ToolName::Board));
+    }
+
+    #[test]
+    fn a_feature_with_its_tools_kept_stays_on_and_only_its_tools_go() {
+        let kept = OptOut { disabled: vec!["mongodb".to_string(), "timer".to_string()] };
+        let features = Features::all().without_tools_of(&kept);
+        assert!(features.is_on(Feature::Mongodb), "its page stays");
+        assert!(!features.offers(ToolName::Mongo));
+        assert!(features.offers(ToolName::Board), "another feature's tool");
+        assert!(features.offers(ToolName::ReadFile), "a tool no feature owns");
+        assert!(Features::all().without_tools_of(&OptOut::default()).offers(ToolName::Mongo));
     }
 }

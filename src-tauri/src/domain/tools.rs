@@ -1479,6 +1479,9 @@ pub enum ToolError {
     /// when it was on.
     #[error("the tool `{tool}` belongs to {feature}, which is turned off — tell the user they can turn it on on the Catalog page")]
     FeatureOff { tool: String, feature: String },
+    /// A tool of a feature that is on, kept from the model on its Catalog panel.
+    #[error("the user keeps the tools of {feature}, `{tool}` among them, from you — tell them they can give them to you on {feature}'s panel on the Catalog page")]
+    ToolsKept { tool: String, feature: String },
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {

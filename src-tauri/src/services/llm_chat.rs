@@ -1091,8 +1091,12 @@ fn preflight(turn: &Turn, reads: &ReadFiles, call: &LlmToolCall) -> Result<(), c
     // Before the place's own gate: a call from memory of a turn when the
     // feature was on is told where to turn it on, not that the tool is unknown.
     if let Some(tool) = ToolName::from_wire_name(&call.name).filter(|&tool| !turn.features.offers(tool)) {
-        let feature = crate::domain::features::Feature::owning(tool).map(|f| f.manifest().name).unwrap_or_default();
-        return Err(crate::domain::tools::ToolError::FeatureOff { tool: call.name.clone(), feature: feature.to_string() });
+        let owner = crate::domain::features::Feature::owning(tool);
+        let (tool, feature) = (call.name.clone(), owner.map(|f| f.manifest().name).unwrap_or_default().to_string());
+        return Err(match owner.is_some_and(|f| turn.features.is_on(f)) {
+            true => crate::domain::tools::ToolError::ToolsKept { tool, feature },
+            false => crate::domain::tools::ToolError::FeatureOff { tool, feature },
+        });
     }
     match turn.place {
         Place::Folder { scope, mode, parallel, .. } => {

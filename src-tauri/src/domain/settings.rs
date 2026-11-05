@@ -232,6 +232,9 @@ pub struct AppSettings {
     /// Features turned on or off from the Catalog, by id; one not here is
     /// its default — `domain::features`, `docs/33-features.md`.
     pub features: std::collections::BTreeMap<String, bool>,
+    /// Features whose tools the model is not given, by id. The feature stays
+    /// on, with its page: a MongoDB page with no `mongo` in the chat.
+    pub feature_tools: OptOut,
     /// A call recorded on the Meetings page is transcribed as soon as it is
     /// stopped; off, it waits in the list for Transcribe (`docs/36`).
     pub meeting_auto_process: bool,
