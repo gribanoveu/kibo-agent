@@ -59,6 +59,7 @@ pub mod meeting_process;
 pub mod meeting_store;
 pub mod meeting_audio;
 pub mod meeting_recorder;
+pub mod microphone;
 pub mod recording_access;
 pub mod voices_store;
 pub mod mongo_store;
