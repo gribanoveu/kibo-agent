@@ -129,12 +129,14 @@ cd src-tauri && cargo test --release denoise_live -- --ignored --nocapture
 ```
 
 Dictation has one too: a phrase in a macOS voice through GigaAM and Silero, the tone that
-says "speak" opening no phrase, a thrown-away dictation leaving nothing in the next. It needs
-the models (`bun scripts/fetch-meeting-models.ts`); run it after touching
-`dictation_sidecar.rs` or dictation's models in `infra/speech.rs`:
+says "speak" opening no phrase, a thrown-away dictation leaving nothing in the next, the same
+voice through the service and the real process twice, the second time warm, and the real
+microphone at 16 kHz. It needs the models (`bun scripts/fetch-meeting-models.ts`) and the built
+exe; run it after touching `dictation_sidecar.rs`, `services/dictation.rs`,
+`infra/dictation_process.rs` or dictation's models in `infra/speech.rs`:
 
 ```bash
-cd src-tauri && cargo test dictation_live -- --ignored --nocapture
+cd src-tauri && cargo build && cargo test dictation_live -- --ignored --nocapture --test-threads=1
 ```
 
 ## Mutation testing

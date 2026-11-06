@@ -23,19 +23,13 @@ use std::time::Duration;
 
 use crate::domain::meeting::MeetingError;
 use crate::domain::recording::{self, Levels, RecordingState, Source, CHANNELS, HEADER_BYTES, RATE};
-use crate::infra::microphone::{parse_chosen, Input};
+use crate::infra::microphone::{parse_chosen, Input, CHECK};
 
 /// How often what the devices gave is written, and its levels told: ten a
 /// second at most, the throttle of a source that changes fast (AGENTS.md).
 const TICK: Duration = Duration::from_millis(100);
 /// A track whose sound ended this long before the other's is taken as silent (`recording::frames_ready`).
 const MAX_LAG: usize = RATE as usize;
-/// How often, in ticks, each side is checked for a device gone or the system's
-/// default moved: once a second.
-// ponytail: asked each second, not told — cpal says nothing when the default moves
-// from a device still there (macOS' loopback, a microphone); a listener of our own
-// on Core Audio and IMMNotificationClient if a second's delay is ever too long.
-const CHECK: u32 = 10;
 
 /// The recording under way, if one is. One at a time: there is one microphone.
 #[derive(Default)]

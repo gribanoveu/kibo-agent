@@ -11,8 +11,16 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample, StreamInstant};
 use sherpa_onnx::LinearResampler;
 
+use crate::domain::dictation::SoundIn;
 use crate::domain::meeting::MeetingError;
 use crate::domain::recording::{self, Microphone, Source, RATE};
+
+/// How often, in tenth-of-a-second ticks, a side is checked for a device gone
+/// or the system's default moved: once a second.
+// ponytail: asked each second, not told — cpal says nothing when the default moves
+// from a device still there (macOS' loopback, a microphone); a listener of our own
+// on Core Audio and IMMNotificationClient if a second's delay is ever too long.
+pub(super) const CHECK: u32 = 10;
 
 /// Sound as a device gave it: mono at its rate, and when it was captured.
 struct Chunk {
@@ -197,6 +205,44 @@ impl Input {
     }
 }
 
+/// The microphone alone, as a dictation reads it, a tick at a time. Its stream
+/// stays on the thread that opened it, as a recording's does, and closes with it.
+pub struct Capture {
+    host: cpal::Host,
+    input: Input,
+    origin: Option<StreamInstant>,
+    ticks: u32,
+}
+
+impl Capture {
+    /// `microphone` as the settings keep it, else the default, open and playing.
+    pub fn open(microphone: Option<&str>) -> Result<Self, MeetingError> {
+        let mut capture = Capture::closed(microphone)?;
+        capture.input.connect(&capture.host)?;
+        Ok(capture)
+    }
+
+    fn closed(microphone: Option<&str>) -> Result<Self, MeetingError> {
+        let mut input = Input::new(Source::Microphone, Arc::default())?;
+        input.chosen = parse_chosen(microphone);
+        Ok(Capture { host: cpal::default_host(), input, origin: None, ticks: 0 })
+    }
+}
+
+impl SoundIn for Capture {
+    fn pull(&mut self) -> Vec<f32> {
+        self.ticks += 1;
+        if self.ticks % CHECK == 0 {
+            self.input.follow(&self.host, &mut self.origin);
+        }
+        let track = &mut self.input.track;
+        track.pull(&mut self.origin, false);
+        let sound = std::mem::take(&mut track.pending);
+        track.take(sound.len());
+        sound
+    }
+}
+
 fn default_device(host: &cpal::Host, source: Source) -> Result<cpal::Device, MeetingError> {
     match source {
         Source::Microphone => host.default_input_device().ok_or(MeetingError::NoDevice("microphone")),
@@ -283,6 +329,31 @@ pub(super) fn give(track: &Track, ms: u64, samples: impl IntoIterator<Item = f32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_gives_what_came_once() {
+        let mut capture = Capture::closed(None).unwrap();
+        give(&capture.input.track, 0, [0.25, 0.5]);
+        assert_eq!(capture.pull(), [0.25, 0.5]);
+        assert!(capture.pull().is_empty(), "given already");
+        give(&capture.input.track, 1, [0.75]);
+        assert_eq!(capture.pull(), [0.75], "no gap put before sound that goes straight on");
+    }
+
+    #[test]
+    fn a_hole_in_a_captures_sound_is_as_long_as_it_was() {
+        let mut capture = Capture::closed(None).unwrap();
+        give(&capture.input.track, 0, std::iter::repeat_n(0.5, RATE as usize));
+        assert_eq!(capture.pull().len(), RATE as usize);
+        give(&capture.input.track, 2000, [0.5]);
+        assert_eq!(capture.pull().len(), RATE as usize + 1, "a second of silence, the second given not counted twice");
+    }
+
+    #[test]
+    fn a_capture_opens_the_microphone_chosen() {
+        let id = cpal::DeviceId::new(cpal::default_host().id(), "Built-In:Mic:1");
+        assert_eq!(Capture::closed(Some(&id.to_string())).unwrap().input.chosen, Some(id));
+    }
 
     #[test]
     fn a_chosen_microphone_is_kept_as_its_id_and_one_from_elsewhere_is_the_default() {

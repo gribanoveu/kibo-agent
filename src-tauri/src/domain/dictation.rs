@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::domain::recording::RATE;
+use crate::domain::recording::{self, RATE};
 
 /// `<exe> --dictation-sidecar <models>` is the recognition process.
 pub const SIDECAR_FLAG: &str = "--dictation-sidecar";
@@ -28,7 +28,7 @@ const TAG_CANCEL: u8 = 3;
 /// The most samples one [`Frame::Audio`] may carry, half a minute of sound. A
 /// frame carries a tick's worth: past this a length is a stream out of step,
 /// not to be believed.
-const LONGEST_AUDIO: usize = 1 << 19;
+pub const LONGEST_AUDIO: usize = 1 << 19;
 const LONGEST_FRAME_BYTES: usize = LONGEST_AUDIO * 2;
 
 /// What the message box hears of a dictation, on its channel.
@@ -76,6 +76,16 @@ pub enum DictationError {
     ModelsMissing,
     #[error("the {0} model did not load")]
     ModelFailed(&'static str),
+    #[error("voice input is turned off")]
+    Off,
+    #[error("a dictation is already running")]
+    Busy,
+    #[error("the microphone did not open: {0}")]
+    Microphone(String),
+    #[error("the recognition process did not start: {0}")]
+    NotStarted(String),
+    #[error("the recognition process ended: {0}")]
+    ProcessEnded(String),
 }
 
 /// What makes text of a phrase's sound.
@@ -94,6 +104,21 @@ pub trait PhraseDetector {
     fn flush(&self);
     /// Everything heard is forgotten, phrases not yet taken too.
     fn reset(&self);
+}
+
+/// The microphone as a dictation reads it.
+pub trait SoundIn {
+    /// What it gave since the last call, at 16 kHz, mono; empty when nothing came.
+    fn pull(&mut self) -> Vec<f32>;
+}
+
+/// The recognition process as a dictation talks to it.
+pub trait Recognition: Send {
+    fn send(&mut self, frame: &Frame) -> Result<(), DictationError>;
+    /// Its next line, waiting `wait` at most. `None`: nothing came in that time.
+    /// An error means it is gone.
+    fn line(&mut self, wait: Duration) -> Result<Option<DictationLine>, DictationError>;
+    fn alive(&mut self) -> bool;
 }
 
 /// What the app tells the recognition process. Its stdin closing is the app gone.
@@ -179,6 +204,12 @@ pub fn spoken(recognized: &str) -> Option<&str> {
     text.chars().any(char::is_alphanumeric).then_some(text)
 }
 
+/// The peak of each quarter of a tick's `samples`, for the wave in the box to
+/// move smoothly on ten messages a second.
+pub fn quarters(samples: &[f32]) -> [f32; 4] {
+    std::array::from_fn(|i| recording::peak(&samples[samples.len() * i / 4..samples.len() * (i + 1) / 4]))
+}
+
 /// When to recognize the open phrase again. Times are since any fixed moment.
 #[derive(Debug, Default)]
 pub struct PartialPasses {
@@ -207,6 +238,14 @@ impl PartialPasses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ticks_peaks_are_its_quarters_in_order() {
+        let samples = [0.1, 0.0, 0.0, -0.2, 0.3, 0.0, 0.0, 0.4];
+        assert_eq!(quarters(&samples), [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(quarters(&[0.5, 0.25, 0.1]), [0.0, 0.5, 0.25, 0.1], "what does not divide still all counts");
+        assert_eq!(quarters(&[]), [0.0; 4]);
+    }
 
     fn taken(mut stream: Vec<u8>) -> (Result<Option<Frame>, DictationError>, Vec<u8>) {
         (Frame::take(&mut stream), stream)

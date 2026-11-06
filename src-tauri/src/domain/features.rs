@@ -24,6 +24,7 @@ pub enum Feature {
     VoiceMemory,
     Knowledge,
     Mongodb,
+    VoiceInput,
 }
 
 /// Why a choice on the Catalog was not saved.
@@ -48,7 +49,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -122,6 +123,15 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::Mongo],
                 data: Some("mongo_connections.enc"),
+            },
+            Feature::VoiceInput => Manifest {
+                id: "voice-input",
+                name: "Voice input",
+                description: "Dictate into the message box: the microphone button beside Send, or hold the right Option key. \
+                    Russian only. The speech is recognized on this computer and no sound is kept; the text goes nowhere until you send it.",
+                enabled_by_default: false,
+                tools: &[],
+                data: None,
             },
         }
     }
@@ -201,7 +211,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input"]);
     }
 
     #[test]

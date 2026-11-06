@@ -55,6 +55,7 @@ pub mod recent_workspaces;
 pub mod kube_changes;
 pub mod paths;
 pub mod speech;
+pub mod dictation_process;
 pub mod meeting_process;
 pub mod meeting_store;
 pub mod meeting_audio;

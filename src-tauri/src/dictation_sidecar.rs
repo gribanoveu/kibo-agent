@@ -205,7 +205,7 @@ impl<R: PhraseRecognizer, D: PhraseDetector> Listener<R, D> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
@@ -556,7 +556,7 @@ mod tests {
     }
 
     /// A phrase, a pause and a phrase in a macOS voice.
-    fn voice(label: &str) -> Vec<f32> {
+    pub(crate) fn voice(label: &str) -> Vec<f32> {
         let dir = std::env::temp_dir().join(format!("kibo-dictation-live-{label}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let wav = dir.join("phrase.wav");
