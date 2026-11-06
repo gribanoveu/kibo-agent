@@ -41,7 +41,7 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-family: inherit;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: transparent;
 }
@@ -128,6 +128,7 @@
 .composer-wrap {
   /* The settings panel hangs from here. */
   position: relative;
+  margin-top: 2px;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -184,7 +185,7 @@
   border: 0;
   color: var(--text);
   font-family: inherit;
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   line-height: 1.5;
   text-align: left;
   cursor: pointer;

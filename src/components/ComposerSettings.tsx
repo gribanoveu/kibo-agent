@@ -69,7 +69,7 @@ export function ComposerPanel({
     };
     // A menu open in the panel takes this Escape; the panel takes the next.
     const onKey = (e: KeyboardEvent) => {
-      if (matches(e, "close") && !wrap.current?.querySelector(".dropdown-menu")) setOpen(false);
+      if (matches(e, "close") && !e.defaultPrevented) setOpen(false);
     };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
@@ -135,9 +135,9 @@ export function ComposerSettings({ models, onModel, onEffort, onLoadModels, mode
       className="composer-settings"
       summary={
         <>
-          {modeLabel && <span>{modeLabel}</span>}
+          {modeLabel && <span>{modeLabel.toLowerCase()}</span>}
           <span className="composer-settings-shrink">{label.slice(cut)}</span>
-          {models.current && <span>{effortLabel}</span>}
+          {models.current && <span>{effortLabel?.toLowerCase()}</span>}
           {note}
         </>
       }

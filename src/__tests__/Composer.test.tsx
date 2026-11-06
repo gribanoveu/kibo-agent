@@ -93,13 +93,37 @@ describe("the settings panel", () => {
       />,
     );
     const words = [...document.querySelectorAll(".composer-settings-summary > span")].map((el) => el.textContent);
-    expect(words).toEqual(["Plan", "claude-sonnet-5", "High", "Ask"]);
+    expect(words).toEqual(["plan", "claude-sonnet-5", "high", "ask"]);
+  });
+
+  /// The app's words are lower case on the line; a model's name is its own.
+  test("a model's name keeps its case on the line", () => {
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: { providerId: "Local", model: "GPT-4o", label: "local/GPT-4o" } }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+    expect(document.querySelector(".composer-settings-shrink")?.textContent).toBe("GPT-4o");
   });
 
   test("with no model, the line says so and no level", () => {
     composer("agent");
     const words = [...document.querySelectorAll(".composer-settings-summary > span")].map((el) => el.textContent);
-    expect(words).toEqual(["Agent", "no model", "Ask"]);
+    expect(words).toEqual(["agent", "no model", "ask"]);
   });
 
   test("opens and closes on its button, and stays open while a row is used", () => {
@@ -124,11 +148,11 @@ describe("the settings panel", () => {
     fireEvent.click(screen.getByTitle("What the agent may do"));
     expect(screen.getByRole("listbox")).toBeTruthy();
 
-    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    fireEvent.keyDown(document.body, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(screen.getByRole("dialog")).toBeTruthy();
 
-    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    fireEvent.keyDown(document.body, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -208,12 +232,12 @@ describe("the permission switch", () => {
   test("what it says is on the line, last, Auto marked and Ask not", () => {
     const first = composer("agent", () => {}, true);
     const words = () => [...document.querySelectorAll(".composer-settings-summary > span")];
-    expect(words().at(-1)?.textContent).toBe("Auto");
+    expect(words().at(-1)?.textContent).toBe("auto");
     expect(words().at(-1)?.className).toBe("composer-auto");
     first.unmount();
 
     composer("agent", () => {}, false);
-    expect(words().at(-1)?.textContent).toBe("Ask");
+    expect(words().at(-1)?.textContent).toBe("ask");
     expect(document.querySelector(".composer-auto")).toBeNull();
   });
 });
@@ -327,7 +351,10 @@ describe("the line under the box", () => {
     );
     const strip = document.querySelector(".composer-strip");
     expect(strip?.previousElementSibling?.className).toBe("composer");
-    expect([...(strip?.children ?? [])].map((el) => el.textContent)).toEqual(["the folder", "Agentno modelAsk", "the balance"]);
+    const [folder, settings, balance] = [...(strip?.children ?? [])];
+    expect(folder.textContent).toBe("the folder");
+    expect(settings.className).toBe("composer-settings");
+    expect(balance.textContent).toBe("the balance");
   });
 });
 

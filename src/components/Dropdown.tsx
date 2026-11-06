@@ -57,14 +57,18 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
     const onDown = (e: PointerEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
+    // In the capture phase, so the menu has this Escape before anything round
+    // it, whichever listened first; what it took, `defaultPrevented` says.
     const onKey = (e: KeyboardEvent) => {
-      if (matches(e, "close")) setOpen(false);
+      if (!matches(e, "close")) return;
+      e.preventDefault();
+      setOpen(false);
     };
     document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 

@@ -31,10 +31,6 @@
   min-width: 0;
   white-space: nowrap;
 }
-/* Words of the app's, and a model's name that already is. */
-.composer-settings .composer-settings-summary {
-  text-transform: lowercase;
-}
 .composer-settings-summary > span {
   flex: none;
 }
