@@ -24,6 +24,13 @@
   -webkit-user-select: text;
   user-select: text;
 }
+/* The reader keeps the size it was drawn at: `.chat-text` gives the chat a base
+   of its own (tokens.css), while a document in a window of its own — with a zoom
+   of its own in the bar — reads a step above that. Its own `--chat-font-scale`,
+   not the chat's `--font-scale`, which also carries the chat's gain. */
+.viewer-scroll.chat-text {
+  font-size: calc(16px * var(--chat-font-scale, 1.1));
+}
 
 /* As wide as the window: the text reflows when it is resized. */
 .viewer-page {
