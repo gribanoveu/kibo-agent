@@ -774,7 +774,7 @@ function MeetingView({
           </>
         }
       >
-        <div className="meeting-notes">
+        <div className="meeting-notes text-scale">
           {notes ? (
             <Markdown text={notes} streaming={writing} />
           ) : (
@@ -809,7 +809,7 @@ function MeetingView({
 
       <MeetingCard title="Transcript" icon={<MessageSquareText size={14} className="meeting-card-icon" />}>
         <Speakers meeting={meeting} onRename={onRename} />
-        <div className="meeting-transcript">
+        <div className="meeting-transcript text-scale">
           {turns(meeting).map((turn, i, all) => {
             // The turn the player is in, once it has started.
             const now = player.time > 0 && player.time >= turn.start && player.time < (all[i + 1]?.start ?? Infinity);
@@ -885,7 +885,7 @@ function DocumentCard({
         </>
       }
     >
-      <div className="meeting-notes">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
+      <div className="meeting-notes text-scale">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
     </MeetingCard>
   );
 }
@@ -1051,7 +1051,7 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
           </>
         }
       >
-        <p className="meetings-confirm">Every sample of it goes. The name stays where you gave it, as text.</p>
+        <p className="meetings-confirm text-scale">Every sample of it goes. The name stays where you gave it, as text.</p>
       </Modal>
     </PageSheet>
   );

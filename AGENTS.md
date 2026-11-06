@@ -130,6 +130,8 @@ The pattern for a dropdown is a `<button>` trigger plus a `role="listbox"` menu 
 
 Colours, spacing and fonts come from the tokens in `src/styles/tokens.css` (`--bg-*`, `--text-*`, `--border`, `--accent`, `--font-ui*`). A literal hex or pixel font size in a component is a bug: it will not follow the user's theme or font-size preference.
 
+**A sheet, and a dialog that carries prose, reads at the sheet's size — and its text names a token.** A `PageSheet` body carries `.text-scale`, so the type scale inside it is the user's text size and not the app's; but that only reaches what names a step. Prose left to inherit takes `font-size` from `.page-sheet-body` (`16px × the text size`), and Markdown's `em` headings (`Markdown.css`) then land a third above everything around them — which is what a document read in such a panel looked like before it was set the way the Catalog's details are. So content sets `--fs-md` for what is read and `--fs-lg` for a heading (`.catalog-detail-text`, `.knowledge-doc-text`, `.artifacts-text`, `.meeting-notes`), and the two steps under stay for what is a label — a meta line, an id, a count. A dialog that carries prose outside a sheet gets the same by putting `text-scale` on its body (the install screens, `McpInstall.tsx` and the Catalog's).
+
 A component used from more than one place carries its own styles rather than borrowing a neighbour's — CSS is bundled globally, so borrowing appears to work right up until the neighbour is deleted.
 
 ## Commit / PR expectations

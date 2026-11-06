@@ -531,9 +531,10 @@
 /* The type scale. Five steps, not a size per component: monospace is for
    code, paths and diffs only — labels and chrome use --font-ui.
    Declared again on what the user reads at the size they chose — the chat, and
-   what reads like it (`.text-scale`: a file as it renders, a sheet's contents),
-   both set by useChatFontSize — so that there it is computed with that size,
-   while the rest of the app keeps the scale of 1. */
+   what reads like it (`.text-scale`: a file as it renders, a sheet's contents,
+   the screen that installs a server or a hook), both set by useChatFontSize —
+   so that there it is computed with that size, while the rest of the app keeps
+   the scale of 1. */
 :root,
 .chat-text,
 .text-scale {
@@ -546,13 +547,16 @@
 .chat-text {
   --font-ui: var(--font-chat);
   font-family: var(--font-chat);
-  --font-scale: var(--chat-font-scale, 1.1);
-  /* Sizes in em inside the chat follow the preference too. */
-  font-size: calc(16px * var(--font-scale));
+  /* The chat counts from a base a step above the app's own --fs-md — 14px where
+     a chat's name in the sidebar is 13 — and the four steps (useChatFontSize)
+     multiply that, so what is in `em` and every step of the scale follow it. */
+  --font-scale: calc(var(--chat-font-scale, 1.1) * 1.08);
+  font-size: var(--fs-md);
 }
 /* What reads like the chat rather than the chrome around it — a file as it
-   renders, a sheet's contents: the type scale above is recomputed with the
-   user's text size, and their sizes and the em inside them follow it. */
+   renders, a sheet's contents, what a screen installing something asks you to
+   read: the type scale above is recomputed with the user's text size, and their
+   sizes and the em inside them follow it. */
 .text-scale {
   --font-scale: var(--chat-font-scale, 1.1);
 }

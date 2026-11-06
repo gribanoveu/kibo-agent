@@ -230,7 +230,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
 
   return (
     <form
-      className="mcp-install"
+      className="mcp-install text-scale"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
