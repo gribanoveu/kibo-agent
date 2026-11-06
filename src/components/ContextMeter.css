@@ -11,6 +11,9 @@
   border-radius: var(--radius-sm);
   background: none;
   cursor: pointer;
+  /* The focus ring is the platform's, as on every other button here. Without
+     this it also takes in the rotated circles, and comes out crooked. */
+  overflow: hidden;
 }
 .ctx-ring:hover,
 .ctx-ring.open {
