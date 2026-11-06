@@ -1,17 +1,19 @@
-/* Cards, one per thing to look at, each with a heading that says which. */
+/* Sections, one per thing to look at, each with a heading that says which. */
 .overview {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 
 .overview-card {
-  padding: 10px 6px 8px;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
+  padding: 10px 0;
+}
+.overview-card:first-child {
+  padding-top: 4px;
+}
+.overview-card + .overview-card {
+  border-top: 1px solid var(--border-soft);
 }
 
 .overview-head {
@@ -20,9 +22,9 @@
   gap: 6px;
   margin: 0 0 6px;
   padding: 0 6px;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-dim);
 }
 .overview-count {
   font-weight: 400;
@@ -42,6 +44,7 @@
 .overview-link .overview-chev {
   margin-left: auto;
 }
+.overview-link:hover,
 .overview-link:hover .overview-chev {
   color: var(--text);
 }
@@ -141,12 +144,14 @@
 .overview-ctx {
   display: flex;
   flex-direction: column;
-  padding-left: 12px;
-  padding-right: 12px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 .overview-ctx .ctx-head {
   margin-bottom: 8px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-dim);
 }
 .overview-ctx .ctx-rows {
   margin-bottom: 8px;
