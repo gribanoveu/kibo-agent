@@ -41,7 +41,7 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font-family: inherit;
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: transparent;
 }

@@ -683,6 +683,10 @@ button.turn-processes:hover {
 .bubble-foot:focus-within {
   opacity: 1;
 }
+/* Not a detail for the hover: it is what the note is waiting for. */
+.bubble-foot.unread {
+  opacity: 1;
+}
 .bubble-action {
   display: inline-flex;
   align-items: center;

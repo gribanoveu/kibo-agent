@@ -654,6 +654,8 @@ export default function App() {
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
             onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
+            steered={agent.steered}
+            onWithdraw={agent.withdraw}
           />
           <Composer
             tab={
@@ -696,8 +698,6 @@ export default function App() {
             onQueue={agent.queue}
             queued={agent.queued}
             onUnqueue={agent.unqueue}
-            steered={agent.steered}
-            onWithdraw={agent.withdraw}
             focus={composerFocus}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}

@@ -905,13 +905,11 @@ describe("the queue", () => {
   function queueing(
     running: boolean,
     queued: { id: number; text: string; images?: ImagePart[] }[] = [],
-    steered: { id: string; text: string; images?: ImagePart[] }[] = [],
   ) {
     const sent: string[] = [];
     const held: string[] = [];
     const heldPictures: ImagePart[][] = [];
     const taken: number[] = [];
-    const withdrawn: string[] = [];
     const ran: string[] = [];
     // The box's whole state, so a test can hand it a picture the way a
     // taken-back note does — through `quote`, which only new values apply.
@@ -925,8 +923,6 @@ describe("the queue", () => {
         }}
         queued={queued}
         onUnqueue={(id) => taken.push(id)}
-        steered={steered}
-        onWithdraw={(id) => withdrawn.push(id)}
         onStop={() => {}}
         running={running}
         imagesEnabled
@@ -951,7 +947,7 @@ describe("the queue", () => {
       fireEvent.change(box, { target: { value: text } });
       fireEvent.keyDown(box, { code: "Enter", key: "Enter", altKey: true });
     };
-    return { ...view, build, sent, held, heldPictures, taken, withdrawn, ran, box, altEnter };
+    return { ...view, build, sent, held, heldPictures, taken, ran, box, altEnter };
   }
 
   /// A message held for after the turn carries its pictures too: left in the
@@ -1012,29 +1008,18 @@ describe("the queue", () => {
     expect(taken).toEqual([2]);
   });
 
-  /// A note sent into the turn is listed above the queue — it is read sooner —
-  /// and taking it back is its own action, not the queue's.
-  test("a note the turn has not read yet is listed first, and can be taken back", () => {
-    const { taken, withdrawn } = queueing(true, [{ id: 1, text: "then the docs" }], [{ id: "n-1", text: "use the helper" }]);
-    const list = screen.getByRole("list", { name: "Queued messages" });
-    expect([...list.querySelectorAll(".composer-queue-text")].map((el) => el.textContent)).toEqual(["use the helper", "then the docs"]);
-    fireEvent.click(screen.getByRole("button", { name: "Take back to the message box" }));
-    expect(withdrawn).toEqual(["n-1"]);
-    expect(taken).toEqual([]);
-  });
-
-  /// A note can be a picture with nothing typed around it: the row has to
+  /// A message can be a picture with nothing typed around it: the row has to
   /// say something, and what it says is that it is a picture.
-  test("a note that is only a picture is listed as one", () => {
+  test("a message that is only a picture is listed as one", () => {
     const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
-    queueing(true, [], [{ id: "n-1", text: "", images: [picture] }]);
+    queueing(true, [{ id: 1, text: "", images: [picture] }]);
     expect(screen.getByRole("button", { name: "A picture" })).toBeTruthy();
   });
 
-  test("a note of several pictures says how many", () => {
+  test("a message of several pictures says how many", () => {
     const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
     const two: ImagePart = { mediaType: "image/png", data: "PNG", width: 5, height: 3 };
-    queueing(true, [], [{ id: "n-1", text: "", images: [picture, two] }]);
+    queueing(true, [{ id: 1, text: "", images: [picture, two] }]);
     expect(screen.getByRole("button", { name: "2 pictures" })).toBeTruthy();
   });
 
@@ -1042,18 +1027,20 @@ describe("the queue", () => {
   /// and in a held message alike.
   test("a row with words says it carries a picture too", () => {
     const picture: ImagePart = { mediaType: "image/png", data: "PNG", width: 4, height: 3 };
-    queueing(true, [{ id: 1, text: "then the docs", images: [picture] }], [{ id: "n-1", text: "why red?", images: [picture] }]);
-    expect(screen.getByRole("button", { name: "why red? · a picture" })).toBeTruthy();
+    queueing(true, [{ id: 1, text: "then the docs", images: [picture] }]);
     expect(screen.getByRole("button", { name: "then the docs · a picture" })).toBeTruthy();
   });
 
   /// What a row is and when it is read is said on it, not in a tooltip; a long
   /// one opens whole on a click, one at a time.
   test("a row says what it is and when it is read, and opens whole on a click", () => {
-    queueing(true, [{ id: 1, text: "then the docs" }], [{ id: "n-1", text: "use the helper" }]);
+    queueing(true, [
+      { id: 1, text: "use the helper" },
+      { id: 2, text: "then the docs" },
+    ]);
     const list = screen.getByRole("list", { name: "Queued messages" });
-    expect([...list.querySelectorAll(".composer-queue-kind")].map((el) => el.textContent)).toEqual(["Steering", "Queued"]);
-    expect([...list.querySelectorAll(".composer-queue-when")].map((el) => el.textContent)).toEqual(["Next step", "After this turn"]);
+    expect([...list.querySelectorAll(".composer-queue-kind")].map((el) => el.textContent)).toEqual(["Queued", "Queued"]);
+    expect([...list.querySelectorAll(".composer-queue-when")].map((el) => el.textContent)).toEqual(["After this turn", "After this turn"]);
 
     const [note, queued] = [screen.getByRole("button", { name: "use the helper" }), screen.getByRole("button", { name: "then the docs" })];
     fireEvent.click(note);

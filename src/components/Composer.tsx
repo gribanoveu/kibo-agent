@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SendHorizontal, Square, ShieldCheck, CornerDownRight, GitFork, MessageSquareReply, X } from "lucide-react";
+import { SendHorizontal, Square, ShieldCheck, CornerDownRight, GitFork, X } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
 import { ContextMeter } from "./ContextMeter";
@@ -37,10 +37,6 @@ type Props = {
   /** What is waiting for the turn to end; a row taken out goes back to the box. */
   queued?: { id: number; text: string; images?: ImagePart[] }[];
   onUnqueue?: (id: number) => void;
-  /** Notes sent into the running turn that no round has read yet; one taken
-      back goes to the box, with the pictures it carried. */
-  steered?: { id: string; text: string; images?: ImagePart[] }[];
-  onWithdraw?: (id: string) => void;
   onStop: () => void;
   running: boolean;
   /** Both settings live above this component: the backend has to be told, and
@@ -93,8 +89,6 @@ export function Composer({
   onQueue,
   queued = [],
   onUnqueue,
-  steered = [],
-  onWithdraw,
   onStop,
   running,
   conversation,
@@ -119,7 +113,7 @@ export function Composer({
 }: Props) {
   const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
-  const [openRow, setOpenRow] = useState<string | null>(null);
+  const [openRow, setOpenRow] = useState<number | null>(null);
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const attachments = useAttachments(boxTakesPictures(imagesEnabled), draftKey);
@@ -253,32 +247,38 @@ export function Composer({
 
   // A card of the queue: what it is and when it is read, said in words rather
   // than in a tooltip, over its text, cut to a line until clicked open.
-  const queueRow = (key: string, icon: ReactNode, kind: string, when: string, text: string, back: string, onBack: () => void) => {
-    const open = openRow === key;
+  const queueRow = (item: { id: number; text: string; images?: ImagePart[] }) => {
+    const open = openRow === item.id;
     return (
-      <li key={key}>
+      <li key={item.id}>
         <div className="composer-queue-head">
-          {icon}
-          <span className="composer-queue-kind">{kind}</span>
-          <span className="composer-queue-when">{when}</span>
-          <button type="button" className="composer-queue-back" title={back} aria-label={back} onClick={onBack}>
+          <CornerDownRight size={13} />
+          <span className="composer-queue-kind">Queued</span>
+          <span className="composer-queue-when">After this turn</span>
+          <button
+            type="button"
+            className="composer-queue-back"
+            title="Back to the message box"
+            aria-label="Back to the message box"
+            onClick={() => onUnqueue?.(item.id)}
+          >
             <X size={13} />
           </button>
         </div>
         <button
           type="button"
-          className={`composer-queue-text chat-text${open ? " open" : ""}`}
+          className={`composer-queue-text${open ? " open" : ""}`}
           aria-expanded={open}
-          onClick={() => setOpenRow(open ? null : key)}
+          onClick={() => setOpenRow(open ? null : item.id)}
         >
-          {text}
+          {rowText(item.text, item.images)}
         </button>
       </li>
     );
   };
 
   /** What a row of the queue says: what was typed, and the pictures that go
-      with it — a row is a line, so they are counted rather than drawn. A note
+      with it — a row is a line, so they are counted rather than drawn. A message
       can be a picture with nothing typed around it. */
   const rowText = (text: string, images?: ImagePart[]) => {
     const count = images?.length ?? 0;
@@ -289,32 +289,9 @@ export function Composer({
 
   return (
     <div className="composer-wrap">
-      {(steered.length > 0 || queued.length > 0) && (
+      {queued.length > 0 && (
         <ul className="composer-queue" aria-label="Queued messages">
-          {/* The notes first: they reach the agent at its next step, the
-              queue only after the turn. */}
-          {steered.map((note) =>
-            queueRow(
-              `note-${note.id}`,
-              <MessageSquareReply size={13} />,
-              "Steering",
-              "Next step",
-              rowText(note.text, note.images),
-              "Take back to the message box",
-              () => onWithdraw?.(note.id),
-            ),
-          )}
-          {queued.map((item) =>
-            queueRow(
-              `queued-${item.id}`,
-              <CornerDownRight size={13} />,
-              "Queued",
-              "After this turn",
-              rowText(item.text, item.images),
-              "Back to the message box",
-              () => onUnqueue?.(item.id),
-            ),
-          )}
+          {queued.map((item) => queueRow(item))}
         </ul>
       )}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
