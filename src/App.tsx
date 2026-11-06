@@ -59,7 +59,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { type ConversationMode, previewCalls, setConversationMode } from "./lib/chat";
+import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
@@ -198,7 +198,7 @@ export default function App() {
   // What the agent may do this turn, and whether anyone is asked before it
   // does it. Two chips, two questions — and both are enforced on the backend,
   // so these hold only what the chips read back.
-  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode);
+  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode, getConversationMode);
   const toast = useToast();
   const workspace = useWorkspace();
   const index = useIndexStatus(workspace.path);
@@ -277,7 +277,7 @@ export default function App() {
     chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
-  // Servers start with an Agent turn and may stop during one.
+  // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
@@ -397,7 +397,6 @@ export default function App() {
       started: agent.turn.blocks.length > 0,
       folder: !!workspace.path,
       agentMode: conversation.value === "agent",
-      askMode: conversation.value === "ask",
       knowledge: features.isOn("knowledge"),
     },
     {
@@ -491,6 +490,8 @@ export default function App() {
     if (kind === "review") return agent.review(true);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
+    // Not `send`: that would drop the checklist the plan came with.
+    if (kind === "implement") return implement();
     const id = agent.chatId;
     if (!id) return;
     try {
@@ -604,7 +605,9 @@ export default function App() {
       plan: agent.plan,
       checklist: agent.checklist,
       onEdit: agent.editPlan,
-      onImplement: conversation.value === "plan" ? implement : undefined,
+      // Not while a turn waits on a card either: the message would queue, and
+      // a queued one drops the checklist.
+      onImplement: turnBusy ? undefined : implement,
       locked: agent.turn.status === "running",
     },
   };
@@ -640,7 +643,6 @@ export default function App() {
             onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
-            onImplement={conversation.value === "plan" ? implement : undefined}
             onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
             onOpenProcess={openProcess}

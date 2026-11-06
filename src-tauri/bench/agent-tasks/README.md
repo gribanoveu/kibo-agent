@@ -6,7 +6,8 @@ One directory per task, run by `src/services/agent_bench.rs`:
 - `repo/` — the folder the agent opens. Copied fresh for every run.
 - `check.sh` — run afterwards in the copy; exit 0 means solved. It and anything
   beside it (hidden tests) stay outside the copy, so the agent never sees them.
-  It gets `WORKSPACE` (the copy), `ORIG` (this `repo/`) and `TASK` (this directory).
+  It gets `WORKSPACE` (the copy), `ORIG` (this `repo/`), `TASK` (this directory) and
+  `PLAN` (a file with what the turn's last `writePlan` said, empty if none).
 
 Files here are byte-exact (`-text` in `.gitattributes`): `crlf-edit` depends on it.
 
@@ -24,6 +25,7 @@ Files here are byte-exact (`-text` in `.gitattributes`): `crlf-edit` depends on 
 | `flaky-counter` | a thread race the test shows in `hit`, and the same race in `take` it does not |
 | `migrate-records` | a written spec with a dozen edge cases, checked against a reference on hidden input |
 | `log-forensics` | 1 MB of logs, two causes of 500s — one of them three lines in one file; tests required |
+| `plan-on-request` | asked for a plan, not the work: the plan is written and the tree stays as it was — only the prompt holds this |
 | `mixed-endings` | a file half LF, half CRLF; the line to fix repeats, so one line cannot anchor it and two cross a CRLF `editFile` refuses — the route has to change (the loop guard's case) |
 
 Every check was run three ways when written: on the untouched repo (fails), with a

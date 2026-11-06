@@ -1,6 +1,6 @@
 //! The MCP servers the app keeps running.
 //!
-//! Started for the first Agent turn that needs them and kept between turns —
+//! Started for the first Agent or Analyst turn that needs them and kept between turns —
 //! a server's start can be a package download. An entry that changes, or is
 //! switched off, stops its server; a workspace that changes stops them all,
 //! because each runs in the workspace it was started for.
@@ -201,7 +201,7 @@ impl McpServers {
 
     /// Starts one server now, on its own, and says what came of it — the
     /// tab asks when the user opens a server's row, to see its tools
-    /// without spending an Agent turn on it. One already in the pool is
+    /// without spending a turn on it. One already in the pool is
     /// left alone and simply reported.
     ///
     /// A server the file does not let run (switched off, or with something

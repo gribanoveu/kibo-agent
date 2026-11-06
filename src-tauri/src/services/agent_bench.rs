@@ -269,6 +269,32 @@ impl Run {
     }
 }
 
+/// What the turn's last `writePlan` said.
+fn written_plan(history: &[LlmMessage]) -> Option<String> {
+    history.iter().rev().flat_map(|message| message.tool_calls.iter().rev()).find_map(|call| {
+        (call.name == crate::domain::tools::ToolName::WritePlan.wire_name())
+            .then(|| serde_json::from_str::<crate::domain::tools::WritePlanArgs>(&call.arguments).ok())
+            .flatten()
+            .map(|args| args.content)
+    })
+}
+
+/// A plan rewritten in a turn is the plan the check reads.
+#[test]
+fn the_check_reads_the_last_plan() {
+    let call = |id: &str, name: &str, arguments: &str| crate::domain::llm::LlmToolCall {
+        id: id.into(),
+        name: name.into(),
+        arguments: arguments.into(),
+    };
+    let history = [
+        LlmMessage::tool_requests(vec![call("a", "writePlan", r##"{"content":"# First"}"##)]),
+        LlmMessage::tool_requests(vec![call("b", "writePlan", r##"{"content":"# Second"}"##), call("c", "offer", "{}")]),
+    ];
+    assert_eq!(written_plan(&history).as_deref(), Some("# Second"));
+    assert_eq!(written_plan(&history[..0]), None);
+}
+
 fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Task, run: usize, limit: Duration) -> Run {
     let work = workspace(task, run);
     let scope = ToolScope::new(&work).unwrap();
@@ -332,6 +358,14 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     let outcome = llm_chat::stream(&turn, vec![LlmMessage::user(task.prompt.clone())], Vec::new());
     let seconds = started.elapsed().as_secs_f64();
 
+    // Chat state, so outside the copy: a task about a plan has no file to check.
+    let plan_file = work.with_extension("plan.md");
+    let plan = match &outcome {
+        Ok(ChatStreamOutcome::Done(done) | ChatStreamOutcome::Cancelled(done)) => written_plan(&done.history),
+        _ => None,
+    };
+    std::fs::write(&plan_file, plan.unwrap_or_default()).unwrap();
+
     // Stubs left in the history: how many results the turn cleared.
     let stubs = |history: &[LlmMessage]| {
         history.iter().filter(|m| m.content.as_deref().is_some_and(|c| c.starts_with(STUB_PREFIX))).count()
@@ -350,6 +384,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         .env("WORKSPACE", &work)
         .env("ORIG", task.dir.join("repo"))
         .env("TASK", &task.dir)
+        .env("PLAN", &plan_file)
         .output()
         .unwrap();
     let check_output = format!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));

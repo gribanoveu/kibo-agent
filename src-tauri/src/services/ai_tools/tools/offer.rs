@@ -4,7 +4,8 @@
 //!
 //! The tool, not the prompt, decides whether there is anything to offer: a
 //! review needs a change `/review` would read, a commit a tree that differs
-//! from HEAD. Otherwise the model reads why not, and no button appears.
+//! from HEAD, and implementing a plan needs one. Otherwise the model reads
+//! why not, and no button appears.
 
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::review;
@@ -50,6 +51,11 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
             })?;
             git_branches::pr_ready(scope.root(), base).map_err(|e| ToolError::Command(e.to_string()))?;
         }
+        OfferKind::Implement => {
+            if !deps.has_plan {
+                return Err(ToolError::Command("no plan to implement: write it with writePlan first".into()));
+            }
+        }
     }
     Ok(ToolResult::Offered { kind: args.kind })
 }
@@ -62,12 +68,13 @@ review: once, at the end of a task whose change is not trivial — several files
 commit: when the task is done and checked, and the user has not said they commit themselves. \
 worktree: while another chat is running in this checkout and this task needs file changes; pressing it moves only this chat to a clean worktree from the current branch. \
 pullRequest: after committing this chat's worktree changes, when the branch is ahead of and not behind its recorded base; pressing it asks you to push and create the PR with confirmed commands. \
+implement: after writePlan, when the user asked for a plan rather than the work; pressing it asks you to carry the plan out, so end your turn there. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest"] },
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "implement"] },
                 "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
             },
             "required": ["kind", "reason"]
@@ -163,6 +170,28 @@ mod tests {
             offer(&scope, &args(OfferKind::PullRequest, "publish it"), &deps).unwrap(),
             ToolResult::Offered { kind: OfferKind::PullRequest }
         );
+    }
+
+    #[test]
+    fn a_plan_is_offered_only_once_there_is_one() {
+        let (_dir, scope) = folder("offer-implement");
+        let refused = offer(&scope, &args(OfferKind::Implement, "the parser"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("no plan"), "{refused}");
+        let deps = ToolDeps { has_plan: true, ..ToolDeps::default() };
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Implement, "the parser"), &deps).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Implement }
+        );
+    }
+
+    /// A kind left out of the schema is one the model is never told it can use.
+    #[test]
+    fn the_schema_lists_every_kind() {
+        let schema = definition().parameters;
+        let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::Implement] {
+            assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
+        }
     }
 
     #[test]

@@ -211,6 +211,8 @@ pub struct AppSettings {
     pub folder_trust: FolderTrust,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
+    /// The mode picked in the composer's panel, for every folder.
+    pub conversation_mode: crate::domain::conversation_mode::PickedMode,
     /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
     pub kube: KubeSettings,
     /// Which search a chat's `webSearch` asks. `None` in every file written
@@ -262,7 +264,7 @@ impl AppSettings {
 pub enum WebSearchPlace {
     /// Chat mode, with no folder.
     Chat,
-    /// A folder, in any mode: the tools only read, so Plan and Ask have them too.
+    /// A folder, in any mode: the tools only read, so Analyst has them too.
     Agent,
 }
 

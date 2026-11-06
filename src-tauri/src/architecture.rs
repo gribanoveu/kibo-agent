@@ -347,3 +347,13 @@ fn the_version_in_the_window_is_the_one_the_build_sends() {
         "src-tauri/tauri.conf.json and src-tauri/Cargo.toml are bumped together"
     );
 }
+
+/// The mode picked is read back on both sides, and neither line is under a test
+/// of its own: `App` is not rendered in tests, and the builder runs only in the app.
+#[test]
+fn the_mode_picked_comes_back_when_the_app_starts() {
+    let lib_rs = fs::read_to_string(crate_dir().join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("AgentState::restored()"), "the backend starts without the mode picked last");
+    let app = fs::read_to_string(crate_dir().join("../src/App.tsx")).unwrap();
+    assert!(app.contains("getConversationMode)"), "the window does not ask which mode turns run in");
+}

@@ -14,7 +14,7 @@ export type FeatureView = {
   tools: { name: string; description: string }[];
   /** Whether the model gets them while the feature is on. */
   toolsOn: boolean;
-  /** Where: "Assistant chat", "Agent", "Plan", "Ask". */
+  /** Where: "Assistant chat", "Agent", "Analyst". */
   places: string[];
   /** Its file, `~/.kibo/…`; null for a feature with none. */
   data: string | null;

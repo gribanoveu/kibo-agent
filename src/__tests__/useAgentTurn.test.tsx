@@ -716,7 +716,7 @@ describe("branching", () => {
   });
 
   /// What an answer left open is dropped by the next request, and the model is
-  /// sent the list as it stands — except the plan handed over from Plan mode.
+  /// sent the list as it stands — except the plan handed over to be implemented.
   test("a new message drops what the last answer left open", async () => {
     results.chat_start = (args: Record<string, unknown>) => ({
       status: "done",

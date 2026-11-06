@@ -593,6 +593,9 @@
   margin-bottom: -1px;
   border-radius: var(--radius);
 }
+/* Notes and documents read at the sheet's scale — `text-scale` in the markup,
+   as the Catalog's details panel does — so their text is --fs-md and a
+   section's heading --fs-lg, whatever the page around them is set to. */
 .meeting-notes {
   padding: 14px 18px 16px;
   font-size: var(--fs-md);
@@ -644,6 +647,8 @@
   opacity: 0.5;
   cursor: default;
 }
+/* The spoken text at the same scale as the notes (`text-scale` in the markup):
+   a turn is --fs-md, its time and speaker's mark the two steps under it. */
 .meeting-transcript {
   display: flex;
   flex-direction: column;

@@ -4,7 +4,7 @@ import type { Block } from "./chatTurnReducer";
 // accepted — its arguments say what and why. It is drawn after the answer,
 // not where the call was made.
 
-export type OfferKind = "review" | "commit" | "worktree" | "pullRequest";
+export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "implement";
 
 export type Offer = { kind: OfferKind; reason: string };
 
@@ -20,7 +20,11 @@ export function offerOf(block: Block): Offer | null {
   const result = block.result as { result?: string; kind?: string } | undefined;
   if (
     result?.result !== "offered" ||
-    (result.kind !== "review" && result.kind !== "commit" && result.kind !== "worktree" && result.kind !== "pullRequest")
+    (result.kind !== "review" &&
+      result.kind !== "commit" &&
+      result.kind !== "worktree" &&
+      result.kind !== "pullRequest" &&
+      result.kind !== "implement")
   ) {
     return null;
   }
