@@ -1,0 +1,12 @@
+.voice-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+}
+.voice-wave span {
+  flex: 1 1 0;
+  max-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+}

@@ -603,6 +603,27 @@ pub(crate) mod tests {
         assert!(phrases[0].starts_with("Привет"), "{phrases:?}");
     }
 
+    /// The tone that says "heard" plays as the key comes up, with the microphone
+    /// on for a moment more: right after the words it must add none.
+    #[test]
+    #[ignore]
+    fn dictation_live_stop_tone() {
+        let tone: Vec<f32> = (0..SECOND / 10)
+            .map(|i| {
+                let at = i as f32 / (SECOND / 10) as f32;
+                let phase = (990.0 - 165.0 * at) * i as f32 / SECOND as f32;
+                (phase * std::f32::consts::TAU).sin() * 0.3
+            })
+            .collect();
+        let sound = [voice("stop-tone"), tone].concat();
+        let (mut listener, mut lines) = (listener(), Vec::new());
+        hear_all(&mut listener, &sound, &mut lines);
+        listener.take(Frame::Finish, &mut |l| lines.push(l));
+        let phrases = phrases_of(&lines);
+        eprintln!("{phrases:?}");
+        assert_eq!(phrases.last().copied(), Some("Сегодня хорошая погода."), "{phrases:?}");
+    }
+
     /// What was open when a dictation was thrown away is not in the next one.
     #[test]
     #[ignore]

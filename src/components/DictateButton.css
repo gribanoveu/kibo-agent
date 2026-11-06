@@ -1,0 +1,50 @@
+.dictate {
+  display: flex;
+  align-items: center;
+}
+.dictate .chip {
+  padding: 4px 3px;
+}
+.dictate-mic {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.dictate-mic:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.dictate-mic:disabled {
+  cursor: default;
+}
+.dictate-mic.stop {
+  color: var(--accent);
+}
+.dictate-mic.refused {
+  position: relative;
+}
+/* The red dot: the icon alone reads as "muted", not as "the system refused". */
+.dictate-mic.refused::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+}
+.dictate-mic.working svg {
+  animation: dictate-spin 0.9s linear infinite;
+}
+@keyframes dictate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

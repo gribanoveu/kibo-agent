@@ -11,8 +11,11 @@ import { boxTakesPictures, type ImagePart } from "../lib/images";
 import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
 import { effortOptions } from "../lib/providerForm";
 import { useAttachments } from "../hooks/useAttachments";
+import { useDictation } from "../hooks/useDictation";
 import { useArrival } from "../hooks/useArrival";
 import { useChatDraft } from "../hooks/useChatDraft";
+import { DictateButton } from "./DictateButton";
+import { VoiceWave } from "./VoiceWave";
 import { ImageThumbs } from "./ImageThumbs";
 import { ErrorNote } from "./ErrorNote";
 import "./Composer.css";
@@ -84,6 +87,8 @@ type Props = {
   /** Where this chat's unsent message is kept: the box belongs to a chat, not
       to the window, so it comes back to the one it was typed in. */
   draftKey: string;
+  /** Whether Voice input is on: its button, its key. */
+  dictate?: boolean;
 };
 
 export function Composer({
@@ -115,6 +120,7 @@ export function Composer({
   pendingCommands,
   focus = 0,
   draftKey,
+  dictate = false,
 }: Props) {
   const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
@@ -124,6 +130,7 @@ export function Composer({
   const attachments = useAttachments(boxTakesPictures(imagesEnabled), draftKey);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
+  const dictation = useDictation({ on: dictate, draftKey, text, setText, area, onChange: () => requestAnimationFrame(grow) });
   // The menu follows the text: shown while a name is being typed, until
   // Escape or a click elsewhere — and back with the next keystroke. What is
   // *typed*, not what the box holds: a draft restored as a chat opens is not
@@ -131,10 +138,10 @@ export function Composer({
   // was typed here.
   const [typedIn, setTypedIn] = useState<string | null>(null);
   const [active, setActive] = useState(0);
-  const offered = typedIn === draftKey ? suggestCommands(commands, text) : [];
+  const offered = typedIn === draftKey && !dictation.active ? suggestCommands(commands, text) : [];
   // Open while more commands are coming, even if none typed so far matches
   // yet: the prompt being typed may be one of them.
-  const menuOpen = offered.length > 0 || (!!pendingCommands && typedIn === draftKey && typingCommandName(text));
+  const menuOpen = offered.length > 0 || (!!pendingCommands && typedIn === draftKey && !dictation.active && typingCommandName(text));
   const at = Math.min(active, Math.max(offered.length - 1, 0));
   const hint = pendingHint(commands, text);
 
@@ -200,6 +207,8 @@ export function Composer({
   };
 
   const send = async () => {
+    // What is said goes in the box first; Stop, then Send, as with anything typed.
+    if (dictation.active) return;
     const typed = commandFor(commands, text);
     if (typed) return run(typed.command, typed.args);
     if (waiting.current) return;
@@ -223,6 +232,7 @@ export function Composer({
   // A `/` command is not queued: it runs now, as with Enter — the queue holds
   // text for the model, and a command's expansion belongs to the moment it runs.
   const queue = async () => {
+    if (dictation.active) return;
     if (!running || !onQueue || commandFor(commands, text)) return send();
     if (waiting.current) return;
     if (!text.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
@@ -320,6 +330,7 @@ export function Composer({
         {attachments.error && (
           <ErrorNote className="composer-attach-error" message={attachments.error} onClose={attachments.clearError} />
         )}
+        {dictation.error && <ErrorNote className="composer-attach-error" message={dictation.error} onClose={dictation.clearError} />}
         <div className="composer-input">
           {/* The arguments still to type, in grey after the text: the text
               itself is drawn here too, invisibly, so the hint starts where it
@@ -335,6 +346,7 @@ export function Composer({
             className="chat-text"
             ref={area}
             rows={2}
+            readOnly={dictation.active}
             placeholder={
               running
                 ? `Add something while it works — ${shortcutText("queue")} to send it after`
@@ -386,6 +398,13 @@ export function Composer({
             }}
           />
         </div>
+        {dictation.active && (
+          <div className="composer-dictation">
+            <VoiceWave peaks={dictation.peaks} />
+            {/* The phrase being said: it changes until it is whole, and then goes in the box. */}
+            {dictation.partial && <p className="composer-partial chat-text">{dictation.partial}</p>}
+          </div>
+        )}
         <div className="composer-bar">
           <Dropdown
             title="Permission mode"
@@ -462,6 +481,7 @@ export function Composer({
               whatever the box refuses to paste, drop or bring back, it does not
               offer to pick either. */}
           {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}
+          {dictate && <DictateButton dictation={dictation} />}
           {/* One button, two jobs: while a turn runs the only thing worth doing
               with it is stopping — and a send button that does nothing during a
               turn is worse than no button. */}

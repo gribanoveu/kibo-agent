@@ -119,6 +119,30 @@
 .composer .attach-images + .send {
   margin-left: 0;
 }
+/* The same for the microphone, with or without the attach button before it. */
+.composer .dictate {
+  margin-left: auto;
+}
+.composer .composer-meter + .dictate,
+.composer .attach-images + .dictate,
+.composer .dictate + .send {
+  margin-left: 0;
+}
+/* The wave and the phrase being said; a long phrase shows its end, where the words are coming. */
+.composer-dictation {
+  margin-top: 4px;
+}
+.composer .composer-partial {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: 4.5em;
+  overflow: hidden;
+  margin: 4px 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
 
 .composer-wrap {
   flex: none;

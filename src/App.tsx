@@ -691,6 +691,8 @@ export default function App() {
             steered={agent.steered}
             onWithdraw={agent.withdraw}
             focus={composerFocus}
+            // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
+            dictate={features.isOn("voice-input") && !onPage}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}

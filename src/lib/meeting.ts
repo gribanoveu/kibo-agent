@@ -313,6 +313,25 @@ export async function meetingMicrophoneSet(id: string | null): Promise<void> {
   return invoke("meeting_microphone_set", { id });
 }
 
+/** The menu's value for the system's default microphone: no id is empty. */
+export const DEFAULT_MIC = "";
+
+/** The trigger's words for the microphone chosen; one not plugged in now says so, once the list is read. */
+export function micLabel(microphone: string | null, microphones: Microphone[] | null): string {
+  if (microphone === null) return "System default microphone";
+  if (microphones === null) return "Chosen microphone";
+  return microphones.find((m) => m.id === microphone)?.name ?? "Chosen microphone, not plugged in";
+}
+
+/** A microphone menu's rows: the default, those plugged in, and the one chosen if it is not. */
+export function micOptions(microphone: string | null, microphones: Microphone[] | null): { value: string; label: string }[] {
+  return [
+    { value: DEFAULT_MIC, label: "System default" },
+    ...(microphones ?? []).map((m) => ({ value: m.id, label: m.name })),
+    ...(microphone !== null && !microphones?.some((m) => m.id === microphone) ? [{ value: microphone, label: micLabel(microphone, microphones) }] : []),
+  ];
+}
+
 /** Whether a recording is transcribed as soon as it is stopped. */
 export async function meetingAutoProcessGet(): Promise<boolean> {
   if (!inTauri()) return false;
