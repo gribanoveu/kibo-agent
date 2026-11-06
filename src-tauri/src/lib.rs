@@ -160,7 +160,7 @@ pub fn run() {
         // One resident piece of state, shared by every command that has to
         // reach a turn while it runs. `Arc` because a turn runs on a blocking
         // thread that outlives the command call that started it.
-        .manage(std::sync::Arc::new(commands::chat::AgentState::default()))
+        .manage(std::sync::Arc::new(commands::chat::AgentState::restored()))
         // The questions MCP servers are waiting on the user for.
         .manage(std::sync::Arc::new(services::mcp_questions::McpQuestions::default()))
         .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
@@ -294,6 +294,7 @@ pub fn run() {
             commands::chat::approval_remember_get,
             commands::chat::approval_remember_set,
             commands::chat::chat_set_mode,
+            commands::chat::chat_mode,
             commands::chat::next_prompt_log,
             commands::chat::next_prompt_sent,
             commands::chat::chat_context_usage,

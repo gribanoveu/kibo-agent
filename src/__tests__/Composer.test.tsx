@@ -370,7 +370,7 @@ describe("telling the backend", () => {
 
 const { useBackendSetting } = await import("../hooks/useBackendSetting");
 const { chatDraftKey, readChatDraft } = await import("../hooks/useChatDraft");
-const { act, renderHook } = await import("@testing-library/react");
+const { act, renderHook, waitFor } = await import("@testing-library/react");
 
 describe("holding the chosen mode", () => {
   /// The chip must not move ahead of the backend. Showing "Analyst" over a turn
@@ -397,6 +397,57 @@ describe("holding the chosen mode", () => {
 
     expect(result.current.value).toBe("analyst");
     expect(calls).toEqual([{ command: "chat_set_mode", args: { mode: "analyst" } }]);
+  });
+
+  /// Remembered by the backend, which says so once the control is up.
+  test("the mode picked last comes back", async () => {
+    const { result } = renderHook(() => useBackendSetting(setConversationMode, "agent", async () => "analyst"));
+    expect(result.current.value).toBe("agent");
+    await waitFor(() => expect(result.current.value).toBe("analyst"));
+  });
+
+  test("a mode that cannot be read stays where it started", async () => {
+    let asked = 0;
+    const { result } = renderHook(() =>
+      useBackendSetting(setConversationMode, "agent", () => {
+        asked++;
+        return Promise.reject(new Error("no backend"));
+      }),
+    );
+    await act(async () => {});
+    expect(asked).toBe(1);
+    expect(result.current.value).toBe("agent");
+  });
+
+  /// The answer was asked before the pick and says what is no longer true.
+  test("an answer that lands after a pick does not undo it", async () => {
+    let answer: (mode: "agent" | "analyst") => void = () => {};
+    const stored = new Promise<"agent" | "analyst">((resolve) => (answer = resolve));
+    const { result } = renderHook(() => useBackendSetting(setConversationMode, "agent", () => stored));
+    await act(async () => {
+      await result.current.pick("analyst");
+    });
+    await act(async () => {
+      answer("agent");
+      await stored;
+    });
+    expect(result.current.value).toBe("analyst");
+  });
+
+  /// A refused pick changed nothing, so what the backend says still holds.
+  test("a refused pick does not drop the answer", async () => {
+    let answer: (mode: "agent" | "analyst") => void = () => {};
+    const stored = new Promise<"agent" | "analyst">((resolve) => (answer = resolve));
+    const { result } = renderHook(() => useBackendSetting(setConversationMode, "agent", () => stored));
+    refuse = true;
+    await act(async () => {
+      await result.current.pick("analyst");
+    });
+    await act(async () => {
+      answer("analyst");
+      await stored;
+    });
+    expect(result.current.value).toBe("analyst");
   });
 
   /// The chip the prototype drew and nobody connected. The command existed on

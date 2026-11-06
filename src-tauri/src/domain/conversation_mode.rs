@@ -7,9 +7,10 @@
 //! conversation rather than a security control: someone thinking a change
 //! through does not want the agent making it halfway through the thought.
 //!
-//! Chosen per turn and never persisted. The frontend sends it with each
-//! request, the way Alfa Atlas does — a mode that outlives the app is a
-//! restriction switched on in March and wondered about in June.
+//! Picked once for the whole app and remembered (`AppSettings::conversation_mode`):
+//! an analyst is a person, not a repository, so every folder they open starts
+//! as the last one did. A restriction kept like that could be forgotten, which
+//! is why the line under the message box always says the mode.
 //!
 //! The narrower modes are a real restriction, not advice. A tool the mode does
 //! not offer is left out of the request *and* refused if the model asks for it

@@ -147,16 +147,25 @@ pub struct AgentState {
     /// Grows as the user answers "always allow"; not persisted, because a
     /// saved "never ask me" is a brake released a month ago and forgotten.
     approval: Mutex<ApprovalPolicy>,
-    /// What the window's mode chip says right now. Resident rather than sent
+    /// What the composer's panel says right now. Resident rather than sent
     /// with each turn for the same reason as the approval policy: a paused
-    /// turn is resumed from a checkpoint that predates the chip, and a mode
+    /// turn is resumed from a checkpoint that predates the choice, and a mode
     /// threaded through both entry points would have to be re-sent correctly
-    /// by the caller at the one moment it is easiest to forget. Not persisted
-    /// — a mode is a decision about this conversation, not about the app.
+    /// by the caller at the one moment it is easiest to forget. Kept in the
+    /// settings as well: this is the copy turns read, that is the one that
+    /// outlives the app.
     mode: Mutex<PickedMode>,
 }
 
 impl AgentState {
+    /// The state a window starts with: the mode picked last, read here so a
+    /// turn does not depend on the window having asked. Settings that cannot
+    /// be read leave the default, which still asks before it writes.
+    pub fn restored() -> Self {
+        let mode = crate::infra::settings_store::load().map(|s| s.conversation_mode).unwrap_or_default();
+        Self { mode: Mutex::new(mode), ..Self::default() }
+    }
+
     /// The handle `chat_id`'s turns are reached through, made on first ask.
     pub(crate) fn session(&self, chat_id: &str) -> Arc<SessionHandle> {
         let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -286,14 +295,13 @@ impl AgentState {
         }
     }
 
+    fn picked(&self) -> PickedMode {
+        // A poisoned lock loses the choice, not the turn.
+        self.mode.lock().map_or(PickedMode::default(), |mode| *mode)
+    }
+
     fn mode(&self) -> ConversationMode {
-        // A poisoned lock loses the chip's setting, not the turn. Falling back
-        // to the default would silently widen it, so the last successful read
-        // is not available — `Agent` is the default and the honest answer is
-        // to say the mode could not be read.
-        self.mode
-            .lock()
-            .map_or(ConversationMode::default(), |mode| (*mode).into())
+        self.picked().into()
     }
 
     fn approval(&self) -> Result<ApprovalPolicy, String> {
@@ -769,11 +777,21 @@ pub fn chat_set_mode(
     mode: PickedMode,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<(), String> {
-    *state
-        .mode
-        .lock()
-        .map_err(|_| "mode lock poisoned".to_string())? = mode;
+    set_mode(&state, mode)
+}
+
+/// Written first: a choice that cannot be kept is refused whole, and the chip,
+/// which moves when this says yes, never shows what the backend is not doing.
+fn set_mode(state: &AgentState, mode: PickedMode) -> Result<(), String> {
+    crate::infra::settings_store::update(|s| s.conversation_mode = mode).map_err(|e| e.to_string())?;
+    *state.mode.lock().map_err(|_| "mode lock poisoned".to_string())? = mode;
     Ok(())
+}
+
+/// The mode turns run in now, for the composer's panel when the window opens.
+#[tauri::command]
+pub fn chat_mode(state: State<'_, Arc<AgentState>>) -> PickedMode {
+    state.picked()
 }
 
 /// Runs the whole turn without asking. Deliberately not persisted anywhere.
@@ -1190,6 +1208,35 @@ mod tests {
         assert!(session.take_finished("turn-1").is_none());
         assert!(session.take_finished("turn-2").is_some(), "another turn's is left where it was");
         assert!(session.take_finished("turn-2").is_none());
+    }
+
+    /// An analyst opens the app as they left it; the next window is the next
+    /// `restored`.
+    #[test]
+    fn the_mode_picked_outlives_the_window() {
+        crate::testing::with_app_dir("chat-mode-kept", || {
+            assert_eq!(AgentState::restored().picked(), PickedMode::Agent, "nothing picked yet");
+            std::fs::write(crate::infra::settings_store::path().unwrap(), "{}").unwrap();
+            assert_eq!(AgentState::restored().picked(), PickedMode::Agent, "a file from before the choice");
+            let state = state();
+            set_mode(&state, PickedMode::Analyst).unwrap();
+            assert_eq!(state.mode(), ConversationMode::Analyst);
+            assert_eq!(AgentState::restored().mode(), ConversationMode::Analyst);
+        });
+    }
+
+    /// Settings that cannot be read back to change refuse the choice: the
+    /// backend stays where the chip stays. So at the start, a window opens in Agent.
+    #[test]
+    fn a_choice_that_cannot_be_kept_is_not_made() {
+        crate::testing::with_app_dir("chat-mode-unwritable", || {
+            let state = state();
+            set_mode(&state, PickedMode::Analyst).unwrap();
+            std::fs::write(crate::infra::settings_store::path().unwrap(), "not json").unwrap();
+            assert!(set_mode(&state, PickedMode::Agent).is_err());
+            assert_eq!(state.picked(), PickedMode::Analyst);
+            assert_eq!(AgentState::restored().picked(), PickedMode::Agent);
+        });
     }
 
     /// A new turn starts from nothing, in the mode it starts in — and does

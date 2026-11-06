@@ -59,7 +59,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { type ConversationMode, previewCalls, setConversationMode } from "./lib/chat";
+import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
@@ -198,7 +198,7 @@ export default function App() {
   // What the agent may do this turn, and whether anyone is asked before it
   // does it. Two chips, two questions — and both are enforced on the backend,
   // so these hold only what the chips read back.
-  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode);
+  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode, getConversationMode);
   const toast = useToast();
   const workspace = useWorkspace();
   const index = useIndexStatus(workspace.path);

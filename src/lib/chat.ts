@@ -345,6 +345,12 @@ export async function setConversationMode(mode: ConversationMode): Promise<void>
   return invoke<void>("chat_set_mode", { mode });
 }
 
+/** The mode turns run in now: the one picked last, in any folder. */
+export async function getConversationMode(): Promise<ConversationMode> {
+  requireBackend();
+  return invoke<ConversationMode>("chat_mode");
+}
+
 /**
  * Subscribes to one turn's events.
  *
