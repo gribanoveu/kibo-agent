@@ -118,6 +118,19 @@
   align-items: center;
   gap: 7px;
 }
+.ctx-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted var(--text-box-hint);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.ctx-link:hover {
+  color: var(--text);
+}
 .ctx-rows dd {
   margin: 0;
   font-family: var(--font-mono);

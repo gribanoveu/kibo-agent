@@ -73,7 +73,7 @@ export function OverviewPanel({
     <div className="overview">
       {context && (
         <section className="overview-card overview-ctx">
-          <ContextDetails context={context} cache={usage} spent={spent} />
+          <ContextDetails context={context} cache={usage} spent={spent} onOpenPane={onOpenPanel} />
         </section>
       )}
 
