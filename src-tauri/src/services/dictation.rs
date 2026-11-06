@@ -289,9 +289,11 @@ impl Session {
                 false => Ok(None),
             };
         }
+        // Measured before the pull, so that the last one has the whole tail in it.
+        let tail_over = matches!(asked, Asked::Stop { at, .. } if at.elapsed() >= TAIL);
         self.listen()?;
         match asked {
-            Asked::Stop { at, reason } if at.elapsed() >= TAIL => {
+            Asked::Stop { reason, .. } if tail_over => {
                 self.mic = None;
                 self.warm.process.send(&Frame::Finish)?;
                 self.finishing = Some((Instant::now(), reason));
@@ -412,6 +414,7 @@ mod tests {
         queued: Arc<Mutex<VecDeque<Vec<f32>>>>,
         flowing: Arc<AtomicBool>,
         pulls: Arc<AtomicUsize>,
+        last_pull: Arc<Mutex<Option<Instant>>>,
         closed: Arc<AtomicBool>,
     }
 
@@ -420,6 +423,7 @@ mod tests {
     impl SoundIn for OpenMic {
         fn pull(&mut self) -> Vec<f32> {
             self.0.pulls.fetch_add(1, Ordering::SeqCst);
+            *self.0.last_pull.lock().unwrap() = Some(Instant::now());
             match self.0.queued.lock().unwrap().pop_front() {
                 Some(sound) => sound,
                 None if self.0.flowing.load(Ordering::SeqCst) => vec![0.5; 4],
@@ -553,11 +557,16 @@ mod tests {
         let d = dictation();
         begin(&d, Some(process), &mic, &told).unwrap();
         told.wait(DictationEvent::Listening);
+        // Between two ticks: right after one, half a tail would look like a whole one.
+        std::thread::sleep(TICK / 2);
         let (before, asked) = (speech.sound_sent(), Instant::now());
         d.stop();
         until("finish", || speech.got(Frame::Finish));
         assert!(asked.elapsed() >= TAIL, "the end of the word is in");
-        assert!(speech.sound_sent() >= before + 2, "two ticks of it went on");
+        // By the clock, not by counting ticks: a late tick pulls what a real
+        // microphone gathered meanwhile, in fewer frames.
+        assert!(speech.sound_sent() > before, "it went on");
+        assert!(mic.last_pull.lock().unwrap().is_some_and(|at| at >= asked + TAIL), "to the end of the tail");
         assert_eq!(speech.sent().last(), Some(&Frame::Finish), "and all of it before the finish");
         until("the microphone let go", || mic.closed.load(Ordering::SeqCst));
 
