@@ -346,8 +346,8 @@ impl ToolName {
             | ToolName::KubeDelete
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
-            // asks, and it stays out of the modes that promise nothing
-            // changes.
+            // goes through the approval gate, in Analyst too, the one place
+            // it is offered beside a promise to leave the code alone.
             | ToolName::Mcp => true,
             ToolName::ReadFile
             | ToolName::Grep
@@ -1630,7 +1630,7 @@ impl ToolCall {
     /// the call rather than a lookup on the name.
     pub fn is_risky(&self) -> bool {
         match self {
-            // The tool stays mutating — Plan and Ask modes do not offer it —
+            // The tool stays mutating — Analyst does not offer it —
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
             _ => self.name().is_mutating(),

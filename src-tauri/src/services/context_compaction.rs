@@ -258,7 +258,7 @@ mod tests {
 
     /// Each part of the frame is on its own row, and each is what the turn
     /// sends: the rules in the instructions, the skills list, a server's
-    /// schemas under MCP — and in Plan mode only the tools Plan offers, no
+    /// schemas under MCP — and in a review only the tools it offers, no
     /// server's among them.
     #[test]
     fn the_frame_counts_what_the_turn_sends_on_its_own_rows() {
@@ -310,9 +310,10 @@ mod tests {
         // Without a server's tools waiting the search is the app's own; with them, theirs.
         assert!(waiting.tools < base.tools, "the search is the servers' cost: {waiting:?} {base:?}");
 
-        let plan = frame_with(ConversationMode::Plan, &[], &[], &server());
-        assert_eq!(plan.mcp, 0, "Plan offers no server's tools");
-        assert!(plan.tools < base.tools, "Plan offers fewer built-in tools");
+        assert!(frame_with(ConversationMode::Analyst, &[], &[], &server()).mcp > 0, "Analyst offers a server's tools");
+        let review = frame_with(ConversationMode::Review, &[], &[], &server());
+        assert_eq!(review.mcp, 0, "a review offers no server's tools");
+        assert!(review.tools < base.tools, "a review offers fewer built-in tools");
     }
 
     struct Summarizer {

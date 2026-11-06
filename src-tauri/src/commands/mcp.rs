@@ -44,7 +44,7 @@ fn view(config: McpConfig, servers: &McpServers) -> Result<McpView, String> {
 }
 
 /// A change stops what it switched off or changed at once; what it added
-/// starts with the next Agent turn.
+/// starts with the next Agent or Analyst turn.
 fn changed(config: McpConfig, servers: &McpServers) -> Result<McpView, String> {
     servers.prune(&config);
     view(config, servers)
@@ -81,7 +81,7 @@ pub fn mcp_tool_set_shown(
     changed(mcp_config::set_tool_shown(&server, &tool, shown).map_err(|e| e.to_string())?, &servers)
 }
 
-/// Starts one server now, without an Agent turn, so that opening its row in
+/// Starts one server now, without a turn, so that opening its row in
 /// the tab shows what it offers — the user checking a server they just
 /// configured should not have to send a message first.
 ///

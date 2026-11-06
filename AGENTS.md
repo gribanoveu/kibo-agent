@@ -67,12 +67,12 @@ The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, 
 |---|---|
 | `ToolName` variant and its row in `ToolName::ALL` (`domain/tools.rs`) | test `all_is_complete` (the count) |
 | `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees`, `runs_alongside` on `ToolName` | compiler — exhaustive `match`, no wildcard; test `what_runs_alongside_never_writes` |
-| `loads_up_front` on `ToolName` — a wildcard on purpose: an unlisted tool, a new one included, waits for `toolSearch` in Agent mode and costs a request nothing until found; list it only if it is needed from the first step or the prompt names it | test `what_waits_for_tool_search_is_these` |
+| `loads_up_front` on `ToolName` — a wildcard on purpose: an unlisted tool, a new one included, waits for `toolSearch` in Agent and Analyst and costs a request nothing until found; list it only if it is needed from the first step or the prompt names it | test `what_waits_for_tool_search_is_these` |
 | `ToolCall` / `ToolResult` variants, a module under `services/ai_tools/tools/`, its arm in `dispatch`, its text in `model_text.rs` | compiler |
 | its row in `DEFINITIONS` (`tools/mod.rs`) | tests over `ToolName::ALL` there |
 | its arm in the string `match` of `services/ai_tools/parse.rs` | test `every_tool_in_all_reaches_its_variant` |
 | its redaction in `domain/tool_call_log.rs` | test `every_tool_is_redacted` |
-| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed. Plan, Ask and a helper get nothing mutating (test); a Chat role's changes reach only its own place — the Kubernetes role's pinned namespace, the Prototype role's folder — and its tests name them |
+| where it is offered: a mode's set in `domain/conversation_mode.rs`, a role's list in `domain/chat_role.rs` | a deliberate choice; not offered until listed. Analyst and a helper get nothing mutating (test), but for MCP in Analyst: a foreign tool is mutating only because nothing is known about it, an analyst's tracker and wiki live there, and a call goes through the approval gate as in Agent; a Chat role's changes reach only its own place — the Kubernetes role's pinned namespace, the Prototype role's folder — and its tests name them |
 | `ACCOUNTED` in `src/lib/rewind.ts` | test `every_tools_rewind_flag_matches_the_window` against `rewind_sees` |
 | its label and summary in `src/lib/describeTool.ts`, its icon in `ChatPanel.tsx` | nobody — without them the call shows its raw name and the default icon |
 

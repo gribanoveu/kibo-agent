@@ -685,9 +685,7 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
-  /** Present while the conversation is in Plan mode: hands the plan to Agent mode. */
-  onImplement?: () => void;
-  /** Opens the Plan tab, where the plan is read and edited before handing it over. */
+  /** Opens the Plan tab, where the plan is read and edited before it is implemented. */
   onOpenPlan?: () => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
@@ -887,7 +885,6 @@ export function ChatPanel({
   turn,
   onDecide,
   onOpenRepo,
-  onImplement,
   checklist = [],
   onOpenPlan,
   onOpenProcess,
@@ -907,9 +904,6 @@ export function ChatPanel({
   headSlot = null,
 }: Props) {
   const groups = group(turn.blocks);
-  // Under a finished answer only: mid-turn the plan is not written yet, and
-  // after a stop or a failure it may be half of one.
-  const planReady = onImplement && turn.status === "done" && groups[groups.length - 1]?.role === "agent";
   // The thread follows the answer as it grows, until the user scrolls up to
   // read; scrolling back to the end picks it up again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
@@ -1035,19 +1029,6 @@ export function ChatPanel({
               steered={steered}
               onWithdraw={onWithdraw}
             />
-            {planReady && (
-              <div className="plan-handoff">
-                <button type="button" className="btn btn-primary" onClick={onImplement}>
-                  Implement in Agent mode
-                </button>
-                {onOpenPlan && (
-                  <button type="button" className="btn btn-ghost" onClick={onOpenPlan}>
-                    Review the plan
-                  </button>
-                )}
-                <span>Switches to Agent with the plan and the checklist.</span>
-              </div>
-            )}
           </div>
         )}
       </div>

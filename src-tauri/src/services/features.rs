@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::domain::chat_role::ChatRole;
-use crate::domain::conversation_mode::{self, ConversationMode};
+use crate::domain::conversation_mode::{self, PickedMode};
 use crate::domain::features::{Feature, FeatureError, Features};
 use crate::domain::settings::AppSettings;
 use crate::infra::{app_dir, settings_store, voices_store};
@@ -124,10 +124,10 @@ fn places(tools: &[crate::domain::tools::ToolName]) -> Vec<String> {
         .iter()
         .filter(|role| tools.iter().any(|tool| role.tools().contains(tool)))
         .map(|role| format!("{} chat", role.name()));
-    let modes = [(ConversationMode::Agent, "Agent"), (ConversationMode::Plan, "Plan"), (ConversationMode::Ask, "Ask")]
-        .into_iter()
-        .filter(|(mode, _)| tools.iter().any(|&tool| conversation_mode::offers(*mode, tool)))
-        .map(|(_, name)| name.to_string());
+    let modes = PickedMode::ALL
+        .iter()
+        .filter(|&&mode| tools.iter().any(|&tool| conversation_mode::offers(mode.into(), tool)))
+        .map(|mode| mode.name().to_string());
     roles.chain(modes).collect()
 }
 
@@ -144,7 +144,7 @@ mod tests {
         assert_eq!((board.id.as_str(), board.on, board.has_data), ("board", false, false));
         assert_eq!(board.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["board"]);
         assert!(board.tools[0].description.contains("remind"), "{}", board.tools[0].description);
-        assert_eq!(board.places, ["Assistant chat", "Agent", "Plan", "Ask"]);
+        assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
         assert_eq!(board.data.as_deref(), Some("~/.kibo/board.json"));
 
         std::fs::write(dir.join("board.json"), "[]").unwrap();

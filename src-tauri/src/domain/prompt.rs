@@ -165,17 +165,15 @@ When the user asks for a plan rather than the work — \"make a plan\", \"how wo
 The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
 
 When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step — the next part of a larger task — you may end with one short question naming it: \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
-        // Written against the failure the mode exists to prevent: an agent
-        // that answers "here is the plan" and has already applied half of it.
-        ConversationMode::Plan => "## This conversation: Plan
+        // Written for the reader it has: someone who asks what the system does
+        // and cannot check an answer by reading the code themselves.
+        ConversationMode::Analyst => "## This conversation: Analyst
 
-You are working out *how* something should be done, and you are not doing it. Read whatever you need, then give the user a plan they can read and argue with: what changes, in which files, in what order, and what you are unsure about.
+You are talking to a systems analyst, not a developer. They ask what the system does; the code is your evidence, not your subject. Answer in terms of behaviour, business rules, integrations, contracts and data flows: what happens, when, to which data, and who is on the other side. Leave implementation detail out unless it is the answer.
 
-Nothing that changes the repository is available to you here, and neither is running a command — so do not say you will edit, create, delete or run anything, and do not offer to. If the work is now clear enough to do, say the plan is ready; switching to Agent is the user's move, not yours.
+Answer as directly as the question deserves — one line if one line is the answer. Read what you need to be sure, and stop there. Give the file and line each claim rests on, as evidence. Keep what the code confirms apart from what you infer, say which is which, and say so when the code cannot settle a question.
 
-Once the plan is settled, write it down with `writePlan` — the user reads it in the Plan tab, may edit it there, and hands it to Agent mode from there. Then outline it in the checklist with `todo`, a few words per step, in the order they should be done: the plan says what to do and why, the checklist is what the agent checks its work against, and a step that is only in prose is a step it has to rediscover. In the chat, summarize the plan in a few lines rather than repeating it.
-
-This also means you cannot check your plan against a build or a test run. Where that matters, say which step you would verify first.",
+You cannot change the repository or run anything here, so do not offer to, and do not suggest edits. If the answer turns out to need real work, say what the work is and leave the decision to the user.",
         // After alibaba/open-code-review's reviewer and MiniMax Code's
         // (docs/19-minimax-code-ideas.md, § 6): precision over recall.
         ConversationMode::Review => "## This conversation: Review
@@ -205,11 +203,6 @@ Search and read until you can answer, and stop there. You cannot change anything
 ",
             explore_answer_shape!()
         ),
-        ConversationMode::Ask => "## This conversation: Ask
-
-Answer the question from the repository, as directly as it deserves — one line if one line is the answer. Read what you need to be sure, and stop there.
-
-You cannot change anything or run anything here, so do not offer to. There is no checklist and no plan to produce: if the answer turns out to need real work, say what the work is and leave the decision to the user.",
     }
 }
 
@@ -966,7 +959,7 @@ mod tests {
         assert!(text.contains("do not edit files there"), "{text}");
     }
 
-    /// A mode's paragraph may only name tools that mode offers: telling Plan
+    /// A mode's paragraph may only name tools that mode offers: telling a mode
     /// to use a tool it was not given is a rule it can only break.
     #[test]
     fn each_mode_names_only_tools_it_offers() {
@@ -979,27 +972,29 @@ mod tests {
             }
         }
         assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind implement"));
-        assert!(mode_instructions(ConversationMode::Plan).contains("`todo`"));
-        assert!(mode_instructions(ConversationMode::Plan).contains("`writePlan`"));
+        assert!(mode_instructions(ConversationMode::Agent).contains("`writePlan`"));
     }
 
-    /// The narrower modes have to say plainly that they cannot act. An
-    /// agent that promises an edit it has no tool for is the failure both of
-    /// them exist to prevent.
+    /// The narrower mode has to say plainly that it cannot act. An agent that
+    /// promises an edit it has no tool for is the failure it exists to prevent.
     #[test]
-    fn the_read_only_modes_say_they_cannot_act() {
-        for mode in [ConversationMode::Plan, ConversationMode::Ask] {
-            let text = mode_instructions(mode).to_lowercase();
-            assert!(
-                text.contains("do not offer to"),
-                "{mode:?} does not tell the model to stop offering what it cannot do"
-            );
-        }
+    fn the_read_only_mode_says_it_cannot_act() {
+        assert!(mode_instructions(ConversationMode::Analyst).contains("do not offer to"));
         assert!(!mode_instructions(ConversationMode::Agent).contains("do not offer to"));
     }
 
+    /// What makes it Analyst and not a shorter Agent: who is asking, and what
+    /// an answer has to show.
+    #[test]
+    fn analyst_answers_a_systems_analyst_with_evidence() {
+        let text = mode_instructions(ConversationMode::Analyst);
+        for said in ["systems analyst, not a developer", "business rules", "file and line", "what the code confirms apart from what you infer"] {
+            assert!(text.contains(said), "{said}");
+        }
+    }
+
     /// The mode reaches the model at all. Each paragraph has to be its own
-    /// text, or two of the three modes are a label on the same behaviour.
+    /// text, or two of the modes are a label on the same behaviour.
     #[test]
     fn each_mode_is_told_apart_in_the_prompt() {
         let texts: Vec<&str> = ConversationMode::ALL
@@ -1019,14 +1014,14 @@ mod tests {
     #[test]
     fn the_chosen_mode_reaches_the_messages() {
         let workspace = PathBuf::from("/tmp/p");
-        let planning = system_messages(&TurnContext {
-            mode: ConversationMode::Plan,
+        let analyst = system_messages(&TurnContext {
+            mode: ConversationMode::Analyst,
             ..ctx(&workspace)
         });
 
         assert_eq!(
-            planning[1].content.as_deref(),
-            Some(mode_instructions(ConversationMode::Plan))
+            analyst[1].content.as_deref(),
+            Some(mode_instructions(ConversationMode::Analyst))
         );
     }
 

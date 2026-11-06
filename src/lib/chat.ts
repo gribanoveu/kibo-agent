@@ -323,14 +323,13 @@ export async function contextUsage(chatId: string, messages: LlmMessage[]): Prom
   return invoke<ContextUsage>("chat_context_usage", { chatId, messages });
 }
 
-/** What the agent is allowed to be. Mirrors `domain::conversation_mode`. */
-export type ConversationMode = "agent" | "plan" | "ask";
+/** What the agent is allowed to be. Mirrors `domain::conversation_mode::PickedMode`. */
+export type ConversationMode = "agent" | "analyst";
 
-/** The modes as the user sees them, on the composer's chip. The values are what `domain::conversation_mode` deserializes. */
+/** The modes as the user sees them, in the composer's panel. The values are what `PickedMode` deserializes. */
 export const CONVERSATION_MODES: { value: ConversationMode; label: string; hint: string }[] = [
   { value: "agent", label: "Agent", hint: "Reads, edits files and runs commands" },
-  { value: "plan", label: "Plan", hint: "Reads only and writes a plan" },
-  { value: "ask", label: "Ask", hint: "Answers questions, changes nothing" },
+  { value: "analyst", label: "Analyst", hint: "Explains how the system works, from the code; edits nothing" },
 ];
 
 /**

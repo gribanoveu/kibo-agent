@@ -140,7 +140,7 @@ export function PlanPanel({ plan, checklist, onEdit, onImplement, locked }: Prop
           </div>
         ) : (
           <div className="empty">
-            No plan yet. In Plan mode the agent writes one here — or{" "}
+            No plan yet. Ask the agent for one and it appears here — or{" "}
             <button type="button" className="link-btn" disabled={locked} onClick={() => setEditing(true)}>
               write your own
             </button>

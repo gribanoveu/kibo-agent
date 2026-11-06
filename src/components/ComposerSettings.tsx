@@ -143,9 +143,9 @@ export function ComposerSettings({ models, onModel, onEffort, onLoadModels, mode
       }
     >
       {/* Two questions, not one: this row is what the agent is for; the
-          switch under the line is who has to agree before it acts — a
-          plan-mode turn still asks, and an unattended agent still cannot
-          write in Ask. */}
+          switch under the line is who has to agree before it acts — an
+          Analyst turn still asks before a server's tool, and an unattended
+          agent still cannot edit a file there. */}
       {mode && (
         <Dropdown
           right

@@ -3373,14 +3373,14 @@ mod tests {
     /// Half the gate: a tool the mode does not offer is not in the request.
     #[test]
     fn a_narrower_mode_advertises_fewer_tools() {
-        let mut planning = harness("mode-advertised", vec![text("here is the plan")]);
-        planning.mode = ConversationMode::Plan;
+        let mut analyst = harness("mode-advertised", vec![text("here is how it works")]);
+        analyst.mode = ConversationMode::Analyst;
 
-        planning
-            .run(|turn| stream(turn, vec![LlmMessage::user("how would you do it?")], vec![]))
+        analyst
+            .run(|turn| stream(turn, vec![LlmMessage::user("how does it work?")], vec![]))
             .expect("finishes");
 
-        let advertised: Vec<String> = planning.provider.requests()[0]
+        let advertised: Vec<String> = analyst.provider.requests()[0]
             .tools
             .iter()
             .map(|t| t.name.clone())
@@ -3396,7 +3396,7 @@ mod tests {
     /// the model as a result it can act on rather than ending the turn.
     #[test]
     fn a_tool_the_mode_does_not_offer_is_refused_even_when_asked_for() {
-        let mut planning = harness(
+        let mut analyst = harness(
             "mode-refused",
             vec![
                 asks(vec![wants(
@@ -3407,10 +3407,10 @@ mod tests {
                 text("right — here is what I would change"),
             ],
         );
-        planning.mode = ConversationMode::Plan;
-        std::fs::write(planning.root.join("a.rs"), "old").unwrap();
+        analyst.mode = ConversationMode::Analyst;
+        std::fs::write(analyst.root.join("a.rs"), "old").unwrap();
 
-        let outcome = planning
+        let outcome = analyst
             .run(|turn| stream(turn, vec![LlmMessage::user("fix it")], vec![]))
             .expect("finishes rather than failing");
 
@@ -3419,12 +3419,12 @@ mod tests {
         };
         assert_eq!(done.result.text, "right — here is what I would change");
         assert_eq!(
-            std::fs::read_to_string(planning.root.join("a.rs")).unwrap(),
+            std::fs::read_to_string(analyst.root.join("a.rs")).unwrap(),
             "old",
             "the file was written in a mode that cannot write"
         );
 
-        let told = told_errors(&planning);
+        let told = told_errors(&analyst);
         assert!(
             told.iter().any(|r| r.contains("not available in this conversation mode")),
             "the model was not told why: {told:?}"
@@ -5091,30 +5091,33 @@ mod tests {
         assert!(!search.description.contains("MCP") && search.description.contains("`gitBlame`"), "{}", search.description);
     }
 
-    /// The app's rarer tools wait for `toolSearch` in Agent mode, and one it
-    /// found is declared from the next step on; where there is no search —
-    /// Plan mode — they are declared as ever.
+    /// The app's rarer tools wait for `toolSearch` in Agent mode and Analyst,
+    /// and one it found is declared from the next step on; where there is no
+    /// search — a review — they are declared as ever.
     #[test]
     fn a_waiting_tool_is_declared_once_the_search_found_it() {
-        let h = harness(
-            "builtin-search",
-            vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"blame"}"#)]), text("done")],
-        );
-        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        let requests = h.provider.requests();
-        assert!(!tool_names(&requests[0]).contains(&"gitBlame".to_string()));
-        assert!(tool_names(&requests[1]).contains(&"gitBlame".to_string()), "{:?}", tool_names(&requests[1]));
-        assert!(!tool_names(&requests[1]).contains(&"move".to_string()), "only what was found");
+        for mode in [ConversationMode::Agent, ConversationMode::Analyst] {
+            let mut h = harness(
+                "builtin-search",
+                vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"blame"}"#)]), text("done")],
+            );
+            h.mode = mode;
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            let requests = h.provider.requests();
+            assert!(!tool_names(&requests[0]).contains(&"gitBlame".to_string()), "{mode:?}");
+            assert!(tool_names(&requests[1]).contains(&"gitBlame".to_string()), "{mode:?}: {:?}", tool_names(&requests[1]));
+            assert!(!tool_names(&requests[1]).contains(&"move".to_string()), "only what was found");
+        }
 
-        let mut plan = harness("builtin-plan", vec![text("hi")]);
-        plan.mode = ConversationMode::Plan;
-        plan.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        let tools = tool_names(&plan.provider.requests()[0]);
+        let mut review = harness("builtin-review", vec![text("hi")]);
+        review.mode = ConversationMode::Review;
+        review.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let tools = tool_names(&review.provider.requests()[0]);
         assert!(tools.contains(&"gitBlame".to_string()) && !tools.contains(&"toolSearch".to_string()), "{tools:?}");
     }
 
     /// The agent searches only when Settings gave it a search: off, neither
-    /// web tool is offered; on, both are — in Plan and Ask too, since they only
+    /// web tool is offered; on, both are — in Analyst too, since they only
     /// read — and a call reaches the search.
     #[test]
     fn the_web_tools_are_offered_to_the_agent_only_when_its_search_is_on() {
@@ -5122,7 +5125,7 @@ mod tests {
         off.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
         assert!(off.provider.requests()[0].tools.iter().all(|t| t.name != "webSearch" && t.name != "webFetch"));
 
-        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Ask] {
+        for mode in [ConversationMode::Agent, ConversationMode::Analyst] {
             let mut on = harness("web-on", vec![asks(vec![wants("w1", "webSearch", r#"{"query":"tokio 2"}"#)]), text("ok")]);
             on.mode = mode;
             let searched = Arc::new(Mutex::new(Vec::new()));
@@ -5138,23 +5141,40 @@ mod tests {
         }
     }
 
-    /// Offered in Agent beside the built-in tools; not in Plan, which
-    /// promises nothing changes, and a foreign tool promises nothing.
+    /// Offered in Agent and Analyst beside the built-in tools; not in a review,
+    /// which has its own job and no user to ask.
     #[test]
-    fn a_servers_tools_are_offered_in_agent_mode_only() {
-        let agent = with_server(harness("mcp-offered", vec![text("hi")]), 3);
-        agent.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        let offered = &agent.provider.requests()[0].tools;
-        let tracker = offered.iter().find(|t| t.name == "mcp__tracker__find").expect("offered");
-        assert_eq!(tracker.description, "[MCP server \"tracker\"] Finds issues.");
+    fn a_servers_tools_are_offered_where_the_mode_has_them() {
+        for mode in [ConversationMode::Agent, ConversationMode::Analyst] {
+            let mut h = with_server(harness("mcp-offered", vec![text("hi")]), 3);
+            h.mode = mode;
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            let offered = &h.provider.requests()[0].tools;
+            let tracker = offered.iter().find(|t| t.name == "mcp__tracker__find").expect("offered");
+            assert_eq!(tracker.description, "[MCP server \"tracker\"] Finds issues.");
+        }
 
-        let mut plan = with_server(harness("mcp-plan", vec![asks(vec![wants("m1", "mcp__tracker__find", "{}")]), text("ok")]), 3);
-        plan.mode = ConversationMode::Plan;
-        plan.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
-        let requests = plan.provider.requests();
+        let mut review = with_server(harness("mcp-review", vec![asks(vec![wants("m1", "mcp__tracker__find", "{}")]), text("ok")]), 3);
+        review.mode = ConversationMode::Review;
+        review.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = review.provider.requests();
         assert!(requests[0].tools.iter().all(|t| !t.name.starts_with("mcp__")));
         let refused = requests[1].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("m1")).unwrap();
         assert!(refused.content.as_deref().unwrap().contains("not available in this conversation mode"));
+    }
+
+    /// The one thing in Analyst that might change something: it asks, as in Agent.
+    #[test]
+    fn an_analysts_call_to_a_server_asks_first() {
+        let mut h = with_server(harness("mcp-analyst-asks", vec![asks(vec![wants("m1", "mcp__tracker__find", "{}")])]), 3);
+        h.mode = ConversationMode::Analyst;
+        h.approval = asking();
+
+        let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+        let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else {
+            panic!("expected a pause");
+        };
+        assert!(pending.calls[0].requires_confirmation);
     }
 
     /// The same gate as a write: it asks, and the round is charged the

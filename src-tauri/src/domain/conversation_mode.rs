@@ -22,18 +22,15 @@ use serde::{Deserialize, Serialize};
 
 use super::tools::ToolName;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConversationMode {
     /// Everything: read, change, run.
     #[default]
     Agent,
-    /// Read and think. Nothing that touches the working tree, and no
-    /// commands — see [`tools`] for why running one is not a read.
-    Plan,
-    /// Questions about the code, answered from the code. The leanest set:
-    /// no checklist, nothing to change.
-    Ask,
+    /// Questions about the system, asked by someone who is not its developer
+    /// and answered from the code. Nothing that touches the working tree, and
+    /// no commands — see [`tools`] for why running one is not a read.
+    Analyst,
     /// `/review`: the uncommitted change read, checked and reported on.
     /// Not a mode the user picks: the command starts its turn in it.
     Review,
@@ -45,11 +42,41 @@ pub enum ConversationMode {
 impl ConversationMode {
     pub const ALL: &'static [ConversationMode] = &[
         ConversationMode::Agent,
-        ConversationMode::Plan,
-        ConversationMode::Ask,
+        ConversationMode::Analyst,
         ConversationMode::Review,
         ConversationMode::Explore,
     ];
+}
+
+/// The modes the user picks: all the window can send, so the others can be
+/// neither chosen nor kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PickedMode {
+    #[default]
+    Agent,
+    Analyst,
+}
+
+impl PickedMode {
+    pub const ALL: &'static [PickedMode] = &[PickedMode::Agent, PickedMode::Analyst];
+
+    /// As the user reads it.
+    pub fn name(self) -> &'static str {
+        match self {
+            PickedMode::Agent => "Agent",
+            PickedMode::Analyst => "Analyst",
+        }
+    }
+}
+
+impl From<PickedMode> for ConversationMode {
+    fn from(mode: PickedMode) -> Self {
+        match mode {
+            PickedMode::Agent => ConversationMode::Agent,
+            PickedMode::Analyst => ConversationMode::Analyst,
+        }
+    }
 }
 
 /// Offered in every mode: looking, searching, and reading git history. None of
@@ -93,17 +120,18 @@ fn base_tools() -> HashSet<ToolName> {
 
 /// Every tool reachable in `mode`.
 ///
-/// `runCommand` is in `Agent` alone, and that is the one judgement call here.
-/// Running the project's tests would be useful while planning, but nothing in
+/// `runCommand` is out of `Analyst`, and that is a judgement call.
+/// Running the project's tests would be useful to an answer, but nothing in
 /// this app can tell `cargo test` from `rm -rf` before the line runs — the
 /// argument is an opaque string, and `domain::command_exec` says so. A mode
-/// whose whole promise is "nothing will change" cannot keep it while offering
-/// a tool that might. The cost is real and recorded: a plan cannot check
+/// whose promise is "the code stays as it is" cannot keep it while offering a
+/// tool that might. The cost is real and recorded: an answer cannot check
 /// itself against a build.
 ///
-/// `todo` and `writePlan` are in `Plan` because a plan is a document and a
-/// list of steps. Both are chat state, saved with the chat, and carry over
-/// when the user hands the plan to Agent mode; neither touches the tree.
+/// `Mcp` is the other, and goes the other way. It is in `Analyst` though it is
+/// mutating: an analyst's tracker and wiki are there. A server is the user's
+/// own choice, not the repository's code, and a call to one asks as in `Agent`
+/// — unless the user set Auto or always allowed it.
 pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
     let mut tools = base_tools();
     match mode {
@@ -119,7 +147,6 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::WritePlan,
                 // A next step put to the user, not taken (`docs/43-single-loop.md`, Ш6).
                 ToolName::Offer,
-                // Agent only: nothing says a foreign tool changes nothing.
                 ToolName::Mcp,
                 // Where the MCP tools are, so is the way to the deferred ones.
                 ToolName::ToolSearch,
@@ -130,19 +157,13 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::KnowledgeWrite,
             ]);
         }
-        // `writePlan` is chat state, not the working tree: writing the plan
-        // is the one thing Plan mode is for. Agent has it too, so a plan
-        // that meets reality can be corrected where the user reads it.
-        ConversationMode::Plan => {
-            tools.extend([ToolName::Todo, ToolName::WritePlan, ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::KnowledgeWrite]);
-        }
         // Research handed off reads the same files, only somewhere else.
         // `remember` writes the agent's memory, not the tree: "remember
         // that" is something the user says in any mode they talk in — and
-        // "remind me", which is the board's. The knowledge base is the
-        // agent's, like memory: what a question taught it is worth keeping.
-        ConversationMode::Ask => {
-            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::KnowledgeWrite]);
+        // "remind me", which is the board's. No `knowledgeWrite`: the base is
+        // what other repositories' agents read, not a place for an answer.
+        ConversationMode::Analyst => {
+            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
@@ -168,28 +189,33 @@ mod tests {
     /// The promise the mode makes. Every tool that changes the working tree,
     /// checked against the enum rather than a list written out here — a tool
     /// added later is in `ToolName::ALL` whether or not anybody remembers
-    /// this test.
+    /// this test. The one exception is MCP in `Analyst`: mutating because
+    /// nothing is known about a foreign tool, offered because that is where an
+    /// analyst's tracker and wiki are, and held by the approval gate instead.
     #[test]
     fn nothing_that_changes_the_tree_is_offered_outside_agent_mode() {
-        for mode in [ConversationMode::Plan, ConversationMode::Ask, ConversationMode::Explore] {
-            for &tool in ToolName::ALL {
-                if tool.is_mutating() {
-                    assert!(
-                        !offers(mode, tool),
-                        "{mode:?} offers {}, which changes the tree",
-                        tool.wire_name()
-                    );
+        for &tool in ToolName::ALL {
+            if tool.is_mutating() {
+                assert!(!offers(ConversationMode::Explore, tool), "a helper offers {}", tool.wire_name());
+                if tool != ToolName::Mcp {
+                    assert!(!offers(ConversationMode::Analyst, tool), "Analyst offers {}, which changes the tree", tool.wire_name());
                 }
             }
         }
     }
 
+    /// What Analyst has beyond every mode's reading, and nothing else.
+    #[test]
+    fn an_analyst_gets_the_helper_memory_board_and_servers() {
+        let mut expected = base_tools();
+        expected.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
+        assert_eq!(tools(ConversationMode::Analyst), expected);
+    }
+
     /// The modes the user picks. A review worker's set is its own, pinned by
     /// `a_review_reads_and_reports_and_changes_nothing`, and so is a helper's.
-    fn picked() -> impl Iterator<Item = &'static ConversationMode> {
-        ConversationMode::ALL
-            .iter()
-            .filter(|mode| !matches!(mode, ConversationMode::Review | ConversationMode::Explore))
+    fn picked() -> impl Iterator<Item = ConversationMode> {
+        PickedMode::ALL.iter().map(|&mode| mode.into())
     }
 
     /// A helper reads what every mode reads, and nothing more: no checklist,
@@ -199,7 +225,7 @@ mod tests {
         assert_eq!(tools(ConversationMode::Explore), base_tools());
         assert!(!offers(ConversationMode::Explore, ToolName::Explore));
         for mode in picked() {
-            assert!(offers(*mode, ToolName::Explore), "{mode:?}");
+            assert!(offers(mode, ToolName::Explore), "{mode:?}");
         }
         assert!(!offers(ConversationMode::Review, ToolName::Explore));
     }
@@ -208,7 +234,7 @@ mod tests {
     #[test]
     fn the_terminal_is_read_in_every_mode_and_typed_into_in_agent_alone() {
         for mode in picked() {
-            assert!(offers(*mode, ToolName::ReadTerminal), "{mode:?}");
+            assert!(offers(mode, ToolName::ReadTerminal), "{mode:?}");
         }
     }
 
@@ -220,19 +246,17 @@ mod tests {
         assert!(offers(ConversationMode::Agent, ToolName::RunCommand));
         // Reading a process's output changes nothing; stopping one does.
         for mode in picked() {
-            assert!(offers(*mode, ToolName::ReadOutput), "{mode:?}");
+            assert!(offers(mode, ToolName::ReadOutput), "{mode:?}");
         }
         assert!(offers(ConversationMode::Agent, ToolName::StopProcess));
-        assert!(!offers(ConversationMode::Plan, ToolName::StopProcess));
-        assert!(!offers(ConversationMode::Ask, ToolName::StopProcess));
-        assert!(!offers(ConversationMode::Plan, ToolName::RunCommand));
-        assert!(!offers(ConversationMode::Ask, ToolName::RunCommand));
+        assert!(!offers(ConversationMode::Analyst, ToolName::StopProcess));
+        assert!(!offers(ConversationMode::Analyst, ToolName::RunCommand));
     }
 
     /// A mode that cannot read the repository has nothing to be a mode about.
     #[test]
     fn every_mode_can_look_at_the_repository() {
-        for &mode in picked() {
+        for mode in picked() {
             for tool in [
                 ToolName::ReadFile,
                 ToolName::Grep,
@@ -286,51 +310,51 @@ mod tests {
     }
 
 
-    /// A plan is a document and a list of steps; a question needs neither.
+    /// A plan is a document and a list of steps, and the button that starts
+    /// it; a question needs none of them, and writes nothing to the base.
     #[test]
-    fn a_plan_can_keep_a_checklist_and_a_question_has_no_use_for_one() {
-        assert!(offers(ConversationMode::Plan, ToolName::Todo));
-        assert!(offers(ConversationMode::Plan, ToolName::WritePlan));
-        assert!(!offers(ConversationMode::Ask, ToolName::WritePlan));
-        assert!(!offers(ConversationMode::Ask, ToolName::Todo));
+    fn a_plan_is_agents_and_a_question_has_no_use_for_one() {
+        for tool in [ToolName::Todo, ToolName::WritePlan, ToolName::Offer, ToolName::KnowledgeWrite] {
+            assert!(offers(ConversationMode::Agent, tool), "{tool:?}");
+            assert!(!offers(ConversationMode::Analyst, tool), "{tool:?}");
+        }
     }
 
     /// "Remember that" is said in whatever mode the user talks in; a helper
     /// and a reviewer have no one to remember it for.
     #[test]
     fn memory_is_kept_where_the_user_talks_to_the_agent() {
-        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Ask] {
+        for mode in picked() {
             assert!(offers(mode, ToolName::Remember), "{mode:?}");
         }
         assert!(!offers(ConversationMode::Explore, ToolName::Remember));
         assert!(!offers(ConversationMode::Review, ToolName::Remember));
     }
 
-    /// The narrower modes are narrower. Without this, a set that quietly grew
-    /// back to everything would pass every test above.
-    #[test]
-    fn each_mode_is_strictly_smaller_than_the_last() {
-        assert!(
-            tools(ConversationMode::Ask).len() < tools(ConversationMode::Plan).len(),
-            "ask is not leaner than plan"
-        );
-        assert!(
-            tools(ConversationMode::Plan).len() < tools(ConversationMode::Agent).len(),
-            "plan is not leaner than agent"
-        );
-    }
-
     /// The wire name is what the window sends; a rename here is a mode the
     /// frontend can no longer select.
     #[test]
     fn the_wire_names_are_the_ones_the_window_sends() {
-        for (mode, wire) in [
-            (ConversationMode::Agent, "\"agent\""),
-            (ConversationMode::Plan, "\"plan\""),
-            (ConversationMode::Ask, "\"ask\""),
-        ] {
+        for (mode, wire) in [(PickedMode::Agent, "\"agent\""), (PickedMode::Analyst, "\"analyst\"")] {
             assert_eq!(serde_json::to_string(&mode).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<PickedMode>(wire).unwrap(), mode);
         }
+    }
+
+    /// What the user cannot pick cannot be sent: a review, a helper, and the
+    /// modes that are gone.
+    #[test]
+    fn the_window_cannot_send_any_other_mode() {
+        for wire in ["\"review\"", "\"explore\"", "\"plan\"", "\"ask\""] {
+            assert!(serde_json::from_str::<PickedMode>(wire).is_err(), "{wire}");
+        }
+    }
+
+    /// Each picked mode is the mode of that name, not the first one.
+    #[test]
+    fn a_picked_mode_is_the_mode_it_names() {
+        assert_eq!(ConversationMode::from(PickedMode::Agent), ConversationMode::Agent);
+        assert_eq!(ConversationMode::from(PickedMode::Analyst), ConversationMode::Analyst);
     }
 
     /// Nothing selected is the full harness: this app is an agent, and a
@@ -338,5 +362,6 @@ mod tests {
     #[test]
     fn the_default_is_the_full_harness() {
         assert_eq!(ConversationMode::default(), ConversationMode::Agent);
+        assert_eq!(PickedMode::default(), PickedMode::Agent);
     }
 }

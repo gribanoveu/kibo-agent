@@ -188,7 +188,7 @@ pub struct McpServerItem {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum McpServerState {
-    /// Servers start with the first Agent turn after the file names them.
+    /// Servers start with the first Agent or Analyst turn after the file names them.
     #[default]
     NotStarted,
     Starting,

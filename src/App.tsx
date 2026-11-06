@@ -277,7 +277,7 @@ export default function App() {
     chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
-  // Servers start with an Agent turn and may stop during one.
+  // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
@@ -397,7 +397,6 @@ export default function App() {
       started: agent.turn.blocks.length > 0,
       folder: !!workspace.path,
       agentMode: conversation.value === "agent",
-      askMode: conversation.value === "ask",
       knowledge: features.isOn("knowledge"),
     },
     {
@@ -644,7 +643,6 @@ export default function App() {
             onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
-            onImplement={conversation.value === "plan" ? implement : undefined}
             onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
             onOpenProcess={openProcess}

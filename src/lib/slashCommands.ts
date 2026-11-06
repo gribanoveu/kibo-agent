@@ -194,8 +194,6 @@ export type BuiltInState = {
   folder: boolean;
   /** Agent mode, the one that writes files. */
   agentMode: boolean;
-  /** Ask mode, which has no checklist. */
-  askMode: boolean;
   /** The knowledge base is turned on in the Catalog; without it there is no `/analyze`. */
   knowledge: boolean;
 };
@@ -217,12 +215,12 @@ export const HAND_TO_AGENT = "send-result-to-agent";
 
 /** The app's own `/` commands, each with why it cannot run now when it cannot. */
 export function builtInCommands(state: BuiltInState, run: BuiltInActions): SlashCommand[] {
-  const { busy, started, folder, agentMode, askMode, knowledge } = state;
+  const { busy, started, folder, agentMode, knowledge } = state;
   const analyze: SlashCommand = {
     name: "analyze",
     hint: "Document this repository in the knowledge base: its services, endpoints, topics, tables, algorithms",
     argumentHint: "[focus] [--domain <id>]",
-    unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : askMode ? "Switch to Agent or Plan mode — it keeps a checklist" : undefined,
+    unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : !agentMode ? "Switch to Agent mode — it writes to the knowledge base" : undefined,
     run: (args) => run.analyze(args),
   };
   return [

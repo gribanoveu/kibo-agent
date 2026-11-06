@@ -26,7 +26,7 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::image::ImagePart;
 use crate::domain::prompt::TurnContext;
-use crate::domain::conversation_mode::ConversationMode;
+use crate::domain::conversation_mode::{ConversationMode, PickedMode};
 use crate::domain::settings::{RememberScope, WebSearchPlace};
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::tools::{ApprovalPolicy, CodeSearchFn, Task, ToolPreview, ToolScope};
@@ -153,7 +153,7 @@ pub struct AgentState {
     /// threaded through both entry points would have to be re-sent correctly
     /// by the caller at the one moment it is easiest to forget. Not persisted
     /// — a mode is a decision about this conversation, not about the app.
-    mode: Mutex<ConversationMode>,
+    mode: Mutex<PickedMode>,
 }
 
 impl AgentState {
@@ -293,7 +293,7 @@ impl AgentState {
         // to say the mode could not be read.
         self.mode
             .lock()
-            .map_or(ConversationMode::default(), |mode| *mode)
+            .map_or(ConversationMode::default(), |mode| (*mode).into())
     }
 
     fn approval(&self) -> Result<ApprovalPolicy, String> {
@@ -637,8 +637,9 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
     let mode = state.mode();
     let skills = crate::services::skills::enabled_catalog(root).unwrap_or_default();
     let rules = root.map(crate::services::project_rules::load).unwrap_or_default();
-    let mcp = match (root, app.try_state::<Arc<McpServers>>()) {
-        (Some(root), Some(servers)) if mode == ConversationMode::Agent => servers.running(root),
+    let servers = app.try_state::<Arc<McpServers>>();
+    let mcp = match (root, crate::services::turn_setup::servers_for(servers.as_ref().map(|s| s.as_ref()), mode)) {
+        (Some(root), Some(servers)) => servers.running(root),
         _ => McpTools::default(),
     };
     let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
@@ -760,12 +761,12 @@ pub fn approval_always_allow(tool: String, state: State<'_, Arc<AgentState>>) ->
         .allow_always(&tool)
 }
 
-/// What the conversation is for: everything, planning only, or answering
-/// only. Takes effect from the next turn, and never retroactively — a turn
-/// already paused on an approval card runs the calls the user decided on.
+/// What the conversation is for: everything, or answering only. Takes effect
+/// from the next turn, and never retroactively — a turn already paused on an
+/// approval card runs the calls the user decided on.
 #[tauri::command]
 pub fn chat_set_mode(
-    mode: ConversationMode,
+    mode: PickedMode,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<(), String> {
     *state
@@ -1199,12 +1200,12 @@ mod tests {
         let session = state.session("c1");
         session.begin_turn(state.mode());
         next_prompt_turn(&session, "turn-1", &[said("first")]);
-        *state.mode.lock().unwrap() = ConversationMode::Plan;
+        *state.mode.lock().unwrap() = PickedMode::Analyst;
         session.begin_turn(state.mode());
         next_prompt_turn(&session, "turn-2", &[said("second")]);
 
         let input = session.take_finished("turn-2").expect("journaled").model_input("u", "");
-        assert!(input.starts_with("<mode>plan"), "{input}");
+        assert!(input.starts_with("<mode>ask"), "{input}");
         assert!(input.ends_with("<agent>second"), "{input}");
     }
 

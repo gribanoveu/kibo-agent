@@ -262,7 +262,7 @@ impl AppSettings {
 pub enum WebSearchPlace {
     /// Chat mode, with no folder.
     Chat,
-    /// A folder, in any mode: the tools only read, so Plan and Ask have them too.
+    /// A folder, in any mode: the tools only read, so Analyst has them too.
     Agent,
 }
 

@@ -5,7 +5,7 @@ import type { ImagePart } from "../lib/images";
 import type { IndexState } from "../lib/indexStatus";
 
 // The panel is the only way to reach `chat_set_mode`, and what it says has to
-// be what the backend was actually told — a label reading "Plan" over a turn
+// be what the backend was actually told — a label reading "Analyst" over a turn
 // that is still armed is the failure worth a test.
 
 const calls: { command: string; args: unknown }[] = [];
@@ -40,8 +40,8 @@ afterEach(() => {
 const openSettings = () => fireEvent.click(screen.getByTitle("Mode, model and thinking"));
 
 function composer(
-  conversation: "agent" | "plan" | "ask",
-  onConversation: (mode: "agent" | "plan" | "ask") => void = () => {},
+  conversation: "agent" | "analyst",
+  onConversation: (mode: "agent" | "analyst") => void = () => {},
   unattended = false,
   onUnattended: (unattended: boolean) => void = () => {},
 ) {
@@ -75,7 +75,7 @@ describe("the settings panel", () => {
         onSend={() => {}}
         onStop={() => {}}
         running={false}
-        conversation="plan"
+        conversation="analyst"
         onConversation={() => {}}
         unattended={false}
         onUnattended={() => {}}
@@ -93,7 +93,7 @@ describe("the settings panel", () => {
       />,
     );
     const words = [...document.querySelectorAll(".composer-settings-summary > span")].map((el) => el.textContent);
-    expect(words).toEqual(["plan", "claude-sonnet-5", "high", "ask"]);
+    expect(words).toEqual(["analyst", "claude-sonnet-5", "high", "ask"]);
   });
 
   /// The app's words are lower case on the line; a model's name is its own.
@@ -133,8 +133,8 @@ describe("the settings panel", () => {
 
     openSettings();
     fireEvent.click(screen.getByTitle("What the agent may do"));
-    fireEvent.click(screen.getByRole("option", { name: /Plan/ }));
-    expect(picked).toEqual(["plan"]);
+    fireEvent.click(screen.getByRole("option", { name: /Analyst/ }));
+    expect(picked).toEqual(["analyst"]);
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     openSettings();
@@ -174,21 +174,19 @@ describe("the conversation mode", () => {
 
     openSettings();
     fireEvent.click(screen.getByTitle("What the agent may do"));
-    for (const label of ["Agent", "Plan", "Ask"]) {
-      expect(screen.getByRole("option", { name: new RegExp(label) })).toBeTruthy();
-    }
+    expect(screen.getAllByRole("option").map((option) => option.textContent?.split(/(?<=[a-z])(?=[A-Z])/)[0])).toEqual(["Agent", "Analyst"]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Plan/ }));
-    expect(picked).toEqual(["plan"]);
+    fireEvent.click(screen.getByRole("option", { name: /Analyst/ }));
+    expect(picked).toEqual(["analyst"]);
   });
 
-  /// The wire value and the word on screen are different things: "plan" is
+  /// The wire value and the word on screen are different things: "analyst" is
   /// what `domain::conversation_mode` deserializes, not a word for a menu.
   test("shows the word, not the wire value", () => {
-    composer("plan");
+    composer("analyst");
     openSettings();
-    expect(screen.getByTitle("What the agent may do").textContent).toContain("Plan");
-    expect(screen.getByTitle("What the agent may do").textContent).not.toContain("plan");
+    expect(screen.getByTitle("What the agent may do").textContent).toContain("Analyst");
+    expect(screen.getByTitle("What the agent may do").textContent).not.toContain("analyst");
   });
 
   /// Two controls, two questions. Permissions decide who agrees before a call;
@@ -358,15 +356,15 @@ describe("the line under the box", () => {
 
 describe("telling the backend", () => {
   test("the mode goes to the command that enforces it", async () => {
-    await setConversationMode("ask");
-    expect(calls).toEqual([{ command: "chat_set_mode", args: { mode: "ask" } }]);
+    await setConversationMode("analyst");
+    expect(calls).toEqual([{ command: "chat_set_mode", args: { mode: "analyst" } }]);
   });
 
   /// A refusal has to reach the caller: the chip only moves after the backend
   /// agreed, and it can only do that if the failure is not swallowed here.
   test("a refused change is not reported as a success", async () => {
     refuse = true;
-    expect(setConversationMode("plan")).rejects.toThrow();
+    expect(setConversationMode("analyst")).rejects.toThrow();
   });
 });
 
@@ -375,7 +373,7 @@ const { chatDraftKey, readChatDraft } = await import("../hooks/useChatDraft");
 const { act, renderHook } = await import("@testing-library/react");
 
 describe("holding the chosen mode", () => {
-  /// The chip must not move ahead of the backend. Showing "Plan" over a turn
+  /// The chip must not move ahead of the backend. Showing "Analyst" over a turn
   /// that is still armed is worse than showing the old mode for a moment.
   test("the mode only changes once the backend has agreed", async () => {
     refuse = true;
@@ -383,7 +381,7 @@ describe("holding the chosen mode", () => {
 
     let failed: string | null = null;
     await act(async () => {
-      failed = await result.current.pick("plan");
+      failed = await result.current.pick("analyst");
     });
 
     expect(failed).toBeTruthy();
@@ -394,11 +392,11 @@ describe("holding the chosen mode", () => {
     const { result } = renderHook(() => useBackendSetting(setConversationMode, "agent"));
 
     await act(async () => {
-      expect(await result.current.pick("ask")).toBeNull();
+      expect(await result.current.pick("analyst")).toBeNull();
     });
 
-    expect(result.current.value).toBe("ask");
-    expect(calls).toEqual([{ command: "chat_set_mode", args: { mode: "ask" } }]);
+    expect(result.current.value).toBe("analyst");
+    expect(calls).toEqual([{ command: "chat_set_mode", args: { mode: "analyst" } }]);
   });
 
   /// The chip the prototype drew and nobody connected. The command existed on
