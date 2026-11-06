@@ -54,7 +54,7 @@ struct Task {
     name: String,
     dir: PathBuf,
     prompt: String,
-    /// The chat's "Changes" is on, and every card is approved.
+    /// The chat's "Allow changes" is on, and every card is approved.
     writes: bool,
 }
 

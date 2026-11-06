@@ -75,7 +75,7 @@ export const CHAT_SUGGESTIONS = [
 
 /**
  * The Kubernetes role's: questions about the cluster the chat is pinned to.
- * Reads only — a chat starts on Read only, and a suggestion should work there.
+ * Reads only — a chat starts with changes off, and a suggestion should work there.
  */
 export const KUBE_SUGGESTIONS = [
   "Why is a pod in this namespace restarting?",

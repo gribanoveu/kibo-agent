@@ -8,7 +8,7 @@ One directory per task, run by `src/services/kube_bench.rs` on the local cluster
 - `setup.yaml` — applied to the fresh namespace; no `namespace:` in it.
 - `setup.sh` — optional; runs after the apply and returns when the broken state
   is there (a pod is crash-looping, a claim's uid is written down).
-- `writes` — an empty file: the chat's "Changes" is on and every approval card is
+- `writes` — an empty file: the chat's "Allow changes" is on and every approval card is
   approved, as by a user who clicks Allow without reading. Without it the chat is
   read only, and a call of a changing tool is counted as an attempt.
 - `check.sh` — run afterwards; exit 0 means solved. It reads the cluster, the

@@ -347,10 +347,10 @@ impl FolderTrust {
 #[serde(rename_all = "camelCase", default)]
 pub struct KubeSettings {
     pub configs: Vec<Kubeconfig>,
-    /// The last one picked on a chat's tab, by name — where a new chat
+    /// The last one picked in a chat's panel, by name — where a new chat
     /// starts. `None` falls back to the first, as the active provider does.
     pub active: Option<String>,
-    /// Namespaces typed on a chat's tab, per kubeconfig, newest first: a
+    /// Namespaces typed in a chat's panel, per kubeconfig, newest first: a
     /// namespace the identity may work in but not list is typed once.
     #[serde(default)]
     pub typed_namespaces: std::collections::BTreeMap<String, Vec<String>>,
