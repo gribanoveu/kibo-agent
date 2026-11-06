@@ -16,7 +16,7 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-family: inherit;
   font-size: var(--fs-sm);
   cursor: pointer;

@@ -228,17 +228,15 @@ describe("the permission switch", () => {
     expect(screen.getByRole("switch", { name: "Approve automatically" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  /// Read before sending, with the panel closed — and Auto marked, since nobody will be asked.
-  test("what it says is on the line, last, Auto marked and Ask not", () => {
+  /// Read before sending, with the panel closed.
+  test("what it says is on the line, last", () => {
     const first = composer("agent", () => {}, true);
     const words = () => [...document.querySelectorAll(".composer-settings-summary > span")];
     expect(words().at(-1)?.textContent).toBe("auto");
-    expect(words().at(-1)?.className).toBe("composer-auto");
     first.unmount();
 
     composer("agent", () => {}, false);
     expect(words().at(-1)?.textContent).toBe("ask");
-    expect(document.querySelector(".composer-auto")).toBeNull();
   });
 });
 

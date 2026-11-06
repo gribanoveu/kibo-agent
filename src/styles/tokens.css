@@ -453,6 +453,11 @@
   /* Under a page in the Prototype preview: white, as a browser's canvas is, in
      every theme — a page that sets no background is drawn as it would be there. */
   --bg-page: #ffffff;
+  /* The message box: a shade off the page at rest, the page itself and a touch
+     of the accent round it while it is being written in. */
+  --bg-box: color-mix(in srgb, var(--bg-panel) 70%, var(--bg-panel-soft));
+  --border-box-focus: color-mix(in srgb, var(--accent) 10%, var(--border-soft));
+  --text-box-hint: color-mix(in srgb, var(--text-faint) 80%, var(--bg-panel));
   --radius: 10px;
   --radius-md: 8px;
   --radius-sm: 6px;

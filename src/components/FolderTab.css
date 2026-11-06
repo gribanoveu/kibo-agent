@@ -12,6 +12,11 @@
 }
 .folder-tab .chip {
   max-width: 100%;
+  color: var(--text-faint);
+}
+.folder-tab .chip:hover,
+.folder-tab .chip.open {
+  color: var(--text);
 }
 .folder-tab .chip-label {
   display: flex;

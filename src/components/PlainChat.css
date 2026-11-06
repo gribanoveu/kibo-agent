@@ -84,7 +84,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 4px 14px 8px;
+  margin: 8px 14px 12px;
   padding: 0 4px;
   min-width: 0;
 }
@@ -100,6 +100,11 @@
 }
 .plain-tab .chip {
   max-width: 100%;
+  color: var(--text-faint);
+}
+.plain-tab .chip:hover,
+.plain-tab .chip.open {
+  color: var(--text);
 }
 .plain-tab .plain-chip-label {
   min-width: 0;
@@ -120,7 +125,7 @@
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--text-dim);
+  color: var(--text-faint);
   font: inherit;
   font-size: var(--fs-xs);
   cursor: pointer;
@@ -140,10 +145,14 @@
 .plain-composer {
   flex: none;
   margin: 0 14px;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border);
+  background: var(--bg-box);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 8px;
+}
+.plain-composer:focus-within {
+  background: var(--bg-panel);
+  border-color: var(--border-box-focus);
 }
 .plain-composer .image-thumbs {
   margin: 4px 6px 8px;
@@ -169,7 +178,7 @@
   margin-left: 6px;
 }
 .plain-composer textarea::placeholder {
-  color: var(--text-faint);
+  color: var(--text-box-hint);
 }
 .plain-composer-bar {
   display: flex;

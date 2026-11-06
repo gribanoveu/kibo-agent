@@ -410,7 +410,7 @@ export function Composer({
           // asking. "Always allow this tool" is the third real one, answered on
           // the card, about one tool, in the moment. Set in the panel; read on
           // the line, where Auto is not to be missed.
-          note={<span className={unattended ? "composer-auto" : undefined}>{unattended ? "auto" : "ask"}</span>}
+          note={<span>{unattended ? "auto" : "ask"}</span>}
           status={index && <IndexBadge state={index} />}
           toggles={[
             ...(worktree ? [{ label: "Worktree", icon: <GitFork size={14} />, ...worktree }] : []),
