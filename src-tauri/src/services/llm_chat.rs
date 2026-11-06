@@ -6223,7 +6223,7 @@ mod tests {
     #[test]
     fn a_plan_written_in_the_same_round_can_be_offered() {
         let implement = r#"{"kind":"implement","reason":"the parser"}"#;
-        let mut h = harness(
+        let h = harness(
             "offer-implement-same-round",
             vec![asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##), wants("o", "offer", implement)]), text("done")],
         );
@@ -6236,7 +6236,7 @@ mod tests {
     #[test]
     fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
         let implement = r#"{"kind":"implement","reason":"the parser"}"#;
-        let mut h = harness(
+        let h = harness(
             "offer-implement-after-read",
             vec![
                 asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##)]),
