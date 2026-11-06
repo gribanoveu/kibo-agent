@@ -26,6 +26,9 @@ import {
   type Meeting,
   type MeetingDocument,
   type MeetingInfo,
+  DEFAULT_MIC,
+  micLabel,
+  micOptions,
   type Microphone,
   type Recording,
   type RecordingAccess,
@@ -262,9 +265,6 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
   );
 }
 
-/** The menu's value for the system's default microphone: no id is empty. */
-const DEFAULT_MIC = "";
-
 /** The recording's settings, set once and left: behind a gear beside Record, not on the page. */
 function RecordingOptions({
   autoProcess,
@@ -327,13 +327,7 @@ function RecordingOptions({
               heading="Record from"
               value={microphone ?? DEFAULT_MIC}
               onPick={(id) => onMicrophone(id === DEFAULT_MIC ? null : id)}
-              options={[
-                { value: DEFAULT_MIC, label: "System default" },
-                ...(microphones ?? []).map((m) => ({ value: m.id, label: m.name })),
-                ...(microphone !== null && !microphones?.some((m) => m.id === microphone)
-                  ? [{ value: microphone, label: micLabel(microphone, microphones) }]
-                  : []),
-              ]}
+              options={micOptions(microphone, microphones)}
             />
           </div>
           <label className="meetings-auto" title="A recording is made into a meeting as soon as you press Stop">
@@ -348,13 +342,6 @@ function RecordingOptions({
       )}
     </div>
   );
-}
-
-/** The trigger's words for the microphone chosen; one not plugged in now says so, once the list is read. */
-function micLabel(microphone: string | null, microphones: Microphone[] | null): string {
-  if (microphone === null) return "System default microphone";
-  if (microphones === null) return "Chosen microphone";
-  return microphones.find((m) => m.id === microphone)?.name ?? "Chosen microphone, not plugged in";
 }
 
 /** What a recording not yet transcribed is called in the list. */

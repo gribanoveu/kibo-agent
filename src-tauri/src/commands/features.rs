@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::domain::features::Feature;
 use crate::infra::mongo_client::MongoClients;
 use crate::services::features::{self, FeatureView};
+use crate::services::dictation::Dictation;
 use crate::services::meeting_notes::MeetingNotes;
 
 /// A feature was turned on or off.
@@ -31,7 +32,11 @@ pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Resu
     }
     // A kill and a wait for the recognition process: off the main thread.
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
-    tauri::async_runtime::spawn_blocking(move || notes.feature_set(&id, on));
+    let dictation = app.state::<Arc<Dictation>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        notes.feature_set(&id, on);
+        dictation.feature_set(&id, on);
+    });
     let _ = app.emit(FEATURES_EVENT, ());
     Ok(features::list())
 }

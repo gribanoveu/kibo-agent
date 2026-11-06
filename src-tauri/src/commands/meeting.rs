@@ -9,7 +9,7 @@ use tauri::{AppHandle, Builder, Emitter, Manager, Runtime, State};
 use crate::domain::meeting::{JobState, Meeting, MeetingEvent, MeetingEventSink, MeetingInfo};
 use crate::domain::recording::{Access, Microphone, RecordingAccess, RecordingInfo, RecordingState, Source};
 use crate::domain::voices::VoiceInfo;
-use crate::infra::{meeting_audio, meeting_recorder, meeting_store, recording_access, settings_store, speech};
+use crate::infra::{meeting_audio, meeting_store, microphone, recording_access, settings_store, speech};
 use crate::services::meeting_notes::{self, MeetingNotes};
 
 use super::blocking;
@@ -179,7 +179,7 @@ pub fn meeting_denoise_set(on: bool) -> Result<(), String> {
 /// The microphones plugged in, to choose one to record from.
 #[tauri::command]
 pub async fn meeting_microphones() -> Result<Vec<Microphone>, String> {
-    blocking(|| meeting_recorder::microphones().map_err(|e| e.to_string())).await
+    blocking(|| microphone::microphones().map_err(|e| e.to_string())).await
 }
 
 /// The microphone a call is recorded from, by its id; `None` is the system's default.

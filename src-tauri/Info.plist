@@ -14,7 +14,7 @@
   <!-- Recording a call on the Meetings page (docs/36): macOS asks with these
        words. Without the second, the call's sound records as silence. -->
   <key>NSMicrophoneUsageDescription</key>
-  <string>Kibo Agent records your side of a call on the Meetings page, between Record and Stop.</string>
+  <string>Kibo Agent records your side of a call on the Meetings page, between Record and Stop, and hears what you dictate into the message box. Dictated sound is not kept.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>Kibo Agent records the call's sound on the Meetings page, between Record and Stop.</string>
   <key>CFBundleDocumentTypes</key>

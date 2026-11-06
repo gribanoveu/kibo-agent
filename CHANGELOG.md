@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-06 Voice input: dictate into the message box with the microphone button or by holding the right Option or Alt key, in Russian, recognized on this computer and with no sound kept; on in the Catalog
 - 2026-11-06 Two modes instead of three: Analyst answers a systems analyst about how the system behaves, with the file and line as evidence, and Agent asked for a plan writes it, changes nothing and offers an Implement button; the mode picked stays for every folder
 - 2026-11-06 In Overview, Instructions, Skills and MCP servers open their panels, and a back arrow returns from there to Overview
 - 2026-11-06 The sidebar has Agent and Chat as one switch, a search over the chats, and the chats sorted under Today and Earlier, with New chat in the title bar, beside the sidebar's button

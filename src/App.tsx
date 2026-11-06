@@ -701,6 +701,8 @@ export default function App() {
             queued={agent.queued}
             onUnqueue={agent.unqueue}
             focus={composerFocus}
+            // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
+            dictate={features.isOn("voice-input") && !onPage}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
@@ -742,6 +744,7 @@ export default function App() {
       ) : (
         <PlainChat
           chat={plain}
+          dictate={features.isOn("voice-input") && !onPage}
           focus={composerFocus}
           models={llm.models}
           imagesEnabled={imagesEnabled}

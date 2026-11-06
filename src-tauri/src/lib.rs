@@ -4,6 +4,7 @@ pub mod commands;
 pub mod domain;
 pub mod infra;
 pub mod meeting_sidecar;
+pub mod dictation_sidecar;
 #[cfg(test)]
 mod data_policy;
 #[cfg(test)]
@@ -118,6 +119,11 @@ pub fn run() {
         if window.label() != "main" {
             return;
         }
+        // Its message box is gone, and a viewer can keep the app alive: the
+        // microphone would stay open with nobody to tell and no Stop to press.
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            window.state::<std::sync::Arc<services::dictation::Dictation>>().cancel();
+        }
         if matches!(event, tauri::WindowEvent::Focused(false) | tauri::WindowEvent::CloseRequested { .. }) {
             if let Err(e) = window.app_handle().save_window_state(window_state()) {
                 eprintln!("window size and position not saved: {e}");
@@ -168,6 +174,7 @@ pub fn run() {
         .manage(commands::git::GitWatch::default())
         .manage(std::sync::Arc::new(commands::viewer::Viewers::default()))
         .manage(std::sync::Arc::new(services::meeting_notes::MeetingNotes::default()))
+        .manage(std::sync::Arc::new(services::dictation::Dictation::default()))
         // The MongoDB page's clients, one per connection string, kept.
         .manage(std::sync::Arc::new(infra::mongo_client::MongoClients::default()))
         // The index of the open folder, and the one embedding model every
@@ -385,6 +392,9 @@ pub fn run() {
             commands::meeting::meeting_write_document,
             commands::meeting::meeting_delete_document,
             commands::meeting::meeting_stop,
+            commands::dictation::dictation_start,
+            commands::dictation::dictation_stop,
+            commands::dictation::dictation_cancel,
             commands::meeting::meeting_job,
             commands::meeting::meeting_record_start,
             commands::meeting::meeting_record_stop,
@@ -473,6 +483,7 @@ pub fn run() {
                 // The recognition process would also see its stdin close; a kill is
                 // now. A recording gets its sizes put in, or it reads as nothing.
                 app.state::<std::sync::Arc<services::meeting_notes::MeetingNotes>>().stop_all();
+                app.state::<std::sync::Arc<services::dictation::Dictation>>().close();
             }
         });
 }

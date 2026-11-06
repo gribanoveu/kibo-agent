@@ -1,12 +1,12 @@
 // The models of meeting notes (docs/36-meeting-notes-research.md), bundled
 // with the app: GigaAM v3 with punctuation, as sherpa-onnx exported it,
 // campplus for telling voices apart, and DPDFNet-2 for taking the noise out of
-// a recorded call's microphone. Pinned to a commit and checked by hash;
+// a recorded call's microphone, and Silero VAD for dictation's phrases. Pinned to a commit and checked by hash;
 // a file already here with the right hash is not fetched again.
 //
 //   bun scripts/fetch-meeting-models.ts [out dir]   (default: src-tauri/models/meeting)
 //
-// The names here are the ones `infra::speech::MODEL_FILES` reads.
+// The names here are the ones `infra::speech::MODEL_FILES` and `DICTATION_FILES` read.
 
 import { mkdirSync, renameSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -26,6 +26,10 @@ const threeDSpeaker = "https://raw.githubusercontent.com/modelscope/3D-Speaker/0
 const denoiser = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models";
 const dpdfnet = "https://raw.githubusercontent.com/ceva-ip/DPDFNet/9bd9844a227bb6aa57e55588d8d0e961fcff1c46";
 
+// sherpa-onnx's copy of Silero VAD. A release asset, held by its hash; MIT, as Silero's repository says.
+const sileroVad = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
+const silero = "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052";
+
 const files: [name: string, url: string, sha256: string][] = [
   ["encoder.int8.onnx", `${gigaam}/encoder.int8.onnx`, "369f35a71bf288d3b8e0391fabd8dba5f2314088d440bca474056b7b4b6e66bf"],
   ["decoder.onnx", `${gigaam}/decoder.onnx`, "38fc7475443ea2a26f63211ca350f73ac50fff824ab7a3876ee2bd610c53bbc4"],
@@ -40,6 +44,8 @@ const files: [name: string, url: string, sha256: string][] = [
   ["campplus-LICENSE", `${threeDSpeaker}/LICENSE`, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"],
   ["dpdfnet2.onnx", `${denoiser}/dpdfnet2.onnx`, "ce35d6025fc71df0ef10d1540e1b7916837bbfe5f6896deb744508d2cad487a9"],
   ["DPDFNet-LICENSE", `${dpdfnet}/LICENSE`, "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"],
+  ["silero_vad.onnx", `${sileroVad}/silero_vad.onnx`, "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"],
+  ["Silero-LICENSE", `${silero}/LICENSE`, "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"],
 ];
 
 async function sha256(path: string): Promise<string> {
