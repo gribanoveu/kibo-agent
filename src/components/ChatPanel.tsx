@@ -738,6 +738,7 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onOffer"
+  | "onOpenPlan"
   | "steered"
   | "onWithdraw"
   | "onAnswerQuestion"
@@ -794,6 +795,7 @@ export function Transcript({
   onRewind,
   onFix,
   onOffer,
+  onOpenPlan,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
@@ -849,7 +851,7 @@ export function Transcript({
           )}
         </div>
       ))}
-      {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
+      {onOffer && <OfferCards offers={offers} onPick={onOffer} onOpenPlan={onOpenPlan} />}
       {steered.length > 0 && (
         <div className="turn">
           <div className="role">You</div>
@@ -1028,6 +1030,7 @@ export function ChatPanel({
               onFix={onFix}
               preview={preview}
               onOffer={onOffer}
+              onOpenPlan={onOpenPlan}
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}

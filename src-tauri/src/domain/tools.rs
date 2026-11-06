@@ -1250,6 +1250,9 @@ pub struct ToolDeps<'a> {
     pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
     /// The base recorded when this chat moved to its worktree.
     pub worktree_base: Option<&'a str>,
+    /// Whether the chat has a plan to implement: written this turn, or in the
+    /// window with something in it.
+    pub has_plan: bool,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -2335,6 +2338,7 @@ pub enum OfferKind {
     Commit,
     Worktree,
     PullRequest,
+    Implement,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.

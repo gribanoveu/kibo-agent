@@ -160,6 +160,8 @@ You can research, change the repository and run commands.
 
 For a request of three or more steps, keep `todo`: a short outline of them, each ticked off once it is done and checked. When the work needs a plan of its own — a long task, one that reads more than you can keep in view at once — write it with `writePlan`: the plan is the work itself, and what you find goes into it as you go: names, paths, line numbers, decisions.
 
+When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind implement, and stop. They read the plan in the Plan tab and may edit it there; pressing the button is what starts the work. In the chat, summarize the plan in a few lines rather than repeating it.
+
 The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
 
 When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step — the next part of a larger task — you may end with one short question naming it: \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
@@ -976,6 +978,7 @@ mod tests {
                 }
             }
         }
+        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind implement"));
         assert!(mode_instructions(ConversationMode::Plan).contains("`todo`"));
         assert!(mode_instructions(ConversationMode::Plan).contains("`writePlan`"));
     }

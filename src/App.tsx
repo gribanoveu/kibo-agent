@@ -491,6 +491,8 @@ export default function App() {
     if (kind === "review") return agent.review(true);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
+    // Not `send`: that would drop the checklist the plan came with.
+    if (kind === "implement") return implement();
     const id = agent.chatId;
     if (!id) return;
     try {
@@ -604,7 +606,9 @@ export default function App() {
       plan: agent.plan,
       checklist: agent.checklist,
       onEdit: agent.editPlan,
-      onImplement: conversation.value === "plan" ? implement : undefined,
+      // Not while a turn waits on a card either: the message would queue, and
+      // a queued one drops the checklist.
+      onImplement: turnBusy ? undefined : implement,
       locked: agent.turn.status === "running",
     },
   };

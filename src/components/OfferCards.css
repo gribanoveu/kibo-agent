@@ -9,6 +9,9 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
+.offer-cards-plan {
+  justify-self: start;
+}
 .offer-card {
   --tint: var(--accent);
   display: grid;

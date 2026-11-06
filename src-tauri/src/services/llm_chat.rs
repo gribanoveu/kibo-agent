@@ -929,7 +929,8 @@ fn run_calls(
                     // Around the call, not inside the tool: one place sees
                     // every write, and no tool has to remember to report.
                     let watched = turn.place.scope().and_then(|scope| file_changes::before(scope, &parsed));
-                    let result = execute_call(turn, round, call, &parsed, &state.history, &mut state.reads, &mut state.todos);
+                    let plan = state.written_plan.as_deref().or(turn.plan);
+                    let result = execute_call(turn, round, call, &parsed, &state.history, plan, &mut state.reads, &mut state.todos);
                     if let (Ok(_), crate::domain::tools::ToolCall::WritePlan(written)) = (&result, &parsed) {
                         state.written_plan = Some(written.content.trim().to_string());
                     }
@@ -1014,12 +1015,14 @@ fn pre_tool_use(turn: &Turn, events: &Events, round: u32, call: &LlmToolCall) ->
 }
 
 /// Runs one parsed call with what the turn has.
+#[allow(clippy::too_many_arguments)]
 fn execute_call(
     turn: &Turn,
     round: u32,
     call: &LlmToolCall,
     parsed: &crate::domain::tools::ToolCall,
     history: &[LlmMessage],
+    plan: Option<&str>,
     reads: &mut ReadFiles,
     todos: &mut Vec<Task>,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
@@ -1081,6 +1084,7 @@ fn execute_call(
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
             Place::Chat { .. } => Vec::new(),
         },
+        has_plan: plan.is_some_and(|plan| !plan.trim().is_empty()),
     };
     dispatch(turn.place.scope(), parsed, reads, todos, &deps)
 }
@@ -1228,7 +1232,7 @@ fn side_by_side(
                         // The todo list is not touched by a read; the round's
                         // own stays with the loop.
                         let mut reads = ReadFiles::default();
-                        let result = execute_call(turn, round, call, parsed, history, &mut reads, &mut Vec::new());
+                        let result = execute_call(turn, round, call, parsed, history, turn.plan, &mut reads, &mut Vec::new());
                         (call.id.clone(), Early { result, started: *started, reads })
                     })
                 })
@@ -6192,6 +6196,52 @@ mod tests {
 
         assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
         assert!(tool_contents(&h.provider.requests()[1]).iter().any(|c| c.starts_with("Offered")));
+    }
+
+    /// Implement needs a plan, and a turn that wrote one has it for the
+    /// `offer` in the same round: the calls run in the order asked.
+    #[test]
+    fn a_plan_written_in_the_same_round_can_be_offered() {
+        let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+        let mut h = harness(
+            "offer-implement-same-round",
+            vec![asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##), wants("o", "offer", implement)]), text("done")],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("plan it")], vec![])).expect("turn");
+        assert!(tool_contents(&h.provider.requests()[1]).iter().any(|c| c.starts_with("Offered")));
+    }
+
+    /// Reads run alongside each other with only the window's plan to go on;
+    /// an `offer` among them would not see the one this turn wrote.
+    #[test]
+    fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
+        let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+        let mut h = harness(
+            "offer-implement-after-read",
+            vec![
+                asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##)]),
+                asks(vec![wants("l", "listFiles", "{}"), wants("o", "offer", implement)]),
+                text("done"),
+            ],
+        );
+        h.run(|turn| stream(turn, vec![LlmMessage::user("plan it")], vec![])).expect("turn");
+        assert!(tool_contents(&h.provider.requests()[2]).iter().any(|c| c.starts_with("Offered")));
+    }
+
+    /// The plan the window holds counts, but one emptied there does not.
+    #[test]
+    fn the_windows_plan_can_be_offered_unless_it_is_blank() {
+        let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+        let said = |label: &str, plan: Option<&str>| {
+            let mut h = harness(label, vec![asks(vec![wants("o", "offer", implement)]), text("done")]);
+            h.plan = plan.map(str::to_string);
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go on")], vec![])).expect("turn");
+            tool_contents(&h.provider.requests()[1]).concat()
+        };
+        assert!(said("offer-implement-window", Some("# Plan")).starts_with("Offered"));
+        for (label, plan) in [("offer-implement-none", None), ("offer-implement-blank", Some(" \n"))] {
+            assert!(said(label, plan).contains("no plan"), "{plan:?}");
+        }
     }
 
     /// A command line is not a tool name: `ls` and `rm -rf /` are the same
