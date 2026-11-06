@@ -52,8 +52,8 @@
   font-weight: 600;
 }
 .modal-close {
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -83,16 +83,17 @@
 .modal-field input {
   width: 100%;
   padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-bubble);
-  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   outline: none;
 }
 .modal-field input:focus {
-  border-color: var(--text-faint);
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
 }
 .modal-note {
   font-size: var(--fs-xs);

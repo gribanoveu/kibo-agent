@@ -96,11 +96,11 @@
   justify-content: space-between;
   gap: 8px;
   margin: 0 0 10px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-box-hint);
 }
 .usage-card-title span {
   font-weight: 400;

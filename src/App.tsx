@@ -20,7 +20,7 @@ import { pagesShown, type PageId } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, SquarePen } from "lucide-react";
 import { Titlebar } from "./components/Titlebar";
 import { shortcutText } from "./lib/shortcuts";
 import { useAgentTurn } from "./hooks/useAgentTurn";
@@ -846,20 +846,26 @@ export default function App() {
         leading={
           // The IDE layout has no sidebar to show.
           !ide && (
-            <button
-              className="iconbtn"
-              type="button"
-              title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
-              aria-pressed={!rail}
-              onClick={toggleSidebar}
-            >
-              <PanelLeft size={15} />
-            </button>
+            <>
+              <button
+                className="iconbtn"
+                type="button"
+                title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
+                aria-pressed={!rail}
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={15} />
+              </button>
+              <button className="iconbtn" type="button" title={`New chat (${shortcutText("newChat")})`} aria-label="New chat" onClick={newChat}>
+                <SquarePen size={15} />
+              </button>
+            </>
           )
         }
       >
-        {/* The open chat's name, where the chat is on screen; the IDE layout's header names it already. */}
-        {(!ide && !onPage && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
+        {/* The open page's name, or the open chat's where the chat is on screen; the IDE layout's header names it already. */}
+        {onPage?.label ||
+          (!ide && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
           "Kibo Agent"}
       </Titlebar>
 
@@ -880,7 +886,6 @@ export default function App() {
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
-          onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }

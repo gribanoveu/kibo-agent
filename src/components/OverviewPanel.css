@@ -22,9 +22,11 @@
   gap: 6px;
   margin: 0 0 6px;
   padding: 0 6px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 500;
-  color: var(--text-dim);
+  color: var(--text-box-hint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 .overview-count {
   font-weight: 400;
@@ -149,9 +151,11 @@
 }
 .overview-ctx .ctx-head {
   margin-bottom: 8px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 500;
-  color: var(--text-dim);
+  color: var(--text-box-hint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 .overview-ctx .ctx-rows {
   margin-bottom: 8px;

@@ -35,11 +35,11 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
 }
 .aside-button {
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   border-radius: var(--radius-sm);
 }
 /* An open pane: a faint fill, one step off the header, not the full active one. */
@@ -48,6 +48,7 @@
   background: var(--bg-panel-soft);
 }
 .head-time {
+  margin-right: 6px;
   font-size: var(--fs-xs);
   color: var(--text-faint);
   white-space: nowrap;
@@ -72,7 +73,7 @@
   margin: 6px 0 4px;
   padding: 8px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   color: var(--text-dim);
 }
@@ -88,7 +89,7 @@
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--state) 14%, transparent);
   color: var(--state);
 }
@@ -123,7 +124,7 @@
   margin: 6px 0 4px;
   padding: 8px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   color: var(--text-dim);
   font-family: var(--font-ui);
@@ -145,7 +146,7 @@
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--state) 14%, transparent);
   color: var(--state);
 }
@@ -192,7 +193,7 @@
 .process-ended-state {
   flex: none;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--state) 16%, transparent);
   color: var(--state);
   font-family: var(--font-mono);
@@ -347,7 +348,7 @@ button.turn-processes:hover {
 .bubble {
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
-  border-radius: 9px;
+  border-radius: var(--radius);
   padding: 11px 13px;
   font-size: var(--fs-md);
   line-height: 1.55;
@@ -476,7 +477,7 @@ button.turn-processes:hover {
   gap: 10px;
   width: 100%;
   padding: 5px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   border: 0;
   background: none;
   color: var(--text);
@@ -537,7 +538,7 @@ button.turn-processes:hover {
   margin: 0 0 4px 8px;
   padding: 2px 7px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--text-dim);
   font-family: var(--font-ui);
@@ -552,7 +553,7 @@ button.turn-processes:hover {
   padding: 7px 9px;
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   line-height: 1.55;
@@ -569,7 +570,7 @@ button.turn-processes:hover {
   margin: 6px 0 4px;
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--amber) 8%, transparent);
 }
 .approval-card.approved {
@@ -624,7 +625,7 @@ button.turn-processes:hover {
   padding: 5px 7px;
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-xs);
@@ -690,7 +691,7 @@ button.turn-processes:hover {
   padding: 2px 6px;
   margin-left: -6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-faint);
   font-family: inherit;
@@ -764,7 +765,7 @@ button.turn-processes:hover {
 .approval-change-place {
   margin: 0 0 4px;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--amber);
 }
 .approval-change-place.production {

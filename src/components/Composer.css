@@ -73,8 +73,8 @@
   color: var(--text-box-hint);
 }
 .composer .send {
-  width: 30px;
-  height: 30px;
+  width: var(--control);
+  height: var(--control);
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;
@@ -102,7 +102,7 @@
 .composer-meter {
   display: flex;
   align-items: center;
-  height: 30px;
+  height: var(--control);
 }
 
 /* Where the message is worked on, and what it goes out with. The folder side

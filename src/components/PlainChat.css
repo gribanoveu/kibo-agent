@@ -49,7 +49,7 @@
 }
 .plain-suggest button {
   padding: 7px 11px;
-  border-radius: 9px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-soft);
   background: var(--bg-panel-soft);
   color: var(--text-dim);
@@ -123,7 +123,7 @@
   gap: 5px;
   padding: 2px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-faint);
   font: inherit;
@@ -201,12 +201,12 @@
 .plain-meter {
   display: flex;
   align-items: center;
-  height: 30px;
+  height: var(--control);
 }
 .plain-send {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: var(--control);
+  height: var(--control);
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   border: 0;
@@ -237,7 +237,7 @@
   margin: 0 0 8px;
   padding: 2px 4px 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-size: var(--fs-xs);
 }
@@ -254,7 +254,7 @@
   display: inline-flex;
   padding: 2px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--text-dim);
   cursor: pointer;

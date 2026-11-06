@@ -4,7 +4,7 @@
   margin: 6px 0 4px;
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   display: flex;
   flex-direction: column;
@@ -58,16 +58,17 @@
 }
 .mcp-question-input {
   padding: 5px 7px;
-  background: var(--bg-bubble);
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-xs);
 }
 .mcp-question-input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
 }
 .mcp-question-choice {
   display: flex;
@@ -76,7 +77,7 @@
 .mcp-question-choice button {
   padding: 3px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-bubble);
   color: var(--text-dim);
   font-size: var(--fs-xs);

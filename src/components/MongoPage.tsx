@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, Chevrons
 import { Dropdown } from "./Dropdown";
 import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
-import { Page } from "./Page";
+import { Page, PageEmpty } from "./Page";
 import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
 import { useCopied } from "../hooks/useCopied";
@@ -133,14 +133,17 @@ export function MongoPage(_: PageContext) {
     >
       {store.error && <p className="mongo-error">{store.error}</p>}
       {store.connections.length === 0 ? (
-        <div className="mongo-welcome">
-          <Database size={28} className="mongo-welcome-icon" />
-          <p>No connections yet. Add one with its connection string — it is sealed on this computer as the API keys are, and this window never sees the password again.</p>
-          <button type="button" className="btn btn-primary" onClick={() => setForm({ name: "", uri: "", agent: false })}>
-            <Plus size={14} />
-            Add connection
-          </button>
-        </div>
+        <PageEmpty
+          icon={Database}
+          action={
+            <button type="button" className="btn btn-primary" onClick={() => setForm({ name: "", uri: "", agent: false })}>
+              <Plus size={14} />
+              Add connection
+            </button>
+          }
+        >
+          No connections yet. Add one with its connection string — it is sealed on this computer as the API keys are, and this window never sees the password again.
+        </PageEmpty>
       ) : (
         <div className="mongo-layout">
           <nav className="mongo-tree" aria-label="Databases">

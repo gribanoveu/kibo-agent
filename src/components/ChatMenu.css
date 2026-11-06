@@ -3,8 +3,8 @@
 }
 
 .chat-menu-button {
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   border-radius: var(--radius-sm);
 }
 .chat-menu-button.on {
@@ -47,11 +47,19 @@
   background: var(--bg-menu-hover);
   color: var(--text);
 }
-/* Opening a panel and acting on the chat are two different things. */
+/* Opening a panel and acting on the chat are two different things. The line is
+   in the gap above the row, so a hovered row is as tall as the others. */
 .chat-menu-item.divided {
-  margin-top: 5px;
+  position: relative;
+  margin-top: 9px;
+}
+.chat-menu-item.divided::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
   border-top: 1px solid var(--border-soft);
-  padding-top: 10px;
 }
 .chat-menu-item:disabled {
   color: var(--text-faint);

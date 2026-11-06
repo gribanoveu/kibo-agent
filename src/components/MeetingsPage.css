@@ -21,8 +21,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   border: none;
   border-radius: var(--radius-pill);
   background: var(--accent);
@@ -365,11 +365,11 @@
 }
 .meetings-day-head {
   margin: 0 0 6px 4px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--text-faint);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  color: var(--text-box-hint);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
 }
 .meetings-list {
   list-style: none;
@@ -472,8 +472,8 @@
 .meetings-row-delete {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   margin-right: 8px;
   border: none;
   border-radius: var(--radius-sm);
@@ -565,7 +565,7 @@
 .meeting-card-head h3 {
   margin: 0 auto 0 0;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
 }
 /* The title folds its card: a chevron that turns, the whole line a button. */
@@ -668,7 +668,7 @@
   background: color-mix(in srgb, currentColor 14%, transparent);
   font-family: inherit;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
 }
 .meeting-avatar > * {
@@ -712,7 +712,7 @@
 }
 .meeting-speaker {
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
 }
 .meeting-text {
@@ -740,7 +740,7 @@
   background: var(--bg-panel);
   font-family: inherit;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
 }
 .meeting-speaker-chip {
   cursor: pointer;
