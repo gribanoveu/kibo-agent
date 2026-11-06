@@ -99,6 +99,7 @@ pub struct Silero(VoiceActivityDetector);
 impl PhraseDetector for Silero {
     /// A window at a time: a call decides once, whatever its length, so
     /// sound given in larger pieces loses the starts of phrases and glues them.
+    /// The short piece at the end is not lost: sherpa keeps it for the next call.
     fn accept(&self, samples: &[f32]) {
         samples.chunks(VAD_WINDOW as usize).for_each(|window| self.0.accept_waveform(window));
     }
