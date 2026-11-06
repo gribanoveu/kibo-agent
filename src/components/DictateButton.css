@@ -6,8 +6,8 @@
   padding: 4px 3px;
 }
 .dictate-mic {
-  width: 30px;
-  height: 30px;
+  width: var(--control);
+  height: var(--control);
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;

@@ -1281,7 +1281,7 @@ pub fn change(kube: Option<PinnedCluster>, call: &ToolCall) -> Result<ToolResult
 }
 
 /// What every changing tool says of itself.
-const CHANGE: &str = "Needs \"Changes\" on the chat's tab and the user's approval on a card; the object is backed up first. \
+const CHANGE: &str = "Needs \"Allow changes\" on for the chat and the user's approval on a card; the object is backed up first. \
     Returns what it was and is, and a change id for each object changed.";
 
 /// How every Kubernetes tool is told where it reads. The namespace is each
@@ -1500,7 +1500,7 @@ pub(super) fn scale_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "kubeScale".to_string(),
         description: "Set the replicas of a Deployment, StatefulSet or ReplicaSet in the chat's own namespace — a change is \
-            never made in another namespace or cluster. Works only when the user has switched the chat's tab to \"Changes\"; \
+            never made in another namespace or cluster. Works only when the user has turned on \"Allow changes\" for the chat; \
             otherwise it answers that the chat is read-only. The user approves it on a card showing the cluster and the \
             counts; the object is backed up first. Returns what it was and is, and a change id. To scale several, call it \
             for each in one round — they share one card. A DaemonSet, CronJob or Job has no replicas: it answers how those \
@@ -1630,7 +1630,7 @@ pub(super) fn undo_definition() -> LlmToolDefinition {
         name: "kubeUndo".to_string(),
         description: "Put a change back by its change id — the id a changing tool answered with, or one the user names. The \
             app restores from the backup it took before the change, so it works after the conversation has forgotten the \
-            details; use it rather than changing the object back yourself. Needs \"Changes\" on the chat's tab and the \
+            details; use it rather than changing the object back yourself. Needs \"Allow changes\" on for the chat and the \
             user's approval on a card, like any change, and is one itself: it answers with a new change id, and undoing \
             that makes the change again. It refuses when the object has been changed since — by a later change of yours \
             (undo that first) or by someone else (then the user decides what to do) — when the change was made \
@@ -1861,7 +1861,7 @@ mod tests {
         Some(PinnedCluster { api: fake, namespace: "orders", kubeconfig: "prod", context: "eks", writes: false, production: false, changes: None })
     }
 
-    /// The same chat with "Changes" switched on.
+    /// The same chat with "Allow changes" on.
     fn writing<'a>(fake: &'a Fake, recorded: &'a Recorded) -> Option<PinnedCluster<'a>> {
         Some(PinnedCluster { writes: true, changes: Some(recorded), ..pinned(fake).unwrap() })
     }
@@ -1917,7 +1917,7 @@ mod tests {
         assert!(matches!(kube_scale(Some(read_only), &scale(0)), Err(ToolError::KubeReadOnly)));
         assert!(matches!(preflight(Some(read_only), &ToolCall::KubeScale(scale(0))), Err(ToolError::KubeReadOnly)));
         assert!(fake.asked().is_empty(), "{:?}", fake.asked());
-        assert!(ToolError::KubeReadOnly.to_string().contains("\"Changes\""));
+        assert!(ToolError::KubeReadOnly.to_string().contains("\"Allow changes\""));
     }
 
     /// No backup, no change: a cluster is not a working tree.

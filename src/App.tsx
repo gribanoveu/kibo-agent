@@ -20,7 +20,7 @@ import { pagesShown, type PageId } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, SquarePen } from "lucide-react";
 import { Titlebar } from "./components/Titlebar";
 import { shortcutText } from "./lib/shortcuts";
 import { useAgentTurn } from "./hooks/useAgentTurn";
@@ -654,6 +654,8 @@ export default function App() {
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
             onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
+            steered={agent.steered}
+            onWithdraw={agent.withdraw}
           />
           <Composer
             tab={
@@ -666,15 +668,12 @@ export default function App() {
                 onForgetFolder={(path) => void workspace.forget(path)}
                 branch={branch}
                 worktreeOf={worktreeOf}
-                index={index}
-                end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  onWorktree: unstarted ? branchPicker.setWorktree : undefined,
                   locked: anyTurnBusy
                     ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
                     : undefined,
@@ -683,13 +682,22 @@ export default function App() {
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
               />
             }
+            end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
+            index={workspace.path ? index : null}
+            worktree={
+              unstarted && workspace.path && branch
+                ? {
+                    on: branchPicker.worktree,
+                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
+                    onChange: branchPicker.setWorktree,
+                  }
+                : undefined
+            }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
             queued={agent.queued}
             onUnqueue={agent.unqueue}
-            steered={agent.steered}
-            onWithdraw={agent.withdraw}
             focus={composerFocus}
             // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
             dictate={features.isOn("voice-input") && !onPage}
@@ -840,20 +848,26 @@ export default function App() {
         leading={
           // The IDE layout has no sidebar to show.
           !ide && (
-            <button
-              className="iconbtn"
-              type="button"
-              title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
-              aria-pressed={!rail}
-              onClick={toggleSidebar}
-            >
-              <PanelLeft size={15} />
-            </button>
+            <>
+              <button
+                className="iconbtn"
+                type="button"
+                title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
+                aria-pressed={!rail}
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={15} />
+              </button>
+              <button className="iconbtn" type="button" title={`New chat (${shortcutText("newChat")})`} aria-label="New chat" onClick={newChat}>
+                <SquarePen size={15} />
+              </button>
+            </>
           )
         }
       >
-        {/* The open chat's name, where the chat is on screen; the IDE layout's header names it already. */}
-        {(!ide && !onPage && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
+        {/* The open page's name, or the open chat's where the chat is on screen; the IDE layout's header names it already. */}
+        {onPage?.label ||
+          (!ide && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
           "Kibo Agent"}
       </Titlebar>
 
@@ -874,7 +888,6 @@ export default function App() {
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
-          onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }

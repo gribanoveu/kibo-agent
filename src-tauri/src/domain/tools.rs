@@ -1442,9 +1442,9 @@ pub enum ToolError {
     /// A search or read of the knowledge base that could not be done.
     #[error("{0}")]
     KnowledgeRead(String),
-    /// A change asked for while the chat's tab says "Read only". The switch
+    /// A change asked for while "Allow changes" is off. The switch
     /// is the user's; the model says what it would do and where to turn it on.
-    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
+    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by turning on \"Allow changes\" in the cluster panel under the message box.")]
     KubeReadOnly,
     /// The backup could not be written, so nothing was changed.
     #[error("nothing was changed: the backup that makes it undoable could not be written — {0}")]

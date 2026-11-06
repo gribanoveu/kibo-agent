@@ -16,8 +16,8 @@
   line-height: 1.4;
 }
 .entry-input {
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border);
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--font-ui);
@@ -31,7 +31,8 @@
 }
 .entry-input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
 }
 .entry-row {
   display: flex;

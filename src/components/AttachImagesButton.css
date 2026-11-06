@@ -1,8 +1,8 @@
 /* The look is the button's own; the row it sits in decides where it lands —
    beside the send button, with the pair pushed to the right of the bar. */
 .attach-images {
-  width: 30px;
-  height: 30px;
+  width: var(--control);
+  height: var(--control);
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;

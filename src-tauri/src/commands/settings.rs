@@ -296,7 +296,7 @@ pub async fn kube_namespaces(pin: KubePin, clusters: State<'_, Arc<Clusters>>) -
         .map_err(|e| format!("the request thread failed: {e}"))?
 }
 
-/// A namespace typed on a chat's tab, offered again for that kubeconfig.
+/// A namespace typed in a chat's panel, offered again for that kubeconfig.
 #[tauri::command]
 pub fn kube_namespace_remember(kubeconfig: String, namespace: String) -> Result<(), String> {
     let namespace = namespace.trim();

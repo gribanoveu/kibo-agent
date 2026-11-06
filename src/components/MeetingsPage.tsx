@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
 import { AudioLines, Calendar, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { Markdown } from "./Markdown";
 import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
@@ -537,9 +537,9 @@ function MeetingList({
   const busy = job !== null;
   if (list.length === 0 && recordings.length === 0) {
     return (
-      <p className="meetings-empty">
+      <PageEmpty icon={AudioLines}>
         No meetings yet. Record a call, or import its recording — sound or video — and its notes are written here: what was decided, who does what.
-      </p>
+      </PageEmpty>
     );
   }
   // Both newest first, merged: a day's rows are together.

@@ -13,6 +13,9 @@ mock.module("@tauri-apps/api/core", () => ({
     calls.push({ command, args });
     // A pasted picture, sanitized: what the backend answers with.
     if (command === "image_prepare") return Promise.resolve({ mediaType: "image/png", data: "PNG", width: 4, height: 3 });
+    if (command === "kube_contexts") {
+      return Promise.resolve({ contexts: [{ name: "orbstack", cluster: "orbstack", namespace: "shop" }], current: "orbstack" });
+    }
     return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
@@ -90,13 +93,13 @@ describe("Chat mode's box", () => {
   /// One rule for every box (`boxTakesPictures`): a model that sees pictures,
   /// and a Prototype chat, whose pictures are the page's assets whatever the
   /// model can see.
-  test("a picture can be chosen beside send, when the box takes them", () => {
+  test("a picture can be chosen right before the text, when the box takes them", () => {
     const { rerender } = render(chatScreen("a"));
     expect(screen.queryByRole("button", { name: "Attach a picture" })).toBeNull();
 
     rerender(chatScreen("a", undefined, true));
     const attach = screen.getByRole("button", { name: "Attach a picture" });
-    expect(attach.nextElementSibling?.getAttribute("title")).toBe("Send");
+    expect(attach.nextElementSibling?.tagName).toBe("TEXTAREA");
 
     // Text only: an assistant chat takes none; a Prototype chat keeps its assets.
     rerender(chatScreen("a", undefined, false));
@@ -165,5 +168,113 @@ describe("Chat mode's box", () => {
     expect(sent).toEqual(["сделай"]);
     expect(box().value).toBe("");
     expect(readChatDraft(chatDraftKey("chat", null))).toBe("");
+  });
+});
+
+describe("a Kubernetes chat's box", () => {
+  type Pin = { kubeconfig: string; context: string | null; namespace: string | null; writes?: boolean };
+  const pinned = (writes: boolean | undefined, pins: Pin[] = [], production = false) => (
+    <PlainChat
+      chat={
+        {
+          ...state("k"),
+          role: "kubernetes",
+          roles: [{ id: "kubernetes", name: "Kubernetes", description: "Works with a cluster" }],
+          kube: { kubeconfig: "local", context: null, namespace: null, writes },
+          setPin: (pin: Pin) => pins.push(pin),
+        } as unknown as Chat
+      }
+      focus={0}
+      models={{ choices: [], current: null }}
+      onModel={() => {}}
+      onEffort={() => {}}
+      onLoadModels={() => {}}
+      kube={{ configs: [{ name: "local", path: "/k", production }], pick: () => {} } as unknown as Kube}
+      onSetUpKube={() => {}}
+      onCompact={() => {}}
+    />
+  );
+  const settings = () => fireEvent.click(screen.getByTitle("Mode, model and thinking"));
+  const cluster = () => fireEvent.click(screen.getAllByTitle("Kubeconfig, context, namespace and access")[0]);
+  const line = () =>
+    [...document.querySelectorAll(".kube-panel .composer-settings-summary > span")].map((el) => el.textContent);
+  const loaded = () => screen.findByText("shop");
+
+  /// One chip for the whole cluster, and its panel apart from the model's.
+  test("says the cluster on the line and sets it in a panel of its own", async () => {
+    render(pinned(undefined));
+    await loaded();
+    expect(line()).toEqual(["local", "shop"]);
+    expect(screen.queryByTitle("The namespace this chat works in")).toBeNull();
+
+    cluster();
+    expect(screen.getByTitle("The kubeconfig this chat works with").textContent).toContain("local");
+    expect(screen.getByTitle("The context of the kubeconfig — which cluster, as which user").textContent).toContain("orbstack");
+    expect(screen.getByTitle("The namespace this chat works in").textContent).toContain("shop");
+    const toggle = screen.getByRole("switch", { name: "Allow changes" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.closest("label")?.title).toContain("it may change shop");
+  });
+
+  test("the model's panel has none of it", async () => {
+    render(pinned(undefined));
+    await loaded();
+    settings();
+    expect(screen.getByTitle("Model")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Allow changes" })).toBeNull();
+    expect(screen.queryByTitle("The kubeconfig this chat works with")).toBeNull();
+  });
+
+  test("the switch goes to the chat's pin, the rest of the pin kept", async () => {
+    const pins: Pin[] = [];
+    render(pinned(false, pins));
+    await loaded();
+    cluster();
+    fireEvent.click(screen.getByRole("switch", { name: "Allow changes" }));
+    expect(pins).toEqual([{ kubeconfig: "local", context: null, namespace: null, writes: true }]);
+  });
+
+  /// Moved elsewhere, the chat is not the one that was allowed to change things.
+  test("another namespace takes the permission away", async () => {
+    const pins: Pin[] = [];
+    render(pinned(true, pins));
+    await loaded();
+    cluster();
+    fireEvent.click(screen.getByTitle("The namespace this chat works in"));
+    const other = screen.getByRole("textbox", { name: "Another namespace" });
+    fireEvent.change(other, { target: { value: "staging" } });
+    fireEvent.keyDown(other, { code: "Enter", key: "Enter" });
+    expect(pins).toEqual([{ kubeconfig: "local", context: null, namespace: "staging", writes: false }]);
+  });
+
+  /// The panel is closed most of the time, and a chat that may change a cluster
+  /// is not something to find out by opening it.
+  test("a chat that may change the cluster says so on the line, one that only reads does not", async () => {
+    const { rerender } = render(pinned(true));
+    await loaded();
+    expect(line()).toEqual(["local", "shop", "changes"]);
+
+    rerender(pinned(false));
+    expect(line()).toEqual(["local", "shop"]);
+  });
+
+  /// As red on the line as it was on its chip: seen before a word is typed.
+  test("a cluster marked production is red on the line", async () => {
+    render(pinned(false, [], true));
+    await loaded();
+    expect(document.querySelector(".kube-panel .kube-panel-production")?.textContent).toBe("local");
+  });
+
+  /// Nothing to change until there is a cluster to change.
+  test("has no switch before a context is known", () => {
+    render(pinned(false));
+    cluster();
+    expect(screen.queryByRole("switch", { name: "Allow changes" })).toBeNull();
+    expect(line()).toEqual(["local"]);
+  });
+
+  test("another role has no such chip", () => {
+    render(chatScreen("a"));
+    expect(screen.queryByTitle("Kubeconfig, context, namespace and access")).toBeNull();
   });
 });

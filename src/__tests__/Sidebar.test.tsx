@@ -37,7 +37,6 @@ const sidebar = (
       activeChat={null}
       chatActivity={chatActivity}
       onSelectChat={on.select ?? (() => {})}
-      onNewChat={() => {}}
       onArchiveChat={on.archive ?? (() => {})}
       onDeleteChat={on.remove ?? (() => {})}
       onOpenSettings={() => {}}
@@ -65,6 +64,40 @@ describe("the chat list", () => {
     pickFilter("All");
     expect(screen.getByText("kept in view")).toBeTruthy();
     expect(screen.getByText("filed away")).toBeTruthy();
+  });
+
+  /// What was touched today comes under its own heading; a heading with nothing under it is not drawn.
+  test("sorts the list by day", () => {
+    const now = Date.now();
+    sidebar({}, "dark", {}, [
+      { id: "t", title: "from today", updatedAt: now, archived: false },
+      { id: "e", title: "from before", updatedAt: now - 3 * 86_400_000, archived: false },
+    ]);
+    const under = (day: string) => screen.getByText(day).closest("section")?.textContent;
+    expect(under("Today")).toContain("from today");
+    expect(under("Today")).not.toContain("from before");
+    expect(under("Earlier")).toContain("from before");
+  });
+
+  /// Typed, the list narrows to what matches; Escape gives it all back.
+  test("the search narrows the list by title, and Escape clears it", () => {
+    sidebar();
+    const box = screen.getByRole("textbox", { name: "Search chats" });
+    fireEvent.change(box, { target: { value: "KEPT" } });
+    expect(screen.getByText("kept in view")).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: "nothing like it" } });
+    expect(screen.queryByText("kept in view")).toBeNull();
+    expect(screen.getByText("No chats match.")).toBeTruthy();
+
+    fireEvent.keyDown(box, { code: "Escape", key: "Escape" });
+    expect(screen.getByText("kept in view")).toBeTruthy();
+  });
+
+  test("a day with no chats has no heading", () => {
+    sidebar();
+    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.getByText("Earlier")).toBeTruthy();
   });
 
   test("archives from a row's menu, and an archived row offers to bring it back", () => {
@@ -177,7 +210,6 @@ describe("pages", () => {
         chats={chats}
         activeChat={null}
         onSelectChat={() => {}}
-        onNewChat={() => {}}
         onArchiveChat={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
@@ -194,7 +226,7 @@ describe("pages", () => {
     expect(selected()).toEqual(["Agent"]);
     unmount();
     views("catalog");
-    expect(selected()).toEqual(["Catalog"]);
+    expect(selected()).toEqual(["Agent", "Catalog"]);
   });
 
   test("a feature's page is listed only while the feature is on", () => {
@@ -210,11 +242,11 @@ describe("pages", () => {
     expect(calls).toEqual(["catalog", "agent"]);
   });
 
-  test("an open page drops the chat list", () => {
-    const { unmount } = views(null);
-    expect(screen.queryByText("Chats")).not.toBeNull();
-    unmount();
+  /// A page changes what is right of the sidebar, not the sidebar.
+  test("an open page keeps the search and the list, with no chat marked open", () => {
     views("catalog");
-    expect(screen.queryByText("Chats")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Search chats" })).toBeTruthy();
+    expect(screen.getByText("Chats")).toBeTruthy();
+    expect(document.querySelector(".chat.active")).toBeNull();
   });
 });

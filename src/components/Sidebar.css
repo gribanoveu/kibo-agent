@@ -5,7 +5,7 @@
   flex: 0 1 auto;
   min-width: 180px;
   position: relative;
-  background: var(--bg-panel-soft);
+  background: var(--bg-box);
   border-radius: var(--radius-panel);
   display: flex;
   flex-direction: column;
@@ -27,7 +27,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 12px 10px 10px;
   overflow-x: clip;
 }
@@ -39,77 +39,69 @@
   padding: 14px 0 8px;
 }
 
-/* A row like the ones under it, set apart by its accent "+" alone; its key
-   shows while the pointer is on it. */
-.newchat {
-  flex: 1;
+/* The chats' search: the mode's list, narrowed as it is typed. */
+.sidebar-search {
+  flex: 0 0 100%;
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
+  gap: 8px;
+  height: var(--control);
+  padding: 0 10px;
+  background: var(--bg-field);
+  border-radius: var(--radius-md);
+  color: var(--text-box-hint);
+  border: 1px solid var(--border-field);
+}
+.sidebar-search:focus-within {
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
+}
+.sidebar-search svg {
+  flex: none;
+}
+.sidebar-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
   background: none;
+  border: 0;
+  outline: none;
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-md);
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
 }
-.newchat svg {
-  flex: none;
-  color: var(--accent);
-}
-.newchat:hover {
-  background: var(--bg-hover);
-}
-.newchat-keys {
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  font-weight: normal;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.newchat:hover .newchat-keys,
-.newchat:focus-visible .newchat-keys {
-  opacity: 1;
-}
-.window.collapsed .newchat {
-  flex: none;
-  width: 30px;
-  padding: 0;
-  justify-content: center;
-}
-.window.collapsed .newchat .label,
-.window.collapsed .newchat-keys {
+.window.collapsed .sidebar-search {
   display: none;
 }
 
-/* The modes: a list of rows, one per mode, so another one is another row
-   (APP_MODES) rather than a narrower segment. Drawn as the chats below are;
-   on the rail, a column of icons. */
+/* The modes: one segment each, on a tray; on the rail, a column of icons. */
 .mode-switch {
   flex: 0 0 100%;
+  box-sizing: border-box;
   display: flex;
-  flex-direction: column;
   gap: 2px;
-  margin-top: 6px;
+  padding: 3px;
+  background: var(--bg-panel-soft);
+  border-radius: var(--radius-md);
 }
+/* The pages: a list, drawn as the chats below are. */
 .sidebar-pages {
-  margin-top: 0;
+  flex-direction: column;
+  padding: 0;
+  background: none;
 }
 .window.collapsed .mode-switch {
   flex: none;
+  flex-direction: column;
   align-items: center;
+  padding: 0;
+  background: none;
 }
 .mode-opt {
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 30px;
+  height: var(--control);
   padding: 0 8px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -129,7 +121,7 @@
    selections in the sidebar read as different kinds. */
 .mode-opt.active,
 .mode-opt.active:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--bg-active);
   color: var(--text);
 }
 .mode-opt.active svg {
@@ -138,12 +130,30 @@
 .mode-opt svg {
   flex: none;
 }
-/* A mode is where the work happens, a page something beside it: the modes'
-   rows are a little taller and read in full ink, the pages' in dim. Every
-   icon in the top block — "+", modes, pages — sits on one column. */
+/* A mode is where the work happens: the one in use stands up off its tray. */
 .mode-switch:not(.sidebar-pages) .mode-opt {
-  height: 32px;
+  flex: 1;
+  justify-content: center;
+  height: var(--control-sm);
+  color: var(--text-box-hint);
+}
+.mode-switch:not(.sidebar-pages) .mode-opt:hover {
+  background: none;
   color: var(--text);
+}
+.mode-switch:not(.sidebar-pages) .mode-opt.active {
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+}
+.sidebar-pages .mode-opt {
+  height: var(--control);
+}
+.sidebar-pages .mode-opt svg {
+  color: var(--text-box-hint);
+}
+.sidebar-pages .mode-opt.active svg {
+  color: var(--accent);
 }
 .mode-tile {
   flex: none;
@@ -159,8 +169,11 @@
      cut the block in two. */
   margin-top: 10px;
   padding: 0 8px 2px;
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
+  color: var(--text-box-hint);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 /* On the rail, with no words to show, the heading is a line between the two groups. */
 .window.collapsed .sidebar-pages-head {
@@ -173,7 +186,9 @@
   overflow: hidden;
 }
 .window.collapsed .mode-opt {
-  width: 30px;
+  flex: none;
+  width: var(--control);
+  height: var(--control);
   padding: 0;
   justify-content: center;
 }
@@ -200,9 +215,9 @@
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 7px 8px;
+  height: var(--control);
+  padding: 0 8px;
   border-radius: var(--radius-md);
-  margin-top: 2px;
   font-size: var(--fs-md);
   font-family: inherit;
   text-align: left;
@@ -215,6 +230,9 @@
 }
 .chat svg {
   flex: none;
+}
+.chat > svg:not(.chat-activity) {
+  color: var(--text-box-hint);
 }
 .chat span {
   overflow: hidden;
@@ -258,19 +276,44 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 0 2px 8px;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
+  height: var(--control-sm);
+  padding: 0 0 0 8px;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-box-hint);
   /* Stays over the rows as they scroll under it, in the sidebar's own tone. */
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg-panel-soft);
+  background: var(--bg-box);
 }
 
 /* Three short filters: no wider than they need, inside the sidebar. */
 .group-head .dropdown-menu {
   min-width: 140px;
+}
+/* The filter's word is a control, not a heading. */
+.group-head .chip {
+  font-weight: normal;
+  letter-spacing: normal;
+  text-transform: none;
+}
+/* Stays under the list's heading while its day scrolls, until the next day
+   pushes it out; `top` is that heading's height. */
+.chat-day {
+  position: sticky;
+  top: var(--control-sm);
+  z-index: 1;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: var(--bg-box);
+  color: var(--text-box-hint);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  font-weight: 500;
 }
 
 /* A row is the chat and its ⋮, which shows on hover or while its menu is open. */
@@ -334,7 +377,7 @@
 .sidebar-shortcuts h3 {
   margin: 0 0 4px;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-faint);
 }
 .sidebar-shortcuts dl {
@@ -386,14 +429,15 @@
 .sidebar-bottom {
   flex: none;
   margin-top: auto;
-  padding: 10px;
+  padding: 4px 10px;
   position: relative;
+  border-top: 1px solid var(--border-soft);
 }
 .window.collapsed .sidebar-bottom {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 10px 0;
+  padding: 4px 0;
 }
 
 .user-wrap {
@@ -408,7 +452,8 @@
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 8px;
+  height: var(--control);
+  padding: 0 8px;
   border-radius: var(--radius-md);
   background: none;
   border: 0;
@@ -416,6 +461,18 @@
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-md);
+}
+.user-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 500;
 }
 .user:hover,
 .user.open {
@@ -427,8 +484,7 @@
 }
 /* Collapsed rail: the avatar button becomes a square icon like the ones above it. */
 .window.collapsed .user {
-  width: 36px;
-  height: 36px;
+  width: var(--control);
   padding: 0;
   gap: 0;
   justify-content: center;
@@ -497,7 +553,7 @@
 .sidebar-about-version {
   margin: 0 0 8px;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
 }
 .sidebar-about-note {

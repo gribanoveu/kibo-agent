@@ -68,10 +68,10 @@
 }
 .mcp-install-head {
   margin: 0;
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  color: var(--text-box-hint);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 .mcp-install-note {
@@ -135,7 +135,7 @@
 }
 .mcp-install-choice-title {
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
 }
 .mcp-install-choice-text {
   color: var(--text-faint);

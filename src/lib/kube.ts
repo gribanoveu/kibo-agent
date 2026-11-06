@@ -43,7 +43,7 @@ export type KubePin = {
   kubeconfig: string;
   context: string | null;
   namespace: string | null;
-  /** "Changes" on the chat's tab: its tools may change the cluster. Absent is read-only. */
+  /** "Allow changes" in the chat's settings: its tools may change the cluster. Absent is read-only. */
   writes?: boolean;
 };
 export type KubeContext = { name: string; cluster: string; namespace: string | null };
@@ -61,7 +61,7 @@ export async function kubeNamespaces(pin: KubePin): Promise<KubeNamespaces> {
   return invoke<KubeNamespaces>("kube_namespaces", { pin });
 }
 
-/** A namespace typed on a chat's tab, offered again for that kubeconfig. */
+/** A namespace typed in a chat's panel, offered again for that kubeconfig. */
 export async function rememberNamespace(kubeconfig: string, namespace: string): Promise<void> {
   await invoke("kube_namespace_remember", { kubeconfig, namespace });
 }
