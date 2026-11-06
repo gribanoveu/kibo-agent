@@ -43,7 +43,8 @@
   color: var(--accent);
 }
 /* The pictures' button, with how many there are. */
-.prototype-preview-assets {
+/* Over `.iconbtn`, whichever stylesheet comes last: its grid stacks the number under the icon. */
+.iconbtn.prototype-preview-assets {
   width: auto;
   display: inline-flex;
   align-items: center;
