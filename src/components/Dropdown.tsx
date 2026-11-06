@@ -4,7 +4,7 @@ import "./Dropdown.css";
 import { matches } from "../lib/shortcuts";
 
 /** `label` when what the caller sends and what the reader sees differ — a wire
-    value like "plan" is not a word to put in a menu. */
+    value like "pullRequest" is not a word to put in a menu. */
 type Option = {
   value: string;
   label?: string;

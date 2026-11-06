@@ -625,7 +625,7 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
               </p>
             ) : (
               <p className="catalog-detail-confirm">
-                Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
+                Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent or Analyst turn, as this entry says — the command it runs or the address it
                 sends to:
               </p>
             )}

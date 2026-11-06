@@ -58,7 +58,7 @@ beforeEach(() => {
     on: false,
     tools: [{ name: "board", description: "When the user asks you to remind them…" }],
     toolsOn: true,
-    places: ["Assistant chat", "Agent", "Plan", "Ask"],
+    places: ["Assistant chat", "Agent", "Analyst"],
     data: "~/.kibo/board.json",
     hasData: true,
   };
@@ -73,7 +73,7 @@ describe("features on the catalog page", () => {
 
     fireEvent.click(section.getByRole("button", { name: "Board" }));
     const panel = within(screen.getByRole("complementary", { name: "Board details" }));
-    expect(panel.getByText("Assistant chat, Agent, Plan, Ask")).toBeTruthy();
+    expect(panel.getByText("Assistant chat, Agent, Analyst")).toBeTruthy();
     expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
     expect(panel.getByText("~/.kibo/board.json")).toBeTruthy();
   });
