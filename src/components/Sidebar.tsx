@@ -15,12 +15,11 @@ import {
   MessageSquare,
   MessagesSquare,
   Moon,
-  Plus,
+  Search,
   Settings,
   ShipWheel,
   Sun,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
@@ -29,7 +28,7 @@ import { GettingStarted } from "./GettingStarted";
 import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { comboKeys, matches, shortcutText, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
+import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab, type ChatActivity } from "../types";
 import type { Scheme } from "../hooks/useTheme";
@@ -67,6 +66,16 @@ const EMPTY: Record<Filter, string> = {
   all: "No chats yet.",
 };
 
+/** The list under its headings: what was touched today, and the rest, each in the order it came. */
+function byDay(chats: ChatSummary[]) {
+  const today = new Date().toDateString();
+  const isToday = (chat: ChatSummary) => new Date(chat.updatedAt).toDateString() === today;
+  return [
+    { day: "Today", chats: chats.filter(isToday) },
+    { day: "Earlier", chats: chats.filter((chat) => !isToday(chat)) },
+  ].filter((group) => group.chats.length > 0);
+}
+
 type Props = {
   mode: AppMode;
   onMode: (mode: AppMode) => void;
@@ -79,7 +88,6 @@ type Props = {
   activeChat: string | null;
   chatActivity?: Record<string, ChatActivity>;
   onSelectChat: (id: string) => void;
-  onNewChat: () => void;
   onArchiveChat: (id: string, archived: boolean) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
@@ -99,7 +107,6 @@ export function Sidebar({
   activeChat,
   chatActivity = {},
   onSelectChat,
-  onNewChat,
   onArchiveChat,
   onDeleteChat,
   onOpenSettings,
@@ -109,6 +116,7 @@ export function Sidebar({
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("active");
+  const [query, setQuery] = useState("");
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
@@ -117,7 +125,10 @@ export function Sidebar({
   useEffect(() => {
     if (aboutOpen && version === null) void appVersion().then(setVersion, () => setVersion("unknown"));
   }, [aboutOpen, version]);
-  const listed = chats.filter((chat) => filter === "all" || chat.archived === (filter === "archived"));
+  const wanted = query.trim().toLowerCase();
+  const listed = chats.filter(
+    (chat) => (filter === "all" || chat.archived === (filter === "archived")) && chat.title.toLowerCase().includes(wanted),
+  );
   const userWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -134,17 +145,68 @@ export function Sidebar({
     };
   }, [menuOpen]);
 
+  const chatRow = (chat: ChatSummary) => (
+    <div key={chat.id} className={`chat-row${chat.archived ? " archived" : ""}`}>
+      <button
+        type="button"
+        className={`chat${page === null && chat.id === activeChat ? " active" : ""}`}
+        onClick={() => onSelectChat(chat.id)}
+        title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
+      >
+        {chatActivity[chat.id] === "running" ? (
+          <Loader2 className="chat-activity chat-activity-running" size={14} aria-label="Turn running" />
+        ) : chatActivity[chat.id] === "awaitingApproval" ? (
+          <MessageCircleQuestion className="chat-activity chat-activity-awaiting" size={14} aria-label="Approval needed" />
+        ) : chatActivity[chat.id] === "finished" ? (
+          <CircleCheck className="chat-activity" size={14} aria-label="Finished in background" />
+        ) : chat.archived ? (
+          <Archive size={14} />
+        ) : chat.branchedFrom ? (
+          <GitBranch size={14} />
+        ) : chat.role === "kubernetes" ? (
+          <ShipWheel size={14} />
+        ) : chat.role === "prototype" ? (
+          <AppWindow size={14} />
+        ) : chat.role === "assistant" ? (
+          <MessagesSquare size={14} />
+        ) : (
+          <MessageSquare size={14} />
+        )}
+        <ChangingText text={chat.title} />
+      </button>
+      <ChatMenu
+        items={[
+          chat.archived
+            ? {
+                id: "unarchive",
+                label: "Unarchive",
+                icon: <ArchiveRestore size={14} />,
+                onSelect: () => onArchiveChat(chat.id, false),
+              }
+            : {
+                id: "archive",
+                label: "Archive",
+                icon: <Archive size={14} />,
+                onSelect: () => onArchiveChat(chat.id, true),
+              },
+          {
+            id: "delete",
+            label: "Delete",
+            icon: <Trash2 size={14} />,
+            divided: true,
+            onSelect: () => setDeleting(chat),
+          },
+        ]}
+      />
+    </div>
+  );
+
   return (
     <nav className="sidebar">
       <div className="sidebar-top">
-        <button className="newchat" type="button" onClick={onNewChat} title={`New chat (${shortcutText("newChat")})`}>
-          <Plus size={14} />
-          <span className="label">New chat</span>
-          <span className="newchat-keys">{shortcutText("newChat")}</span>
-        </button>
-        <div className="mode-switch" role="tablist" aria-label="Mode" aria-orientation="vertical">
+        <div className="mode-switch" role="tablist" aria-label="Mode">
           {APP_MODES.map((value) => {
-            const active = page === null && mode === value;
+            const active = mode === value;
             return (
               <button
                 key={value}
@@ -161,8 +223,21 @@ export function Sidebar({
             );
           })}
         </div>
+        <label className="sidebar-search">
+          <Search size={14} />
+          <input
+            type="text"
+            placeholder="Search chats"
+            aria-label="Search chats"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (matches(e, "close")) setQuery("");
+            }}
+          />
+        </label>
         {pages.length > 0 && <div className="sidebar-pages-head">Workspace</div>}
-        <div className="mode-switch sidebar-pages" role="tablist" aria-label="Pages" aria-orientation="vertical">
+        <div className="mode-switch sidebar-pages" role="tablist" aria-label="Pages">
           {pages.map(({ id, label, title, icon: Icon }) => (
             <button
               key={id}
@@ -173,90 +248,39 @@ export function Sidebar({
               title={title}
               onClick={() => onPage(id)}
             >
-              <Icon size={14} />
+              <Icon size={15} />
               <span className="mode-label">{label}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {page === null && (
-        <div className="group">
-          {chats.length > 0 && (
-            <div className="group-head">
-              <span>Chats</span>
-              <Dropdown
-                label={FILTERS.find((f) => f.value === filter)?.label}
-                title="Which chats to list"
-                options={FILTERS}
-                value={filter}
-                onPick={(value) => setFilter(value as Filter)}
-                below
-                right
-              />
-            </div>
-          )}
-          {listed.length === 0 ? (
-            <div className="empty">{chats.length === 0 ? "No chats yet." : EMPTY[filter]}</div>
-          ) : (
-            listed.map((chat) => (
-              <div key={chat.id} className={`chat-row${chat.archived ? " archived" : ""}`}>
-                <button
-                  type="button"
-                  className={`chat${chat.id === activeChat ? " active" : ""}`}
-                  onClick={() => onSelectChat(chat.id)}
-                  title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
-                >
-                  {chatActivity[chat.id] === "running" ? (
-                    <Loader2 className="chat-activity chat-activity-running" size={14} aria-label="Turn running" />
-                  ) : chatActivity[chat.id] === "awaitingApproval" ? (
-                    <MessageCircleQuestion className="chat-activity chat-activity-awaiting" size={14} aria-label="Approval needed" />
-                  ) : chatActivity[chat.id] === "finished" ? (
-                    <CircleCheck className="chat-activity" size={14} aria-label="Finished in background" />
-                  ) : chat.archived ? (
-                    <Archive size={14} />
-                  ) : chat.branchedFrom ? (
-                    <GitBranch size={14} />
-                  ) : chat.role === "kubernetes" ? (
-                    <ShipWheel size={14} />
-                  ) : chat.role === "prototype" ? (
-                    <AppWindow size={14} />
-                  ) : chat.role === "assistant" ? (
-                    <MessagesSquare size={14} />
-                  ) : (
-                    <MessageSquare size={14} />
-                  )}
-                  <ChangingText text={chat.title} />
-                </button>
-                <ChatMenu
-                  items={[
-                    chat.archived
-                      ? {
-                          id: "unarchive",
-                          label: "Unarchive",
-                          icon: <ArchiveRestore size={14} />,
-                          onSelect: () => onArchiveChat(chat.id, false),
-                        }
-                      : {
-                          id: "archive",
-                          label: "Archive",
-                          icon: <Archive size={14} />,
-                          onSelect: () => onArchiveChat(chat.id, true),
-                        },
-                    {
-                      id: "delete",
-                      label: "Delete",
-                      icon: <Trash2 size={14} />,
-                      divided: true,
-                      onSelect: () => setDeleting(chat),
-                    },
-                  ]}
-                />
-              </div>
-            ))
-          )}
-        </div>
-      )}
+      <div className="group">
+        {chats.length > 0 && (
+          <div className="group-head">
+            <span>Chats</span>
+            <Dropdown
+              label={FILTERS.find((f) => f.value === filter)?.label}
+              title="Which chats to list"
+              options={FILTERS}
+              value={filter}
+              onPick={(value) => setFilter(value as Filter)}
+              below
+              right
+            />
+          </div>
+        )}
+        {listed.length === 0 ? (
+          <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
+        ) : (
+          byDay(listed).map(({ day, chats: rows }) => (
+            <section key={day}>
+              <div className="chat-day">{day}</div>
+              {rows.map(chatRow)}
+            </section>
+          ))
+        )}
+      </div>
 
       <Modal
         title="Delete this chat?"
@@ -337,7 +361,9 @@ export function Sidebar({
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
           >
-            <UserRound size={16} />
+            <span className="user-avatar" aria-hidden="true">
+              A
+            </span>
             <span className="meta">Account</span>
             <ChevronRight className="chev" size={12} />
           </button>

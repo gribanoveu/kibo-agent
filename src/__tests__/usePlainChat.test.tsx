@@ -438,7 +438,7 @@ describe("the cluster a chat works with", () => {
     expect(result.current.role).toBe("kubernetes");
   });
 
-  /// "Changes" is a brake released for the chat as it is open: a chat saved
+  /// "Allow changes" is a brake released for the chat as it is open: a chat saved
   /// with it on opens reading only, and so does a new chat started from it.
   test("a chat saved with Changes on opens read-only", async () => {
     const pin = { kubeconfig: "stg", context: "kind", namespace: "orders" };

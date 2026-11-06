@@ -1,10 +1,7 @@
-import { Check, Folder, FolderPlus, GitBranch, GitFork, Trash2, Undo2, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { Folder, FolderPlus, GitBranch, GitFork, Trash2, Undo2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
-import { IndexBadge } from "./IndexBadge";
 import type { RecentFolder } from "../lib/chat";
 import type { BranchRef } from "../lib/git";
-import type { IndexState } from "../lib/indexStatus";
 import "./FolderTab.css";
 
 /** Not a path: no folder is called this. */
@@ -47,8 +44,6 @@ type Props = {
   worktreeOf?: string | null;
   /** The git branch checked out in the folder; `null` outside a repository. */
   branch?: string | null;
-  /** The folder's index; `null` until anything is known about it. */
-  index?: IndexState | null;
   /** Switch the folder's branch, or start a worktree from one. Without it
       the branch is only shown. */
   branchPicker?: {
@@ -58,21 +53,17 @@ type Props = {
     worktree: boolean;
     /** Where a worktree starts, shown in place of the branch while Worktree is on. */
     base?: string | null;
-    /** Offered only before the chat starts: a worktree is a new folder, and a new chat in it. */
-    onWorktree?: (on: boolean) => void;
     /** Why the branch cannot be switched now — a turn is working in it. */
     locked?: string;
   };
   /** The branch the open chat works on. Another chat of the folder may have
       moved the folder off it since: then it is said, with the way back. */
   chatBranch?: string | null;
-  /** At the strip's right end — the provider's balance. */
-  end?: ReactNode;
 };
 
-/** Where the next message will be worked on: the folder, its branch and its
-    index. Sits on the composer's
-    top edge — this is read before sending, not looked up in the sidebar. */
+/** Where the next message will be worked on: the folder and its branch. Sits
+    right under the composer — this is read before sending, not looked up in the
+    sidebar. */
 export function FolderTab({
   path,
   recent,
@@ -82,10 +73,8 @@ export function FolderTab({
   onForgetFolder,
   branch = null,
   worktreeOf = null,
-  index = null,
   branchPicker,
   chatBranch = null,
-  end,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
   const away = chatBranch && branch && chatBranch !== branch ? chatBranch : null;
@@ -186,23 +175,6 @@ export function FolderTab({
               <span className="folder-tab-text">{away}</span>
             </button>
           )}
-          {branchPicker.onWorktree && (
-            <button
-              type="button"
-              role="checkbox"
-              className={`folder-tab-worktree${branchPicker.worktree ? " on" : ""}`}
-              aria-checked={branchPicker.worktree}
-              aria-label="Worktree"
-              title={`The first message starts a worktree from ${shownBranch}: its own folder on a new branch, this one left as it is`}
-              onClick={() => branchPicker.onWorktree?.(!branchPicker.worktree)}
-            >
-              <span className="folder-tab-check" aria-hidden="true">
-                {branchPicker.worktree && <Check size={9} strokeWidth={3.5} />}
-              </span>
-              <GitFork size={12} />
-              <span className="folder-tab-narrow-hide">Worktree</span>
-            </button>
-          )}
         </>
       )}
       {path && branch && !branchPicker && (
@@ -211,8 +183,6 @@ export function FolderTab({
           <span>{branch}</span>
         </span>
       )}
-      {path && index && <IndexBadge state={index} />}
-      {end && <span className="folder-tab-end">{end}</span>}
     </div>
   );
 }

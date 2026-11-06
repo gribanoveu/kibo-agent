@@ -61,10 +61,9 @@ export function ImageThumbs({ images, preparing = 0, onRemove, align = "start" }
           </li>
         ))}
       </ul>
-      {/* Out of the thread and into the window: the thread fades its own bottom
-          out with a mask, and a fixed panel drawn inside it is held to the
-          thread's box and cut off with that fade — the viewer's Close button
-          with it. The same escape a diagram takes (Markdown.tsx). */}
+      {/* Out of the thread and into the window, so nothing the thread does to
+          its own box can cut the viewer or its Close button. The same escape a
+          diagram takes (Markdown.tsx). */}
       {shown &&
         createPortal(
           <Modal title={`Image · ${shown.width}×${shown.height}`} open onClose={() => setOpen(null)} wide>

@@ -10,14 +10,15 @@ const sheet = (onClose: () => void) => (
 );
 
 describe("a page", () => {
-  test("has its title and bar", () => {
+  /// The name on screen is the window's title bar's: the page only says it to a screen reader.
+  test("is named by its title, and has its bar", () => {
     render(
       <Page title="Things" bar={<button type="button">Refresh</button>}>
         <p>listed</p>
       </Page>,
     );
     expect(screen.getByRole("region", { name: "Things" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Things" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Things" })).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
   });
 

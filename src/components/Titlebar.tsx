@@ -39,7 +39,7 @@ export function Titlebar({
   return (
     <div className={`titlebar${nativeFrame ? " native" : ""}`} onMouseDown={dragOrMaximize}>
       {!windowsFrame && !fullscreen && <WindowControls />}
-      {leading}
+      {leading && <div className="titlebar-leading">{leading}</div>}
       {children && <span className="titlebar-title">{children}</span>}
       {slot && <div className="titlebar-slot" ref={slot} />}
       {actions && <div className="titlebar-actions">{actions}</div>}

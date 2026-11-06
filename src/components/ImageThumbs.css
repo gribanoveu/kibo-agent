@@ -20,7 +20,7 @@
   display: grid;
   place-items: center;
   border: 1px dashed var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel-soft);
   color: var(--text-faint);
 }
@@ -41,7 +41,7 @@
   display: block;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--bg-panel-soft);
   cursor: zoom-in;

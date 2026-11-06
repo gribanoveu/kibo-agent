@@ -67,11 +67,11 @@
   align-items: center;
   gap: 6px;
   margin: 0 0 10px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-box-hint);
 }
 .provider-card-head .provider-card-title {
   margin: 0;
@@ -120,18 +120,20 @@
   align-items: center;
   gap: 7px;
   padding: 0 9px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-  color: var(--text-faint);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+  color: var(--text-box-hint);
+  height: var(--control);
 }
 .model-search:focus-within {
-  border-color: var(--text-faint);
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
 }
 .model-search input {
   flex: 1;
   min-width: 0;
-  padding: 7px 0;
+  padding: 0;
   border: 0;
   outline: none;
   background: none;
@@ -211,10 +213,10 @@
   flex: none;
   padding: 1px 7px;
   border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
 }
 /* A note beside a row, not a state: a provider the app carries itself is not
    the chosen one, and the accent pill above reads as chosen. */

@@ -15,6 +15,7 @@ import {
   Sparkles,
   SquareKanban,
   SquareSlash,
+  Store,
   Webhook,
   X,
   type LucideIcon,
@@ -22,7 +23,7 @@ import {
 import { Markdown } from "./Markdown";
 import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
 import { Switch } from "./Switch";
@@ -841,7 +842,7 @@ export function CatalogPage() {
         />
       )}
       {sources !== null && entries.length > 0 && sections.length === 0 && featuresFound.length === 0 && (
-        <div className="catalog-empty">{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</div>
+        <PageEmpty icon={Store}>{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</PageEmpty>
       )}
     </Page>
   );

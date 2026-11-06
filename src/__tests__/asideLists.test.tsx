@@ -48,6 +48,7 @@ const { useSkills } = await import("../hooks/useSkills");
 const { useRules } = await import("../hooks/useRules");
 const { RulesList, SkillsList, folderOf } = await import("../components/panes");
 const { AsidePanel } = await import("../components/AsidePanel");
+const { ContextDetails } = await import("../components/ContextMeter");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 const skill = (name: string, enabled = true, extra: Partial<SkillListItem> = {}): SkillListItem => ({
@@ -212,6 +213,71 @@ describe("the side panel", () => {
     render(<AsidePanel tab="overview" dock="right" ctx={ctx(true)} onClose={() => {}} />);
     expect(screen.queryByTitle("Close panel")).toBeNull();
     expect(screen.getByText("Connectors")).toBeTruthy();
+  });
+
+  // The window moves the dock when asked, so each step here is a rerender on the tab it asked for.
+  test("a pane Overview led to goes back to it instead of closing, and only then", () => {
+    const opened: string[] = [];
+    let closed = 0;
+    const base = ctx(true);
+    const panes = {
+      ...base,
+      overview: {
+        ...base.overview,
+        context: { instructions: 10, skills: 1, tools: 8, mcp: 0, conversation: 0, total: 19, limit: 350 },
+        onOpenPanel: (next: string) => opened.push(next),
+      },
+    } as unknown as ReturnType<typeof ctx>;
+    const panel = (tab: "overview" | "rules" | "files") => <AsidePanel tab={tab} dock="right" ctx={panes} onClose={() => closed++} />;
+
+    const { rerender } = render(panel("overview"));
+    fireEvent.click(screen.getByRole("button", { name: "Instructions and rules" }));
+    expect(opened).toEqual(["rules"]);
+
+    rerender(panel("rules"));
+    expect(screen.queryByTitle("Close panel")).toBeNull();
+    fireEvent.click(screen.getByTitle("Back to Overview"));
+    expect(opened).toEqual(["rules", "overview"]);
+    expect(closed).toBe(0);
+
+    rerender(panel("overview"));
+    rerender(panel("rules"));
+    expect(screen.queryByTitle("Back to Overview")).toBeNull();
+    expect(screen.getByTitle("Close panel")).toBeTruthy();
+  });
+
+  test("leaving a pane for another forgets that Overview led to it", () => {
+    const base = ctx(true);
+    const panes = {
+      ...base,
+      overview: { ...base.overview, context: { instructions: 1, skills: 0, tools: 0, mcp: 0, conversation: 0, total: 1, limit: 10 } },
+    } as unknown as ReturnType<typeof ctx>;
+    const panel = (tab: "overview" | "rules" | "files") => <AsidePanel tab={tab} dock="right" ctx={panes} onClose={() => {}} />;
+
+    const { rerender } = render(panel("overview"));
+    fireEvent.click(screen.getByRole("button", { name: "Instructions and rules" }));
+    rerender(panel("rules"));
+    rerender(panel("files"));
+    rerender(panel("rules"));
+    expect(screen.getByTitle("Close panel")).toBeTruthy();
+  });
+
+  const usage = { instructions: 1, skills: 0, tools: 0, mcp: 0, conversation: 0, total: 1, limit: 10 };
+
+  // The ring's panel shows the same rows, with nowhere to lead.
+  test("a part's row is a link only where something opens it", () => {
+    render(<ContextDetails context={usage} />);
+    expect(screen.getByText("Instructions and rules")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Instructions and rules" })).toBeNull();
+  });
+
+  test("each part with a pane leads to its own, and the others lead nowhere", () => {
+    const opened: string[] = [];
+    render(<ContextDetails context={usage} onOpenPane={(pane) => opened.push(pane)} />);
+    for (const name of ["Instructions and rules", "Skills", "MCP servers"]) fireEvent.click(screen.getByRole("button", { name }));
+    expect(opened).toEqual(["rules", "skills", "mcp"]);
+    expect(screen.queryByRole("button", { name: "Built-in tools" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Conversation" })).toBeNull();
   });
 });
 

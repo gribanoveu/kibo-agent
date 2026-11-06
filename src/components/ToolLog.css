@@ -8,12 +8,17 @@
   align-items: center;
   gap: 6px;
 }
+.log-search:focus {
+  outline: none;
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
+}
 .log-search {
   flex: 1;
   min-width: 0;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
   color: var(--text);
   font: inherit;
   font-size: 0.92em;
@@ -24,7 +29,7 @@
   margin: 0;
   padding: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 .log-row + .log-row {
@@ -60,7 +65,7 @@
 }
 .log-tool {
   color: var(--text);
-  font-weight: 600;
+  font-weight: 500;
 }
 .log-target {
   font-family: var(--font-mono);
@@ -99,7 +104,7 @@
   max-height: 16em;
   overflow: auto;
   background: var(--bg-panel-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.85em;
   color: var(--text-dim);

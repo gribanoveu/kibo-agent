@@ -9,7 +9,7 @@ import {
   type KubeSettings,
 } from "../lib/kube";
 
-/** The kubeconfig files of Settings → Kubernetes, and the one the chat's tab picked. */
+/** The kubeconfig files of Settings → Kubernetes, and the one the chat's panel picked. */
 export function useKubeconfigs() {
   const [settings, setSettings] = useState<KubeSettings | null>(null);
   const [error, setError] = useState<string | null>(null);

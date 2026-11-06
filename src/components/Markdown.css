@@ -56,7 +56,7 @@
   margin-right: 0.35em;
   vertical-align: -0.12em;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   color: var(--accent-contrast);
 }
 .md-check[aria-checked="true"] {
@@ -108,7 +108,7 @@
 
 .md-img {
   max-width: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .md-img-missing {
   display: inline-flex;
@@ -116,7 +116,7 @@
   gap: 0.35em;
   padding: 0.15em 0.5em;
   border: 1px dashed var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   color: var(--text-faint);
   font-size: 0.85em;
 }
@@ -125,7 +125,7 @@
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 0.05em 0.3em;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-bubble);
 }
 
@@ -133,7 +133,7 @@
   position: relative;
   margin: 0.6em 0;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
 }
 .md-code-scroll {
@@ -200,7 +200,7 @@
   height: 22px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--text-faint);
   cursor: pointer;

@@ -1,0 +1,16 @@
+/* The left of the strip, after the role: gives way before the model's line. */
+.kube-panel {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.kube-panel-unset {
+  color: var(--text-faint);
+}
+/* A cluster the user marked as production: seen before a word is typed. */
+.kube-panel-production {
+  color: var(--red);
+}
+/* The chat may change the cluster: not to be missed on the line. */
+.kube-panel-changes {
+  color: var(--amber);
+}
