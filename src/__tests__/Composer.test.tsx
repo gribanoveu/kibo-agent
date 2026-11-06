@@ -2,8 +2,9 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import type { ImagePart } from "../lib/images";
+import type { IndexState } from "../lib/indexStatus";
 
-// The chip is the only way to reach `chat_set_mode`, and what it says has to
+// The panel is the only way to reach `chat_set_mode`, and what it says has to
 // be what the backend was actually told — a label reading "Plan" over a turn
 // that is still armed is the failure worth a test.
 
@@ -35,6 +36,9 @@ afterEach(() => {
   localStorage.clear();
 });
 
+/** The panel the mode, the model and the switches live in. */
+const openSettings = () => fireEvent.click(screen.getByTitle("Mode, model and thinking"));
+
 function composer(
   conversation: "agent" | "plan" | "ask",
   onConversation: (mode: "agent" | "plan" | "ask") => void = () => {},
@@ -62,11 +66,89 @@ function composer(
   );
 }
 
-describe("the conversation-mode chip", () => {
+describe("the settings panel", () => {
+  /// Read before sending, without opening anything.
+  test("says on one line what the message goes out with", () => {
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="plan"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{
+          choices: [],
+          current: { providerId: "OpenRouter", model: "anthropic/claude-sonnet-5", label: "openrouter/anthropic/claude-sonnet-5" },
+          effort: "high",
+        }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+    const words = [...document.querySelectorAll(".composer-settings-summary > span")].map((el) => el.textContent);
+    expect(words).toEqual(["Plan", "claude-sonnet-5", "High", "Ask"]);
+  });
+
+  test("with no model, the line says so and no level", () => {
+    composer("agent");
+    const words = [...document.querySelectorAll(".composer-settings-summary > span")].map((el) => el.textContent);
+    expect(words).toEqual(["Agent", "no model", "Ask"]);
+  });
+
+  test("opens and closes on its button, and stays open while a row is used", () => {
+    const picked: string[] = [];
+    composer("agent", (mode) => picked.push(mode));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    openSettings();
+    fireEvent.click(screen.getByTitle("What the agent may do"));
+    fireEvent.click(screen.getByRole("option", { name: /Plan/ }));
+    expect(picked).toEqual(["plan"]);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    openSettings();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  /// One key, one thing closed: the menu over the panel goes first.
+  test("Escape closes a menu open in it first, then the panel", () => {
+    composer("agent");
+    openSettings();
+    fireEvent.click(screen.getByTitle("What the agent may do"));
+    expect(screen.getByRole("listbox")).toBeTruthy();
+
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("a press outside it closes it, a press inside does not", () => {
+    composer("agent");
+    openSettings();
+    fireEvent.pointerDown(screen.getByRole("dialog"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("the conversation mode", () => {
   test("offers each mode and reports the one that was picked", () => {
     const picked: string[] = [];
     composer("agent", (mode) => picked.push(mode));
 
+    openSettings();
     fireEvent.click(screen.getByTitle("What the agent may do"));
     for (const label of ["Agent", "Plan", "Ask"]) {
       expect(screen.getByRole("option", { name: new RegExp(label) })).toBeTruthy();
@@ -80,44 +162,172 @@ describe("the conversation-mode chip", () => {
   /// what `domain::conversation_mode` deserializes, not a word for a menu.
   test("shows the word, not the wire value", () => {
     composer("plan");
+    openSettings();
     expect(screen.getByTitle("What the agent may do").textContent).toContain("Plan");
     expect(screen.getByTitle("What the agent may do").textContent).not.toContain("plan");
   });
 
-  /// Two chips, two questions. Permissions decide who agrees before a call;
+  /// Two controls, two questions. Permissions decide who agrees before a call;
   /// the mode decides whether the call exists at all.
-  test("does not replace the permission chip", () => {
+  test("does not replace the permission switch", () => {
     composer("agent");
-    expect(screen.getByTitle("Permission mode")).toBeTruthy();
+    openSettings();
+    expect(screen.getByRole("switch", { name: "Approve automatically" })).toBeTruthy();
     expect(screen.getByTitle("What the agent may do")).toBeTruthy();
   });
 });
 
-describe("the permission chip", () => {
-  /// It used to be three labels over a backend with two states, wired to
-  /// nothing. A control that moves and changes nothing is worse than no
-  /// control: it reads as a guarantee.
-  test("offers exactly the two states the backend has", () => {
-    composer("agent");
-    fireEvent.click(screen.getByTitle("Permission mode"));
-
-    const options = screen.getAllByRole("option").map((o) => o.textContent);
-    expect(options).toEqual(["AskConfirm edits and commands", "AutoRun the whole turn without asking"]);
-  });
-
-  test("picking auto reports that nothing will be asked", () => {
+describe("the permission switch", () => {
+  test("turned on, reports that nothing will be asked", () => {
     const picked: boolean[] = [];
     composer("agent", () => {}, false, (v) => picked.push(v));
 
-    fireEvent.click(screen.getByTitle("Permission mode"));
-    fireEvent.click(screen.getByRole("option", { name: /Auto/ }));
+    openSettings();
+    fireEvent.click(screen.getByRole("switch", { name: "Approve automatically" }));
     expect(picked).toEqual([true]);
   });
 
-  /// The label is the backend's state, not a click this component remembered.
+  /// Its word is part of the control: a click on it does what one on the switch does.
+  test("a click on its name turns it too, once", () => {
+    const picked: boolean[] = [];
+    composer("agent", () => {}, true, (v) => picked.push(v));
+
+    openSettings();
+    fireEvent.click(screen.getByText("Approve automatically"));
+    expect(picked).toEqual([false]);
+  });
+
+  /// What it shows is the backend's state, not a click this component remembered.
   test("shows the state it was given", () => {
     composer("agent", () => {}, true);
-    expect(screen.getByTitle("Permission mode").textContent).toContain("Auto");
+    openSettings();
+    expect(screen.getByRole("switch", { name: "Approve automatically" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  /// Read before sending, with the panel closed — and Auto marked, since nobody will be asked.
+  test("what it says is on the line, last, Auto marked and Ask not", () => {
+    const first = composer("agent", () => {}, true);
+    const words = () => [...document.querySelectorAll(".composer-settings-summary > span")];
+    expect(words().at(-1)?.textContent).toBe("Auto");
+    expect(words().at(-1)?.className).toBe("composer-auto");
+    first.unmount();
+
+    composer("agent", () => {}, false);
+    expect(words().at(-1)?.textContent).toBe("Ask");
+    expect(document.querySelector(".composer-auto")).toBeNull();
+  });
+});
+
+describe("the worktree switch", () => {
+  const box = (worktree?: { on: boolean; title: string; onChange: (on: boolean) => void }) =>
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        worktree={worktree}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+
+  test("reports the change and says where the worktree would start", () => {
+    const picked: boolean[] = [];
+    box({ on: false, title: "Starts from main", onChange: (on) => picked.push(on) });
+    openSettings();
+    const toggle = screen.getByRole("switch", { name: "Worktree" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.closest("label")?.title).toBe("Starts from main");
+    fireEvent.click(toggle);
+    expect(picked).toEqual([true]);
+  });
+
+  /// A worktree is a new folder and a new chat in it: nothing a started chat can become.
+  test("is not offered without being asked for", () => {
+    box();
+    openSettings();
+    expect(screen.queryByRole("switch", { name: "Worktree" })).toBeNull();
+  });
+});
+
+describe("the folder's index", () => {
+  const box = (index: IndexState | null) =>
+    render(
+      <Composer
+        index={index}
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+  const ready: IndexState = { phase: "ready", done: 0, total: 0, embedded: 12, skipped: 0, embeddingError: null, error: null };
+
+  /// It says little most of the time: it is in the panel, not on the line.
+  test("is said in the settings panel, with its detail, and not on the line", () => {
+    box(ready);
+    expect(screen.queryByRole("status")).toBeNull();
+    openSettings();
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toBe("Indexed");
+    expect(badge.title).toContain("12 passages");
+    expect(badge.closest(".composer-settings-panel")).toBeTruthy();
+  });
+
+  test("with nothing known, or no folder, the panel has no such row", () => {
+    box(null);
+    openSettings();
+    expect(document.querySelector(".composer-settings-status")).toBeNull();
+  });
+});
+
+describe("the line under the box", () => {
+  test("holds the folder, the settings and the balance, in that order", () => {
+    render(
+      <Composer
+        tab={<span>the folder</span>}
+        end={<span>the balance</span>}
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+    const strip = document.querySelector(".composer-strip");
+    expect(strip?.previousElementSibling?.className).toBe("composer");
+    expect([...(strip?.children ?? [])].map((el) => el.textContent)).toEqual(["the folder", "Agentno modelAsk", "the balance"]);
   });
 });
 
@@ -304,7 +514,7 @@ describe("text handed to the box", () => {
   });
 });
 
-describe("the model chip", () => {
+describe("the model row", () => {
   const settings = {
     providers: [
       { id: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "Anthropic/Claude-Sonnet-5", hasApiKey: true },
@@ -348,6 +558,7 @@ describe("the model chip", () => {
       />,
     );
 
+    openSettings();
     expect(screen.getByTitle("Model").textContent).toContain("openrouter/anthropic/claude-sonnet-5");
     fireEvent.click(screen.getByTitle("Model"));
     expect(loads).toBe(1);
@@ -355,7 +566,7 @@ describe("the model chip", () => {
     expect(picked).toEqual(["OpenRouter|openai/gpt-5"]);
   });
 
-  test("the thinking chip shows the active provider's level and reports the pick", () => {
+  test("the thinking row shows the active provider's level and reports the pick", () => {
     const models = modelChoices(
       { ...settings, providers: settings.providers.map((p) => ({ ...p, reasoningEffort: "max" })) },
       {},
@@ -381,6 +592,7 @@ describe("the model chip", () => {
       />,
     );
 
+    openSettings();
     // A level typed by hand in Settings is still the one shown as chosen.
     expect(screen.getByTitle("Thinking level").textContent).toContain("max");
     fireEvent.click(screen.getByTitle("Thinking level"));
@@ -412,7 +624,7 @@ describe("the model chip", () => {
       />,
     );
     const ring = screen.getByRole("button", { name: "Context usage: 4%" });
-    expect(ring.closest(".composer-bar")).toBeTruthy();
+    expect(ring.closest(".composer-meter")?.nextElementSibling?.className).toContain("send");
   });
 });
 
@@ -835,11 +1047,12 @@ describe("the queue", () => {
     expect(screen.getByRole("button", { name: "then the docs · a picture" })).toBeTruthy();
   });
 
-  /// When a row is read is said on it, not in a tooltip; a long one opens
-  /// whole on a click, one at a time.
-  test("a row says when it is read, and opens whole on a click", () => {
+  /// What a row is and when it is read is said on it, not in a tooltip; a long
+  /// one opens whole on a click, one at a time.
+  test("a row says what it is and when it is read, and opens whole on a click", () => {
     queueing(true, [{ id: 1, text: "then the docs" }], [{ id: "n-1", text: "use the helper" }]);
     const list = screen.getByRole("list", { name: "Queued messages" });
+    expect([...list.querySelectorAll(".composer-queue-kind")].map((el) => el.textContent)).toEqual(["Steering", "Queued"]);
     expect([...list.querySelectorAll(".composer-queue-when")].map((el) => el.textContent)).toEqual(["Next step", "After this turn"]);
 
     const [note, queued] = [screen.getByRole("button", { name: "use the helper" }), screen.getByRole("button", { name: "then the docs" })];

@@ -43,7 +43,7 @@ export type KubePin = {
   kubeconfig: string;
   context: string | null;
   namespace: string | null;
-  /** "Changes" on the chat's tab: its tools may change the cluster. Absent is read-only. */
+  /** "Allow changes" in the chat's settings: its tools may change the cluster. Absent is read-only. */
   writes?: boolean;
 };
 export type KubeContext = { name: string; cluster: string; namespace: string | null };

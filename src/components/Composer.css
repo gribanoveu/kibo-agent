@@ -2,21 +2,41 @@
   /* The / menu opens above it. */
   position: relative;
   flex: none;
-  margin: 0 14px 14px;
+  margin: 0 14px;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px 9px;
+  padding: 8px;
+}
+/* Thumbnails line up with the text, not with the button left of it. */
+.composer .image-thumbs {
+  margin: 4px 6px 8px;
+}
+/* One line that grows: the buttons stay on its last row, by the cursor. */
+.composer-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.composer-bar > * {
+  flex: none;
 }
 /* The textarea and the argument hint under it, drawn alike so the hint lines
    up with the text: same font and scale, same wrapping. */
-.composer-input {
+.composer-bar > .composer-input {
   position: relative;
+  flex: 1;
+  min-width: 0;
+}
+/* With nothing beside it, the text keeps off the box's edge. */
+.composer-bar > .composer-input:first-child {
+  margin-left: 6px;
 }
 /* Two classes, as `.composer textarea` has: `.chat-text` sets a size of its own. */
 .composer .composer-ghost {
   position: absolute;
   inset: 0;
+  padding: 5px 0;
   pointer-events: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -32,8 +52,10 @@
   position: relative;
   display: block;
   width: 100%;
-  min-height: 48px;
+  min-height: 30px;
   max-height: 120px;
+  padding: 5px 0;
+  overflow-y: hidden;
   resize: none;
   background: none;
   border: 0;
@@ -46,45 +68,7 @@
 .composer textarea::placeholder {
   color: var(--text-faint);
 }
-.composer-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-/* A long provider/model ellipsises rather than pushing the send button off —
-   or, in a narrow chat, sliding under the context meter: the model's chip is
-   the one thing in the bar that gives up width, the rest keep their size. */
-.composer-bar > * {
-  flex: none;
-}
-.composer-bar > .dropdown-wrap:has(.model-label) {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-.composer-bar > .dropdown-wrap:has(.model-label) .chip {
-  max-width: 100%;
-}
-.composer .model-label {
-  display: block;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.composer .mode-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-/* The meter and the send button share the right end of the bar. */
-.composer-meter {
-  margin-left: auto;
-}
-.composer .composer-meter + .send {
-  margin-left: 0;
-}
 .composer .send {
-  margin-left: auto;
   width: 30px;
   height: 30px;
   border-radius: var(--radius-md);
@@ -110,17 +94,40 @@
   background: var(--bg-hover);
 }
 
-/* The attach button and the send button are pushed right together: the meter
-   takes the room before them, or the pair takes it itself. */
-.composer .attach-images {
-  margin-left: auto;
+/* As tall as the buttons beside it. */
+.composer-meter {
+  display: flex;
+  align-items: center;
+  height: 30px;
 }
-.composer .composer-meter + .attach-images,
-.composer .attach-images + .send {
-  margin-left: 0;
+
+/* Where the message is worked on, and what it goes out with. The folder side
+   and the settings give up width together; the balance keeps its own. */
+.composer-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 14px 8px;
+  padding: 0 4px;
+  min-width: 0;
+}
+.composer-strip > .folder-tab {
+  flex: 1 1 200px;
+  /* The folder stays read: it is where the message is worked on. */
+  min-width: 80px;
+}
+.composer-strip > .provider-balance {
+  flex: none;
+}
+/* Nobody is asked: not to be missed on the line. */
+.composer-auto {
+  color: var(--amber);
 }
 
 .composer-wrap {
+  /* The settings panel hangs from here. */
+  position: relative;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -133,50 +140,60 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  /* A long queue scrolls rather than taking the thread's place. */
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .composer-queue li {
+  flex: none;
+  padding: 6px 10px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.composer-queue-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 6px 5px 12px;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-}
-.composer-queue li > svg {
-  flex: none;
-  color: var(--text-faint);
-}
-.composer-queue-when {
-  flex: none;
-  color: var(--text-faint);
+  gap: 7px;
   font-size: var(--fs-xs);
 }
-.composer-queue-text {
+.composer-queue-head > svg {
+  flex: none;
+  color: var(--accent);
+}
+.composer-queue-kind {
+  flex: none;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.composer-queue-when {
   flex: 1;
   min-width: 0;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-queue-text {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
   padding: 0;
   background: none;
   border: 0;
-  color: inherit;
-  font: inherit;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
   text-align: left;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.composer-queue-text:hover {
-  color: var(--text);
-}
-/* Opened, the row shows the whole message, scrolling past a few lines. */
-.composer-queue li.open {
-  align-items: flex-start;
-}
-.composer-queue li.open .composer-queue-text {
+/* Opened, the card shows the whole message, scrolling past a few lines. */
+.composer-queue-text.open {
   max-height: 30vh;
   overflow: auto;
   white-space: pre-wrap;

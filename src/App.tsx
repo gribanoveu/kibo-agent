@@ -666,15 +666,12 @@ export default function App() {
                 onForgetFolder={(path) => void workspace.forget(path)}
                 branch={branch}
                 worktreeOf={worktreeOf}
-                index={index}
-                end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  onWorktree: unstarted ? branchPicker.setWorktree : undefined,
                   locked: anyTurnBusy
                     ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
                     : undefined,
@@ -682,6 +679,17 @@ export default function App() {
                 // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
               />
+            }
+            end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
+            index={workspace.path ? index : null}
+            worktree={
+              unstarted && workspace.path && branch
+                ? {
+                    on: branchPicker.worktree,
+                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
+                    onChange: branchPicker.setWorktree,
+                  }
+                : undefined
             }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
