@@ -127,7 +127,7 @@ impl Feature {
             Feature::VoiceInput => Manifest {
                 id: "voice-input",
                 name: "Voice input",
-                description: "Dictate into the message box: the microphone button beside Send, or hold the right Option key. \
+                description: "Dictate into the message box: the microphone button beside Send, or hold the right Option or Alt key. \
                     Russian only. The speech is recognized on this computer and no sound is kept; the text goes nowhere until you send it.",
                 enabled_by_default: false,
                 tools: &[],
