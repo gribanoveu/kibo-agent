@@ -10,3 +10,18 @@
   border-radius: var(--radius-sm);
   background: var(--accent);
 }
+.dictation-line {
+  margin: 4px 6px 0;
+}
+/* A long phrase shows its end, where the words are coming. Two classes: `.chat-text` sets a size of its own. */
+.dictation-line .dictation-partial {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: 4.5em;
+  overflow: hidden;
+  margin: 4px 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text-faint);
+}

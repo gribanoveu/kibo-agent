@@ -742,6 +742,7 @@ export default function App() {
       ) : (
         <PlainChat
           chat={plain}
+          dictate={features.isOn("voice-input") && !onPage}
           focus={composerFocus}
           models={llm.models}
           imagesEnabled={imagesEnabled}

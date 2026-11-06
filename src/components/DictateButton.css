@@ -2,11 +2,18 @@
   display: flex;
   align-items: center;
 }
+/* The arrow belongs to the microphone: no label to leave room for, and the button only as wide as it takes. */
 .dictate .chip {
   padding: 4px 3px;
 }
+.dictate .chip-label {
+  display: none;
+}
+.dictate .chip-chev {
+  margin-left: 0;
+}
 .dictate-mic {
-  width: var(--control);
+  width: var(--control-sm);
   height: var(--control);
   border-radius: var(--radius-md);
   display: grid;

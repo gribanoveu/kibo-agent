@@ -15,12 +15,15 @@ import { boxTakesPictures } from "../lib/images";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
+import { DictateButton } from "./DictateButton";
 import { ErrorNote } from "./ErrorNote";
+import { DictationLine } from "./VoiceWave";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import type { ModelChoice } from "../hooks/useLlmSettings";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useArrival } from "../hooks/useArrival";
 import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
+import { useDictation } from "../hooks/useDictation";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
 
@@ -74,7 +77,8 @@ type Props = {
     onUnpoint: () => void;
     /** Opens the panel on its pictures: some are being attached to a message. */
     onShowAssets: () => void;
-  };
+  };  /** Whether Voice input is on: its button, its key. */
+  dictate?: boolean;
 };
 
 
@@ -96,6 +100,7 @@ export function PlainChat({
   onCompact,
   onRewind,
   pages,
+  dictate = false,
 }: Props) {
   // The box belongs to this chat, as the agent's does: what was typed here
   // waits here while another chat is open, and comes back with this one.
@@ -106,6 +111,8 @@ export function PlainChat({
   // `key` is what keeps one chat's attached pictures off the next one's.
   const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role), draftKey);
   const input = useRef<HTMLTextAreaElement>(null);
+  // The box measures itself on every change of the text, so there is nothing to tell it.
+  const dictation = useDictation({ on: dictate, draftKey, text: draft, setText: setDraft, area: input, onChange: () => {} });
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
@@ -136,7 +143,7 @@ export function PlainChat({
   }, [chat.chatId, sent, scrollToBottom]);
 
   const send = async () => {
-    if (chat.busy || waiting.current) return;
+    if (chat.busy || waiting.current || dictation.active) return;
     if (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
     // What is sent is what was in the box at the keystroke; a picture still
     // being read is waited for, so it does not end up in the next message.
@@ -234,6 +241,7 @@ export function PlainChat({
           {attachments.error && (
             <ErrorNote className="plain-attach-error" message={attachments.error} onClose={attachments.clearError} />
           )}
+          {dictation.error && <ErrorNote className="plain-attach-error" message={dictation.error} onClose={dictation.clearError} />}
           <div className="plain-composer-bar">
             {/* The same rule as in the agent's box: the hook decides, and
                 there is no button when it refuses. */}
@@ -242,6 +250,7 @@ export function PlainChat({
               ref={input}
               className="chat-text"
               rows={1}
+              readOnly={dictation.active}
               placeholder="Message the model…"
               value={draft}
               onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
@@ -258,6 +267,7 @@ export function PlainChat({
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
             )}
+            {dictate && <DictateButton dictation={dictation} />}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
                 <Square size={14} />
@@ -267,13 +277,14 @@ export function PlainChat({
                 type="button"
                 className="plain-send"
                 title="Send"
-                disabled={chat.busy || (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0)}
+                disabled={chat.busy || dictation.active || (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0)}
                 onClick={send}
               >
                 <SendHorizontal size={16} />
               </button>
             )}
           </div>
+          {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
         {/* Under the box, where the agent's says which folder: here, who the
             model is. The chat's own settings go on this strip as they come. */}

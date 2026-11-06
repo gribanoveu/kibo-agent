@@ -124,21 +124,6 @@
 .composer-strip > .provider-balance {
   flex: none;
 }
-/* The wave and the phrase being said; a long phrase shows its end, where the words are coming. */
-.composer-dictation {
-  margin: 4px 6px 0;
-}
-.composer .composer-partial {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  max-height: 4.5em;
-  overflow: hidden;
-  margin: 4px 0 0;
-  font-size: var(--fs-md);
-  line-height: 1.5;
-  color: var(--text-faint);
-}
 
 .composer-wrap {
   /* The settings panel hangs from here. */

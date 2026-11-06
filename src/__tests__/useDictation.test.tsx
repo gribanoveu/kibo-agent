@@ -41,6 +41,11 @@ mock.module("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }),
 }));
 
+// The balance chip beside the model listens for features being switched.
+mock.module("@tauri-apps/api/event", () => ({
+  listen: () => Promise.resolve(() => {}),
+}));
+
 mock.module("../lib/sounds", () => ({
   playTone: (tone: string) => {
     tones.push(tone);
@@ -56,6 +61,7 @@ const { useDictation } = await import("../hooks/useDictation");
 const { DictateButton } = await import("../components/DictateButton");
 const { HOLD_MS } = await import("../lib/dictation");
 const { Composer } = await import("../components/Composer");
+const { PlainChat } = await import("../components/PlainChat");
 
 const cursorMoves: (string | number)[] = [];
 let changes = 0;
@@ -586,6 +592,101 @@ describe("the menu", () => {
   });
 });
 
+describe("the box of a plain chat", () => {
+  type Chat = Parameters<typeof PlainChat>[0]["chat"];
+  type Kube = Parameters<typeof PlainChat>[0]["kube"];
+  const sent: string[] = [];
+
+  async function plain(dictate = true) {
+    sent.length = 0;
+    localStorage.clear();
+    const chat = {
+      chatId: "c1",
+      role: "assistant",
+      roles: [{ id: "assistant", name: "Assistant", description: "Answers in text" }],
+      turn: { blocks: [], status: "done", usage: null },
+      busy: false,
+      draft: null,
+      preview: null,
+      branchable: null,
+      error: null,
+      kube: null,
+      context: null,
+      spent: null,
+      send: (text: string) => sent.push(text),
+      decide: () => {},
+      stop: () => {},
+      setRole: () => {},
+      setPin: () => {},
+    } as unknown as Chat;
+    render(
+      <PlainChat
+        chat={chat}
+        focus={0}
+        dictate={dictate}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        kube={{ configs: [], pick: () => {} } as unknown as Kube}
+        onSetUpKube={() => {}}
+        onCompact={() => {}}
+        onRewind={() => {}}
+      />,
+    );
+    await settled();
+    return screen.getByPlaceholderText("Message the model…") as HTMLTextAreaElement;
+  }
+  const dictating = async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Dictate —/ }));
+    await settled();
+    tell({ kind: "preparing" });
+    tell({ kind: "listening" });
+  };
+  const sendButton = () => screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+
+  test("has no button and asks nothing while the feature is off", async () => {
+    await plain(false);
+    expect(screen.queryByRole("button", { name: /^Dictate —/ })).toBeNull();
+    expect(said("meeting_recording_access")).toBe(0);
+  });
+
+  test("shows the wave and the phrase being said, and then the phrase is text", async () => {
+    const area = await plain();
+    await dictating();
+    tell({ kind: "partial", text: "Привет, ми" });
+    expect(document.querySelector(".voice-wave")).not.toBeNull();
+    expect(document.querySelector(".dictation-partial")?.textContent).toBe("Привет, ми");
+    tell({ kind: "phrase", text: "Привет, мир." });
+    expect(area.value).toBe("Привет, мир.");
+    tell({ kind: "ended", reason: "stopped" });
+    expect(document.querySelector(".voice-wave")).toBeNull();
+  });
+
+  test("holds the text for the dictation, and gives it back to be sent by hand", async () => {
+    const area = await plain();
+    await dictating();
+    tell({ kind: "phrase", text: "Привет." });
+    expect(area.readOnly).toBe(true);
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
+    await settled();
+    expect(sent).toEqual([]);
+    tell({ kind: "ended", reason: "stopped" });
+    expect(area.readOnly).toBe(false);
+    fireEvent.keyDown(area, { code: "Enter", key: "Enter" });
+    await settled();
+    expect(sent).toEqual(["Привет."]);
+  });
+
+  test("says what went wrong above the field", async () => {
+    await plain();
+    await dictating();
+    tell({ kind: "failed", message: "The microphone is gone" });
+    expect(screen.getByText("The microphone is gone")).not.toBeNull();
+  });
+});
+
 describe("the message box", () => {
   function box(dictate: boolean, onSend: (text: string) => void = () => {}, onQueue?: (text: string) => void) {
     localStorage.clear();
@@ -642,10 +743,10 @@ describe("the message box", () => {
     tell({ kind: "levels", peaks: [0.25, 0.25, 0.25, 0.25] });
     tell({ kind: "partial", text: "Привет, ми" });
     expect(document.querySelector(".voice-wave")).toBeTruthy();
-    expect(document.querySelector(".composer-partial")?.textContent).toBe("Привет, ми");
+    expect(document.querySelector(".dictation-partial")?.textContent).toBe("Привет, ми");
     expect(document.querySelector(".dictate-mic.stop")).toBeTruthy();
     tell({ kind: "phrase", text: "Привет, мир." });
-    expect(document.querySelector(".composer-partial")).toBeNull();
+    expect(document.querySelector(".dictation-partial")).toBeNull();
     expect(area().value).toBe("Привет, мир.");
     tell({ kind: "ended", reason: "stopped" });
     expect(document.querySelector(".voice-wave")).toBeNull();

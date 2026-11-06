@@ -16,7 +16,7 @@ import { useDictation } from "../hooks/useDictation";
 import { useArrival } from "../hooks/useArrival";
 import { useChatDraft } from "../hooks/useChatDraft";
 import { DictateButton } from "./DictateButton";
-import { VoiceWave } from "./VoiceWave";
+import { DictationLine } from "./VoiceWave";
 import { ImageThumbs } from "./ImageThumbs";
 import { ErrorNote } from "./ErrorNote";
 import "./Composer.css";
@@ -409,13 +409,7 @@ export function Composer({
             </button>
           )}
         </div>
-        {dictation.active && (
-          <div className="composer-dictation">
-            <VoiceWave peaks={dictation.peaks} />
-            {/* The phrase being said: it changes until it is whole, and then goes in the box. */}
-            {dictation.partial && <p className="composer-partial chat-text">{dictation.partial}</p>}
-          </div>
-        )}
+        {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
       <div className="composer-strip">
         {tab}
