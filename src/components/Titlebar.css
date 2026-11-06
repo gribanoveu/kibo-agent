@@ -12,6 +12,12 @@
   /* Menus opened from a header drawn here fall over the panels below. */
   z-index: 10;
 }
+/* As close together as the buttons at the other end. */
+.titlebar-leading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 /* Between the controls and the edge (or Windows' buttons): a panel's header. */
 .titlebar-slot {
   flex: 1;

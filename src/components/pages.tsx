@@ -44,9 +44,9 @@ export type PageDef = {
 
 // Every page the sidebar lists under the modes, in its order. A page is drawn
 // with `Page` (title, pinned bar, its content) and opens what it is about in a
-// `PageSheet` over its right side (Page.tsx). It takes the chat's place, and the
-// sidebar drops the chat list while it is open; the chat stays mounted
-// underneath, so a draft or a running turn survives a visit. Adding one is an
+// `PageSheet` over its right side (Page.tsx). It takes the chat's place; the
+// sidebar stays as it is, a chat picked there leaves the page, and the chat stays
+// mounted underneath, so a draft or a running turn survives a visit. Adding one is an
 // entry here — nothing else names a page.
 export const PAGES = [
   { id: "catalog", label: "Catalog", title: "Catalog — skills, commands, MCP servers and hooks to install", icon: Store, dock: false, Component: CatalogPage },

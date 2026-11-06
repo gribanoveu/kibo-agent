@@ -3,14 +3,17 @@
 }
 
 .ctx-ring {
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   display: grid;
   place-items: center;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
   cursor: pointer;
+  /* The focus ring is the platform's, as on every other button here. Without
+     this it also takes in the rotated circles, and comes out crooked. */
+  overflow: hidden;
 }
 .ctx-ring:hover,
 .ctx-ring.open {
@@ -64,7 +67,7 @@
   align-items: baseline;
   margin-bottom: 10px;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
 }
 .ctx-percent {
@@ -114,6 +117,19 @@
   display: flex;
   align-items: center;
   gap: 7px;
+}
+.ctx-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted var(--text-box-hint);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.ctx-link:hover {
+  color: var(--text);
 }
 .ctx-rows dd {
   margin: 0;

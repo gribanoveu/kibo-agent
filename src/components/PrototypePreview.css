@@ -43,7 +43,8 @@
   color: var(--accent);
 }
 /* The pictures' button, with how many there are. */
-.prototype-preview-assets {
+/* Over `.iconbtn`, whichever stylesheet comes last: its grid stacks the number under the icon. */
+.iconbtn.prototype-preview-assets {
   width: auto;
   display: inline-flex;
   align-items: center;
@@ -77,7 +78,7 @@
   gap: 4px;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
   font: inherit;
@@ -122,7 +123,7 @@
   gap: 4px;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
   font: inherit;

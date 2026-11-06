@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, FileText, Folder, MoreHorizontal, Search, Server, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, Library, MoreHorizontal, Search, Server, Trash2 } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { useKnowledge } from "../hooks/useKnowledge";
 import { splitDocument, type DocumentFacts, type DomainCount, type KnowledgeDocument, type KnowledgeDomain, type KnowledgeKind, type RepoSummary } from "../lib/knowledge";
 import { matches } from "../lib/shortcuts";
@@ -153,9 +153,9 @@ export function KnowledgePage() {
     >
       {knowledge.error && <p className="knowledge-error">{knowledge.error}</p>}
       {!knowledge.error && base.documents.length === 0 && (
-        <p className="knowledge-empty">
+        <PageEmpty icon={Library}>
           Nothing written yet. Run /analyze in a repository, or let the agent write down what it works out — documents land here by domain.
-        </p>
+        </PageEmpty>
       )}
       {words ? (
         <>

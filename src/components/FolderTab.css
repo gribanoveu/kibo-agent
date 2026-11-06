@@ -1,29 +1,22 @@
-/* A strip joined to the top of the composer, inset from its sides. Outlined:
-   in a light theme panel-soft is nearly the window's own colour, and without
-   an edge the tab dissolves into it. */
+/* The left of the line under the composer. */
 .folder-tab {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 24px;
-  padding: 3px 11px 3px 7px;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
+  gap: 6px;
   min-width: 0;
-  /* What fits is decided by the strip's own width, not the window's: the
-     columns beside the chat take their share first. */
-  container-type: inline-size;
 }
-/* The folder and the branch give way first, down to their icons; the
-   status on the right keeps its size. */
+/* The folder and the branch give way first, down to their icons. */
 .folder-tab .dropdown-wrap {
   min-width: 0;
   flex: 0 1 auto;
 }
 .folder-tab .chip {
   max-width: 100%;
+  color: var(--text-faint);
+}
+.folder-tab .chip:hover,
+.folder-tab .chip.open {
+  color: var(--text);
 }
 .folder-tab .chip-label {
   display: flex;
@@ -56,17 +49,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.folder-tab-worktree,
-.folder-tab .index-badge {
-  flex: none;
-}
-/* Narrow: words that have an icon and a tooltip become just the icon. */
-@container (max-width: 560px) {
-  .folder-tab-narrow-hide,
-  .folder-tab .index-badge-label {
-    display: none;
-  }
 }
 /* No folder yet: the one thing to do before sending, so it reads as an action. */
 .folder-tab.no-folder .chip {
@@ -111,55 +93,4 @@
   outline: 1px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
-}
-/* A switch, not an action: on, the next branch picked starts a worktree. */
-.folder-tab-worktree {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border: 0;
-  background: none;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.folder-tab-worktree:hover {
-  color: var(--text-dim);
-}
-.folder-tab-worktree.on {
-  color: var(--accent);
-}
-/* Drawn, not the platform's: an empty box off, filled with a tick on. */
-.folder-tab-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 11px;
-  height: 11px;
-  border: 1px solid var(--text-faint);
-  border-radius: var(--radius-xs);
-  color: var(--accent-contrast);
-}
-.folder-tab-worktree:hover .folder-tab-check {
-  border-color: var(--text-dim);
-}
-.folder-tab-worktree.on .folder-tab-check {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-.folder-tab-worktree:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-xs);
-}
-.folder-tab-end {
-  margin-left: auto;
-  min-width: 0;
-  display: flex;
-}
-/* Nothing to show there: no gap for it either. */
-.folder-tab-end:empty {
-  display: none;
 }

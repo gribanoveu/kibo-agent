@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, Image, MoreHorizontal } from "lucide-react";
+import { AudioLines, ChevronRight, File, FileCode, FileText, Folder, FolderOpen, Image, MoreHorizontal } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { PrototypeFrame } from "./PrototypeFrame";
 import { KIND_NAMES, useArtifacts, type Place, type Row } from "../hooks/useArtifacts";
 import { useLiveRead } from "../hooks/useLiveRead";
@@ -181,16 +181,19 @@ export function ArtifactsPage({ openPage, openChat, removeChat, chats }: PageCon
       title="Artifacts"
       bar={
         <>
-          <nav className="artifacts-crumbs" aria-label="Where you are">
-            {crumbs.map((crumb, at) => (
-              <span key={at} className="artifacts-crumb">
-                {at > 0 && <ChevronRight size={13} className="artifacts-crumb-sep" />}
-                <button type="button" aria-current={at === crumbs.length - 1 ? "page" : undefined} onClick={() => go(() => artifacts.go(crumb.to))}>
-                  {crumb.label}
-                </button>
-              </span>
-            ))}
-          </nav>
+          {/* At the top the page's title already says where you are. */}
+          {crumbs.length > 1 && (
+            <nav className="artifacts-crumbs" aria-label="Where you are">
+              {crumbs.map((crumb, at) => (
+                <span key={at} className="artifacts-crumb">
+                  {at > 0 && <ChevronRight size={13} className="artifacts-crumb-sep" />}
+                  <button type="button" aria-current={at === crumbs.length - 1 ? "page" : undefined} onClick={() => go(() => artifacts.go(crumb.to))}>
+                    {crumb.label}
+                  </button>
+                </span>
+              ))}
+            </nav>
+          )}
           <span className="artifacts-space" aria-label="Disk space">
             {sizeLabel(artifacts.used)} used
             {artifacts.free !== null && ` · ${sizeLabel(artifacts.free)} free on disk`}
@@ -209,9 +212,9 @@ export function ArtifactsPage({ openPage, openChat, removeChat, chats }: PageCon
         {said && <p className={said.error ? "artifacts-error" : "artifacts-said"}>{said.text}</p>}
         {artifacts.error && <p className="artifacts-error">{artifacts.error}</p>}
         {!artifacts.error && artifacts.loaded && artifacts.rows.length === 0 && (
-          <p className="artifacts-empty">
+          <PageEmpty icon={FolderOpen}>
             {place.kind === null ? "Nothing here yet. Meetings made into notes and prototypes presented in a chat show up here." : "This folder is empty."}
-          </p>
+          </PageEmpty>
         )}
         {artifacts.rows.length > 0 && (
           <div className="artifacts-list" role="listbox" aria-label="Contents">

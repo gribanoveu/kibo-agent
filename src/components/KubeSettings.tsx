@@ -56,7 +56,7 @@ export function KubeSettings({ kube }: { kube: KubeconfigsState }) {
       {view === "clusters" && (
         <>
           <p className="modal-note kube-intro">
-            The kubeconfig files the Kubernetes role in Chat mode works with; pick one on the tab above the chat's
+            The kubeconfig files the Kubernetes role in Chat mode works with; pick one in the panel under the chat's
             message box. Kibo keeps only the path — the file stays where kubectl reads it, credentials and all.
           </p>
 

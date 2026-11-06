@@ -5,8 +5,8 @@ import type { ImagePart } from "../lib/images";
 
 const picture: ImagePart = { mediaType: "image/png", data: "AA==", width: 40, height: 30 };
 
-/// The thread fades its bottom out with a mask, which traps a fixed overlay
-/// inside it — the viewer has to leave the thread to have its own Close.
+/// The viewer leaves the thread, so nothing done to the thread's box cuts it
+/// or its Close.
 test("a picture opens over the window, not inside the thread it was sent in", () => {
   render(
     <div className="thread">

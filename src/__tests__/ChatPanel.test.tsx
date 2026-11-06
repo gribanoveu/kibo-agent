@@ -966,6 +966,49 @@ describe("a message with pictures", () => {
     expect(screen.getByText("why red?")).toBeTruthy();
   });
 
+  /// Sent into a running turn, a note is in the thread at once, and says that
+  /// the agent has not got to it.
+  test("a note not read yet is a message that says so, and can be taken back", () => {
+    const withdrawn: string[] = [];
+    render(
+      <Transcript
+        turn={state([{ kind: "user", id: "u0", text: "go" }])}
+        onDecide={() => {}}
+        steered={[{ id: "n1", text: "use the helper", images: [picture] }]}
+        onWithdraw={(id) => withdrawn.push(id)}
+      />,
+    );
+    const note = screen.getByText("use the helper");
+    expect(note.className).toBe("bubble");
+    expect(note.closest(".user-msg")?.textContent).toContain("Not read yet");
+    expect(screen.getByAltText("Image 1, 30×20")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Take back to the message box"));
+    expect(withdrawn).toEqual(["n1"]);
+  });
+
+  /// Read, it is an ordinary `steer` block: nothing says it is waiting.
+  test("a note the turn has read no longer says it waits", () => {
+    render(<Transcript turn={state([{ kind: "steer", id: "steer:n1", text: "use the helper" }])} onDecide={() => {}} />);
+    expect(screen.queryByText("Not read yet")).toBeNull();
+    expect(screen.queryByTitle("Take back to the message box")).toBeNull();
+  });
+
+  /// It waits under what the agent has said so far, above the clock: where the
+  /// next round will read it.
+  test("a note not read yet stands after the agent's words and before the clock", () => {
+    const { container } = render(
+      <Transcript
+        turn={{ ...state([{ kind: "user", id: "u0", text: "go" }]), status: "running", runningSince: Date.now() }}
+        onDecide={() => {}}
+        steered={[{ id: "n1", text: "use the helper" }]}
+      />,
+    );
+    const clock = container.querySelector(".turn-clock.live");
+    const note = screen.getByText("use the helper");
+    expect(note.compareDocumentPosition(clock as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   test("a note that is only a picture has no empty bubble", () => {
     const { container } = panel(state([{ kind: "steer", id: "steer:n2", text: "", images: [picture] }]));
     expect(screen.getByAltText("Image 1, 30×20")).toBeTruthy();

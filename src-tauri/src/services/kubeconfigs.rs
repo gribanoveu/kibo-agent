@@ -29,7 +29,7 @@ pub fn pick(name: Option<String>) -> Result<(), SettingsError> {
     update(|kube| kube.active = name)
 }
 
-/// A namespace typed on a chat's tab, offered again for that kubeconfig.
+/// A namespace typed in a chat's panel, offered again for that kubeconfig.
 /// Marks a kubeconfig as production, or takes the mark off.
 pub fn set_production(name: &str, production: bool) -> Result<(), SettingsError> {
     update(|kube| kube.configs.iter_mut().filter(|config| config.name == name).for_each(|config| config.production = production))

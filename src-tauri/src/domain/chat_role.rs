@@ -83,7 +83,7 @@ impl ChatRole {
             ChatRole::Tester => None,
             ChatRole::Kubernetes => Some(match kube {
                 KubeSetup::NotSet => "No kubeconfig is set up in Kibo yet. When the user asks about their own cluster, \
-                    say once that they can add their kubeconfig file in Settings → Kubernetes and pick it on the tab above \
+                    say once that they can add their kubeconfig file in Settings → Kubernetes and pick it in the cluster panel under \
                     the message box; general Kubernetes questions need none of that."
                     .to_string(),
                 KubeSetup::Missing(config) => format!(
@@ -98,7 +98,7 @@ impl ChatRole {
                 ),
                 KubeSetup::NoContext { config, context } => format!(
                     "The chat is pinned to the context \"{context}\" of the kubeconfig \"{}\", and the file at {} no \
-                     longer has it. When they ask about their cluster, tell them to pick a context on the tab above the \
+                     longer has it. When they ask about their cluster, tell them to pick a context in the cluster panel under the \
                      message box.",
                     config.name, config.path
                 ),
@@ -109,7 +109,7 @@ impl ChatRole {
 
     /// The tools this role may call. Offered whether or not a cluster is
     /// pinned: the list heads every request, and one that changed with the
-    /// tab would cost the provider's cache — a call without a cluster says so.
+    /// panel would cost the provider's cache — a call without a cluster says so.
     /// `webSearch` and `webFetch` are the exception, left out while web search
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
@@ -140,7 +140,7 @@ impl ChatRole {
                 ToolName::KubeWaitRollout,
                 ToolName::KubeProbe,
                 ToolName::KubeRunbook,
-                // The changes so far (K-5a–c); refused while the tab says Read only.
+                // The changes so far (K-5a–c); refused until "Allow changes" is on.
                 ToolName::KubeScale,
                 ToolName::KubeUndo,
                 ToolName::KubeSuspend,
@@ -221,15 +221,16 @@ fn pinned_note(target: &KubeTarget) -> String {
              get through — the VPN, an expired login (`aws sso login`, `gcloud auth login`), the context's server."
         ),
     };
-    // Told, not found out: unaware of the tab, deepseek-flash tried a change
+    // Told, not found out: unaware of the switch, deepseek-flash tried a change
     // in five read-only chats to learn it from the refusal.
-    let tab = if *writes {
-        "The chat's tab is on \"Changes\": your changing tools work, each after the user approves it on a card."
+    let allowed = if *writes {
+        "\"Allow changes\" is on for this chat: your changing tools work, each after the user approves it on a card."
     } else {
-        "The chat's tab is on \"Read only\": your changing tools are refused. Asked for a change, say in a line what \
-         you would change and that switching the tab to \"Changes\" lets you do it — not the kubectl commands as well."
+        "\"Allow changes\" is off for this chat: your changing tools are refused. Asked for a change, say in a line what \
+         you would change and that turning on \"Allow changes\" in the cluster panel under the message box lets you do \
+         it — not the kubectl commands as well."
     };
-    format!("{place} {found} {tab}")
+    format!("{place} {found} {allowed}")
 }
 
 /// The role's standing instructions: where it writes, what a page may load —
@@ -358,7 +359,7 @@ Plain HTML, one `<section class="slide">` per slide; the script shows one at a t
 /// could make, a dry run, three cautions and a promise of what came next).
 const KUBERNETES_PROMPT: &str = r#"You are a senior Kubernetes engineer (SRE/platform level) in a chat. You know Kubernetes itself — workloads, scheduling, networking, storage, RBAC, the control plane — and what surrounds it: kubectl, Helm, Kustomize, container images, ingress controllers and service meshes, GitOps with Argo CD or Flux, Prometheus and Grafana, and the managed flavours (EKS, GKE, AKS, OpenShift).
 
-Your tools read the user's cluster — the one this chat is pinned to, below: kubeDiagnose, kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout, kubeProbe. They change it, in the chat's own namespace only: kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a revision), kubeApply (a manifest: create or update objects), kubeDelete, and kubeUndo, which puts a change back from its backup by its change id — never undo by changing it back from memory. Changes work only while the chat's tab is on "Changes" (the note below says where it is now); the user approves each round of them on one card, and every object is backed up first. Prefer the narrow tool to kubeApply when one fits; for kubeApply, read the object first (kubeGet) and send it whole with your change. A rollout restart cannot be undone: restart only when a restart is what is wanted.
+Your tools read the user's cluster — the one this chat is pinned to, below: kubeDiagnose, kubeList, kubeGet, kubeEvents, kubeLogs, kubeTop, kubeFieldHistory, kubeWaitRollout, kubeProbe. They change it, in the chat's own namespace only: kubeScale (replicas), kubeSuspend (a CronJob or a Job), kubeRolloutRestart, kubeRolloutUndo (a Deployment back a revision), kubeApply (a manifest: create or update objects), kubeDelete, and kubeUndo, which puts a change back from its backup by its change id — never undo by changing it back from memory. Changes work only while "Allow changes" is on in the cluster panel under the message box (the note below says whether it is); the user approves each round of them on one card, and every object is backed up first. Prefer the narrow tool to kubeApply when one fits; for kubeApply, read the object first (kubeGet) and send it whole with your change. A rollout restart cannot be undone: restart only when a restart is what is wanted.
 
 ## Finding out
 - Look before you ask: do not ask for output your tools can read. Ask the user only for what the cluster cannot tell — when it broke, which request failed (its path, time, request id, status code).
@@ -375,7 +376,7 @@ Your tools read the user's cluster — the one this chat is pinned to, below: ku
 - After a change that starts a rollout — a restart, a rollback, an apply, a scale — and whenever the user wants to know it came up, call kubeWaitRollout once instead of reading the object again and again.
 - Report each change in a line: what it was, what it is now, its change id.
 - Asked to stop everything: scale what has replicas, suspend the CronJobs and Jobs, and name what neither stops — a DaemonSet — rather than passing over it.
-- A change your tools can make is made with them, not handed over as commands as well. While the tab is on "Read only", say in a line what you would change and that switching the tab to "Changes" lets you do it.
+- A change your tools can make is made with them, not handed over as commands as well. While "Allow changes" is off, say in a line what you would change and that turning it on lets you do it.
 - What your tools cannot do — anything cluster-wide, another namespace, a Namespace itself — is the user's to run: give the exact command and say what it affects.
 
 ## Manifests and commands for the user
@@ -553,18 +554,18 @@ mod tests {
             "--kube-context eks-prod",
             "Kubernetes v1.30.2",
             "may only read",
-            "tab is on \"Read only\"",
+            "\"Allow changes\" is off",
         ] {
             assert!(note.contains(said), "{said:?} not in {note}");
         }
     }
 
     #[test]
-    fn the_note_says_which_way_the_tab_is() {
+    fn the_note_says_whether_changes_are_allowed() {
         let KubeSetup::Pinned(mut target) = pinned(Reach::Answered { version: "v1.30.2".into(), access: Access::Changes }) else { unreachable!() };
         target.writes = true;
         let note = ChatRole::Kubernetes.setup_note(&KubeSetup::Pinned(target)).unwrap();
-        assert!(note.contains("tab is on \"Changes\"") && !note.contains("Read only"), "{note}");
+        assert!(note.contains("\"Allow changes\" is on") && !note.contains("refused"), "{note}");
     }
 
     #[test]

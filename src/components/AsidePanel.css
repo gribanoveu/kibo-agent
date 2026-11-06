@@ -32,6 +32,7 @@
   flex: 1;
   min-height: 0;
   animation: aside-in 0.18s ease-out;
+  background: var(--bg-box);
 }
 /* As tall as it was dragged — but never the whole chat, which stays
    readable. */
@@ -130,10 +131,11 @@
   align-items: center;
   justify-content: space-between;
   padding: 2px 8px 6px;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
+  font-size: var(--fs-2xs);
+  color: var(--text-box-hint);
   font-weight: 500;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .file {

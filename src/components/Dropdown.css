@@ -64,9 +64,9 @@
   padding: 6px 9px 4px;
   font-size: var(--fs-2xs);
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-box-hint);
 }
 .dropdown-custom {
   display: block;
@@ -156,8 +156,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);

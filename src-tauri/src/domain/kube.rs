@@ -19,8 +19,8 @@ pub struct KubePin {
     /// `None` is the context's own namespace, or `default`.
     #[serde(default)]
     pub namespace: Option<String>,
-    /// Whether the chat's tools may change the cluster — "Changes" on its
-    /// tab. Off unless the user turned it on, in this chat, this time it is open.
+    /// Whether the chat's tools may change the cluster — "Allow changes" in
+    /// its panel. Off unless the user turned it on, in this chat, this time it is open.
     #[serde(default)]
     pub writes: bool,
 }
@@ -316,7 +316,7 @@ pub struct PinnedCluster<'a> {
     /// and the approval card.
     pub kubeconfig: &'a str,
     pub context: &'a str,
-    /// "Changes" is on for this chat.
+    /// "Allow changes" is on for this chat.
     pub writes: bool,
     /// The user marked this kubeconfig as production: said on every card.
     pub production: bool,
@@ -447,7 +447,7 @@ pub struct KubeTarget {
     pub cluster: String,
     pub namespace: String,
     pub reach: Reach,
-    /// The pin's "Changes": whether a tool may change anything here.
+    /// The pin's "Allow changes": whether a tool may change anything here.
     pub writes: bool,
 }
 

@@ -390,13 +390,13 @@ describe("whose pictures the box holds", () => {
 describe("choosing a picture", () => {
   const attachButton = () => screen.queryByRole("button", { name: "Attach a picture" });
 
-  /// The button is for a model that sees pictures, and it sits right before
-  /// the send button — the two things done with a finished message.
-  test("is beside the send button when the model takes pictures", () => {
+  /// The button is for a model that sees pictures, and it opens the line: what
+  /// goes with the text, in front of it.
+  test("is right before the text when the model takes pictures", () => {
     box();
     const attach = attachButton();
     expect(attach).toBeTruthy();
-    expect(attach!.nextElementSibling?.getAttribute("title")).toBe("Send");
+    expect(attach!.nextElementSibling?.querySelector("textarea")).toBeTruthy();
   });
 
   test("is not there for a model set to text only", () => {

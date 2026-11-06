@@ -79,7 +79,7 @@
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 0.05em 0.3em;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-bubble);
 }
 .adoc pre {
@@ -87,7 +87,7 @@
   padding: 0.6em 0.9em;
   overflow-x: auto;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
   font-family: var(--font-mono);
   font-size: 0.88em;
@@ -123,7 +123,7 @@
   margin: 0.6em 0;
   padding: 0.6em 0.9em;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
 }
 .adoc .sidebarblock > .content {
   background: var(--bg-panel-soft);
@@ -199,7 +199,7 @@
   margin: 0.6em 0 1em;
   padding: 0.5em 0.9em;
   border: 1px solid var(--border-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
 }
 .adoc .toc ul {
   list-style: none;
@@ -216,7 +216,7 @@
   margin: 0.6em 0;
   padding: 0.6em;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: white;
   cursor: zoom-in;
 }
