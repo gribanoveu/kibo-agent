@@ -33,6 +33,7 @@ pub mod explore;
 pub mod git;
 pub mod grep;
 pub mod knowledge;
+pub mod http_request;
 pub mod mongo;
 pub mod cluster;
 pub mod runbook;
@@ -123,6 +124,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
+    (ToolName::HttpRequest, http_request::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -191,6 +193,7 @@ pub fn dispatch(
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
+        ToolCall::HttpRequest(args) => http_request::http_request(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -614,6 +617,16 @@ mod definition_tests {
                     id: Some("c1".into()),
                     column: Some(crate::domain::board::Column::Done),
                     due: None,
+                })],
+            ),
+            ToolName::HttpRequest => (
+                r#"{"method":"GET","path":"/orders"}"#,
+                vec![ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs {
+                    environment: Some("Stage".into()),
+                    method: "GET".into(),
+                    path: "/orders?id=1".into(),
+                    headers: Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into()),
+                    show_headers: Some(true),
                 })],
             ),
             ToolName::Mongo => (

@@ -243,6 +243,8 @@ pub struct Turn<'a> {
     pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The environments `httpRequest` reaches, while that feature is on.
+    pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, for `deepseekSearch` and
     /// `deepseekFetch`; `None` while the feature is off or there is no key.
     pub deepseek: Option<Web>,
@@ -1072,6 +1074,7 @@ fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        http: turn.http.clone(),
         parallel: match turn.place {
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
@@ -1383,6 +1386,8 @@ fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
+        // Neither is let call it: `httpRequest` is no read of the folder's, and it will write (HC-8).
+        http: None,
         deepseek: None,
         features,
         fork: fork.is_some(),
@@ -2578,6 +2583,7 @@ mod tests {
         shell_described: String,
         agents: Option<Arc<crate::domain::agents::Agents>>,
         questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
+        http: Option<Arc<dyn crate::domain::http_client::HttpStands>>,
         /// The agent's web, as Settings would give it; `None` is off.
         web: Option<Web>,
         features: Features,
@@ -2636,6 +2642,7 @@ mod tests {
             agents: None,
             questions: None,
             web: None,
+            http: None,
             features: Features::default(),
             parallel: Vec::new(),
             parallel_calls: Arc::new(Mutex::new(0)),
@@ -2706,6 +2713,7 @@ mod tests {
                 questions: self.questions.clone(),
                 board: None,
                 mongo: None,
+                http: self.http.clone(),
                 deepseek: None,
                 features: self.features.clone(),
                 fork: false,
@@ -4605,6 +4613,38 @@ mod tests {
         assert!(offered(Features::all()));
     }
 
+    /// So does the HTTP client's, as a read: no card asks for it, and nothing is offered with the feature off.
+    #[test]
+    fn the_agent_is_offered_http_only_while_the_feature_is_on() {
+        let offered = |features: Features| {
+            let mut h = harness("loop-http", vec![text("hi")]);
+            h.features = features;
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            let tools = &h.provider.requests()[0].tools;
+            assert!(tools.iter().all(|t| t.name != "httpRequest"), "not in every request");
+            tools.iter().any(|t| t.name == "toolSearch" && t.description.contains("`httpRequest`"))
+        };
+        assert!(!offered(Features::default()));
+        assert!(offered(Features::all()));
+    }
+
+    /// Found with `toolSearch`, it runs with no card and the stand's answer reaches the model.
+    #[test]
+    fn the_agent_reads_a_stand_once_it_has_found_the_tool() {
+        let script = vec![
+            asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
+            asks(vec![wants("h1", "httpRequest", r#"{"method":"GET","path":"/orders"}"#)]),
+            text("done"),
+        ];
+        let mut h = harness("loop-http-call", script);
+        h.features = Features::all();
+        h.http = Some(crate::services::ai_tools::tools::http_request::tests::answering());
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+        let requests = h.provider.requests();
+        let ran = requests[2].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("h1")).unwrap();
+        assert!(ran.content.as_deref().unwrap().starts_with("GET /orders → 200"), "{:?}", ran.content);
+    }
+
     #[test]
     fn every_request_carries_the_tool_schemas() {
         let h = harness("loop-tools", vec![text("hi")]);
@@ -4614,13 +4654,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's one — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 12 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 13 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

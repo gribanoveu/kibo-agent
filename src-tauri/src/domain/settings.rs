@@ -209,6 +209,9 @@ pub struct AppSettings {
     /// Whether to trust each folder the user was asked about: its own skills
     /// and `/` commands are read only once trusted.
     pub folder_trust: FolderTrust,
+    /// The HTTP page's collections whose scripts may run, by id: the hash of the
+    /// scripts trusted, so a change to any of them asks again.
+    pub http_script_trust: std::collections::BTreeMap<String, String>,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
     /// The mode picked in the composer's panel, for every folder.

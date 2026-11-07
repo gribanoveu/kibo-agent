@@ -8,7 +8,7 @@ import type { AsideTab } from "../types";
  */
 export type Combo = { code: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean };
 
-export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board" | "MongoDB";
+export type ShortcutGroup = "General" | "Panels" | "Chat" | "Files" | "Markdown viewer" | "Artifacts" | "Board" | "MongoDB" | "HTTP";
 type Shortcut = { label: string; group: ShortcutGroup; combos: Combo[] };
 
 // Every pane has one: `Record<AsideTab, …>` fails to compile when a pane is added without it.
@@ -55,6 +55,8 @@ export const SHORTCUTS = {
   find: { label: "Find and replace in the file", group: "Files", combos: [{ code: "KeyF", mod: true }] },
   findNext: { label: "Next match", group: "Files", combos: [{ code: "KeyG", mod: true }, { code: "F3" }] },
   findPrevious: { label: "Previous match", group: "Files", combos: [{ code: "KeyG", mod: true, shift: true }, { code: "F3", shift: true }] },
+  // The same key as the shortcuts dialog: in an editor that can be written in, this one wins.
+  comment: { label: "Comment or uncomment the lines — in a file, a JSON body or a script", group: "Files", combos: [{ code: "Slash", mod: true }] },
   textLarger: { label: "Larger text", group: "Markdown viewer", combos: [{ code: "Equal", mod: true }] },
   textSmaller: { label: "Smaller text", group: "Markdown viewer", combos: [{ code: "Minus", mod: true }] },
   textReset: { label: "Text at its usual size", group: "Markdown viewer", combos: [{ code: "Digit0", mod: true }] },
@@ -67,6 +69,7 @@ export const SHORTCUTS = {
   mongoSuggestPrev: { label: "Previous suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowUp" }] },
   mongoSuggestPick: { label: "Use the suggestion picked in a query field", group: "MongoDB", combos: [{ code: "Tab" }, { code: "Enter" }, { code: "NumpadEnter" }] },
   mongoPairErase: { label: "Erase an empty pair of brackets or quotes in a query field", group: "MongoDB", combos: [{ code: "Backspace" }] },
+  httpSend: { label: "Send the request", group: "HTTP", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

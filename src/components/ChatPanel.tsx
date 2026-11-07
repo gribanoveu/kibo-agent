@@ -98,6 +98,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Explore: Telescope,
   Board: SquareKanban,
   MongoDB: Database,
+  HTTP: Globe,
   Prototype: AppWindow,
 };
 

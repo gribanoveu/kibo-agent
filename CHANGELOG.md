@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat
+- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
+- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
+
 ## v0.12.0 — 2026-11-07
 
 - 2026-11-06 Voice input: dictate into the message box with the microphone button or by holding the right Option or Alt key, in Russian, recognized on this computer and with no sound kept; on in the Catalog

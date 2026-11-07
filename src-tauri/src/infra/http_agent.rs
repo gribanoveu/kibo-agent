@@ -373,6 +373,9 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
                 if tls.read(&mut [0u8; 4096]).is_ok() {
                     let _ = tls.write_all(reply.as_bytes());
                     let _ = tls.flush();
+                    // Closed with a body unread, Windows resets the connection and the client loses the reply.
+                    let _ = tls.sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+                    let _ = std::io::copy(&mut tls, &mut std::io::sink());
                 }
             }
         });

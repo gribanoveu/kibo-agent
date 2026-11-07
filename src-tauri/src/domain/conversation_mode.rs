@@ -156,6 +156,8 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 // While the user has the feature on (`domain::features`).
                 ToolName::Board,
                 ToolName::KnowledgeWrite,
+                // Here and not in `base_tools`: with HC-8 it writes, and Analyst gets nothing that does.
+                ToolName::HttpRequest,
             ]);
         }
         // Research handed off reads the same files, only somewhere else.

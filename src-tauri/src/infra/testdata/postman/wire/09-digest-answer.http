@@ -1,0 +1,9 @@
+GET /api/digest/protected HTTP/1.1
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: dac4f7d0-b767-4ede-93c5-b84aca504a64
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+Authorization: Digest username="digestuser", realm="probe", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", uri="/api/digest/protected", algorithm="MD5", qop=auth, nc=00000001, cnonce="ExdcBIwJ", response="dad2add312778a2251db938171747059"
+

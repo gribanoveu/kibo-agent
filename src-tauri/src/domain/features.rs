@@ -24,6 +24,7 @@ pub enum Feature {
     VoiceMemory,
     Knowledge,
     Mongodb,
+    HttpClient,
     VoiceInput,
 }
 
@@ -49,7 +50,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::HttpClient, Feature::VoiceInput];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -123,6 +124,17 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::Mongo],
                 data: Some("mongo_connections.enc"),
+            },
+            Feature::HttpClient => Manifest {
+                id: "http-client",
+                name: "HTTP client",
+                description: "An HTTP page for trying an API: requests in collections kept in the Postman format, \
+                    imported from and exported to Postman, environments with sealed secrets, the response beside the \
+                    request and kept with it, every send in History. A collection's scripts run once you trust it. \
+                    An environment you open to the agent it reads with httpRequest, its secrets kept from the model.",
+                enabled_by_default: false,
+                tools: &[ToolName::HttpRequest],
+                data: Some("http"),
             },
             Feature::VoiceInput => Manifest {
                 id: "voice-input",
@@ -211,7 +223,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "http-client", "voice-input"]);
     }
 
     #[test]

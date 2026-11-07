@@ -436,6 +436,11 @@ mod tests {
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
             ),
+            // What was asked is what the log is for, `{{token}}` written out; what came back goes as `text`.
+            ToolName::HttpRequest => (
+                Some(ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs { method: "GET".into(), path: "/orders".into(), ..Default::default() })),
+                ToolResult::HttpRequest { text: LEAK.into(), summary: "200 · 12 ms".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

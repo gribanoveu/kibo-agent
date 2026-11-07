@@ -23,26 +23,26 @@ pub fn mcp(args: &McpCallArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         None => entry.client.call_tool(&entry.tool.name, args.arguments.clone(), cancelled),
     };
     match called {
-        Ok(result) if result.is_error => Err(ToolError::McpToolFailed(fit(result.text))),
-        Ok(result) => Ok(ToolResult::Mcp { text: fit(result.text) }),
+        Ok(result) if result.is_error => Err(ToolError::McpToolFailed(fit(result.text, MAX_RESULT_CHARS))),
+        Ok(result) => Ok(ToolResult::Mcp { text: fit(result.text, MAX_RESULT_CHARS) }),
         Err(error @ McpError::Cancelled) => Err(ToolError::McpUnavailable(error.to_string())),
         Err(error) => Err(ToolError::McpUnavailable(format!("\"{}\": {error}", entry.server))),
     }
 }
 
-/// `text` cut to [`MAX_RESULT_CHARS`], the whole of it saved where the
+/// `text` cut to `most` characters, the whole of it saved where the
 /// model can read the middle — with `runCommand`, since the file is outside
 /// the workspace — rather than call the tool again. A save that fails leaves
 /// the cut as it is.
-fn fit(text: String) -> String {
-    let (cut, truncated) = truncate_output(&text, MAX_RESULT_CHARS);
+pub(super) fn fit(text: String, most: usize) -> String {
+    let (cut, truncated) = truncate_output(&text, most);
     if !truncated {
         return text;
     }
     match command_output_store::save(&text, "") {
         Some(path) => format!(
             "{cut}\n[The whole result, {} characters, is saved at {} — read the part you need there with runCommand \
-             (grep, head, tail) rather than calling the tool again.]",
+             (grep, head, tail), if this turn has it, rather than calling the tool again.]",
             text.chars().count(),
             path.display()
         ),
@@ -146,7 +146,7 @@ mod tests {
             let Err(ToolError::McpToolFailed(error)) = mcp(&call("mcp__gh__big_error"), &deps) else { panic!() };
             assert!(error.contains("is saved at"), "cut too");
         });
-        assert_eq!(fit("a\rb".into()), "a\rb", "under the limit, untouched");
+        assert_eq!(fit("a\rb".into(), MAX_RESULT_CHARS), "a\rb", "under the limit, untouched");
     }
 
     #[test]

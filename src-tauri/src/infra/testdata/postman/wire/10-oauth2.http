@@ -1,0 +1,9 @@
+GET /api/oauth2/resource HTTP/1.1
+Authorization: Bearer {{access_token}}
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: 7247cd88-820e-41f5-aacd-f8c7c8f49855
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+

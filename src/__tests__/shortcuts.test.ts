@@ -91,6 +91,13 @@ describe("a window-wide shortcut", () => {
     expect(closed).toBe(1);
   });
 
+  test("a handler that declines leaves the key to what has focus", () => {
+    let runs = 0;
+    renderHook(() => useShortcuts({ closeFile: () => (runs++, false) }));
+    expect(press("KeyE").defaultPrevented).toBe(false);
+    expect(runs).toBe(1);
+  });
+
   test("with no handler, leaves the key alone", () => {
     renderHook(() => useShortcuts({ closeFile: undefined }));
     expect(press("KeyE").defaultPrevented).toBe(false);
