@@ -48,6 +48,8 @@ pub struct ChatTurn<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads, while that feature is on.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The environments `httpRequest` reaches, while that feature is on.
+    pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
     /// The knowledge base's search, for a role that reads it, while that feature is on.
@@ -151,6 +153,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         questions: None,
         board: chat.board.clone(),
         mongo: chat.mongo.clone(),
+        http: chat.http.clone(),
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
@@ -225,6 +228,7 @@ mod tests {
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
         board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
         mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+        http: Option<Arc<dyn crate::domain::http_client::HttpStands>>,
         features: crate::domain::features::Features,
         knowledge: Option<crate::domain::tools::CodeSearchFn>,
     }
@@ -252,6 +256,7 @@ mod tests {
             seen: Arc::default(),
             board: None,
             mongo: None,
+            http: None,
             features: Default::default(),
             knowledge: None,
         }
@@ -278,6 +283,7 @@ mod tests {
                 log_call: &log,
                 board: self.board.clone(),
                 mongo: self.mongo.clone(),
+                http: self.http.clone(),
                 knowledge: self.knowledge.clone(),
                 deepseek: None,
                 features: self.features.clone(),
@@ -325,6 +331,20 @@ mod tests {
         let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
         assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
         assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+    }
+
+    /// The Assistant with the HTTP client on: offered it from the first step, as a
+    /// chat has no `toolSearch`, and the stand answers with no card asking first.
+    #[test]
+    fn the_assistant_reads_a_stand_while_the_feature_is_on() {
+        let mut chat = chat(vec![calls("httpRequest", r#"{"method":"GET","path":"/orders"}"#), said("It answers.")], None);
+        chat.features = crate::domain::features::Features::from_settings(&[("http-client".to_string(), true)].into());
+        chat.http = Some(crate::services::ai_tools::tools::http_request::tests::answering());
+        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("стенд жив?")]));
+
+        let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(offered, ["httpRequest"]);
+        assert!(tool_result(&done.history).starts_with("GET /orders → 200"), "{}", tool_result(&done.history));
     }
 
     /// The Assistant with the knowledge base on: told of it, offered its

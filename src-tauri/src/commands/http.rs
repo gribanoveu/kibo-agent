@@ -1,16 +1,28 @@
 //! The HTTP page (`docs/45-http-client.md`), through `services::http_client`.
-//! No channel yet: only the page changes its stores, and each command answers
-//! with what it did. `http:changed` comes with the agent's sends (HC-7).
+//! Each command answers with what it did; [`HTTP_EVENT`] is for what the page
+//! did not ask for, the agent's sends.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::Value;
+use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, ResponseView};
+use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, HttpChanged, HttpEventSink, ResponseView};
 use crate::infra::{http_collections, http_cookies, http_env_store};
 use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptTrust};
 
 use super::blocking;
+
+/// The agent sent a request: history has one more.
+pub const HTTP_EVENT: &str = "http:changed";
+
+pub fn http_event_sink<R: Runtime>(app: &AppHandle<R>) -> HttpEventSink {
+    let app = app.clone();
+    Arc::new(move |event: HttpChanged| {
+        let _ = app.emit(HTTP_EVENT, event);
+    })
+}
 
 /// `request` is the page's unsaved edit of the request, sent in place of the stored one.
 #[tauri::command]
@@ -133,4 +145,28 @@ pub async fn http_script_trust_set(collection: String, hash: String) -> Result<(
 #[tauri::command]
 pub fn http_parse_curl(command: String) -> Result<Value, String> {
     parse_curl(&command).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tauri::Listener;
+
+    #[test]
+    fn the_channel_name_is_the_one_the_frontend_listens_on() {
+        assert_eq!(HTTP_EVENT, "http:changed");
+    }
+
+    #[test]
+    fn a_send_reaches_the_window_as_the_event() {
+        let app = tauri::test::mock_app();
+        let (tx, rx) = mpsc::channel();
+        app.handle().listen(HTTP_EVENT, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+        http_event_sink(app.handle())(HttpChanged);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "null");
+    }
 }
