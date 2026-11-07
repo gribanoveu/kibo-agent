@@ -192,10 +192,10 @@ mod tests {
     #[test]
     fn a_cookie_past_its_time_leaves_the_list_without_being_told() {
         with_app_dir("http-cookies-lapsed", || {
-            take("http://a.test/", &["brief=1; Path=/; Max-Age=1"]);
-            assert_eq!(list().unwrap().len(), 1);
+            // Beside one that stays: a slow machine can pass the second before a first look.
+            take("http://a.test/", &["brief=1; Path=/; Max-Age=1", "long=2; Path=/; Max-Age=3600"]);
             std::thread::sleep(std::time::Duration::from_millis(1100));
-            assert_eq!(list().unwrap(), vec![]);
+            assert_eq!(list().unwrap().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["long"]);
         });
     }
 
