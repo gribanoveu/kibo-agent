@@ -4,12 +4,12 @@
 //! and removing an entry.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use url::Url;
 
-use crate::domain::catalog::{self, CatalogError, CatalogItem, Installed, ItemKind, ItemState};
+use crate::domain::catalog::{self, CatalogError, CatalogItem, Installed, ItemKind, ItemState, ServerFile};
 use crate::domain::hooks::HooksConfig;
 use crate::domain::hooks::HookGroup;
 use crate::domain::mcp::{McpConfig, McpServerConfig};
@@ -141,12 +141,14 @@ fn listed(source: &str, kind: ItemKind, id: &str) -> Result<(Url, CatalogItem), 
 
 /// Installs an entry: a skill's, command's or runbook's files fetched first,
 /// then written into their place in one go; a server's entry, its
-/// placeholders filled from `secrets`, added to `mcp.json`. Then recorded.
-pub fn install(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>) -> Result<(), CatalogError> {
-    install_with(source, kind, id, secrets, &catalog_http::fetch_file)
+/// placeholders filled from `secrets`, added to `mcp.json`, with the files it
+/// needs beside the open folder (`folder`) written where nothing is yet. Then
+/// recorded.
+pub fn install(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, folder: Option<&Path>) -> Result<(), CatalogError> {
+    install_into(source, kind, id, secrets, folder, &catalog_http::fetch_file)
 }
 
-fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, fetch: FetchFile) -> Result<(), CatalogError> {
+fn install_into(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, folder: Option<&Path>, fetch: FetchFile) -> Result<(), CatalogError> {
     let (base, item) = listed(source, kind, id)?;
     let mut installed = catalog_store::load_installed().map_err(CatalogError::Record)?;
     let ours = record(&installed, kind, id);
@@ -157,6 +159,7 @@ fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<Strin
             return Err(CatalogError::Present(item.name));
         }
         let server = catalog::fill_secrets(&catalog::parse_mcp(&fetch(&base, &item.path)?)?, secrets)?;
+        write_project_files(&base, &item, &catalog::project_files(&server, &item.project_files)?, folder, fetch)?;
         let hash = catalog::mcp_hash(&server);
         mcp_config::add(id, server).map_err(|e| disk(&e))?;
         (Vec::new(), hash, BTreeMap::new())
@@ -191,6 +194,27 @@ fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<Strin
     })
 }
 
+/// A server's files for the open folder, read whole before any is written,
+/// and each written only where nothing is there: a config the user has
+/// filled in since stays their own.
+fn write_project_files(base: &Url, item: &CatalogItem, files: &[ServerFile], folder: Option<&Path>, fetch: FetchFile) -> Result<(), CatalogError> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let root = folder.ok_or_else(|| CatalogError::NoFolder(item.name.clone()))?;
+    let read = files.iter().map(|file| Ok((file, fetch(base, &file.from)?))).collect::<Result<Vec<_>, CatalogError>>()?;
+    for (file, bytes) in read {
+        let target = root.join(&file.to);
+        // [`catalog_store::hash_at`] answers whether something is there, a
+        // dangling symlink included.
+        if catalog_store::hash_at(&target, false, &[]).is_some() {
+            continue;
+        }
+        catalog_store::place(&target, false, &[(String::new(), bytes)]).map_err(CatalogError::Disk)?;
+    }
+    Ok(())
+}
+
 /// Every file of a skill, command or runbook, by its name in a skill's
 /// folder (empty for a one-file kind's) — all of them, before any is written.
 fn fetch_files(base: &Url, item: &CatalogItem, fetch: FetchFile) -> Result<Vec<(String, Vec<u8>)>, CatalogError> {
@@ -220,6 +244,9 @@ pub struct UpdatePreview {
     pub changes: Vec<FileChange>,
     /// A server's placeholders whose value the installed entry does not give back.
     pub secrets: Vec<String>,
+    /// A server's files for the open folder that the update writes where
+    /// nothing is yet — the dialog says so before it does.
+    pub project_files: Vec<ProjectFile>,
     /// Changed here since it was installed: an update writes over it — for
     /// hooks, leaves the changed ones beside the new.
     pub edited: bool,
@@ -306,9 +333,13 @@ pub fn update_preview(source: &str, kind: ItemKind, id: &str) -> Result<UpdatePr
 fn update_preview_with(source: &str, kind: ItemKind, id: &str, fetch: FetchFile) -> Result<UpdatePreview, CatalogError> {
     let (base, item, _, record) = outdated(source, kind, id)?;
     let (next, changes) = next(&base, &item, &record, fetch)?;
-    let secrets = match &next {
-        Next::Server { template, known } => catalog::mcp_secrets(template).into_iter().filter(|name| !known.contains_key(name)).collect(),
-        _ => Vec::new(),
+    let (secrets, project_files) = match &next {
+        Next::Server { template, known } => {
+            let secrets = catalog::mcp_secrets(template).into_iter().filter(|name| !known.contains_key(name)).collect();
+            let files = catalog::project_files(template, &item.project_files)?.into_iter().map(shown).collect();
+            (secrets, files)
+        }
+        _ => (Vec::new(), Vec::new()),
     };
     let edited = item_view(item, base.as_str(), &Here::load()).state == ItemState::Changed;
     let changes = changes
@@ -318,17 +349,18 @@ fn update_preview_with(source: &str, kind: ItemKind, id: &str, fetch: FetchFile)
             FileChange { name, diff: stats.unified_diff, added: stats.lines_added, removed: stats.lines_removed }
         })
         .collect();
-    Ok(UpdatePreview { changes, secrets, edited })
+    Ok(UpdatePreview { changes, secrets, project_files, edited })
 }
 
 /// Writes the catalog's new version of what this source installed over it —
 /// everything read first, as install does — and records the new rev. A
-/// server keeps the secrets it was given unless `secrets` names them again.
-pub fn update(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>) -> Result<(), CatalogError> {
-    update_with(source, kind, id, secrets, &catalog_http::fetch_file)
+/// server keeps the secrets it was given unless `secrets` names them again,
+/// and gets the files it needs beside the open folder that are not there yet.
+pub fn update(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, folder: Option<&Path>) -> Result<(), CatalogError> {
+    update_into(source, kind, id, secrets, folder, &catalog_http::fetch_file)
 }
 
-fn update_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, fetch: FetchFile) -> Result<(), CatalogError> {
+fn update_into(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, folder: Option<&Path>, fetch: FetchFile) -> Result<(), CatalogError> {
     let (base, item, mut installed, record) = outdated(source, kind, id)?;
     let disk = |e: &dyn std::fmt::Display| CatalogError::Disk(e.to_string());
     let (files, hash, hooks) = match next(&base, &item, &record, fetch)?.0 {
@@ -340,6 +372,7 @@ fn update_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String
         Next::Server { template, mut known } => {
             known.extend(secrets.iter().filter(|(_, value)| !value.trim().is_empty()).map(|(name, value)| (name.clone(), value.clone())));
             let server = catalog::fill_secrets(&template, &known)?;
+            write_project_files(&base, &item, &catalog::project_files(&server, &item.project_files)?, folder, fetch)?;
             let hash = catalog::mcp_hash(&server);
             mcp_config::add(id, server).map_err(|e| disk(&e))?;
             (Vec::new(), hash, BTreeMap::new())
@@ -392,6 +425,25 @@ pub struct Preview {
     pub text: String,
     /// A server's `${NAME}` placeholders: install asks for each.
     pub secrets: Vec<String>,
+    /// A server's files for the open folder, where each goes and where in
+    /// the source it comes from.
+    pub project_files: Vec<ProjectFile>,
+}
+
+/// A file a server needs beside the open folder, as its entry names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFile {
+    /// Relative to the open folder — the entry's own `env` value.
+    pub path: String,
+    /// The file in the source it is written from.
+    pub from: String,
+}
+
+/// A server's file for the open folder as a dialog names it: `/`-separated,
+/// since a path read from a catalog is shown, not used here.
+fn shown(file: ServerFile) -> ProjectFile {
+    ProjectFile { path: file.to.to_string_lossy().replace('\\', "/"), from: file.from }
 }
 
 /// An entry read from the source, as an install would read it — a server's
@@ -404,12 +456,19 @@ fn preview_with(source: &str, kind: ItemKind, id: &str, fetch: FetchFile) -> Res
     let (base, item) = listed(source, kind, id)?;
     let path = if kind == ItemKind::Skill { format!("{}/{}", item.path, catalog::SKILL_MD) } else { item.path };
     let bytes = fetch(&base, &path)?;
-    let secrets = match kind {
-        ItemKind::Mcp => catalog::mcp_secrets(&catalog::parse_mcp(&bytes)?),
-        ItemKind::Hooks => catalog::parse_hooks(&bytes).map(|_| Vec::new())?,
-        _ => Vec::new(),
+    let (secrets, project_files) = match kind {
+        ItemKind::Mcp => {
+            let server = catalog::parse_mcp(&bytes)?;
+            let files = catalog::project_files(&server, &item.project_files)?.into_iter().map(shown).collect();
+            (catalog::mcp_secrets(&server), files)
+        }
+        ItemKind::Hooks => {
+            catalog::parse_hooks(&bytes)?;
+            (Vec::new(), Vec::new())
+        }
+        _ => (Vec::new(), Vec::new()),
     };
-    Ok(Preview { text: String::from_utf8_lossy(&bytes).into_owned(), secrets })
+    Ok(Preview { text: String::from_utf8_lossy(&bytes).into_owned(), secrets, project_files })
 }
 
 /// The app's own first, then the user's in their order, each once: two
@@ -574,7 +633,9 @@ mod tests {
         {"id": "github", "kind": "mcp", "name": "GitHub", "rev": "1", "path": "mcp/github.json"},
         {"id": "tls", "kind": "runbook", "role": "kubernetes", "name": "TLS", "rev": "1", "path": "runbooks/kubernetes/tls.md"},
         {"id": "probes", "kind": "command", "name": "/probes", "rev": "1", "path": "commands/probes.md"},
-        {"id": "no-force", "kind": "hooks", "name": "No force push", "rev": "1", "path": "hooks/no-force.json"}]}"#;
+        {"id": "no-force", "kind": "hooks", "name": "No force push", "rev": "1", "path": "hooks/no-force.json"},
+        {"id": "kibana", "kind": "mcp", "name": "Kibana", "rev": "1", "path": "mcp/kibana.json",
+         "projectFiles": {"KIBANA_SOURCE_CATALOG_PATH": "mcp/kibana.sources.example.json"}}]}"#;
 
     fn none() -> BTreeMap<String, String> {
         BTreeMap::new()
@@ -582,6 +643,17 @@ mod tests {
 
     fn token(value: &str) -> BTreeMap<String, String> {
         BTreeMap::from([("GITHUB_TOKEN".to_string(), value.to_string())])
+    }
+
+    /// Installs with the test's files and no folder open: only a server with
+    /// `projectFiles` needs one, and those tests say so themselves.
+    fn install_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, fetch: FetchFile) -> Result<(), CatalogError> {
+        install_into(source, kind, id, secrets, None, fetch)
+    }
+
+    /// An update, with no folder open, for the same reason.
+    fn update_with(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String, String>, fetch: FetchFile) -> Result<(), CatalogError> {
+        update_into(source, kind, id, secrets, None, fetch)
     }
 
     /// The source's files, by path under it.
@@ -594,6 +666,8 @@ mod tests {
             "runbooks/kubernetes/crashloop.md" => Ok(b"Sign: mine".to_vec()),
             "hooks/no-force.json" => Ok(br#"{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}"#.to_vec()),
             "mcp/github.json" => Ok(br#"{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}"#.to_vec()),
+            "mcp/kibana.json" => Ok(br#"{"command": "npx", "env": {"KIBANA_SOURCE_CATALOG_PATH": ".kibo/kibana-sources.json"}}"#.to_vec()),
+            "mcp/kibana.sources.example.json" => Ok(br#"{"sources": []}"#.to_vec()),
             _ => Err(CatalogError::Status(404)),
         }
     }
@@ -979,12 +1053,61 @@ mod tests {
     }
 
     #[test]
+    fn a_servers_own_file_is_written_into_the_open_folder_once() {
+        use crate::testing::temp_dir;
+        with_app_dir("catalog-mcp-project", || {
+            let folder = temp_dir("catalog-mcp-project-ws");
+            listed_once(CAT);
+            let preview = preview_with(BASE, ItemKind::Mcp, "kibana", &files).unwrap();
+            assert_eq!(preview.project_files, [ProjectFile { path: ".kibo/kibana-sources.json".into(), from: "mcp/kibana.sources.example.json".into() }]);
+
+            // Nothing is added, and nothing written, without a folder to write into.
+            assert_eq!(install_with(BASE, ItemKind::Mcp, "kibana", &none(), &files), Err(CatalogError::NoFolder("Kibana".into())));
+            assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
+            assert!(!folder.join(".kibo").exists());
+
+            install_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &files).unwrap();
+            assert_eq!(std::fs::read_to_string(folder.join(".kibo/kibana-sources.json")).unwrap(), r#"{"sources": []}"#);
+            assert!(mcp_config::load().unwrap().mcp_servers.contains_key("kibana"));
+
+            // A file filled in since is the user's: an update neither writes it nor asks.
+            std::fs::write(folder.join(".kibo/kibana-sources.json"), r#"{"sources": ["mine"]}"#).unwrap();
+            listed_once(&CAT.replace(r#""name": "Kibana", "rev": "1""#, r#""name": "Kibana", "rev": "2""#));
+            let update = update_preview_with(BASE, ItemKind::Mcp, "kibana", &files).unwrap();
+            assert_eq!(update.project_files, [ProjectFile { path: ".kibo/kibana-sources.json".into(), from: "mcp/kibana.sources.example.json".into() }], "the dialog says which file the update may write");
+            update_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &files).unwrap();
+            assert_eq!(std::fs::read_to_string(folder.join(".kibo/kibana-sources.json")).unwrap(), r#"{"sources": ["mine"]}"#);
+
+            // Deleted since: the update puts it back.
+            std::fs::remove_file(folder.join(".kibo/kibana-sources.json")).unwrap();
+            listed_once(&CAT.replace(r#""name": "Kibana", "rev": "1""#, r#""name": "Kibana", "rev": "3""#));
+            update_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &files).unwrap();
+            assert_eq!(std::fs::read_to_string(folder.join(".kibo/kibana-sources.json")).unwrap(), r#"{"sources": []}"#);
+        });
+    }
+
+    #[test]
+    fn a_file_that_fails_to_come_adds_no_server() {
+        use crate::testing::temp_dir;
+        with_app_dir("catalog-mcp-project-missing", || {
+            let folder = temp_dir("catalog-mcp-project-missing-ws");
+            listed_once(CAT);
+            let missing = |url: &Url, path: &str| if path.ends_with("sources.example.json") { Err(CatalogError::Status(404)) } else { files(url, path) };
+            assert_eq!(install_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &missing), Err(CatalogError::Status(404)));
+            assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
+            assert!(!folder.join(".kibo").exists());
+            assert_eq!(catalog_store::load_installed().unwrap(), Vec::new());
+        });
+    }
+
+    #[test]
     fn a_preview_is_a_skills_skill_md_or_the_one_file() {
         with_app_dir("catalog-preview", || {
             listed_once(CAT);
-            assert_eq!(preview_with(BASE, ItemKind::Skill, "review", &files).unwrap(), Preview { text: "# Review".into(), secrets: vec![] });
+            assert_eq!(preview_with(BASE, ItemKind::Skill, "review", &files).unwrap(), Preview { text: "# Review".into(), secrets: vec![], project_files: vec![] });
             assert_eq!(preview_with(BASE, ItemKind::Command, "changelog", &files).unwrap().text, "Add a line");
             assert_eq!(preview_with(BASE, ItemKind::Mcp, "github", &files).unwrap().secrets, ["GITHUB_TOKEN"]);
+            assert_eq!(preview_with(BASE, ItemKind::Mcp, "github", &files).unwrap().project_files, []);
             assert!(preview_with(BASE, ItemKind::Hooks, "no-force", &files).unwrap().text.contains("exit 2"));
             // A server entry that would not install says so here already.
             let broken = |_: &Url, _: &str| Ok(br#"{"headers": {}}"#.to_vec());
@@ -1007,12 +1130,17 @@ mod tests {
             assert_eq!(listed.error, None);
             let files: Vec<_> = listed.items.iter().filter(|v| v.target.is_some()).map(|v| (v.item.kind, v.item.id.clone())).collect();
             assert!(!files.is_empty());
+            // A folder open, for a server that reads a config beside itself.
+            let folder = crate::testing::temp_dir("catalog-live-folder");
             for (kind, id) in &files {
                 let preview = preview(source, *kind, id).unwrap();
                 assert!(!preview.text.is_empty(), "{id}");
                 // A server's placeholders filled with a stand-in: nothing connects here.
                 let secrets = preview.secrets.iter().map(|name| (name.clone(), "live-test".to_string())).collect();
-                install(source, *kind, id, &secrets).unwrap();
+                install(source, *kind, id, &secrets, Some(&folder)).unwrap();
+                for file in &preview.project_files {
+                    assert!(folder.join(&file.path).exists(), "{id}: {} was not written", file.path);
+                }
             }
             let again = read(source, &catalog_http::fetch_index, 2, &on_disk(&catalog_store::load_installed().unwrap()));
             for view in again.items.iter().filter(|v| v.target.is_some()) {
@@ -1025,7 +1153,7 @@ mod tests {
             for (kind, id) in &files {
                 let preview = update_preview(source, *kind, id).unwrap();
                 assert!(preview.changes.iter().all(|change| change.diff.is_empty()) && preview.secrets.is_empty() && !preview.edited, "{id}: {preview:?}");
-                update(source, *kind, id, &BTreeMap::new()).unwrap();
+                update(source, *kind, id, &BTreeMap::new(), Some(&folder)).unwrap();
             }
             let updated = read(source, &catalog_http::fetch_index, 3, &on_disk(&catalog_store::load_installed().unwrap()));
             assert!(updated.items.iter().filter(|v| v.target.is_some()).all(|v| v.state == ItemState::Installed));

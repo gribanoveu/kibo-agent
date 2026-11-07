@@ -246,6 +246,13 @@ function Details({
         )}
       </dl>
 
+      {preview?.read && preview.read.projectFiles.length > 0 && (
+        <p className="catalog-detail-note">
+          Installing it also writes <span className="mono">{preview.read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config this server
+          reads beside itself, from the catalog's template. A file already there is left as it is.
+        </p>
+      )}
+
       <h4 className="catalog-detail-file">{file}</h4>
       {preview?.error ? (
         <div className="catalog-detail-error">{preview.error}</div>
@@ -526,6 +533,12 @@ function UpdateDialog({ entry, onUpdate, onClose }: { entry: Entry; onUpdate: (s
           ))}
           {changed.length === 0 && <p className="catalog-detail-note">The text is the same; only the version changes.</p>}
           {same.length > 0 && <p className="modal-note">Unchanged: {same.map((change) => change.name).join(", ")}</p>}
+          {read.projectFiles.length > 0 && (
+            <p className="catalog-detail-note">
+              It also writes <span className="mono">{read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config it reads beside itself —
+              when that file is not there yet.
+            </p>
+          )}
           <SecretFields names={read.secrets} values={secrets} onChange={setSecrets} target={item.target} />
         </>
       )}
@@ -627,6 +640,12 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
               <p className="catalog-detail-confirm">
                 Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent or Analyst turn, as this entry says — the command it runs or the address it
                 sends to:
+              </p>
+            )}
+            {item.kind === "mcp" && read && read.projectFiles.length > 0 && (
+              <p className="catalog-detail-note">
+                It also writes <span className="mono">{read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config it reads beside itself.
+                A file already there is left as it is.
               </p>
             )}
             {preview?.error ? (

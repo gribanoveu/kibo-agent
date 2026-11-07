@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-07 A server installed from the Catalog can bring the config file it reads beside itself: Kibana's exact-index server gets `.kibo/kibana-sources.json` written into the open folder, and a file already there is left as it is
+
 ## v0.12.0 — 2026-11-07
 
 - 2026-11-06 Voice input: dictate into the message box with the microphone button or by holding the right Option or Alt key, in Russian, recognized on this computer and with no sound kept; on in the Catalog
