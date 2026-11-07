@@ -3,6 +3,11 @@
 ## Unreleased
 
 - 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat
+- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
+- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
+
+## v0.12.0 — 2026-11-07
+
 - 2026-11-06 Voice input: dictate into the message box with the microphone button or by holding the right Option or Alt key, in Russian, recognized on this computer and with no sound kept; on in the Catalog
 - 2026-11-06 Two modes instead of three: Analyst answers a systems analyst about how the system behaves, with the file and line as evidence, and Agent asked for a plan writes it, changes nothing and offers an Implement button; the mode picked stays for every folder
 - 2026-11-06 In Overview, Instructions, Skills and MCP servers open their panels, and a back arrow returns from there to Overview
@@ -16,10 +21,8 @@
 - 2026-11-05 A feature's panel in the Catalog has a switch for its tools: the MongoDB page can stay while the model no longer gets `mongo` — in chats and in folders alike — and the same goes for the Board, DeepSeek search and the knowledge base; a call from memory is told where the tools are given back
 - 2026-11-05 A recorded call keeps its sentences whole: a quiet word of someone on the call stays theirs instead of landing on you as a one-word line
 - 2026-11-05 Meetings tell people apart more reliably: a few noisy moments in a recording no longer leave two people sharing one speaker
-- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
 - 2026-11-05 A picture attached for a message is that message's: the box waits for one still being read instead of sending the words without it, another chat opens with an empty box, a message coming back says which of its pictures did not fit rather than dropping them silently, and a draft without pictures clears the field — Chat mode's Send also sends a picture with nothing typed, and the attach button no longer greys out while a turn runs
 - 2026-11-05 Opening a chat that had already finished, while the agent was still working in another, played the finish sound and showed its notification as if that chat had just ended — a status belongs to the chat it came from, and an approval card waiting in the chat opened is no longer announced either
-- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
 - 2026-11-04 A picture is attached with a button beside Send, in the agent's chat and in Chat mode, instead of pasting or dropping it — the button follows one rule for every box: a model set to see pictures, or a Prototype chat, whose pictures are the page's assets whatever the model — and the picker offers PNG and JPEG only — a picture still being read and sanitized shows a spinner in its place in the row until it lands
 - 2026-11-04 A message sent into a turn that is already running takes its pictures with it: a screenshot attached to the note reaches the model with the note and is drawn on its bubble, and a note taken back before a round reads it brings its picture home to the box — a message held for after the turn carries its pictures too, as does one typed while an approval card shows
 - 2026-11-04 A panel that holds a page of its own — a prototype in the preview — drags by its edge again: the page inside no longer takes the pointer for itself, which stopped the drag at the panel's edge and left the resize cursor on the window
