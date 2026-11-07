@@ -19,6 +19,12 @@ const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, {
 });
 
 describe("what each call shows", () => {
+  test("a request to a stand shows what was asked, its status and what came back", () => {
+    const done = tool({ name: "httpRequest", arguments: '{"method":"GET","path":"/orders","environment":"Stage"}', result: { summary: "200 · 12 ms", text: "GET /orders → 200" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP", arg: "GET /orders on Stage", meta: "200 · 12 ms", detail: "GET /orders → 200" });
+    expect(describeTool(tool({ name: "httpRequest", arguments: '{"method":"GET","path":"/x"}' })).arg).toBe("GET /x");
+  });
+
   test("a presented page shows its name and the version kept, and its title while it runs", () => {
     const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
     expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });

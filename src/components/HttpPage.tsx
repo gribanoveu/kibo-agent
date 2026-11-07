@@ -46,6 +46,7 @@ import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
 import type { HttpHistoryEntry, HttpOutcome, HttpScriptReport, HttpTestResult } from "../lib/httpCommands";
 import {
+  type AgentAccess,
   requestsUnder,
   METHODS,
   asHttpText,
@@ -86,9 +87,9 @@ import "./HttpPage.css";
  * the environment and every send's history in the bar.
  */
 export function HttpPage() {
-  const http = useHttpClient();
-  const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
   const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | { kind: "cookies" } | null>(null);
+  const http = useHttpClient(sheet?.kind === "history");
+  const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggle = (id: string) =>
     setExpanded((s) => {
@@ -147,10 +148,6 @@ export function HttpPage() {
       (id) => setSheet({ kind: "environment", id }),
       (e) => setFailed(`The environment was not made: ${e}`),
     );
-  const openHistory = () => {
-    setSheet({ kind: "history" });
-    void http.loadHistory();
-  };
   const menu = (node: TreeNode): Action[] => {
     // Counted when Delete is picked, not for every row on every render.
     const holds = () => {
@@ -235,7 +232,7 @@ export function HttpPage() {
             <Cookie size={13} />
             Cookies
           </button>
-          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={openHistory}>
+          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
             <History size={13} />
             History
           </button>
@@ -1399,6 +1396,11 @@ function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined;
 /** A variable in the form; `kept` when a sealed value is behind it. */
 type Row = EnvVariable & { kept?: boolean };
 
+const AGENT_ACCESS = [
+  { value: "off", label: "Off", hint: "the agent does not know it is here" },
+  { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS, with no card" },
+];
+
 function EnvironmentForm({
   environment,
   onSave,
@@ -1496,6 +1498,20 @@ function EnvironmentForm({
         <Plus size={13} />
         Variable
       </button>
+
+      <div className="http-field-row">
+        <span className="http-label">
+          <Bot size={13} /> Agent access
+        </span>
+        <Dropdown
+          below
+          label={AGENT_ACCESS.find((a) => a.value === (draft.agent ?? "off"))?.label}
+          title="What the agent may do here"
+          options={AGENT_ACCESS}
+          value={draft.agent ?? "off"}
+          onPick={(agent) => setDraft({ ...draft, agent: agent as AgentAccess })}
+        />
+      </div>
 
       <label className="http-field-row http-field-top">
         <span className="http-label">

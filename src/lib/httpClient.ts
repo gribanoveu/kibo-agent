@@ -59,8 +59,10 @@ export type Collection = { id: string; name: string; auth: Auth; variables: (Pai
 
 /** A variable as the window sees it: a secret's value never comes back, only `•••` when it has one. */
 export type EnvVariable = { key: string; value: string; secret: boolean; enabled: boolean };
+/** How far the agent may go in an environment; absent is off. */
+export type AgentAccess = "off" | "readOnly";
 /** `trustedCert` is the PEM of the stand's own certificate or its CA's. */
-export type Environment = { id: string; name: string; variables: EnvVariable[]; trustedCert?: string };
+export type Environment = { id: string; name: string; variables: EnvVariable[]; trustedCert?: string; agent?: AgentAccess };
 
 /** A request or a response as HTTP writes it: the first line, the headers, a blank line, the body. */
 export function asHttpText(first: string, headers: Pair[], body: string | null): string {

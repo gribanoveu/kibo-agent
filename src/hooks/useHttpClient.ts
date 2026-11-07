@@ -23,6 +23,7 @@ import {
   type HttpHistoryEntry,
   type HttpImported,
   type HttpResponseView,
+  onHttpChanged,
 } from "../lib/httpCommands";
 import {
   addRequest,
@@ -60,7 +61,7 @@ const SAVE_AFTER_MS = 400;
  * the history. The open tabs outlive a restart here; a request's last answer
  * and the history are on the backend, read when its tab or the sheet opens.
  */
-export function useHttpClient() {
+export function useHttpClient(historyShown = false) {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [globals, setGlobals] = useState<EnvVariable[]>([]);
@@ -292,6 +293,14 @@ export function useHttpClient() {
   }, []);
   const historyRead = history !== null;
 
+  // While the log is on screen: read once listening, so that a send landing in between is in it.
+  useEffect(() => {
+    if (!historyShown) return;
+    const listening = onHttpChanged(() => void loadHistory());
+    void listening.then(() => loadHistory());
+    return () => void listening.then((stop) => stop());
+  }, [historyShown, loadHistory]);
+
   const send = useCallback(
     (id: string) => {
       const found = findRequest(collections, id);
@@ -409,7 +418,6 @@ export function useHttpClient() {
       globals,
       setEnvironmentId,
       history,
-      loadHistory,
       tabs,
       active,
       setActive,
@@ -442,7 +450,6 @@ export function useHttpClient() {
       globals,
       setEnvironmentId,
       history,
-      loadHistory,
       tabs,
       active,
       setActive,

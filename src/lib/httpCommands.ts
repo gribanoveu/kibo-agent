@@ -1,8 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { requireBackend } from "./backend";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { inTauri, requireBackend } from "./backend";
 import type { Environment, EnvVariable } from "./httpClient";
 
 // The HTTP page's commands (docs/45-http-client.md). Mirrors `services::http_client`.
+
+export const HTTP_EVENT = "http:changed";
+
+/** The agent sent a request: history has one more. */
+export async function onHttpChanged(handler: () => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => {};
+  return listen(HTTP_EVENT, () => handler());
+}
 
 /** What came back: a response, 4xx and 5xx too, or why none did. */
 export type HttpOutcome =

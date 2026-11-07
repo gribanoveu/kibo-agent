@@ -81,6 +81,8 @@ mock.module("@tauri-apps/api/core", () => ({
   transformCallback: (callback: unknown) => callback,
 }));
 
+mock.module("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
+
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -309,6 +311,20 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("option", { name: /Delete/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(await openFromHistory()).toBeNull();
+  });
+
+  test("an environment is off to the agent until its form says otherwise", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    const access = screen.getByTitle("What the agent may do here");
+    expect(access.textContent).toContain("Off");
+    fireEvent.click(access);
+    fireEvent.click(screen.getByRole("option", { name: /Read only/ }));
+    expect(screen.getByTitle("What the agent may do here").textContent).toContain("Read only");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).agent).toBe("readOnly");
   });
 
   test("a renamed secret goes back as the mask, which the backend refuses rather than saving it empty", async () => {

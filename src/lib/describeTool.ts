@@ -91,6 +91,7 @@ export const LABELS: Record<string, string> = {
   deepseekFetch: "DeepSeek page",
   board: "Board",
   mongo: "MongoDB",
+  httpRequest: "HTTP",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -366,6 +367,14 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         detail: [str(args.note), str(args.due) && `due ${str(args.due)}`].filter(Boolean).join("\n"),
       };
     }
+
+    case "httpRequest":
+      return {
+        name,
+        arg: [str(args.method), str(args.path), str(args.environment) && `on ${str(args.environment)}`].filter(Boolean).join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? "",
+      };
 
     // What was read, and where: `find shop.orders on Local { paid: true }`.
     case "mongo": {
