@@ -25,8 +25,18 @@ pub fn send(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar)
     send_within(request, trusted_cert, jar, TIMEOUT)
 }
 
+/// For the agent: the one address it was given, and no session. Where a redirect
+/// leads is for the model to read, not for a stand to take the request there.
+pub fn send_once(request: &Outgoing, trusted_cert: Option<&str>) -> (Outcome, Vec<u8>) {
+    settled(exchange(request, trusted_cert, &NoCookies, TIMEOUT, false))
+}
+
 fn send_within(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar, timeout: Duration) -> (Outcome, Vec<u8>) {
-    exchange(request, trusted_cert, jar, timeout).unwrap_or_else(|Failed(error)| (Outcome::Failed { error }, Vec::new()))
+    settled(exchange(request, trusted_cert, jar, timeout, true))
+}
+
+fn settled(exchanged: Result<(Outcome, Vec<u8>), Failed>) -> (Outcome, Vec<u8>) {
+    exchanged.unwrap_or_else(|Failed(error)| (Outcome::Failed { error }, Vec::new()))
 }
 
 /// For what is not the user's session: a token request takes and leaves no cookies.
@@ -129,7 +139,7 @@ fn digest_for(request: &Outgoing, hop: &Hop, first: &str, response: &Response<Bo
     digest_answer(challenge, username, password, hop.method.as_str(), &uri, &uuid::Uuid::new_v4().simple().to_string())
 }
 
-fn exchange(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar, timeout: Duration) -> Result<(Outcome, Vec<u8>), Failed> {
+fn exchange(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar, timeout: Duration, follow: bool) -> Result<(Outcome, Vec<u8>), Failed> {
     let started = Instant::now();
     let agent = build_agent(trusted_cert).map_err(|e| e.to_string())?;
     let method = Method::from_bytes(request.method.as_bytes()).map_err(|_| format!("{} is not an HTTP method", request.method))?;
@@ -154,7 +164,8 @@ fn exchange(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar,
             hop.headers.push(("Authorization".into(), answer));
             continue;
         }
-        let Some(next) = redirect_of(&response, &hop.url)? else { break response };
+        let next = if follow { redirect_of(&response, &hop.url)? } else { None };
+        let Some(next) = next else { break response };
         let status = response.status().as_u16();
         // A body can hold a filled-in secret, and the stand names this address: the 307 is the user's to read.
         if hop.body.is_some() && matches!(status, 307 | 308) && !same_origin(&hop.url, &next) {
@@ -662,5 +673,31 @@ pub(crate) mod tests {
         assert!(matches!(&outcome, Outcome::Failed { error } if error.contains("is not an address")), "{outcome:?}");
         let (outcome, _) = send(&Outgoing { method: "GET".into(), url: "http://127.0.0.1:9/".into(), headers: vec![("X\nY".into(), "1".into())], body: None, digest: None }, None);
         assert!(matches!(&outcome, Outcome::Failed { error } if error.starts_with("the request does not go out as written")), "{outcome:?}");
+    }
+
+    #[test]
+    fn the_agents_send_stays_where_it_was_sent_and_says_where_it_would_go() {
+        let (port, seen) = serve(vec![reply("HTTP/1.1 302 Found\r\nlocation: /next\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"), reply("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")]);
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/start"), None), None);
+        let Outcome::Response { status, headers, redirects, .. } = outcome else { panic!("{outcome:?}") };
+        assert_eq!(status, 302);
+        assert!(headers.contains(&("location".to_string(), "/next".to_string())), "{headers:?}");
+        assert!(redirects.is_empty());
+        assert!(seen.recv().unwrap().head.starts_with("GET /start"));
+        assert!(seen.recv_timeout(Duration::from_millis(200)).is_err(), "nothing went to /next");
+    }
+
+    /// The stand answered: a `Location` no address could be is for the model to read.
+    #[test]
+    fn a_bad_location_is_read_not_refused_when_nothing_follows_it() {
+        let (port, _seen) = serve(vec![reply("HTTP/1.1 302 Found\r\nlocation: http://[bad\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")]);
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/"), None), None);
+        assert!(matches!(outcome, Outcome::Response { status: 302, .. }), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_stand_down_is_an_outcome_for_the_agent_too() {
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{}/", closed_port()), None), None);
+        assert!(matches!(outcome, Outcome::Failed { .. }), "{outcome:?}");
     }
 }
