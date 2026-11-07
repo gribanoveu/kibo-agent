@@ -95,6 +95,11 @@ pub struct CatalogItem {
     /// A runbook's role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// A server's files for the open folder: the `env` variable of its entry
+    /// that names where one goes, and the file in the source it is written
+    /// from — a config the server needs beside it to start.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_files: BTreeMap<String, String>,
 }
 
 /// An index as this app can use it: the entries that passed, and a line for
@@ -138,6 +143,8 @@ pub enum CatalogError {
     MissingSecret(String),
     #[error("{0} has a line break or another control character in it — paste the value alone")]
     BadSecret(String),
+    #[error("{0} writes a file into the open folder, and none is open")]
+    NoFolder(String),
 }
 
 /// A source's address as the base its paths are joined to: `https`, or
@@ -206,6 +213,8 @@ struct RawItem {
     files: Vec<String>,
     #[serde(default)]
     role: Option<String>,
+    #[serde(default, rename = "projectFiles")]
+    project_files: BTreeMap<String, String>,
 }
 
 /// Reads an index. Only a file that is not an index at all fails; an entry
@@ -251,6 +260,17 @@ fn check(raw: RawItem) -> Result<CatalogItem, String> {
         }
         Some(_) => {}
     }
+    if !raw.project_files.is_empty() {
+        if kind != ItemKind::Mcp {
+            return Err("only a server lists files for the open folder".into());
+        }
+        for (env, path) in &raw.project_files {
+            if !is_secret_name(env) {
+                return Err(format!("\"{env}\" is not an env variable name"));
+            }
+            relative_path(path)?;
+        }
+    }
     let role = match (kind, raw.role) {
         (ItemKind::Runbook, Some(role)) if RUNBOOK_ROLES.contains(&role.as_str()) => Some(role),
         (ItemKind::Runbook, Some(role)) => return Err(format!("no role \"{role}\" here to read a runbook")),
@@ -266,6 +286,7 @@ fn check(raw: RawItem) -> Result<CatalogItem, String> {
         path: raw.path,
         files: raw.files,
         role,
+        project_files: raw.project_files,
     })
 }
 
@@ -371,6 +392,32 @@ pub fn parse_mcp(bytes: &[u8]) -> Result<McpServerConfig, CatalogError> {
         return Err(CatalogError::BadEntry("it has to have a command or a url, one of them".into()));
     }
     Ok(server)
+}
+
+/// A file a server reads beside the open folder: where it goes, relative to
+/// that folder, and the file in the source it is written from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerFile {
+    pub to: PathBuf,
+    pub from: String,
+}
+
+/// Where a server's `projectFiles` go, each with the file in the source it is
+/// written from: the destination is the entry's own `env` value for that
+/// name, checked like any other path from an index — it is what the server
+/// reads, relative to the folder it is started in.
+pub fn project_files(
+    server: &McpServerConfig,
+    listed: &BTreeMap<String, String>,
+) -> Result<Vec<ServerFile>, CatalogError> {
+    listed
+        .iter()
+        .map(|(env, from)| {
+            let value = server.env.get(env).ok_or_else(|| CatalogError::BadEntry(format!("it sets no {env}, which names where {from} goes")))?;
+            relative_path(value).map_err(CatalogError::BadEntry)?;
+            Ok(ServerFile { to: PathBuf::from(value), from: from.clone() })
+        })
+        .collect()
 }
 
 /// The `${NAME}` placeholders in an entry's `env` and `headers` values, each
@@ -722,6 +769,43 @@ mod tests {
     }
 
     const GITHUB: &[u8] = br#"{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}", "X-Org": "${ORG}-${ORG}"}, "env": {"A": "${A_1} and ${ 1} and $ORG and ${"}}"#;
+
+    const KIBANA: &str = r#"{"id": "kibana-exact", "kind": "mcp", "name": "Kibana", "rev": "1", "path": "mcp/kibana-exact.json",
+        "projectFiles": {"KIBANA_SOURCE_CATALOG_PATH": "mcp/kibana-exact.sources.example.json"}}"#;
+
+    #[test]
+    fn only_a_server_lists_files_for_the_open_folder() {
+        let read = index(KIBANA);
+        assert_eq!(read.problems, Vec::<String>::new());
+        assert_eq!(read.items[0].project_files["KIBANA_SOURCE_CATALOG_PATH"], "mcp/kibana-exact.sources.example.json");
+        // A skill writes only into its own folder, a command has one file.
+        for other in [
+            r#"{"id": "review", "kind": "skill", "name": "X", "rev": "1", "path": "skills/review", "files": ["SKILL.md"], "projectFiles": {"A": "x.md"}}"#,
+            r#"{"id": "changelog", "kind": "command", "name": "X", "rev": "1", "path": "commands/changelog.md", "projectFiles": {"A": "x.md"}}"#,
+        ] {
+            let read = index(other);
+            assert!(read.items.is_empty(), "{other}");
+            assert!(read.problems[0].ends_with(": only a server lists files for the open folder"), "{other}");
+        }
+        // The key is an env variable name and the value a path of ours.
+        for bad in [r#"{"source path": "x.json"}"#, r#"{"A": "../x.json"}"#, r#"{"A": "/etc/x.json"}"#] {
+            let read = index(&KIBANA.replace(r#"{"KIBANA_SOURCE_CATALOG_PATH": "mcp/kibana-exact.sources.example.json"}"#, bad));
+            assert!(read.items.is_empty(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_servers_files_go_where_its_own_env_says() {
+        let listed = index(KIBANA).items[0].project_files.clone();
+        let server = parse_mcp(br#"{"command": "npx", "env": {"KIBANA_SOURCE_CATALOG_PATH": ".kibo/kibana-sources.json"}}"#).unwrap();
+        assert_eq!(project_files(&server, &listed), Ok(vec![ServerFile { to: PathBuf::from(".kibo/kibana-sources.json"), from: "mcp/kibana-exact.sources.example.json".to_string() }]));
+        assert!(project_files(&parse_mcp(br#"{"command": "npx"}"#).unwrap(), &listed).unwrap_err().to_string().contains("sets no KIBANA_SOURCE_CATALOG_PATH"));
+        // The value is a path the server reads from the folder it starts in, and nothing else.
+        for bad in ["../x.json", "/etc/x.json", "~/x.json", "C:/x.json", ".kibo//x.json", ""] {
+            let server = parse_mcp(format!(r#"{{"command": "npx", "env": {{"KIBANA_SOURCE_CATALOG_PATH": "{bad}"}}}}"#).as_bytes()).unwrap();
+            assert!(matches!(project_files(&server, &listed), Err(CatalogError::BadEntry(_))), "{bad}");
+        }
+    }
 
     #[test]
     fn an_mcp_entry_has_a_command_or_a_url() {
