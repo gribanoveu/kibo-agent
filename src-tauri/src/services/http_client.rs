@@ -11,13 +11,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::domain::http_auth::{refusal, OAuth2, Token};
-use crate::domain::http_client::{Environment, HistoryEntry, HttpError, Outcome, Outgoing, Prepared, ResponseView, SavedResponse, Scope, Variable};
+use crate::domain::http_client::{AgentReply, AgentRequest, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, ResponseView, SavedResponse, Scope, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, Auth, Collection, Imported};
 use crate::infra::http_client::NoCookies;
 use crate::infra::http_cookies::StoredJar;
 use crate::infra::postman_sandbox::{Ran, Sandbox, LIMITS};
-use crate::infra::{http_agent, http_client, http_collections, http_env_store, settings_store};
+use crate::infra::{chat_store, http_agent, http_client, http_collections, http_env_store, settings_store};
 
 /// Sends a collection's request — `edited`, the page's unsaved `request`, in
 /// place of the stored one — into `environment`. What came back is on disk, as
@@ -90,7 +90,7 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     let at = chrono::Utc::now().timestamp_millis();
     let name = environment.map(|e| e.name.clone());
     let written = collection.written_url(request_id).unwrap_or_default();
-    remember(at, name.clone(), written, Some(request_id), &prepared, &outcome, &body, &scripts.mask());
+    remember(at, name.clone(), None, written, Some(request_id), &prepared, &outcome, &body, &scripts.mask());
     scripts.after_response(&prepared, &outcome, &body);
     // What the test scripts learned counts too: a token they stored is a secret's value.
     let outcome = outcome.hidden(&scripts.mask());
@@ -193,8 +193,8 @@ struct Sent {
 
 /// A store that fails now must not hide what came back: the request went out.
 #[allow(clippy::too_many_arguments)]
-fn remember(at: i64, environment: Option<String>, written: String, request_id: Option<&str>, prepared: &Prepared, outcome: &Outcome, body: &[u8], scope: &Scope) {
-    let mut entry = HistoryEntry::new(at, environment, None, scope.hide(&written), &prepared.hidden(scope), outcome.clone().hidden(scope), body);
+fn remember(at: i64, environment: Option<String>, agent_chat: Option<String>, written: String, request_id: Option<&str>, prepared: &Prepared, outcome: &Outcome, body: &[u8], scope: &Scope) {
+    let mut entry = HistoryEntry::new(at, environment, agent_chat, scope.hide(&written), &prepared.hidden(scope), outcome.clone().hidden(scope), body);
     entry.request_id = request_id.map(str::to_string);
     if let Err(e) = http_collections::record(entry) {
         eprintln!("http: a send not written to history: {e}");
@@ -311,10 +311,37 @@ fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option
     let prepared = one.prepare("sub-request", scope)?;
     let (outcome, body) = deliver(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
     let at = chrono::Utc::now().timestamp_millis();
-    remember(at, environment.map(|e| e.name.clone()), written, None, &prepared, &outcome, &body, mask);
+    remember(at, environment.map(|e| e.name.clone()), None, written, None, &prepared, &outcome, &body, mask);
     match outcome {
         Outcome::Response { status, headers, elapsed_ms, .. } => Ok(response_for(status, &headers, &body, elapsed_ms)),
         Outcome::Failed { error } => Err(HttpError::Script(error)),
+    }
+}
+
+/// The environments as one chat's agent reaches them. History keeps what the
+/// model read, so what the page shows of an agent's send is what it was told.
+pub struct Stands {
+    pub changed: HttpEventSink,
+    pub chat: String,
+}
+
+impl HttpStands for Stands {
+    fn open(&self) -> Result<Vec<OpenStand>, HttpError> {
+        let open = http_env_store::list()?.into_iter().filter(|e| !e.agent.is_off());
+        Ok(open.map(|e| OpenStand { id: e.id, name: e.name }).collect())
+    }
+
+    /// The environment read again: access taken back mid-turn counts from the next call.
+    fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError> {
+        let environment = http_env_store::get(id)?;
+        let (prepared, scope) = environment.agent_request(request)?;
+        let (outcome, body) = http_client::send_once(&prepared.sent, environment.trusted_cert.as_deref());
+        let reply = AgentReply::new(outcome, &body, &scope);
+        let chat = chat_store::title(&self.chat).ok().flatten().unwrap_or_else(|| self.chat.clone());
+        let written = format!("{{{{baseUrl}}}}/{}", request.path.trim_start_matches('/'));
+        remember(now(), Some(environment.name), Some(chat), written, None, &prepared, &reply.outcome, &reply.body, &scope);
+        (self.changed)(HttpChanged);
+        Ok(reply)
     }
 }
 
@@ -561,13 +588,14 @@ pub fn save_environment(mut from_window: Environment) -> Result<(), HttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::http_client::{Environment, Outcome, Variable};
+    use crate::domain::http_client::{AgentAccess, CookieJar as _, Environment, Outcome, Variable};
     use crate::domain::postman::Collection;
     use crate::infra::http_client::tests::{closed_port, reply, serve, Seen};
     use crate::infra::http_cookies;
     use crate::testing::with_app_dir;
     use serde_json::json;
     use std::sync::mpsc::Receiver;
+    use std::sync::Arc;
 
     const PROBE: &str = include_str!("../infra/testdata/postman/probe.postman_collection.json");
 
@@ -1204,7 +1232,7 @@ mod tests {
     fn a_certificate_that_does_not_parse_is_refused_and_an_empty_one_is_none() {
         use crate::infra::http_agent::tests::CA;
         with_app_dir("http-env-cert", || {
-            let env = |cert: &str| Environment { id: "e".into(), name: "E".into(), variables: vec![], trusted_cert: Some(cert.into()) };
+            let env = |cert: &str| Environment { id: "e".into(), name: "E".into(), variables: vec![], trusted_cert: Some(cert.into()), agent: Default::default() };
             assert!(matches!(save_environment(env("not a certificate")), Err(HttpError::BadCertificate(_))));
             assert!(matches!(http_env_store::get("e"), Err(HttpError::NoEnvironment(_))), "nothing saved");
             save_environment(env("  \n")).unwrap();
@@ -1283,7 +1311,7 @@ mod tests {
     fn stage(base: String) -> String {
         let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
         let variables = vec![var("baseUrl", base, false), var("token", "s3cr3t-t0k".into(), true)];
-        http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None }).unwrap();
+        http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: Default::default() }).unwrap();
         "stage".into()
     }
 
@@ -1341,7 +1369,7 @@ mod tests {
             let collection = shop();
             let var = |key: &str, value: &str| Variable { key: key.into(), value: value.into(), secret: false, enabled: true };
             let variables = vec![var("baseUrl", &format!("https://127.0.0.1:{port}")), var("token", "t"), var("sum", "5")];
-            http_env_store::add(Environment { id: "tls".into(), name: "TLS".into(), variables, trusted_cert: Some(CA.into()) }).unwrap();
+            http_env_store::add(Environment { id: "tls".into(), name: "TLS".into(), variables, trusted_cert: Some(CA.into()), agent: Default::default() }).unwrap();
             let view = send(&collection, "order", None, Some("tls")).unwrap();
             assert!(matches!(view.outcome, Outcome::Response { status: 200, .. }), "{view:?}");
             assert_eq!(http_collections::history().unwrap()[0].request.body.as_deref(), Some("{\"sum\": 5}"));
@@ -1813,6 +1841,136 @@ mod tests {
             assert_eq!(view.scripts.console.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["•••", "•••"]);
             let stored = http_env_store::get("stage").unwrap();
             assert!(stored.variables.iter().any(|v| v.key == "token" && v.secret && v.value == "n3w-t0k3n"), "still a secret, with its new value");
+        });
+    }
+
+    /// Counts the page's signals, and says the chat's the one in `title`.
+    fn stands(chat: &str) -> (Stands, Arc<AtomicU64>) {
+        let told = Arc::new(AtomicU64::new(0));
+        let counted = told.clone();
+        (Stands { changed: Arc::new(move |_| { counted.fetch_add(1, Ordering::Relaxed); }), chat: chat.into() }, told)
+    }
+
+    fn opened_stage(base: String) {
+        let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
+        let variables = vec![var("baseUrl", base, false), var("token", "s3cr3t-t0k".into(), true)];
+        http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::ReadOnly }).unwrap();
+    }
+
+    fn ask(method: &str, path: &str, headers: &[(&str, &str)]) -> AgentRequest {
+        AgentRequest { method: method.into(), path: path.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    }
+
+    #[test]
+    fn the_agent_sees_only_the_environments_opened_to_it() {
+        with_app_dir("http-stands-open", || {
+            stage("http://127.0.0.1:1".into());
+            let (stands, _) = stands("c");
+            assert_eq!(stands.open().unwrap(), []);
+            http_env_store::delete("stage").unwrap();
+            opened_stage("http://127.0.0.1:1".into());
+            assert_eq!(stands.open().unwrap(), [OpenStand { id: "stage".into(), name: "Stage".into() }]);
+        });
+    }
+
+    #[test]
+    fn the_agents_send_carries_the_secret_on_the_wire_only_and_lands_in_history_as_read() {
+        with_app_dir("http-stands-send", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nset-cookie: sid=1\r\nx-echo: s3cr3t-t0k\r\ncontent-length: 21\r\nconnection: close\r\n\r\n{\"you\":\"s3cr3t-t0k\"}\r\n");
+            opened_stage(format!("http://127.0.0.1:{port}/v1"));
+            crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Assistant, None, &[crate::domain::llm::LlmMessage::user("check the stand")], &json!([])).unwrap();
+            let (stands, told) = stands("c1");
+            let reply = stands.send("stage", &ask("GET", "orders?id=1", &[("Authorization", "Bearer {{token}}")])).unwrap();
+
+            let wire = wire(&seen);
+            assert!(wire.starts_with("GET /v1/orders?id=1 HTTP/1.1"), "{wire}");
+            assert!(wire.contains("Bearer s3cr3t-t0k"), "{wire}");
+
+            let text = format!("{reply:?} {}", String::from_utf8_lossy(&reply.body));
+            assert!(!text.contains("s3cr3t-t0k") && !text.contains("set-cookie"), "{text}");
+            assert!(String::from_utf8_lossy(&reply.body).contains("\"you\": \"•••\""), "{text}");
+
+            let history = http_collections::history().unwrap();
+            let entry = &history[0];
+            assert_eq!((entry.template_url.as_str(), entry.environment.as_deref(), entry.agent_chat.as_deref(), entry.request_id.as_deref()), ("{{baseUrl}}/orders?id=1", Some("Stage"), Some("check the stand"), None));
+            assert_eq!(entry.outcome, reply.outcome);
+            assert_eq!(entry.response_body.as_deref().map(str::as_bytes), Some(&reply.body[..]));
+            assert!(entry.request.headers.contains(&("Authorization".into(), "Bearer •••".into())), "{:?}", entry.request.headers);
+            assert!(!serde_json::to_string(entry).unwrap().contains("s3cr3t-t0k"));
+            assert_eq!(told.load(Ordering::Relaxed), 1, "the page is told");
+        });
+    }
+
+    #[test]
+    fn a_chat_gone_still_signs_its_send() {
+        with_app_dir("http-stands-no-title", || {
+            let (port, _seen) = serve_once("HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
+            opened_stage(format!("http://127.0.0.1:{port}"));
+            stands("c9").0.send("stage", &ask("GET", "/x", &[])).unwrap();
+            let entry = &http_collections::history().unwrap()[0];
+            assert_eq!((entry.agent_chat.as_deref(), entry.template_url.as_str()), (Some("c9"), "{{baseUrl}}/x"));
+        });
+    }
+
+    #[test]
+    fn the_agent_neither_rides_the_users_session_nor_leaves_cookies_in_it() {
+        with_app_dir("http-stands-jar", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nset-cookie: sid=theirs\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            let base = format!("http://127.0.0.1:{port}");
+            StoredJar.take(&format!("{base}/"), &["session=users".to_string()]);
+            opened_stage(base);
+            stands("c").0.send("stage", &ask("GET", "/x", &[])).unwrap();
+            assert!(!wire(&seen).to_ascii_lowercase().contains("cookie"));
+            let names: Vec<String> = crate::infra::http_cookies::list().unwrap().into_iter().map(|c| c.name).collect();
+            assert_eq!(names, ["session"]);
+        });
+    }
+
+    #[test]
+    fn a_stand_on_its_own_certificate_answers_the_agent_as_it_does_the_page() {
+        use crate::infra::http_agent::tests::{serve_tls_with, CA, LEAF, LEAF_KEY};
+        with_app_dir("http-stands-tls", || {
+            let port = serve_tls_with(LEAF, LEAF_KEY, "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            let variables = vec![Variable { key: "baseUrl".into(), value: format!("https://127.0.0.1:{port}"), secret: false, enabled: true }];
+            http_env_store::add(Environment { id: "tls".into(), name: "TLS".into(), variables, trusted_cert: Some(CA.into()), agent: AgentAccess::ReadOnly }).unwrap();
+            let reply = stands("c").0.send("tls", &ask("GET", "/x", &[])).unwrap();
+            assert!(matches!(reply.outcome, Outcome::Response { status: 200, .. }), "{:?}", reply.outcome);
+        });
+    }
+
+    #[test]
+    fn what_is_refused_reaches_neither_the_network_nor_history() {
+        with_app_dir("http-stands-refused", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            opened_stage(format!("http://127.0.0.1:{port}"));
+            let (stands, told) = stands("c");
+            assert!(matches!(stands.send("stage", &ask("POST", "/x", &[])), Err(HttpError::ReadOnly { .. })));
+            assert_eq!(stands.send("stage", &ask("GET", "https://evil.test/", &[])), Err(HttpError::AbsolutePath));
+            assert!(seen.recv_timeout(std::time::Duration::from_millis(100)).is_err());
+            assert_eq!(http_collections::history().unwrap(), []);
+            assert_eq!(told.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    /// The user opened an environment, not the page's globals.
+    #[test]
+    fn a_global_is_not_the_agents_to_name() {
+        with_app_dir("http-stands-globals", || {
+            opened_stage("http://127.0.0.1:1".into());
+            http_env_store::set_globals(vec![Variable { key: "shared".into(), value: "g".into(), secret: false, enabled: true }]).unwrap();
+            let told = stands("c").0.send("stage", &ask("GET", "/{{shared}}", &[])).unwrap_err();
+            assert_eq!(told, HttpError::UnknownIn { names: vec!["shared".into()], environment: "Stage".into(), known: "baseUrl, token".into() });
+        });
+    }
+
+    #[test]
+    fn access_taken_back_mid_turn_counts_from_the_next_call() {
+        with_app_dir("http-stands-closed", || {
+            opened_stage("http://127.0.0.1:1".into());
+            let (stands, _) = stands("c");
+            let open = http_env_store::get("stage").unwrap();
+            http_env_store::save_from_window(Environment { agent: AgentAccess::Off, ..open.for_window() }).unwrap();
+            assert_eq!(stands.send("stage", &ask("GET", "/x", &[])), Err(HttpError::NoneOpen));
         });
     }
 }
