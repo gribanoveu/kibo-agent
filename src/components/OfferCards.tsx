@@ -1,4 +1,4 @@
-import { CornerDownLeft, GitCommitHorizontal, GitFork, GitPullRequest, SearchCheck } from "lucide-react";
+import { CornerDownLeft, GitCommitHorizontal, GitFork, GitPullRequest, ListChecks, SearchCheck } from "lucide-react";
 import type { Offer, OfferKind } from "../lib/offer";
 import "./OfferCards.css";
 
@@ -7,10 +7,20 @@ const LOOK: Record<OfferKind, { label: string; icon: typeof SearchCheck }> = {
   commit: { label: "Commit", icon: GitCommitHorizontal },
   worktree: { label: "Move this chat to a worktree", icon: GitFork },
   pullRequest: { label: "Create a pull request", icon: GitPullRequest },
+  implement: { label: "Implement the plan", icon: ListChecks },
 };
 
 /** The next steps the agent offered, after its answer: each a button that sends it as the user's message. */
-export function OfferCards({ offers, onPick }: { offers: Offer[]; onPick: (kind: OfferKind) => void }) {
+export function OfferCards({
+  offers,
+  onPick,
+  onOpenPlan,
+}: {
+  offers: Offer[];
+  onPick: (kind: OfferKind) => void;
+  /** Opens the Plan tab: a plan is read before it is implemented. */
+  onOpenPlan?: () => void;
+}) {
   if (offers.length === 0) return null;
   return (
     <section className="offer-cards" aria-label="Suggested next steps">
@@ -32,6 +42,11 @@ export function OfferCards({ offers, onPick }: { offers: Offer[]; onPick: (kind:
           </button>
         );
       })}
+      {onOpenPlan && offers.some((offer) => offer.kind === "implement") && (
+        <button type="button" className="btn btn-ghost offer-cards-plan" onClick={onOpenPlan}>
+          Review the plan
+        </button>
+      )}
     </section>
   );
 }

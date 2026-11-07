@@ -43,6 +43,7 @@ export const SHORTCUTS = {
   send: { label: "Send the message", group: "Chat", combos: [{ code: "Enter" }, { code: "NumpadEnter" }] },
   newLine: { label: "New line in the message", group: "Chat", combos: [{ code: "Enter", shift: true }] },
   queue: { label: "Send the message after the current turn", group: "Chat", combos: [{ code: "Enter", alt: true }] },
+  dictate: { label: "Hold to dictate into the message box", group: "Chat", combos: [{ code: "AltRight", alt: true }] },
   commandNext: { label: "Next command in the / menu", group: "Chat", combos: [{ code: "ArrowDown" }] },
   commandPrev: { label: "Previous command in the / menu", group: "Chat", combos: [{ code: "ArrowUp" }] },
   commandComplete: { label: "Complete the command's name", group: "Chat", combos: [{ code: "Tab" }] },
@@ -101,6 +102,9 @@ export const matchesCombo = (e: KeyState, c: Combo, mac = IS_MAC) =>
 export const matches = (e: KeyState, id: ShortcutId, mac = IS_MAC) =>
   !(e.isComposing || e.nativeEvent?.isComposing) && SHORTCUTS[id].combos.some((c) => matchesCombo(e, c, mac));
 
+/** A key held and let go: its `keyup` no longer says the modifier it is. */
+export const released = (e: { code: string }, id: ShortcutId) => SHORTCUTS[id].combos.some((c) => c.code === e.code);
+
 const KEY_LABELS: Record<string, string> = {
   Backquote: "`",
   Comma: ",",
@@ -116,6 +120,7 @@ const KEY_LABELS: Record<string, string> = {
 
 /** The keys to draw, in the platform's order: ⌃⌥⇧⌘ on a Mac, Ctrl+Alt+Shift elsewhere. */
 export function comboKeys(c: Combo, mac = IS_MAC): string[] {
+  if (c.code === "AltRight") return [mac ? "Right ⌥" : "Right Alt"];
   const key = KEY_LABELS[c.code] ?? c.code.replace(/^(Key|Digit)/, "");
   const ctrl = c.ctrl || (!mac && c.mod);
   const mods = mac

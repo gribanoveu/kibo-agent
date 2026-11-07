@@ -10,6 +10,8 @@ use std::time::UNIX_EPOCH;
 
 use thiserror::Error;
 
+use crate::domain::features::Features;
+use crate::domain::tools::ToolName;
 use crate::domain::knowledge::{
     self, Base, Domain, DomainCount, Header, KnowledgeError, Listed, Overview, RepoSummary, Since, GENERAL_DOMAIN,
 };
@@ -62,6 +64,13 @@ pub fn overview(root: &Path) -> Result<Overview, KnowledgeStoreError> {
     let roots = HashMap::from([(repo.clone(), root.to_path_buf())]);
     let (documents, domains) = walk(&store, &roots, Some(&repo))?;
     Ok(Overview { repo, documents, domains })
+}
+
+/// The overview for the prompt's block, which names the base's tools: none
+/// while the model is not offered them, and none for a base that cannot be read
+/// — the tools say why when called.
+pub fn overview_offered(features: &Features, root: &Path) -> Option<Overview> {
+    features.offers(ToolName::KnowledgeSearch).then(|| overview(root).ok()).flatten()
 }
 
 /// Every document, domain and repository of the base, documents of a
@@ -233,6 +242,18 @@ mod tests {
 
     fn doc(title: &str, evidence: &str, commit: &str) -> String {
         format!("---\nid: x\nkind: api\ntitle: {title}\ncommit: {commit}\nevidence:\n  - {evidence}\nconfidence: confirmed\n---\n# {title}\n\nAbout {title}.\n")
+    }
+
+    #[test]
+    fn the_prompt_sees_the_base_only_while_the_model_is_offered_its_tools() {
+        use crate::domain::settings::OptOut;
+        with_app_dir("knowledge-offered", || {
+            let (root, _) = repository("knowledge-offered-repo");
+            assert!(overview_offered(&Features::all(), &root).is_some());
+            assert!(overview_offered(&Features::default(), &root).is_none(), "the feature off");
+            let kept = OptOut { disabled: vec!["knowledge".to_string()] };
+            assert!(overview_offered(&Features::all().without_tools_of(&kept), &root).is_none(), "its tools kept");
+        });
     }
 
     /// A repository with `src/Api.java` and `src/Job.java`, committed; the commit.

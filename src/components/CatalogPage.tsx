@@ -15,6 +15,7 @@ import {
   Sparkles,
   SquareKanban,
   SquareSlash,
+  Store,
   Webhook,
   X,
   type LucideIcon,
@@ -22,9 +23,10 @@ import {
 import { Markdown } from "./Markdown";
 import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
+import { Switch } from "./Switch";
 import type { FeatureView } from "../lib/features";
 import type { CatalogEntry, CatalogKind, CatalogSource } from "../lib/catalog";
 import "./CatalogPage.css";
@@ -350,12 +352,14 @@ function FeatureDetails({
   feature,
   error,
   onSet,
+  onSetTools,
   onDeleteData,
   onClose,
 }: {
   feature: FeatureView;
   error: string | null;
   onSet: (on: boolean) => void;
+  onSetTools: (on: boolean) => void;
   onDeleteData: () => void;
   onClose: () => void;
 }) {
@@ -383,6 +387,12 @@ function FeatureDetails({
             ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
             : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
         </p>
+      )}
+      {feature.tools.length > 0 && (
+        <label className="catalog-detail-switch">
+          <span>Tools for the model</span>
+          <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
+        </label>
       )}
 
       <dl className="catalog-detail-facts">
@@ -597,44 +607,48 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
         )
       }
     >
-      {askSecrets && (
-        <div className="catalog-install-steps">
-          <Steps steps={INSTALL_STEPS} current={step} onGo={setStep} />
-        </div>
-      )}
-      {step === "secrets" ? (
-        <SecretFields names={read?.secrets ?? []} values={secrets} onChange={setSecrets} target={item.target} />
-      ) : (
-        <>
-          {item.kind === "hooks" ? (
-            <p className="catalog-detail-confirm">
-              Adds these hooks to {item.target}. From the next Agent turn each command runs on every tool call its <b>matcher</b> names, with no card to approve it:
-            </p>
-          ) : (
-            <p className="catalog-detail-confirm">
-              Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent turn, as this entry says — the command it runs or the address it
-              sends to:
-            </p>
-          )}
-          {preview?.error ? (
-            <div className="catalog-detail-error">{preview.error}</div>
-          ) : !read ? (
-            <div className="catalog-detail-note">Reading…</div>
-          ) : hooks ? (
-            hooks.map(({ event, matcher, command }, i) => (
-              <div key={i} className="catalog-hook">
-                <div className="catalog-hook-when">
-                  {event} · {matcher}
+      {/* `text-scale`: the dialog reads at the user's text size, as a page's
+          sheet does — what it asks to read and confirm is content, not a label. */}
+      <div className="text-scale">
+        {askSecrets && (
+          <div className="catalog-install-steps">
+            <Steps steps={INSTALL_STEPS} current={step} onGo={setStep} />
+          </div>
+        )}
+        {step === "secrets" ? (
+          <SecretFields names={read?.secrets ?? []} values={secrets} onChange={setSecrets} target={item.target} />
+        ) : (
+          <>
+            {item.kind === "hooks" ? (
+              <p className="catalog-detail-confirm">
+                Adds these hooks to {item.target}. From the next Agent turn each command runs on every tool call its <b>matcher</b> names, with no card to approve it:
+              </p>
+            ) : (
+              <p className="catalog-detail-confirm">
+                Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent or Analyst turn, as this entry says — the command it runs or the address it
+                sends to:
+              </p>
+            )}
+            {preview?.error ? (
+              <div className="catalog-detail-error">{preview.error}</div>
+            ) : !read ? (
+              <div className="catalog-detail-note">Reading…</div>
+            ) : hooks ? (
+              hooks.map(({ event, matcher, command }, i) => (
+                <div key={i} className="catalog-hook">
+                  <div className="catalog-hook-when">
+                    {event} · {matcher}
+                  </div>
+                  <pre className="catalog-detail-text catalog-server-entry">{command}</pre>
                 </div>
-                <pre className="catalog-detail-text catalog-server-entry">{command}</pre>
-              </div>
-            ))
-          ) : (
-            <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
-          )}
-        </>
-      )}
-      <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>
+              ))
+            ) : (
+              <pre className="catalog-detail-text catalog-server-entry">{read.text}</pre>
+            )}
+          </>
+        )}
+        <p className="modal-note">The app writes {item.target} in its own layout: spacing and key order typed there by hand are not kept.</p>
+      </div>
     </Modal>
   );
 }
@@ -736,6 +750,7 @@ export function CatalogPage() {
             feature={shownFeature}
             error={features.error}
             onSet={(on) => void features.set(shownFeature.id, on)}
+            onSetTools={(on) => void features.setTools(shownFeature.id, on)}
             onDeleteData={() => void features.deleteData(shownFeature.id)}
             onClose={() => setOpenFeature(null)}
           />
@@ -831,7 +846,7 @@ export function CatalogPage() {
         />
       )}
       {sources !== null && entries.length > 0 && sections.length === 0 && featuresFound.length === 0 && (
-        <div className="catalog-empty">{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</div>
+        <PageEmpty icon={Store}>{query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing of this kind yet."}</PageEmpty>
       )}
     </Page>
   );

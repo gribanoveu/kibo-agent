@@ -5,7 +5,7 @@
   gap: 2px;
 }
 .catalog-tabs button {
-  height: 30px;
+  height: var(--control);
   padding: 0 12px;
   border: none;
   border-radius: var(--radius-md);
@@ -19,23 +19,26 @@
   color: var(--text);
 }
 .catalog-tabs button.active {
-  background: var(--bg-hover);
+  background: var(--bg-active);
   color: var(--text);
 }
 .catalog-search {
-  flex: 1;
+  flex: 0 1 260px;
   min-width: 160px;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 32px;
+  height: var(--control);
   padding: 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-md);
-  color: var(--text-faint);
+  color: var(--text-box-hint);
+  background: var(--bg-field);
 }
 .catalog-search:focus-within {
-  border-color: var(--accent);
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
 }
 .catalog-search input {
   flex: 1;
@@ -50,8 +53,8 @@
 .catalog-refresh {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control);
+  height: var(--control);
   border: none;
   border-radius: var(--radius-md);
   background: none;
@@ -101,19 +104,21 @@
 }
 
 .catalog-section {
-  margin-top: 32px;
+  margin-top: 24px;
 }
 .catalog-section-head {
   display: flex;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .catalog-section-head h2 {
   flex: 1;
   margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  color: var(--text);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-box-hint);
 }
 .catalog-more {
   display: flex;
@@ -141,12 +146,13 @@
   align-items: flex-start;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius);
+  background: var(--bg-panel-soft);
   cursor: pointer;
 }
 .catalog-card:hover {
-  background: var(--bg-panel-soft);
+  background: var(--bg-hover);
 }
 .catalog-card:focus-visible {
   outline: 2px solid var(--accent);
@@ -159,26 +165,9 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel-soft);
-}
-.catalog-card-ico.skill {
-  color: var(--purple);
-}
-.catalog-card-ico.command {
-  color: var(--text-dim);
-}
-.catalog-card-ico.runbook {
-  color: var(--red);
-}
-.catalog-card-ico.mcp {
-  color: var(--accent);
-}
-.catalog-card-ico.hooks {
-  color: var(--green);
+  width: 20px;
+  height: 20px;
+  color: var(--text-faint);
 }
 .catalog-card-body {
   flex: 1;
@@ -214,16 +203,17 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-soft);
+  width: var(--control-sm);
+  height: var(--control-sm);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-panel-soft);
-  color: var(--text);
+  background: none;
+  color: var(--text-faint);
   cursor: pointer;
 }
 .catalog-card-add:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-active);
+  color: var(--text);
 }
 .catalog-card-add:disabled {
   cursor: default;
@@ -235,8 +225,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   color: var(--green);
 }
 .catalog-card-state.taken {
@@ -250,7 +240,7 @@
 .catalog-detail-name {
   margin: 0 0 6px;
   font-size: var(--fs-lg);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
 }
 .catalog-detail-desc {
@@ -308,6 +298,15 @@
 .catalog-detail-facts .mono {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+}
+.catalog-detail-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: var(--fs-sm);
+  color: var(--text);
 }
 .catalog-detail-file {
   margin: 0 0 8px;
@@ -378,7 +377,4 @@ pre.catalog-server-entry {
 .catalog-update-count {
   margin-left: 6px;
   color: var(--text-faint);
-}
-.catalog-card-ico.feature {
-  color: var(--amber);
 }

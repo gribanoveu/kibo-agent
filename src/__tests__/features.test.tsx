@@ -18,6 +18,10 @@ mock.module("@tauri-apps/api/core", () => ({
       board = { ...board, on: args!.on as boolean };
       return Promise.resolve([structuredClone(board)]);
     }
+    if (command === "features_set_tools") {
+      board = { ...board, toolsOn: args!.on as boolean };
+      return Promise.resolve([structuredClone(board)]);
+    }
     if (command === "features_delete_data") {
       board = { ...board, hasData: false };
       return Promise.resolve([structuredClone(board)]);
@@ -53,7 +57,8 @@ beforeEach(() => {
     description: "Cards for later",
     on: false,
     tools: [{ name: "board", description: "When the user asks you to remind them…" }],
-    places: ["Assistant chat", "Agent", "Plan", "Ask"],
+    toolsOn: true,
+    places: ["Assistant chat", "Agent", "Analyst"],
     data: "~/.kibo/board.json",
     hasData: true,
   };
@@ -68,7 +73,7 @@ describe("features on the catalog page", () => {
 
     fireEvent.click(section.getByRole("button", { name: "Board" }));
     const panel = within(screen.getByRole("complementary", { name: "Board details" }));
-    expect(panel.getByText("Assistant chat, Agent, Plan, Ask")).toBeTruthy();
+    expect(panel.getByText("Assistant chat, Agent, Analyst")).toBeTruthy();
     expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
     expect(panel.getByText("~/.kibo/board.json")).toBeTruthy();
   });
@@ -85,6 +90,20 @@ describe("features on the catalog page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
     await settle();
     expect(calls.at(-1)).toEqual({ command: "features_set", args: { id: "board", on: false } });
+  });
+
+  test("the panel's switch keeps the tools from the model and leaves the feature on", async () => {
+    board = { ...board, on: true };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    const tools = () => screen.getByRole("switch", { name: "Tools for the model" });
+    expect(tools().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(tools());
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "features_set_tools", args: { id: "board", on: false } });
+    expect(tools().getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
   });
 
   test("its data is deleted only while it is off, and only after asking", async () => {

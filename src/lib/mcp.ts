@@ -126,7 +126,7 @@ export async function saveMcpConfig(text: string): Promise<McpView> {
   return invoke<McpView>("mcp_config_save", { text });
 }
 
-/** Starts the server if it is not running, so the tab can show its tools without an Agent turn. */
+/** Starts the server if it is not running, so the tab can show its tools without a turn. */
 export async function connectMcpServer(name: string): Promise<McpView> {
   requireBackend();
   return invoke<McpView>("mcp_server_connect", { name });

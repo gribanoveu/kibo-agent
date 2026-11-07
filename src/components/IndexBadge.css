@@ -1,29 +1,11 @@
 .index-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: var(--fs-xs);
   color: var(--text-faint);
   white-space: nowrap;
 }
-.index-badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-.index-badge--busy .index-badge-dot {
-  background: var(--accent);
-}
-.index-badge--ok .index-badge-dot {
-  background: var(--green);
-}
-.index-badge--warn .index-badge-dot {
-  background: var(--amber);
+.index-badge--warn {
+  color: var(--amber);
 }
 .index-badge--error {
   color: var(--red);
-}
-.index-badge--error .index-badge-dot {
-  background: var(--red);
 }

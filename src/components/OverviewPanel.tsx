@@ -49,7 +49,7 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
 
 /** The open session at a glance: how full the model's window is, which MCP
     servers are on, what runs in the background, and what the folder holds
-    against its last commit. The folder and branch are over the message box.
+    against its last commit. The folder and branch are under the message box.
     Each section leads to the pane that does something about it. */
 export function OverviewPanel({
   branch,
@@ -73,7 +73,7 @@ export function OverviewPanel({
     <div className="overview">
       {context && (
         <section className="overview-card overview-ctx">
-          <ContextDetails context={context} cache={usage} spent={spent} />
+          <ContextDetails context={context} cache={usage} spent={spent} onOpenPane={onOpenPanel} />
         </section>
       )}
 

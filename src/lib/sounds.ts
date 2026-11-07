@@ -32,6 +32,30 @@ export function preloadSounds() {
   for (const sound of Object.keys(URIS) as Sound[]) buffer(sound).catch(() => buffers.delete(sound));
 }
 
+/** Dictation's answer to a press: up for "speak", down for "heard". */
+export type Tone = "listening" | "stopped";
+
+const TONE_SECONDS = 0.1;
+
+/** Made here, not a file: two short sweeps are not worth two more mp3s in the bundle. */
+export async function playTone(tone: Tone) {
+  context ??= new AudioContext();
+  const ctx = context;
+  if (ctx.state === "suspended") await ctx.resume();
+  const [from, to] = tone === "listening" ? [660, 990] : [990, 660];
+  const now = ctx.currentTime;
+  const oscillator = ctx.createOscillator();
+  oscillator.frequency.setValueAtTime(from, now);
+  oscillator.frequency.exponentialRampToValueAtTime(to, now + TONE_SECONDS);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.15, now + 0.01);
+  gain.gain.linearRampToValueAtTime(0, now + TONE_SECONDS);
+  oscillator.connect(gain).connect(ctx.destination);
+  oscillator.start(now);
+  oscillator.stop(now + TONE_SECONDS);
+}
+
 export async function playSound(sound: Sound) {
   const decoded = await buffer(sound);
   const ctx = context;

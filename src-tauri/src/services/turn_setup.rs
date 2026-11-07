@@ -17,7 +17,7 @@ use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
 use crate::domain::mongo::MongoServers;
 use crate::domain::chat_role::ChatRole;
-use crate::domain::conversation_mode::ConversationMode;
+use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::embeddings::EmbeddingProvider;
 use crate::domain::features::Feature;
 use crate::domain::hooks::{Hooks, HooksConfigError};
@@ -139,11 +139,7 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
-    // A base that cannot be read costs the prompt its block; the tools say why when called.
-    let knowledge_overview = match features.is_on(Feature::Knowledge) {
-        true => crate::services::knowledge::overview(workspace).ok(),
-        false => None,
-    };
+    let knowledge_overview = crate::services::knowledge::overview_offered(&features, workspace);
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
     let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone(), parallel });
@@ -283,8 +279,14 @@ pub fn run_in_chat(
     Ok(run(&turn)?)
 }
 
-/// Only an Agent turn starts servers: the others cannot offer their tools,
-/// and a server's start is already something done on the user's machine.
+/// The servers `mode` has any business with: their tools are its to offer. A
+/// turn starts them, the context meter counts them, and neither in another mode.
+pub(crate) fn servers_for<'a>(servers: Option<&'a McpServers>, mode: ConversationMode) -> Option<&'a McpServers> {
+    servers.filter(|_| conversation_mode::offers(mode, crate::domain::tools::ToolName::Mcp))
+}
+
+/// Only a turn whose mode offers their tools starts servers: a server's start
+/// is already something done on the user's machine.
 /// A configuration that does not parse costs the turn its servers, not the
 /// turn — the tab says what is wrong with the file.
 fn mcp_for_turn(
@@ -293,11 +295,9 @@ fn mcp_for_turn(
     workspace: &Path,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> McpTools {
-    match servers {
-        Some(servers) if mode == ConversationMode::Agent => {
-            servers.for_turn(&crate::infra::mcp_config::load().unwrap_or_default(), workspace, cancelled)
-        }
-        _ => McpTools::default(),
+    match servers_for(servers, mode) {
+        Some(servers) => servers.for_turn(&crate::infra::mcp_config::load().unwrap_or_default(), workspace, cancelled),
+        None => McpTools::default(),
     }
 }
 
@@ -472,7 +472,7 @@ mod tests {
             let folder = FolderTurn {
                 chat_id: "folder-chat",
                 workspace: &dir,
-                mode: ConversationMode::Plan,
+                mode: ConversationMode::Analyst,
                 approval: ApprovalPolicy::default(),
                 plan: None,
                 events: &events,
@@ -551,7 +551,7 @@ mod tests {
                 let folder = FolderTurn {
                     chat_id: "c1",
                     workspace: &dir,
-                    mode: ConversationMode::Plan,
+                    mode: ConversationMode::Analyst,
                     approval: ApprovalPolicy::default(),
                     plan: Some("the plan"),
                     events: &events,
@@ -568,7 +568,7 @@ mod tests {
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
                     assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules && f.knowledge.as_ref() == turn.knowledge_overview), "the folder's turn is frozen");
-                    assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Plan, web: None, .. }));
+                    assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Analyst, web: None, .. }));
                     seen = Some((turn.board.is_some(), turn.mongo.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
@@ -589,22 +589,26 @@ mod tests {
     }
 
     #[test]
-    fn only_an_agent_turn_starts_mcp_servers() {
+    fn only_a_mode_with_their_tools_starts_mcp_servers() {
         crate::testing::with_app_dir("cmd-mcp-mode", || {
             crate::infra::mcp_config::save_text(r#"{"mcpServers":{"a":{"command":"x"}}}"#).unwrap();
-            let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let counted = Arc::clone(&starts);
-            let servers = McpServers::new(Arc::new(move |_, _, _| {
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Err(crate::domain::mcp::McpError::NotStarted("test".into()))
-            }), Arc::new(|_| {}));
             let root = temp_dir("cmd-mcp-mode-root");
-            for mode in [ConversationMode::Plan, ConversationMode::Ask] {
+            let starts = |mode| {
+                let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let counted = Arc::clone(&starts);
+                let servers = McpServers::new(Arc::new(move |_, _, _| {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(crate::domain::mcp::McpError::NotStarted("test".into()))
+                }), Arc::new(|_| {}));
                 mcp_for_turn(Some(&servers), mode, &root, &|| false);
+                starts.load(std::sync::atomic::Ordering::SeqCst)
+            };
+            for mode in [ConversationMode::Review, ConversationMode::Explore] {
+                assert_eq!(starts(mode), 0, "{mode:?}");
             }
-            assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 0);
-            mcp_for_turn(Some(&servers), ConversationMode::Agent, &root, &|| false);
-            assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+            for mode in [ConversationMode::Agent, ConversationMode::Analyst] {
+                assert_eq!(starts(mode), 1, "{mode:?}");
+            }
         });
     }
 

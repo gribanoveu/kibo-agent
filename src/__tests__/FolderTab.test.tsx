@@ -2,16 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FolderTab, folderOptions } from "../components/FolderTab";
 import type { RecentFolder } from "../lib/chat";
-import { fromSnapshot, type IndexState } from "../lib/indexStatus";
 
-// The strip on the composer's top edge: which folder the next message is
-// worked on, and what that folder is like — its branch and index.
+// Under the composer: which folder the next message is worked on, and its branch.
 
 type Over = {
   path?: string | null;
   recent?: string[];
   branch?: string | null;
-  index?: IndexState | null;
   onOpenFolder?: (path: string) => void;
   onPickFolder?: () => void;
 };
@@ -22,7 +19,6 @@ const tab = (over: Over = {}) =>
       path={over.path === undefined ? "/work/kibo" : over.path}
       recent={(over.recent ?? []).map((path) => ({ path, worktreeOf: null }))}
       branch={over.branch}
-      index={over.index}
       onOpenFolder={over.onOpenFolder ?? (() => {})}
       onPickFolder={over.onPickFolder ?? (() => {})}
     />,
@@ -72,20 +68,6 @@ describe("the branch", () => {
   test("outside a repository there is none", () => {
     tab({ branch: null });
     expect(screen.queryByTitle("Checked-out branch")).toBeNull();
-  });
-});
-
-describe("the index", () => {
-  test("its state is shown, with the detail on hover", () => {
-    tab({ index: fromSnapshot({ root: "/work/kibo", syncing: false, embedded: 3, skipped: 2, embeddingError: null }) });
-    const badge = screen.getByRole("status");
-    expect(badge.textContent).toBe("Indexed");
-    expect(badge.getAttribute("title")).toContain("2 files not indexed");
-  });
-
-  test("nothing is shown before anything is known", () => {
-    tab();
-    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 

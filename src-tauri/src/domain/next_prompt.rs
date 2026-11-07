@@ -242,10 +242,10 @@ impl FinishedTurn {
     pub fn model_input(&self, user: &str, home: &str) -> String {
         let mode = match self.mode {
             ConversationMode::Agent => "agent",
-            ConversationMode::Plan => "plan",
-            // A helper's turn is never one the user finishes; if one got here,
-            // reading-only is what it was.
-            ConversationMode::Ask | ConversationMode::Explore => "ask",
+            // `ask` is the word the model was trained on for a turn that only
+            // reads. A helper's turn is never one the user finishes; if one
+            // got here, reading-only is what it was.
+            ConversationMode::Analyst | ConversationMode::Explore => "ask",
             ConversationMode::Review => "review",
         };
         let outcome = if self.cancelled { "cancelled" } else { "done" };
@@ -432,7 +432,7 @@ mod tests {
     /// counted after the resume, and the pause itself is not an end.
     #[test]
     fn a_turn_with_a_pause_adds_up_across_it() {
-        let mut turn = TurnFeatures::new(ConversationMode::Plan);
+        let mut turn = TurnFeatures::new(ConversationMode::Agent);
         turn.observe(&call("a", "git commit -m x"));
         turn.observe(&ran("a", Some(0), ""));
         turn.observe(&said("Сначала закоммитил."));
@@ -458,7 +458,7 @@ mod tests {
         });
         assert_eq!(
             turn.finish(&ended).expect("ended").model_input("сделай в /home/me/x", "/home/me"),
-            "<mode>plan<outcome>cancelled<commit>1<tests>pass<todo>1/2<offer>Дальше?\n\
+            "<mode>agent<outcome>cancelled<commit>1<tests>pass<todo>1/2<offer>Дальше?\n\
              <user>сделай в ~/x\n\
              <agent>Сначала закоммитил.\nТесты прошли. Дальше?"
         );
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn a_turn_that_said_nothing_is_not_an_input() {
-        let mut turn = TurnFeatures::new(ConversationMode::Ask);
+        let mut turn = TurnFeatures::new(ConversationMode::Analyst);
         turn.observe(&said(""));
         assert!(turn.finish(&done(Vec::new())).is_none());
         turn.observe(&said("Ответ."));

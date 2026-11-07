@@ -93,6 +93,7 @@ mod tests {
             skill_sources: crate::domain::settings::OptOut { disabled: vec!["agents".to_string()] },
             rules: crate::domain::settings::OptOut { disabled: vec!["/repo/AGENTS.md".to_string()] },
             features: [("board".to_string(), true)].into(),
+            feature_tools: crate::domain::settings::OptOut { disabled: vec!["mongodb".to_string()] },
             meeting_auto_process: true,
             meeting_denoise: Some(false),
             meeting_microphone: Some("coreaudio:BuiltInMicrophoneDevice".to_string()),
@@ -108,6 +109,7 @@ mod tests {
                 auto_chats: vec!["c1".to_string()],
                 auto_folders: vec!["/repo".to_string()],
             },
+            conversation_mode: crate::domain::conversation_mode::PickedMode::Analyst,
             kube: crate::domain::settings::KubeSettings {
                 configs: vec![crate::domain::settings::Kubeconfig {
                     name: "prod".to_string(),

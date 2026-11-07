@@ -1,6 +1,6 @@
 .diff-view {
   margin: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-bubble);
   border: 1px solid var(--border-soft);
   font-family: var(--font-mono);
@@ -56,7 +56,7 @@
   display: block;
   padding: 4px 9px;
   color: var(--text);
-  font-weight: 600;
+  font-weight: 500;
   background: var(--bg-panel-soft);
   border-top: 1px solid var(--border-soft);
 }
@@ -80,7 +80,7 @@
 /* The words that changed within an edited line. */
 .diff-view mark {
   color: inherit;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 .diff-add mark {
   background: color-mix(in srgb, var(--green) 28%, transparent);

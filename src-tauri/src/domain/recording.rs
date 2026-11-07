@@ -1,7 +1,7 @@
 //! Recording a call (`docs/36-meeting-notes-research.md`, "Запись созвона"):
 //! the microphone and the call's sound side by side in one stereo WAV — L the
 //! microphone, R the call — at the rate the models read. The rules of the file
-//! live here; the devices and the disk are `infra::meeting_recorder`.
+//! live here; the devices are `infra::microphone`, the disk `infra::meeting_recorder`.
 
 use serde::Serialize;
 

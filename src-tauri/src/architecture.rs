@@ -70,7 +70,7 @@ const RULES: &[Rule] = &[
 /// `Result<…, String>` outside `commands/`: errors as data are `thiserror`
 /// enums, flattened to a string only at the IPC boundary. Only goes down —
 /// when it does, lower it here (#7).
-const STRING_ERRORS: usize = 79;
+const STRING_ERRORS: usize = 78;
 
 /// The lines of `path` that are code: no comments, no `#[cfg(test)]` items.
 ///
@@ -202,7 +202,7 @@ fn commands() -> Vec<Command> {
 const SLOW: &[&str] = &[
     "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
     "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",
-    "meeting_store::", "rename_speaker", "meeting_notes::", "artifacts::", "free_space", "mongo::", "http_client::", "http_collections::", "http_env_store::",
+    "meeting_store::", "rename_speaker", "meeting_notes::", "artifacts::", "free_space", "mongo::", "http_client::", "http_collections::", "http_env_store::", "microphone::",
 ];
 
 /// Sync commands that reach one of [`SLOW`] today. Only shrinks.
@@ -346,4 +346,14 @@ fn the_version_in_the_window_is_the_one_the_build_sends() {
         env!("CARGO_PKG_VERSION"),
         "src-tauri/tauri.conf.json and src-tauri/Cargo.toml are bumped together"
     );
+}
+
+/// The mode picked is read back on both sides, and neither line is under a test
+/// of its own: `App` is not rendered in tests, and the builder runs only in the app.
+#[test]
+fn the_mode_picked_comes_back_when_the_app_starts() {
+    let lib_rs = fs::read_to_string(crate_dir().join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("AgentState::restored()"), "the backend starts without the mode picked last");
+    let app = fs::read_to_string(crate_dir().join("../src/App.tsx")).unwrap();
+    assert!(app.contains("getConversationMode)"), "the window does not ask which mode turns run in");
 }

@@ -21,7 +21,7 @@ pub async fn catalog_list() -> Result<Vec<SourceView>, String> {
 
 /// Installs an entry from `source`'s kept index — the one the page shows; a
 /// server with its `${NAME}`s filled from `secrets`. Its files come over the
-/// network, so off the IPC loop. A server added starts with the next Agent turn.
+/// network, so off the IPC loop. A server added starts with the next Agent or Analyst turn.
 #[tauri::command]
 pub async fn catalog_install(source: String, kind: ItemKind, id: String, secrets: BTreeMap<String, String>) -> Result<(), String> {
     blocking(move || catalog::install(&source, kind, &id, &secrets)).await
@@ -47,7 +47,7 @@ pub async fn catalog_update_preview(source: String, kind: ItemKind, id: String) 
 
 /// Writes the catalog's new version over what `source` installed; a server
 /// keeps its secrets unless `secrets` gives them again. A server changed
-/// stops, to start again as it now is with the next Agent turn.
+/// stops, to start again as it now is with the next Agent or Analyst turn.
 #[tauri::command]
 pub async fn catalog_update(
     source: String,

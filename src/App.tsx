@@ -20,7 +20,7 @@ import { pagesShown, type PageId } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, SquarePen } from "lucide-react";
 import { Titlebar } from "./components/Titlebar";
 import { shortcutText } from "./lib/shortcuts";
 import { useAgentTurn } from "./hooks/useAgentTurn";
@@ -59,7 +59,7 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { type ConversationMode, previewCalls, setConversationMode } from "./lib/chat";
+import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
@@ -198,7 +198,7 @@ export default function App() {
   // What the agent may do this turn, and whether anyone is asked before it
   // does it. Two chips, two questions — and both are enforced on the backend,
   // so these hold only what the chips read back.
-  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode);
+  const conversation = useBackendSetting(setConversationMode, "agent" as ConversationMode, getConversationMode);
   const toast = useToast();
   const workspace = useWorkspace();
   const index = useIndexStatus(workspace.path);
@@ -277,7 +277,7 @@ export default function App() {
     chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
-  // Servers start with an Agent turn and may stop during one.
+  // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
@@ -397,7 +397,6 @@ export default function App() {
       started: agent.turn.blocks.length > 0,
       folder: !!workspace.path,
       agentMode: conversation.value === "agent",
-      askMode: conversation.value === "ask",
       knowledge: features.isOn("knowledge"),
     },
     {
@@ -491,6 +490,8 @@ export default function App() {
     if (kind === "review") return agent.review(true);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
+    // Not `send`: that would drop the checklist the plan came with.
+    if (kind === "implement") return implement();
     const id = agent.chatId;
     if (!id) return;
     try {
@@ -604,7 +605,9 @@ export default function App() {
       plan: agent.plan,
       checklist: agent.checklist,
       onEdit: agent.editPlan,
-      onImplement: conversation.value === "plan" ? implement : undefined,
+      // Not while a turn waits on a card either: the message would queue, and
+      // a queued one drops the checklist.
+      onImplement: turnBusy ? undefined : implement,
       locked: agent.turn.status === "running",
     },
   };
@@ -640,7 +643,6 @@ export default function App() {
             onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
-            onImplement={conversation.value === "plan" ? implement : undefined}
             onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
             onOpenProcess={openProcess}
@@ -654,6 +656,8 @@ export default function App() {
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
             onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
+            steered={agent.steered}
+            onWithdraw={agent.withdraw}
           />
           <Composer
             tab={
@@ -666,15 +670,12 @@ export default function App() {
                 onForgetFolder={(path) => void workspace.forget(path)}
                 branch={branch}
                 worktreeOf={worktreeOf}
-                index={index}
-                end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  onWorktree: unstarted ? branchPicker.setWorktree : undefined,
                   locked: anyTurnBusy
                     ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
                     : undefined,
@@ -683,14 +684,25 @@ export default function App() {
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
               />
             }
+            end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
+            index={workspace.path ? index : null}
+            worktree={
+              unstarted && workspace.path && branch
+                ? {
+                    on: branchPicker.worktree,
+                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
+                    onChange: branchPicker.setWorktree,
+                  }
+                : undefined
+            }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
             queued={agent.queued}
             onUnqueue={agent.unqueue}
-            steered={agent.steered}
-            onWithdraw={agent.withdraw}
             focus={composerFocus}
+            // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
+            dictate={features.isOn("voice-input") && !onPage}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
@@ -732,6 +744,7 @@ export default function App() {
       ) : (
         <PlainChat
           chat={plain}
+          dictate={features.isOn("voice-input") && !onPage}
           focus={composerFocus}
           models={llm.models}
           imagesEnabled={imagesEnabled}
@@ -838,20 +851,26 @@ export default function App() {
         leading={
           // The IDE layout has no sidebar to show.
           !ide && (
-            <button
-              className="iconbtn"
-              type="button"
-              title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
-              aria-pressed={!rail}
-              onClick={toggleSidebar}
-            >
-              <PanelLeft size={15} />
-            </button>
+            <>
+              <button
+                className="iconbtn"
+                type="button"
+                title={`${rail ? "Show the sidebar" : "Hide the sidebar"} (${shortcutText("sidebar")})`}
+                aria-pressed={!rail}
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={15} />
+              </button>
+              <button className="iconbtn" type="button" title={`New chat (${shortcutText("newChat")})`} aria-label="New chat" onClick={newChat}>
+                <SquarePen size={15} />
+              </button>
+            </>
           )
         }
       >
-        {/* The open chat's name, where the chat is on screen; the IDE layout's header names it already. */}
-        {(!ide && !onPage && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
+        {/* The open page's name, or the open chat's where the chat is on screen; the IDE layout's header names it already. */}
+        {onPage?.label ||
+          (!ide && (agentMode ? chatName(history.chats, agent.chatId, agent.turn) : chatName(plain.chats, plain.chatId, plain.turn))) ||
           "Kibo Agent"}
       </Titlebar>
 
@@ -872,7 +891,6 @@ export default function App() {
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
-          onNewChat={newChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }

@@ -230,7 +230,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
 
   return (
     <form
-      className="mcp-install"
+      className="mcp-install text-scale"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
@@ -430,7 +430,7 @@ export function McpInstall({ name, text, path, error, onSave, onClose, onEditJso
           {finalEntry !== undefined && <pre className="mcp-install-entry">{JSON.stringify(finalEntry, null, 2)}</pre>}
           <p className="modal-note">
             The app writes {path || "the file"} in its own layout: spacing and key order typed there by hand are not
-            kept. It starts with the next Agent turn.
+            kept. It starts with the next Agent or Analyst turn.
           </p>
         </>
       )}

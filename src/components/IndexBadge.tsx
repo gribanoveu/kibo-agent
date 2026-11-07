@@ -6,8 +6,7 @@ export function IndexBadge({ state }: { state: IndexState }) {
   const { label, detail, tone } = describeIndex(state);
   return (
     <span className={`index-badge index-badge--${tone}`} title={detail} role="status">
-      <span className="index-badge-dot" aria-hidden="true" />
-      <span className="index-badge-label">{label}</span>
+      {label}
     </span>
   );
 }

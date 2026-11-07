@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { matches } from "../lib/shortcuts";
 import { windowsFrame } from "../lib/window";
 import { AudioLines, Calendar, Volume2, Check, ChevronLeft, ChevronRight, Clock, Copy, FileAudio, FilePlus, FileText, HardDrive, Hourglass, LoaderCircle, MessageSquareText, Mic, MicOff, Pause, Play, Plus, RefreshCw, Settings2, Sparkles, Square, Trash2, Users, X } from "lucide-react";
-import { Page, PageSheet } from "./Page";
+import { Page, PageEmpty, PageSheet } from "./Page";
 import { Markdown } from "./Markdown";
 import { ErrorNote } from "./ErrorNote";
 import { Modal } from "./Modal";
@@ -26,6 +26,9 @@ import {
   type Meeting,
   type MeetingDocument,
   type MeetingInfo,
+  DEFAULT_MIC,
+  micLabel,
+  micOptions,
   type Microphone,
   type Recording,
   type RecordingAccess,
@@ -262,9 +265,6 @@ function AccessNote({ source, denied, onAllow }: { source: Source; denied: boole
   );
 }
 
-/** The menu's value for the system's default microphone: no id is empty. */
-const DEFAULT_MIC = "";
-
 /** The recording's settings, set once and left: behind a gear beside Record, not on the page. */
 function RecordingOptions({
   autoProcess,
@@ -327,13 +327,7 @@ function RecordingOptions({
               heading="Record from"
               value={microphone ?? DEFAULT_MIC}
               onPick={(id) => onMicrophone(id === DEFAULT_MIC ? null : id)}
-              options={[
-                { value: DEFAULT_MIC, label: "System default" },
-                ...(microphones ?? []).map((m) => ({ value: m.id, label: m.name })),
-                ...(microphone !== null && !microphones?.some((m) => m.id === microphone)
-                  ? [{ value: microphone, label: micLabel(microphone, microphones) }]
-                  : []),
-              ]}
+              options={micOptions(microphone, microphones)}
             />
           </div>
           <label className="meetings-auto" title="A recording is made into a meeting as soon as you press Stop">
@@ -348,13 +342,6 @@ function RecordingOptions({
       )}
     </div>
   );
-}
-
-/** The trigger's words for the microphone chosen; one not plugged in now says so, once the list is read. */
-function micLabel(microphone: string | null, microphones: Microphone[] | null): string {
-  if (microphone === null) return "System default microphone";
-  if (microphones === null) return "Chosen microphone";
-  return microphones.find((m) => m.id === microphone)?.name ?? "Chosen microphone, not plugged in";
 }
 
 /** What a recording not yet transcribed is called in the list. */
@@ -550,9 +537,9 @@ function MeetingList({
   const busy = job !== null;
   if (list.length === 0 && recordings.length === 0) {
     return (
-      <p className="meetings-empty">
+      <PageEmpty icon={AudioLines}>
         No meetings yet. Record a call, or import its recording — sound or video — and its notes are written here: what was decided, who does what.
-      </p>
+      </PageEmpty>
     );
   }
   // Both newest first, merged: a day's rows are together.
@@ -774,7 +761,7 @@ function MeetingView({
           </>
         }
       >
-        <div className="meeting-notes">
+        <div className="meeting-notes text-scale">
           {notes ? (
             <Markdown text={notes} streaming={writing} />
           ) : (
@@ -809,7 +796,7 @@ function MeetingView({
 
       <MeetingCard title="Transcript" icon={<MessageSquareText size={14} className="meeting-card-icon" />}>
         <Speakers meeting={meeting} onRename={onRename} />
-        <div className="meeting-transcript">
+        <div className="meeting-transcript text-scale">
           {turns(meeting).map((turn, i, all) => {
             // The turn the player is in, once it has started.
             const now = player.time > 0 && player.time >= turn.start && player.time < (all[i + 1]?.start ?? Infinity);
@@ -885,7 +872,7 @@ function DocumentCard({
         </>
       }
     >
-      <div className="meeting-notes">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
+      <div className="meeting-notes text-scale">{text ? <Markdown text={text} streaming={writing} /> : <p className="meetings-empty">Writing…</p>}</div>
     </MeetingCard>
   );
 }
@@ -1051,7 +1038,7 @@ function VoicesPanel({ changed, onClose }: { changed: unknown; onClose: () => vo
           </>
         }
       >
-        <p className="meetings-confirm">Every sample of it goes. The name stays where you gave it, as text.</p>
+        <p className="meetings-confirm text-scale">Every sample of it goes. The name stays where you gave it, as text.</p>
       </Modal>
     </PageSheet>
   );

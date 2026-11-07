@@ -346,8 +346,8 @@ impl ToolName {
             | ToolName::KubeDelete
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
-            // asks, and it stays out of the modes that promise nothing
-            // changes.
+            // goes through the approval gate, in Analyst too, the one place
+            // it is offered beside a promise to leave the code alone.
             | ToolName::Mcp => true,
             ToolName::ReadFile
             | ToolName::Grep
@@ -1250,6 +1250,9 @@ pub struct ToolDeps<'a> {
     pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
     /// The base recorded when this chat moved to its worktree.
     pub worktree_base: Option<&'a str>,
+    /// Whether the chat has a plan to implement: written this turn, or in the
+    /// window with something in it.
+    pub has_plan: bool,
 }
 
 /// How a tool result begins when its call did nothing: it failed, the user
@@ -1442,9 +1445,9 @@ pub enum ToolError {
     /// A search or read of the knowledge base that could not be done.
     #[error("{0}")]
     KnowledgeRead(String),
-    /// A change asked for while the chat's tab says "Read only". The switch
+    /// A change asked for while "Allow changes" is off. The switch
     /// is the user's; the model says what it would do and where to turn it on.
-    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by switching \"Read only\" to \"Changes\" on the chat's tab.")]
+    #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by turning on \"Allow changes\" in the cluster panel under the message box.")]
     KubeReadOnly,
     /// The backup could not be written, so nothing was changed.
     #[error("nothing was changed: the backup that makes it undoable could not be written — {0}")]
@@ -1479,6 +1482,9 @@ pub enum ToolError {
     /// when it was on.
     #[error("the tool `{tool}` belongs to {feature}, which is turned off — tell the user they can turn it on on the Catalog page")]
     FeatureOff { tool: String, feature: String },
+    /// A tool of a feature that is on, kept from the model on its Catalog panel.
+    #[error("the user keeps the tools of {feature}, `{tool}` among them, from you — tell them they can give them to you on {feature}'s panel on the Catalog page")]
+    ToolsKept { tool: String, feature: String },
 }
 
 fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
@@ -1624,7 +1630,7 @@ impl ToolCall {
     /// the call rather than a lookup on the name.
     pub fn is_risky(&self) -> bool {
         match self {
-            // The tool stays mutating — Plan and Ask modes do not offer it —
+            // The tool stays mutating — Analyst does not offer it —
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
             _ => self.name().is_mutating(),
@@ -2332,6 +2338,7 @@ pub enum OfferKind {
     Commit,
     Worktree,
     PullRequest,
+    Implement,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.

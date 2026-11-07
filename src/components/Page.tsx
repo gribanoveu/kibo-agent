@@ -5,7 +5,7 @@ import "./Page.css";
 
 type PageProps = {
   title: string;
-  /** Under the title — tabs, a search, buttons — and pinned with it while the page scrolls. */
+  /** Tabs, a search, buttons — pinned while the page scrolls. */
   bar?: ReactNode;
   /** A `PageSheet` over the page while one is open: it moves nothing aside. */
   sheet?: ReactNode;
@@ -13,17 +13,15 @@ type PageProps = {
 };
 
 /**
- * A sidebar page (pages.tsx): a title and a bar pinned at the top, what the
- * page lists under them, and the sheet of what it opened over its right side.
+ * A sidebar page (pages.tsx): a bar pinned at the top, what the page lists under
+ * it, and the sheet of what it opened over its right side. The name is in the
+ * window's title bar (App.tsx); `title` is what a screen reader calls the page.
  * Every page is drawn with it, so a new one only fills it in.
  */
 export function Page({ title, bar, sheet, children }: PageProps) {
   return (
     <section className="page" aria-label={title}>
-      <header className="page-top">
-        <h1 className="page-title">{title}</h1>
-        {bar && <div className="page-bar">{bar}</div>}
-      </header>
+      {bar && <header className="page-bar">{bar}</header>}
       <div className="page-body">{children}</div>
       {sheet}
     </section>
@@ -39,6 +37,17 @@ type PanelProps = {
   onClose: () => void;
   children: ReactNode;
 };
+
+/** What a page says while it has nothing to show; `action` is what starts it. */
+export function PageEmpty({ icon: Icon, action, children }: { icon: ComponentType<{ size?: number }>; action?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="page-empty">
+      <Icon size={24} />
+      <p>{children}</p>
+      {action}
+    </div>
+  );
+}
 
 /**
  * What a page opens, laid over its right side in the look of the panes beside

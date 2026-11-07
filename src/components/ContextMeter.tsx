@@ -3,6 +3,7 @@ import type { ChatUsage, ContextUsage } from "../lib/chat";
 import "./ContextMeter.css";
 import { compactTokens } from "../lib/usage";
 import { matches } from "../lib/shortcuts";
+import type { AsideTab } from "../types";
 
 // How full the model's window is, as a ring beside the send button; a click opens
 // what the tokens are spent on and the one thing to do about it — fold the
@@ -34,6 +35,9 @@ const PARTS = [
   { key: "conversation", label: "Conversation" },
 ] as const;
 
+/** The parts something can be done about: the pane each is made in. */
+const PANE_OF: Partial<Record<(typeof PARTS)[number]["key"], AsideTab>> = { instructions: "rules", skills: "skills", mcp: "mcp" };
+
 const R = 7;
 const CIRCUMFERENCE = 2 * Math.PI * R;
 
@@ -43,16 +47,19 @@ const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.
 
 /** What the tokens are spent on: the ring's panel, and the Overview pane's. `cache` adds the
     last request's cache hit as a row (the Overview's — the ring says it in a sentence); `children`
-    go under the rows. `spent` adds what the whole session has cost, every model call of it. */
+    go under the rows. `spent` adds what the whole session has cost, every model call of it.
+    `onOpenPane` makes a part's row a link to the pane it is made in. */
 export function ContextDetails({
   context,
   cache,
   spent,
+  onOpenPane,
   children,
 }: {
   context: ContextUsage;
   cache?: ChatUsage | null;
   spent?: number | null;
+  onOpenPane?: (pane: AsideTab) => void;
   children?: ReactNode;
 }) {
   const share = shareOf(context);
@@ -87,15 +94,24 @@ export function ContextDetails({
       )}
 
       <dl className="ctx-rows">
-        {PARTS.map(({ key, label }) => (
-          <div key={key}>
-            <dt>
-              <i className={`ctx-dot ctx-part--${key}`} />
-              {label}
-            </dt>
-            <dd>{compactTokens(context[key])}</dd>
-          </div>
-        ))}
+        {PARTS.map(({ key, label }) => {
+          const pane = PANE_OF[key];
+          return (
+            <div key={key}>
+              <dt>
+                <i className={`ctx-dot ctx-part--${key}`} />
+                {pane && onOpenPane ? (
+                  <button type="button" className="ctx-link" onClick={() => onOpenPane(pane)}>
+                    {label}
+                  </button>
+                ) : (
+                  label
+                )}
+              </dt>
+              <dd>{compactTokens(context[key])}</dd>
+            </div>
+          );
+        })}
         {cache !== undefined && (
           <div>
             <dt>

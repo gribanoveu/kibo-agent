@@ -214,6 +214,8 @@ pub struct AppSettings {
     pub http_script_trust: std::collections::BTreeMap<String, String>,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
+    /// The mode picked in the composer's panel, for every folder.
+    pub conversation_mode: crate::domain::conversation_mode::PickedMode,
     /// Chat mode's Kubernetes role: which kubeconfig files it knows of.
     pub kube: KubeSettings,
     /// Which search a chat's `webSearch` asks. `None` in every file written
@@ -235,6 +237,9 @@ pub struct AppSettings {
     /// Features turned on or off from the Catalog, by id; one not here is
     /// its default — `domain::features`, `docs/33-features.md`.
     pub features: std::collections::BTreeMap<String, bool>,
+    /// Features whose tools the model is not given, by id. The feature stays
+    /// on, with its page: a MongoDB page with no `mongo` in the chat.
+    pub feature_tools: OptOut,
     /// A call recorded on the Meetings page is transcribed as soon as it is
     /// stopped; off, it waits in the list for Transcribe (`docs/36`).
     pub meeting_auto_process: bool,
@@ -262,7 +267,7 @@ impl AppSettings {
 pub enum WebSearchPlace {
     /// Chat mode, with no folder.
     Chat,
-    /// A folder, in any mode: the tools only read, so Plan and Ask have them too.
+    /// A folder, in any mode: the tools only read, so Analyst has them too.
     Agent,
 }
 
@@ -347,10 +352,10 @@ impl FolderTrust {
 #[serde(rename_all = "camelCase", default)]
 pub struct KubeSettings {
     pub configs: Vec<Kubeconfig>,
-    /// The last one picked on a chat's tab, by name — where a new chat
+    /// The last one picked in a chat's panel, by name — where a new chat
     /// starts. `None` falls back to the first, as the active provider does.
     pub active: Option<String>,
-    /// Namespaces typed on a chat's tab, per kubeconfig, newest first: a
+    /// Namespaces typed in a chat's panel, per kubeconfig, newest first: a
     /// namespace the identity may work in but not list is typed once.
     #[serde(default)]
     pub typed_namespaces: std::collections::BTreeMap<String, Vec<String>>,

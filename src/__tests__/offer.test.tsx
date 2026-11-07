@@ -62,6 +62,24 @@ describe("offers in the transcript", () => {
     expect(picked).toEqual(["review"]);
   });
 
+  /// A plan is read before it is implemented; the card says what pressing does, this says where it is.
+  test("an offer to implement leads to the plan as well, and no other does", () => {
+    let opened = 0;
+    const picked: OfferKind[] = [];
+    const plan: Block[] = [turn[0], offer("implement", "the parser"), turn[2]];
+    const { unmount } = render(
+      <Transcript turn={state(turn)} onDecide={() => {}} onOffer={() => {}} onOpenPlan={() => opened++} />,
+    );
+    expect(screen.queryByRole("button", { name: "Review the plan" })).toBeNull();
+    unmount();
+    render(<Transcript turn={state(plan)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} onOpenPlan={() => opened++} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review the plan" }));
+    expect(opened).toBe(1);
+    expect(picked).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: /Implement the plan/ }));
+    expect(picked).toEqual(["implement"]);
+  });
+
   /// A notice after the answer — a hook, a cache miss — is not the end of the turn's offers.
   test("still there after a notice that follows the answer", () => {
     render(<Transcript turn={state([...turn, { kind: "notice", id: "n1", text: "Cache missed" }])} onDecide={() => {}} onOffer={() => {}} />);

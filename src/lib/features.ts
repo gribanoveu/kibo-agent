@@ -12,7 +12,9 @@ export type FeatureView = {
   on: boolean;
   /** What the model is given, as it is told. */
   tools: { name: string; description: string }[];
-  /** Where: "Assistant chat", "Agent", "Plan", "Ask". */
+  /** Whether the model gets them while the feature is on. */
+  toolsOn: boolean;
+  /** Where: "Assistant chat", "Agent", "Analyst". */
   places: string[];
   /** Its file, `~/.kibo/…`; null for a feature with none. */
   data: string | null;
@@ -39,6 +41,12 @@ const requireBackend = () => {
 export async function setFeature(id: string, on: boolean): Promise<FeatureView[]> {
   requireBackend();
   return invoke<FeatureView[]>("features_set", { id, on });
+}
+
+/** Whether the model gets the feature's tools, from the next turn; the feature stays as it is. The list after it. */
+export async function setFeatureTools(id: string, on: boolean): Promise<FeatureView[]> {
+  requireBackend();
+  return invoke<FeatureView[]>("features_set_tools", { id, on });
 }
 
 /** Only while it is off. The list after it. */

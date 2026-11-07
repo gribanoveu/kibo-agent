@@ -137,7 +137,7 @@ const restored = (record: Awaited<ReturnType<typeof loadChat>>): Session => ({
   chatId: record.id,
   turn: restoredTurn(chatBlocks(record.blocks, record.messages)),
   history: record.messages,
-  // "Changes" belongs to the chat as it is open now, not to its saved pin.
+  // "Allow changes" belongs to the chat as it is open now, not to its saved pin.
   pinned: record.kube ? { kubeconfig: record.kube.kubeconfig, context: record.kube.context, namespace: record.kube.namespace } : null,
 });
 

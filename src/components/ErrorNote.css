@@ -31,8 +31,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--control-sm);
+  height: var(--control-sm);
   border: none;
   border-radius: var(--radius-sm);
   background: none;

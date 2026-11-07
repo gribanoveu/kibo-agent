@@ -448,11 +448,31 @@
   /* Corners, after macOS: the window's panels are square and joined edge to
      edge by a hairline gutter, drawn in the border colour behind them
      (App.css); what floats — a sheet, a menu, the composer — is rounded, and
-     controls a little. The chat's own rendering keeps its literal radii. */
+     controls a little. */
   --radius-panel: 0;
   /* Under a page in the Prototype preview: white, as a browser's canvas is, in
      every theme — a page that sets no background is drawn as it would be there. */
   --bg-page: #ffffff;
+  /* A shade off the page: the window round it (title bar, the columns beside it)
+     and the message box at rest, which is the page itself with a touch of the
+     accent round it while it is being written in. */
+  --bg-box: color-mix(in srgb, var(--bg-panel) 70%, var(--bg-panel-soft));
+  --border-box-focus: color-mix(in srgb, var(--accent) 10%, var(--border-soft));
+  --text-box-hint: color-mix(in srgb, var(--text-faint) 80%, var(--bg-panel));
+  /* Every field: filled at rest, and focused the way the message box is. */
+  --bg-field: var(--bg-panel-soft);
+  /* The two sizes of a control: what is read and typed in, and what sits in a row. */
+  --control: 32px;
+  --control-sm: 26px;
+  /* A section's heading, the same in every panel. */
+  --tracking-label: 0.08em;
+  /* The context bar's five parts: the conversation, which grows, in the accent;
+     what the app loads in the greys, and the servers in a tint of the accent. */
+  --ctx-conversation: var(--accent);
+  --ctx-instructions: var(--text-dim);
+  --ctx-tools: var(--text-faint);
+  --ctx-skills: color-mix(in srgb, var(--text-faint) 55%, var(--bg-active));
+  --ctx-mcp: color-mix(in srgb, var(--accent) 45%, var(--bg-panel));
   --radius: 10px;
   --radius-md: 8px;
   --radius-sm: 6px;
@@ -494,35 +514,27 @@
   --bg-menu: var(--bg-hover);
   --bg-menu-hover: var(--bg-active);
 
-  /* The context bar's five parts: one hue each, close enough in lightness to
-     read as one bar and far enough apart in tone to tell one part from the next.
-     They are the side's, not the theme's, so a part keeps its hue when the
-     palette changes — a legend the eye has already learnt. */
-  --ctx-instructions: #c9a8ff;
-  --ctx-tools: #7ddcea;
-  --ctx-skills: #6fd996;
-  --ctx-mcp: #f6d274;
-  --ctx-conversation: #8cbcfa;
+  /* A field's edge: a dark panel and the fill are too close to read alone. */
+  --border-field: var(--border-soft);
+  /* A shadow in the text's colour would glow here; the tone sets it apart. */
+  --shadow-raised: none;
 }
 [data-scheme="light"] {
   --bg-menu: var(--bg-panel);
   --bg-menu-hover: var(--bg-hover);
 
-  /* As above, a step darker: on white a bar has to be drawn with ink, and each
-     of these clears 3:1 against the track it sits in. */
-  --ctx-instructions: #7d5cd8;
-  --ctx-tools: #0a7c8c;
-  --ctx-skills: #23803f;
-  --ctx-mcp: #9c6200;
-  --ctx-conversation: #2a6fd6;
+  --border-field: transparent;
+  /* What stands up off a tray. */
+  --shadow-raised: 0 1px 2px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 /* The type scale. Five steps, not a size per component: monospace is for
    code, paths and diffs only — labels and chrome use --font-ui.
    Declared again on what the user reads at the size they chose — the chat, and
-   what reads like it (`.text-scale`: a file as it renders, a sheet's contents),
-   both set by useChatFontSize — so that there it is computed with that size,
-   while the rest of the app keeps the scale of 1. */
+   what reads like it (`.text-scale`: a file as it renders, a sheet's contents,
+   the screen that installs a server or a hook), both set by useChatFontSize —
+   so that there it is computed with that size, while the rest of the app keeps
+   the scale of 1. */
 :root,
 .chat-text,
 .text-scale {
@@ -535,13 +547,16 @@
 .chat-text {
   --font-ui: var(--font-chat);
   font-family: var(--font-chat);
-  --font-scale: var(--chat-font-scale, 1.1);
-  /* Sizes in em inside the chat follow the preference too. */
-  font-size: calc(16px * var(--font-scale));
+  /* The chat counts from a base a step above the app's own --fs-md — 14px where
+     a chat's name in the sidebar is 13 — and the four steps (useChatFontSize)
+     multiply that, so what is in `em` and every step of the scale follow it. */
+  --font-scale: calc(var(--chat-font-scale, 1.1) * 1.08);
+  font-size: var(--fs-md);
 }
 /* What reads like the chat rather than the chrome around it — a file as it
-   renders, a sheet's contents: the type scale above is recomputed with the
-   user's text size, and their sizes and the em inside them follow it. */
+   renders, a sheet's contents, what a screen installing something asks you to
+   read: the type scale above is recomputed with the user's text size, and their
+   sizes and the em inside them follow it. */
 .text-scale {
   --font-scale: var(--chat-font-scale, 1.1);
 }

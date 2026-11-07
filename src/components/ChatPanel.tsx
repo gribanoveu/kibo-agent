@@ -35,6 +35,7 @@ import {
   TerminalSquare,
   Trash2,
   RotateCcw,
+  Undo2,
   MousePointerClick,
   Library,
 } from "lucide-react";
@@ -59,6 +60,7 @@ import { describeActive, describeRun, describeTool, type AgentFocus } from "../l
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
+import type { ImagePart } from "../lib/images";
 import { type FileDiffStats, type PendingToolCall, previewCalls, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
 import type { McpAnswer } from "../lib/mcp";
 import { type ProcessInfo, processStatus } from "../lib/processes";
@@ -683,9 +685,7 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
-  /** Present while the conversation is in Plan mode: hands the plan to Agent mode. */
-  onImplement?: () => void;
-  /** Opens the Plan tab, where the plan is read and edited before handing it over. */
+  /** Opens the Plan tab, where the plan is read and edited before it is implemented. */
   onOpenPlan?: () => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
@@ -710,11 +710,17 @@ type Props = {
   preview?: PreviewCalls;
   /** Sends what an offer under the last answer offered, as the user's message. */
   onOffer?: (kind: OfferKind) => void;
+  /** Notes sent into the running turn that no round has read yet; one taken
+      back goes to the box, with the pictures it carried. */
+  steered?: SteeredNote[];
+  onWithdraw?: (id: string) => void;
   /** Answers an MCP server's question to a call that is waiting on it. */
   onAnswerQuestion?: (id: string, answer: McpAnswer) => void;
   /** The window's title bar, where the header is drawn when there is one. */
   headSlot?: HTMLElement | null;
 };
+
+type SteeredNote = { id: string; text: string; images?: ImagePart[] };
 
 type TranscriptProps = Pick<
   Props,
@@ -730,6 +736,9 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onOffer"
+  | "onOpenPlan"
+  | "steered"
+  | "onWithdraw"
   | "onAnswerQuestion"
   | "checklist"
 > & {
@@ -748,6 +757,27 @@ type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
  * their cards. The agent's chat draws it, and Chat mode draws its own with it,
  * so a role's tool calls and approval cards look as the agent's do.
  */
+/**
+ * A note sent into the running turn that no round has read yet. It stands at
+ * the end of the thread, where it will be when it is read: then it is a `steer`
+ * block in the same place, and this is gone. Taken back, it goes to the box.
+ */
+function UnreadNote({ note, onWithdraw }: { note: SteeredNote; onWithdraw?: (id: string) => void }) {
+  return (
+    <div className="user-msg">
+      <ImageThumbs images={note.images ?? []} align="end" />
+      {note.text && <div className="bubble">{note.text}</div>}
+      <div className="bubble-foot unread">
+        <button type="button" className="bubble-action" title="Take back to the message box" onClick={() => onWithdraw?.(note.id)}>
+          <Undo2 size={12} />
+          Take back
+        </button>
+        Not read yet
+      </div>
+    </div>
+  );
+}
+
 export function Transcript({
   turn,
   onDecide,
@@ -763,9 +793,12 @@ export function Transcript({
   onRewind,
   onFix,
   onOffer,
+  onOpenPlan,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
+  steered = [],
+  onWithdraw,
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // Under a finished answer only, gathered from the whole last turn — a notice
@@ -816,7 +849,15 @@ export function Transcript({
           )}
         </div>
       ))}
-      {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
+      {onOffer && <OfferCards offers={offers} onPick={onOffer} onOpenPlan={onOpenPlan} />}
+      {steered.length > 0 && (
+        <div className="turn">
+          <div className="role">You</div>
+          {steered.map((note) => (
+            <UnreadNote key={note.id} note={note} onWithdraw={onWithdraw} />
+          ))}
+        </div>
+      )}
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
@@ -844,7 +885,6 @@ export function ChatPanel({
   turn,
   onDecide,
   onOpenRepo,
-  onImplement,
   checklist = [],
   onOpenPlan,
   onOpenProcess,
@@ -859,21 +899,21 @@ export function ChatPanel({
   preview,
   onOffer,
   onAnswerQuestion,
+  steered = [],
+  onWithdraw,
   headSlot = null,
 }: Props) {
   const groups = group(turn.blocks);
-  // Under a finished answer only: mid-turn the plan is not written yet, and
-  // after a stop or a failure it may be half of one.
-  const planReady = onImplement && turn.status === "done" && groups[groups.length - 1]?.role === "agent";
   // The thread follows the answer as it grows, until the user scrolls up to
   // read; scrolling back to the end picks it up again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
   // A new message, or another chat, is where the user is looking now —
   // follow it even if they had scrolled away.
   const lastUserId = turn.blocks.filter((block) => block.kind === "user").pop()?.id;
+  const lastNoteId = steered[steered.length - 1]?.id;
   useEffect(() => {
     scrollToBottom();
-  }, [lastUserId, scrollToBottom]);
+  }, [lastUserId, lastNoteId, scrollToBottom]);
 
   // The side panels first — they are what the menu is opened for — then what
   // can be done to the conversation itself.
@@ -984,21 +1024,11 @@ export function ChatPanel({
               onFix={onFix}
               preview={preview}
               onOffer={onOffer}
+              onOpenPlan={onOpenPlan}
               checklist={checklist}
+              steered={steered}
+              onWithdraw={onWithdraw}
             />
-            {planReady && (
-              <div className="plan-handoff">
-                <button type="button" className="btn btn-primary" onClick={onImplement}>
-                  Implement in Agent mode
-                </button>
-                {onOpenPlan && (
-                  <button type="button" className="btn btn-ghost" onClick={onOpenPlan}>
-                    Review the plan
-                  </button>
-                )}
-                <span>Switches to Agent with the plan and the checklist.</span>
-              </div>
-            )}
           </div>
         )}
       </div>

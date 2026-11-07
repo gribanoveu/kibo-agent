@@ -275,13 +275,11 @@ describe("the folder tab's branch", () => {
   test("without a picker, is only shown", () => {
     tab();
     expect(screen.getByTitle("Checked-out branch").textContent).toBe("main");
-    expect(screen.queryByRole("checkbox", { name: /Worktree/ })).toBeNull();
   });
 
   test("before it has, lists the branches as they are opened and says which are remote", () => {
     const picked: string[] = [];
     let opened = 0;
-    let worktree: boolean | null = null;
     tab({
       branches: [
         { name: "main", remote: false },
@@ -290,25 +288,17 @@ describe("the folder tab's branch", () => {
       onOpen: () => opened++,
       onPick: (name) => picked.push(name),
       worktree: false,
-      onWorktree: (on) => (worktree = on),
     });
     fireEvent.click(screen.getByTitle("Switch the folder's branch"));
     expect(opened).toBe(1);
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["main", "origin/featureremote"]);
     fireEvent.click(screen.getByRole("option", { name: /origin\/feature/ }));
     expect(picked).toEqual(["origin/feature"]);
-
-    const toggle = screen.getByRole("checkbox", { name: "Worktree" });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(toggle);
-    expect(worktree).toBe(true);
   });
 
-  /// A worktree is a new folder and a new chat in it: nothing a started chat can become.
-  test("once the chat has started, still switches between turns, with no Worktree", () => {
+  test("once the chat has started, still switches between turns", () => {
     const picked: string[] = [];
     tab(started({ onPick: (name) => picked.push(name) }));
-    expect(screen.queryByRole("checkbox", { name: /Worktree/ })).toBeNull();
     fireEvent.click(screen.getByTitle("Switch the folder's branch"));
     fireEvent.click(screen.getByRole("option", { name: "feature" }));
     expect(picked).toEqual(["feature"]);
@@ -352,10 +342,8 @@ describe("the folder tab's branch", () => {
   });
 
   test("with Worktree on, the menu asks where the worktree starts and shows that branch", () => {
-    tab({ branches: [], onOpen: () => {}, onPick: () => {}, worktree: true, base: "feature", onWorktree: () => {} });
+    tab({ branches: [], onOpen: () => {}, onPick: () => {}, worktree: true, base: "feature" });
     expect(screen.getByTitle("The branch a new worktree starts from").textContent).toContain("feature");
-    expect(screen.getByRole("checkbox", { name: "Worktree" }).getAttribute("title")).toContain("from feature");
-    expect(screen.getByRole("checkbox", { name: "Worktree" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
     expect(screen.getByText("Start a worktree from")).toBeTruthy();
   });

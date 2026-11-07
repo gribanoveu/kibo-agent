@@ -1,0 +1,13 @@
+[package]
+name = "dictation-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "VI-0 (docs/52-voice-input.md): how soon after a press one can speak, and what GigaAM hears through Silero VAD"
+
+# Not part of the app's build: its own lockfile and nothing in src-tauri depends on it.
+[workspace]
+
+[dependencies]
+cpal = "0.18.2"
+sherpa-onnx = "1.13.8"

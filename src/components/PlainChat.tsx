@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from "react";
-import { AppWindow, Brain, FileCog, Layers, Lock, MessagesSquare, MousePointerClick, PencilLine, SendHorizontal, Server, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
+import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
+import { ComposerSettings } from "./ComposerSettings";
 import { Dropdown } from "./Dropdown";
+import { KubePanel } from "./KubePanel";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
@@ -13,20 +15,18 @@ import { boxTakesPictures } from "../lib/images";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
+import { DictateButton } from "./DictateButton";
 import { ErrorNote } from "./ErrorNote";
+import { DictationLine } from "./VoiceWave";
 import type { PlainChatState } from "../hooks/usePlainChat";
-import { choiceKey, type ModelChoice } from "../hooks/useLlmSettings";
-import { effortOptions } from "../lib/providerForm";
+import type { ModelChoice } from "../hooks/useLlmSettings";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useArrival } from "../hooks/useArrival";
 import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
+import { useDictation } from "../hooks/useDictation";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
-import { namespaceOptions, useKubeTarget } from "../hooks/useKubeTarget";
-import { rememberNamespace } from "../lib/kube";
 import "./PlainChat.css";
 
-const WRITES_OFF = "read";
-const WRITES_ON = "changes";
 
 /** Each role's sign, on its chip above the message box and in the role's menu. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
@@ -39,7 +39,7 @@ const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
 const ROLE_WELCOME: Record<ChatRoleId, string> = {
   assistant: "The model answers in text here: it does not read your files, run commands or change anything.",
   kubernetes:
-    "The model reads the cluster picked below: pods, events, logs. With Changes on it can change it too, asking you first.",
+    "The model reads the cluster picked below: pods, events, logs. With Allow changes on it can change it too, asking you first.",
   prototype:
     "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
 };
@@ -55,7 +55,7 @@ type Props = {
   onModel: (choice: ModelChoice) => void;
   onEffort: (effort: string | null) => void;
   onLoadModels: () => void;
-  /** The Kubernetes role's cluster, picked on the tab beside the role. */
+  /** The Kubernetes role's cluster, picked in the panel beside the role. */
   kube: KubeconfigsState;
   /** Opens Settings → Kubernetes. */
   onSetUpKube: () => void;
@@ -77,11 +77,10 @@ type Props = {
     onUnpoint: () => void;
     /** Opens the panel on its pictures: some are being attached to a message. */
     onShowAssets: () => void;
-  };
+  };  /** Whether Voice input is on: its button, its key. */
+  dictate?: boolean;
 };
 
-// Not a kubeconfig's name: the menu's last row, which opens Settings instead.
-const MANAGE_KUBECONFIGS = "\u0000manage";
 
 /**
  * Chat mode: the conversation and its message box, the two panels of `.main`.
@@ -101,6 +100,7 @@ export function PlainChat({
   onCompact,
   onRewind,
   pages,
+  dictate = false,
 }: Props) {
   // The box belongs to this chat, as the agent's does: what was typed here
   // waits here while another chat is open, and comes back with this one.
@@ -111,13 +111,12 @@ export function PlainChat({
   // `key` is what keeps one chat's attached pictures off the next one's.
   const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role), draftKey);
   const input = useRef<HTMLTextAreaElement>(null);
+  // The box measures itself on every change of the text, so there is nothing to tell it.
+  const dictation = useDictation({ on: dictate, draftKey, text: draft, setText: setDraft, area: input, onChange: () => {} });
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
   const RoleIcon = ROLE_ICONS[chat.role];
-  // The chat's own cluster: its kubeconfig from Settings, and what its pin resolves to.
-  const config = kube.configs.find((c) => c.name === chat.kube?.kubeconfig) ?? null;
-  const target = useKubeTarget(config ? chat.kube : null);
   const empty = chat.turn.blocks.length === 0;
   // Two of the role's set, picked again each time an empty chat opens or the role changes.
   const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
@@ -144,7 +143,7 @@ export function PlainChat({
   }, [chat.chatId, sent, scrollToBottom]);
 
   const send = async () => {
-    if (chat.busy || waiting.current) return;
+    if (chat.busy || waiting.current || dictation.active) return;
     if (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0) return;
     // What is sent is what was in the box at the keystroke; a picture still
     // being read is waited for, so it does not end up in the next message.
@@ -170,8 +169,15 @@ export function PlainChat({
     if (pointed) input.current?.focus();
   }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
-  const effort = models.effort ?? "";
-  const efforts = effortOptions(effort);
+  // The box fits what is in it, wherever it came from.
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+  }, [draft]);
 
   return (
     <>
@@ -216,134 +222,6 @@ export function PlainChat({
       </section>
 
       <div className="plain-composer-wrap">
-        {/* On the box's top edge, where the agent's says which folder: here, who the
-            model is. The chat's own settings go on this strip as they come. */}
-        <div className="plain-tab">
-          {/* One role per chat: what was said was said to it. */}
-          <Dropdown
-            title={empty ? "Who the model is in this chat" : "The chat's role — start a new chat for another"}
-            locked={!empty}
-            heading="Role"
-            label={
-              <span className="plain-chip-label">
-                <RoleIcon size={13} />
-                <span>{roleName}</span>
-              </span>
-            }
-            value={chat.role}
-            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
-            onPick={(value) => chat.setRole(value as ChatRoleId)}
-          />
-          {chat.role === "kubernetes" && (
-            <Dropdown
-              title="The kubeconfig this chat works with"
-              heading="Kubeconfig"
-              label={
-                <span className={`plain-chip-label${config ? "" : " unset"}${config?.production ? " production" : ""}`}>
-                  <FileCog size={13} />
-                  <span>{config?.name ?? "No kubeconfig"}</span>
-                </span>
-              }
-              value={config?.name ?? ""}
-              options={[
-                ...kube.configs.map((c) => ({ value: c.name, hint: c.path })),
-                { value: MANAGE_KUBECONFIGS, label: kube.configs.length ? "Manage kubeconfigs…" : "Add a kubeconfig…" },
-              ]}
-              onPick={(value) => {
-                if (value === MANAGE_KUBECONFIGS) return onSetUpKube();
-                chat.setPin({ kubeconfig: value, context: null, namespace: null });
-                // Where the next new chat starts.
-                void kube.pick(value);
-              }}
-            />
-          )}
-          {chat.role === "kubernetes" && config && chat.kube && (
-            <Dropdown
-              title="The context of the kubeconfig — which cluster, as which user"
-              heading="Context"
-              label={
-                <span className={`plain-chip-label${target.context ? "" : " unset"}`}>
-                  <Server size={13} />
-                  <span>{target.context?.name ?? chat.kube.context ?? "No context"}</span>
-                </span>
-              }
-              value={target.context?.name ?? ""}
-              options={(target.contexts?.contexts ?? []).map((c) => ({
-                value: c.name,
-                hint: [c.cluster, c.namespace, c.name === target.contexts?.current ? "current" : null].filter(Boolean).join(" · "),
-              }))}
-              emptyLabel={target.error ?? "The kubeconfig has no contexts"}
-              onPick={(context) => chat.kube && chat.setPin({ ...chat.kube, context, namespace: null, writes: false })}
-            />
-          )}
-          {chat.role === "kubernetes" && config && chat.kube && target.context && (
-            <Dropdown
-              title="The namespace this chat works in"
-              heading="Namespace"
-              label={
-                <span className="plain-chip-label">
-                  <Layers size={13} />
-                  <span>{target.namespace}</span>
-                </span>
-              }
-              value={target.namespace}
-              options={namespaceOptions(target.namespace, target.namespaces)}
-              onOpen={target.loadNamespaces}
-              note={
-                target.namespaces === null
-                  ? "Asking the cluster…"
-                  : target.namespaces.clusterError
-                    ? `The cluster did not list its namespaces: ${target.namespaces.clusterError}`
-                    : undefined
-              }
-              custom={{
-                placeholder: "Another namespace",
-                onEnter: (namespace) => {
-                  if (!chat.kube) return;
-                  chat.setPin({ ...chat.kube, namespace, writes: false });
-                  void rememberNamespace(chat.kube.kubeconfig, namespace).catch(() => {});
-                },
-              }}
-              onPick={(namespace) => chat.kube && chat.setPin({ ...chat.kube, namespace, writes: false })}
-            />
-          )}
-          {chat.role === "kubernetes" && config && chat.kube && target.context && (
-            <Dropdown
-              title="Whether this chat may change the cluster, or only read it"
-              heading="Access"
-              label={
-                <span className={`plain-chip-label${chat.kube.writes ? " changes" : ""}`}>
-                  {chat.kube.writes ? <PencilLine size={13} /> : <Lock size={13} />}
-                  <span>{chat.kube.writes ? "Changes" : "Read only"}</span>
-                </span>
-              }
-              value={chat.kube.writes ? WRITES_ON : WRITES_OFF}
-              options={[
-                { value: WRITES_OFF, label: "Read only", hint: "The model reads the cluster and changes nothing" },
-                {
-                  value: WRITES_ON,
-                  label: "Changes",
-                  hint: `It may change ${target.namespace} — each change asks you first and is backed up`,
-                },
-              ]}
-              onPick={(value) => chat.kube && chat.setPin({ ...chat.kube, writes: value === WRITES_ON })}
-            />
-          )}
-          {pages?.available && (
-            <button
-              type="button"
-              className={`plain-preview-toggle${pages.open ? " on" : ""}`}
-              title={pages.open ? "Hide the preview" : "Show the preview"}
-              onClick={pages.onToggle}
-            >
-              <AppWindow size={13} />
-              <span>Preview</span>
-            </button>
-          )}
-          <span className="plain-tab-end">
-            <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
-          </span>
-        </div>
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
           {attachments.dragging && (
             <div className="plain-drop" aria-hidden="true">
@@ -363,63 +241,33 @@ export function PlainChat({
           {attachments.error && (
             <ErrorNote className="plain-attach-error" message={attachments.error} onClose={attachments.clearError} />
           )}
-          <textarea
-            ref={input}
-            className="chat-text"
-            rows={2}
-            placeholder="Message the model…"
-            value={draft}
-            onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (matches(e, "send")) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
+          {dictation.error && <ErrorNote className="plain-attach-error" message={dictation.error} onClose={dictation.clearError} />}
           <div className="plain-composer-bar">
-            <Dropdown
-              title="Model"
-              heading="Model"
-              label={<span className="plain-model-label">{models.current?.label ?? "no model"}</span>}
-              value={models.current ? choiceKey(models.current) : ""}
-              options={models.choices.map((choice) => ({
-                value: choiceKey(choice),
-                label: choice.label,
-                hint: choice.model ? undefined : "The first model the provider lists",
-              }))}
-              emptyLabel="No provider yet — add one in Settings → Models"
-              onOpen={onLoadModels}
-              onPick={(key) => {
-                const choice = models.choices.find((c) => choiceKey(c) === key);
-                if (choice) onModel(choice);
+            {/* The same rule as in the agent's box: the hook decides, and
+                there is no button when it refuses. */}
+            {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}
+            <textarea
+              ref={input}
+              className="chat-text"
+              rows={1}
+              readOnly={dictation.active}
+              placeholder="Message the model…"
+              value={draft}
+              onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (matches(e, "send")) {
+                  e.preventDefault();
+                  void send();
+                }
               }}
             />
-            {models.current && (
-              <Dropdown
-                title="Thinking level"
-                heading="Thinking"
-                label={
-                  <span className="plain-chip-label">
-                    <Brain size={13} />
-                    {efforts.find((e) => e.value === effort)?.label}
-                  </span>
-                }
-                value={effort}
-                options={efforts}
-                onPick={(v) => onEffort(v || null)}
-              />
-            )}
             {chat.context && (
               <span className="plain-meter">
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
             )}
-            {/* Beside the send button, as in the agent's box — a picture can
-                be chosen instead of pasted, under the same rule: the hook
-                decides, and there is no button when it refuses. */}
-            {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}
+            {dictate && <DictateButton dictation={dictation} />}
             {running ? (
               <button type="button" className="plain-send stop" title="Stop" onClick={chat.stop}>
                 <Square size={14} />
@@ -429,14 +277,50 @@ export function PlainChat({
                 type="button"
                 className="plain-send"
                 title="Send"
-                disabled={chat.busy || (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0)}
+                disabled={chat.busy || dictation.active || (!draft.trim() && attachments.images.length === 0 && attachments.preparing === 0)}
                 onClick={send}
               >
                 <SendHorizontal size={16} />
               </button>
             )}
           </div>
+          {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
+        {/* Under the box, where the agent's says which folder: here, who the
+            model is. The chat's own settings go on this strip as they come. */}
+        <div className="plain-tab">
+          {/* One role per chat: what was said was said to it. */}
+          <Dropdown
+            title={empty ? "Who the model is in this chat" : "The chat's role — start a new chat for another"}
+            locked={!empty}
+            heading="Role"
+            label={
+              <span className="plain-chip-label">
+                <RoleIcon size={13} />
+                <span>{roleName}</span>
+              </span>
+            }
+            value={chat.role}
+            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
+            onPick={(value) => chat.setRole(value as ChatRoleId)}
+          />
+          {chat.role === "kubernetes" && (
+            <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
+          )}
+          {pages?.available && (
+            <button
+              type="button"
+              className={`plain-preview-toggle${pages.open ? " on" : ""}`}
+              title={pages.open ? "Hide the preview" : "Show the preview"}
+              onClick={pages.onToggle}
+            >
+              <AppWindow size={13} />
+              <span>Preview</span>
+            </button>
+          )}
+          <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
+          <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
+        </div>
       </div>
     </>
   );

@@ -262,7 +262,7 @@ describe("the app's own commands", () => {
     analyze: (args: string) => ran.push(`analyze:${args}`),
     trust: () => ran.push("trust"),
   };
-  const ready = { busy: false, started: true, folder: true, agentMode: true, askMode: false, knowledge: true };
+  const ready = { busy: false, started: true, folder: true, agentMode: true, knowledge: true };
   const why = (state: Partial<Parameters<typeof builtInCommands>[0]>) =>
     Object.fromEntries(
       builtInCommands({ ...ready, ...state }, actions).map((c) => [
@@ -279,8 +279,10 @@ describe("the app's own commands", () => {
     expect(running.trust).toBeNull();
     expect(why({ started: false }).fork).toBe("Nothing to fork yet");
     expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", analyze: "Open a folder first", trust: "Open a folder first" });
-    expect(why({ agentMode: false })).toMatchObject({ init: "Switch to Agent mode — it writes files", analyze: null });
-    expect(why({ agentMode: false, askMode: true }).analyze).toBe("Switch to Agent or Plan mode — it keeps a checklist");
+    expect(why({ agentMode: false })).toMatchObject({
+      init: "Switch to Agent mode — it writes files",
+      analyze: "Switch to Agent mode — it writes to the knowledge base",
+    });
     expect("analyze" in why({ knowledge: false })).toBe(false);
   });
 

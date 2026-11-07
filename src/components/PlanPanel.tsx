@@ -10,7 +10,7 @@ type Props = {
   checklist: Task[];
   /** Called when an edit is finished — on leaving the text, not per keystroke. */
   onEdit: (plan: string) => void;
-  /** Present in Plan mode once there is something to hand over. */
+  /** Drawn once there is a plan to hand over. */
   onImplement?: () => void;
   /** A running turn may be rewriting the plan; an edit then would be lost. */
   locked: boolean;
@@ -140,7 +140,7 @@ export function PlanPanel({ plan, checklist, onEdit, onImplement, locked }: Prop
           </div>
         ) : (
           <div className="empty">
-            No plan yet. In Plan mode the agent writes one here — or{" "}
+            No plan yet. Ask the agent for one and it appears here — or{" "}
             <button type="button" className="link-btn" disabled={locked} onClick={() => setEditing(true)}>
               write your own
             </button>
