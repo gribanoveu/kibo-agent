@@ -1,10 +1,10 @@
 //! The HTTP client's rules (`docs/45-http-client.md`): variables and their
 //! `{{name}}`, an environment and what the window sees of it, a request as it
-//! leaves, a JSON body's comments, a pasted cURL, and an agent's path held under
-//! its environment's base address. No I/O — `postman.rs` reads collections.
+//! leaves, a JSON body's comments, a pasted cURL, and what the agent may send
+//! into an environment and read back. No I/O — `postman.rs` reads collections.
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
@@ -59,6 +59,22 @@ pub enum HttpError {
     BadId(String),
     #[error("{0}")]
     Store(String),
+    #[error("no environment is open to the agent — set its agent access on the HTTP page")]
+    NoneOpen,
+    #[error("no environment \"{name}\" is open to the agent: {open}")]
+    NotOpen { name: String, open: String },
+    #[error("say which `environment`: {0}")]
+    WhichEnvironment(String),
+    #[error("{count} environments are named \"{name}\" — rename one on the HTTP page")]
+    SameName { name: String, count: usize },
+    #[error("\"{environment}\" is read only for the agent: {method} is refused — the user can change its agent access on the HTTP page")]
+    ReadOnly { environment: String, method: String },
+    #[error("\"{0}\" has no baseUrl variable — the user sets it on the HTTP page")]
+    NoBaseUrl(String),
+    #[error("{} not in \"{environment}\", which has: {known}", .names.join(", "))]
+    UnknownIn { names: Vec<String>, environment: String, known: String },
+    #[error("the request failed: {0}")]
+    Unanswered(String),
 }
 
 /// A variable of an environment, a collection or globals — Postman's `{key, value}`.
@@ -95,7 +111,87 @@ pub struct Environment {
     /// certificate is trusted this way, never by turning the check off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_cert: Option<String>,
+    #[serde(default, skip_serializing_if = "AgentAccess::is_off")]
+    pub agent: AgentAccess,
 }
+
+/// How far the agent may go in an environment (decision 6): nowhere, until the
+/// user opens it. A file imported or from before this field is off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentAccess {
+    #[default]
+    Off,
+    ReadOnly,
+}
+
+impl AgentAccess {
+    pub fn is_off(&self) -> bool {
+        *self == AgentAccess::Off
+    }
+}
+
+/// An environment the agent may name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenStand {
+    pub id: String,
+    pub name: String,
+}
+
+/// What the model asked for, its `{{name}}` still written out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRequest {
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+}
+
+/// What the model may read of a response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReply {
+    pub outcome: Outcome,
+    /// Text with its secrets masked; bytes that are not text as they came, for their size only.
+    pub body: Vec<u8>,
+    /// What the stand sent, before indents and masks.
+    pub size: usize,
+}
+
+impl AgentReply {
+    /// With no `Set-Cookie` and every secret masked. JSON is indented before the
+    /// masking: reading it undoes its escapes, and `\/` would hide a secret from it.
+    pub fn new(outcome: Outcome, body: &[u8], scope: &Scope) -> AgentReply {
+        let outcome = match outcome.hidden(scope) {
+            Outcome::Response { status, headers, url, redirects, elapsed_ms } => {
+                let headers = headers.iter().filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie")).map(|(k, v)| (scope.hide(k), scope.hide(v))).collect();
+                Outcome::Response { status, headers, url, redirects, elapsed_ms }
+            }
+            failed => failed,
+        };
+        let size = body.len();
+        let body = match std::str::from_utf8(body) {
+            Ok(text) => {
+                let indented = serde_json::from_str::<Value>(text).ok().and_then(|v| serde_json::to_string_pretty(&v).ok());
+                scope.hide(indented.as_deref().unwrap_or(text)).into_bytes()
+            }
+            Err(_) => body.to_vec(),
+        };
+        AgentReply { outcome, body, size }
+    }
+}
+
+/// The environments as the agent's `httpRequest` reaches them.
+/// `services::http_client::Stands` over the stores; a test's own in memory.
+pub trait HttpStands: Send + Sync {
+    /// The ones not off: another is not named to the model, in a list or an error.
+    fn open(&self) -> Result<Vec<OpenStand>, HttpError>;
+    fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError>;
+}
+
+/// History gained an agent's send, for the page to read again.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct HttpChanged;
+
+pub type HttpEventSink = Arc<dyn Fn(HttpChanged) + Send + Sync>;
 
 impl Environment {
     /// What the window gets: a secret's value never — the mask if it has one, "" if not.
@@ -124,6 +220,55 @@ impl Environment {
     /// The agent's base address: the `baseUrl` variable, as a collection writes `{{baseUrl}}`.
     pub fn base_url(&self) -> Option<&str> {
         self.variables.iter().find(|v| v.enabled && v.key == "baseUrl").map(|v| v.value.as_str())
+    }
+
+    /// The agent's request as it leaves, and the variables its reply is masked
+    /// with. All that is refused is refused here, before the network. Only this
+    /// environment's variables: globals are not what the user opened to the agent.
+    pub fn agent_request(&self, request: &AgentRequest) -> Result<(Prepared, Scope), HttpError> {
+        if self.agent.is_off() {
+            return Err(HttpError::NoneOpen);
+        }
+        let method = request.method.trim().to_ascii_uppercase();
+        if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+            return Err(HttpError::ReadOnly { environment: self.name.clone(), method });
+        }
+        let base = self.base_url().ok_or_else(|| HttpError::NoBaseUrl(self.name.clone()))?;
+        let scope = Scope::new(&[&self.variables]);
+        let fill = |text: &str| scope.fill(text).map_err(|e| self.unknown_named(e));
+        let base = fill(base)?.sent;
+        // As the page takes `localhost:3000`.
+        let base = if base.contains("://") { base } else { format!("http://{base}") };
+        let url = under_base(&base, &fill(&request.path)?.sent).map_err(|e| match e {
+            // As the model wrote it: filled in, it can hold a secret.
+            HttpError::OutsideBase(_) => HttpError::OutsideBase(request.path.clone()),
+            e => e,
+        })?;
+        let mut headers = Vec::with_capacity(request.headers.len());
+        for (name, value) in &request.headers {
+            if name.eq_ignore_ascii_case("host") {
+                return Err(HttpError::AbsolutePath);
+            }
+            headers.push((name, fill(value)?));
+        }
+        // A credential is one whatever its variable says: a Postman import marks none secret.
+        let authorization = headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+        let scope = scope.keeping(authorization.and_then(|(_, value)| value.sent.split_whitespace().last()));
+        let written = |pick: fn(&Filled) -> &String| headers.iter().map(|(k, v)| (k.to_string(), pick(v).clone())).collect();
+        let sent = Outgoing { method, url, headers: written(|f| &f.sent), body: None, digest: None };
+        let shown = Outgoing { url: scope.hide(&sent.url), headers: written(|f| &f.shown), ..sent.clone() };
+        Ok((Prepared { sent, shown }, scope))
+    }
+
+    /// A name the model got wrong, with the names it may use: values stay home.
+    fn unknown_named(&self, error: HttpError) -> HttpError {
+        match error {
+            HttpError::UnknownVariables(names) => {
+                let known = self.variables.iter().filter(|v| v.enabled).map(|v| v.key.as_str()).collect::<Vec<_>>().join(", ");
+                HttpError::UnknownIn { names, environment: self.name.clone(), known }
+            }
+            e => e,
+        }
     }
 }
 
@@ -169,18 +314,29 @@ impl Scope {
         if missing.is_empty() { Ok(filled) } else { Err(HttpError::UnknownVariables(missing)) }
     }
 
-    /// `text` with each secret's value masked — as it is, and as an address or a
-    /// form encodes it: what comes back about a request (where it went, why it
-    /// failed) is written from the address as sent.
+    /// `text` with each secret's value masked — as it goes out, a `{{name}}` in it
+    /// filled in, and as an address, a form or a JSON string encodes that: what comes
+    /// back about a request (where it went, why it failed) is written from the
+    /// address as sent. The longest first: one secret can be the start of another.
     pub fn hide(&self, text: &str) -> String {
-        let mut text = text.to_string();
-        for secret in self.vars.values().filter(|v| v.secret && !v.value.is_empty()) {
-            let forms = [secret.value.clone(), utf8_percent_encode(&secret.value, ADDRESS).to_string(), utf8_percent_encode(&secret.value, super::postman::FORM).to_string()];
-            for form in forms {
-                text = text.replace(&form, SECRET_MASK);
-            }
+        let secrets = self.vars.values().filter(|v| v.secret && !v.value.is_empty());
+        let values = secrets.map(|v| self.fill(&v.value).map_or_else(|_| v.value.clone(), |filled| filled.sent)).filter(|v| !v.is_empty());
+        let mut forms: Vec<String> = values
+            .flat_map(|value| {
+                let quoted = Value::from(value.as_str()).to_string();
+                [utf8_percent_encode(&value, ADDRESS).to_string(), utf8_percent_encode(&value, super::postman::FORM).to_string(), quoted[1..quoted.len() - 1].to_string(), value]
+            })
+            .collect();
+        forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+        forms.iter().fold(text.to_string(), |text, form| text.replace(form, SECRET_MASK))
+    }
+
+    /// With `value` masked too, though no variable marks it.
+    fn keeping(mut self, value: Option<&str>) -> Scope {
+        if let Some(value) = value {
+            self.vars.insert("\0kept".into(), Variable { key: String::new(), value: value.into(), secret: true, enabled: true });
         }
-        text
+        self
     }
 
     fn fill_in(&self, text: &str, path: &mut Vec<String>, missing: &mut Vec<String>) -> Result<Filled, HttpError> {
@@ -485,7 +641,8 @@ pub fn under_base(base: &str, path: &str) -> Result<String, HttpError> {
     if ABSOLUTE.is_match(path) {
         return Err(HttpError::AbsolutePath);
     }
-    let lower = path.to_ascii_lowercase();
+    // Of the path only: `?next=%2Forders` is a value, and no server walks up by it.
+    let lower = path.split(['?', '#']).next().unwrap_or(path).to_ascii_lowercase();
     if lower.contains("%2f") || lower.contains("%5c") {
         return Err(HttpError::OutsideBase(path.into()));
     }
@@ -725,7 +882,7 @@ mod tests {
 
     #[test]
     fn the_window_never_gets_a_secrets_value_and_an_untouched_secret_keeps_it() {
-        let stored = Environment { id: "e".into(), name: "test".into(), variables: vec![secret("token", "s3cr3t"), secret("unset", ""), var("baseUrl", "https://api")], trusted_cert: None };
+        let stored = Environment { id: "e".into(), name: "test".into(), variables: vec![secret("token", "s3cr3t"), secret("unset", ""), var("baseUrl", "https://api")], trusted_cert: None, agent: AgentAccess::Off };
         let shown = stored.for_window();
         assert!(!serde_json::to_string(&shown).unwrap().contains("s3cr3t"));
         assert_eq!(shown.variables[0].value, SECRET_MASK);
@@ -953,5 +1110,189 @@ mod tests {
         assert_eq!(parse_curl("curl -é https://x"), Err(HttpError::BadCurl("unknown option -é".into())), "not a panic");
         assert_eq!(parse_curl("curl https://x https://y"), Err(HttpError::BadCurl("a second address https://y".into())));
         assert_eq!(parse_curl("curl https://x --url https://y"), Err(HttpError::BadCurl("a second address https://y".into())));
+    }
+
+    fn opened(variables: Vec<Variable>) -> Environment {
+        Environment { id: "e".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::ReadOnly }
+    }
+
+    fn ask(method: &str, path: &str, headers: &[(&str, &str)]) -> AgentRequest {
+        AgentRequest { method: method.into(), path: path.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    }
+
+    fn stand() -> Environment {
+        opened(vec![var("baseUrl", "https://api.test/v1"), secret("token", "s3cr3t"), var("id", "42")])
+    }
+
+    fn refused(environment: &Environment, request: AgentRequest) -> HttpError {
+        environment.agent_request(&request).map(|_| ()).unwrap_err()
+    }
+
+    #[test]
+    fn an_environment_off_takes_nothing_and_says_nothing_of_itself() {
+        let off = Environment { agent: AgentAccess::Off, ..stand() };
+        assert_eq!(refused(&off, ask("GET", "/x", &[])), HttpError::NoneOpen);
+    }
+
+    #[test]
+    fn read_only_lets_through_what_reads_and_names_what_it_refuses() {
+        for (asked, sent) in [("GET", "GET"), (" head ", "HEAD"), ("options", "OPTIONS")] {
+            assert_eq!(stand().agent_request(&ask(asked, "/x", &[])).unwrap().0.sent.method, sent);
+        }
+        for method in ["POST", "PUT", "PATCH", "DELETE", "TRACE"] {
+            assert_eq!(refused(&stand(), ask(method, "/x", &[])), HttpError::ReadOnly { environment: "Stage".into(), method: method.into() });
+        }
+        assert_eq!(refused(&stand(), ask("post", "/x", &[])).to_string(), "\"Stage\" is read only for the agent: POST is refused — the user can change its agent access on the HTTP page");
+    }
+
+    #[test]
+    fn a_path_goes_filled_in_under_the_base_and_a_secret_in_it_is_shown_masked() {
+        let (prepared, _) = stand().agent_request(&ask("GET", "/orders/{{id}}?key={{token}}", &[])).unwrap();
+        assert_eq!(prepared.sent.url, "https://api.test/v1/orders/42?key=s3cr3t");
+        assert_eq!(prepared.shown.url, "https://api.test/v1/orders/42?key=•••");
+        assert_eq!((prepared.sent.body, prepared.shown.method.as_str()), (None, "GET"));
+    }
+
+    #[test]
+    fn the_base_is_filled_in_and_may_name_no_scheme_as_on_the_page() {
+        let base = opened(vec![var("baseUrl", "{{host}}/v1"), var("host", "localhost:3000")]);
+        assert_eq!(base.agent_request(&ask("GET", "/x", &[])).unwrap().0.sent.url, "http://localhost:3000/v1/x");
+    }
+
+    #[test]
+    fn an_address_is_refused_however_it_gets_into_the_path() {
+        assert_eq!(refused(&stand(), ask("GET", "https://evil.test/x", &[])), HttpError::AbsolutePath);
+        assert_eq!(refused(&stand(), ask("GET", "{{baseUrl}}/x", &[])), HttpError::AbsolutePath);
+        let carried = opened(vec![var("baseUrl", "https://api.test"), var("away", "//evil.test")]);
+        assert_eq!(refused(&carried, ask("GET", "{{away}}/x", &[])), HttpError::AbsolutePath);
+    }
+
+    #[test]
+    fn a_path_out_of_the_base_is_told_as_written_not_with_a_secret_in_it() {
+        let climbing = opened(vec![var("baseUrl", "https://api.test/v1"), secret("up", "../../s3cr3t")]);
+        assert_eq!(refused(&climbing, ask("GET", "{{up}}", &[])), HttpError::OutsideBase("{{up}}".into()));
+    }
+
+    #[test]
+    fn headers_go_filled_in_and_are_shown_masked_and_the_host_is_not_the_models() {
+        let (prepared, _) = stand().agent_request(&ask("GET", "/x", &[("Authorization", "Bearer {{token}}"), ("X-Id", "{{id}}")])).unwrap();
+        assert_eq!(prepared.sent.headers, [("Authorization".to_string(), "Bearer s3cr3t".to_string()), ("X-Id".to_string(), "42".to_string())]);
+        assert_eq!(prepared.shown.headers, [("Authorization".to_string(), "Bearer •••".to_string()), ("X-Id".to_string(), "42".to_string())]);
+        assert_eq!(refused(&stand(), ask("GET", "/x", &[("hOsT", "evil.test")])), HttpError::AbsolutePath);
+    }
+
+    #[test]
+    fn a_name_not_there_lists_the_names_that_are_and_no_value() {
+        let mut environment = stand();
+        environment.variables.push(Variable { enabled: false, ..var("hidden", "h") });
+        let told = HttpError::UnknownIn { names: vec!["nope".into()], environment: "Stage".into(), known: "baseUrl, token, id".into() };
+        assert_eq!(refused(&environment, ask("GET", "/{{nope}}", &[])), told);
+        assert_eq!(refused(&environment, ask("GET", "/x", &[("X-A", "{{nope}}")])), told);
+        assert_eq!(told.to_string(), "nope not in \"Stage\", which has: baseUrl, token, id");
+        assert_eq!(refused(&stand(), ask("GET", "/{{$random}}", &[])), HttpError::UnsupportedDynamic("$random".into()), "another error stands");
+    }
+
+    #[test]
+    fn without_a_base_there_is_nowhere_to_go() {
+        let none = opened(vec![var("token", "t")]);
+        assert_eq!(refused(&none, ask("GET", "/x", &[])), HttpError::NoBaseUrl("Stage".into()));
+        let off = opened(vec![Variable { enabled: false, ..var("baseUrl", "https://api.test") }]);
+        assert_eq!(refused(&off, ask("GET", "/x", &[])), HttpError::NoBaseUrl("Stage".into()));
+    }
+
+    #[test]
+    fn the_scope_goes_on_to_mask_the_reply() {
+        let (_, scope) = stand().agent_request(&ask("GET", "/x", &[])).unwrap();
+        assert_eq!(scope.hide("s3cr3t"), "•••");
+    }
+
+    #[test]
+    fn a_credential_is_masked_though_its_variable_is_not_marked_secret() {
+        let imported = opened(vec![var("baseUrl", "https://api.test"), var("token", "pl41n")]);
+        let (prepared, scope) = imported.agent_request(&ask("GET", "/x", &[("authorization", "Bearer {{token}}")])).unwrap();
+        assert_eq!(prepared.sent.headers[0].1, "Bearer pl41n");
+        assert_eq!(prepared.hidden(&scope).shown.headers[0].1, "Bearer •••", "in history too");
+        assert_eq!(scope.hide(r#"{"you":"pl41n"}"#), r#"{"you":"•••"}"#);
+        let (_, other) = imported.agent_request(&ask("GET", "/x", &[("X-Id", "{{token}}")])).unwrap();
+        assert_eq!(other.hide("pl41n"), "pl41n", "another header is what the variable says");
+    }
+
+    #[test]
+    fn an_encoded_slash_in_the_query_stays_under_the_base() {
+        assert_eq!(under_base("https://api.test/v1", "/search?next=%2Forders%2F2"), Ok("https://api.test/v1/search?next=%2Forders%2F2".to_string()));
+        assert_eq!(under_base("https://api.test/v1", "/a#%2F"), Ok("https://api.test/v1/a#%2F".to_string()));
+        assert_eq!(under_base("https://api.test/v1", "..%2fadmin?x=1"), Err(HttpError::OutsideBase("..%2fadmin?x=1".into())));
+    }
+
+    /// Thirty-two scopes: the map's order is new in each, and a short secret first would leave the long one's tail.
+    #[test]
+    fn a_secret_that_starts_another_leaves_nothing_of_it() {
+        for _ in 0..32 {
+            let scope = Scope::new(&[&[secret("key", "abc"), secret("key2", "abc-def")]]);
+            assert_eq!(scope.hide("abc-def and abc"), "••• and •••");
+        }
+    }
+
+    #[test]
+    fn a_secret_built_of_variables_is_found_as_it_went_out() {
+        let scope = Scope::new(&[&[secret("token", "pre-{{suffix}}"), var("suffix", "42")]]);
+        assert_eq!(scope.hide("echo pre-42"), "echo •••");
+        let blank = Scope::new(&[&[secret("token", "{{nothing}}"), var("nothing", "")]]);
+        assert_eq!(blank.hide("text"), "text", "what fills in to nothing masks nothing");
+        let unknown = Scope::new(&[&[secret("token", "a{{missing}}")]]);
+        assert_eq!(unknown.hide("a{{missing}}"), "•••", "as written, when it does not fill in");
+    }
+
+    fn scope() -> Scope {
+        stand().agent_request(&ask("GET", "/x", &[])).unwrap().1
+    }
+
+    fn response(headers: &[(&str, &str)]) -> Outcome {
+        let headers = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        Outcome::Response { status: 200, headers, url: "https://api.test/v1/x?key=s3cr3t".into(), redirects: vec![], elapsed_ms: 5 }
+    }
+
+    #[test]
+    fn a_reply_has_no_set_cookie_and_no_secret_in_its_headers_or_where_it_came_from() {
+        let reply = AgentReply::new(response(&[("Set-Cookie", "a=1"), ("set-cookie", "b=2"), ("X-Echo", "Bearer s3cr3t"), ("X-s3cr3t", "1")]), b"", &scope());
+        let Outcome::Response { headers, url, .. } = reply.outcome else { panic!("a response") };
+        assert_eq!(headers, [("X-Echo".to_string(), "Bearer •••".to_string()), ("X-•••".to_string(), "1".to_string())]);
+        assert_eq!(url, "https://api.test/v1/x?key=•••");
+    }
+
+    #[test]
+    fn a_failure_keeps_its_words_without_the_secret() {
+        let reply = AgentReply::new(Outcome::Failed { error: "no route to ?key=s3cr3t".into() }, b"", &scope());
+        assert_eq!(reply.outcome, Outcome::Failed { error: "no route to ?key=•••".into() });
+    }
+
+    #[test]
+    fn a_body_comes_masked_json_with_its_indents_and_the_rest_as_it_was() {
+        let body = |text: &[u8]| AgentReply::new(response(&[]), text, &scope()).body;
+        assert_eq!(body(b"echo s3cr3t {"), "echo ••• {".as_bytes());
+        assert_eq!(body(br#"{"b":1,"a":"s3cr3t"}"#), "{\n  \"b\": 1,\n  \"a\": \"•••\"\n}".as_bytes());
+        assert_eq!(body(&[0xff, 0x00, 0xfe]), [0xff, 0x00, 0xfe], "not text: never shown, only measured");
+        assert_eq!(AgentReply::new(response(&[]), br#"{"a":1}"#, &scope()).size, 7, "what the stand sent, not the indents");
+    }
+
+    #[test]
+    fn a_secret_escaped_in_json_is_found_after_the_escape_is_read() {
+        let slashed = Scope::new(&[&[secret("token", "a/b")]]);
+        assert_eq!(AgentReply::new(response(&[]), br#"{"t":"a\/b"}"#, &slashed).body, "{\n  \"t\": \"•••\"\n}".as_bytes());
+        let quoted = Scope::new(&[&[secret("token", "a\"b")]]);
+        assert_eq!(AgentReply::new(response(&[]), br#"{"t":"a\"b"}"#, &quoted).body, "{\n  \"t\": \"•••\"\n}".as_bytes());
+        assert_eq!(quoted.hide(r#"not json: a\"b"#), "not json: •••");
+    }
+
+    #[test]
+    fn access_is_off_in_a_file_that_does_not_say_and_the_window_keeps_what_it_set() {
+        let read: Environment = serde_json::from_value(json!({"id": "e", "name": "n", "variables": []})).unwrap();
+        assert_eq!(read.agent, AgentAccess::Off);
+        assert!(serde_json::to_value(&read).unwrap().get("agent").is_none());
+        let open = serde_json::to_value(stand()).unwrap();
+        assert_eq!(open["agent"], "readOnly");
+        assert_eq!(stand().for_window().agent, AgentAccess::ReadOnly);
+        let closed = Environment { agent: AgentAccess::Off, ..stand().for_window() };
+        assert_eq!(stand().edited(closed).unwrap().agent, AgentAccess::Off);
     }
 }

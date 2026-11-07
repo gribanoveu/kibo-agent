@@ -501,7 +501,7 @@ pub fn read_import(text: &str) -> Result<Imported, HttpError> {
             .collect())
     };
     match root.get("_postman_variable_scope").and_then(Value::as_str) {
-        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()?, trusted_cert: None })),
+        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()?, trusted_cert: None, agent: Default::default() })),
         Some("globals") => Ok(Imported::Globals(values()?)),
         Some(other) => Err(HttpError::NotACollection(format!("it is Postman {other} variables, which Kibo does not import"))),
         None => {
@@ -1350,7 +1350,7 @@ mod tests {
         let env = Environment { id: "e".into(), name: "Stage".into(), variables: vec![
             Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
             Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: false },
-        ], trusted_cert: None };
+        ], trusted_cert: None, agent: Default::default() };
         let out: Value = serde_json::from_str(&environment_to_postman(&env, false)).unwrap();
         assert_eq!(out["_postman_variable_scope"], "environment");
         assert_eq!(out["values"][0], json!({"key": "token", "value": "", "type": "secret", "enabled": true}));
