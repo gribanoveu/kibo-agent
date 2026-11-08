@@ -122,6 +122,13 @@ mod tests {
         }
     }
 
+    /// The agent's card for a write to a stand: the call as written, no file in it.
+    #[test]
+    fn an_http_write_shows_the_call_as_written() {
+        let shown = preview(&temp_dir("preview-http"), "httpRequest", r#"{"environment":"Stage","method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#);
+        assert!(matches!(&shown, ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "POST {{baseUrl}}/orders"), "{shown:?}");
+    }
+
     #[test]
     fn a_write_shows_what_would_change_and_changes_nothing() {
         let root = temp_dir("preview-write");

@@ -820,6 +820,14 @@ mod tests {
         assert!(matches!(&unpinned[0], ToolPreview::Failed { reason } if reason.contains("no cluster")), "{unpinned:?}");
     }
 
+    /// A chat's card for a write to a stand is the agent's, with no cluster pinned.
+    #[test]
+    fn an_http_write_in_a_chat_shows_the_call_as_written() {
+        let call = LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: r#"{"environment":"Stage","method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#.into() };
+        let shown = preview(&KubeSetup::NotSet, None, &[call]);
+        assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "POST {{baseUrl}}/orders"), "{shown:?}");
+    }
+
     fn pinned(namespace: &str) -> KubeSetup {
         KubeSetup::Pinned(KubeTarget {
             config: crate::domain::settings::Kubeconfig { name: "prod".into(), path: "/k/prod".into(), production: false },
