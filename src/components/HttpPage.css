@@ -995,7 +995,11 @@
 .http-env .http-pairs {
   margin-top: 4px;
 }
-/* The agent's access drawn as the fields around it are, its text on their edge. */
+/* The agent's access at the row's right end, its menu opening from there. */
+.http-agent-row > .dropdown-wrap {
+  margin-left: auto;
+}
+/* The agent's access drawn as the fields around it are. */
 .http-env .http-field-row .chip {
   min-width: 14em;
   padding: 6px 8px;

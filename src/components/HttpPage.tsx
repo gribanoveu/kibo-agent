@@ -1800,12 +1800,13 @@ function EnvironmentForm({
         Variable
       </button>
 
-      <div className="http-field-row">
+      <div className="http-field-row http-agent-row">
         <span className="http-label">
           <Bot size={13} /> Agent access
         </span>
         <Dropdown
           below
+          right
           label={AGENT_ACCESS.find((a) => a.value === (draft.agent ?? "off"))?.label}
           title="What the agent may do here"
           options={AGENT_ACCESS}
