@@ -698,4 +698,76 @@ pub(crate) mod tests {
         let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{}/", closed_port()), None), None);
         assert!(matches!(outcome, Outcome::Failed { .. }), "{outcome:?}");
     }
+
+    /// The live test's stand (HC-9): an orders API behind a bearer token, with one
+    /// bug planted — an order that does not exist answers 200 with an empty order,
+    /// where its spec says 404. Every request it gets is kept: method, path, token.
+    pub(crate) mod live_stand {
+        use std::sync::{Arc, Mutex};
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        pub(crate) const TOKEN: &str = "s3cr3t-l1ve-t0ken";
+
+        /// What reached the stand: method, path, and whether the token was right.
+        pub(crate) type Got = Arc<Mutex<Vec<(String, String, bool)>>>;
+
+        pub(crate) fn stand() -> (u16, Got) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let got: Got = Arc::default();
+            let kept = Arc::clone(&got);
+            // ponytail: one thread for the test's life, a connection at a time — enough for one model.
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    let mut reader = BufReader::new(&stream);
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() {
+                        continue;
+                    }
+                    let mut parts = line.split_whitespace();
+                    let (method, path) = (parts.next().unwrap_or_default().to_string(), parts.next().unwrap_or_default().to_string());
+                    let (mut authorized, mut length) = (false, 0usize);
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+                            break;
+                        }
+                        let (name, value) = header.split_once(':').unwrap_or((&header, ""));
+                        match name.trim().to_ascii_lowercase().as_str() {
+                            "authorization" => authorized = value.trim() == format!("Bearer {TOKEN}"),
+                            "content-length" => length = value.trim().parse().unwrap_or(0),
+                            _ => {}
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    let _ = reader.read_exact(&mut body);
+                    kept.lock().unwrap().push((method.clone(), path.clone(), authorized));
+                    let (status, text) = answer(&method, &path, authorized);
+                    let reply = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}", text.len());
+                    let _ = (&stream).write_all(reply.as_bytes());
+                }
+            });
+            (port, got)
+        }
+
+        fn answer(method: &str, path: &str, authorized: bool) -> (&'static str, String) {
+            if !authorized {
+                return ("401 Unauthorized", r#"{"error":"a bearer token is required"}"#.into());
+            }
+            if !matches!(method, "GET" | "HEAD") {
+                return ("405 Method Not Allowed", r#"{"error":"read only"}"#.into());
+            }
+            let path = path.split('?').next().unwrap_or_default();
+            match path.trim_end_matches('/') {
+                "/orders" => ("200 OK", r#"[{"id":42,"status":"paid"}]"#.into()),
+                "/orders/42" => ("200 OK", r#"{"id":42,"status":"paid","items":[{"sku":"A1","qty":2}]}"#.into()),
+                // The planted bug: the spec says 404.
+                other => match other.strip_prefix("/orders/") {
+                    Some(id) if !id.is_empty() && !id.contains('/') => ("200 OK", format!(r#"{{"id":"{id}","status":null,"items":[]}}"#)),
+                    _ => ("404 Not Found", r#"{"error":"no such route"}"#.into()),
+                },
+            }
+        }
+    }
 }

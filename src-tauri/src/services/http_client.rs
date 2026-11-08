@@ -2078,4 +2078,202 @@ mod tests {
             assert_eq!(stands("c").0.describe("nope"), Err(HttpError::NoEnvironment("nope".into())));
         });
     }
+
+    /// The live test's stand (HC-9) is `infra::http_client::tests::live_stand`; here, what it is opened with.
+    mod live {
+        use super::*;
+        pub(super) use crate::infra::http_client::tests::live_stand::{stand, TOKEN};
+
+        /// Stage, open to the agent read only, with the token secret; a collection
+        /// whose one request reads order 42 with it.
+        pub(super) fn environment(port: u16) {
+            let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
+            let variables = vec![var("baseUrl", format!("http://127.0.0.1:{port}"), false), var("token", TOKEN.into(), true)];
+            http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::ReadOnly }).unwrap();
+            let orders = json!({
+                "info": {"name": "Orders", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+                "item": [{"id": "get", "name": "Get order", "request": {"method": "GET", "url": "{{baseUrl}}/orders/42"}}]
+            });
+            http_collections::add(&Collection::parse(&orders.to_string()).unwrap()).unwrap();
+        }
+    }
+
+    /// The stand checks itself with no model: otherwise the live test could "find" a bug
+    /// that is not there, or miss one for a stand that refuses everything.
+    #[test]
+    fn http_live_stand_has_its_bug_and_nothing_else() {
+        with_app_dir("http-live-stand", || {
+            let (port, got) = live::stand();
+            live::environment(port);
+            let (stands, _) = stands("c");
+            let status = |url: &str, headers: &[(&str, &str)]| match stands.send("stage", &ask("GET", url, headers)).unwrap().outcome {
+                Outcome::Response { status, .. } => status,
+                Outcome::Failed { error } => panic!("{error}"),
+            };
+            let bearer = [("Authorization", "Bearer {{token}}")];
+            assert_eq!(status("{{baseUrl}}/orders/42", &bearer), 200);
+            assert_eq!(status("{{baseUrl}}/orders/999", &bearer), 200, "the planted bug: the spec says 404");
+            assert_eq!(status("{{baseUrl}}/nope", &bearer), 404);
+            assert_eq!(status("{{baseUrl}}/orders/42", &[]), 401);
+            assert_eq!(got.lock().unwrap().iter().filter(|(_, _, authorized)| *authorized).count(), 3);
+        });
+    }
+
+    /// The Assistant's turn on the stand with `session`'s model, and what the stand got.
+    fn assistant_on_the_stand(session: &crate::services::llm_session::LlmSession) -> (crate::domain::turn::ChatStreamOutcome, Vec<(String, String, bool)>) {
+        use crate::domain::chat_role::ChatRole;
+        use crate::domain::features::Features;
+        use crate::domain::kube::KubeSetup;
+        use crate::domain::llm::LlmMessage;
+        use crate::domain::tools::ApprovalPolicy;
+        use crate::domain::turn::ChatEventSink;
+        use crate::services::plain_chat::{self, ChatTurn};
+        use std::time::{Duration, Instant};
+
+        let (port, got) = live::stand();
+        live::environment(port);
+        let http: Arc<dyn crate::domain::http_client::HttpStands> = Arc::new(stands("live").0);
+        let events: ChatEventSink = Arc::new(|_| {});
+        let started = Instant::now();
+        let cancelled = || started.elapsed() > Duration::from_secs(300);
+        let approval = ApprovalPolicy::default();
+        let chat = ChatTurn {
+            session,
+            role: ChatRole::Assistant,
+            kube: &KubeSetup::NotSet,
+            cluster: None,
+            changes: None,
+            runbooks: &[],
+            web: None,
+            scope: None,
+            approval: &approval,
+            events: &events,
+            cancelled: &cancelled,
+            log_call: &|_| {},
+            board: None,
+            mongo: None,
+            http: Some(http),
+            deepseek: None,
+            knowledge: None,
+            features: Features::all(),
+        };
+        let prompt = "There is an orders API on my HTTP environment Stage. Its spec: `GET /orders/{id}` answers 200 \
+            with the order, and 404 when there is no order with that id. Check whether the API follows the spec for \
+            an id that does not exist. Answer with one line that starts with PASS or FAIL, then why.";
+        let outcome = plain_chat::start(&chat, vec![LlmMessage::user(prompt)]).expect("the turn runs");
+        let got = got.lock().unwrap().clone();
+        (outcome, got)
+    }
+
+    /// The hidden check: the turn ends with an answer that says FAIL; the stand got a GET
+    /// for an order that does not exist, with the right token; no write reached it; the
+    /// token's value is nowhere in what the model read; History signs each send with the chat.
+    fn found_the_bug(outcome: &crate::domain::turn::ChatStreamOutcome, got: &[(String, String, bool)]) -> Result<(), String> {
+        let crate::domain::turn::ChatStreamOutcome::Done(done) = outcome else { return Err(format!("the turn did not end with an answer: {outcome:?}")) };
+        let answer = done.result.text.trim();
+        let verdict = answer.trim_start_matches(|c: char| !c.is_alphanumeric()).to_ascii_uppercase();
+        if !verdict.starts_with("FAIL") {
+            return Err(format!("the bug is not named: {answer}"));
+        }
+        let missing = |(method, path, authorized): &(String, String, bool)| method == "GET" && *authorized && path.starts_with("/orders/") && path.trim_end_matches('/') != "/orders/42";
+        if !got.iter().any(missing) {
+            return Err(format!("no read of an order that does not exist, with the token: {got:?}"));
+        }
+        if let Some(write) = got.iter().find(|(method, _, _)| !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS")) {
+            return Err(format!("a write reached the stand: {write:?}"));
+        }
+        if serde_json::to_string(&done.history).unwrap().contains(live::TOKEN) {
+            return Err("the model read the token".into());
+        }
+        let history = http_collections::history().unwrap();
+        if history.is_empty() || history.iter().any(|e| e.agent_chat.is_none()) {
+            return Err(format!("History does not sign the agent's sends: {history:?}"));
+        }
+        Ok(())
+    }
+
+    /// A model that answers in turns from a script, for the check of the check.
+    struct Scripted(std::sync::Mutex<std::collections::VecDeque<crate::domain::llm::ChatStreamResult>>);
+
+    impl crate::domain::llm::LlmProvider for Scripted {
+        fn chat(&self, _: crate::domain::llm::ChatRequest) -> Result<crate::domain::llm::ChatResponse, crate::domain::llm::LlmError> {
+            unreachable!("a chat turn is streamed")
+        }
+
+        fn chat_stream(
+            &self,
+            _: crate::domain::llm::ChatRequest,
+            _: &dyn Fn(crate::domain::llm::StreamEvent),
+            _: &dyn Fn() -> bool,
+        ) -> Result<crate::domain::llm::ChatStreamResult, crate::domain::llm::LlmError> {
+            Ok(self.0.lock().unwrap().pop_front().expect("a reply left in the script"))
+        }
+
+        fn list_models(&self) -> Result<Vec<crate::domain::llm::LlmModelInfo>, crate::domain::llm::LlmError> {
+            unreachable!("a chat turn never lists models")
+        }
+    }
+
+    fn model_from(replies: Vec<crate::domain::llm::ChatStreamResult>) -> crate::services::llm_session::LlmSession {
+        crate::services::llm_session::LlmSession {
+            provider: Arc::new(Scripted(std::sync::Mutex::new(replies.into()))),
+            provider_id: "test".into(),
+            model: "m".into(),
+            debug_logging: false,
+            context_limit: None,
+            reply_language: None,
+            limits: Default::default(),
+        }
+    }
+
+    /// The live test's turn and check, with a model from a script: the way a model should
+    /// go passes, and each way it could go wrong does not — so a pass of the live test
+    /// means the model found the bug, not that the check is blind.
+    #[test]
+    fn http_live_check_passes_the_right_turn_only() {
+        use crate::domain::llm::{ChatStreamResult, LlmToolCall};
+        let said = |text: &str| ChatStreamResult { text: text.into(), ..Default::default() };
+        let get = |url: &str, auth: &str| ChatStreamResult {
+            tool_calls: vec![LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: json!({"url": url, "headers": {"Authorization": auth}}).to_string() }],
+            ..said("")
+        };
+        let missing = || get("{{baseUrl}}/orders/999", "Bearer {{token}}");
+        let check = |label: &str, replies: Vec<ChatStreamResult>| {
+            with_app_dir(label, || {
+                let (outcome, got) = assistant_on_the_stand(&model_from(replies));
+                found_the_bug(&outcome, &got)
+            })
+        };
+        assert_eq!(check("http-live-right", vec![missing(), said("**FAIL** — /orders/999 answers 200, the spec says 404")]), Ok(()));
+        let wrong = [
+            ("http-live-pass", vec![missing(), said("PASS — it answers")]),
+            ("http-live-no-read", vec![said("FAIL, surely")]),
+            ("http-live-only-42", vec![get("{{baseUrl}}/orders/42", "Bearer {{token}}"), said("FAIL")]),
+            ("http-live-no-token", vec![get("{{baseUrl}}/orders/999", "Bearer nope"), said("FAIL")]),
+        ];
+        for (label, replies) in wrong {
+            assert!(check(label, replies).is_err(), "{label}");
+        }
+    }
+
+    /// A real model in the Assistant role finds the planted bug through `httpRequest`.
+    /// The provider is the agent bench's (`AGENT_BENCH_*`, see the top of `agent_bench.rs`):
+    ///
+    /// ```text
+    /// AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… cargo test http_live -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "a real model; see the doc comment"]
+    fn http_live_the_assistant_finds_the_planted_bug() {
+        let session = crate::services::agent_bench::session();
+        with_app_dir("http-live", || {
+            let (outcome, got) = assistant_on_the_stand(&session);
+            if let crate::domain::turn::ChatStreamOutcome::Done(done) = &outcome {
+                println!("answer: {}", done.result.text.trim());
+            }
+            println!("the stand got: {got:?}");
+            found_the_bug(&outcome, &got).unwrap();
+        });
+    }
 }
