@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills
+- 2026-11-08 A feature's card in the Catalog carries its own icon: the Meetings page's sound wave for Meeting notes, two people for Voice memory, the library for the knowledge base and a microphone for Voice input, instead of the generic puzzle piece
 - 2026-11-08 Chat with DeepSeek search on and the search in Settings off no longer answers that search is unavailable: what the model is told of it follows the tools it is given
 
 ## v0.12.0 — 2026-11-07

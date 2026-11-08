@@ -4,9 +4,12 @@ import { MongoIcon } from "./MongoIcon";
 import { Steps } from "./Steps";
 import {
   ArrowRight,
+  AudioLines,
   BookOpen,
   Check,
+  Library,
   Loader2,
+  Mic,
   Plug,
   Plus,
   RefreshCw,
@@ -16,6 +19,7 @@ import {
   SquareKanban,
   SquareSlash,
   Store,
+  Users,
   Webhook,
   X,
   type LucideIcon,
@@ -34,9 +38,9 @@ import "./CatalogPage.css";
 // In the order the page lists them.
 const KINDS: { kind: CatalogKind; label: string; one: string; icon: LucideIcon }[] = [
   { kind: "skill", label: "Skills", one: "Skill", icon: Sparkles },
+  { kind: "mcp", label: "MCP servers", one: "MCP server", icon: Plug },
   { kind: "command", label: "Commands", one: "Command", icon: SquareSlash },
   { kind: "runbook", label: "Runbooks", one: "Runbook", icon: BookOpen },
-  { kind: "mcp", label: "MCP servers", one: "MCP server", icon: Plug },
   { kind: "hooks", label: "Hooks", one: "Hooks", icon: Webhook },
 ];
 const kindOf = (kind: CatalogKind) => KINDS.find((k) => k.kind === kind) ?? KINDS[0];
@@ -53,7 +57,11 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   board: SquareKanban,
   "provider-balance": DeepSeekIcon,
   "deepseek-search": DeepSeekIcon,
+  "meeting-notes": AudioLines,
+  "voice-memory": Users,
+  knowledge: Library,
   mongodb: MongoIcon,
+  "voice-input": Mic,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
@@ -61,8 +69,8 @@ const featureMatches = (feature: FeatureView, query: string) => {
   return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
 };
 
-/** How many cards a kind shows under All before "Show all": two rows of three, three of two. */
-const PREVIEW = 6;
+/** How many cards a kind shows under All before "Show all": a row is one to four wide, so eight is two rows of four. */
+const PREVIEW = 8;
 
 /** `raw.githubusercontent.com/<owner>/<repo>/<branch>/` as the repository it is; any other address as it is. */
 function sourceName(url: string): string {

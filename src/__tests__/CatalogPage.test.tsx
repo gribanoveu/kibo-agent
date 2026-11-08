@@ -110,15 +110,25 @@ describe("the catalog page", () => {
     expect(screen.getByText("Nothing matches “nothing like it”.")).toBeTruthy();
   });
 
-  test("All shows a few of a long kind, and Show all opens its tab", async () => {
-    answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g"].map(skill) }];
+  test("a kind shows 8 cards at first, and Show all opens its tab with the rest", async () => {
+    answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map(skill) }];
     render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Skill a");
-    expect(screen.getByText("Skill f")).toBeTruthy();
-    expect(screen.queryByText("Skill g")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Show all 7/ }));
-    expect(screen.getByText("Skill g")).toBeTruthy();
+    expect(screen.getByText("Skill h")).toBeTruthy();
+    expect(screen.queryByText("Skill i")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all 10/ }));
+    expect(screen.getByText("Skill j")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Skills" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
+  });
+
+  test("a kind's own tab lists them all, with nothing left to show", async () => {
+    answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map(skill) }];
+    render(<CatalogPage openPane={() => {}} />);
+    await screen.findByText("Skill a");
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    expect(screen.getByText("Skill h")).toBeTruthy();
+    expect(screen.getByText("Skill j")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
   });
 
