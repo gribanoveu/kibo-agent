@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-08 The HTTP environment form saves itself as you leave a field — no Save button
+- 2026-11-08 HTTP collections and folders you opened stay open after a restart
 - 2026-11-08 Move an HTTP request or folder to another folder or collection from its menu
 - 2026-11-08 Typing {{ in an HTTP request's address, fields or body lists the variables in scope to pick from
 - 2026-11-08 Show a saved HTTP environment secret with the eye beside its field

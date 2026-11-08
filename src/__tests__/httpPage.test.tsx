@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { currentCompletions } from "@codemirror/autocomplete";
 import type { HttpHistoryEntry, HttpResponseView } from "../lib/httpCommands";
@@ -207,6 +207,19 @@ describe("the HTTP page", () => {
     expect(called("http_item_rename")).toEqual([]);
   });
 
+  test("what is open in the tree is open again when the page comes back", async () => {
+    await shown();
+    expect(screen.queryByText("Health") === null).toBe(true);
+    fireEvent.click(screen.getByText("Orders API"));
+    expect(screen.queryByText("Health") !== null).toBe(true);
+    cleanup();
+    render(<HttpPage />);
+    expect((await screen.findByText("Health")) !== null).toBe(true);
+    fireEvent.click(screen.getByText("Orders API"));
+    expect(screen.queryByText("Health") === null).toBe(true);
+    expect(JSON.parse(localStorage.getItem("http.expanded") ?? "null")).toEqual([]);
+  });
+
   test("a request moves into a folder picked from its menu, with nowhere to go said", async () => {
     await shown();
     fireEvent.click(screen.getByText("Orders API"));
@@ -386,7 +399,6 @@ describe("the HTTP page", () => {
     fireEvent.click(access);
     fireEvent.click(screen.getByRole("option", { name: /Read only/ }));
     expect(screen.getByTitle("What the agent may do here").textContent).toContain("Read only");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(called("http_environment_save").length).toBe(1));
     expect((called("http_environment_save")[0]!.environment as Environment).agent).toBe("readOnly");
   });
@@ -398,7 +410,6 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByTitle("What the agent may do here"));
     expect(screen.getByRole("option", { name: /Writes as other tools/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("option", { name: /Ask for writes/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(called("http_environment_save").length).toBe(1));
     expect((called("http_environment_save")[0]!.environment as Environment).agent).toBe("askForWrites");
   });
@@ -408,7 +419,7 @@ describe("the HTTP page", () => {
     await shown();
     fireEvent.click(screen.getByLabelText("Edit the environment"));
     fireEvent.change(screen.getAllByLabelText("Variable")[1], { target: { value: "apiToken" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.focusOut(screen.getAllByLabelText("Variable")[1]);
     await waitFor(() => expect(called("http_environment_save").length).toBe(1));
     const saved = called("http_environment_save")[0]!.environment as Environment;
     expect(saved.variables[1]).toEqual({ key: "apiToken", value: "•••", secret: true, enabled: true });
@@ -421,8 +432,13 @@ describe("the HTTP page", () => {
     const values = screen.getAllByLabelText("Value") as HTMLInputElement[];
     expect(values[1].value).toBe("");
     expect(values[1].placeholder).toContain("saved — type to replace");
+    expect(screen.queryByRole("button", { name: "Save" }) === null).toBe(true);
+    // A field left with nothing changed saves nothing.
+    fireEvent.focusOut(values[1]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_environment_save")).toEqual([]);
     fireEvent.change(values[0], { target: { value: "https://stage2.test" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.focusOut(values[0]);
     await waitFor(() => expect(called("http_environment_save").length).toBe(1));
     const saved = called("http_environment_save")[0]!.environment as Environment;
     expect(saved.variables).toEqual([
@@ -431,11 +447,48 @@ describe("the HTTP page", () => {
     ]);
 
     fireEvent.change(screen.getByPlaceholderText(/PEM/), { target: { value: "junk" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.focusOut(screen.getByPlaceholderText(/PEM/));
     expect(await screen.findByText("the certificate: no certificate in it")).toBeDefined();
+    // Refused, it is tried again as the field is next left, though nothing changed since.
+    fireEvent.focusOut(screen.getByPlaceholderText(/PEM/));
+    await waitFor(() => expect(called("http_environment_save").length).toBe(3));
   });
 
-  test("a saved secret is read only by its eye, shown until hidden, and sealed again once saved", async () => {
+  test("a shown secret edited is saved as typed and stays shown", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.click(screen.getByLabelText("Show token"));
+    const value = () => (screen.getAllByLabelText("Value") as HTMLInputElement[])[1];
+    await waitFor(() => expect(value().value).toBe("hunter2"));
+    fireEvent.change(value(), { target: { value: "hunter3" } });
+    fireEvent.focusOut(value());
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).variables[1].value).toBe("hunter3");
+    await new Promise((r) => setTimeout(r, 20));
+    expect([value().value, value().type]).toEqual(["hunter3", "text"]);
+  });
+
+  test("a variable turned off is saved at once", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.click(screen.getByLabelText("Use baseUrl"));
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).variables[0].enabled).toBe(false);
+  });
+
+  test("what is typed is saved as the form closes, with no field left", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.change(screen.getAllByLabelText("Value")[0], { target: { value: "https://stage3.test" } });
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).variables[0].value).toBe("https://stage3.test");
+  });
+
+  test("a saved secret is read only by its eye, shown until hidden, and sealed again once typed over", async () => {
     localStorage.setItem("http.environment", JSON.stringify("stage"));
     await shown();
     fireEvent.click(screen.getByLabelText("Edit the environment"));
@@ -452,12 +505,29 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByLabelText("Show token"));
     expect(value().type).toBe("text");
     expect(called("http_environment_secret").length).toBe(1);
-    // The lock off and on again does not show it without the eye.
+    // Only looked at, it is no change: leaving the field saves nothing, and it stays shown.
+    fireEvent.focusOut(value());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_environment_save")).toEqual([]);
+    expect(value().value).toBe("hunter2");
+    // Another field saved: the one the eye shows stays shown.
+    fireEvent.change(screen.getAllByLabelText("Value")[0], { target: { value: "https://stage4.test" } });
+    fireEvent.focusOut(screen.getAllByLabelText("Value")[0]);
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect([value().value, value().type]).toEqual(["hunter2", "text"]);
+    // The lock off and on again does not show it without the eye; each is saved at once,
+    // and the value it had goes as the mask, never as itself.
     fireEvent.click(screen.getByLabelText("token is a secret"));
     fireEvent.click(screen.getByLabelText("Make token a secret"));
     expect(value().type).toBe("password");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const sentToken = () => called("http_environment_save").slice(1).map((c) => (c!.environment as Environment).variables[1].value);
+    await waitFor(() => expect(sentToken()).toEqual(["•••", "•••"]));
+    // A value typed over it goes as itself, and the field is sealed again.
+    fireEvent.change(value(), { target: { value: "new-one" } });
+    fireEvent.focusOut(value());
     await waitFor(() => expect(value().value).toBe(""));
+    expect(sentToken()).toEqual(["•••", "•••", "new-one"]);
     expect(value().type).toBe("password");
   });
 

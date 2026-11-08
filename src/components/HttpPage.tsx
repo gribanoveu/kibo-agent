@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { Decoration, keymap, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext } from "@codemirror/autocomplete";
@@ -96,14 +96,10 @@ export function HttpPage() {
   const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | { kind: "cookies" } | null>(null);
   const http = useHttpClient(sheet?.kind === "history");
   const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const toggle = (id: string) =>
-    setExpanded((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // What was open in the tree is open again on the next visit, and after a restart.
+  const [opened, setOpened] = useStoredState<string[]>("http.expanded", [], isIds);
+  const expanded = useMemo(() => new Set(opened), [opened]);
+  const toggle = (id: string) => setOpened((o) => (o.includes(id) ? o.filter((open) => open !== id) : [...o, id]));
 
   // A name being typed: for a node renamed, or for a collection or request made only once it is confirmed.
   const [renaming, setRenaming] = useState<Naming | null>(null);
@@ -152,7 +148,7 @@ export function HttpPage() {
     } else http.remove(deleting.id);
     setDeleting(null);
   };
-  const reveal = (id: string) => setExpanded((s) => new Set(s).add(id));
+  const reveal = (id: string) => setOpened((o) => (o.includes(id) ? o : [...o, id]));
   const newCollection = () => setRenaming({ kind: "collection", name: "New collection" });
   const newRequest = (parent: string) => setRenaming({ kind: "request", parent, name: "New request" });
   const newFolder = (parent: string) => setRenaming({ kind: "folder", parent, name: "New folder" });
@@ -727,6 +723,7 @@ const LAYOUTS = [
   { value: "side", icon: Columns2, title: "Response beside the request" },
 ] as const;
 const isLayout = (v: unknown): v is Layout => v === "stacked" || v === "side";
+const isIds = (v: unknown): v is string[] => Array.isArray(v) && v.every((id) => typeof id === "string");
 
 /**
  * Neither side closes: the request keeps its tabs and a couple of lines of
@@ -1577,7 +1574,17 @@ function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined;
 }
 
 /** A variable in the form; `kept` when a sealed value is behind it. */
-type Row = EnvVariable & { kept?: boolean; shown?: boolean };
+type Row = EnvVariable & { kept?: boolean; shown?: boolean; revealed?: string };
+type Draft = Omit<Environment, "variables"> & { variables: Row[] };
+
+/**
+ * What the form saves: a sealed value left empty, or as the eye read it, goes back as
+ * the mask, which keeps it — so a secret only looked at is not a change.
+ */
+const toSave = (d: Draft): Environment => ({
+  ...d,
+  variables: d.variables.map(({ kept, shown: _, revealed, ...v }) => (kept && (v.value === "" || v.value === revealed) ? { ...v, value: SECRET_MASK } : v)),
+});
 
 const AGENT_ACCESS = [
   { value: "off", label: "Off", hint: "the agent does not know it is here" },
@@ -1603,11 +1610,13 @@ function EnvironmentForm({
   // A saved secret's field starts empty — typing replaces it — never `•••` to type after. `kept` says
   // a sealed value is behind the row: left empty, it goes back as the mask, which keeps the value —
   // and is refused when the row was renamed away from it, rather than saved empty.
-  const [draft, setDraft] = useState(() => ({
+  const [draft, setDraft] = useState<Draft>(() => ({
     ...environment,
     variables: environment.variables.map((v): Row => (v.secret && v.value === SECRET_MASK ? { ...v, value: "", kept: true } : v)),
   }));
   const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
+  // What was last sent, as text: a field left with nothing changed saves nothing.
+  const sent = useRef(JSON.stringify(toSave(draft)));
   const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
   // Only a secret saved under the name the row still has: its value is what the eye asks for.
   const sealed = new Set(environment.variables.filter((s) => s.secret).map((s) => s.key));
@@ -1620,21 +1629,43 @@ function EnvironmentForm({
     const key = v.key;
     onReveal(key).then(
       (value) =>
-        setDraft((d) => ({ ...d, variables: d.variables.map((r) => (r.secret && key === r.key && r.value === "" ? { ...r, value, shown: true } : r)) })),
+        setDraft((d) => ({ ...d, variables: d.variables.map((r) => (r.secret && key === r.key && r.value === "" ? { ...r, value, shown: true, revealed: value } : r)) })),
       (e) => setSaid({ error: true, text: `The secret was not read: ${e}` }),
     );
   };
-  const save = () =>
-    onSave({ ...draft, variables: draft.variables.map(({ kept, ...v }) => (kept && v.value === "" ? { ...v, value: SECRET_MASK } : v)) }).then(
+  // Saved as a field is left, a switch is flipped, a row goes — and as the form closes. No Save button.
+  const save = (from: Draft = draft) => {
+    const next = toSave(from);
+    const text = JSON.stringify(next);
+    if (text === sent.current) return;
+    sent.current = text;
+    const typed = new Map(next.variables.filter((v) => v.secret && v.value !== SECRET_MASK).map((v) => [v.key, v.value]));
+    onSave(next).then(
       () => {
         setSaid({ error: false, text: "Saved." });
-        // A secret just typed is sealed now: its field empties, as a saved one's is.
-        setDraft((d) => ({ ...d, variables: d.variables.map((v) => (v.secret ? { ...v, value: "", shown: false, kept: v.kept || v.value !== "" } : v)) }));
+        // A secret just typed is sealed now: its field empties, as a saved one's is — unless the eye
+        // shows it, or something else has been typed there since.
+        setDraft((d) => ({
+          ...d,
+          variables: d.variables.map((v) => (v.secret && !v.shown && v.value !== "" && typed.get(v.key) === v.value ? { ...v, value: "", kept: true } : v)),
+        }));
       },
-      (e) => setSaid({ error: true, text: String(e) }),
+      (e) => {
+        sent.current = "";
+        setSaid({ error: true, text: String(e) });
+      },
     );
+  };
+  const change = (next: Draft) => {
+    setDraft(next);
+    save(next);
+  };
+  const flip = (i: number, patch: Partial<Row>) => change({ ...draft, variables: draft.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) });
+  const latest = useRef(save);
+  latest.current = save;
+  useEffect(() => () => latest.current(), []);
   return (
-    <div className="http-form http-env">
+    <div className="http-form http-env" onBlur={() => save()}>
       <label className="http-field-row">
         <span className="http-label">Name</span>
         <input className="http-input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
@@ -1654,7 +1685,7 @@ function EnvironmentForm({
           {draft.variables.map((v, i) => (
             <tr key={i} className={v.enabled ? "" : "off"}>
               <td>
-                <input type="checkbox" aria-label={`Use ${v.key}`} checked={v.enabled} onChange={(e) => put(i, { enabled: e.target.checked })} />
+                <input type="checkbox" aria-label={`Use ${v.key}`} checked={v.enabled} onChange={(e) => flip(i, { enabled: e.target.checked })} />
               </td>
               <td>
                 <input className="http-mono" aria-label="Variable" spellCheck={false} value={v.key} onChange={(e) => put(i, { key: e.target.value })} />
@@ -1689,7 +1720,7 @@ function EnvironmentForm({
                   title={v.secret ? "Secret: sealed, shown only by the eye, scrubbed from what the agent reads" : "Make it a secret"}
                   aria-label={v.secret ? `${v.key} is a secret` : `Make ${v.key} a secret`}
                   aria-pressed={v.secret}
-                  onClick={() => put(i, { secret: !v.secret, shown: false })}
+                  onClick={() => flip(i, { secret: !v.secret, shown: false })}
                 >
                   {v.secret ? <Lock size={13} /> : <LockOpen size={13} />}
                 </button>
@@ -1700,7 +1731,7 @@ function EnvironmentForm({
                   className="http-icon-button"
                   title="Remove"
                   aria-label={`Remove ${v.key}`}
-                  onClick={() => setDraft((d) => ({ ...d, variables: d.variables.filter((_, j) => j !== i) }))}
+                  onClick={() => change({ ...draft, variables: draft.variables.filter((_, j) => j !== i) })}
                 >
                   <Trash2 size={13} />
                 </button>
@@ -1724,7 +1755,7 @@ function EnvironmentForm({
           title="What the agent may do here"
           options={AGENT_ACCESS}
           value={draft.agent ?? "off"}
-          onPick={(agent) => setDraft({ ...draft, agent: agent as AgentAccess })}
+          onPick={(agent) => change({ ...draft, agent: agent as AgentAccess })}
         />
       </div>
 
@@ -1742,7 +1773,9 @@ function EnvironmentForm({
         />
       </label>
 
-      <p className="http-quiet">Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.</p>
+      <p className="http-quiet">
+        Saved as you leave a field. Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.
+      </p>
       {said && <p className={said.error ? "http-error" : "http-quiet"}>{said.text}</p>}
       <div className="http-actions">
         <button
@@ -1757,10 +1790,6 @@ function EnvironmentForm({
         <button type="button" className="http-bar-button" onClick={onDelete}>
           <Trash2 size={13} />
           Delete…
-        </button>
-        <span className="http-spacer" />
-        <button type="button" className="http-send" onClick={save}>
-          Save
         </button>
       </div>
     </div>

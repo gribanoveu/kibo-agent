@@ -920,8 +920,14 @@
 .http-env .http-pairs {
   margin-top: 4px;
 }
+/* The eye and the lock side by side: an icon button is a block of its own, and two would stack. */
 .http-env-secret {
   white-space: nowrap;
+  text-align: center;
+}
+.http-env-secret > .http-icon-button {
+  display: inline-grid;
+  vertical-align: middle;
 }
 .http-env > .http-bar-button {
   align-self: flex-start;
