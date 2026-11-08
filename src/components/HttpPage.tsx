@@ -1398,7 +1398,7 @@ type Row = EnvVariable & { kept?: boolean };
 
 const AGENT_ACCESS = [
   { value: "off", label: "Off", hint: "the agent does not know it is here" },
-  { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS, with no card" },
+  { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS to your collections' hosts, with no card; it reads the values that are not secret" },
 ];
 
 function EnvironmentForm({

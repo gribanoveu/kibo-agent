@@ -368,13 +368,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
-    case "httpRequest":
+    // `GET {{baseUrl}}/orders on Stage`; with no url, the environment was asked what it holds.
+    case "httpRequest": {
+      const [url, environment] = [str(args.url), str(args.environment)];
+      const sent = url && [str(args.method)?.toUpperCase() ?? "GET", url, environment && `on ${environment}`].filter(Boolean).join(" ");
       return {
         name,
-        arg: [str(args.method), str(args.path), str(args.environment) && `on ${str(args.environment)}`].filter(Boolean).join(" "),
+        arg: sent || `what is in ${environment ?? "the environment"}`,
         meta: str(result.summary),
         detail: str(result.text) ?? "",
       };
+    }
 
     // What was read, and where: `find shop.orders on Local { paid: true }`.
     case "mongo": {
