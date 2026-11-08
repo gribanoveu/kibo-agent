@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
+import { currentCompletions } from "@codemirror/autocomplete";
 import type { HttpHistoryEntry, HttpResponseView } from "../lib/httpCommands";
 import type { Environment } from "../lib/httpClient";
 
@@ -8,6 +10,7 @@ import type { Environment } from "../lib/httpClient";
 
 const FILE = {
   info: { name: "Orders API", schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  variable: [{ key: "orderId", value: "9" }],
   item: [
     { id: "r1", name: "Create order", event: [{ listen: "prerequest", script: { exec: ["pm.environment.set('t', 1);"] } }], request: { method: "POST", url: "{{baseUrl}}/orders" } },
     { id: "r2", name: "Health", request: "{{baseUrl}}/health" },
@@ -426,6 +429,67 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByLabelText("Edit the environment"));
     fireEvent.change(screen.getAllByLabelText("Variable")[1], { target: { value: "apiToken" } });
     expect(screen.queryByLabelText("Show apiToken") === null).toBe(true);
+  });
+
+  test("a {{ in a field lists the variables in scope, a secret masked, and a pick closes it", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown("r2");
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    fireEvent.change(address, { target: { value: "{{" } });
+    const options = () => screen.queryAllByRole("option").map((o) => o.textContent);
+    expect(options()).toEqual(["{{orderId}}9", "{{baseUrl}}https://stage.test", "{{token}}•••"]);
+    fireEvent.change(address, { target: { value: "{{to" } });
+    expect(options()).toEqual(["{{token}}•••"]);
+    fireEvent.keyDown(address, { key: "Escape", code: "Escape" });
+    expect(options()).toEqual([]);
+
+    fireEvent.change(address, { target: { value: "{{" } });
+    fireEvent.keyDown(address, { key: "ArrowDown", code: "ArrowDown" });
+    expect(screen.getByRole("option", { selected: true }).textContent).toContain("{{baseUrl}}");
+    fireEvent.keyDown(address, { key: "ArrowUp", code: "ArrowUp" });
+    fireEvent.keyDown(address, { key: "ArrowUp", code: "ArrowUp" });
+    expect(screen.getByRole("option", { selected: true }).textContent).toContain("{{token}}");
+    fireEvent.keyDown(address, { key: "ArrowDown", code: "ArrowDown" });
+    fireEvent.keyDown(address, { key: "ArrowDown", code: "ArrowDown" });
+    fireEvent.keyDown(address, { key: "Enter", code: "Enter" });
+    expect(address.value).toBe("{{baseUrl}}");
+    expect(address.selectionStart).toBe(11);
+    expect(options()).toEqual([]);
+
+    fireEvent.change(address, { target: { value: "{{baseUrl}}/x?t={{" } });
+    fireEvent.pointerDown(screen.getByRole("option", { name: /token/ }));
+    expect(address.value).toBe("{{baseUrl}}/x?t={{token}}");
+
+    // Typed in the middle: the caret lands after the variable, not at the end.
+    fireEvent.change(address, { target: { value: "{{/x" } });
+    // A click there: React makes onSelect from the mouseup, not from a `select` event.
+    act(() => address.focus());
+    address.setSelectionRange(2, 2);
+    fireEvent.mouseUp(address);
+    fireEvent.keyDown(address, { key: "Tab", code: "Tab" });
+    expect(address.value).toBe("{{orderId}}/x");
+    expect(address.selectionStart).toBe(11);
+
+    fireEvent.change(address, { target: { value: "{{" } });
+    fireEvent.blur(address);
+    expect(options()).toEqual([]);
+  });
+
+  test("a {{ in the body lists the same variables, and the registry's key puts one in", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Body/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "raw" }));
+    const view = EditorView.findFromDOM(document.querySelector(".http-editor .cm-editor") as HTMLElement)!;
+    act(() => view.dispatch({ changes: { from: 0, insert: '{"t": "{{to}}"' }, selection: { anchor: 11 }, userEvent: "input.type" }));
+    await waitFor(() => expect(currentCompletions(view.state).map((c) => [c.label, c.detail])).toEqual([["{{token}}", "•••"]]));
+    // CodeMirror takes no pick for its `interactionDelay` (75 ms) after the list opens.
+    await new Promise((done) => setTimeout(done, 100));
+    act(() => {
+      view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(view.state.doc.toString()).toBe('{"t": "{{token}}"');
+    expect(view.state.selection.main.head).toBe(16);
   });
 
   test("a variable missing from the auth marks the Auth tab, not the address", async () => {

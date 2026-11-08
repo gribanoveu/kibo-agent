@@ -1,6 +1,7 @@
-import { useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
-import { Decoration, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { Decoration, keymap, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
+import { Prec, type Extension } from "@codemirror/state";
+import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext } from "@codemirror/autocomplete";
 import {
   Bot,
   ChevronDown,
@@ -65,6 +66,9 @@ import {
   statusTone,
   toCurl,
   VARIABLE,
+  putVariable,
+  variableAt,
+  variableHints,
   variableParts,
   variableValue,
   withAuthParam,
@@ -720,6 +724,48 @@ function variableMarks(values: ReadonlyMap<string, string>): Extension {
 }
 
 /**
+ * The list a `{{` opens in an editor — the body — of the variables in scope, a
+ * secret masked; picked, `{{name}}` replaces what was typed, the closer kept once.
+ * Its keys by the registry, as the field's list has them.
+ */
+function variableCompletion(values: ReadonlyMap<string, string>): Extension {
+  const source = (context: CompletionContext) => {
+    const at = context.matchBefore(/\{\{\s*[^{}\s]*/);
+    if (!at) return null;
+    return {
+      from: at.from,
+      filter: false,
+      options: variableHints(values, variableAt(at.text, at.text.length)?.typed ?? "").map(({ name, value }) => ({
+        label: `{{${name}}}`,
+        detail: value,
+        apply: (view: EditorView, _: unknown, from: number, to: number) => {
+          const text = view.state.sliceDoc(from, Math.min(view.state.doc.length, to + 200));
+          const put = putVariable(text, 0, to - from, name);
+          view.dispatch({ changes: { from, to: from + text.length, insert: put.text }, selection: { anchor: from + put.caret } });
+        },
+      })),
+    };
+  };
+  return [
+    autocompletion({ override: [source], icons: false, defaultKeymap: false }),
+    Prec.highest(
+      keymap.of([
+        {
+          any: (view, e) =>
+            matches(e, "httpVarNext")
+              ? moveCompletionSelection(true)(view)
+              : matches(e, "httpVarPrev")
+                ? moveCompletionSelection(false)(view)
+                : matches(e, "httpVarPick")
+                  ? acceptCompletion(view)
+                  : matches(e, "close") && closeCompletion(view),
+        },
+      ]),
+    ),
+  ];
+}
+
+/**
  * A text field whose `{{variables}}` are drawn found or not. A field cannot
  * colour part of its text, so while it holds a variable its own text is made
  * invisible and drawn again over it — the caret, the selection and the
@@ -728,6 +774,48 @@ function variableMarks(values: ReadonlyMap<string, string>): Extension {
 function VarInput({ values, value, className, ...field }: InputHTMLAttributes<HTMLInputElement> & { value: string; values: ReadonlyMap<string, string> }) {
   const input = useRef<HTMLInputElement>(null);
   const over = useRef<HTMLSpanElement>(null);
+  const id = useId();
+  // Where the caret is while the field has focus; `null` keeps the list closed.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const typing = caret === null || dismissed ? null : variableAt(value, caret);
+  const hints = typing ? variableHints(values, typing.typed) : [];
+  const picked = hints[Math.min(active, hints.length - 1)];
+  // The caret a pick leaves, set once React has put the new text in.
+  const after = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (after.current === null || !input.current) return;
+    input.current.setSelectionRange(after.current, after.current);
+    setCaret(after.current);
+    after.current = null;
+  });
+  // Put in as typing would be — the field's own onChange gets it — so every caller takes it as it takes a key.
+  const pick = (name: string) => {
+    if (!typing || caret === null || !input.current) return;
+    const put = putVariable(value, typing.from, caret, name);
+    after.current = put.caret;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input.current, put.text);
+    input.current.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const keyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (picked) {
+      const moves = matches(e, "httpVarNext") ? 1 : matches(e, "httpVarPrev") ? -1 : 0;
+      if (moves) {
+        e.preventDefault();
+        return setActive((active + moves + hints.length) % hints.length);
+      }
+      if (matches(e, "httpVarPick")) {
+        e.preventDefault();
+        return pick(picked.name);
+      }
+      if (matches(e, "close")) {
+        e.stopPropagation();
+        return setDismissed(true);
+      }
+    }
+    field.onKeyDown?.(e);
+  };
   const parts = variableParts(value, values);
   const marked = parts.some((part) => part.variable);
   // The drawn text sits where the field's would: its font, padding and border, and where it is scrolled to.
@@ -764,10 +852,51 @@ function VarInput({ values, value, className, ...field }: InputHTMLAttributes<HT
         value={value}
         title={title || field.title}
         className={`${className ?? ""}${marked ? " http-var-hidden" : ""}`}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={!!picked}
+        aria-controls={picked ? `${id}-list` : undefined}
+        aria-activedescendant={picked ? `${id}-${hints.indexOf(picked)}` : undefined}
+        autoComplete="off"
+        onChange={(e) => {
+          field.onChange?.(e);
+          setCaret(e.target.selectionStart);
+          setActive(0);
+          setDismissed(false);
+        }}
+        onKeyDown={keyDown}
+        onBlur={(e) => {
+          setCaret(null);
+          field.onBlur?.(e);
+        }}
         onScroll={follow}
-        onSelect={follow}
+        onSelect={(e) => {
+          follow();
+          setCaret(e.currentTarget.selectionStart);
+        }}
         onKeyUp={follow}
       />
+      {picked && (
+        <div className="http-var-list" role="listbox" id={`${id}-list`} aria-label="Variables">
+          {hints.map((hint, i) => (
+            <div
+              key={hint.name}
+              id={`${id}-${i}`}
+              role="option"
+              aria-selected={hint === picked}
+              className={`http-var-option${hint === picked ? " active" : ""}`}
+              // Picked without taking the focus from the field.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                pick(hint.name);
+              }}
+            >
+              <span className="http-mono">{`{{${hint.name}}}`}</span>
+              <span className="http-var-value">{hint.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {marked && (
         <span ref={over} className="http-var-over" aria-hidden="true">
           <span className="http-var-line">
@@ -833,6 +962,7 @@ function RequestView({
   // Keyed by what the values say, not by the map: typing makes a new map of the same values,
   // and new marks would have the editors draw every variable again.
   const marks = useMemo(() => variableMarks(values), [valuesKey]);
+  const typed = useMemo(() => [marks, variableCompletion(values)], [valuesKey]);
   const { copied, copy } = useCopied();
   const notIn = (names: string[]) => (names.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${names.map((m) => `{{${m}}}`).join(", ")}` : undefined);
   const missing = notIn(resolved.missing);
@@ -928,7 +1058,7 @@ function RequestView({
             {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" values={values} onChange={(rows) => onEdit(withParams(request, rows))} />}
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
-            {tab === "body" && <BodyEditor body={request.body} values={values} marks={marks} onChange={(body) => set({ body })} />}
+            {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
             {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
             {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
@@ -1441,7 +1571,8 @@ function EnvironmentForm({
   const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
   const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
   // Only a secret saved under the name the row still has: its value is what the eye asks for.
-  const saved = (v: Row) => v.secret && environment.variables.some((s) => s.secret && s.key === v.key);
+  const sealed = new Set(environment.variables.filter((s) => s.secret).map((s) => s.key));
+  const saved = (v: Row) => v.secret && sealed.has(v.key);
   const reveal = (i: number, v: Row) => {
     if (v.shown) return put(i, { shown: false });
     if (v.value !== "") return put(i, { shown: true });
