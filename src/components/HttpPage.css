@@ -983,13 +983,36 @@
   color: var(--red);
 }
 
+/* The environment's sheet reads at the user's text size: a label column in em, on one
+   line, so "Agent access" neither wraps nor pushes its field off the others' edge. */
+.http-env .http-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 9em;
+  white-space: nowrap;
+}
 .http-env .http-pairs {
   margin-top: 4px;
 }
+/* The agent's access drawn as the fields around it are, its text on their edge. */
+.http-env .http-field-row .chip {
+  min-width: 14em;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-soft);
+  color: var(--text);
+}
+.http-env .http-field-row .chip .chip-label {
+  flex: 1;
+  text-align: left;
+}
 /* The eye and the lock side by side: an icon button is a block of its own, and two would stack. */
+/* Right-aligned: the lock keeps its place whether an eye stands before it or not. */
 .http-env-secret {
+  width: 56px;
   white-space: nowrap;
-  text-align: center;
+  text-align: right;
 }
 .http-env-secret > .http-icon-button {
   display: inline-grid;
@@ -1000,8 +1023,14 @@
 }
 .http-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
   margin-top: 6px;
+}
+.http-actions > .http-quiet,
+.http-actions > .http-error {
+  margin: 0;
 }
 
 /* Text shown in the editor: selected, copied and searched like a file's. */

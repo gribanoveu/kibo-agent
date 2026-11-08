@@ -1831,7 +1831,6 @@ function EnvironmentForm({
       <p className="http-quiet">
         Saved as you leave a field. Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.
       </p>
-      {said && <p className={said.error ? "http-error" : "http-quiet"}>{said.text}</p>}
       <div className="http-actions">
         <button
           type="button"
@@ -1846,6 +1845,8 @@ function EnvironmentForm({
           <Trash2 size={13} />
           Delete…
         </button>
+        <span className="http-spacer" />
+        {said && <span className={said.error ? "http-error" : "http-quiet"}>{said.text}</span>}
       </div>
     </div>
   );
