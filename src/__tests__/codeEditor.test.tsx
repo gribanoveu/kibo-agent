@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { act, render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { CodeEditor } from "../components/CodeEditor";
 
 const viewOf = (container: HTMLElement) => EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement)!;
@@ -26,6 +27,17 @@ describe("a text put into the editor from outside", () => {
     const page = render(<CodeEditor text="one" language="text" />);
     page.rerender(<CodeEditor text="two" language="text" />);
     expect(undoDepth(viewOf(page.container).state)).toBe(0);
+  });
+
+  test("a long response is parsed to its end when shown, and when it is replaced", async () => {
+    const long = (key: string, items: number) => JSON.stringify(Array.from({ length: items }, (_, i) => ({ [key]: i, name: `item ${i}` })), null, 2);
+    const page = render(<CodeEditor text={long("id", 4000)} language="json" />);
+    const view = viewOf(page.container);
+    await waitFor(() => expect(syntaxTree(view.state).length).toBeGreaterThan(0));
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    // Large enough that the replacing transaction's own parse stops short of the end.
+    page.rerender(<CodeEditor text={long("key", 20000)} language="json" />);
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
   });
 
   test("the label follows the text it names", () => {

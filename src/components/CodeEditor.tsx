@@ -6,6 +6,7 @@ import {
   codeFolding,
   foldGutter,
   foldService,
+  forceParsing,
   HighlightStyle,
   LanguageDescription,
   LanguageSupport,
@@ -111,6 +112,19 @@ const named = new Compartment();
 const labelled = (label?: string) => (label ? EditorView.contentAttributes.of({ "aria-label": label }) : []);
 const readOnlyUnless = (onChange: ((text: string) => void) | undefined) => EditorState.readOnly.of(!onChange);
 
+/** How long a text only read may hold the window to be coloured whole when shown. */
+const PARSE_BUDGET_MS = 150;
+
+/**
+ * A text only read — a response, a script — coloured to its end now, not as the
+ * lazy parse catches up with the scroll. What the budget does not reach, a body
+ * of megabytes, stays lazy rather than freezing the window. An editable text keeps
+ * the lazy parse: it changes under the cursor, and the visible part is what counts.
+ */
+function parseWhole(editor: EditorView | null, editable: boolean) {
+  if (editor && !editable) forceParsing(editor, editor.state.doc.length, PARSE_BUDGET_MS);
+}
+
 type Props = {
   text: string;
   /** A language CodeMirror knows by name — `json`, `xml`, `javascript`, `http`; anything else is plain. */
@@ -193,7 +207,11 @@ export function CodeEditor({ text, language, onChange, numbered = true, label, e
     else
       found
         .load()
-        .then((support) => live && view.current === editor && editor?.dispatch({ effects: syntax.reconfigure(support) }))
+        .then((support) => {
+          if (!live || view.current !== editor || !editor) return;
+          editor.dispatch({ effects: syntax.reconfigure(support) });
+          parseWhole(editor, latest.current !== undefined);
+        })
         // A chunk that failed to load leaves the text plain.
         .catch(() => {});
     return () => {
@@ -210,6 +228,7 @@ export function CodeEditor({ text, language, onChange, numbered = true, label, e
       changes: { from: 0, to: editor.state.doc.length, insert: text },
       annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(latest.current !== undefined), isolateHistory.of("full")],
     });
+    parseWhole(editor, latest.current !== undefined);
   }, [text]);
 
   return <div ref={host} className="code-editor" />;
