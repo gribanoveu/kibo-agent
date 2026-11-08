@@ -197,7 +197,15 @@
 .http-rename:focus {
   border-color: var(--accent);
 }
-/* Where a request or folder may move: every place in one scrolling list. */
+/* Where a request or folder may move: the tree of places, folding, in one scrolling list. */
+.http-move {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.http-move-all {
+  align-self: flex-start;
+}
 .http-move-list {
   display: flex;
   flex-direction: column;
@@ -205,8 +213,23 @@
   max-height: 320px;
   overflow-y: auto;
 }
+.http-move-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: calc(var(--depth) * 16px);
+}
+.http-move-gap {
+  flex: none;
+  width: 24px;
+}
 .http-move-target {
-  padding: 6px 8px;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
@@ -216,12 +239,29 @@
   text-align: left;
   cursor: pointer;
 }
-.http-move-target:hover {
+.http-move-target.collection {
+  font-weight: 600;
+}
+.http-move-target:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 .http-move-target.on {
   background: var(--bg-active);
-  box-shadow: inset 2px 0 0 var(--accent);
+}
+.http-move-target:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.http-move-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.http-move-here {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-weight: 400;
 }
 .http-confirm {
   margin: 0;

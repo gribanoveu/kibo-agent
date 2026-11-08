@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { Decoration, keymap, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext } from "@codemirror/autocomplete";
@@ -68,6 +68,7 @@ import {
   VARIABLE,
   putVariable,
   moveTargets,
+  type MovePlace,
   variableAt,
   variableHints,
   variableParts,
@@ -414,24 +415,10 @@ export function HttpPage() {
           </>
         }
       >
-        {targets.length === 0 ? (
+        {targets.every((t) => t.here) ? (
           <p className="http-confirm">There is nowhere else to put it: make a folder or another collection first.</p>
         ) : (
-          // A list in the dialog, not a dropdown: the dialog's body scrolls, and would cut a menu off.
-          <div className="http-move-list" role="listbox" aria-label="Where to move it — last into">
-            {targets.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="option"
-                aria-selected={moving?.to === t.id}
-                className={`http-move-target${moving?.to === t.id ? " on" : ""}`}
-                onClick={() => moving && setMoving({ ...moving, to: t.id })}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          moving && <MovePicker key={moving.id} places={targets} value={moving.to} onPick={(to) => setMoving({ ...moving, to })} />
         )}
       </Modal>
       <Modal
@@ -738,6 +725,68 @@ const isIds = (v: unknown): v is string[] => Array.isArray(v) && v.every((id) =>
 const PANE_MIN = { stacked: 160, side: 400 };
 const RESPONSE_MIN = { stacked: 160, side: 320 };
 const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
+
+/**
+ * Where a move goes, as the tree it is: a list in the dialog, not a dropdown — the
+ * dialog's body scrolls, and would cut a menu off. A place that holds others folds;
+ * at first only the way to where the item is now is open, so many collections are
+ * a short list.
+ */
+function MovePicker({ places, value, onPick }: { places: MovePlace[]; value: string | null; onPick: (id: string) => void }) {
+  const holders = new Set(places.flatMap((p) => p.parents));
+  const [closed, setClosed] = useState(() => {
+    const here = places.find((p) => p.here);
+    const open = new Set(here ? [...here.parents, here.id] : []);
+    return new Set([...holders].filter((id) => !open.has(id)));
+  });
+  const fold = (id: string) =>
+    setClosed((c) => {
+      const next = new Set(c);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const all = closed.size > 0;
+  return (
+    <div className="http-move">
+      {holders.size > 0 && (
+        <button type="button" className="http-bar-button http-move-all" onClick={() => setClosed(all ? new Set() : new Set(holders))}>
+          {all ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {all ? "Expand all" : "Collapse all"}
+        </button>
+      )}
+      <div className="http-move-list" role="listbox" aria-label="Where to move it — last into">
+        {places
+          .filter((p) => !p.parents.some((id) => closed.has(id)))
+          .map((p) => (
+            <div key={p.id} className="http-move-row" style={{ "--depth": p.parents.length } as CSSProperties}>
+              {holders.has(p.id) ? (
+                <button type="button" className="http-icon-button" aria-label={`${closed.has(p.id) ? "Expand" : "Collapse"} ${p.label}`} aria-expanded={!closed.has(p.id)} onClick={() => fold(p.id)}>
+                  {closed.has(p.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+              ) : (
+                <span className="http-move-gap" />
+              )}
+              <button
+                type="button"
+                role="option"
+                aria-label={p.label}
+                aria-selected={value === p.id}
+                disabled={p.here}
+                title={p.here ? "It is here now" : p.label}
+                className={`http-move-target${p.parents.length === 0 ? " collection" : ""}${value === p.id ? " on" : ""}`}
+                onClick={() => onPick(p.id)}
+              >
+                {p.parents.length > 0 && <Folder size={13} className="http-tree-icon" />}
+                <span className="http-move-name">{p.name}</span>
+                {p.here && <span className="http-move-here">here now</span>}
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
 
 /** What a variable is said to be on hover: its value, or that nothing in scope has it. */
 const variableTitle = (name: string, value: string | null) => (value === null ? `{{${name}}} is not set in the environment or the collection` : `{{${name}}} = ${value}`);

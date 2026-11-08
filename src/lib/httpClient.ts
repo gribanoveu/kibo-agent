@@ -424,18 +424,21 @@ export function moveNode(collections: Collection[], id: string, to: string): Col
   return moved ? addItem(removeNode(collections, id), to, moved) : collections;
 }
 
+/** A collection or folder in the tree a move picks from; `here` is where the item is now, not a place to pick. */
+export type MovePlace = { id: string; name: string; label: string; parents: string[]; here: boolean };
+
 /**
- * Where a folder or request may go: every collection and folder but itself, what it
- * holds and the one it is in now — each named by its path. A collection whose file
- * does not read is not one.
+ * The tree a folder or request may move into, in order: every collection and folder
+ * but itself and what it holds, each with its path and the ones above it. A
+ * collection whose file does not read is not in it.
  */
-export function moveTargets(collections: Collection[], id: string): { id: string; label: string }[] {
-  const out: { id: string; label: string }[] = [];
-  const walk = (holder: { id: string; items: Item[] }, label: string) => {
-    if (!holder.items.some((item) => item.id === id)) out.push({ id: holder.id, label });
-    for (const item of holder.items) if (item.kind === "folder" && item.id !== id) walk(item, `${label} / ${item.name}`);
+export function moveTargets(collections: Collection[], id: string): MovePlace[] {
+  const out: MovePlace[] = [];
+  const walk = (holder: { id: string; name: string; items: Item[] }, label: string, parents: string[]) => {
+    out.push({ id: holder.id, name: holder.name, label, parents, here: holder.items.some((item) => item.id === id) });
+    for (const item of holder.items) if (item.kind === "folder" && item.id !== id) walk(item, `${label} / ${item.name}`, [...parents, holder.id]);
   };
-  for (const c of collections) if (!c.error) walk(c, c.name);
+  for (const c of collections) if (!c.error) walk(c, c.name, []);
   return out;
 }
 

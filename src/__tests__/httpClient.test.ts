@@ -82,10 +82,17 @@ describe("a folder or request moved", () => {
     { id: "x", name: "X", auth: { type: "none" }, variables: [], scripts: {}, items: [], error: "does not read" },
   ];
 
-  test("goes anywhere but itself, what it holds, where it is, and a file that does not read", () => {
-    expect(moveTargets(tree(), "f").map((t) => t.label)).toEqual(["B", "B / H"]);
-    expect(moveTargets(tree(), "r1").map((t) => t.label)).toEqual(["A", "A / F / G", "B", "B / H"]);
-    expect(moveTargets(tree(), "r1").map((t) => t.id)).toEqual(["a", "g", "b", "h"]);
+  test("goes anywhere but itself and what it holds, where it is marked, a file that does not read left out", () => {
+    const places = (id: string) => moveTargets(tree(), id).map((t) => [t.label, t.here]);
+    expect(places("f")).toEqual([["A", true], ["B", false], ["B / H", false]]);
+    expect(places("r1")).toEqual([["A", false], ["A / F", true], ["A / F / G", false], ["B", false], ["B / H", false]]);
+    expect(moveTargets(tree(), "r1").map((t) => [t.id, t.name, t.parents])).toEqual([
+      ["a", "A", []],
+      ["f", "F", ["a"]],
+      ["g", "G", ["a", "f"]],
+      ["b", "B", []],
+      ["h", "H", ["b"]],
+    ]);
   });
 
   test("goes last into its place with all it holds, and leaves where it was", () => {

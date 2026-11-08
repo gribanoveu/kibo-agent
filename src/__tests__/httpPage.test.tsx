@@ -236,7 +236,11 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("option", { name: /New folder/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Returns" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(called("http_item_add")).toHaveLength(2));
+    fireEvent.click(screen.getByLabelText("Actions for Returns"));
+    fireEvent.click(screen.getByRole("option", { name: /New folder/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Inner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(called("http_item_add")).toHaveLength(3));
     const folder = (called("http_item_add")[1]!.item as { id: string }).id;
 
     fireEvent.click(screen.getByLabelText("Actions for Health"));
@@ -244,7 +248,21 @@ describe("the HTTP page", () => {
     const move = screen.getByRole("button", { name: "Move" }) as HTMLButtonElement;
     expect(move.disabled).toBe(true);
     fireEvent.click(screen.getByRole("option", { name: "Orders API / Returns" }));
-    expect(screen.getByRole("option", { selected: true }).textContent).toBe("Orders API / Returns");
+    expect(screen.getByRole("option", { selected: true }).getAttribute("aria-label")).toBe("Orders API / Returns");
+    // Where it is now is shown, and not a place to pick.
+    expect((screen.getByRole("option", { name: "Orders API" }) as HTMLButtonElement).disabled).toBe(true);
+    // Folded at first but for the way to where it is; all opened; a place folded by its own
+    // arrow takes what it holds, however deep, and opens again; all folded.
+    const seen = (label: string) => screen.queryByRole("option", { name: label }) !== null;
+    expect(seen("Orders API / Returns / Inner")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(seen("Orders API / Returns / Inner")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Orders API" }));
+    expect([seen("Orders API / Returns"), seen("Orders API / Returns / Inner")]).toEqual([false, false]);
+    fireEvent.click(screen.getByRole("button", { name: "Expand Orders API" }));
+    expect([seen("Orders API / Returns"), seen("Orders API / Returns / Inner")]).toEqual([true, true]);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(seen("Orders API / Returns")).toBe(false);
     fireEvent.click(move);
     await waitFor(() => expect(called("http_item_move")).toEqual([{ collection: "c", id: "r2", to: "c", parent: folder }]));
     // Shown in it at once: the folder opened, the request inside.
