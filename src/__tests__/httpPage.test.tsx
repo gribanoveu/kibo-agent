@@ -327,6 +327,18 @@ describe("the HTTP page", () => {
     expect((called("http_environment_save")[0]!.environment as Environment).agent).toBe("readOnly");
   });
 
+  test("the writing modes are offered and saved by name", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.click(screen.getByTitle("What the agent may do here"));
+    expect(screen.getByRole("option", { name: /Writes as other tools/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: /Ask for writes/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).agent).toBe("askForWrites");
+  });
+
   test("a renamed secret goes back as the mask, which the backend refuses rather than saving it empty", async () => {
     localStorage.setItem("http.environment", JSON.stringify("stage"));
     await shown();

@@ -1399,6 +1399,8 @@ type Row = EnvVariable & { kept?: boolean };
 const AGENT_ACCESS = [
   { value: "off", label: "Off", hint: "the agent does not know it is here" },
   { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS to your collections' hosts, with no card; it reads the values that are not secret" },
+  { value: "askForWrites", label: "Ask for writes", hint: "reads with no card; POST, PUT, PATCH and DELETE ask every time, even when always allowed or in Auto" },
+  { value: "writesAsOtherTools", label: "Writes as other tools", hint: "reads with no card; a write asks as any change does — Always allow and Auto skip the card" },
 ];
 
 function EnvironmentForm({
