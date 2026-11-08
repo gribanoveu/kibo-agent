@@ -1392,17 +1392,18 @@ mod tests {
             json!({"type": "oauth2", "oauth2": [{"key": "accessTokenUrl", "value": "{{baseUrl}}/oauth/token"}, {"key": "clientSecret", "value": "{{cs}}"}]}),
             json!(null),
         );
-        let names = ["cs", "apiKey", "user", "pass", "sess", "accept", "authHeader", "inner", "plain", "deep", "pw", "qk", "apiToken"];
+        let names = ["cs", "apiKey", "user", "pass", "sess", "accept", "authHeader", "inner", "plain", "deep", "pw", "qk", "apiToken", "part"];
         let mut variables: Vec<Variable> = names.iter().map(|n| var(n, &format!("{n}-value"))).collect();
         variables.push(var("baseUrl", "https://api.test"));
         variables[6].value = "Bearer {{inner}}".into();
         variables[7].value = "{{deep}}".into();
+        variables[12].value = "tk-{{part}}".into();
         let environment = opened(variables);
         let reach = Reach::new(&[(&shop, vec![])], &[], &environment);
         assert!(reach.origins.contains("https://api.test"), "an oauth2 address is no credential: {reach:?}");
         let view = environment.described(&reach).unwrap();
         let hidden: Vec<&str> = view.variables.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| k.as_str()).collect();
-        assert_eq!(hidden, ["cs", "apiKey", "user", "pass", "sess", "authHeader", "inner", "deep", "pw", "qk", "apiToken"], "a chain a → b → c, a field and a parameter by their key, a variable by its name");
+        assert_eq!(hidden, ["cs", "apiKey", "user", "pass", "sess", "authHeader", "inner", "deep", "pw", "qk", "apiToken", "part"], "a chain a → b → c, a field and a parameter by their key, a variable by its name");
         assert!(view.variables.contains(&("accept".to_string(), Some("accept-value".to_string()))));
 
         let (prepared, scope) = environment.agent_request(&ask("GET", "{{baseUrl}}/x?k={{apiKey}}&p={{plain}}", &[]), &reach).unwrap();
