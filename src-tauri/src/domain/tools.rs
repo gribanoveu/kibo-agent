@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::domain::command_risk::{self, CommandRisk};
-use crate::domain::http_client::{is_read, AgentAccess};
+use crate::domain::http_client::{acts_as, is_read, AgentAccess};
 
 /// A tool's identity, known from the wire name alone — before its arguments
 /// are parsed, and without borrowing them. That is what lets it key the
@@ -428,7 +428,7 @@ impl ToolName {
             | ToolName::DeepseekFetch
             // A server asked, nothing left open after it.
             | ToolName::Mongo => true,
-            // One at a time: it will write (HC-8), and a stand is the user's to load.
+            // One at a time: it writes, and a stand is the user's to load.
             ToolName::HttpRequest
             | ToolName::WriteFile
             | ToolName::EditFile
@@ -508,7 +508,6 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
-            | ToolName::HttpRequest
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -522,6 +521,8 @@ impl ToolName {
             ToolName::RunCommand | ToolName::Mcp => false,
             // The folder's memory file and the knowledge base, which stay.
             ToolName::Remember | ToolName::KnowledgeWrite => false,
+            // A stand, which a rewind does not reach: a write there stays.
+            ToolName::HttpRequest => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // A button under the answer; nothing outside the chat.
@@ -1426,6 +1427,10 @@ pub enum ToolError {
     /// around.
     #[error("a hook refused this call: {0}")]
     BlockedByHook(String),
+    /// A call its round let through unasked that asks now: a setting — an HTTP
+    /// environment's mode, "Always allow" — changed while another call's card waited.
+    #[error("this call needs the user's approval now, and did not when its round paused — a setting changed while the card waited; call it again to ask")]
+    AsksNow,
     /// Arguments that did not deserialize into the struct their tool expects.
     ///
     /// `reason` is JSON-path-annotated (`edits[1]: missing field \`old\``)
@@ -1703,7 +1708,7 @@ impl ToolCall {
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
             // So is `httpRequest`: a read asks nobody, in any mode.
-            ToolCall::HttpRequest(args) => !is_read(&args.method()),
+            ToolCall::HttpRequest(args) => !is_read(&args.acts_as()),
             _ => self.name().is_mutating(),
         }
     }
@@ -2112,6 +2117,12 @@ pub struct HttpRequestArgs {
 }
 
 impl HttpRequestArgs {
+    /// The method the call acts as — a method-override header's write over the
+    /// request line ([`acts_as`]). What asks, and what Read only refuses.
+    pub fn acts_as(&self) -> String {
+        acts_as(&self.method(), self.headers.iter().flatten().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
     /// In capitals; GET when the model left it out or blank.
     pub fn method(&self) -> String {
         self.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase)

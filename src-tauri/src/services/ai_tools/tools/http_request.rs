@@ -27,7 +27,7 @@ pub(super) fn definition() -> LlmToolDefinition {
             otherwise after the user approves, when its mode asks. Call it first with no `url`: you get the environment's variables, the addresses you may send to, and the requests \
             in the user's collections. A `url` must go to one of those addresses — write it as the collections do, \
             `{{baseUrl}}/orders/42?expand=items`. Another host is refused: ask the user to add a request for it on the HTTP \
-            page, or give them a curl command to run themselves. `{{name}}` in the url or a header is filled in from the \
+            page, or give them a curl command to run themselves. `{{name}}` in the url, a header or the body is filled in from the \
             environment; a hidden variable's value never reaches you: write `Authorization: Bearer {{token}}`. \
             A redirect is not followed: you get its status and `location`. No cookies are sent or kept."
             .into(),
@@ -151,10 +151,15 @@ pub(crate) mod tests {
         reply: Option<AgentReply>,
         view: Option<StandView>,
         asked: Mutex<Vec<(String, AgentRequest)>>,
+        /// The environments' file could not be read.
+        unreadable: bool,
     }
 
     impl HttpStands for Canned {
         fn open(&self) -> Result<Vec<OpenStand>, HttpError> {
+            if self.unreadable {
+                return Err(HttpError::NoneOpen);
+            }
             Ok(self.open.clone())
         }
 
@@ -172,6 +177,11 @@ pub(crate) mod tests {
     /// One environment that answers 200, for what is about the way there.
     pub(crate) fn answering() -> Arc<dyn HttpStands> {
         opened_as(AgentAccess::ReadOnly)
+    }
+
+    /// Environments that cannot be read.
+    pub(crate) fn unreadable() -> Arc<dyn HttpStands> {
+        Arc::new(Canned { unreadable: true, ..Canned::default() })
     }
 
     /// The same, open to the agent as `access` says.
@@ -354,6 +364,19 @@ pub(crate) mod tests {
                 Variables, written as {{name}}:\n  baseUrl = https://api.test\n  token — hidden: filled in on sending, never shown\n\
                 Requests in the user's collections:\n  Shop / List orders: GET {{baseUrl}}/orders";
             assert_eq!(text_of(result), expected);
+        }
+    }
+
+    /// The model learns before sending whether a write will be refused, or asked about.
+    #[test]
+    fn the_description_says_what_a_write_meets() {
+        for (access, said) in [
+            (AgentAccess::AskForWrites, "open to writes, each one after the user approves it"),
+            (AgentAccess::WritesAsOtherTools, "open to writes, approved as the user approves other changes"),
+        ] {
+            let view = view(&[], &[]).map(|v| StandView { access, ..v });
+            let (result, _) = call(Canned { open: stands(&["Stage"]), view, ..Canned::default() }, &HttpRequestArgs::default());
+            assert!(text_of(result).starts_with(&format!("Environment \"Stage\", {said}.")), "{access:?}");
         }
     }
 

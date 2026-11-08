@@ -130,6 +130,21 @@ pub enum AgentAccess {
     WritesAsOtherTools,
 }
 
+/// Headers a server may read as the method in place of the request line's.
+const METHOD_OVERRIDES: [&str; 3] = ["x-http-method-override", "x-http-method", "x-method-override"];
+
+/// What a request does to a server that honours a method override: a GET with
+/// `X-HTTP-Method-Override: DELETE` deletes. An override that names a read, or
+/// nothing, leaves the request line's method.
+pub fn acts_as<'a>(method: &str, headers: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
+    headers
+        .into_iter()
+        .filter(|(name, _)| METHOD_OVERRIDES.iter().any(|o| name.trim().eq_ignore_ascii_case(o)))
+        .map(|(_, value)| value.trim().to_ascii_uppercase())
+        .find(|value| !value.is_empty() && !is_read(value))
+        .unwrap_or_else(|| method.trim().to_ascii_uppercase())
+}
+
 /// GET, HEAD and OPTIONS: what reads, by RFC — what a Read only environment takes.
 pub fn is_read(method: &str) -> bool {
     matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS")
@@ -363,8 +378,9 @@ impl Environment {
             return Err(HttpError::NoneOpen);
         }
         let method = request.method.trim().to_ascii_uppercase();
-        if self.agent == AgentAccess::ReadOnly && !is_read(&method) {
-            return Err(HttpError::ReadOnly { environment: self.name.clone(), method });
+        let acts = acts_as(&method, request.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        if self.agent == AgentAccess::ReadOnly && !is_read(&acts) {
+            return Err(HttpError::ReadOnly { environment: self.name.clone(), method: acts });
         }
         let scope = Scope::new(&[&self.for_agent(&reach.credentials)]);
         let fill = |text: &str| scope.fill(text).map_err(|e| self.unknown_named(e));
@@ -1255,6 +1271,21 @@ mod tests {
             assert_eq!(refused(&stand(), ask(method, "{{baseUrl}}/x", &[])), HttpError::ReadOnly { environment: "Stage".into(), method: method.into() });
         }
         assert_eq!(refused(&stand(), ask("post", "{{baseUrl}}/x", &[])).to_string(), "\"Stage\" is read only for the agent: POST is refused — the user can change its agent access on the HTTP page");
+    }
+
+    /// A GET that a method-override header turns into a write is a write: Read only
+    /// refuses it, by the method it would act as; an override naming a read changes nothing.
+    #[test]
+    fn a_method_override_is_the_method() {
+        for header in ["X-HTTP-Method-Override", "x-http-method", " X-Method-Override "] {
+            let refused = refused(&stand(), ask("GET", "{{baseUrl}}/x", &[(header, " delete ")]));
+            assert_eq!(refused, HttpError::ReadOnly { environment: "Stage".into(), method: "DELETE".into() }, "{header}");
+        }
+        assert_eq!(agent_sends(&stand(), ask("GET", "{{baseUrl}}/x", &[("X-HTTP-Method-Override", "HEAD")])).sent.method, "GET");
+        assert_eq!(agent_sends(&stand(), ask("GET", "{{baseUrl}}/x", &[("X-Other", "DELETE")])).sent.method, "GET");
+        assert_eq!(acts_as("post", [("X-HTTP-Method-Override", "GET")]), "POST", "a read named over a write");
+        assert_eq!(acts_as(" get ", [("X-HTTP-Method", " ")]), "GET");
+        assert_eq!(acts_as("GET", [("X-HTTP-Method", "patch")]), "PATCH");
     }
 
     #[test]
