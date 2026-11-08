@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::domain::command_risk::{self, CommandRisk};
+use crate::domain::http_client::{is_read, AgentAccess};
 
 /// A tool's identity, known from the wire name alone — before its arguments
 /// are parsed, and without borrowing them. That is what lets it key the
@@ -349,6 +350,8 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete
+            // POST, PUT, DELETE to a stand; a read asks nobody (`ToolCall::is_risky`).
+            | ToolName::HttpRequest
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
             // goes through the approval gate, in Analyst too, the one place
@@ -394,8 +397,6 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
-            // GET, HEAD and OPTIONS only until the writing modes (HC-8), which make this true.
-            | ToolName::HttpRequest
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -716,6 +717,21 @@ impl ApprovalPolicy {
         }
     }
 
+    /// `httpRequest` with `method` into an environment of `access` (HC-8). A read
+    /// never asks. A write asks by the mode: Ask for writes every time, whatever
+    /// "Always allow" and Auto say, as a production cluster does; Writes as other
+    /// tools as any change does. Off and Read only ask nothing — the tool refuses.
+    pub fn stand_asks(&self, access: AgentAccess, method: &str, environment: &str) -> (bool, Option<String>) {
+        if is_read(method) {
+            return (false, None);
+        }
+        match access {
+            AgentAccess::Off | AgentAccess::ReadOnly => (false, None),
+            AgentAccess::AskForWrites => (true, Some(format!("\"{environment}\" asks for every write"))),
+            AgentAccess::WritesAsOtherTools => (self.requires_approval(ToolName::HttpRequest, true), None),
+        }
+    }
+
     /// "Always allow" from an approval card, by the name the call carried.
     pub fn allow_always(&mut self, wire_name: &str) -> Result<(), String> {
         if wire_name.starts_with(MCP_PREFIX) {
@@ -912,6 +928,8 @@ mod tests {
                 ToolName::Move,
                 // Unknown, so assumed.
                 ToolName::Mcp,
+                // A POST to a stand changes it; a GET is told apart per call (`is_risky`).
+                ToolName::HttpRequest,
             ])
         );
     }
@@ -1012,6 +1030,39 @@ mod tests {
         };
         assert!(!policy.requires_approval(ToolName::WriteFile, true));
         assert!(policy.requires_approval(ToolName::Delete, true));
+    }
+
+    /// A write into a stand asks by the environment's mode, and a read asks nobody in any.
+    /// Ask for writes holds under "Always allow" and Auto; Writes as other tools gives way to both.
+    #[test]
+    fn a_stand_asks_for_a_write_by_its_mode() {
+        let policy = |skip_all: bool, always: bool| {
+            let mut policy = ApprovalPolicy { skip_all, ..ApprovalPolicy::default() };
+            if always {
+                policy.allow_always("httpRequest").unwrap();
+            }
+            policy
+        };
+        let modes = [AgentAccess::Off, AgentAccess::ReadOnly, AgentAccess::AskForWrites, AgentAccess::WritesAsOtherTools];
+        for (skip_all, always) in [(false, false), (true, false), (false, true), (true, true)] {
+            let policy = policy(skip_all, always);
+            for access in modes {
+                for read in ["GET", " head ", "options"] {
+                    assert_eq!(policy.stand_asks(access, read, "Stage"), (false, None), "{access:?} {read}");
+                }
+                let asks = match access {
+                    AgentAccess::Off | AgentAccess::ReadOnly => false,
+                    AgentAccess::AskForWrites => true,
+                    AgentAccess::WritesAsOtherTools => !skip_all && !always,
+                };
+                for write in ["POST", "put", "PATCH", "DELETE"] {
+                    let (asked, why) = policy.stand_asks(access, write, "Stage");
+                    assert_eq!(asked, asks, "{access:?} {write} skip_all={skip_all} always={always}");
+                    let said = (access == AgentAccess::AskForWrites).then(|| "\"Stage\" asks for every write".to_string());
+                    assert_eq!(why, said, "{access:?}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -1651,6 +1702,8 @@ impl ToolCall {
             // The tool stays mutating — Analyst does not offer it —
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
+            // So is `httpRequest`: a read asks nobody, in any mode.
+            ToolCall::HttpRequest(args) => !is_read(&args.method()),
             _ => self.name().is_mutating(),
         }
     }
@@ -2051,8 +2104,18 @@ pub struct HttpRequestArgs {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Sent as written, `{{name}}` filled in.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub show_headers: Option<bool>,
+}
+
+impl HttpRequestArgs {
+    /// In capitals; GET when the model left it out or blank.
+    pub fn method(&self) -> String {
+        self.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

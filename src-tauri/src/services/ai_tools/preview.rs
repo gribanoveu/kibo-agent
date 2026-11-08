@@ -76,6 +76,8 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
 
         // Where that terminal is now is the user's doing, not a path of ours.
 
+        ToolCall::HttpRequest(args) => super::tools::http_request::preview(&args),
+
         // A rename, a new directory, a read: the arguments already say it.
         _ => ToolPreview::Nothing,
     }

@@ -328,7 +328,7 @@ pub struct Stands {
 impl HttpStands for Stands {
     fn open(&self) -> Result<Vec<OpenStand>, HttpError> {
         let open = http_env_store::list()?.into_iter().filter(|e| !e.agent.is_off());
-        Ok(open.map(|e| OpenStand { id: e.id, name: e.name }).collect())
+        Ok(open.map(|e| OpenStand { id: e.id, name: e.name, access: e.agent }).collect())
     }
 
     fn describe(&self, id: &str) -> Result<StandView, HttpError> {
@@ -1887,7 +1887,7 @@ mod tests {
     }
 
     fn ask(method: &str, url: &str, headers: &[(&str, &str)]) -> AgentRequest {
-        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body: None }
     }
 
     #[test]
@@ -1898,7 +1898,7 @@ mod tests {
             assert_eq!(stands.open().unwrap(), []);
             http_env_store::delete("stage").unwrap();
             opened_stage("http://127.0.0.1:1".into());
-            assert_eq!(stands.open().unwrap(), [OpenStand { id: "stage".into(), name: "Stage".into() }]);
+            assert_eq!(stands.open().unwrap(), [OpenStand { id: "stage".into(), name: "Stage".into(), access: AgentAccess::ReadOnly }]);
         });
     }
 
@@ -1927,6 +1927,29 @@ mod tests {
             assert!(entry.request.headers.contains(&("Authorization".into(), "Bearer •••".into())), "{:?}", entry.request.headers);
             assert!(!serde_json::to_string(entry).unwrap().contains("s3cr3t-t0k"));
             assert_eq!(told.load(Ordering::Relaxed), 1, "the page is told");
+        });
+    }
+
+    /// A write goes with its body filled in and typed as JSON; history keeps it masked.
+    #[test]
+    fn the_agents_write_carries_its_body_and_history_keeps_it_masked() {
+        with_app_dir("http-stands-write", || {
+            let (port, seen) = serve_once("HTTP/1.1 201 Created\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
+            let variables = vec![var("baseUrl", format!("http://127.0.0.1:{port}"), false), var("token", "s3cr3t-t0k".into(), true)];
+            http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::AskForWrites }).unwrap();
+            shop_to("{{baseUrl}}/orders");
+            let mut request = ask("POST", "{{baseUrl}}/orders", &[]);
+            request.body = Some(r#"{"key": "{{token}}"}"#.into());
+            stands("c").0.send("stage", &request).unwrap();
+
+            let wire = wire(&seen).to_ascii_lowercase();
+            assert!(wire.starts_with("post /orders http/1.1"), "{wire}");
+            assert!(wire.contains("content-type: application/json"), "{wire}");
+            assert!(wire.ends_with(r#"{"key": "s3cr3t-t0k"}"#), "{wire}");
+            let entry = &http_collections::history().unwrap()[0];
+            assert_eq!(entry.request.body.as_deref(), Some(r#"{"key": "•••"}"#));
+            assert!(!serde_json::to_string(entry).unwrap().contains("s3cr3t-t0k"));
         });
     }
 

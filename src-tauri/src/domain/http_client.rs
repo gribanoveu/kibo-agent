@@ -116,13 +116,23 @@ pub struct Environment {
 }
 
 /// How far the agent may go in an environment (decision 6): nowhere, until the
-/// user opens it. A file imported or from before this field is off.
+/// user opens it. A file imported or from before this field is off. A read
+/// never asks; what a write does is the mode's (`ApprovalPolicy::stand_asks`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentAccess {
     #[default]
     Off,
     ReadOnly,
+    /// A write asks every time, even under "Always allow" and in Auto.
+    AskForWrites,
+    /// A write asks as another changing tool does.
+    WritesAsOtherTools,
+}
+
+/// GET, HEAD and OPTIONS: what reads, by RFC — what a Read only environment takes.
+pub fn is_read(method: &str) -> bool {
+    matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS")
 }
 
 impl AgentAccess {
@@ -131,11 +141,12 @@ impl AgentAccess {
     }
 }
 
-/// An environment the agent may name.
+/// An environment the agent may name, and how far it may go there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenStand {
     pub id: String,
     pub name: String,
+    pub access: AgentAccess,
 }
 
 /// What the model asked for, its `{{name}}` still written out.
@@ -144,6 +155,7 @@ pub struct AgentRequest {
     pub method: String,
     pub url: String,
     pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
 }
 
 /// What the user's collections make of one environment for the agent (HC-7a):
@@ -351,7 +363,7 @@ impl Environment {
             return Err(HttpError::NoneOpen);
         }
         let method = request.method.trim().to_ascii_uppercase();
-        if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+        if self.agent == AgentAccess::ReadOnly && !is_read(&method) {
             return Err(HttpError::ReadOnly { environment: self.name.clone(), method });
         }
         let scope = Scope::new(&[&self.for_agent(&reach.credentials)]);
@@ -367,12 +379,19 @@ impl Environment {
             let origin = if origin_of(&filled.shown).as_ref() == Some(&origin) { origin } else { "a host with a hidden value in it".into() };
             return Err(HttpError::Untrusted { url: request.url.clone(), origin, environment: self.name.clone(), trusted });
         }
-        let mut headers = Vec::with_capacity(request.headers.len());
+        let mut headers = Vec::with_capacity(request.headers.len() + 1);
         for (name, value) in &request.headers {
             if name.eq_ignore_ascii_case("host") {
                 return Err(HttpError::HostHeader);
             }
-            headers.push((name, value, fill(value)?));
+            headers.push((name.clone(), value.clone(), fill(value)?));
+        }
+        let body = request.body.as_deref().map(fill).transpose()?;
+        // Many APIs answer 415 to JSON without its type, and the model spends a step on it.
+        let json = body.as_ref().is_some_and(|b| serde_json::from_str::<Value>(&b.sent).is_ok_and(|v| v.is_object() || v.is_array()));
+        if json && !headers.iter().any(|(name, _, _)| name.eq_ignore_ascii_case("content-type")) {
+            let plain = Filled { sent: "application/json".into(), shown: "application/json".into() };
+            headers.push(("Content-Type".into(), String::new(), plain));
         }
         // A variable in a credential's header is masked whatever it says, by its last
         // word: `Bearer` stays, so history still says which scheme went. What the model
@@ -384,8 +403,8 @@ impl Environment {
             .filter(|word| word.chars().count() >= 4);
         let scope = scope.keeping(credentials);
         let written = |pick: fn(&Filled) -> &String| headers.iter().map(|(k, _, v)| (k.to_string(), pick(v).clone())).collect();
-        let sent = Outgoing { method, url: url.into(), headers: written(|f| &f.sent), body: None, digest: None };
-        let shown = Outgoing { url: scope.hide(&sent.url), headers: written(|f| &f.shown), ..sent.clone() };
+        let sent = Outgoing { method, url: url.into(), headers: written(|f| &f.sent), body: body.as_ref().map(|b| b.sent.clone()), digest: None };
+        let shown = Outgoing { url: scope.hide(&sent.url), headers: written(|f| &f.shown), body: body.map(|b| scope.hide(&b.shown)), ..sent.clone() };
         Ok((Prepared { sent, shown }, scope))
     }
 
@@ -1187,7 +1206,7 @@ mod tests {
     }
 
     fn ask(method: &str, url: &str, headers: &[(&str, &str)]) -> AgentRequest {
-        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body: None }
     }
 
     fn stand() -> Environment {
@@ -1236,6 +1255,51 @@ mod tests {
             assert_eq!(refused(&stand(), ask(method, "{{baseUrl}}/x", &[])), HttpError::ReadOnly { environment: "Stage".into(), method: method.into() });
         }
         assert_eq!(refused(&stand(), ask("post", "{{baseUrl}}/x", &[])).to_string(), "\"Stage\" is read only for the agent: POST is refused — the user can change its agent access on the HTTP page");
+    }
+
+    #[test]
+    fn a_mode_open_to_writes_lets_every_method_through() {
+        for access in [AgentAccess::AskForWrites, AgentAccess::WritesAsOtherTools] {
+            let open = Environment { agent: access, ..stand() };
+            for method in ["GET", "post", "PUT", "PATCH", "DELETE"] {
+                assert_eq!(agent_sends(&open, ask(method, "{{baseUrl}}/x", &[])).sent.method, method.to_ascii_uppercase(), "{access:?}");
+            }
+        }
+    }
+
+    /// The body is filled in as the url is, and a secret in it is masked in what is shown and kept.
+    #[test]
+    fn a_body_goes_filled_in_and_a_secret_in_it_is_shown_masked() {
+        let open = Environment { agent: AgentAccess::WritesAsOtherTools, ..stand() };
+        let mut request = ask("POST", "{{baseUrl}}/orders", &[]);
+        request.body = Some(r#"{"id": {{id}}, "key": "{{token}}"}"#.into());
+        let prepared = agent_sends(&open, request);
+        assert_eq!(prepared.sent.body.as_deref(), Some(r#"{"id": 42, "key": "s3cr3t"}"#));
+        assert_eq!(prepared.shown.body.as_deref(), Some(r#"{"id": 42, "key": "•••"}"#));
+        let mut unknown = ask("POST", "{{baseUrl}}/orders", &[]);
+        unknown.body = Some("{{nope}}".into());
+        assert!(matches!(refused(&open, unknown), HttpError::UnknownIn { names, .. } if names == ["nope"]));
+    }
+
+    /// JSON — an object or an array — with no type of its own goes as application/json;
+    /// a type the model gave, in any case, stays the only one, and other text gets none.
+    #[test]
+    fn json_with_no_type_goes_as_json_and_nothing_else_gets_one() {
+        let open = Environment { agent: AgentAccess::WritesAsOtherTools, ..stand() };
+        let types = |body: &str, headers: &[(&str, &str)]| {
+            let mut request = ask("POST", "{{baseUrl}}/x", headers);
+            request.body = Some(body.into());
+            let prepared = agent_sends(&open, request);
+            assert_eq!(prepared.sent.headers, prepared.shown.headers);
+            prepared.sent.headers.into_iter().filter(|(k, _)| k.eq_ignore_ascii_case("content-type")).map(|(_, v)| v).collect::<Vec<_>>()
+        };
+        assert_eq!(types(r#"{"a": {{id}}}"#, &[]), ["application/json"]);
+        assert_eq!(types("[1, 2]", &[]), ["application/json"]);
+        assert_eq!(types("{\"a\": 1}", &[("content-type", "text/plain")]), ["text/plain"]);
+        for other in ["a=1&b=2", "42", "\"text\"", "{not json", ""] {
+            assert_eq!(types(other, &[]), Vec::<String>::new(), "{other}");
+        }
+        assert_eq!(agent_sends(&open, ask("POST", "{{baseUrl}}/x", &[])).sent.headers, [], "no body, no type");
     }
 
     #[test]

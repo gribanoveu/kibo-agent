@@ -2222,6 +2222,13 @@ fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<String>) {
     if production && parsed.name().is_mutating() && parsed.name().wire_name().starts_with("kube") {
         return (true, Some("a production cluster — every change to it asks".to_string()));
     }
+    // A write to a stand asks by the environment's mode, read now (HC-8). One not
+    // open or not found asks nothing: the tool says so, and there is nothing to approve.
+    if let crate::domain::tools::ToolCall::HttpRequest(args) = &parsed {
+        let open = turn.http.as_deref().and_then(|stands| stands.open().ok()).unwrap_or_default();
+        let stand = crate::services::ai_tools::tools::http_request::stand(&open, args.environment.as_deref()).ok();
+        return stand.map_or((false, None), |s| policy.stand_asks(s.access, &args.method(), &s.name));
+    }
     // What a server says about its own tool is its word (`McpToolHints`):
     // "destructive" asks whatever "Always allow" says, "only reads" is put
     // on the card and lifts nothing.
@@ -4643,6 +4650,40 @@ mod tests {
         let requests = h.provider.requests();
         let ran = requests[2].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("h1")).unwrap();
         assert!(ran.content.as_deref().unwrap().starts_with("GET {{baseUrl}}/orders → 200"), "{:?}", ran.content);
+    }
+
+    /// A write asks by the environment's mode, read when the call comes: Ask for writes
+    /// even in Auto and says why, Writes as other tools as any change. A read asks in none,
+    /// and a call to an environment not open asks nothing — the tool refuses it.
+    #[test]
+    fn a_write_to_a_stand_asks_by_its_mode() {
+        use crate::domain::http_client::AgentAccess;
+        use crate::services::ai_tools::tools::http_request::tests::opened_as;
+        let run = |access: AgentAccess, approval: ApprovalPolicy, call: &str| {
+            let script = vec![
+                asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
+                asks(vec![wants("h1", "httpRequest", call)]),
+                text("done"),
+            ];
+            let mut h = harness("loop-http-write", script);
+            h.features = Features::all();
+            h.http = Some(opened_as(access));
+            h.approval = approval;
+            match h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes") {
+                ChatStreamOutcome::PendingApproval(pending) => Some(pending.calls[0].reason.clone()),
+                _ => None,
+            }
+        };
+        let auto = ApprovalPolicy { skip_all: true, ..ApprovalPolicy::default() };
+        let post = r#"{"method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#;
+        let get = r#"{"url":"{{baseUrl}}/orders"}"#;
+        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), post), Some(Some("\"Stage\" asks for every write".into())));
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), get), None, "a read");
+        assert_eq!(run(AgentAccess::WritesAsOtherTools, asking(), post), Some(None));
+        assert_eq!(run(AgentAccess::WritesAsOtherTools, auto, post), None, "Auto");
+        assert_eq!(run(AgentAccess::ReadOnly, asking(), post), None, "refused by the tool, not asked");
+        let elsewhere = r#"{"environment":"Prod","method":"DELETE","url":"{{baseUrl}}/orders"}"#;
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), elsewhere), None, "not open");
     }
 
     #[test]

@@ -102,6 +102,7 @@ pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmTool
     calls
         .iter()
         .map(|call| match parse_tool_call(call) {
+            Ok(crate::domain::tools::ToolCall::HttpRequest(args)) => tools::http_request::preview(&args),
             Ok(parsed) => tools::cluster::preview(pinned, &parsed),
             Err(e) => ToolPreview::Failed { reason: e.to_string() },
         })

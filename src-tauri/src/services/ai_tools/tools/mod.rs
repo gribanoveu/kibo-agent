@@ -626,6 +626,7 @@ mod definition_tests {
                     method: Some("GET".into()),
                     url: Some("{{baseUrl}}/orders?id=1".into()),
                     headers: Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into()),
+                    body: None,
                     show_headers: Some(true),
                 })],
             ),

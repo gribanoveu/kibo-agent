@@ -1,15 +1,18 @@
-//! `httpRequest` — the HTTP environments the user opened to the agent, read
-//! (`docs/45-http-client.md`, HC-7, HC-7a). The model sends where a request of
-//! the user's collections goes, and `{{name}}` is filled in by the environment:
-//! a hidden variable's value never reaches the model. Called without a `url` it
-//! describes the environment. A stand that does not answer is a result, told as an error.
+//! `httpRequest` — the HTTP environments the user opened to the agent
+//! (`docs/45-http-client.md`, HC-7, HC-7a, HC-8). The model sends where a request
+//! of the user's collections goes, and `{{name}}` is filled in by the environment:
+//! a hidden variable's value never reaches the model. A write goes as the
+//! environment's mode says — the card is the loop's (`ApprovalPolicy::stand_asks`).
+//! Called without a `url` it describes the environment. A stand that does not
+//! answer is a result, told as an error.
 
 use serde_json::json;
 
 use super::mcp::fit;
 use crate::domain::http_client::{AgentAccess, AgentRequest, HttpError, OpenStand, Outcome, StandView};
 use crate::domain::llm::LlmToolDefinition;
-use crate::domain::tools::{HttpRequestArgs, ToolDeps, ToolError, ToolResult};
+use crate::domain::tools::{ChangeDiff, HttpRequestArgs, ToolDeps, ToolError, ToolPreview, ToolResult};
+use crate::services::text_diff::diff_stats;
 
 /// The most of a response the model gets at once; the rest waits in a file.
 const MOST: usize = 8000;
@@ -19,8 +22,9 @@ const SHOWN: &[&str] = &["content-type", "location", "retry-after", "x-request-i
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "httpRequest".into(),
-        description: "Read from an HTTP environment the user opened to the agent on the HTTP page: GET, HEAD or OPTIONS. \
-            Call it first with no `url`: you get the environment's variables, the addresses you may send to, and the requests \
+        description: "Send a request into an HTTP environment the user opened to the agent on the HTTP page. GET, HEAD \
+            and OPTIONS always go; another method goes as the environment allows — refused when it is read only, \
+            otherwise after the user approves, when its mode asks. Call it first with no `url`: you get the environment's variables, the addresses you may send to, and the requests \
             in the user's collections. A `url` must go to one of those addresses — write it as the collections do, \
             `{{baseUrl}}/orders/42?expand=items`. Another host is refused: ask the user to add a request for it on the HTTP \
             page, or give them a curl command to run themselves. `{{name}}` in the url or a header is filled in from the \
@@ -32,8 +36,9 @@ pub(super) fn definition() -> LlmToolDefinition {
             "properties": {
                 "environment": {"type": "string", "description": "Its name; may be left out when only one is open"},
                 "url": {"type": "string", "description": "Where to send, `{{name}}` filled in; leave out to see what the environment holds"},
-                "method": {"type": "string", "enum": ["GET", "HEAD", "OPTIONS"], "description": "GET when left out"},
+                "method": {"type": "string", "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"], "description": "GET when left out"},
                 "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Sent as written, `{{name}}` filled in"},
+                "body": {"type": "string", "description": "Sent as written, `{{name}}` filled in; JSON goes as application/json unless a Content-Type says otherwise"},
                 "showHeaders": {"type": "boolean", "description": "All the response's headers, not the few that usually matter"}
             },
             "required": []
@@ -50,9 +55,9 @@ pub fn http_request(args: &HttpRequestArgs, deps: &ToolDeps) -> Result<ToolResul
         let summary = format!("{} · {} {}", view.name, view.origins.len(), if view.origins.len() == 1 { "address" } else { "addresses" });
         return Ok(ToolResult::HttpRequest { text: fit(described(&view), MOST), summary });
     };
-    let method = args.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase);
+    let method = args.method();
     let headers = args.headers.iter().flatten().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let request = AgentRequest { method: method.clone(), url: url.to_string(), headers };
+    let request = AgentRequest { method: method.clone(), url: url.to_string(), headers, body: args.body.clone() };
     let reply = stands.send(&stand.id, &request)?;
     let (status, headers, elapsed_ms) = match reply.outcome {
         Outcome::Response { status, headers, elapsed_ms, .. } => (status, headers, elapsed_ms),
@@ -69,6 +74,8 @@ fn described(view: &StandView) -> String {
     let access = match view.access {
         AgentAccess::Off => "off",
         AgentAccess::ReadOnly => "read only: GET, HEAD and OPTIONS",
+        AgentAccess::AskForWrites => "open to writes, each one after the user approves it",
+        AgentAccess::WritesAsOtherTools => "open to writes, approved as the user approves other changes",
     };
     let mut lines = vec![format!("Environment \"{}\", {access}.", view.name)];
     if view.origins.is_empty() {
@@ -91,8 +98,18 @@ fn described(view: &StandView) -> String {
     lines.join("\n")
 }
 
+/// The approval card's account of a call: where, what, its headers and body —
+/// as the model wrote them, `{{token}}` and not its value. Built from the call
+/// alone, so it is the same in Agent and in Chat.
+pub fn preview(args: &HttpRequestArgs) -> ToolPreview {
+    let place = args.environment.as_deref().map(str::trim).filter(|e| !e.is_empty()).map_or_else(|| "the environment open to the agent".to_string(), |e| format!("environment {e}"));
+    let notes = args.headers.iter().flatten().map(|(k, v)| format!("{k}: {v}")).collect();
+    let diffs = args.body.iter().map(|body| ChangeDiff { title: "Body".into(), diff: diff_stats("", body) }).collect();
+    ToolPreview::Change { place, summary: format!("{} {}", args.method(), args.url.as_deref().unwrap_or_default()), notes, production: false, diffs }
+}
+
 /// The environment by its name, any case; with none named, the only one open.
-fn stand<'a>(open: &'a [OpenStand], name: Option<&str>) -> Result<&'a OpenStand, HttpError> {
+pub(crate) fn stand<'a>(open: &'a [OpenStand], name: Option<&str>) -> Result<&'a OpenStand, HttpError> {
     let names = || open.iter().map(|s| format!("\"{}\"", s.name)).collect::<Vec<_>>().join(", ");
     let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
         return match open {
@@ -124,7 +141,7 @@ fn body_text(body: &[u8]) -> Option<String> {
 pub(crate) mod tests {
     use super::*;
     use crate::domain::http_client::{AgentReply, HttpStands};
-    use crate::domain::tools::ToolName;
+    use crate::domain::tools::{ToolCall, ToolName};
     use std::sync::{Arc, Mutex};
 
     /// Its environments, one canned reply, and what it was asked.
@@ -142,7 +159,7 @@ pub(crate) mod tests {
         }
 
         fn describe(&self, id: &str) -> Result<StandView, HttpError> {
-            self.asked.lock().unwrap().push((id.to_string(), AgentRequest { method: "describe".into(), url: String::new(), headers: vec![] }));
+            self.asked.lock().unwrap().push((id.to_string(), AgentRequest { method: "describe".into(), url: String::new(), headers: vec![], body: None }));
             Ok(self.view.clone().unwrap())
         }
 
@@ -154,11 +171,17 @@ pub(crate) mod tests {
 
     /// One environment that answers 200, for what is about the way there.
     pub(crate) fn answering() -> Arc<dyn HttpStands> {
-        Arc::new(Canned { open: stands(&["Stage"]), reply: reply(200, &[], b"ok"), ..Canned::default() })
+        opened_as(AgentAccess::ReadOnly)
+    }
+
+    /// The same, open to the agent as `access` says.
+    pub(crate) fn opened_as(access: AgentAccess) -> Arc<dyn HttpStands> {
+        let open = stands(&["Stage"]).into_iter().map(|s| OpenStand { access, ..s }).collect();
+        Arc::new(Canned { open, reply: reply(200, &[], b"ok"), ..Canned::default() })
     }
 
     fn stands(names: &[&str]) -> Vec<OpenStand> {
-        names.iter().map(|n| OpenStand { id: format!("id-{n}"), name: n.to_string() }).collect()
+        names.iter().map(|n| OpenStand { id: format!("id-{n}"), name: n.to_string(), access: AgentAccess::ReadOnly }).collect()
     }
 
     fn reply(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Option<AgentReply> {
@@ -228,10 +251,43 @@ pub(crate) mod tests {
         assert_eq!(asked[0].0, "id-Stage");
     }
 
-    /// No card asks for a read; with HC-8 the method decides, and this flips.
+    /// The tool writes, so Analyst never gets it; a call is risky only when its method is
+    /// not a read — no method at all is a GET.
     #[test]
-    fn reading_a_stand_asks_nobody() {
-        assert!(!ToolName::HttpRequest.is_mutating());
+    fn a_read_is_not_risky_and_a_write_is() {
+        assert!(ToolName::HttpRequest.is_mutating());
+        let risky = |method: Option<&str>| ToolCall::HttpRequest(HttpRequestArgs { method: method.map(Into::into), ..get("/x") }).is_risky();
+        for read in [None, Some("GET"), Some(" head "), Some("options"), Some("")] {
+            assert!(!risky(read), "{read:?}");
+        }
+        for write in ["POST", "put", "PATCH", "DELETE"] {
+            assert!(risky(Some(write)), "{write}");
+        }
+    }
+
+    /// The card says where, what, the headers and the body as the model wrote them —
+    /// `{{token}}`, never its value, which the call does not hold.
+    #[test]
+    fn the_card_shows_the_call_as_written() {
+        let headers = Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into());
+        let args = HttpRequestArgs { environment: Some(" Stage ".into()), method: Some("post".into()), headers, body: Some("{\"a\": 1}".into()), ..get("{{baseUrl}}/orders") };
+        let ToolPreview::Change { place, summary, notes, production, diffs } = preview(&args) else { panic!("a change") };
+        assert_eq!((place.as_str(), summary.as_str(), production), ("environment Stage", "POST {{baseUrl}}/orders", false));
+        assert_eq!(notes, ["Authorization: Bearer {{token}}"]);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].title, "Body");
+        assert!(diffs[0].diff.unified_diff.contains("+{\"a\": 1}"), "{:?}", diffs[0].diff);
+
+        let ToolPreview::Change { place, summary, notes, diffs, .. } = preview(&HttpRequestArgs { method: None, ..get("/x") }) else { panic!("a change") };
+        assert_eq!((place.as_str(), summary.as_str()), ("the environment open to the agent", "GET /x"));
+        assert!(notes.is_empty() && diffs.is_empty());
+    }
+
+    #[test]
+    fn a_body_reaches_the_stand_as_written() {
+        let args = HttpRequestArgs { method: Some("put".into()), body: Some("{\"id\": {{id}}}".into()), ..get("/orders/1") };
+        let (_, asked) = call(Canned { open: stands(&["Stage"]), reply: reply(200, &[], b""), ..Canned::default() }, &args);
+        assert_eq!((asked[0].1.method.as_str(), asked[0].1.body.as_deref()), ("PUT", Some("{\"id\": {{id}}}")));
     }
 
     #[test]
