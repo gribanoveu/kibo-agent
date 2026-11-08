@@ -109,6 +109,17 @@ after touching `infra/kube_client.rs`:
 cd src-tauri && cargo test live_cluster -- --ignored --nocapture
 ```
 
+The HTTP client's agent tool has a live test too: the Assistant role, a real model, a
+local orders API with a bug planted in it (an order that does not exist answers 200, its
+spec says 404), and a hidden check — the answer says FAIL, the stand got that request
+with the right token, no write reached it, the token never reached the model. The
+provider is the agent bench's (`AGENT_BENCH_*`). Run it after touching `httpRequest`,
+its description, or how a chat turn offers it:
+
+```bash
+cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… cargo test http_live -- --ignored --nocapture
+```
+
 Recording a call has a live test on the real microphone and output: a few seconds with a
 voice playing (`say`), checked to be a whole stereo WAV. Run it after touching
 `infra/meeting_recorder.rs` or `infra/microphone.rs`. From a terminal macOS asks for the
