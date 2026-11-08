@@ -620,11 +620,11 @@ mod definition_tests {
                 })],
             ),
             ToolName::HttpRequest => (
-                r#"{"method":"GET","path":"/orders"}"#,
+                r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#,
                 vec![ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs {
                     environment: Some("Stage".into()),
                     method: "GET".into(),
-                    path: "/orders?id=1".into(),
+                    url: Some("{{baseUrl}}/orders?id=1".into()),
                     headers: Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into()),
                     show_headers: Some(true),
                 })],

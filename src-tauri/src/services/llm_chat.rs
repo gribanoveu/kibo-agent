@@ -4633,7 +4633,7 @@ mod tests {
     fn the_agent_reads_a_stand_once_it_has_found_the_tool() {
         let script = vec![
             asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
-            asks(vec![wants("h1", "httpRequest", r#"{"method":"GET","path":"/orders"}"#)]),
+            asks(vec![wants("h1", "httpRequest", r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#)]),
             text("done"),
         ];
         let mut h = harness("loop-http-call", script);
@@ -4642,7 +4642,7 @@ mod tests {
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
         let requests = h.provider.requests();
         let ran = requests[2].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("h1")).unwrap();
-        assert!(ran.content.as_deref().unwrap().starts_with("GET /orders → 200"), "{:?}", ran.content);
+        assert!(ran.content.as_deref().unwrap().starts_with("GET {{baseUrl}}/orders → 200"), "{:?}", ran.content);
     }
 
     #[test]

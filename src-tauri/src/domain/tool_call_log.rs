@@ -438,7 +438,7 @@ mod tests {
             ),
             // What was asked is what the log is for, `{{token}}` written out; what came back goes as `text`.
             ToolName::HttpRequest => (
-                Some(ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs { method: "GET".into(), path: "/orders".into(), ..Default::default() })),
+                Some(ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs { method: "GET".into(), url: Some("{{baseUrl}}/orders".into()), ..Default::default() })),
                 ToolResult::HttpRequest { text: LEAK.into(), summary: "200 · 12 ms".into() },
             ),
             // A path and the page's name for its card: what the log is for.

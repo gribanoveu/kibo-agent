@@ -2043,8 +2043,12 @@ pub struct HttpRequestArgs {
     /// An environment's name, as the user named it on the HTTP page.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub environment: Option<String>,
+    /// GET when left out.
+    #[serde(default)]
     pub method: String,
-    pub path: String,
+    /// None asks what the environment holds, rather than sending.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub url: Option<String>,
     #[serde(default)]
     pub headers: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]

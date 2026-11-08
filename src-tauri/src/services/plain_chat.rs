@@ -337,14 +337,14 @@ mod tests {
     /// chat has no `toolSearch`, and the stand answers with no card asking first.
     #[test]
     fn the_assistant_reads_a_stand_while_the_feature_is_on() {
-        let mut chat = chat(vec![calls("httpRequest", r#"{"method":"GET","path":"/orders"}"#), said("It answers.")], None);
+        let mut chat = chat(vec![calls("httpRequest", r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#), said("It answers.")], None);
         chat.features = crate::domain::features::Features::from_settings(&[("http-client".to_string(), true)].into());
         chat.http = Some(crate::services::ai_tools::tools::http_request::tests::answering());
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("стенд жив?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
         assert_eq!(offered, ["httpRequest"]);
-        assert!(tool_result(&done.history).starts_with("GET /orders → 200"), "{}", tool_result(&done.history));
+        assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders → 200"), "{}", tool_result(&done.history));
     }
 
     /// The Assistant with the knowledge base on: told of it, offered its

@@ -11,7 +11,15 @@ use rand::Rng;
 use serde_json::{Map, Value};
 
 use super::http_auth::OAuth2;
-use super::http_client::{strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
+use super::http_client::{is_credential_header, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
+
+/// A request as the agent's description lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub method: String,
+    pub url: String,
+}
 
 /// A collection's scripts, for trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +209,57 @@ impl Collection {
             walk(items, &mut ids);
         }
         ids
+    }
+
+    /// Every request, at any depth, its address as a send fills it in.
+    pub fn requests(&self) -> Vec<Listed> {
+        let listed = |id: String| {
+            let item = *self.chain(&id)?.last()?;
+            let method = match item.get("request")? {
+                Value::Object(r) => r.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase(),
+                _ => "GET".into(),
+            };
+            let url = match item.get("request")? {
+                Value::String(url) => url.clone(),
+                r => url_of(r.get("url")),
+            };
+            Some(Listed { name: text_of(item.get("name")), method, url })
+        };
+        self.request_ids().into_iter().filter_map(listed).collect()
+    }
+
+    /// The `{{name}}`s written where a credential goes: anywhere in an `auth`, at
+    /// any level, and in the value of a header that carries one.
+    pub fn credential_names(&self) -> Vec<String> {
+        fn every_name(v: &Value, names: &mut Vec<String>) {
+            match v {
+                Value::String(text) => names.extend(names_in(text).map(String::from)),
+                Value::Array(items) => items.iter().for_each(|i| every_name(i, names)),
+                Value::Object(map) => map.values().for_each(|i| every_name(i, names)),
+                _ => {}
+            }
+        }
+        fn walk(v: &Value, names: &mut Vec<String>) {
+            match v {
+                Value::Array(items) => items.iter().for_each(|i| walk(i, names)),
+                Value::Object(map) => {
+                    for (key, value) in map {
+                        match key.as_str() {
+                            "auth" => every_name(value, names),
+                            "header" => {
+                                let carrying = value.as_array().into_iter().flatten().filter(|h| h.get("key").and_then(Value::as_str).is_some_and(is_credential_header));
+                                carrying.for_each(|h| every_name(&h["value"], names));
+                            }
+                            _ => walk(value, names),
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        walk(&self.root, &mut names);
+        names
     }
 
     /// The name of the item `id`, as `pm.info.requestName` says it.

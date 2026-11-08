@@ -3,12 +3,14 @@
 //! leaves, a JSON body's comments, a pasted cURL, and what the agent may send
 //! into an environment and read back. No I/O — `postman.rs` reads collections.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
 use super::http_scripts::ScriptReport;
+use super::postman::Collection;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -41,12 +43,12 @@ pub enum HttpError {
     Script(String),
     #[error("a {0} body is kept from Postman and not sent yet")]
     UnsupportedBody(String),
-    #[error("the host is fixed by the environment — pass a path")]
-    AbsolutePath,
-    #[error("{0} leaves the environment's base address")]
-    OutsideBase(String),
-    #[error("the environment's baseUrl is not an address: {0}")]
-    BadBaseUrl(String),
+    #[error("{0} is not an http or https address once filled in")]
+    NotAnAddress(String),
+    #[error("{url} goes to {origin}, and no request in the user's collections goes there with \"{environment}\" (they go to: {trusted}) — ask the user to add a request for it on the HTTP page, or give them a curl command to run themselves")]
+    Untrusted { url: String, origin: String, environment: String, trusted: String },
+    #[error("the host is the url's — send no Host header")]
+    HostHeader,
     #[error("not a cURL command Kibo reads: {0}")]
     BadCurl(String),
     #[error("no environment {0}")]
@@ -69,8 +71,6 @@ pub enum HttpError {
     SameName { name: String, count: usize },
     #[error("\"{environment}\" is read only for the agent: {method} is refused — the user can change its agent access on the HTTP page")]
     ReadOnly { environment: String, method: String },
-    #[error("\"{0}\" has no baseUrl variable — the user sets it on the HTTP page")]
-    NoBaseUrl(String),
     #[error("{} not in \"{environment}\", which has: {known}", .names.join(", "))]
     UnknownIn { names: Vec<String>, environment: String, known: String },
     #[error("the request failed: {0}")]
@@ -142,8 +142,85 @@ pub struct OpenStand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRequest {
     pub method: String,
-    pub path: String,
+    pub url: String,
     pub headers: Vec<(String, String)>,
+}
+
+/// What the user's collections make of one environment for the agent (HC-7a):
+/// where it may send, and which variables it may not read. The requests are the
+/// user's, written by hand or imported — not the model's — so where they go is trusted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reach {
+    /// `scheme://host[:port]` of a request, filled in with the environment.
+    pub origins: BTreeSet<String>,
+    /// Names a collection writes where a credential goes.
+    pub credentials: BTreeSet<String>,
+    /// `Collection / Request: METHOD url`, the url as written, without its query.
+    pub requests: Vec<String>,
+}
+
+impl Reach {
+    /// `collections` each with its variables as a send sees them, the layers of the page.
+    pub fn new(collections: &[(&Collection, Vec<Variable>)], globals: &[Variable], environment: &Environment) -> Reach {
+        let credentials: BTreeSet<String> = collections.iter().flat_map(|(c, _)| c.credential_names()).collect();
+        let mut reach = Reach { credentials, ..Reach::default() };
+        let mine = environment.for_agent(&reach.credentials);
+        for (collection, variables) in collections {
+            let theirs = hiding(variables, &reach.credentials);
+            let scope = Scope::new(&[globals, &theirs, &mine]);
+            for listed in collection.requests() {
+                // An address with a secret in it could not be named to the model.
+                if let Ok(filled) = scope.fill(&listed.url) {
+                    if let Some(origin) = origin_of(&filled.sent).filter(|o| origin_of(&filled.shown).as_ref() == Some(o)) {
+                        reach.origins.insert(origin);
+                    }
+                }
+                let url = listed.url.split('?').next().unwrap_or_default();
+                reach.requests.push(format!("{} / {}: {} {url}", collection.name(), listed.name, listed.method));
+            }
+        }
+        reach
+    }
+}
+
+/// An environment as the agent's description gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandView {
+    pub name: String,
+    pub access: AgentAccess,
+    pub origins: Vec<String>,
+    /// Each variable on, with its value unless it is hidden.
+    pub variables: Vec<(String, Option<String>)>,
+    pub requests: Vec<String>,
+}
+
+/// A header a credential travels in: its value is never the model's to read back.
+pub fn is_credential_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["auth", "token", "key", "secret", "session", "password", "cookie"].iter().any(|word| name.contains(word))
+}
+
+/// The `{{name}}`s in `text`.
+pub fn names_in(text: &str) -> impl Iterator<Item = &str> {
+    VARIABLE.captures_iter(text).filter_map(|m| m.get(1)).map(|m| m.as_str())
+}
+
+/// `http://` before an address with no scheme, as Postman takes `localhost:3000/x`.
+/// A scheme is letters before the first `://` — not the `://` of an address in its query.
+pub fn with_scheme(url: &str) -> Cow<'_, str> {
+    let scheme = url.split_once("://").is_some_and(|(s, _)| s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')));
+    if scheme { Cow::Borrowed(url) } else { Cow::Owned(format!("http://{url}")) }
+}
+
+/// An address's `scheme://host[:port]`; none for one that is not http or https.
+fn origin_of(url: &str) -> Option<String> {
+    let parsed = Url::parse(&with_scheme(url)).ok().filter(|u| matches!(u.scheme(), "http" | "https"))?;
+    Some(parsed.origin().ascii_serialization())
+}
+
+/// `variables` with those named in `hidden` made secrets.
+fn hiding(variables: &[Variable], hidden: &BTreeSet<String>) -> Vec<Variable> {
+    variables.iter().map(|v| Variable { secret: v.secret || hidden.contains(&v.key), ..v.clone() }).collect()
 }
 
 /// What the model may read of a response.
@@ -184,6 +261,7 @@ impl AgentReply {
 pub trait HttpStands: Send + Sync {
     /// The ones not off: another is not named to the model, in a list or an error.
     fn open(&self) -> Result<Vec<OpenStand>, HttpError>;
+    fn describe(&self, id: &str) -> Result<StandView, HttpError>;
     fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError>;
 }
 
@@ -217,15 +295,39 @@ impl Environment {
         Ok(Environment { variables, ..from_window })
     }
 
-    /// The agent's base address: the `baseUrl` variable, as a collection writes `{{baseUrl}}`.
-    pub fn base_url(&self) -> Option<&str> {
-        self.variables.iter().find(|v| v.enabled && v.key == "baseUrl").map(|v| v.value.as_str())
+    /// Its variables as the agent has them: a credential the collections write
+    /// is a secret, and so is any variable a secret's value names.
+    fn for_agent(&self, credentials: &BTreeSet<String>) -> Vec<Variable> {
+        let mut hidden: BTreeSet<String> = self.variables.iter().filter(|v| v.secret).map(|v| v.key.clone()).chain(credentials.iter().cloned()).collect();
+        loop {
+            let named = self.variables.iter().filter(|v| hidden.contains(&v.key)).flat_map(|v| names_in(&v.value));
+            let more: Vec<String> = named.filter(|n| !hidden.contains(*n)).map(String::from).collect();
+            if more.is_empty() {
+                return hiding(&self.variables, &hidden);
+            }
+            hidden.extend(more);
+        }
+    }
+
+    /// What the agent is told of this environment: where it may send, the
+    /// variables — a hidden one by name only — and the collections' requests.
+    pub fn described(&self, reach: &Reach) -> Result<StandView, HttpError> {
+        if self.agent.is_off() {
+            return Err(HttpError::NoneOpen);
+        }
+        let mine = self.for_agent(&reach.credentials);
+        let scope = Scope::new(&[&mine]);
+        // A value can hold a secret's text without naming it.
+        let variables = mine.iter().filter(|v| v.enabled).map(|v| (v.key.clone(), (!v.secret).then(|| scope.hide(&v.value)))).collect();
+        let requests = reach.requests.iter().map(|r| scope.hide(r)).collect();
+        Ok(StandView { name: self.name.clone(), access: self.agent, origins: reach.origins.iter().cloned().collect(), variables, requests })
     }
 
     /// The agent's request as it leaves, and the variables its reply is masked
-    /// with. All that is refused is refused here, before the network. Only this
-    /// environment's variables: globals are not what the user opened to the agent.
-    pub fn agent_request(&self, request: &AgentRequest) -> Result<(Prepared, Scope), HttpError> {
+    /// with. All that is refused is refused here, before the network: an address
+    /// no request of the collections goes to does not reach even DNS.
+    /// Only this environment's variables: globals are not what the user opened.
+    pub fn agent_request(&self, request: &AgentRequest, reach: &Reach) -> Result<(Prepared, Scope), HttpError> {
         if self.agent.is_off() {
             return Err(HttpError::NoneOpen);
         }
@@ -233,29 +335,29 @@ impl Environment {
         if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
             return Err(HttpError::ReadOnly { environment: self.name.clone(), method });
         }
-        let base = self.base_url().ok_or_else(|| HttpError::NoBaseUrl(self.name.clone()))?;
-        let scope = Scope::new(&[&self.variables]);
+        let scope = Scope::new(&[&self.for_agent(&reach.credentials)]);
         let fill = |text: &str| scope.fill(text).map_err(|e| self.unknown_named(e));
-        let base = fill(base)?.sent;
-        // As the page takes `localhost:3000`.
-        let base = if base.contains("://") { base } else { format!("http://{base}") };
-        let url = under_base(&base, &fill(&request.path)?.sent).map_err(|e| match e {
-            // As the model wrote it: filled in, it can hold a secret.
-            HttpError::OutsideBase(_) => HttpError::OutsideBase(request.path.clone()),
-            e => e,
-        })?;
+        // The messages have the url as the model wrote it: filled in, it can hold a secret.
+        let filled = fill(&request.url)?.sent;
+        let url = Url::parse(&with_scheme(&filled)).ok().filter(|u| matches!(u.scheme(), "http" | "https")).ok_or_else(|| HttpError::NotAnAddress(request.url.clone()))?;
+        let origin = url.origin().ascii_serialization();
+        if !reach.origins.contains(&origin) {
+            let trusted = if reach.origins.is_empty() { "nowhere".to_string() } else { reach.origins.iter().cloned().collect::<Vec<_>>().join(", ") };
+            return Err(HttpError::Untrusted { url: request.url.clone(), origin: scope.hide(&origin), environment: self.name.clone(), trusted });
+        }
         let mut headers = Vec::with_capacity(request.headers.len());
         for (name, value) in &request.headers {
             if name.eq_ignore_ascii_case("host") {
-                return Err(HttpError::AbsolutePath);
+                return Err(HttpError::HostHeader);
             }
             headers.push((name, fill(value)?));
         }
-        // A credential is one whatever its variable says: a Postman import marks none secret.
-        let authorization = headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("authorization"));
-        let scope = scope.keeping(authorization.and_then(|(_, value)| value.sent.split_whitespace().last()));
+        // A credential is one whatever its variable says: the model may write it out.
+        // Its last word: `Bearer` stays, so history still says which scheme went.
+        let credentials = headers.iter().filter(|(name, _)| is_credential_header(name)).filter_map(|(_, value)| value.sent.split_whitespace().last());
+        let scope = scope.keeping(credentials);
         let written = |pick: fn(&Filled) -> &String| headers.iter().map(|(k, v)| (k.to_string(), pick(v).clone())).collect();
-        let sent = Outgoing { method, url, headers: written(|f| &f.sent), body: None, digest: None };
+        let sent = Outgoing { method, url: url.into(), headers: written(|f| &f.sent), body: None, digest: None };
         let shown = Outgoing { url: scope.hide(&sent.url), headers: written(|f| &f.shown), ..sent.clone() };
         Ok((Prepared { sent, shown }, scope))
     }
@@ -331,10 +433,10 @@ impl Scope {
         forms.iter().fold(text.to_string(), |text, form| text.replace(form, SECRET_MASK))
     }
 
-    /// With `value` masked too, though no variable marks it.
-    fn keeping(mut self, value: Option<&str>) -> Scope {
-        if let Some(value) = value {
-            self.vars.insert("\0kept".into(), Variable { key: String::new(), value: value.into(), secret: true, enabled: true });
+    /// With `values` masked too, though no variable marks them.
+    fn keeping<'a>(mut self, values: impl IntoIterator<Item = &'a str>) -> Scope {
+        for (i, value) in values.into_iter().enumerate() {
+            self.vars.insert(format!("\0kept{i}"), Variable { key: String::new(), value: value.into(), secret: true, enabled: true });
         }
         self
     }
@@ -631,40 +733,6 @@ fn piece_end(text: &str, i: usize) -> Option<usize> {
     None
 }
 
-/// The agent's `path` under its environment's base address: relative, and not
-/// out of the base's prefix by `..` (spelled as dots, `%2e` or `\`). An encoded
-/// slash is refused too: the URL keeps `..%2f` one segment, a server may decode
-/// it into one more `../`.
-pub fn under_base(base: &str, path: &str) -> Result<String, HttpError> {
-    static ABSOLUTE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\s*([A-Za-z][A-Za-z0-9+.-]*:)?[/\\]{2}").expect("valid regex"));
-    if ABSOLUTE.is_match(path) {
-        return Err(HttpError::AbsolutePath);
-    }
-    // Of the path only: `?next=%2Forders` is a value, and no server walks up by it.
-    let lower = path.split(['?', '#']).next().unwrap_or(path).to_ascii_lowercase();
-    if lower.contains("%2f") || lower.contains("%5c") {
-        return Err(HttpError::OutsideBase(path.into()));
-    }
-    // The message leaves the address out: it may carry a password.
-    let mut root = Url::parse(base).map_err(|e| HttpError::BadBaseUrl(e.to_string()))?;
-    if root.cannot_be_a_base() {
-        return Err(HttpError::BadBaseUrl("it cannot hold a path".into()));
-    }
-    // The base is a folder: `/v1` holds `/v1/orders`, not `/v1x`.
-    if !root.path().ends_with('/') {
-        let folder = format!("{}/", root.path());
-        root.set_path(&folder);
-    }
-    // `./` first: `documents:batchGet` is a path, not a scheme. The join drops the base's query.
-    let relative = format!("./{}", path.trim_start_matches(['/', '\\']));
-    let joined = root.join(&relative).map_err(|_| HttpError::OutsideBase(path.into()))?;
-    if joined.origin() != root.origin() || !joined.path().starts_with(root.path()) {
-        return Err(HttpError::OutsideBase(path.into()));
-    }
-    Ok(joined.into())
-}
-
 /// A `curl …` command, as DevTools copies it (Chrome's and Firefox's "Copy as
 /// cURL" for bash), as a Postman v2.1 `request`.
 pub fn parse_curl(command: &str) -> Result<Value, HttpError> {
@@ -908,10 +976,6 @@ mod tests {
 
         back.variables[0].value = "rotated".into();
         assert_eq!(stored.edited(back).unwrap().variables[0].value, "rotated");
-        assert_eq!(stored.base_url(), Some("https://api"));
-        let mut off = stored.clone();
-        off.variables[2].enabled = false;
-        assert_eq!(off.base_url(), None, "a baseUrl turned off is not the base");
     }
 
     fn sent(body: &str) -> HistoryEntry {
@@ -1036,27 +1100,6 @@ mod tests {
     }
 
     #[test]
-    fn a_path_stays_under_the_base() {
-        let base = "https://api.example/v1";
-        assert_eq!(under_base(base, "/orders?id=1").unwrap(), "https://api.example/v1/orders?id=1");
-        assert_eq!(under_base(base, "orders/../items").unwrap(), "https://api.example/v1/items");
-        assert_eq!(under_base("https://api.example", "").unwrap(), "https://api.example/");
-        assert_eq!(under_base("https://api.example/v1?key=1#top", "").unwrap(), "https://api.example/v1/", "the base's own query stays behind");
-        assert_eq!(under_base(base, "/documents:batchGet").unwrap(), "https://api.example/v1/documents:batchGet");
-        assert_eq!(under_base(base, "items:run").unwrap(), "https://api.example/v1/items:run");
-        for absolute in ["https://evil.example/x", "//evil.example/x", "\\\\evil.example\\x", "\t//evil.example/x", " https://evil.example"] {
-            assert_eq!(under_base(base, absolute), Err(HttpError::AbsolutePath), "{absolute:?}");
-        }
-        for out in ["../v2/users", "/orders/../../admin", "%2e%2e/admin", "..\\admin", "./%2E%2E/admin", "..%2fadmin", "%2e%2e%2Fadmin", "..%5cadmin"] {
-            assert_eq!(under_base(base, out), Err(HttpError::OutsideBase(out.into())), "{out}");
-        }
-        assert!(matches!(under_base("not a url", "/x"), Err(HttpError::BadBaseUrl(_))));
-        assert_eq!(under_base("mailto:me@x", "/x"), Err(HttpError::BadBaseUrl("it cannot hold a path".into())));
-        let hidden = under_base("https://u:pa55@", "/x").unwrap_err().to_string();
-        assert!(!hidden.contains("pa55"), "{hidden}");
-    }
-
-    #[test]
     fn chromes_copy_as_curl_reads() {
         let chrome = "curl 'https://api.example/v1/orders?x=1' \\\n  -H 'accept: application/json' \\\n  -H 'content-type: application/json' \\\n  -b 'sid=abc' \\\n  --data-raw $'{\"note\":\"it\\'s\\nfine\"}' \\\n  --compressed";
         let r = parse_curl(chrome).unwrap();
@@ -1116,69 +1159,114 @@ mod tests {
         Environment { id: "e".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::ReadOnly }
     }
 
-    fn ask(method: &str, path: &str, headers: &[(&str, &str)]) -> AgentRequest {
-        AgentRequest { method: method.into(), path: path.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    fn ask(method: &str, url: &str, headers: &[(&str, &str)]) -> AgentRequest {
+        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
     }
 
     fn stand() -> Environment {
         opened(vec![var("baseUrl", "https://api.test/v1"), secret("token", "s3cr3t"), var("id", "42")])
     }
 
+    /// Where a collection of `https://api.test` requests sends.
+    fn reach() -> Reach {
+        Reach { origins: ["https://api.test".to_string()].into(), ..Reach::default() }
+    }
+
     fn refused(environment: &Environment, request: AgentRequest) -> HttpError {
-        environment.agent_request(&request).map(|_| ()).unwrap_err()
+        environment.agent_request(&request, &reach()).map(|_| ()).unwrap_err()
+    }
+
+    fn agent_sends(environment: &Environment, request: AgentRequest) -> Prepared {
+        environment.agent_request(&request, &reach()).unwrap().0
+    }
+
+    /// A collection named Shop, its items given ids by the caller.
+    fn collection(items: Value, auth: Value, variables: Value) -> Collection {
+        let root = json!({
+            "info": {"name": "Shop", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": items, "auth": auth, "variable": variables
+        });
+        Collection::parse(&root.to_string()).unwrap()
+    }
+
+    fn get(id: &str, url: Value) -> Value {
+        json!({"id": id, "name": id, "request": {"method": "get", "url": url}})
     }
 
     #[test]
     fn an_environment_off_takes_nothing_and_says_nothing_of_itself() {
         let off = Environment { agent: AgentAccess::Off, ..stand() };
-        assert_eq!(refused(&off, ask("GET", "/x", &[])), HttpError::NoneOpen);
+        assert_eq!(refused(&off, ask("GET", "{{baseUrl}}/x", &[])), HttpError::NoneOpen);
+        assert_eq!(off.described(&reach()), Err(HttpError::NoneOpen));
     }
 
     #[test]
     fn read_only_lets_through_what_reads_and_names_what_it_refuses() {
-        for (asked, sent) in [("GET", "GET"), (" head ", "HEAD"), ("options", "OPTIONS")] {
-            assert_eq!(stand().agent_request(&ask(asked, "/x", &[])).unwrap().0.sent.method, sent);
+        for (asked, method) in [("GET", "GET"), (" head ", "HEAD"), ("options", "OPTIONS")] {
+            assert_eq!(agent_sends(&stand(), ask(asked, "{{baseUrl}}/x", &[])).sent.method, method);
         }
         for method in ["POST", "PUT", "PATCH", "DELETE", "TRACE"] {
-            assert_eq!(refused(&stand(), ask(method, "/x", &[])), HttpError::ReadOnly { environment: "Stage".into(), method: method.into() });
+            assert_eq!(refused(&stand(), ask(method, "{{baseUrl}}/x", &[])), HttpError::ReadOnly { environment: "Stage".into(), method: method.into() });
         }
-        assert_eq!(refused(&stand(), ask("post", "/x", &[])).to_string(), "\"Stage\" is read only for the agent: POST is refused — the user can change its agent access on the HTTP page");
+        assert_eq!(refused(&stand(), ask("post", "{{baseUrl}}/x", &[])).to_string(), "\"Stage\" is read only for the agent: POST is refused — the user can change its agent access on the HTTP page");
     }
 
     #[test]
-    fn a_path_goes_filled_in_under_the_base_and_a_secret_in_it_is_shown_masked() {
-        let (prepared, _) = stand().agent_request(&ask("GET", "/orders/{{id}}?key={{token}}", &[])).unwrap();
+    fn a_url_goes_filled_in_and_a_secret_in_it_is_shown_masked() {
+        let prepared = agent_sends(&stand(), ask("GET", "{{baseUrl}}/orders/{{id}}?key={{token}}", &[]));
         assert_eq!(prepared.sent.url, "https://api.test/v1/orders/42?key=s3cr3t");
         assert_eq!(prepared.shown.url, "https://api.test/v1/orders/42?key=•••");
         assert_eq!((prepared.sent.body, prepared.shown.method.as_str()), (None, "GET"));
+        assert_eq!(agent_sends(&stand(), ask("GET", "HTTPS://API.test/a/../b", &[])).sent.url, "https://api.test/b", "as the url crate sends it");
     }
 
     #[test]
-    fn the_base_is_filled_in_and_may_name_no_scheme_as_on_the_page() {
-        let base = opened(vec![var("baseUrl", "{{host}}/v1"), var("host", "localhost:3000")]);
-        assert_eq!(base.agent_request(&ask("GET", "/x", &[])).unwrap().0.sent.url, "http://localhost:3000/v1/x");
+    fn a_url_with_no_scheme_is_http_as_on_the_page() {
+        let local = opened(vec![var("host", "localhost:3000")]);
+        let reach = Reach { origins: ["http://localhost:3000".to_string()].into(), ..Reach::default() };
+        assert_eq!(local.agent_request(&ask("GET", "{{host}}/v1/x?next=http://a", &[]), &reach).unwrap().0.sent.url, "http://localhost:3000/v1/x?next=http://a");
     }
 
     #[test]
-    fn an_address_is_refused_however_it_gets_into_the_path() {
-        assert_eq!(refused(&stand(), ask("GET", "https://evil.test/x", &[])), HttpError::AbsolutePath);
-        assert_eq!(refused(&stand(), ask("GET", "{{baseUrl}}/x", &[])), HttpError::AbsolutePath);
-        let carried = opened(vec![var("baseUrl", "https://api.test"), var("away", "//evil.test")]);
-        assert_eq!(refused(&carried, ask("GET", "{{away}}/x", &[])), HttpError::AbsolutePath);
+    fn an_address_no_collection_goes_to_is_refused_and_says_what_to_do_instead() {
+        let untrusted = |url: &str, origin: &str| HttpError::Untrusted { url: url.into(), origin: origin.into(), environment: "Stage".into(), trusted: "https://api.test".into() };
+        for (url, origin) in [
+            ("https://evil.test/x", "https://evil.test"),
+            ("https://api.test@evil.test/x", "https://evil.test"),
+            ("https://api.test.evil.test/", "https://api.test.evil.test"),
+            ("//evil.test/x", "http://evil.test"),
+            ("http://api.test/x", "http://api.test"),
+            ("https://api.test:8443/x", "https://api.test:8443"),
+        ] {
+            assert_eq!(refused(&stand(), ask("GET", url, &[])), untrusted(url, origin), "{url}");
+        }
+        let told = refused(&stand(), ask("GET", "https://evil.test/x", &[])).to_string();
+        assert_eq!(told, "https://evil.test/x goes to https://evil.test, and no request in the user's collections goes there with \"Stage\" (they go to: https://api.test) — ask the user to add a request for it on the HTTP page, or give them a curl command to run themselves");
+        let nowhere = stand().agent_request(&ask("GET", "{{baseUrl}}/x", &[]), &Reach::default()).unwrap_err();
+        assert!(matches!(&nowhere, HttpError::Untrusted { trusted, .. } if trusted == "nowhere"), "{nowhere:?}");
     }
 
     #[test]
-    fn a_path_out_of_the_base_is_told_as_written_not_with_a_secret_in_it() {
-        let climbing = opened(vec![var("baseUrl", "https://api.test/v1"), secret("up", "../../s3cr3t")]);
-        assert_eq!(refused(&climbing, ask("GET", "{{up}}", &[])), HttpError::OutsideBase("{{up}}".into()));
+    fn an_address_refused_names_no_secret() {
+        let carried = opened(vec![secret("host", "s3cr3t.evil.test")]);
+        let told = carried.agent_request(&ask("GET", "https://{{host}}/x", &[]), &reach()).unwrap_err();
+        assert_eq!(told, HttpError::Untrusted { url: "https://{{host}}/x".into(), origin: "https://•••".into(), environment: "Stage".into(), trusted: "https://api.test".into() });
+    }
+
+    #[test]
+    fn what_is_no_http_address_is_said_as_written() {
+        assert_eq!(refused(&stand(), ask("GET", "ftp://api.test/x", &[])), HttpError::NotAnAddress("ftp://api.test/x".into()));
+        assert_eq!(refused(&stand(), ask("GET", "http://[nope/x", &[])), HttpError::NotAnAddress("http://[nope/x".into()));
+        let carried = opened(vec![secret("away", "http://[s3cr3t")]);
+        assert_eq!(carried.agent_request(&ask("GET", "{{away}}", &[]), &reach()).unwrap_err(), HttpError::NotAnAddress("{{away}}".into()));
     }
 
     #[test]
     fn headers_go_filled_in_and_are_shown_masked_and_the_host_is_not_the_models() {
-        let (prepared, _) = stand().agent_request(&ask("GET", "/x", &[("Authorization", "Bearer {{token}}"), ("X-Id", "{{id}}")])).unwrap();
+        let prepared = agent_sends(&stand(), ask("GET", "{{baseUrl}}/x", &[("Authorization", "Bearer {{token}}"), ("X-Id", "{{id}}")]));
         assert_eq!(prepared.sent.headers, [("Authorization".to_string(), "Bearer s3cr3t".to_string()), ("X-Id".to_string(), "42".to_string())]);
         assert_eq!(prepared.shown.headers, [("Authorization".to_string(), "Bearer •••".to_string()), ("X-Id".to_string(), "42".to_string())]);
-        assert_eq!(refused(&stand(), ask("GET", "/x", &[("hOsT", "evil.test")])), HttpError::AbsolutePath);
+        assert_eq!(refused(&stand(), ask("GET", "{{baseUrl}}/x", &[("hOsT", "evil.test")])), HttpError::HostHeader);
     }
 
     #[test]
@@ -1186,42 +1274,106 @@ mod tests {
         let mut environment = stand();
         environment.variables.push(Variable { enabled: false, ..var("hidden", "h") });
         let told = HttpError::UnknownIn { names: vec!["nope".into()], environment: "Stage".into(), known: "baseUrl, token, id".into() };
-        assert_eq!(refused(&environment, ask("GET", "/{{nope}}", &[])), told);
-        assert_eq!(refused(&environment, ask("GET", "/x", &[("X-A", "{{nope}}")])), told);
+        assert_eq!(refused(&environment, ask("GET", "{{baseUrl}}/{{nope}}", &[])), told);
+        assert_eq!(refused(&environment, ask("GET", "{{baseUrl}}/x", &[("X-A", "{{nope}}")])), told);
         assert_eq!(told.to_string(), "nope not in \"Stage\", which has: baseUrl, token, id");
-        assert_eq!(refused(&stand(), ask("GET", "/{{$random}}", &[])), HttpError::UnsupportedDynamic("$random".into()), "another error stands");
-    }
-
-    #[test]
-    fn without_a_base_there_is_nowhere_to_go() {
-        let none = opened(vec![var("token", "t")]);
-        assert_eq!(refused(&none, ask("GET", "/x", &[])), HttpError::NoBaseUrl("Stage".into()));
-        let off = opened(vec![Variable { enabled: false, ..var("baseUrl", "https://api.test") }]);
-        assert_eq!(refused(&off, ask("GET", "/x", &[])), HttpError::NoBaseUrl("Stage".into()));
+        assert_eq!(refused(&stand(), ask("GET", "{{baseUrl}}/{{$random}}", &[])), HttpError::UnsupportedDynamic("$random".into()), "another error stands");
     }
 
     #[test]
     fn the_scope_goes_on_to_mask_the_reply() {
-        let (_, scope) = stand().agent_request(&ask("GET", "/x", &[])).unwrap();
+        let (_, scope) = stand().agent_request(&ask("GET", "{{baseUrl}}/x", &[]), &reach()).unwrap();
         assert_eq!(scope.hide("s3cr3t"), "•••");
     }
 
     #[test]
-    fn a_credential_is_masked_though_its_variable_is_not_marked_secret() {
-        let imported = opened(vec![var("baseUrl", "https://api.test"), var("token", "pl41n")]);
-        let (prepared, scope) = imported.agent_request(&ask("GET", "/x", &[("authorization", "Bearer {{token}}")])).unwrap();
+    fn a_credential_the_model_sends_is_masked_though_no_variable_marks_it() {
+        let imported = opened(vec![var("baseUrl", "https://api.test"), var("token", "pl41n"), var("key", "k3y"), var("id", "1d")]);
+        let headers = [("authorization", "Bearer {{token}}"), ("X-Api-Key", "{{key}}"), ("X-Id", "{{id}}")];
+        let (prepared, scope) = imported.agent_request(&ask("GET", "{{baseUrl}}/x", &headers), &reach()).unwrap();
         assert_eq!(prepared.sent.headers[0].1, "Bearer pl41n");
         assert_eq!(prepared.hidden(&scope).shown.headers[0].1, "Bearer •••", "in history too");
-        assert_eq!(scope.hide(r#"{"you":"pl41n"}"#), r#"{"you":"•••"}"#);
-        let (_, other) = imported.agent_request(&ask("GET", "/x", &[("X-Id", "{{token}}")])).unwrap();
-        assert_eq!(other.hide("pl41n"), "pl41n", "another header is what the variable says");
+        assert_eq!(scope.hide(r#"{"you":"pl41n","k":"k3y"}"#), r#"{"you":"•••","k":"•••"}"#);
+        assert_eq!(scope.hide("1d"), "1d", "another header is what the variable says");
     }
 
     #[test]
-    fn an_encoded_slash_in_the_query_stays_under_the_base() {
-        assert_eq!(under_base("https://api.test/v1", "/search?next=%2Forders%2F2"), Ok("https://api.test/v1/search?next=%2Forders%2F2".to_string()));
-        assert_eq!(under_base("https://api.test/v1", "/a#%2F"), Ok("https://api.test/v1/a#%2F".to_string()));
-        assert_eq!(under_base("https://api.test/v1", "..%2fadmin?x=1"), Err(HttpError::OutsideBase("..%2fadmin?x=1".into())));
+    fn the_collections_say_where_the_agent_may_go() {
+        let shop = collection(
+            json!([
+                {"id": "f", "name": "Orders", "item": [get("list", json!({"raw": "{{baseUrl}}/orders?page=2"}))]},
+                get("local", json!("localhost:3000/health")),
+                get("auth", json!("{{authUrl}}/token")),
+                get("global", json!("{{g}}/x")),
+                get("unknown", json!("https://{{nope}}/x")),
+                get("hidden", json!("https://{{secretHost}}/x")),
+                get("ftp", json!("ftp://files.test/x")),
+            ]),
+            json!(null),
+            json!([{"key": "authUrl", "value": "https://auth.test:8443"}, {"key": "secretHost", "value": "s3cr3t.test", "type": "secret"}]),
+        );
+        let theirs = shop.variables();
+        let reach = Reach::new(&[(&shop, theirs)], &[var("g", "https://global.test")], &stand());
+        let origins: Vec<&str> = reach.origins.iter().map(String::as_str).collect();
+        assert_eq!(origins, ["http://localhost:3000", "https://api.test", "https://auth.test:8443", "https://global.test"]);
+        assert_eq!(reach.requests[0], "Shop / list: GET {{baseUrl}}/orders", "the method in capitals, no query");
+        assert_eq!(reach.requests.len(), 7, "each request listed, gone or not");
+    }
+
+    #[test]
+    fn a_variable_written_where_a_credential_goes_is_hidden_and_so_is_what_it_names() {
+        let shop = collection(
+            json!([{
+                "id": "f", "name": "F",
+                "auth": {"type": "apikey", "apikey": [{"key": "value", "value": "{{apiKey}}"}]},
+                "item": [{
+                    "id": "r", "name": "r",
+                    "request": {
+                        "url": "{{baseUrl}}/x",
+                        "auth": {"type": "basic", "basic": [{"key": "username", "value": "{{user}}"}, {"key": "password", "value": "{{pass}}"}]},
+                        "header": [{"key": "X-Session-Id", "value": "{{sess}}"}, {"key": "Accept", "value": "{{accept}}"}, {"key": "Authorization", "value": "{{authHeader}}"}]
+                    }
+                }]
+            }]),
+            json!({"type": "bearer", "bearer": [{"key": "token", "value": "{{bearer}}"}]}),
+            json!(null),
+        );
+        let names = ["bearer", "apiKey", "user", "pass", "sess", "accept", "authHeader", "inner", "plain"];
+        let mut variables: Vec<Variable> = names.iter().map(|n| var(n, &format!("{n}-value"))).collect();
+        variables.push(var("baseUrl", "https://api.test"));
+        variables[6].value = "Bearer {{inner}}".into();
+        let environment = opened(variables);
+        let reach = Reach::new(&[(&shop, vec![])], &[], &environment);
+        let view = environment.described(&reach).unwrap();
+        let hidden: Vec<&str> = view.variables.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| k.as_str()).collect();
+        assert_eq!(hidden, ["bearer", "apiKey", "user", "pass", "sess", "authHeader", "inner"]);
+        assert!(view.variables.contains(&("accept".to_string(), Some("accept-value".to_string()))));
+
+        let (prepared, scope) = environment.agent_request(&ask("GET", "{{baseUrl}}/x?k={{apiKey}}&p={{plain}}", &[]), &reach).unwrap();
+        assert_eq!(prepared.shown.url, "https://api.test/x?k=•••&p=plain-value", "hidden in what is shown");
+        assert_eq!(scope.hide("inner-value"), "•••", "and in what comes back");
+    }
+
+    #[test]
+    fn the_description_says_where_what_and_which_without_a_secret() {
+        let environment = opened(vec![var("baseUrl", "https://api.test/v1"), secret("token", "s3cr3t"), var("echo", "x={{token}}&y=s3cr3t"), Variable { enabled: false, ..var("off", "1") }]);
+        let reach = Reach { origins: ["https://b.test".to_string(), "https://a.test".to_string()].into(), requests: vec!["Shop / r: GET https://a.test/s3cr3t".into()], ..Reach::default() };
+        let view = environment.described(&reach).unwrap();
+        assert_eq!(view.name, "Stage");
+        assert_eq!(view.access, AgentAccess::ReadOnly);
+        assert_eq!(view.origins, ["https://a.test", "https://b.test"]);
+        assert_eq!(view.variables, [("baseUrl".to_string(), Some("https://api.test/v1".to_string())), ("token".to_string(), None), ("echo".to_string(), Some("x={{token}}&y=•••".to_string()))]);
+        assert_eq!(view.requests, ["Shop / r: GET https://a.test/•••"]);
+    }
+
+    #[test]
+    fn a_header_that_carries_a_credential_is_known_by_its_name() {
+        for name in ["Authorization", "proxy-authorization", "Cookie", "X-API-Key", "api_key", "X-Auth-Token", "X-Session-Id", "Client-Secret", "X-Password", "X-Token"] {
+            assert!(is_credential_header(name), "{name}");
+        }
+        for name in ["Accept", "Content-Type", "X-Request-Id", "User-Agent"] {
+            assert!(!is_credential_header(name), "{name}");
+        }
     }
 
     /// Thirty-two scopes: the map's order is new in each, and a short secret first would leave the long one's tail.
@@ -1244,7 +1396,7 @@ mod tests {
     }
 
     fn scope() -> Scope {
-        stand().agent_request(&ask("GET", "/x", &[])).unwrap().1
+        stand().agent_request(&ask("GET", "{{baseUrl}}/x", &[]), &reach()).unwrap().1
     }
 
     fn response(headers: &[(&str, &str)]) -> Outcome {

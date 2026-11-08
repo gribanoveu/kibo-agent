@@ -195,9 +195,7 @@ fn exchange(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar,
 /// The address as a browser would send it: spaces and the rest percent-encoded,
 /// and `http://` when it names no scheme, as Postman takes `localhost:3000/x`.
 fn address(url: &str) -> Result<String, Failed> {
-    // A scheme is letters before the first `://` — not the `://` of an address in its query.
-    let scheme = url.split_once("://").is_some_and(|(s, _)| s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')));
-    let url = if scheme { url.to_string() } else { format!("http://{url}") };
+    let url = crate::domain::http_client::with_scheme(url);
     Url::parse(&url).map(String::from).map_err(|e| Failed(format!("{url} is not an address: {e}")))
 }
 

@@ -1,12 +1,13 @@
 //! `httpRequest` — the HTTP environments the user opened to the agent, read
-//! (`docs/45-http-client.md`, HC-7). The environment fixes the host and fills in
-//! `{{name}}`: the model passes a path, names its variables, and never sees a
-//! secret's value. A stand that does not answer is a result, told as an error.
+//! (`docs/45-http-client.md`, HC-7, HC-7a). The model sends where a request of
+//! the user's collections goes, and `{{name}}` is filled in by the environment:
+//! a hidden variable's value never reaches the model. Called without a `url` it
+//! describes the environment. A stand that does not answer is a result, told as an error.
 
 use serde_json::json;
 
 use super::mcp::fit;
-use crate::domain::http_client::{AgentRequest, HttpError, OpenStand, Outcome};
+use crate::domain::http_client::{AgentAccess, AgentRequest, HttpError, OpenStand, Outcome, StandView};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{HttpRequestArgs, ToolDeps, ToolError, ToolResult};
 
@@ -19,21 +20,23 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "httpRequest".into(),
         description: "Read from an HTTP environment the user opened to the agent on the HTTP page: GET, HEAD or OPTIONS. \
-            The host is the environment's `baseUrl`, so pass a path under it, with its query, never an address. \
-            `{{name}}` in the path or a header is filled in from the environment, secrets too, and their values never \
-            reach you: write `Authorization: Bearer {{token}}`. A name the environment lacks gets its variables listed. \
+            Call it first with no `url`: you get the environment's variables, the addresses you may send to, and the requests \
+            in the user's collections. A `url` must go to one of those addresses — write it as the collections do, \
+            `{{baseUrl}}/orders/42?expand=items`. Another host is refused: ask the user to add a request for it on the HTTP \
+            page, or give them a curl command to run themselves. `{{name}}` in the url or a header is filled in from the \
+            environment; a hidden variable's value never reaches you: write `Authorization: Bearer {{token}}`. \
             A redirect is not followed: you get its status and `location`. No cookies are sent or kept."
             .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "environment": {"type": "string", "description": "Its name; may be left out when only one is open"},
-                "method": {"type": "string", "enum": ["GET", "HEAD", "OPTIONS"]},
-                "path": {"type": "string", "description": "Under the environment's baseUrl, e.g. /orders/42?expand=items"},
+                "url": {"type": "string", "description": "Where to send, `{{name}}` filled in; leave out to see what the environment holds"},
+                "method": {"type": "string", "enum": ["GET", "HEAD", "OPTIONS"], "description": "GET when left out"},
                 "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Sent as written, `{{name}}` filled in"},
                 "showHeaders": {"type": "boolean", "description": "All the response's headers, not the few that usually matter"}
             },
-            "required": ["method", "path"]
+            "required": []
         }),
     }
 }
@@ -42,17 +45,53 @@ pub fn http_request(args: &HttpRequestArgs, deps: &ToolDeps) -> Result<ToolResul
     let stands = deps.http.as_deref().ok_or(HttpError::NoneOpen)?;
     let open = stands.open()?;
     let stand = stand(&open, args.environment.as_deref())?;
+    let Some(url) = args.url.as_deref().filter(|u| !u.trim().is_empty()) else {
+        let view = stands.describe(&stand.id)?;
+        let summary = format!("{} · {} {}", view.name, view.origins.len(), if view.origins.len() == 1 { "address" } else { "addresses" });
+        return Ok(ToolResult::HttpRequest { text: fit(described(&view), MOST), summary });
+    };
+    let method = match args.method.trim() {
+        "" => "GET".to_string(),
+        m => m.to_ascii_uppercase(),
+    };
     let headers = args.headers.iter().flatten().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let request = AgentRequest { method: args.method.clone(), path: args.path.clone(), headers };
+    let request = AgentRequest { method: method.clone(), url: url.to_string(), headers };
     let reply = stands.send(&stand.id, &request)?;
     let (status, headers, elapsed_ms) = match reply.outcome {
         Outcome::Response { status, headers, elapsed_ms, .. } => (status, headers, elapsed_ms),
         Outcome::Failed { error } => return Err(HttpError::Unanswered(error).into()),
     };
-    let first = format!("{} {} → {status} · {elapsed_ms} ms · {} bytes", args.method.trim().to_ascii_uppercase(), args.path, reply.size);
+    let first = format!("{method} {url} → {status} · {elapsed_ms} ms · {} bytes", reply.size);
     let lines = headers.iter().filter(|(k, _)| args.show_headers == Some(true) || SHOWN.contains(&k.to_ascii_lowercase().as_str())).map(|(k, v)| format!("{k}: {v}"));
     let text = std::iter::once(first).chain(lines).chain(body_text(&reply.body)).collect::<Vec<_>>().join("\n");
     Ok(ToolResult::HttpRequest { text: fit(text, MOST), summary: format!("{status} · {elapsed_ms} ms") })
+}
+
+/// The environment as the model reads it before sending.
+fn described(view: &StandView) -> String {
+    let access = match view.access {
+        AgentAccess::Off => "off",
+        AgentAccess::ReadOnly => "read only: GET, HEAD and OPTIONS",
+    };
+    let mut lines = vec![format!("Environment \"{}\", {access}.", view.name)];
+    if view.origins.is_empty() {
+        lines.push("It sends nowhere yet: no request in the user's collections goes anywhere with it. Ask the user to add one on the HTTP page.".into());
+    } else {
+        lines.push("It sends to these addresses, where the user's collections go:".into());
+        lines.extend(view.origins.iter().map(|o| format!("  {o}")));
+    }
+    if !view.variables.is_empty() {
+        lines.push("Variables, written as {{name}}:".into());
+        lines.extend(view.variables.iter().map(|(name, value)| match value {
+            Some(value) => format!("  {name} = {value}"),
+            None => format!("  {name} — hidden: filled in on sending, never shown"),
+        }));
+    }
+    if !view.requests.is_empty() {
+        lines.push("Requests in the user's collections:".into());
+        lines.extend(view.requests.iter().map(|r| format!("  {r}")));
+    }
+    lines.join("\n")
 }
 
 /// The environment by its name, any case; with none named, the only one open.
@@ -88,6 +127,7 @@ fn body_text(body: &[u8]) -> Option<String> {
 pub(crate) mod tests {
     use super::*;
     use crate::domain::http_client::{AgentReply, HttpStands};
+    use crate::domain::tools::ToolName;
     use std::sync::{Arc, Mutex};
 
     /// Its environments, one canned reply, and what it was asked.
@@ -95,12 +135,18 @@ pub(crate) mod tests {
     struct Canned {
         open: Vec<OpenStand>,
         reply: Option<AgentReply>,
+        view: Option<StandView>,
         asked: Mutex<Vec<(String, AgentRequest)>>,
     }
 
     impl HttpStands for Canned {
         fn open(&self) -> Result<Vec<OpenStand>, HttpError> {
             Ok(self.open.clone())
+        }
+
+        fn describe(&self, id: &str) -> Result<StandView, HttpError> {
+            self.asked.lock().unwrap().push((id.to_string(), AgentRequest { method: "describe".into(), url: String::new(), headers: vec![] }));
+            Ok(self.view.clone().unwrap())
         }
 
         fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError> {
@@ -123,8 +169,8 @@ pub(crate) mod tests {
         Some(AgentReply { outcome: Outcome::Response { status, headers, url: "http://stand/x".into(), redirects: vec![], elapsed_ms: 12 }, body: body.to_vec(), size: body.len() })
     }
 
-    fn get(path: &str) -> HttpRequestArgs {
-        HttpRequestArgs { method: "get".into(), path: path.into(), ..HttpRequestArgs::default() }
+    fn get(url: &str) -> HttpRequestArgs {
+        HttpRequestArgs { method: "get".into(), url: Some(url.into()), ..HttpRequestArgs::default() }
     }
 
     fn call(canned: Canned, args: &HttpRequestArgs) -> (Result<ToolResult, ToolError>, Vec<(String, AgentRequest)>) {
@@ -188,7 +234,7 @@ pub(crate) mod tests {
     /// No card asks for a read; with HC-8 the method decides, and this flips.
     #[test]
     fn reading_a_stand_asks_nobody() {
-        assert!(!crate::domain::tools::ToolName::HttpRequest.is_mutating());
+        assert!(!ToolName::HttpRequest.is_mutating());
     }
 
     #[test]
@@ -197,7 +243,7 @@ pub(crate) mod tests {
         let args = HttpRequestArgs { headers, ..get("/orders?id=1") };
         let (_, asked) = call(Canned { open: stands(&["Stage"]), reply: reply(200, &[], b""), ..Canned::default() }, &args);
         let request = &asked[0].1;
-        assert_eq!((request.method.as_str(), request.path.as_str()), ("get", "/orders?id=1"));
+        assert_eq!((request.method.as_str(), request.url.as_str()), ("GET", "/orders?id=1"));
         assert_eq!(request.headers, vec![("Authorization".to_string(), "Bearer {{token}}".to_string())]);
     }
 
@@ -219,6 +265,51 @@ pub(crate) mod tests {
         assert_eq!(text_of(result), "GET /x → 200 · 12 ms · 3 bytes\n[not text]");
         let (result, _) = call(Canned { open: stands(&["Stage"]), reply: reply(204, &[], b""), ..Canned::default() }, &get("/x"));
         assert_eq!(text_of(result), "GET /x → 204 · 12 ms · 0 bytes");
+    }
+
+    #[test]
+    fn a_method_left_out_is_get() {
+        for method in ["", "  "] {
+            let args = HttpRequestArgs { method: method.into(), ..get("{{baseUrl}}/x") };
+            let (result, asked) = call(Canned { open: stands(&["Stage"]), reply: reply(200, &[], b""), ..Canned::default() }, &args);
+            assert_eq!(asked[0].1.method, "GET");
+            assert!(text_of(result).starts_with("GET {{baseUrl}}/x → 200"));
+        }
+    }
+
+    fn view(origins: &[&str], requests: &[&str]) -> Option<StandView> {
+        Some(StandView {
+            name: "Stage".into(),
+            access: AgentAccess::ReadOnly,
+            origins: origins.iter().map(|o| o.to_string()).collect(),
+            variables: vec![("baseUrl".into(), Some("https://api.test".into())), ("token".into(), None)],
+            requests: requests.iter().map(|r| r.to_string()).collect(),
+        })
+    }
+
+    #[test]
+    fn no_url_describes_the_environment_and_sends_nothing() {
+        for url in [None, Some(" ".to_string())] {
+            let canned = Canned { open: stands(&["Stage"]), view: view(&["https://api.test"], &["Shop / List orders: GET {{baseUrl}}/orders"]), ..Canned::default() };
+            let (result, asked) = call(canned, &HttpRequestArgs { url, ..HttpRequestArgs::default() });
+            assert_eq!(asked.iter().map(|(id, r)| (id.as_str(), r.method.as_str())).collect::<Vec<_>>(), [("id-Stage", "describe")]);
+            assert!(matches!(&result, Ok(ToolResult::HttpRequest { summary, .. }) if summary == "Stage · 1 address"), "{result:?}");
+            let expected = "Environment \"Stage\", read only: GET, HEAD and OPTIONS.\n\
+                It sends to these addresses, where the user's collections go:\n  https://api.test\n\
+                Variables, written as {{name}}:\n  baseUrl = https://api.test\n  token — hidden: filled in on sending, never shown\n\
+                Requests in the user's collections:\n  Shop / List orders: GET {{baseUrl}}/orders";
+            assert_eq!(text_of(result), expected);
+        }
+    }
+
+    #[test]
+    fn an_environment_with_nowhere_to_go_says_who_can_change_that() {
+        let canned = Canned { open: stands(&["Stage"]), view: view(&[], &[]), ..Canned::default() };
+        let (result, _) = call(canned, &HttpRequestArgs::default());
+        assert!(matches!(&result, Ok(ToolResult::HttpRequest { summary, .. }) if summary == "Stage · 0 addresses"), "{result:?}");
+        let text = text_of(result);
+        assert!(text.contains("It sends nowhere yet") && text.contains("add one on the HTTP page"), "{text}");
+        assert!(!text.contains("Requests in"), "{text}");
     }
 
     /// What the stand sent, not the indents added to it.
