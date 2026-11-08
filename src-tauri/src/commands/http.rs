@@ -68,6 +68,12 @@ pub async fn http_item_rename(collection: String, id: String, name: String) -> R
     blocking(move || http_client::rename(&collection, &id, &name)).await
 }
 
+/// A folder or request moved, last into the folder `parent` of `to` — or into `to` itself when there is none.
+#[tauri::command]
+pub async fn http_item_move(collection: String, id: String, to: String, parent: Option<String>) -> Result<(), String> {
+    blocking(move || http_client::move_item(&collection, &id, &to, parent.as_deref())).await
+}
+
 #[tauri::command]
 pub async fn http_item_delete(collection: String, id: String) -> Result<(), String> {
     blocking(move || http_client::delete_item(&collection, &id)).await

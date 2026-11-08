@@ -176,6 +176,12 @@ impl Collection {
 
     /// The folder or request `id` gone, with all it held; the requests that went, whose responses go too.
     pub fn remove(&mut self, id: &str) -> Result<Vec<String>, HttpError> {
+        let gone = self.take(id)?;
+        Ok(Collection { root: serde_json::json!({"item": [gone]}) }.request_ids())
+    }
+
+    /// The folder or request `id` taken out, with all it holds — to be put back elsewhere.
+    pub fn take(&mut self, id: &str) -> Result<Value, HttpError> {
         fn take(items: &mut Vec<Value>, id: &str) -> Option<Value> {
             if let Some(at) = items.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id)) {
                 return Some(items.remove(at));
@@ -183,8 +189,19 @@ impl Collection {
             items.iter_mut().filter_map(|v| v.get_mut("item")?.as_array_mut()).find_map(|children| take(children, id))
         }
         let items = self.root.get_mut("item").and_then(Value::as_array_mut).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
-        let gone = take(items, id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
-        let held = Collection { root: serde_json::json!({"item": [gone]}) };
+        take(items, id).ok_or_else(|| HttpError::NoSuchItem(id.into()))
+    }
+
+    /// A taken item put in last in the folder `parent`, or in the collection when there is none;
+    /// the requests it brought. Refused when an id it holds is here already — a collection
+    /// imported twice has the same ids, and two items under one id would be one.
+    pub fn put(&mut self, parent: Option<&str>, item: Value) -> Result<Vec<String>, HttpError> {
+        let held = Collection { root: serde_json::json!({"item": [item.clone()]}) };
+        let here = self.ids();
+        if let Some(twice) = held.ids().into_iter().find(|id| here.contains(id)) {
+            return Err(HttpError::BadId(twice));
+        }
+        self.add(parent, item)?;
         Ok(held.request_ids())
     }
 

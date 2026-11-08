@@ -117,6 +117,14 @@ fn opened(path: &Path, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, HttpError> {
     secret_store::open(&key, PURPOSE, blob).map_err(|_| HttpError::Store(format!("{} does not open with this machine's key — delete that file to start it afresh", path.display())))
 }
 
+/// A request's last response, if it has one, under the collection it moved to.
+pub fn move_response(from: &str, to: &str, request: &str) -> Result<(), HttpError> {
+    let (old, new) = (response_path(from, request)?, response_path(to, request)?);
+    let Some(blob) = read(&old)? else { return Ok(()) };
+    app_dir::write_private(&new, &blob).map_err(HttpError::Store)?;
+    remove(&old, std::fs::remove_file(&old))
+}
+
 /// The request's last response in place of the one before, then the oldest
 /// of all dropped while they come to more than 200 MB.
 pub fn save_response(collection: &str, request: &str, response: &SavedResponse) -> Result<(), HttpError> {

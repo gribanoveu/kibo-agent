@@ -253,6 +253,7 @@ pub fn run() {
             commands::http::http_item_add,
             commands::http::http_item_rename,
             commands::http::http_item_delete,
+            commands::http::http_item_move,
             commands::http::http_import,
             commands::http::http_export_collection,
             commands::http::http_export_environment,

@@ -547,6 +547,32 @@ pub fn rename(collection: &str, id: &str, name: &str) -> Result<(), HttpError> {
     })
 }
 
+/// A folder or request, with all it holds, moved last into the folder `parent` of the
+/// collection `to`, or into `to` itself. Into another collection its requests' last
+/// responses go with it; the target is written first, so a failure between the two
+/// writes leaves the item in both rather than in neither.
+pub fn move_item(from: &str, id: &str, to: &str, parent: Option<&str>) -> Result<(), HttpError> {
+    if from == to {
+        // A folder into itself or one of its own finds no `parent` once taken, and nothing is written.
+        return change(from, |c| {
+            let item = c.take(id)?;
+            c.put(parent, item).map(drop)
+        });
+    }
+    let _held = writing();
+    let (mut source, mut target) = (http_collections::get(from)?, http_collections::get(to)?);
+    let requests = target.put(parent, source.take(id)?)?;
+    http_collections::save(to, &target)?;
+    http_collections::save(from, &source)?;
+    for request in requests {
+        // Left behind, it goes when the page next opens, as a deleted request's does.
+        if let Err(e) = http_collections::move_response(from, to, &request) {
+            eprintln!("http: a moved request's response not moved: {e}");
+        }
+    }
+    Ok(())
+}
+
 /// A folder or request gone, and the last responses of the requests it took.
 pub fn delete_item(collection: &str, id: &str) -> Result<(), HttpError> {
     for request in change(collection, |c| c.remove(id))? {
@@ -1224,6 +1250,47 @@ mod tests {
             assert_eq!(http_collections::get(&id).unwrap().request_ids(), ["out"]);
             assert_eq!(http_collections::last_response(&id, "in").unwrap(), None);
             assert!(http_collections::last_response(&id, "out").unwrap().is_some());
+        });
+    }
+
+    #[test]
+    fn a_folder_moves_with_all_it_holds_and_its_responses_follow_it() {
+        with_app_dir("http-move-item", || {
+            let shop = new_collection("Shop").unwrap().id;
+            let other = new_collection("Other").unwrap().id;
+            add_item(&shop, None, json!({"id": "f", "name": "F", "item": []})).unwrap();
+            add_item(&shop, Some("f"), json!({"id": "in", "name": "In", "request": {"url": "/a"}, "event": [{"listen": "test"}]})).unwrap();
+            add_item(&shop, None, json!({"id": "g", "name": "G", "item": []})).unwrap();
+            add_item(&shop, None, json!({"id": "out", "name": "Out", "request": {"url": "/b"}})).unwrap();
+            add_item(&other, None, json!({"id": "h", "name": "H", "item": []})).unwrap();
+            let saved = SavedResponse { at: 1, environment: None, outcome: Outcome::Failed { error: "x".into() }, body: Vec::new(), scripts: Default::default() };
+            http_collections::save_response(&shop, "in", &saved).unwrap();
+            let folders = |c: &str, f: &str| http_collections::get(c).unwrap().item_mut(f).map(|i| i["item"].clone());
+
+            // Within one collection: last into the folder named, nothing else touched.
+            move_item(&shop, "out", &shop, Some("g")).unwrap();
+            assert_eq!(folders(&shop, "g").unwrap(), json!([{"id": "out", "name": "Out", "request": {"url": "/b"}}]));
+            move_item(&shop, "out", &shop, None).unwrap();
+            assert_eq!(folders(&shop, "g").unwrap(), json!([]));
+            assert_eq!(http_collections::get(&shop).unwrap().request_ids(), ["in", "out"]);
+
+            // A folder into itself or what it holds: refused, nothing written.
+            assert!(matches!(move_item(&shop, "f", &shop, Some("f")), Err(HttpError::NoSuchItem(_))));
+            assert_eq!(http_collections::get(&shop).unwrap().request_ids(), ["in", "out"]);
+
+            // Into another collection's folder: the item as it was, scripts too, and its last response.
+            move_item(&shop, "f", &other, Some("h")).unwrap();
+            assert_eq!(http_collections::get(&shop).unwrap().request_ids(), ["out"]);
+            assert_eq!(folders(&other, "h").unwrap()[0]["item"][0]["event"], json!([{"listen": "test"}]));
+            assert_eq!(http_collections::last_response(&shop, "in").unwrap(), None);
+            assert!(http_collections::last_response(&other, "in").unwrap().is_some());
+
+            // An id it holds already there: refused, and neither collection changed.
+            add_item(&shop, None, json!({"id": "f2", "name": "F2", "item": [{"id": "in", "name": "Twin", "request": {"url": "/c"}}]})).unwrap();
+            assert!(matches!(move_item(&shop, "f2", &other, None), Err(HttpError::BadId(id)) if id == "in"));
+            assert_eq!(http_collections::get(&shop).unwrap().request_ids(), ["out", "in"]);
+            assert_eq!(http_collections::get(&other).unwrap().request_ids(), ["in"]);
+            assert!(matches!(move_item(&shop, "nope", &other, None), Err(HttpError::NoSuchItem(_))));
         });
     }
 
