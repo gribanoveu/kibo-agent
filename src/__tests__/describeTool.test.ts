@@ -43,6 +43,22 @@ describe("what each call shows", () => {
     expect(board('{"op":"list"}')).toMatchObject({ arg: "list", detail: "" });
   });
 
+  test("a review reads as the step it is on, not as a bare icon, while it runs", () => {
+    const starting = describeTool(tool({ name: "review", arguments: "{}", status: "running" }));
+    expect(starting).toMatchObject({ name: "Review", arg: "Reading the change…", meta: undefined, detail: "" });
+    const reading = describeTool(
+      tool({ name: "review", arguments: "{}", status: "running", output: "readFile src/lib/x.ts\ngrep TODO\n" }),
+    );
+    expect(reading).toMatchObject({ name: "Review", arg: "Searching TODO", meta: "2 steps" });
+    expect(reading.detail).toBe("Reading src/lib/x.ts\nSearching TODO");
+    // One step is a step, not "1 steps" — and the row already says it.
+    const one = describeTool(tool({ name: "review", arguments: "{}", status: "running", output: "runCommand cargo test" }));
+    expect(one).toMatchObject({ arg: "Running cargo test", meta: undefined });
+    // A step with nothing to name (`todo`) is still the row's text.
+    const bare = describeTool(tool({ name: "review", arguments: "{}", status: "running", output: "todo" }));
+    expect(bare).toMatchObject({ arg: "Updating the checklist", meta: undefined });
+  });
+
   test("a read of several files names them and opens on each under its header", () => {
     const running = describeTool(tool({ arguments: '{"paths":["a.rs","b.rs"]}', status: "running" }));
     expect(running).toMatchObject({ name: "Read", arg: "a.rs, b.rs", meta: "2 files" });

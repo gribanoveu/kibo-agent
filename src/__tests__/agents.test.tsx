@@ -120,7 +120,7 @@ describe("the agent list", () => {
     const stopped: number[] = [];
     render(<AgentList agents={listed} error={null} onStop={(id) => stopped.push(id)} onOpen={() => {}} />);
     const rows = [...document.querySelectorAll(".agent-open")];
-    expect(rows.map((row) => row.textContent)).toEqual(["Where is the token refreshed?readFile", "Which tests cover the parser?done"]);
+    expect(rows.map((row) => row.textContent)).toEqual(["Where is the token refreshed?Read", "Which tests cover the parser?done"]);
     // The detail is the sheet's: no brief, steps or cost here.
     expect(screen.queryByText("31k tokens · 90% cached")).toBeNull();
     expect(screen.queryByText("src/auth.rs")).toBeNull();
@@ -182,7 +182,7 @@ describe("the agent sheet", () => {
     expect(screen.getByText("2 steps")).toBeTruthy();
     expect(screen.getByText("31k tokens · 90% cached")).toBeTruthy();
     const steps = [...document.querySelectorAll(".agent-steps li")];
-    expect(steps.map((li) => li.textContent)).toEqual(["greprefresh", "readFilesrc/auth.rs"]);
+    expect(steps.map((li) => li.textContent)).toEqual(["Greprefresh", "Readsrc/auth.rs"]);
     expect(steps.map((li) => li.className)).toEqual(["", "now"]);
 
     fireEvent.click(screen.getByText("Stop"));

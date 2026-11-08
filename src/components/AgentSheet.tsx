@@ -4,7 +4,7 @@ import { Markdown } from "./Markdown";
 import { PageSheet } from "./Page";
 import { useAgents } from "../hooks/useAgents";
 import { type AgentInfo, agentStatus, briefTitle, splitStep, tokensSpent } from "../lib/agents";
-import type { AgentFocus } from "../lib/describeTool";
+import { toolLabel, type AgentFocus } from "../lib/describeTool";
 import "./AgentSheet.css";
 
 /** The tools a run called, oldest first, the one under way marked while it runs; kept scrolled to the newest. */
@@ -18,10 +18,11 @@ function Steps({ steps, running }: { steps: string[]; running: boolean }) {
     <ol className="agent-steps" ref={list}>
       {steps.map((step, i) => {
         const { tool, on } = splitStep(step);
+        const label = toolLabel(tool);
         const now = running && i === steps.length - 1;
         return (
-          <li key={i} className={now ? "now" : undefined} title={step}>
-            <b>{tool}</b>
+          <li key={i} className={now ? "now" : undefined} title={[label, on].filter(Boolean).join(" ")}>
+            <b>{label}</b>
             {on && <span>{on}</span>}
           </li>
         );
