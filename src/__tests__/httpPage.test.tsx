@@ -203,6 +203,32 @@ describe("the HTTP page", () => {
     expect(called("http_item_rename")).toEqual([]);
   });
 
+  test("a new folder is made in a collection only once its name is confirmed, and is empty", async () => {
+    await shown();
+    fireEvent.click(screen.getByLabelText("Actions for Orders API"));
+    fireEvent.click(screen.getByRole("option", { name: /New folder/ }));
+    expect(screen.getByRole("dialog", { name: "New folder" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_item_add")).toEqual([]);
+
+    fireEvent.click(screen.getByLabelText("Actions for Orders API"));
+    fireEvent.click(screen.getByRole("option", { name: /New folder/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Refunds" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Refunds")).toBeDefined();
+    await waitFor(() => expect(called("http_item_add")).toHaveLength(1));
+    const [added] = called("http_item_add") as { collection: string; parent: string | null; item: { id: string; name: string; item: unknown[] } }[];
+    expect([added.collection, added.parent, added.item.name, added.item.item]).toEqual(["c", null, "Refunds", []]);
+    expect(added.item.id).toBeTruthy();
+    // A folder holds one too; a request does not.
+    fireEvent.click(screen.getByLabelText("Actions for Refunds"));
+    expect(screen.getByRole("option", { name: /New folder/ })).toBeDefined();
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    fireEvent.click(screen.getByLabelText("Actions for Health"));
+    expect(screen.queryByRole("option", { name: /New folder/ })).toBeNull();
+  });
+
   test("⌘Enter under a dialog is the dialog's; outside one it sends the open request", async () => {
     holdSends = true;
     await shown("r2");

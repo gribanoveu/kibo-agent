@@ -374,7 +374,11 @@ export function removeNode(collections: Collection[], id: string): Collection[] 
 
 /** `request` added last in the collection or folder called `parent`. */
 export function addRequest(collections: Collection[], parent: string, request: HttpRequest): Collection[] {
-  const item: Item = { kind: "request", ...request };
+  return addItem(collections, parent, { kind: "request", ...request });
+}
+
+/** `item` — a request or a folder — added last in the collection or folder called `parent`. */
+export function addItem(collections: Collection[], parent: string, item: Item): Collection[] {
   return collections.map((c) =>
     c.id === parent
       ? { ...c, items: [...c.items, item] }

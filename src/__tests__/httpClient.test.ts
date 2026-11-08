@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addItem,
   addRequest,
   asHttpText,
   collectionFrom,
@@ -318,6 +319,9 @@ describe("http client rules", () => {
     expect(findRequest(renameNode(tree, "f", "Folder"), "r1")?.path).toEqual(["API", "Folder"]);
     expect(findRequest(addRequest(tree, "f", fresh), "n")?.path).toEqual(["API", "Keys"]);
     expect(findRequest(addRequest(tree, "c2", fresh), "n")?.collection.id).toBe("c2");
+    // A folder goes in the same way, and a request then goes into it.
+    const folded = addItem(tree, "f", { kind: "folder", id: "g", name: "Refunds", auth: { type: "inherit" }, items: [] });
+    expect(findRequest(addRequest(folded, "g", fresh), "n")?.path).toEqual(["API", "Keys", "Refunds"]);
     expect(addRequest(tree, "r2", fresh)).toEqual(tree);
     expect(requestsUnder(tree, "c")).toEqual(["r1", "r2", "r3"]);
     expect(requestsUnder(tree, "f")).toEqual(["r1"]);

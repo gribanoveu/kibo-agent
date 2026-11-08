@@ -121,6 +121,9 @@ export function HttpPage() {
     else if (renaming.kind === "request") {
       reveal(renaming.parent);
       http.newRequest(renaming.parent, name);
+    } else if (renaming.kind === "folder") {
+      reveal(renaming.parent);
+      http.newFolder(renaming.parent, name);
     } else
       http.newCollection(name).then(
         (id) => reveal(id),
@@ -138,6 +141,7 @@ export function HttpPage() {
   const reveal = (id: string) => setExpanded((s) => new Set(s).add(id));
   const newCollection = () => setRenaming({ kind: "collection", name: "New collection" });
   const newRequest = (parent: string) => setRenaming({ kind: "request", parent, name: "New request" });
+  const newFolder = (parent: string) => setRenaming({ kind: "folder", parent, name: "New folder" });
   const importFile = () =>
     http.importFile().then(
       (imported) => imported?.kind === "collection" && reveal(imported.id),
@@ -158,7 +162,12 @@ export function HttpPage() {
     // A file that does not read can only go.
     const broken = node.kind === "collection" && http.collections.some((c) => c.id === node.id && c.error);
     return [
-      ...(node.kind === "request" || broken ? [] : [{ value: "new", label: "New request", run: () => newRequest(node.id) }]),
+      ...(node.kind === "request" || broken
+        ? []
+        : [
+            { value: "new", label: "New request", run: () => newRequest(node.id) },
+            { value: "folder", label: "New folder", run: () => newFolder(node.id) },
+          ]),
       ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ kind: "rename", id: node.id, name: node.name }) }]),
       ...(node.kind === "collection" && !broken
         ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
@@ -425,9 +434,12 @@ const selectAll = (input: HTMLInputElement | null) => input?.select();
 const CURL = /^\s*curl\s/;
 
 /** What the name dialog names: a node there is, or one made on Create. */
-type Naming = { kind: "rename"; id: string; name: string } | { kind: "collection"; name: string } | { kind: "request"; parent: string; name: string };
+type Naming =
+  | { kind: "rename"; id: string; name: string }
+  | { kind: "collection"; name: string }
+  | { kind: "request" | "folder"; parent: string; name: string };
 
-const NAMING_TITLE: Record<Naming["kind"], string> = { rename: "Rename", collection: "New collection", request: "New request" };
+const NAMING_TITLE: Record<Naming["kind"], string> = { rename: "Rename", collection: "New collection", request: "New request", folder: "New folder" };
 
 function MethodBadge({ method }: { method: HttpMethod }) {
   return <span className={`http-method http-method-${method.toLowerCase()}`}>{method === "DELETE" ? "DEL" : method === "OPTIONS" ? "OPT" : method}</span>;

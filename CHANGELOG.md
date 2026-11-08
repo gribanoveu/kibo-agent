@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-08 Add folders to an HTTP collection or folder from its menu
 - 2026-11-08 The agent can write to an HTTP stand you open to it for writes: POST, PUT, PATCH and DELETE with a body, each shown on a card first — every time with Ask for writes, or as other changes are with Writes as other tools
 - 2026-11-08 The agent works across your HTTP collections: it sends only to the hosts your collections' requests go to, gives you a curl command for any other, and first reads an environment's addresses, requests and open variables — a variable your collections use for sign-in stays hidden from it, marked secret or not
 - 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat

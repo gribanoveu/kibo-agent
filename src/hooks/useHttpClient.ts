@@ -26,6 +26,7 @@ import {
   onHttpChanged,
 } from "../lib/httpCommands";
 import {
+  addItem,
   addRequest,
   collectionFrom,
   findRequest,
@@ -219,6 +220,19 @@ export function useHttpClient(historyShown = false) {
       return id;
     },
     [collections, write, setTabs, setActive],
+  );
+
+  /** A new, empty folder named `name` in a collection or folder; its id. */
+  const newFolder = useCallback(
+    (parent: string, name: string) => {
+      const owner = ownerOf(collections, parent);
+      if (!owner) return null;
+      const id = crypto.randomUUID();
+      setCollections((c) => addItem(c, parent, { kind: "folder", id, name, auth: { type: "inherit" }, items: [] }));
+      void write("The folder was not added", () => addHttpItem(owner.id, parent === owner.id ? null : parent, { id, name, item: [] }));
+      return id;
+    },
+    [collections, write],
   );
 
   const rename = useCallback(
@@ -426,6 +440,7 @@ export function useHttpClient(historyShown = false) {
       edit,
       pasteCurl,
       newCollection,
+      newFolder,
       newRequest,
       rename,
       remove,
@@ -458,6 +473,7 @@ export function useHttpClient(historyShown = false) {
       edit,
       pasteCurl,
       newCollection,
+      newFolder,
       newRequest,
       rename,
       remove,
