@@ -197,6 +197,32 @@
 .http-rename:focus {
   border-color: var(--accent);
 }
+/* Where a request or folder may move: every place in one scrolling list. */
+.http-move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.http-move-target {
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+.http-move-target:hover {
+  background: var(--bg-hover);
+}
+.http-move-target.on {
+  background: var(--bg-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .http-confirm {
   margin: 0;
   color: var(--text-dim);

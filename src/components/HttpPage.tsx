@@ -417,15 +417,21 @@ export function HttpPage() {
         {targets.length === 0 ? (
           <p className="http-confirm">There is nowhere else to put it: make a folder or another collection first.</p>
         ) : (
-          <Dropdown
-            below
-            label={targets.find((t) => t.id === moving?.to)?.label ?? "Pick a collection or folder"}
-            title="Where to move it"
-            heading="Last into"
-            options={targets.map((t) => ({ value: t.id, label: t.label }))}
-            value={moving?.to ?? ""}
-            onPick={(to) => moving && setMoving({ ...moving, to })}
-          />
+          // A list in the dialog, not a dropdown: the dialog's body scrolls, and would cut a menu off.
+          <div className="http-move-list" role="listbox" aria-label="Where to move it — last into">
+            {targets.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="option"
+                aria-selected={moving?.to === t.id}
+                className={`http-move-target${moving?.to === t.id ? " on" : ""}`}
+                onClick={() => moving && setMoving({ ...moving, to: t.id })}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         )}
       </Modal>
       <Modal
