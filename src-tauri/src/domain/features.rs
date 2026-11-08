@@ -25,6 +25,7 @@ pub enum Feature {
     Knowledge,
     Mongodb,
     VoiceInput,
+    LayoutCorrection,
 }
 
 /// Why a choice on the Catalog was not saved.
@@ -49,7 +50,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -133,6 +134,15 @@ impl Feature {
                 tools: &[],
                 data: None,
             },
+            Feature::LayoutCorrection => Manifest {
+                id: "layout-correction",
+                name: "Keyboard layout correction",
+                description: "The message boxes notice Russian or English typed in the other keyboard layout, including a wrong fragment in mixed prose, and offer the likely text. \
+                    Nothing changes until you click Fix or press Cmd/Ctrl+F; ordinary Undo restores what you typed. On macOS and Windows, an optional switch also selects the corrected text's dominant installed layout.",
+                enabled_by_default: false,
+                tools: &[],
+                data: None,
+            },
         }
     }
 
@@ -211,7 +221,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input", "layout-correction"]);
     }
 
     #[test]
@@ -231,6 +241,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.

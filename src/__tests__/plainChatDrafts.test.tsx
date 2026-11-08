@@ -71,11 +71,13 @@ const chatScreen = (
   send?: (text: string) => void,
   imagesEnabled = false,
   role: "assistant" | "prototype" = "assistant",
+  layoutCorrection = false,
 ) => (
   <PlainChat
     chat={state(chatId, send, role) as unknown as Chat}
     focus={0}
     imagesEnabled={imagesEnabled}
+    layoutCorrection={layoutCorrection}
     models={{ choices: [], current: null }}
     onModel={() => {}}
     onEffort={() => {}}
@@ -90,6 +92,16 @@ const box = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 const type = (text: string) => fireEvent.change(box(), { target: { value: text } });
 
 describe("Chat mode's box", () => {
+  test("offers and applies a wrong-layout correction", async () => {
+    render(chatScreen("a", undefined, false, "assistant", true));
+    type("ghbdtn");
+    expect(box().value).toBe("ghbdtn");
+
+    fireEvent.blur(box());
+    fireEvent.click(await screen.findByRole("button", { name: "Fix" }));
+    await waitFor(() => expect(box().value).toBe("привет"));
+  });
+
   /// One rule for every box (`boxTakesPictures`): a model that sees pictures,
   /// and a Prototype chat, whose pictures are the page's assets whatever the
   /// model can see.

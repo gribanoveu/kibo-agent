@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog
 - 2026-11-08 A review says what it is doing while it runs — the file it reads, the command it runs — instead of standing as a bare icon, and a helper's steps in the Agents tab and its sheet carry the app's own tool names
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills
 - 2026-11-08 A feature's card in the Catalog carries its own icon: the Meetings page's sound wave for Meeting notes, two people for Voice memory, the library for the knowledge base and a microphone for Voice input, instead of the generic puzzle piece
