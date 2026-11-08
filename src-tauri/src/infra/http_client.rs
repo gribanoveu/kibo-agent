@@ -701,7 +701,10 @@ pub(crate) mod tests {
 
     /// The live test's stand (HC-9): an orders API behind a bearer token, with one
     /// bug planted — an order that does not exist answers 200 with an empty order,
-    /// where its spec says 404. Every request it gets is kept: method, path, token.
+    /// where its spec says 404. Every request it gets is kept, with whether the
+    /// token was right and whether the answer was the planted bug. An order echoes
+    /// the `Authorization` it was read with, so the mask on what the model reads is
+    /// put to work.
     pub(crate) mod live_stand {
         use std::sync::{Arc, Mutex};
         use std::io::{BufRead, BufReader, Read, Write};
@@ -709,8 +712,17 @@ pub(crate) mod tests {
 
         pub(crate) const TOKEN: &str = "s3cr3t-l1ve-t0ken";
 
-        /// What reached the stand: method, path, and whether the token was right.
-        pub(crate) type Got = Arc<Mutex<Vec<(String, String, bool)>>>;
+        /// One request the stand got.
+        #[derive(Debug, Clone)]
+        pub(crate) struct Hit {
+            pub method: String,
+            pub path: String,
+            pub authorized: bool,
+            /// Answered with the planted bug: 200 for an order that does not exist.
+            pub planted: bool,
+        }
+
+        pub(crate) type Got = Arc<Mutex<Vec<Hit>>>;
 
         pub(crate) fn stand() -> (u16, Got) {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -722,12 +734,12 @@ pub(crate) mod tests {
                 for stream in listener.incoming().flatten() {
                     let mut reader = BufReader::new(&stream);
                     let mut line = String::new();
-                    if reader.read_line(&mut line).is_err() {
+                    if !matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
                         continue;
                     }
                     let mut parts = line.split_whitespace();
                     let (method, path) = (parts.next().unwrap_or_default().to_string(), parts.next().unwrap_or_default().to_string());
-                    let (mut authorized, mut length) = (false, 0usize);
+                    let (mut authorization, mut length) = (String::new(), 0usize);
                     loop {
                         let mut header = String::new();
                         if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
@@ -735,15 +747,16 @@ pub(crate) mod tests {
                         }
                         let (name, value) = header.split_once(':').unwrap_or((&header, ""));
                         match name.trim().to_ascii_lowercase().as_str() {
-                            "authorization" => authorized = value.trim() == format!("Bearer {TOKEN}"),
+                            "authorization" => authorization = value.trim().to_string(),
                             "content-length" => length = value.trim().parse().unwrap_or(0),
                             _ => {}
                         }
                     }
                     let mut body = vec![0; length];
                     let _ = reader.read_exact(&mut body);
-                    kept.lock().unwrap().push((method.clone(), path.clone(), authorized));
-                    let (status, text) = answer(&method, &path, authorized);
+                    let authorized = authorization == format!("Bearer {TOKEN}");
+                    let (status, text, planted) = answer(&method, &path, &authorization, authorized);
+                    kept.lock().unwrap().push(Hit { method, path, authorized, planted });
                     let reply = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}", text.len());
                     let _ = (&stream).write_all(reply.as_bytes());
                 }
@@ -751,21 +764,27 @@ pub(crate) mod tests {
             (port, got)
         }
 
-        fn answer(method: &str, path: &str, authorized: bool) -> (&'static str, String) {
+        fn answer(method: &str, path: &str, authorization: &str, authorized: bool) -> (&'static str, String, bool) {
             if !authorized {
-                return ("401 Unauthorized", r#"{"error":"a bearer token is required"}"#.into());
+                return ("401 Unauthorized", r#"{"error":"a bearer token is required"}"#.into(), false);
             }
             if !matches!(method, "GET" | "HEAD") {
-                return ("405 Method Not Allowed", r#"{"error":"read only"}"#.into());
+                return ("405 Method Not Allowed", r#"{"error":"read only"}"#.into(), false);
             }
             let path = path.split('?').next().unwrap_or_default();
             match path.trim_end_matches('/') {
-                "/orders" => ("200 OK", r#"[{"id":42,"status":"paid"}]"#.into()),
-                "/orders/42" => ("200 OK", r#"{"id":42,"status":"paid","items":[{"sku":"A1","qty":2}]}"#.into()),
+                "/orders" => ("200 OK", r#"[{"id":42,"status":"paid"}]"#.into(), false),
+                "/orders/42" => {
+                    let order = serde_json::json!({"id": 42, "status": "paid", "items": [{"sku": "A1", "qty": 2}], "readWith": authorization});
+                    ("200 OK", order.to_string(), false)
+                }
                 // The planted bug: the spec says 404.
                 other => match other.strip_prefix("/orders/") {
-                    Some(id) if !id.is_empty() && !id.contains('/') => ("200 OK", format!(r#"{{"id":"{id}","status":null,"items":[]}}"#)),
-                    _ => ("404 Not Found", r#"{"error":"no such route"}"#.into()),
+                    Some(id) if !id.is_empty() && !id.contains('/') => {
+                        let order = serde_json::json!({"id": id, "status": null, "items": [], "readWith": authorization});
+                        ("200 OK", order.to_string(), true)
+                    }
+                    _ => ("404 Not Found", r#"{"error":"no such route"}"#.into(), false),
                 },
             }
         }

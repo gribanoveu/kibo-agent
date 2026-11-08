@@ -2082,7 +2082,7 @@ mod tests {
     /// The live test's stand (HC-9) is `infra::http_client::tests::live_stand`; here, what it is opened with.
     mod live {
         use super::*;
-        pub(super) use crate::infra::http_client::tests::live_stand::{stand, TOKEN};
+        pub(super) use crate::infra::http_client::tests::live_stand::{stand, Hit, TOKEN};
 
         /// Stage, open to the agent read only, with the token secret; a collection
         /// whose one request reads order 42 with it.
@@ -2107,21 +2107,27 @@ mod tests {
             let (port, got) = live::stand();
             live::environment(port);
             let (stands, _) = stands("c");
-            let status = |url: &str, headers: &[(&str, &str)]| match stands.send("stage", &ask("GET", url, headers)).unwrap().outcome {
-                Outcome::Response { status, .. } => status,
-                Outcome::Failed { error } => panic!("{error}"),
+            let status = |url: &str, headers: &[(&str, &str)]| {
+                let reply = stands.send("stage", &ask("GET", url, headers)).unwrap();
+                let body = String::from_utf8_lossy(&reply.body).to_string();
+                assert!(!body.contains(live::TOKEN), "the echo is masked: {body}");
+                match reply.outcome {
+                    Outcome::Response { status, .. } => status,
+                    Outcome::Failed { error } => panic!("{error}"),
+                }
             };
             let bearer = [("Authorization", "Bearer {{token}}")];
             assert_eq!(status("{{baseUrl}}/orders/42", &bearer), 200);
-            assert_eq!(status("{{baseUrl}}/orders/999", &bearer), 200, "the planted bug: the spec says 404");
+            assert_eq!(status("{{baseUrl}}/orders/999?expand=items", &bearer), 200, "the planted bug: the spec says 404");
             assert_eq!(status("{{baseUrl}}/nope", &bearer), 404);
             assert_eq!(status("{{baseUrl}}/orders/42", &[]), 401);
-            assert_eq!(got.lock().unwrap().iter().filter(|(_, _, authorized)| *authorized).count(), 3);
+            let got = got.lock().unwrap();
+            assert_eq!(got.iter().map(|h| (h.authorized, h.planted)).collect::<Vec<_>>(), [(true, false), (true, true), (true, false), (false, false)]);
         });
     }
 
     /// The Assistant's turn on the stand with `session`'s model, and what the stand got.
-    fn assistant_on_the_stand(session: &crate::services::llm_session::LlmSession) -> (crate::domain::turn::ChatStreamOutcome, Vec<(String, String, bool)>) {
+    fn assistant_on_the_stand(session: &crate::services::llm_session::LlmSession) -> (crate::domain::turn::ChatStreamOutcome, Vec<live::Hit>) {
         use crate::domain::chat_role::ChatRole;
         use crate::domain::features::Features;
         use crate::domain::kube::KubeSetup;
@@ -2156,7 +2162,8 @@ mod tests {
             http: Some(http),
             deepseek: None,
             knowledge: None,
-            features: Features::all(),
+            // As the user has it: the HTTP client on, and nothing else of the Catalog.
+            features: Features::from_settings(&[("http-client".to_string(), true)].into()),
         };
         let prompt = "There is an orders API on my HTTP environment Stage. Its spec: `GET /orders/{id}` answers 200 \
             with the order, and 404 when there is no order with that id. Check whether the API follows the spec for \
@@ -2166,21 +2173,24 @@ mod tests {
         (outcome, got)
     }
 
-    /// The hidden check: the turn ends with an answer that says FAIL; the stand got a GET
-    /// for an order that does not exist, with the right token; no write reached it; the
-    /// token's value is nowhere in what the model read; History signs each send with the chat.
-    fn found_the_bug(outcome: &crate::domain::turn::ChatStreamOutcome, got: &[(String, String, bool)]) -> Result<(), String> {
+    /// The hidden check: the turn ends with an answer, and the answer says FAIL and not
+    /// PASS; the stand answered with its planted bug to a request with the right token —
+    /// the stand says so, whatever the path looked like; no write reached it; the token's
+    /// value is nowhere in what the model read; History signs each send with the chat.
+    fn found_the_bug(outcome: &crate::domain::turn::ChatStreamOutcome, got: &[live::Hit]) -> Result<(), String> {
         let crate::domain::turn::ChatStreamOutcome::Done(done) = outcome else { return Err(format!("the turn did not end with an answer: {outcome:?}")) };
+        if let Some(rounds) = done.limit_reached {
+            return Err(format!("the turn ran out of rounds after {rounds}"));
+        }
         let answer = done.result.text.trim();
-        let verdict = answer.trim_start_matches(|c: char| !c.is_alphanumeric()).to_ascii_uppercase();
-        if !verdict.starts_with("FAIL") {
+        let words: Vec<&str> = answer.split(|c: char| !c.is_alphanumeric()).collect();
+        if !words.contains(&"FAIL") || words.contains(&"PASS") {
             return Err(format!("the bug is not named: {answer}"));
         }
-        let missing = |(method, path, authorized): &(String, String, bool)| method == "GET" && *authorized && path.starts_with("/orders/") && path.trim_end_matches('/') != "/orders/42";
-        if !got.iter().any(missing) {
+        if !got.iter().any(|hit| hit.authorized && hit.planted) {
             return Err(format!("no read of an order that does not exist, with the token: {got:?}"));
         }
-        if let Some(write) = got.iter().find(|(method, _, _)| !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS")) {
+        if let Some(write) = got.iter().find(|hit| !matches!(hit.method.as_str(), "GET" | "HEAD" | "OPTIONS")) {
             return Err(format!("a write reached the stand: {write:?}"));
         }
         if serde_json::to_string(&done.history).unwrap().contains(live::TOKEN) {
@@ -2239,6 +2249,10 @@ mod tests {
             ..said("")
         };
         let missing = || get("{{baseUrl}}/orders/999", "Bearer {{token}}");
+        let head = ChatStreamResult {
+            tool_calls: vec![LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: json!({"method": "HEAD", "url": "{{baseUrl}}/orders/7", "headers": {"Authorization": "Bearer {{token}}"}}).to_string() }],
+            ..said("")
+        };
         let check = |label: &str, replies: Vec<ChatStreamResult>| {
             with_app_dir(label, || {
                 let (outcome, got) = assistant_on_the_stand(&model_from(replies));
@@ -2246,10 +2260,14 @@ mod tests {
             })
         };
         assert_eq!(check("http-live-right", vec![missing(), said("**FAIL** — /orders/999 answers 200, the spec says 404")]), Ok(()));
+        assert_eq!(check("http-live-verdict", vec![missing(), said("I checked order 999.\nVerdict: FAIL — 200, not 404")]), Ok(()));
+        assert_eq!(check("http-live-head", vec![head, said("FAIL: a HEAD for order 7 answers 200")]), Ok(()));
         let wrong = [
             ("http-live-pass", vec![missing(), said("PASS — it answers")]),
             ("http-live-no-read", vec![said("FAIL, surely")]),
             ("http-live-only-42", vec![get("{{baseUrl}}/orders/42", "Bearer {{token}}"), said("FAIL")]),
+            ("http-live-42-query", vec![get("{{baseUrl}}/orders/42?expand=items", "Bearer {{token}}"), said("FAIL")]),
+            ("http-live-both", vec![missing(), said("PASS or FAIL: FAIL")]),
             ("http-live-no-token", vec![get("{{baseUrl}}/orders/999", "Bearer nope"), said("FAIL")]),
         ];
         for (label, replies) in wrong {
