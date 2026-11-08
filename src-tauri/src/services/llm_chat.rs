@@ -1589,11 +1589,13 @@ fn run_review(
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.
+/// A review's helper runs commands too (`cargo test`, `git diff`), and a step
+/// with no command named is the one that says the least.
 fn explore_step(name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
     let paths = crate::domain::tools::read_paths(&args).join(", ");
     let target = (!paths.is_empty()).then_some(paths.as_str()).or_else(|| {
-        ["pattern", "query"].iter().find_map(|key| args.get(key).and_then(|v| v.as_str()))
+        ["pattern", "query", "command"].iter().find_map(|key| args.get(key).and_then(|v| v.as_str()))
     });
     match target {
         Some(target) => format!("{name} {target}"),
@@ -6986,6 +6988,9 @@ mod tests {
         assert_eq!(explore_step("gitStatus", "{}"), "gitStatus");
         assert_eq!(explore_step("readFile", r#"{"paths":["a.rs","b.rs"]}"#), "readFile a.rs, b.rs");
         assert_eq!(explore_step("readFile", "{broken"), "readFile");
+        // A review's helper runs tests and reads diffs: its step names the command.
+        assert_eq!(explore_step("runCommand", r#"{"command":"cargo test --all"}"#), "runCommand cargo test --all");
+        assert_eq!(explore_step("todo", r#"{"op":"list"}"#), "todo");
     }
 
     // ------------------------------------------------------ parallel explore

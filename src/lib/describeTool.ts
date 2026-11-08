@@ -625,6 +625,21 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
+    // A review's helper reads the change in the same steps a call is made of:
+    // the one under way is what the row says, and every step taken unfolds.
+    // A settled review is a card of its own (`lib/finding.ts`), so this is the
+    // row while it runs; a failed one takes the branch above, with its error.
+    case "review": {
+      const steps = block.output.split("\n").filter(Boolean).map(helperStep);
+      const under = steps[steps.length - 1];
+      return {
+        name,
+        arg: under ?? (block.status === "running" ? "Reading the change…" : ""),
+        meta: steps.length > 1 ? `${steps.length} steps` : undefined,
+        detail: steps.join("\n"),
+      };
+    }
+
     // The note is the whole call; a refused one says why in the error.
     case "remember":
       return { name, arg: str(args.fact) ?? "", meta: result.already ? "already saved" : undefined, detail: "" };
@@ -768,6 +783,13 @@ const ACTIVE_VERBS: Record<string, string> = {
 export function describeActive(block: Extract<Block, { kind: "tool" }>): string {
   const { name, arg } = describeTool(block);
   return [ACTIVE_VERBS[name] ?? name, arg].filter(Boolean).join(" ");
+}
+
+/** A helper's step as the folded line says a call: `readFile src/a.rs` → `Reading src/a.rs`. */
+function helperStep(line: string): string {
+  const gap = line.indexOf(" ");
+  const label = toolLabel(gap < 0 ? line : line.slice(0, gap));
+  return [ACTIVE_VERBS[label] ?? label, gap < 0 ? "" : line.slice(gap + 1)].filter(Boolean).join(" ");
 }
 
 // A run of calls folded into one line, the way a person would say it: "Read 3
