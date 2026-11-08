@@ -4719,7 +4719,7 @@ mod tests {
     /// once the mode has changed: it is refused and tells the model to call again.
     /// With the mode as it was, it runs.
     #[test]
-    fn a_write_let_through_while_a_card_waited_asks_if_the_mode_changed() {
+    fn an_http_write_let_through_while_a_card_waited_asks_if_the_mode_changed() {
         use crate::domain::http_client::AgentAccess;
         use crate::services::ai_tools::tools::http_request::tests::opened_as;
         let resumed = |now: AgentAccess| {

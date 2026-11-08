@@ -273,6 +273,8 @@ pub(crate) mod tests {
         for write in ["POST", "put", "PATCH", "DELETE"] {
             assert!(risky(Some(write)), "{write}");
         }
+        let headers = Some([("X-HTTP-Method-Override".to_string(), "DELETE".to_string())].into());
+        assert!(ToolCall::HttpRequest(HttpRequestArgs { headers, ..get("/x") }).is_risky(), "a GET that deletes");
     }
 
     /// The card says where, what, the headers and the body as the model wrote them —

@@ -1941,7 +1941,9 @@ mod tests {
             shop_to("{{baseUrl}}/orders");
             let mut request = ask("POST", "{{baseUrl}}/orders", &[]);
             request.body = Some(r#"{"key": "{{token}}"}"#.into());
-            stands("c").0.send("stage", &request).unwrap();
+            let (stands, _) = stands("c");
+            assert_eq!(stands.open().unwrap()[0].access, AgentAccess::AskForWrites, "the mode reaches the agent");
+            stands.send("stage", &request).unwrap();
 
             let wire = wire(&seen).to_ascii_lowercase();
             assert!(wire.starts_with("post /orders http/1.1"), "{wire}");
