@@ -207,6 +207,40 @@ describe("the HTTP page", () => {
     expect(called("http_item_rename")).toEqual([]);
   });
 
+  test("a request moves into a folder picked from its menu, with nowhere to go said", async () => {
+    await shown();
+    fireEvent.click(screen.getByText("Orders API"));
+    fireEvent.click(screen.getByLabelText("Actions for Health"));
+    fireEvent.click(screen.getByRole("option", { name: /Move to/ }));
+    expect(screen.getByText(/There is nowhere else to put it/) !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByLabelText("Actions for Orders API"));
+    fireEvent.click(screen.getByRole("option", { name: /New folder/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Refunds" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(called("http_item_add")).toHaveLength(1));
+    const folder = (called("http_item_add")[0]!.item as { id: string }).id;
+
+    fireEvent.click(screen.getByLabelText("Actions for Health"));
+    fireEvent.click(screen.getByRole("option", { name: /Move to/ }));
+    const move = screen.getByRole("button", { name: "Move" }) as HTMLButtonElement;
+    expect(move.disabled).toBe(true);
+    fireEvent.click(screen.getByTitle("Where to move it"));
+    fireEvent.click(screen.getByRole("option", { name: "Orders API / Refunds" }));
+    fireEvent.click(move);
+    await waitFor(() => expect(called("http_item_move")).toEqual([{ collection: "c", id: "r2", to: "c", parent: folder }]));
+    // Shown in it at once: the folder opened, the request inside.
+    expect(document.querySelector(`[aria-label="Actions for Refunds"]`)?.closest("li")?.textContent?.includes("Health")).toBe(true);
+    // Back into the collection itself: no folder named.
+    fireEvent.click(screen.getByLabelText("Actions for Health"));
+    fireEvent.click(screen.getByRole("option", { name: /Move to/ }));
+    fireEvent.click(screen.getByTitle("Where to move it"));
+    fireEvent.click(screen.getByRole("option", { name: "Orders API" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(called("http_item_move")[1]).toEqual({ collection: "c", id: "r2", to: "c", parent: null }));
+  });
+
   test("a new folder is made in a collection only once its name is confirmed, and is empty", async () => {
     await shown();
     fireEvent.click(screen.getByLabelText("Actions for Orders API"));

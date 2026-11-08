@@ -411,6 +411,34 @@ export function addItem(collections: Collection[], parent: string, item: Item): 
   );
 }
 
+/** A folder or request, with all it holds, moved last into the collection or folder `to`. */
+export function moveNode(collections: Collection[], id: string, to: string): Collection[] {
+  const find = (items: Item[]): Item | null => {
+    for (const item of items) {
+      const found = item.id === id ? item : item.kind === "folder" ? find(item.items) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  const moved = collections.map((c) => find(c.items)).find((item) => item) ?? null;
+  return moved ? addItem(removeNode(collections, id), to, moved) : collections;
+}
+
+/**
+ * Where a folder or request may go: every collection and folder but itself, what it
+ * holds and the one it is in now — each named by its path. A collection whose file
+ * does not read is not one.
+ */
+export function moveTargets(collections: Collection[], id: string): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  const walk = (holder: { id: string; items: Item[] }, label: string) => {
+    if (!holder.items.some((item) => item.id === id)) out.push({ id: holder.id, label });
+    for (const item of holder.items) if (item.kind === "folder" && item.id !== id) walk(item, `${label} / ${item.name}`);
+  };
+  for (const c of collections) if (!c.error) walk(c, c.name);
+  return out;
+}
+
 /** The collection that holds `id` — a folder's, a request's, or its own. */
 export function ownerOf(collections: Collection[], id: string): Collection | null {
   const holds = (items: Item[]): boolean => items.some((item) => item.id === id || (item.kind === "folder" && holds(item.items)));

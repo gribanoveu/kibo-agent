@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-08 Move an HTTP request or folder to another folder or collection from its menu
 - 2026-11-08 Typing {{ in an HTTP request's address, fields or body lists the variables in scope to pick from
 - 2026-11-08 Show a saved HTTP environment secret with the eye beside its field
 - 2026-11-08 A long HTTP response is coloured to its end as soon as it shows, not as you scroll

@@ -5,6 +5,7 @@ import {
   deleteHttpCollection,
   deleteHttpEnvironment,
   deleteHttpItem,
+  moveHttpItem,
   exportHttpCollection,
   exportHttpEnvironment,
   httpEnvironmentSecret,
@@ -31,6 +32,7 @@ import {
   addRequest,
   collectionFrom,
   findRequest,
+  moveNode,
   ownerOf,
   removeNode,
   renameNode,
@@ -247,6 +249,21 @@ export function useHttpClient(historyShown = false) {
   );
 
   /**
+   * A folder or request, with all it holds, moved last into the collection or folder `to`.
+   * Edits still waiting go first, to the collection they were made in.
+   */
+  const move = useCallback(
+    (id: string, to: string) => {
+      const [from, into] = [ownerOf(collections, id), ownerOf(collections, to)];
+      if (!from || !into) return;
+      flush();
+      setCollections((c) => moveNode(c, id, to));
+      void write("It was not moved", () => moveHttpItem(from.id, id, into.id, to === into.id ? null : to));
+    },
+    [collections, write, flush],
+  );
+
+  /**
    * A collection, folder or request gone — its requests' tabs and last answers with it.
    * A send still out is dropped: its answer has no request to go to.
    */
@@ -448,6 +465,7 @@ export function useHttpClient(historyShown = false) {
       newRequest,
       rename,
       remove,
+      move,
       exportCollection,
       importFile,
       send,
@@ -482,6 +500,7 @@ export function useHttpClient(historyShown = false) {
       newRequest,
       rename,
       remove,
+      move,
       exportCollection,
       importFile,
       send,

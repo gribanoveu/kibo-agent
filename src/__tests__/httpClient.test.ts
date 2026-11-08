@@ -6,6 +6,8 @@ import {
   collectionFrom,
   effectiveAuth,
   findRequest,
+  moveNode,
+  moveTargets,
   ownerOf,
   pretty,
   preview,
@@ -34,6 +36,7 @@ import {
   type Auth,
   type Body,
   type Collection,
+  type Item,
   type Environment,
   type HttpRequest,
 } from "../lib/httpClient";
@@ -69,6 +72,32 @@ const collection: Collection = {
     { kind: "request", id: "r3", name: "c", method: "GET", url: "", headers: [], auth: { type: "noauth" }, body: { mode: "none" }, scripts: {} },
   ],
 };
+
+describe("a folder or request moved", () => {
+  const req = (id: string) => ({ kind: "request" as const, id, name: id.toUpperCase(), method: "GET" as const, url: "", headers: [], body: { mode: "none" as const }, auth: { type: "inherit" as const } });
+  const folder = (id: string, items: Item[]) => ({ kind: "folder" as const, id, name: id.toUpperCase(), auth: { type: "inherit" as const }, items });
+  const tree = (): Collection[] => [
+    { id: "a", name: "A", auth: { type: "none" }, variables: [], scripts: {}, items: [folder("f", [req("r1"), folder("g", [])]), req("r2")] },
+    { id: "b", name: "B", auth: { type: "none" }, variables: [], scripts: {}, items: [folder("h", [])] },
+    { id: "x", name: "X", auth: { type: "none" }, variables: [], scripts: {}, items: [], error: "does not read" },
+  ];
+
+  test("goes anywhere but itself, what it holds, where it is, and a file that does not read", () => {
+    expect(moveTargets(tree(), "f").map((t) => t.label)).toEqual(["B", "B / H"]);
+    expect(moveTargets(tree(), "r1").map((t) => t.label)).toEqual(["A", "A / F / G", "B", "B / H"]);
+    expect(moveTargets(tree(), "r1").map((t) => t.id)).toEqual(["a", "g", "b", "h"]);
+  });
+
+  test("goes last into its place with all it holds, and leaves where it was", () => {
+    const moved = moveNode(tree(), "f", "h");
+    expect(moved[0].items.map((i) => i.id)).toEqual(["r2"]);
+    expect(JSON.stringify(moved[1].items[0])).toBe(JSON.stringify(folder("h", [folder("f", [req("r1"), folder("g", [])])])));
+    expect(moveNode(tree(), "r2", "f")[0].items).toEqual([folder("f", [req("r1"), folder("g", []), req("r2")])]);
+    const nested = moveNode(tree(), "r1", "b");
+    expect([nested[0].items[0].kind === "folder" && nested[0].items[0].items.map((i) => i.id), nested[1].items.map((i) => i.id)]).toEqual([["g"], ["h", "r1"]]);
+    expect(moveNode(tree(), "nope", "h")).toEqual(tree());
+  });
+});
 
 describe("the list a {{ opens", () => {
   test("opens on a {{ before the caret, with what of the name is typed", () => {

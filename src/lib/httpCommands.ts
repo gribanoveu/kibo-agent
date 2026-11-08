@@ -143,6 +143,12 @@ export async function renameHttpItem(collection: string, id: string, name: strin
   return invoke("http_item_rename", { collection, id, name });
 }
 
+/** A folder or request moved last into the folder `parent` of `to`, or into `to` itself when null. */
+export async function moveHttpItem(collection: string, id: string, to: string, parent: string | null): Promise<void> {
+  requireBackend();
+  return invoke("http_item_move", { collection, id, to, parent });
+}
+
 export async function deleteHttpItem(collection: string, id: string): Promise<void> {
   requireBackend();
   return invoke("http_item_delete", { collection, id });

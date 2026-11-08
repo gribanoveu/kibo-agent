@@ -67,6 +67,7 @@ import {
   toCurl,
   VARIABLE,
   putVariable,
+  moveTargets,
   variableAt,
   variableHints,
   variableParts,
@@ -107,6 +108,8 @@ export function HttpPage() {
   // A name being typed: for a node renamed, or for a collection or request made only once it is confirmed.
   const [renaming, setRenaming] = useState<Naming | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string; what: string; environment?: boolean } | null>(null);
+  const [moving, setMoving] = useState<{ id: string; name: string; to: string | null } | null>(null);
+  const targets = moving ? moveTargets(http.collections, moving.id) : [];
   const [failed, setFailed] = useState<string | null>(null);
   const shownProblem = failed ?? http.problem;
   const dismiss = () => (failed ? setFailed(null) : http.dismissProblem());
@@ -114,7 +117,7 @@ export function HttpPage() {
   useShortcuts({
     // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
     httpSend: () => {
-      if (renaming || deleting || shownProblem || http.asking || sheet || !http.active) return false;
+      if (renaming || deleting || moving || shownProblem || http.asking || sheet || !http.active) return false;
       http.send(http.active);
     },
   });
@@ -134,6 +137,12 @@ export function HttpPage() {
         (id) => reveal(id),
         (e) => setFailed(`The collection was not made: ${e}`),
       );
+  };
+  const move = () => {
+    if (!moving?.to) return;
+    reveal(moving.to);
+    http.move(moving.id, moving.to);
+    setMoving(null);
   };
   const remove = () => {
     if (!deleting) return;
@@ -174,6 +183,7 @@ export function HttpPage() {
             { value: "folder", label: "New folder", run: () => newFolder(node.id) },
           ]),
       ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ kind: "rename", id: node.id, name: node.name }) }]),
+      ...(node.kind === "collection" ? [] : [{ value: "move", label: "Move to…", run: () => setMoving({ id: node.id, name: node.name, to: null }) }]),
       ...(node.kind === "collection" && !broken
         ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
         : []),
@@ -392,6 +402,35 @@ export function HttpPage() {
         }
       >
         <p className="http-confirm">{deleting?.what}</p>
+      </Modal>
+      <Modal
+        title={`Move “${moving?.name ?? ""}”`}
+        open={moving !== null}
+        onClose={() => setMoving(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setMoving(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!moving?.to} onClick={move}>
+              Move
+            </button>
+          </>
+        }
+      >
+        {targets.length === 0 ? (
+          <p className="http-confirm">There is nowhere else to put it: make a folder or another collection first.</p>
+        ) : (
+          <Dropdown
+            below
+            label={targets.find((t) => t.id === moving?.to)?.label ?? "Pick a collection or folder"}
+            title="Where to move it"
+            heading="Last into"
+            options={targets.map((t) => ({ value: t.id, label: t.label }))}
+            value={moving?.to ?? ""}
+            onPick={(to) => moving && setMoving({ ...moving, to })}
+          />
+        )}
       </Modal>
       <Modal
         title={`Run the scripts of “${http.asking?.name ?? ""}”?`}
