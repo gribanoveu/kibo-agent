@@ -563,8 +563,12 @@ pub fn chat_system_messages(
     if role.tools().contains(&search) && features.offers(search) {
         messages.push(LlmMessage::system(CHAT_KNOWLEDGE));
     }
-    // Every role can search; a role that cannot would need this gated.
-    if !web {
+    // Off is Settings → Web search, not the absence of any search: with
+    // `Feature::DeepseekSearch` on, a role that lists its tools has
+    // `deepseekSearch`, and this note would contradict the request's own
+    // tools. Told only a role that is left no way to the web.
+    let deepseek = crate::domain::tools::ToolName::DeepseekSearch;
+    if !web && !(role.tools().contains(&deepseek) && features.offers(deepseek)) {
         messages.push(LlmMessage::system(NO_WEB_SEARCH));
     }
     if let Some(language) = language {
@@ -1104,13 +1108,29 @@ mod tests {
         // The knowledge base, after the runbooks: told only to a role that
         // reads it, and only while the feature is on.
         let on = Features::all();
+        // And not told it cannot look anything up: DeepSeek's search is on, and
+        // its two tools come with the request — the settings' search is off, it
+        // is not the only way to the web.
         assert_eq!(
             texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false, &on, day)),
-            [system(ChatRole::Assistant.prompt()), system(CHAT_KNOWLEDGE), system(NO_WEB_SEARCH), date.clone()]
+            [system(ChatRole::Assistant.prompt()), system(CHAT_KNOWLEDGE), date.clone()]
+        );
+        // A role DeepSeek's tools do not reach is told the same as ever.
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, false, &on, day)),
+            [system(ChatRole::Kubernetes.prompt()), system(NO_WEB_SEARCH), date.clone(), system(&note)]
         );
         assert_eq!(
             texts(chat_system_messages(ChatRole::Kubernetes, &kube, &[], None, true, &on, day)),
-            [system(ChatRole::Kubernetes.prompt()), date, system(&note)]
+            [system(ChatRole::Kubernetes.prompt()), date.clone(), system(&note)]
+        );
+        // The Catalog's switch that keeps DeepSeek's tools from the model leaves
+        // nothing to search with, so the note comes back.
+        let kept = crate::domain::settings::OptOut { disabled: vec!["deepseek-search".to_string()] };
+        let held = Features::all().without_tools_of(&kept);
+        assert_eq!(
+            texts(chat_system_messages(ChatRole::Assistant, &kube, &books, None, false, &held, day)),
+            [system(ChatRole::Assistant.prompt()), system(CHAT_KNOWLEDGE), system(NO_WEB_SEARCH), date.clone()]
         );
     }
 }

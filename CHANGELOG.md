@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-08 Chat with DeepSeek search on and the search in Settings off no longer answers that search is unavailable: what the model is told of it follows the tools it is given
+
 ## v0.12.0 — 2026-11-07
 
 - 2026-11-06 Voice input: dictate into the message box with the microphone button or by holding the right Option or Alt key, in Russian, recognized on this computer and with no sound kept; on in the Catalog
