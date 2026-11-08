@@ -7,6 +7,7 @@ import {
   deleteHttpItem,
   exportHttpCollection,
   exportHttpEnvironment,
+  httpEnvironmentSecret,
   importHttpFile,
   lastHttpResponse,
   listHttpCollections,
@@ -391,6 +392,9 @@ export function useHttpClient(historyShown = false) {
     [reloadEnvironments],
   );
 
+  /** A saved secret's value, asked for by the user from the form. */
+  const secretOf = useCallback((environment: string, key: string) => httpEnvironmentSecret(environment, key), []);
+
   /** A new environment with an empty `baseUrl`, picked; its id, to edit it. */
   const newEnvironment = useCallback(async () => {
     const id = crypto.randomUUID();
@@ -452,6 +456,7 @@ export function useHttpClient(historyShown = false) {
       answerScripts,
       sendAskingScripts,
       saveEnvironment,
+      secretOf,
       newEnvironment,
       deleteEnvironment,
       exportEnvironment,
@@ -485,6 +490,7 @@ export function useHttpClient(historyShown = false) {
       answerScripts,
       sendAskingScripts,
       saveEnvironment,
+      secretOf,
       newEnvironment,
       deleteEnvironment,
       exportEnvironment,

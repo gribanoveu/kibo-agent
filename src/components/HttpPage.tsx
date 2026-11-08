@@ -11,6 +11,7 @@ import {
   Copy,
   Download,
   Eye,
+  EyeOff,
   FileCode2,
   Folder,
   FolderOpen,
@@ -254,6 +255,7 @@ export function HttpPage() {
               key={editingEnv.id}
               environment={editingEnv}
               onSave={http.saveEnvironment}
+              onReveal={(key) => http.secretOf(editingEnv.id, key)}
               onExport={() => http.exportEnvironment(editingEnv.id)}
               onDelete={() => setDeleting({ id: editingEnv.id, name: editingEnv.name, what: "Deletes the environment and its sealed secrets.", environment: true })}
             />
@@ -1406,7 +1408,7 @@ function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined;
 }
 
 /** A variable in the form; `kept` when a sealed value is behind it. */
-type Row = EnvVariable & { kept?: boolean };
+type Row = EnvVariable & { kept?: boolean; shown?: boolean };
 
 const AGENT_ACCESS = [
   { value: "off", label: "Off", hint: "the agent does not know it is here" },
@@ -1418,11 +1420,14 @@ const AGENT_ACCESS = [
 function EnvironmentForm({
   environment,
   onSave,
+  onReveal,
   onExport,
   onDelete,
 }: {
   environment: Environment;
   onSave: (e: Environment) => Promise<void>;
+  /** A saved secret's value, by its name — asked for by the eye button only. */
+  onReveal: (key: string) => Promise<string>;
   onExport: () => Promise<boolean>;
   onDelete: () => void;
 }) {
@@ -1435,12 +1440,22 @@ function EnvironmentForm({
   }));
   const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
   const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
+  // Only a secret saved under the name the row still has: its value is what the eye asks for.
+  const saved = (v: Row) => v.secret && environment.variables.some((s) => s.secret && s.key === v.key);
+  const reveal = (i: number, v: Row) => {
+    if (v.shown) return put(i, { shown: false });
+    if (v.value !== "") return put(i, { shown: true });
+    onReveal(v.key).then(
+      (value) => put(i, { value, shown: true }),
+      (e) => setSaid({ error: true, text: `The secret was not read: ${e}` }),
+    );
+  };
   const save = () =>
     onSave({ ...draft, variables: draft.variables.map(({ kept, ...v }) => (kept && v.value === "" ? { ...v, value: SECRET_MASK } : v)) }).then(
       () => {
         setSaid({ error: false, text: "Saved." });
         // A secret just typed is sealed now: its field empties, as a saved one's is.
-        setDraft((d) => ({ ...d, variables: d.variables.map((v) => (v.secret ? { ...v, value: "", kept: v.kept || v.value !== "" } : v)) }));
+        setDraft((d) => ({ ...d, variables: d.variables.map((v) => (v.secret ? { ...v, value: "", shown: false, kept: v.kept || v.value !== "" } : v)) }));
       },
       (e) => setSaid({ error: true, text: String(e) }),
     );
@@ -1475,17 +1490,29 @@ function EnvironmentForm({
                   className="http-mono"
                   aria-label="Value"
                   spellCheck={false}
-                  type={v.secret ? "password" : "text"}
+                  type={v.secret && !v.shown ? "password" : "text"}
                   value={v.value}
                   placeholder={v.secret && v.kept ? `${SECRET_MASK} saved — type to replace` : ""}
                   onChange={(e) => put(i, { value: e.target.value })}
                 />
               </td>
-              <td>
+              <td className="http-env-secret">
+                {(saved(v) || (v.secret && v.value !== "")) && (
+                  <button
+                    type="button"
+                    className="http-icon-button"
+                    title={v.shown ? "Hide the value" : "Show the value — here only, until the form closes"}
+                    aria-label={v.shown ? `Hide ${v.key}` : `Show ${v.key}`}
+                    aria-pressed={!!v.shown}
+                    onClick={() => reveal(i, v)}
+                  >
+                    {v.shown ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`http-icon-button${v.secret ? " on" : ""}`}
-                  title={v.secret ? "Secret: sealed, never shown again, scrubbed from what the agent reads" : "Make it a secret"}
+                  title={v.secret ? "Secret: sealed, shown only by the eye, scrubbed from what the agent reads" : "Make it a secret"}
                   aria-label={v.secret ? `${v.key} is a secret` : `Make ${v.key} a secret`}
                   aria-pressed={v.secret}
                   onClick={() => put(i, { secret: !v.secret })}
@@ -1541,7 +1568,7 @@ function EnvironmentForm({
         />
       </label>
 
-      <p className="http-quiet">Sealed on this computer under the app's master key, as the API keys are. A secret's value is never shown again — leave it empty to keep it.</p>
+      <p className="http-quiet">Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.</p>
       {said && <p className={said.error ? "http-error" : "http-quiet"}>{said.text}</p>}
       <div className="http-actions">
         <button

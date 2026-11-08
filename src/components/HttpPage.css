@@ -859,6 +859,9 @@
 .http-env .http-pairs {
   margin-top: 4px;
 }
+.http-env-secret {
+  white-space: nowrap;
+}
 .http-env > .http-bar-button {
   align-self: flex-start;
 }

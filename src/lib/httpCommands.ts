@@ -178,6 +178,12 @@ export async function saveHttpEnvironment(environment: Environment): Promise<voi
   return invoke("http_environment_save", { environment });
 }
 
+/** One saved secret's value, for the form's eye button — the lists keep `•••`. */
+export async function httpEnvironmentSecret(id: string, key: string): Promise<string> {
+  requireBackend();
+  return invoke("http_environment_secret", { id, key });
+}
+
 export async function deleteHttpEnvironment(id: string): Promise<void> {
   requireBackend();
   return invoke("http_environment_delete", { id });

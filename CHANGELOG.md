@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-08 Show a saved HTTP environment secret with the eye beside its field
 - 2026-11-08 A long HTTP response is coloured to its end as soon as it shows, not as you scroll
 - 2026-11-08 Add folders to an HTTP collection or folder from its menu
 - 2026-11-08 The agent can write to an HTTP stand you open to it for writes: POST, PUT, PATCH and DELETE with a body, each shown on a card first — every time with Ask for writes, or as other changes are with Writes as other tools

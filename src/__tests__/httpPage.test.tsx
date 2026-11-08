@@ -72,6 +72,7 @@ mock.module("@tauri-apps/api/core", () => ({
       if (args!.requestId === "r3") return Promise.reject("a graphql body is kept from Postman and not sent yet");
       return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(answer);
     }
+    if (command === "http_environment_secret") return Promise.resolve("hunter2");
     if (command === "http_environment_save") {
       const env = args!.environment as Environment;
       return env.trustedCert === "junk" ? Promise.reject("the certificate: no certificate in it") : Promise.resolve(null);
@@ -395,6 +396,36 @@ describe("the HTTP page", () => {
     fireEvent.change(screen.getByPlaceholderText(/PEM/), { target: { value: "junk" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("the certificate: no certificate in it")).toBeDefined();
+  });
+
+  test("a saved secret is read only by its eye, shown until hidden, and sealed again once saved", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    expect(called("http_environment_secret").length).toBe(0);
+    expect(screen.queryByLabelText("Show baseUrl") === null).toBe(true);
+    fireEvent.click(screen.getByLabelText("Show token"));
+    const value = () => (screen.getAllByLabelText("Value") as HTMLInputElement[])[1];
+    await waitFor(() => expect(value().value).toBe("hunter2"));
+    expect(called("http_environment_secret")).toEqual([{ id: "stage", key: "token" }]);
+    expect(value().type).toBe("text");
+    fireEvent.click(screen.getByLabelText("Hide token"));
+    expect(value().type).toBe("password");
+    expect(value().value).toBe("hunter2");
+    fireEvent.click(screen.getByLabelText("Show token"));
+    expect(value().type).toBe("text");
+    expect(called("http_environment_secret").length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(value().value).toBe(""));
+    expect(value().type).toBe("password");
+  });
+
+  test("a renamed secret has no eye: nothing is saved under its new name", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.change(screen.getAllByLabelText("Variable")[1], { target: { value: "apiToken" } });
+    expect(screen.queryByLabelText("Show apiToken") === null).toBe(true);
   });
 
   test("a variable missing from the auth marks the Auth tab, not the address", async () => {
