@@ -2044,8 +2044,8 @@ pub struct HttpRequestArgs {
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub environment: Option<String>,
     /// GET when left out.
-    #[serde(default)]
-    pub method: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub method: Option<String>,
     /// None asks what the environment holds, rather than sending.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub url: Option<String>,

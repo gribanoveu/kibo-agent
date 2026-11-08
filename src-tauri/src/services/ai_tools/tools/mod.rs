@@ -623,7 +623,7 @@ mod definition_tests {
                 r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#,
                 vec![ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs {
                     environment: Some("Stage".into()),
-                    method: "GET".into(),
+                    method: Some("GET".into()),
                     url: Some("{{baseUrl}}/orders?id=1".into()),
                     headers: Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into()),
                     show_headers: Some(true),

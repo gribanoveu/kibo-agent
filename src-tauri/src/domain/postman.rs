@@ -11,7 +11,7 @@ use rand::Rng;
 use serde_json::{Map, Value};
 
 use super::http_auth::OAuth2;
-use super::http_client::{is_credential_header, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
+use super::http_client::{is_address_name, is_credential_name, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
 
 /// A request as the agent's description lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,28 +229,30 @@ impl Collection {
     }
 
     /// The `{{name}}`s written where a credential goes: anywhere in an `auth`, at
-    /// any level, and in the value of a header that carries one.
+    /// any level, but for its addresses (`accessTokenUrl`); and in the value of a row
+    /// — a header, a query parameter, a form field, a variable — whose key names one.
     pub fn credential_names(&self) -> Vec<String> {
+        let key_of = |map: &Map<String, Value>| map.get("key").and_then(Value::as_str).map(str::to_string);
         fn every_name(v: &Value, names: &mut Vec<String>) {
             match v {
                 Value::String(text) => names.extend(names_in(text).map(String::from)),
                 Value::Array(items) => items.iter().for_each(|i| every_name(i, names)),
+                Value::Object(map) if map.get("key").and_then(Value::as_str).is_some_and(is_address_name) => {}
                 Value::Object(map) => map.values().for_each(|i| every_name(i, names)),
                 _ => {}
             }
         }
-        fn walk(v: &Value, names: &mut Vec<String>) {
+        fn walk(v: &Value, names: &mut Vec<String>, key_of: &dyn Fn(&Map<String, Value>) -> Option<String>) {
             match v {
-                Value::Array(items) => items.iter().for_each(|i| walk(i, names)),
+                Value::Array(items) => items.iter().for_each(|i| walk(i, names, key_of)),
                 Value::Object(map) => {
+                    if key_of(map).is_some_and(|key| is_credential_name(&key)) {
+                        every_name(map.get("value").unwrap_or(&Value::Null), names);
+                    }
                     for (key, value) in map {
                         match key.as_str() {
                             "auth" => every_name(value, names),
-                            "header" => {
-                                let carrying = value.as_array().into_iter().flatten().filter(|h| h.get("key").and_then(Value::as_str).is_some_and(is_credential_header));
-                                carrying.for_each(|h| every_name(&h["value"], names));
-                            }
-                            _ => walk(value, names),
+                            _ => walk(value, names, key_of),
                         }
                     }
                 }
@@ -258,7 +260,7 @@ impl Collection {
             }
         }
         let mut names = Vec::new();
-        walk(&self.root, &mut names);
+        walk(&self.root, &mut names, &key_of);
         names
     }
 

@@ -370,8 +370,8 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
 
     // `GET {{baseUrl}}/orders on Stage`; with no url, the environment was asked what it holds.
     case "httpRequest": {
-      const [url, environment] = [str(args.url), str(args.environment)];
-      const sent = url && [str(args.method)?.toUpperCase() ?? "GET", url, environment && `on ${environment}`].filter(Boolean).join(" ");
+      const [url, environment] = [str(args.url)?.trim(), str(args.environment)];
+      const sent = url && [(str(args.method)?.trim() || "GET").toUpperCase(), url, environment && `on ${environment}`].filter(Boolean).join(" ");
       return {
         name,
         arg: sent || `what is in ${environment ?? "the environment"}`,

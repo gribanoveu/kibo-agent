@@ -2017,6 +2017,22 @@ mod tests {
         });
     }
 
+    /// What a collection's scripts wrote lies over its file, as on the page.
+    #[test]
+    fn a_collections_address_is_what_its_scripts_last_wrote() {
+        with_app_dir("http-stands-written", || {
+            opened_stage("http://127.0.0.1:1".into());
+            let shop = json!({
+                "info": {"name": "Shop", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "variable": [{"key": "host", "value": "https://file.test"}],
+                "item": [{"id": "r", "name": "r", "request": "{{host}}/x"}]
+            });
+            let id = http_collections::add(&Collection::parse(&shop.to_string()).unwrap()).unwrap();
+            http_env_store::write_changes(None, &[], (&id, &[("host".into(), Some("https://script.test".into()))])).unwrap();
+            assert_eq!(stands("c").0.describe("stage").unwrap().origins, ["http://127.0.0.1:1", "https://script.test"]);
+        });
+    }
+
     /// The collections, their variables over the file's, the globals and the
     /// environment, as a send from the page fills an address in.
     #[test]
@@ -2033,7 +2049,7 @@ mod tests {
             assert_eq!(view.variables, [("baseUrl".to_string(), Some("http://127.0.0.1:1".to_string())), ("token".to_string(), None), ("apiKey".to_string(), None)]);
             let mut requests = view.requests.clone();
             requests.sort();
-            assert_eq!(requests, ["Shop / List: GET {{baseUrl}}/orders", "Shop / List: GET {{g}}/x"], "in the order of the collections' ids");
+            assert_eq!(requests, ["Shop / List: GET https://global.test/x", "Shop / List: GET {{baseUrl}}/orders"], "a global written out, the environment's name left");
             assert_eq!(stands("c").0.describe("nope"), Err(HttpError::NoEnvironment("nope".into())));
         });
     }

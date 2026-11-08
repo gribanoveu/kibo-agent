@@ -50,10 +50,7 @@ pub fn http_request(args: &HttpRequestArgs, deps: &ToolDeps) -> Result<ToolResul
         let summary = format!("{} · {} {}", view.name, view.origins.len(), if view.origins.len() == 1 { "address" } else { "addresses" });
         return Ok(ToolResult::HttpRequest { text: fit(described(&view), MOST), summary });
     };
-    let method = match args.method.trim() {
-        "" => "GET".to_string(),
-        m => m.to_ascii_uppercase(),
-    };
+    let method = args.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase);
     let headers = args.headers.iter().flatten().map(|(k, v)| (k.clone(), v.clone())).collect();
     let request = AgentRequest { method: method.clone(), url: url.to_string(), headers };
     let reply = stands.send(&stand.id, &request)?;
@@ -170,7 +167,7 @@ pub(crate) mod tests {
     }
 
     fn get(url: &str) -> HttpRequestArgs {
-        HttpRequestArgs { method: "get".into(), url: Some(url.into()), ..HttpRequestArgs::default() }
+        HttpRequestArgs { method: Some("get".into()), url: Some(url.into()), ..HttpRequestArgs::default() }
     }
 
     fn call(canned: Canned, args: &HttpRequestArgs) -> (Result<ToolResult, ToolError>, Vec<(String, AgentRequest)>) {
@@ -269,8 +266,10 @@ pub(crate) mod tests {
 
     #[test]
     fn a_method_left_out_is_get() {
-        for method in ["", "  "] {
-            let args = HttpRequestArgs { method: method.into(), ..get("{{baseUrl}}/x") };
+        let null: HttpRequestArgs = serde_json::from_str(r#"{"method": null, "url": "/x"}"#).unwrap();
+        assert_eq!(null.method, None, "a model's null is no method, not a refused call");
+        for method in [None, Some(""), Some("  ")] {
+            let args = HttpRequestArgs { method: method.map(String::from), ..get("{{baseUrl}}/x") };
             let (result, asked) = call(Canned { open: stands(&["Stage"]), reply: reply(200, &[], b""), ..Canned::default() }, &args);
             assert_eq!(asked[0].1.method, "GET");
             assert!(text_of(result).starts_with("GET {{baseUrl}}/x → 200"));
