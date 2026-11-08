@@ -102,6 +102,12 @@ pub async fn http_environment_save(environment: Environment) -> Result<(), Strin
     blocking(move || http_client::save_environment(environment)).await
 }
 
+/// One saved secret's value, asked for by the form's eye button.
+#[tauri::command]
+pub async fn http_environment_secret(id: String, key: String) -> Result<String, String> {
+    blocking(move || http_client::environment_secret(&id, &key)).await
+}
+
 #[tauri::command]
 pub async fn http_environment_delete(id: String) -> Result<(), String> {
     blocking(move || http_env_store::delete(&id)).await

@@ -53,6 +53,8 @@ pub enum HttpError {
     BadCurl(String),
     #[error("no environment {0}")]
     NoEnvironment(String),
+    #[error("no saved secret {0} in this environment")]
+    NoSecret(String),
     #[error("no collection {0}")]
     NoCollection(String),
     #[error("the certificate: {0}")]

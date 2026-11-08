@@ -259,6 +259,7 @@ pub fn run() {
             commands::http::http_environment_list,
             commands::http::http_environment_save,
             commands::http::http_environment_delete,
+            commands::http::http_environment_secret,
             commands::http::http_history_list,
             commands::http::http_cookies,
             commands::http::http_cookie_delete,

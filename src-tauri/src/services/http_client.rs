@@ -592,6 +592,14 @@ pub fn environments() -> Result<Environments, HttpError> {
     Ok(Environments { environments: http_env_store::list()?, globals: http_env_store::globals()?.iter().map(Variable::for_window).collect() })
 }
 
+/// One saved secret's value, for the form's eye button: the user asks for it, one
+/// variable of one environment at a time. Lists and Preview keep the mask, and the
+/// agent never asks here — it fills values in on this side and reads them masked.
+pub fn environment_secret(id: &str, key: &str) -> Result<String, HttpError> {
+    let environment = http_env_store::get(id)?;
+    environment.variables.into_iter().find(|v| v.secret && v.key == key).map(|v| v.value).ok_or_else(|| HttpError::NoSecret(key.into()))
+}
+
 /// The form saved; an empty certificate is none. One that does not parse is
 /// refused here, rather than at every send as a stand that does not answer.
 pub fn save_environment(mut from_window: Environment) -> Result<(), HttpError> {
@@ -1083,6 +1091,18 @@ mod tests {
             let got = seen.recv().unwrap();
             let boundary = got.head.split("boundary=").nth(1).unwrap().lines().next().unwrap().trim().to_string();
             assert_eq!(String::from_utf8(got.body).unwrap(), format!("--{boundary}\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--{boundary}--\r\n"));
+        });
+    }
+
+    #[test]
+    fn the_eye_reads_one_saved_secret_and_nothing_that_is_not_one() {
+        with_app_dir("http-secret", || {
+            let env = r#"{"name": "Stage", "values": [{"key": "token", "value": "pm-hunter2", "type": "secret", "enabled": true}, {"key": "user", "value": "ann", "enabled": true}], "_postman_variable_scope": "environment"}"#;
+            let ImportedAs::Environment { id, .. } = import(env).unwrap() else { panic!("an environment") };
+            assert_eq!(environment_secret(&id, "token").unwrap(), "pm-hunter2");
+            assert!(matches!(environment_secret(&id, "user"), Err(HttpError::NoSecret(k)) if k == "user"), "not a secret");
+            assert!(matches!(environment_secret(&id, "nope"), Err(HttpError::NoSecret(_))));
+            assert!(matches!(environment_secret("nope", "token"), Err(HttpError::NoEnvironment(_))));
         });
     }
 
