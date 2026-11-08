@@ -418,9 +418,24 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByLabelText("Show token"));
     expect(value().type).toBe("text");
     expect(called("http_environment_secret").length).toBe(1);
+    // The lock off and on again does not show it without the eye.
+    fireEvent.click(screen.getByLabelText("token is a secret"));
+    fireEvent.click(screen.getByLabelText("Make token a secret"));
+    expect(value().type).toBe("password");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(value().value).toBe(""));
     expect(value().type).toBe("password");
+  });
+
+  test("a secret read while a row above is removed lands in its own row, not the one that moved up", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    fireEvent.click(screen.getByRole("button", { name: "Variable" }));
+    fireEvent.click(screen.getByLabelText("Show token"));
+    fireEvent.click(screen.getByLabelText("Remove baseUrl"));
+    const values = () => (screen.getAllByLabelText("Value") as HTMLInputElement[]).map((v) => v.value);
+    await waitFor(() => expect(values()).toEqual(["hunter2", ""]));
   });
 
   test("a renamed secret has no eye: nothing is saved under its new name", async () => {

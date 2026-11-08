@@ -119,7 +119,8 @@ export function variableHints(values: ReadonlyMap<string, string>, typed: string
  * already after the caret replaced rather than doubled — and the caret after it.
  */
 export function putVariable(text: string, from: number, caret: number, name: string): { text: string; caret: number } {
-  const rest = /^[^{}\s]*\}\}/.exec(text.slice(caret))?.[0].length ?? 0;
+  // Name characters only: in `{"id": "{{"}}` the `"}}` after the caret is the JSON's, not a closer.
+  const rest = /^[\w.$-]*\}\}/.exec(text.slice(caret))?.[0].length ?? 0;
   const put = `{{${name}}}`;
   return { text: text.slice(0, from) + put + text.slice(caret + rest), caret: from + put.length };
 }

@@ -1576,8 +1576,12 @@ function EnvironmentForm({
   const reveal = (i: number, v: Row) => {
     if (v.shown) return put(i, { shown: false });
     if (v.value !== "") return put(i, { shown: true });
-    onReveal(v.key).then(
-      (value) => put(i, { value, shown: true }),
+    // By the name, not the index: a row removed while the value is read moves the rest up,
+    // and the value must not land in another — or in one the user has typed into meanwhile.
+    const key = v.key;
+    onReveal(key).then(
+      (value) =>
+        setDraft((d) => ({ ...d, variables: d.variables.map((r) => (r.secret && key === r.key && r.value === "" ? { ...r, value, shown: true } : r)) })),
       (e) => setSaid({ error: true, text: `The secret was not read: ${e}` }),
     );
   };
@@ -1646,7 +1650,7 @@ function EnvironmentForm({
                   title={v.secret ? "Secret: sealed, shown only by the eye, scrubbed from what the agent reads" : "Make it a secret"}
                   aria-label={v.secret ? `${v.key} is a secret` : `Make ${v.key} a secret`}
                   aria-pressed={v.secret}
-                  onClick={() => put(i, { secret: !v.secret })}
+                  onClick={() => put(i, { secret: !v.secret, shown: false })}
                 >
                   {v.secret ? <Lock size={13} /> : <LockOpen size={13} />}
                 </button>

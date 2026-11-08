@@ -94,6 +94,7 @@ describe("the list a {{ opens", () => {
     expect(putVariable("{{ba}}/x", 0, 4, "baseUrl")).toEqual({ text: "{{baseUrl}}/x", caret: 11 });
     expect(putVariable("{{baXX}}/x", 0, 4, "baseUrl")).toEqual({ text: "{{baseUrl}}/x", caret: 11 });
     expect(putVariable("a {{t b}}", 2, 5, "token")).toEqual({ text: "a {{token}} b}}", caret: 11 });
+    expect(putVariable('{"id":"{{"}}', 7, 9, "userId")).toEqual({ text: '{"id":"{{userId}}"}}', caret: 17 });
   });
 });
 
