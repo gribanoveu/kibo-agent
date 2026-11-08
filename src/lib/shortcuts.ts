@@ -70,6 +70,9 @@ export const SHORTCUTS = {
   mongoSuggestPick: { label: "Use the suggestion picked in a query field", group: "MongoDB", combos: [{ code: "Tab" }, { code: "Enter" }, { code: "NumpadEnter" }] },
   mongoPairErase: { label: "Erase an empty pair of brackets or quotes in a query field", group: "MongoDB", combos: [{ code: "Backspace" }] },
   httpSend: { label: "Send the request", group: "HTTP", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  httpVarNext: { label: "Next variable in the list a {{ opens", group: "HTTP", combos: [{ code: "ArrowDown" }] },
+  httpVarPrev: { label: "Previous variable in the list a {{ opens", group: "HTTP", combos: [{ code: "ArrowUp" }] },
+  httpVarPick: { label: "Put in the variable picked in the list a {{ opens", group: "HTTP", combos: [{ code: "Tab" }, { code: "Enter" }, { code: "NumpadEnter" }] },
 } satisfies Record<string, Shortcut>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

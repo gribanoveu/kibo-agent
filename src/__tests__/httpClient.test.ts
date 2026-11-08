@@ -9,6 +9,9 @@ import {
   ownerOf,
   pretty,
   preview,
+  putVariable,
+  variableAt,
+  variableHints,
   queryOf,
   removeNode,
   renameNode,
@@ -66,6 +69,33 @@ const collection: Collection = {
     { kind: "request", id: "r3", name: "c", method: "GET", url: "", headers: [], auth: { type: "noauth" }, body: { mode: "none" }, scripts: {} },
   ],
 };
+
+describe("the list a {{ opens", () => {
+  test("opens on a {{ before the caret, with what of the name is typed", () => {
+    expect(variableAt("{{baseUrl}}/x?id={{or", 21)).toEqual({ from: 17, typed: "or" });
+    expect(variableAt("a {{ ", 5)).toEqual({ from: 2, typed: "" });
+    expect(variableAt("{{baseUrl}}/x", 13)).toBe(null);
+    expect(variableAt("{{baseUrl}}", 11)).toBe(null);
+    expect(variableAt("{{base", 4)).toEqual({ from: 0, typed: "ba" });
+    expect(variableAt("{ {x", 4)).toBe(null);
+  });
+
+  test("names that start with what is typed come first, then those that hold it, case aside", () => {
+    const values = new Map([["userId", "7"], ["id", "1"], ["orderId", "9"], ["token", "•••"]]);
+    expect(variableHints(values, "id").map((h) => h.name)).toEqual(["id", "userId", "orderId"]);
+    expect(variableHints(values, "ID").map((h) => h.name)).toEqual(["id", "userId", "orderId"]);
+    expect(variableHints(values, "")).toHaveLength(4);
+    expect(variableHints(values, "tok")).toEqual([{ name: "token", value: "•••" }]);
+    expect(variableHints(new Map([["xorder", "1"], ["Order", "2"]]), "or").map((h) => h.name)).toEqual(["Order", "xorder"]);
+  });
+
+  test("a pick closes the variable, replacing the rest of a name and a closer already there", () => {
+    expect(putVariable("{{ba/x", 0, 4, "baseUrl")).toEqual({ text: "{{baseUrl}}/x", caret: 11 });
+    expect(putVariable("{{ba}}/x", 0, 4, "baseUrl")).toEqual({ text: "{{baseUrl}}/x", caret: 11 });
+    expect(putVariable("{{baXX}}/x", 0, 4, "baseUrl")).toEqual({ text: "{{baseUrl}}/x", caret: 11 });
+    expect(putVariable("a {{t b}}", 2, 5, "token")).toEqual({ text: "a {{token}} b}}", caret: 11 });
+  });
+});
 
 describe("http client rules", () => {
   test("the environment wins over the collection, a secret is masked, a missing one is named", () => {

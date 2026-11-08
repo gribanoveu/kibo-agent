@@ -100,6 +100,30 @@ export function variableValue(name: string, values: ReadonlyMap<string, string>)
   return values.get(name) ?? null;
 }
 
+/** A `{{` being typed before the caret: where it starts, and what of the name is typed after it. */
+export function variableAt(text: string, caret: number): { from: number; typed: string } | null {
+  const m = /\{\{\s*([^{}\s]*)$/.exec(text.slice(0, caret));
+  return m ? { from: m.index, typed: m[1] } : null;
+}
+
+/** The variables in scope for what is typed: names that start with it first, then those that hold it. */
+export function variableHints(values: ReadonlyMap<string, string>, typed: string): { name: string; value: string }[] {
+  const all = [...values].map(([name, value]) => ({ name, value }));
+  const low = typed.toLowerCase();
+  const starts = all.filter((v) => v.name.toLowerCase().startsWith(low));
+  return [...starts, ...all.filter((v) => !starts.includes(v) && v.name.toLowerCase().includes(low))];
+}
+
+/**
+ * `text` with `{{name}}` from `from` to the caret — the rest of a name and the `}}`
+ * already after the caret replaced rather than doubled — and the caret after it.
+ */
+export function putVariable(text: string, from: number, caret: number, name: string): { text: string; caret: number } {
+  const rest = /^[^{}\s]*\}\}/.exec(text.slice(caret))?.[0].length ?? 0;
+  const put = `{{${name}}}`;
+  return { text: text.slice(0, from) + put + text.slice(caret + rest), caret: from + put.length };
+}
+
 export type TextPart = { text: string; variable?: { name: string; value: string | null } };
 
 /** `text` cut at its variables, each with what it stands for — for drawing them found or not. */
