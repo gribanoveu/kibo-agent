@@ -1994,7 +1994,7 @@ mod tests {
         with_app_dir("http-stands-send", || {
             let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nset-cookie: sid=1\r\nx-echo: s3cr3t-t0k\r\ncontent-length: 21\r\nconnection: close\r\n\r\n{\"you\":\"s3cr3t-t0k\"}\r\n");
             opened_stage(format!("http://127.0.0.1:{port}/v1"));
-            crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Assistant, None, &[crate::domain::llm::LlmMessage::user("check the stand")], &json!([])).unwrap();
+            crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Api, None, &[crate::domain::llm::LlmMessage::user("check the stand")], &json!([])).unwrap();
             let (stands, told) = stands("c1");
             let reply = stands.send("stage", &ask("GET", "{{baseUrl}}/orders?id=1", &[("Authorization", "Bearer {{token}}")])).unwrap();
 
@@ -2213,8 +2213,8 @@ mod tests {
         });
     }
 
-    /// The Assistant's turn on the stand with `session`'s model, and what the stand got.
-    fn assistant_on_the_stand(session: &crate::services::llm_session::LlmSession) -> (crate::domain::turn::ChatStreamOutcome, Vec<live::Hit>) {
+    /// The API role's turn on the stand with `session`'s model, and what the stand got.
+    fn api_role_on_the_stand(session: &crate::services::llm_session::LlmSession) -> (crate::domain::turn::ChatStreamOutcome, Vec<live::Hit>) {
         use crate::domain::chat_role::ChatRole;
         use crate::domain::features::Features;
         use crate::domain::kube::KubeSetup;
@@ -2233,7 +2233,7 @@ mod tests {
         let approval = ApprovalPolicy::default();
         let chat = ChatTurn {
             session,
-            role: ChatRole::Assistant,
+            role: ChatRole::Api,
             kube: &KubeSetup::NotSet,
             cluster: None,
             changes: None,
@@ -2342,7 +2342,7 @@ mod tests {
         };
         let check = |label: &str, replies: Vec<ChatStreamResult>| {
             with_app_dir(label, || {
-                let (outcome, got) = assistant_on_the_stand(&model_from(replies));
+                let (outcome, got) = api_role_on_the_stand(&model_from(replies));
                 found_the_bug(&outcome, &got)
             })
         };
@@ -2362,7 +2362,7 @@ mod tests {
         }
     }
 
-    /// A real model in the Assistant role finds the planted bug through `httpRequest`.
+    /// A real model in the API role finds the planted bug through `httpRequest`.
     /// The provider is the agent bench's (`AGENT_BENCH_*`, see the top of `agent_bench.rs`):
     ///
     /// ```text
@@ -2370,10 +2370,10 @@ mod tests {
     /// ```
     #[test]
     #[ignore = "a real model; see the doc comment"]
-    fn http_live_the_assistant_finds_the_planted_bug() {
+    fn http_live_the_api_role_finds_the_planted_bug() {
         let session = crate::services::agent_bench::session();
         with_app_dir("http-live", || {
-            let (outcome, got) = assistant_on_the_stand(&session);
+            let (outcome, got) = api_role_on_the_stand(&session);
             if let crate::domain::turn::ChatStreamOutcome::Done(done) = &outcome {
                 println!("answer: {}", done.result.text.trim());
             }

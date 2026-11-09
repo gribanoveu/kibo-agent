@@ -109,7 +109,7 @@ after touching `infra/kube_client.rs`:
 cd src-tauri && cargo test live_cluster -- --ignored --nocapture
 ```
 
-The HTTP client's agent tool has a live test too: the Assistant role, a real model, a
+The HTTP client's agent tool has a live test too: the API role, a real model, a
 local orders API with a bug planted in it (an order that does not exist answers 200, its
 spec says 404), and a hidden check — the answer says FAIL, the stand got that request
 with the right token, no write reached it, the token never reached the model. The

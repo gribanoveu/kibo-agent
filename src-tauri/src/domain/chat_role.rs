@@ -134,9 +134,8 @@ impl ChatRole {
                 ToolName::KnowledgeRelations,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
-                // While the user has the HTTP client on and has opened an environment: reads, and
-                // writes as that environment's mode allows — its one change, on the user's stands.
-                ToolName::HttpRequest,
+                // No `httpRequest`: offered here, the model sent web pages through it in
+                // place of webFetch. The stands are the API role's.
             ],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
@@ -447,8 +446,8 @@ mod tests {
     use super::*;
 
     /// The assistant talks, searches the web, keeps the board and reads the
-    /// knowledge base and MongoDB, and sends to the HTTP stands the user opened to it — the one
-    /// place it changes, as each environment's mode allows. The Kubernetes role's tools
+    /// knowledge base and MongoDB; it changes nothing — the HTTP stands are the API
+    /// role's. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
@@ -465,12 +464,10 @@ mod tests {
                 ToolName::KnowledgeSearch,
                 ToolName::KnowledgeRead,
                 ToolName::KnowledgeRelations,
-                ToolName::Mongo,
-                ToolName::HttpRequest
+                ToolName::Mongo
             ]
         );
-        let changing: Vec<&ToolName> = ChatRole::Assistant.tools().iter().filter(|tool| tool.is_mutating()).collect();
-        assert_eq!(changing, [&ToolName::HttpRequest]);
+        assert!(ChatRole::Assistant.tools().iter().all(|tool| !tool.is_mutating()), "nothing changes from the assistant");
         let tools = ChatRole::Kubernetes.tools();
         assert_eq!(tools.len(), 19);
         assert!(
