@@ -120,6 +120,23 @@ its description, or how a chat turn offers it:
 cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… cargo test http_live -- --ignored --nocapture
 ```
 
+The API role has a bench of its own: a stand in Python with a bug planted against its spec,
+the user's Postman environment and collection for it, and a hidden check of the answer, of
+what reached the stand and of what the model read — `src-tauri/bench/api-tasks/`. The
+provider is the agent bench's (`AGENT_BENCH_*`); the stands need `python3`. Run it after
+touching the role's prompt or an `http*` tool:
+
+```bash
+cd src-tauri && AGENT_BENCH_API_KEY=… AGENT_BENCH_MODEL=… AGENT_BENCH_RUNS=3 cargo test --release api_bench -- --ignored --nocapture --test-threads=1
+```
+
+Its tasks check themselves without a model — the reference turn passes, the untouched and
+the wrong ones fail. Run that after adding or changing a task:
+
+```bash
+cd src-tauri && cargo test api_fixtures -- --ignored --nocapture
+```
+
 Recording a call has a live test on the real microphone and output: a few seconds with a
 voice playing (`say`), checked to be a whole stereo WAV. Run it after touching
 `infra/meeting_recorder.rs` or `infra/microphone.rs`. From a terminal macOS asks for the
