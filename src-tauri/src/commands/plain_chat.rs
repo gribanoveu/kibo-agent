@@ -93,11 +93,16 @@ pub struct RoleView {
     id: ChatRole,
     name: &'static str,
     description: &'static str,
+    /// The Catalog feature the menu waits for before it lists the role.
+    feature: Option<&'static str>,
 }
 
 #[tauri::command]
 pub fn plain_chat_roles() -> Vec<RoleView> {
-    ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
+    ChatRole::ALL
+        .iter()
+        .map(|&role| RoleView { id: role, name: role.name(), description: role.description(), feature: role.feature().map(|f| f.manifest().id) })
+        .collect()
 }
 
 /// A turn of the chat `chat_id` in `role` on `messages`, the whole conversation
@@ -353,14 +358,22 @@ mod tests {
             "id": "assistant",
             "name": "Assistant",
             "description": ChatRole::Assistant.description(),
+            "feature": null,
         }, {
             "id": "kubernetes",
             "name": "Kubernetes",
             "description": ChatRole::Kubernetes.description(),
+            "feature": null,
         }, {
             "id": "prototype",
             "name": "Prototype",
             "description": ChatRole::Prototype.description(),
+            "feature": null,
+        }, {
+            "id": "api",
+            "name": "API",
+            "description": ChatRole::Api.description(),
+            "feature": "http-client",
         }]));
     }
 }
