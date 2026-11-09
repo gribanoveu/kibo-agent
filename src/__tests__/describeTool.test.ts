@@ -19,18 +19,17 @@ const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, {
 });
 
 describe("what each call shows", () => {
-  test("a request to a stand shows what was asked, its status and what came back", () => {
-    const done = tool({ name: "httpRequest", arguments: '{"method":"GET","url":"{{baseUrl}}/orders","environment":"Stage"}', result: { summary: "200 · 12 ms", text: "GET /orders → 200" } });
-    expect(describeTool(done)).toMatchObject({ name: "HTTP", arg: "GET {{baseUrl}}/orders on Stage", meta: "200 · 12 ms", detail: "GET /orders → 200" });
-    expect(describeTool(tool({ name: "httpRequest", arguments: '{"method":"head","url":"/x"}' })).arg).toBe("HEAD /x");
-    expect(describeTool(tool({ name: "httpRequest", arguments: '{"url":"/x"}' })).arg).toBe("GET /x");
-    expect(describeTool(tool({ name: "httpRequest", arguments: '{"method":" ","url":"/x"}' })).arg).toBe("GET /x");
+  test("a send shows what the call changed, the request it went from, its status and what came back", () => {
+    const done = tool({ name: "httpSend", arguments: '{"request":"r1","method":"post","path":"/orders/2","query":"?a=1","environment":"Stage"}', result: { summary: "201 · 12 ms", text: "POST /orders/2 → 201" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP", arg: "POST /orders/2?a=1 from r1 on Stage", meta: "201 · 12 ms", detail: "POST /orders/2 → 201" });
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1"}' })).arg).toBe("r1");
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1","path":"/x"}' })).arg).toBe("/x from r1");
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1","method":" head "}' })).arg).toBe("HEAD from r1");
   });
 
-  test("a call with no url says it asked what the environment holds", () => {
-    expect(describeTool(tool({ name: "httpRequest", arguments: '{"environment":"Stage"}' })).arg).toBe("what is in Stage");
-    expect(describeTool(tool({ name: "httpRequest", arguments: "{}" })).arg).toBe("what is in the environment");
-    expect(describeTool(tool({ name: "httpRequest", arguments: '{"url":"  ","environment":"Stage"}' })).arg).toBe("what is in Stage");
+  test("an environment described shows its name", () => {
+    expect(describeTool(tool({ name: "httpEnvironment", arguments: '{"environment":"Stage"}', result: { summary: "Stage · 3 requests", text: "Environment" } }))).toMatchObject({ name: "HTTP environment", arg: "Stage", meta: "Stage · 3 requests" });
+    expect(describeTool(tool({ name: "httpEnvironment", arguments: "{}" })).arg).toBe("the environment");
   });
 
   test("a saved request read shows where it is once read, and its id until then", () => {

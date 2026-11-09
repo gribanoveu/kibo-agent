@@ -91,7 +91,8 @@ export const LABELS: Record<string, string> = {
   deepseekFetch: "DeepSeek page",
   board: "Board",
   mongo: "MongoDB",
-  httpRequest: "HTTP",
+  httpEnvironment: "HTTP environment",
+  httpSend: "HTTP",
   httpReadRequest: "HTTP request",
   present: "Prototype",
   toolSearch: "Find tools",
@@ -369,13 +370,20 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
-    // `GET {{baseUrl}}/orders on Stage`; with no url, the environment was asked what it holds.
-    case "httpRequest": {
-      const [url, environment] = [str(args.url)?.trim(), str(args.environment)];
-      const sent = url && [(str(args.method)?.trim() || "GET").toUpperCase(), url, environment && `on ${environment}`].filter(Boolean).join(" ");
+    // The environment described: its name, and how many requests it has.
+    case "httpEnvironment":
+      return { name, arg: str(args.environment)?.trim() || "the environment", meta: str(result.summary), detail: str(result.text) ?? "" };
+
+    // `POST /orders/2 from r1 on Stage`: what the call changed, and the saved request it went from.
+    case "httpSend": {
+      const method = str(args.method)?.trim().toUpperCase();
+      const query = str(args.query)?.trim().replace(/^\?/, "");
+      const changed = [method, (str(args.path)?.trim() ?? "") + (query ? `?${query}` : "")].filter(Boolean).join(" ");
+      const environment = str(args.environment);
+      const from = str(args.request)?.trim() ?? "";
       return {
         name,
-        arg: sent || `what is in ${environment ?? "the environment"}`,
+        arg: [changed && `${changed} from`, from, environment && `on ${environment}`].filter(Boolean).join(" "),
         meta: str(result.summary),
         detail: str(result.text) ?? "",
       };

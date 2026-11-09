@@ -100,6 +100,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   MongoDB: Database,
   HTTP: Globe,
   "HTTP request": Globe,
+  "HTTP environment": Globe,
   Prototype: AppWindow,
 };
 
