@@ -65,3 +65,4 @@ pub mod recording_access;
 pub mod voices_store;
 pub mod mongo_store;
 pub mod mongo_client;
+pub mod keyboard_layout;

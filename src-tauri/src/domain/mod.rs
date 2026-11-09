@@ -49,6 +49,7 @@ pub mod mongo;
 pub mod voices;
 pub mod recording;
 pub mod features;
+pub mod keyboard_layout;
 pub mod provider_balance;
 pub mod background;
 pub mod terminal;

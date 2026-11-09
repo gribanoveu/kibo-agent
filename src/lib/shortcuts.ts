@@ -40,6 +40,8 @@ export const SHORTCUTS = {
   ideLayout: { label: "IDE layout: files, the file and the chat side by side", group: "General", combos: [{ code: "KeyD", mod: true, shift: true }] },
   ...PANE_SHORTCUTS,
   focusInput: { label: "Go to the message box", group: "Chat", combos: [{ code: "KeyL", mod: true }] },
+  convertLayout: { label: "Fix a message typed in the wrong keyboard layout", group: "Chat", combos: [{ code: "KeyF", mod: true }] },
+  undo: { label: "Undo a layout correction", group: "Chat", combos: [{ code: "KeyZ", mod: true }] },
   send: { label: "Send the message", group: "Chat", combos: [{ code: "Enter" }, { code: "NumpadEnter" }] },
   newLine: { label: "New line in the message", group: "Chat", combos: [{ code: "Enter", shift: true }] },
   queue: { label: "Send the message after the current turn", group: "Chat", combos: [{ code: "Enter", alt: true }] },

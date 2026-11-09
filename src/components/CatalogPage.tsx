@@ -7,6 +7,7 @@ import {
   AudioLines,
   BookOpen,
   Check,
+  Keyboard,
   Library,
   Loader2,
   Mic,
@@ -62,6 +63,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   knowledge: Library,
   mongodb: MongoIcon,
   "voice-input": Mic,
+  "layout-correction": Keyboard,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
@@ -361,6 +363,7 @@ function FeatureDetails({
   error,
   onSet,
   onSetTools,
+  onSetLayoutSwitch,
   onDeleteData,
   onClose,
 }: {
@@ -368,6 +371,7 @@ function FeatureDetails({
   error: string | null;
   onSet: (on: boolean) => void;
   onSetTools: (on: boolean) => void;
+  onSetLayoutSwitch: (on: boolean) => void;
   onDeleteData: () => void;
   onClose: () => void;
 }) {
@@ -400,6 +404,12 @@ function FeatureDetails({
         <label className="catalog-detail-switch">
           <span>Tools for the model</span>
           <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
+        </label>
+      )}
+      {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
+        <label className="catalog-detail-switch">
+          <span>Switch keyboard layout after Fix</span>
+          <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
         </label>
       )}
 
@@ -759,6 +769,7 @@ export function CatalogPage() {
             error={features.error}
             onSet={(on) => void features.set(shownFeature.id, on)}
             onSetTools={(on) => void features.setTools(shownFeature.id, on)}
+            onSetLayoutSwitch={(on) => void features.setLayoutSwitch(on)}
             onDeleteData={() => void features.deleteData(shownFeature.id)}
             onClose={() => setOpenFeature(null)}
           />

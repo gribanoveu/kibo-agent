@@ -50,6 +50,14 @@ pub fn features_set_tools<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -
     Ok(features::list())
 }
 
+/// Whether Fix also selects the corrected text's dominant system keyboard layout.
+#[tauri::command]
+pub fn features_set_layout_switch<R: Runtime>(app: AppHandle<R>, on: bool) -> Result<Vec<FeatureView>, String> {
+    features::set_layout_switch(on).map_err(|e| e.to_string())?;
+    let _ = app.emit(FEATURES_EVENT, ());
+    Ok(features::list())
+}
+
 #[tauri::command]
 pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
     features::delete_data(&id)?;

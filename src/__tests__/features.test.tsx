@@ -22,6 +22,10 @@ mock.module("@tauri-apps/api/core", () => ({
       board = { ...board, toolsOn: args!.on as boolean };
       return Promise.resolve([structuredClone(board)]);
     }
+    if (command === "features_set_layout_switch") {
+      board = { ...board, layoutSwitchOn: args!.on as boolean };
+      return Promise.resolve([structuredClone(board)]);
+    }
     if (command === "features_delete_data") {
       board = { ...board, hasData: false };
       return Promise.resolve([structuredClone(board)]);
@@ -58,6 +62,8 @@ beforeEach(() => {
     on: false,
     tools: [{ name: "board", description: "When the user asks you to remind them…" }],
     toolsOn: true,
+    layoutSwitchOn: false,
+    layoutSwitchSupported: true,
     places: ["Assistant chat", "Agent", "Analyst"],
     data: "~/.kibo/board.json",
     hasData: true,
@@ -104,6 +110,20 @@ describe("features on the catalog page", () => {
     expect(calls.at(-1)).toEqual({ command: "features_set_tools", args: { id: "board", on: false } });
     expect(tools().getAttribute("aria-checked")).toBe("false");
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  test("the layout feature's optional system switch is saved from its panel", async () => {
+    board = { ...board, id: "layout-correction", name: "Keyboard layout correction", on: true, tools: [] };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard layout correction" }));
+    const toggle = () => screen.getByRole("switch", { name: "Switch keyboard layout after Fix" });
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(toggle());
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "features_set_layout_switch", args: { on: true } });
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
   });
 
   test("its data is deleted only while it is off, and only after asking", async () => {
