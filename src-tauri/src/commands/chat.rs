@@ -868,7 +868,7 @@ fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> O
     (current.root() == workspace).then(|| index.searcher()).flatten()
 }
 
-/// The HTTP page's environments, as this chat's `httpRequest` reaches them.
+/// The HTTP page's environments, as this chat's HTTP tools reach them.
 pub(super) fn http_stands_of<R: Runtime>(app: &AppHandle<R>, chat_id: &str) -> Arc<dyn crate::domain::http_client::HttpStands> {
     Arc::new(crate::services::http_client::Stands { changed: super::http::http_event_sink(app), chat: chat_id.to_string() })
 }

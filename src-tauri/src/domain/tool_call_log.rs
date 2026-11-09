@@ -437,9 +437,13 @@ mod tests {
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
             ),
             // What was asked is what the log is for, `{{token}}` written out; what came back goes as `text`.
-            ToolName::HttpRequest => (
-                Some(ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs { method: Some("GET".into()), url: Some("{{baseUrl}}/orders".into()), ..Default::default() })),
-                ToolResult::HttpRequest { text: LEAK.into(), summary: "200 · 12 ms".into() },
+            ToolName::HttpEnvironment => (
+                Some(ToolCall::HttpEnvironment(crate::domain::tools::HttpEnvironmentArgs { environment: Some("Stage".into()) })),
+                ToolResult::HttpEnvironment { text: LEAK.into(), summary: "Stage · 3 requests".into() },
+            ),
+            ToolName::HttpSend => (
+                Some(ToolCall::HttpSend(crate::domain::tools::HttpSendArgs { request: "r1".into(), method: Some("GET".into()), path: Some("/orders".into()), ..Default::default() })),
+                ToolResult::HttpSend { text: LEAK.into(), summary: "200 · 12 ms".into() },
             ),
             // Which request was read is what the log is for; the request itself goes as `text`.
             ToolName::HttpReadRequest => (

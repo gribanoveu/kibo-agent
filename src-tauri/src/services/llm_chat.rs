@@ -2228,18 +2228,28 @@ fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<String>) {
     if production && parsed.name().is_mutating() && parsed.name().wire_name().starts_with("kube") {
         return (true, Some("a production cluster — every change to it asks".to_string()));
     }
-    // A write to a stand asks by the environment's mode, read now (HC-8). One not
-    // open or not found asks nothing: the tool says so, and there is nothing to approve.
-    // Environments that could not be read leave the mode unknown: a write asks.
-    if let crate::domain::tools::ToolCall::HttpRequest(args) = &parsed {
-        let acts = args.acts_as();
+    // A write to a stand asks by the environment's mode, read now (HC-8), and by the
+    // method the send goes with — the saved request's, unless the call names one
+    // (HC-10c). One not open, or refused before the network, asks nothing: the tool
+    // says so, and there is nothing to approve. Stores that could not be read leave
+    // the method or the mode unknown: a write asks.
+    if let crate::domain::tools::ToolCall::HttpSend(args) = &parsed {
+        use crate::services::ai_tools::tools::http_send;
         let Some(stands) = turn.http.as_deref() else { return (false, None) };
-        let Ok(open) = stands.open() else {
-            let asks = !crate::domain::http_client::is_read(&acts);
-            return (asks, asks.then(|| "the HTTP environments could not be read, so a write asks".to_string()));
+        let unknown = || {
+            let asks = parsed.is_risky();
+            (asks, asks.then(|| "the HTTP environments could not be read, so a write asks".to_string()))
         };
-        let stand = crate::services::ai_tools::tools::http_request::stand(&open, args.environment.as_deref()).ok();
-        return stand.map_or((false, None), |s| policy.stand_asks(s.access, &acts, &s.name));
+        let Ok(open) = stands.open() else { return unknown() };
+        let (Ok(stand), Ok(send)) = (http_send::stand(&open, args.environment.as_deref()), http_send::agent_send(args)) else { return (false, None) };
+        return match stands.sending(&stand.id, &send) {
+            Ok((acts, what)) => match policy.stand_asks(stand.access, &acts, &stand.name) {
+                (true, reason) => (true, Some(reason.map_or_else(|| what.clone(), |r| format!("{what} — {r}")))),
+                no => no,
+            },
+            Err(crate::domain::http_client::HttpError::Store(_)) => unknown(),
+            Err(_) => (false, None),
+        };
     }
     // What a server says about its own tool is its word (`McpToolHints`):
     // "destructive" asks whatever "Always allow" says, "only reads" is put
@@ -4640,8 +4650,8 @@ mod tests {
             h.features = features;
             h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
             let tools = &h.provider.requests()[0].tools;
-            assert!(tools.iter().all(|t| t.name != "httpRequest"), "not in every request");
-            tools.iter().any(|t| t.name == "toolSearch" && t.description.contains("`httpRequest`"))
+            assert!(tools.iter().all(|t| !t.name.starts_with("http")), "not in every request");
+            ["httpEnvironment", "httpSend", "httpReadRequest"].iter().all(|n| tools.iter().any(|t| t.name == "toolSearch" && t.description.contains(&format!("`{n}`"))))
         };
         assert!(!offered(Features::default()));
         assert!(offered(Features::all()));
@@ -4652,16 +4662,16 @@ mod tests {
     fn the_agent_reads_a_stand_once_it_has_found_the_tool() {
         let script = vec![
             asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
-            asks(vec![wants("h1", "httpRequest", r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#)]),
+            asks(vec![wants("h1", "httpSend", r#"{"request":"r1"}"#)]),
             text("done"),
         ];
         let mut h = harness("loop-http-call", script);
         h.features = Features::all();
-        h.http = Some(crate::services::ai_tools::tools::http_request::tests::answering());
+        h.http = Some(crate::services::ai_tools::tools::http_send::tests::answering());
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
         let requests = h.provider.requests();
         let ran = requests[2].messages.iter().find(|m| m.tool_call_id.as_deref() == Some("h1")).unwrap();
-        assert!(ran.content.as_deref().unwrap().starts_with("GET {{baseUrl}}/orders → 200"), "{:?}", ran.content);
+        assert!(ran.content.as_deref().unwrap().starts_with("GET {{baseUrl}}/orders/1 → 200"), "{:?}", ran.content);
     }
 
     /// A write asks by the environment's mode, read when the call comes: Ask for writes
@@ -4670,11 +4680,11 @@ mod tests {
     #[test]
     fn a_write_to_a_stand_asks_by_its_mode() {
         use crate::domain::http_client::AgentAccess;
-        use crate::services::ai_tools::tools::http_request::tests::opened_as;
+        use crate::services::ai_tools::tools::http_send::tests::opened_as;
         let run = |access: AgentAccess, approval: ApprovalPolicy, call: &str| {
             let script = vec![
                 asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
-                asks(vec![wants("h1", "httpRequest", call)]),
+                asks(vec![wants("h1", "httpSend", call)]),
                 text("done"),
             ];
             let mut h = harness("loop-http-write", script);
@@ -4687,24 +4697,34 @@ mod tests {
             }
         };
         let auto = ApprovalPolicy { skip_all: true, ..ApprovalPolicy::default() };
-        let post = r#"{"method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#;
-        let get = r#"{"url":"{{baseUrl}}/orders"}"#;
-        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), post), Some(Some("\"Stage\" asks for every write".into())));
+        let post = r#"{"request":"w1","body":"{}"}"#;
+        let get = r#"{"request":"r1"}"#;
+        let carded = |what: &str| Some(Some(format!("{what} — \"Stage\" asks for every write")));
+        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), post), carded("POST {{baseUrl}}/orders, from \"Shop / Create\""), "the saved request's method");
         assert_eq!(run(AgentAccess::AskForWrites, asking(), get), None, "a read");
-        assert_eq!(run(AgentAccess::WritesAsOtherTools, asking(), post), Some(None));
+        let made = r#"{"request":"r1","method":"post"}"#;
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), made), carded("POST {{baseUrl}}/orders/1, from \"Shop / Get one\""), "the call's");
+        let read = r#"{"request":"w1","method":"HEAD"}"#;
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), read), None, "a read of a POST's address");
+        assert_eq!(run(AgentAccess::WritesAsOtherTools, asking(), post), Some(Some("POST {{baseUrl}}/orders, from \"Shop / Create\"".into())));
         assert_eq!(run(AgentAccess::WritesAsOtherTools, auto.clone(), post), None, "Auto");
         assert_eq!(run(AgentAccess::ReadOnly, asking(), post), None, "refused by the tool, not asked");
-        let elsewhere = r#"{"environment":"Prod","method":"DELETE","url":"{{baseUrl}}/orders"}"#;
+        let elsewhere = r#"{"request":"w1","environment":"Prod","method":"DELETE"}"#;
         assert_eq!(run(AgentAccess::AskForWrites, asking(), elsewhere), None, "not open");
-        let overridden = r#"{"url":"{{baseUrl}}/orders/1","headers":{"X-HTTP-Method-Override":"DELETE"}}"#;
-        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), overridden), Some(Some("\"Stage\" asks for every write".into())), "a GET that deletes");
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), r#"{"request":"nope","method":"DELETE"}"#), None, "no such request: refused by the tool");
+        assert_eq!(run(AgentAccess::AskForWrites, asking(), r#"{"request":"w1","auth":"basic"}"#), None, "a call that cannot be read");
+        let unread = Some(Some("the HTTP environments could not be read, so a write asks".to_string()));
+        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), r#"{"request":"s1"}"#), unread, "a collection that could not be read: its method is unknown");
+        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), r#"{"request":"s1","method":"GET"}"#), None, "but the call's own read");
+        let overridden = r#"{"request":"r1","headers":{"X-HTTP-Method-Override":"DELETE"}}"#;
+        assert_eq!(run(AgentAccess::AskForWrites, auto.clone(), overridden), carded("GET {{baseUrl}}/orders/1, from \"Shop / Get one\""), "a GET that deletes");
 
         // Environments that cannot be read: a write asks, a read does not.
         let unread = |call: &str| {
-            let script = vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]), asks(vec![wants("h1", "httpRequest", call)]), text("done")];
+            let script = vec![asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]), asks(vec![wants("h1", "httpSend", call)]), text("done")];
             let mut h = harness("loop-http-unread", script);
             h.features = Features::all();
-            h.http = Some(crate::services::ai_tools::tools::http_request::tests::unreadable());
+            h.http = Some(crate::services::ai_tools::tools::http_send::tests::unreadable());
             h.approval = auto.clone();
             match h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes") {
                 ChatStreamOutcome::PendingApproval(pending) => Some(pending.calls[0].reason.clone()),
@@ -4712,7 +4732,8 @@ mod tests {
             }
         };
         assert_eq!(unread(post), Some(Some("the HTTP environments could not be read, so a write asks".into())));
-        assert_eq!(unread(get), None);
+        assert_eq!(unread(r#"{"request":"r1"}"#), Some(Some("the HTTP environments could not be read, so a write asks".into())), "its method is the saved request's, unknown");
+        assert_eq!(unread(r#"{"request":"r1","method":"GET"}"#), None, "a read by the call's own method");
     }
 
     /// A write the round let through unasked, while another call's card waited, asks
@@ -4721,13 +4742,13 @@ mod tests {
     #[test]
     fn an_http_write_let_through_while_a_card_waited_asks_if_the_mode_changed() {
         use crate::domain::http_client::AgentAccess;
-        use crate::services::ai_tools::tools::http_request::tests::opened_as;
+        use crate::services::ai_tools::tools::http_send::tests::opened_as;
         let resumed = |now: AgentAccess| {
             let script = vec![
                 asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
                 asks(vec![
                     wants("w1", "writeFile", r#"{"path":"a.rs","content":"new"}"#),
-                    wants("h1", "httpRequest", r#"{"method":"POST","url":"{{baseUrl}}/orders"}"#),
+                    wants("h1", "httpSend", r#"{"request":"w1"}"#),
                 ]),
                 text("done"),
             ];
@@ -4735,7 +4756,7 @@ mod tests {
             h.features = Features::all();
             h.http = Some(opened_as(AgentAccess::WritesAsOtherTools));
             h.approval = asking();
-            h.approval.allow_always("httpRequest").unwrap();
+            h.approval.allow_always("httpSend").unwrap();
             let paused = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
             let ChatStreamOutcome::PendingApproval(pending) = paused.expect("pauses") else { panic!("ran unasked") };
             assert_eq!(pending.calls.iter().map(|c| c.requires_confirmation).collect::<Vec<_>>(), [true, false]);
@@ -4761,13 +4782,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's two — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's three — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 14 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 15 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

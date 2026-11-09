@@ -74,7 +74,7 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
             }
         }
 
-        ToolCall::HttpRequest(args) => super::tools::http_request::preview(&args),
+        ToolCall::HttpSend(args) => super::tools::http_send::preview(&args),
 
         // Where that terminal is now is the user's doing, not a path of ours.
 
@@ -125,8 +125,8 @@ mod tests {
     /// The agent's card for a write to a stand: the call as written, no file in it.
     #[test]
     fn an_http_write_shows_the_call_as_written() {
-        let shown = preview(&temp_dir("preview-http"), "httpRequest", r#"{"environment":"Stage","method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#);
-        assert!(matches!(&shown, ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "POST {{baseUrl}}/orders"), "{shown:?}");
+        let shown = preview(&temp_dir("preview-http"), "httpSend", r#"{"request":"w1","environment":"Stage","method":"POST","path":"/orders","body":"{}"}"#);
+        assert!(matches!(&shown, ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "request w1: POST /orders"), "{shown:?}");
     }
 
     #[test]

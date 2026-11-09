@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::http_request::stand;
+use super::http_send::stand;
 use super::mcp::fit;
 use crate::domain::http_client::HttpError;
 use crate::domain::llm::LlmToolDefinition;
@@ -49,7 +49,7 @@ pub fn http_read_request(args: &HttpReadRequestArgs, deps: &ToolDeps) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::ai_tools::tools::http_request::tests::{opened_as, reading};
+    use crate::services::ai_tools::tools::http_send::tests::{opened_as, reading};
     use crate::domain::http_client::AgentAccess;
 
     fn deps(http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>) -> ToolDeps<'static> {

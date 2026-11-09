@@ -2,7 +2,7 @@
 //! a request sent and what came back kept, a Postman file imported into
 //! whichever store it belongs to, and saved responses whose request is gone dropped.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::domain::http_auth::{refusal, OAuth2, Token};
-use crate::domain::http_client::{AgentReply, AgentRequest, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
+use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, Auth, Collection, Imported};
 use crate::infra::http_client::NoCookies;
@@ -32,19 +32,40 @@ pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, enviro
         item.insert("request".into(), edited);
     }
     let environment = environment.map(http_env_store::get).transpose()?;
+    // The last to start, not the last past its scripts: one can wait a minute there.
+    let key = format!("{collection_id}/{request_id}");
+    let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
+    latest().insert(key.clone(), ticket);
+    let (sent, report, _) = run(&mut collection, collection_id, request_id, environment.as_ref(), Vec::new(), None)?;
+    let saved = SavedResponse { at: sent.at, environment: sent.environment, outcome: sent.outcome, body: sent.body, scripts: ScriptReport::default() };
+    save(collection_id, request_id, Sent { key, ticket, saved }, report)
+}
+
+/// An agent's send: the chat that signs it in history, and the names the
+/// collections write where a credential goes — its mask hides them besides secrets.
+struct ForAgent {
+    chat: String,
+    credentials: BTreeSet<String>,
+    /// Header values and the query the model wrote: a wrong token it sends is its to read back.
+    written: Vec<String>,
+}
+
+/// A request through its scripts, with `local` over the other variables, and what
+/// they wrote kept. What came back, the scripts' report under the send's mask, and the mask.
+fn run(collection: &mut Collection, collection_id: &str, request_id: &str, environment: Option<&Environment>, local: Vec<Variable>, agent: Option<ForAgent>) -> Result<(Exchanged, ScriptReport, Scope), HttpError> {
     let values = http_env_store::collection_values()?;
     let before = ScriptVars {
         globals: http_env_store::globals()?,
         collection: overlaid(collection.variables(), values.get(collection_id).map(Vec::as_slice).unwrap_or_default()),
-        environment: environment.as_ref().map(|e| e.variables.clone()).unwrap_or_default(),
-        local: Vec::new(),
+        environment: environment.map(|e| e.variables.clone()).unwrap_or_default(),
+        local,
     };
     let mut report = ScriptReport::default();
-    let mut scripts = Scripts::new(&collection, collection_id, request_id, environment.as_ref(), before.clone(), &mut report)?;
-    let sent = exchange(&mut collection, collection_id, request_id, environment.as_ref(), &mut scripts);
+    let mut scripts = Scripts::new(collection, collection_id, request_id, environment, before.clone(), &mut report, agent)?;
+    let sent = exchange(collection, collection_id, request_id, environment, &mut scripts);
     let mask = scripts.mask();
     let after = scripts.vars;
-    match write_variables(&before, &after, collection_id, environment.as_ref()) {
+    match write_variables(&before, &after, collection_id, environment) {
         Ok(changed) => report.changed = changed,
         Err(e) => {
             report.error.get_or_insert(format!("What the scripts wrote was not kept: {e}"));
@@ -55,15 +76,20 @@ pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, enviro
         HttpError::OAuth2(why) => HttpError::OAuth2(mask.hide(&why)),
         other => other,
     })?;
-    save(collection_id, request_id, sent, report.hidden(&mask))
+    let report = report.hidden(&mask);
+    Ok((sent, report, mask))
+}
+
+/// What came back of a send, its secrets hidden but in the body.
+struct Exchanged {
+    at: i64,
+    environment: Option<String>,
+    outcome: Outcome,
+    body: Vec<u8>,
 }
 
 /// A request through its scripts, and what came back with its secrets hidden.
-fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, environment: Option<&Environment>, scripts: &mut Scripts) -> Result<Sent, HttpError> {
-    // The last to start, not the last past its scripts: one can wait a minute there.
-    let key = format!("{collection_id}/{request_id}");
-    let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
-    latest().insert(key.clone(), ticket);
+fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, environment: Option<&Environment>, scripts: &mut Scripts) -> Result<Exchanged, HttpError> {
     scripts.before_sending(collection, request_id)?;
     let cert = environment.and_then(|e| e.trusted_cert.as_deref());
     let scope = scripts.vars.scope();
@@ -72,14 +98,15 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
         scripts.keep_secret(&held.access);
     }
     let mut prepared = collection.prepare_with(request_id, &scope, held.as_ref().map(|h| h.access.as_str()))?;
-    let (mut outcome, mut body) = deliver(&prepared.sent, cert);
+    let page = scripts.agent.is_none();
+    let (mut outcome, mut body) = deliver(&prepared.sent, cert, page);
     // Once: a token just got that is refused is not one the next will fix.
     if let Some(stale) = held.filter(|h| !h.fresh && matches!(outcome, Outcome::Response { status: 401, .. })) {
         match renewed(&stale, collection_id, cert) {
             Ok(access) => {
                 scripts.keep_secret(&access);
                 prepared = collection.prepare_with(request_id, &scope, Some(&access))?;
-                (outcome, body) = deliver(&prepared.sent, cert);
+                (outcome, body) = deliver(&prepared.sent, cert, page);
             }
             // The 401 stands, and says why the next request will meet one too.
             Err(e) => {
@@ -90,16 +117,29 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     let at = chrono::Utc::now().timestamp_millis();
     let name = environment.map(|e| e.name.clone());
     let written = collection.written_url(request_id).unwrap_or_default();
-    remember(at, name.clone(), None, written, Some(request_id), &prepared, &outcome, &body, &scripts.mask());
+    let wrote = |literal: &String| scripts.agent.as_ref().is_some_and(|a| a.written.iter().any(|w| w.contains(literal.as_str())));
+    let literals: Vec<String> = credential_literals(&prepared.sent).into_iter().filter(|l| !wrote(l)).collect();
+    scripts.kept.extend(literals);
+    let mask = scripts.mask();
+    match scripts.agent.as_ref().map(|a| a.chat.clone()) {
+        None => remember(at, name.clone(), None, written, Some(request_id), &prepared, &outcome, &body, &mask),
+        // What the model was told, and no more.
+        Some(chat) => {
+            let told = AgentReply::new(outcome.clone(), &body, &mask);
+            remember(at, name.clone(), Some(chat), written, Some(request_id), &prepared, &told.outcome, &told.body, &mask);
+        }
+    }
     scripts.after_response(&prepared, &outcome, &body);
     // What the test scripts learned counts too: a token they stored is a secret's value.
     let outcome = outcome.hidden(&scripts.mask());
-    Ok(Sent { key, ticket, saved: SavedResponse { at, environment: name, outcome, body, scripts: ScriptReport::default() } })
+    Ok(Exchanged { at, environment: name, outcome, body })
 }
 
-/// Through the sender, with the jar: what a send and a script's `pm.sendRequest` have in common.
-fn deliver(request: &Outgoing, cert: Option<&str>) -> (Outcome, Vec<u8>) {
-    http_client::send(request, cert, &StoredJar)
+/// Through the sender, with the jar: what a send and a script's `pm.sendRequest` have
+/// in common. An agent's own request does not `follow` a redirect: where it leads is the
+/// stand's to say, and the model's to read.
+fn deliver(request: &Outgoing, cert: Option<&str>, page: bool) -> (Outcome, Vec<u8>) {
+    if page { http_client::send(request, cert, &StoredJar) } else { http_client::send_once(request, cert, &NoCookies) }
 }
 
 /// The token a send goes with, and what it would take to get another.
@@ -224,20 +264,36 @@ struct Scripts<'a> {
     after: Vec<String>,
     sandbox: Option<Sandbox>,
     name: String,
+    /// An agent's send, masked by the agent's rules.
+    agent: Option<ForAgent>,
+    /// What went as a credential, for an agent's mask: the collection can write one out.
+    kept: Vec<String>,
 }
 
 impl<'a> Scripts<'a> {
-    fn new(collection: &Collection, id: &str, request_id: &str, environment: Option<&'a Environment>, vars: ScriptVars, report: &'a mut ScriptReport) -> Result<Scripts<'a>, HttpError> {
+    fn new(collection: &Collection, id: &str, request_id: &str, environment: Option<&'a Environment>, vars: ScriptVars, report: &'a mut ScriptReport, agent: Option<ForAgent>) -> Result<Scripts<'a>, HttpError> {
         let digest = collection.scripts_digest();
         let trusted = digest.as_ref().is_some_and(|d| is_trusted(id, &d.hash));
         report.not_run = digest.is_some() && !trusted;
         let (before, after) = if trusted { (collection.scripts(request_id, "prerequest")?, collection.scripts(request_id, "test")?) } else { Default::default() };
         let name = collection.item_name(request_id).unwrap_or_default();
-        Ok(Scripts { start: vars.clone(), vars, report, environment, before, after, sandbox: None, name })
+        Ok(Scripts { start: vars.clone(), vars, report, environment, before, after, sandbox: None, name, agent, kept: Vec::new() })
     }
 
+    /// Every secret, before the scripts and after; for an agent, all it may not read too.
     fn mask(&self) -> Scope {
-        ScriptVars::mask(&[&self.start, &self.vars])
+        let Some(agent) = &self.agent else { return ScriptVars::mask(&[&self.start, &self.vars]) };
+        let layers = |v: &'_ ScriptVars| [v.globals.clone(), v.collection.clone(), v.environment.clone(), v.local.clone()];
+        let (start, now) = (layers(&self.start), layers(&self.vars));
+        let all: Vec<&[Variable]> = start.iter().chain(now.iter()).map(Vec::as_slice).collect();
+        let hidden = agent_hidden(&all, &agent.credentials);
+        let marked = |[globals, collection, environment, local]: [Vec<Variable>; 4]| ScriptVars {
+            globals: hiding(&globals, &hidden),
+            collection: hiding(&collection, &hidden),
+            environment: hiding(&environment, &hidden),
+            local: hiding(&local, &hidden),
+        };
+        ScriptVars::mask(&[&marked(start.clone()), &marked(now.clone())]).keeping(self.kept.iter().map(String::as_str))
     }
 
     /// A value no variable holds, a token got for this send, masked as a secret's is.
@@ -309,7 +365,7 @@ fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option
     let mut one = Collection::new("sub-request", "sub-request");
     one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request}))?;
     let prepared = one.prepare("sub-request", scope)?;
-    let (outcome, body) = deliver(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()));
+    let (outcome, body) = deliver(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()), true);
     let at = chrono::Utc::now().timestamp_millis();
     remember(at, environment.map(|e| e.name.clone()), None, written, None, &prepared, &outcome, &body, mask);
     match outcome {
@@ -336,41 +392,57 @@ impl HttpStands for Stands {
         environment.described(&reach(&environment)?)
     }
 
-    /// The environment and the collections read again: access taken back, or a
-    /// request deleted, mid-turn counts from the next call.
-    fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError> {
+    fn sending(&self, id: &str, send: &AgentSend) -> Result<(String, String), HttpError> {
         let environment = http_env_store::get(id)?;
-        let (prepared, scope) = environment.agent_request(request, &reach(&environment)?)?;
-        let (outcome, body) = http_client::send_once(&prepared.sent, environment.trusted_cert.as_deref());
-        let reply = AgentReply::new(outcome, &body, &scope);
+        let plan = with_collections(|collections, globals, _| environment.agent_send(collections, globals, send))??;
+        Ok((plan.acts, format!("{} {}, from \"{}\"", plan.method, plan.url, plan.name)))
+    }
+
+    /// The page's Send of a saved request with the model's edits (HC-10c): its auth,
+    /// `oauth2` and scripts, as trusted. The environment and the collections are read
+    /// again: access taken back, or a request deleted, mid-turn counts from the next
+    /// call. History gets it signed by the chat; the request's last response stays the user's.
+    fn send(&self, id: &str, send: &AgentSend) -> Result<AgentSent, HttpError> {
+        let environment = http_env_store::get(id)?;
+        let (plan, collection_id) = with_collections(|collections, globals, ids| environment.agent_send(collections, globals, send).map(|plan| {
+            let id = ids[plan.collection].to_string();
+            (plan, id)
+        }))??;
+        let request_id = send.request.trim();
+        let mut collection = http_collections::get(&collection_id)?;
+        let item = collection.item_mut(request_id).ok_or_else(|| HttpError::NoRequest(request_id.into()))?;
+        item.insert("request".into(), plan.request);
         let chat = chat_store::title(&self.chat).ok().flatten().unwrap_or_else(|| self.chat.clone());
-        remember(now(), Some(environment.name), Some(chat), request.url.clone(), None, &prepared, &reply.outcome, &reply.body, &scope);
+        let local = send.variables.iter().map(|(key, value)| Variable { key: key.clone(), value: value.clone(), secret: false, enabled: true }).collect();
+        let written = send.edits.headers.iter().filter_map(|(_, v)| v.clone()).chain(send.edits.query.clone()).collect();
+        let agent = ForAgent { chat, credentials: plan.credentials, written };
+        let ran = run(&mut collection, &collection_id, request_id, Some(&environment), local, Some(agent));
         (self.changed)(HttpChanged);
-        Ok(reply)
+        let (sent, scripts, mask) = ran?;
+        Ok(AgentSent { method: plan.method, url: mask.hide(&plan.url), reply: AgentReply::new(sent.outcome, &sent.body, &mask), scripts })
     }
 
     fn read(&self, id: &str, request: &str) -> Result<String, HttpError> {
         let environment = http_env_store::get(id)?;
-        with_collections(|collections, globals| environment.read_request(collections, globals, request))?
+        with_collections(|collections, globals, _| environment.read_request(collections, globals, request))?
     }
 }
 
 /// Where the user's collections go with `environment`, each filled in as the page
 /// sends it.
 fn reach(environment: &Environment) -> Result<Reach, HttpError> {
-    with_collections(|collections, globals| Reach::new(collections, globals, environment))
+    with_collections(|collections, globals, _| Reach::new(collections, globals, environment))
 }
 
-/// The user's collections, each with its variables as a send sees them, and globals.
-/// A collection whose file does not read is left out.
-fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variable]) -> T) -> Result<T, HttpError> {
+/// The user's collections, each with its variables as a send sees them, globals,
+/// and each collection's id. A collection whose file does not read is left out.
+fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variable], &[&str]) -> T) -> Result<T, HttpError> {
     let (globals, values) = (http_env_store::globals()?, http_env_store::collection_values()?);
     let all = http_collections::all()?;
-    let collections: Vec<(&Collection, Vec<Variable>)> = all
-        .iter()
-        .filter_map(|(id, read)| read.as_ref().ok().map(|c| (c, overlaid(c.variables(), values.get(id).map(Vec::as_slice).unwrap_or_default()))))
-        .collect();
-    Ok(f(&collections, &globals))
+    let read: Vec<(&str, &Collection)> = all.iter().filter_map(|(id, read)| read.as_ref().ok().map(|c| (id.as_str(), c))).collect();
+    let collections: Vec<(&Collection, Vec<Variable>)> = read.iter().map(|(id, c)| (*c, overlaid(c.variables(), values.get(*id).map(Vec::as_slice).unwrap_or_default()))).collect();
+    let ids: Vec<&str> = read.iter().map(|(id, _)| *id).collect();
+    Ok(f(&collections, &globals, &ids))
 }
 
 /// Settings that cannot be read trust nothing.
@@ -650,7 +722,7 @@ pub fn save_environment(mut from_window: Environment) -> Result<(), HttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::http_client::{AgentAccess, CookieJar as _, Environment, Outcome, Variable};
+    use crate::domain::http_client::{AgentAccess, AgentEdits, CookieJar as _, Environment, Outcome, Variable};
     use crate::domain::postman::Collection;
     use crate::infra::http_client::tests::{closed_port, reply, serve, Seen};
     use crate::infra::http_cookies;
@@ -1984,8 +2056,38 @@ mod tests {
         http_collections::add(&Collection::parse(&shop.to_string()).unwrap()).unwrap()
     }
 
-    fn ask(method: &str, url: &str, headers: &[(&str, &str)]) -> AgentRequest {
-        AgentRequest { method: method.into(), url: url.into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body: None }
+    /// Stage at `base`, open to the agent as `access` says, its `token` a secret.
+    fn open_stage(base: String, access: AgentAccess) {
+        let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
+        let variables = vec![var("baseUrl", base, false), var("token", "s3cr3t-t0k".into(), true)];
+        http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: access }).unwrap();
+    }
+
+    /// `open_stage`, and Shop under a bearer of `{{token}}`: `list` reads
+    /// `{{baseUrl}}/orders?id=1`, `make` posts `{"sum": 1}` to `{{baseUrl}}/orders`.
+    fn agent_stage(base: String, access: AgentAccess) -> String {
+        open_stage(base, access);
+        let shop = json!({
+            "info": {"name": "Shop", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}"}]},
+            "item": [
+                {"id": "list", "name": "List", "request": {"method": "GET", "url": "{{baseUrl}}/orders?id=1"}},
+                {"id": "make", "name": "Make", "request": {"method": "POST", "url": "{{baseUrl}}/orders", "body": {"mode": "raw", "raw": "{\"sum\": 1}", "options": {"raw": {"language": "json"}}}}},
+            ]
+        });
+        http_collections::add(&Collection::parse(&shop.to_string()).unwrap()).unwrap()
+    }
+
+    fn agent(request: &str) -> AgentSend {
+        AgentSend { request: request.into(), ..AgentSend::default() }
+    }
+
+    fn agent_with(request: &str, edits: AgentEdits) -> AgentSend {
+        AgentSend { request: request.into(), edits, variables: vec![] }
+    }
+
+    fn body_of(sent: &AgentSent) -> String {
+        String::from_utf8_lossy(&sent.reply.body).into_owned()
     }
 
     #[test]
@@ -2000,48 +2102,52 @@ mod tests {
         });
     }
 
+    /// The page's Send of the saved request, the model's edits and values over it: the
+    /// secret on the wire only, History signed by the chat with what the model read, and
+    /// neither the request's last response nor the collection touched.
     #[test]
-    fn the_agents_send_carries_the_secret_on_the_wire_only_and_lands_in_history_as_read() {
+    fn the_agents_send_goes_as_the_pages_with_its_edits_and_lands_in_history_as_read() {
         with_app_dir("http-stands-send", || {
             let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nset-cookie: sid=1\r\nx-echo: s3cr3t-t0k\r\ncontent-length: 21\r\nconnection: close\r\n\r\n{\"you\":\"s3cr3t-t0k\"}\r\n");
-            opened_stage(format!("http://127.0.0.1:{port}/v1"));
+            let shop = agent_stage(format!("http://127.0.0.1:{port}/v1"), AgentAccess::ReadOnly);
             crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Api, None, &[crate::domain::llm::LlmMessage::user("check the stand")], &json!([])).unwrap();
             let (stands, told) = stands("c1");
-            let reply = stands.send("stage", &ask("GET", "{{baseUrl}}/orders?id=1", &[("Authorization", "Bearer {{token}}")])).unwrap();
+            let edits = AgentEdits { path: Some("/orders/{{n}}".into()), query: Some("expand=items".into()), headers: vec![("X-Case".into(), Some("{{n}}".into()))], ..AgentEdits::default() };
+            let sent = stands.send("stage", &AgentSend { variables: vec![("n".into(), "2".into())], ..agent_with("list", edits) }).unwrap();
 
             let wire = wire(&seen);
-            assert!(wire.starts_with("GET /v1/orders?id=1 HTTP/1.1"), "{wire}");
-            assert!(wire.contains("Bearer s3cr3t-t0k"), "{wire}");
-
-            let text = format!("{reply:?} {}", String::from_utf8_lossy(&reply.body));
-            assert!(!text.contains("s3cr3t-t0k") && !text.contains("set-cookie"), "{text}");
-            assert!(String::from_utf8_lossy(&reply.body).contains("\"you\": \"•••\""), "{text}");
+            assert!(wire.starts_with("GET /v1/orders/2?expand=items HTTP/1.1"), "{wire}");
+            assert!(wire.contains("Bearer s3cr3t-t0k") && wire.to_ascii_lowercase().contains("x-case: 2"), "{wire}");
+            assert_eq!((sent.method.as_str(), sent.url.as_str()), ("GET", "{{baseUrl}}/orders/{{n}}?expand=items"));
+            let text = format!("{:?} {}", sent.reply.outcome, body_of(&sent));
+            assert!(!text.contains("s3cr3t-t0k") && !text.to_ascii_lowercase().contains("set-cookie"), "{text}");
+            assert!(body_of(&sent).contains("\"you\": \"•••\""), "{text}");
 
             let history = http_collections::history().unwrap();
             let entry = &history[0];
-            assert_eq!((entry.template_url.as_str(), entry.environment.as_deref(), entry.agent_chat.as_deref(), entry.request_id.as_deref()), ("{{baseUrl}}/orders?id=1", Some("Stage"), Some("check the stand"), None));
-            assert_eq!(entry.outcome, reply.outcome);
-            assert_eq!(entry.response_body.as_deref().map(str::as_bytes), Some(&reply.body[..]));
+            assert_eq!((entry.template_url.as_str(), entry.environment.as_deref(), entry.agent_chat.as_deref(), entry.request_id.as_deref()), ("{{baseUrl}}/orders/{{n}}?expand=items", Some("Stage"), Some("check the stand"), Some("list")));
+            assert_eq!(entry.outcome, sent.reply.outcome);
+            assert_eq!(entry.response_body.as_deref().map(str::as_bytes), Some(&sent.reply.body[..]));
             assert!(entry.request.headers.contains(&("Authorization".into(), "Bearer •••".into())), "{:?}", entry.request.headers);
             assert!(!serde_json::to_string(entry).unwrap().contains("s3cr3t-t0k"));
             assert_eq!(told.load(Ordering::Relaxed), 1, "the page is told");
+            assert_eq!(last_response(&shop, "list").unwrap(), None, "the request's last response is the user's");
+            assert_eq!(http_collections::get(&shop).unwrap().written_url("list").as_deref(), Some("{{baseUrl}}/orders?id=1"), "the edits are not saved");
         });
     }
 
-    /// A write goes with its body filled in and typed as JSON; history keeps it masked.
+    /// A write goes with the model's body, typed as JSON; history keeps it masked;
+    /// the card is told the method and the request it goes from.
     #[test]
-    fn the_agents_write_carries_its_body_and_history_keeps_it_masked() {
+    fn a_write_carries_the_models_body_and_history_keeps_it_masked() {
         with_app_dir("http-stands-write", || {
             let (port, seen) = serve_once("HTTP/1.1 201 Created\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-            let var = |key: &str, value: String, secret| Variable { key: key.into(), value, secret, enabled: true };
-            let variables = vec![var("baseUrl", format!("http://127.0.0.1:{port}"), false), var("token", "s3cr3t-t0k".into(), true)];
-            http_env_store::add(Environment { id: "stage".into(), name: "Stage".into(), variables, trusted_cert: None, agent: AgentAccess::AskForWrites }).unwrap();
-            shop_to("{{baseUrl}}/orders");
-            let mut request = ask("POST", "{{baseUrl}}/orders", &[]);
-            request.body = Some(r#"{"key": "{{token}}"}"#.into());
+            agent_stage(format!("http://127.0.0.1:{port}"), AgentAccess::AskForWrites);
             let (stands, _) = stands("c");
             assert_eq!(stands.open().unwrap()[0].access, AgentAccess::AskForWrites, "the mode reaches the agent");
-            stands.send("stage", &request).unwrap();
+            let send = agent_with("make", AgentEdits { body: Some(r#"{"key": "{{token}}"}"#.into()), ..AgentEdits::default() });
+            assert_eq!(stands.sending("stage", &send).unwrap(), ("POST".to_string(), "POST {{baseUrl}}/orders, from \"Shop / Make\"".to_string()));
+            stands.send("stage", &send).unwrap();
 
             let wire = wire(&seen).to_ascii_lowercase();
             assert!(wire.starts_with("post /orders http/1.1"), "{wire}");
@@ -2053,28 +2159,175 @@ mod tests {
         });
     }
 
+    /// `auth: "none"` is no auth at all: not the collection's `oauth2` — no token is
+    /// asked for — and not a request's own bearer.
     #[test]
-    fn a_chat_gone_still_signs_its_send() {
-        with_app_dir("http-stands-no-title", || {
-            let (port, _seen) = serve_once("HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
-            opened_stage(format!("http://127.0.0.1:{port}"));
-            stands("c9").0.send("stage", &ask("GET", "{{baseUrl}}/x", &[])).unwrap();
-            let entry = &http_collections::history().unwrap()[0];
-            assert_eq!((entry.agent_chat.as_deref(), entry.template_url.as_str()), (Some("c9"), "{{baseUrl}}/x"));
+    fn no_auth_drops_what_is_inherited_and_what_is_its_own() {
+        with_app_dir("http-stands-no-auth", || {
+            let ok = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            let (port, seen) = serve(vec![reply(ok), reply(ok)]);
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let signed = json!({
+                "info": {"name": "Signed", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "auth": {"type": "oauth2", "oauth2": [{"key": "accessTokenUrl", "value": "{{baseUrl}}/token"}, {"key": "grant_type", "value": "client_credentials"}, {"key": "clientId", "value": "c"}, {"key": "clientSecret", "value": "{{token}}"}]},
+                "item": [
+                    {"id": "me", "name": "Me", "request": {"method": "GET", "url": "{{baseUrl}}/me"}},
+                    {"id": "own", "name": "Own", "request": {"method": "GET", "url": "{{baseUrl}}/own", "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}"}]}}},
+                ]
+            });
+            http_collections::add(&Collection::parse(&signed.to_string()).unwrap()).unwrap();
+            let (stands, _) = stands("c");
+            for (request, line) in [("me", "GET /me "), ("own", "GET /own ")] {
+                stands.send("stage", &agent_with(request, AgentEdits { no_auth: true, ..AgentEdits::default() })).unwrap();
+                let wire = wire(&seen);
+                assert!(wire.starts_with(line), "no token was asked for: {wire}");
+                assert!(!wire.to_ascii_lowercase().contains("authorization"), "{wire}");
+            }
+        });
+    }
+
+    /// A trusted pre-request script signs in by a POST, in a read only environment too:
+    /// what it got is kept for the next send, and the model never reads it.
+    #[test]
+    fn a_token_a_trusted_script_got_serves_the_next_send_unread() {
+        with_app_dir("http-stands-login", || {
+            let echo = "HTTP/1.1 200 OK\r\ncontent-length: 18\r\nconnection: close\r\n\r\nyou are s3ss-v4lue";
+            let login = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 25\r\nconnection: close\r\n\r\n{\"session\": \"s3ss-v4lue\"}";
+            let (port, seen) = serve(vec![reply(login), reply(echo), reply(echo)]);
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let code = "if (!pm.environment.get('session')) {\n  pm.sendRequest({url: pm.environment.get('baseUrl') + '/login', method: 'POST'}, (err, res) => pm.environment.set('session', res.json().session));\n}";
+            let app = json!({
+                "info": {"name": "App", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "event": [event("prerequest", code)],
+                "item": [{"id": "me", "name": "Me", "request": {"method": "GET", "url": "{{baseUrl}}/me", "header": [{"key": "X-Session", "value": "{{session}}"}]}}]
+            });
+            let id = http_collections::add(&Collection::parse(&app.to_string()).unwrap()).unwrap();
+            trust(&id);
+            let (stands, _) = stands("c");
+            let first = stands.send("stage", &agent("me")).unwrap();
+            let second = stands.send("stage", &agent("me")).unwrap();
+            let wires: Vec<String> = (0..3).map(|_| wire(&seen)).collect();
+            assert!(wires[0].starts_with("POST /login "), "{wires:?}");
+            assert!(wires[1].starts_with("GET /me ") && wires[2].starts_with("GET /me "), "signed in once: {wires:?}");
+            assert!(wires[1..].iter().all(|w| w.to_ascii_lowercase().contains("x-session: s3ss-v4lue")), "{wires:?}");
+            assert_eq!(env_value("session").as_deref(), Some("s3ss-v4lue"), "kept, as after a Send");
+            for sent in [&first, &second] {
+                assert_eq!(body_of(sent), "you are •••");
+                assert!(!sent.scripts.not_run);
+            }
+            // The script's own sign-in is the user's, as after a Send; the model's sends are what it read.
+            let history = http_collections::history().unwrap();
+            let signed: Vec<_> = history.iter().filter(|e| e.agent_chat.is_some()).collect();
+            assert_eq!(signed.len(), 2);
+            assert!(!serde_json::to_string(&signed).unwrap().contains("s3ss-v4lue"), "{signed:?}");
+        });
+    }
+
+    /// A credential the collection writes out — no variable marks it — is masked in what
+    /// comes back too. The template is found in its own collection, not the first one.
+    #[test]
+    fn a_credential_written_out_is_masked_in_the_reply() {
+        with_app_dir("http-stands-literal", || {
+            let body = r#"{"key": "l1teral-k3y"}"#;
+            let (port, _seen) = serve_once(&format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()));
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let collection = |name: &str, item: Value| {
+                let root = json!({"info": {"name": name, "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"}, "item": [item]});
+                http_collections::add(&Collection::parse(&root.to_string()).unwrap()).unwrap()
+            };
+            collection("Other", json!({"id": "x", "name": "X", "request": "{{baseUrl}}/x"}));
+            collection("Keyed", json!({"id": "k", "name": "K", "request": {"method": "GET", "url": "{{baseUrl}}/k?api_key=l1teral-k3y", "header": [{"key": "X-Api-Key", "value": "l1teral-k3y"}]}}));
+            collection("Last", json!({"id": "z", "name": "Z", "request": "{{baseUrl}}/z"}));
+            let sent = stands("c").0.send("stage", &agent("k")).unwrap();
+            assert_eq!(body_of(&sent), "{\n  \"key\": \"•••\"\n}");
+            assert_eq!(sent.url, "{{baseUrl}}/k?api_key=•••");
+        });
+    }
+
+    /// A variable with a plain name that another request writes where a credential
+    /// goes is masked in what this one gets back.
+    #[test]
+    fn a_credential_by_where_it_is_written_is_masked_in_the_reply() {
+        with_app_dir("http-stands-placed", || {
+            let body = "echo sig-v4lue-9";
+            let (port, _seen) = serve_once(&format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()));
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let root = json!({
+                "info": {"name": "Signed", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "variable": [{"key": "sig", "value": "sig-v4lue-9"}],
+                "item": [
+                    {"id": "k", "name": "K", "request": "{{baseUrl}}/k"},
+                    {"id": "m", "name": "M", "request": {"method": "POST", "url": "{{baseUrl}}/m", "header": [{"key": "X-Api-Key", "value": "{{sig}}"}]}},
+                ]
+            });
+            http_collections::add(&Collection::parse(&root.to_string()).unwrap()).unwrap();
+            let sent = stands("c").0.send("stage", &agent("k")).unwrap();
+            assert_eq!(body_of(&sent), "echo •••");
         });
     }
 
     #[test]
-    fn the_agent_neither_rides_the_users_session_nor_leaves_cookies_in_it() {
+    fn scripts_not_trusted_do_not_run_and_it_is_said() {
+        with_app_dir("http-stands-untrusted", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            scripted(vec![], vec![], vec![event("prerequest", "pm.globals.set('ran', 'yes');")]);
+            let sent = stands("c").0.send("stage", &agent_with("order", AgentEdits { method: Some("GET".into()), ..AgentEdits::default() })).unwrap();
+            assert!(sent.scripts.not_run);
+            assert_eq!(global("ran"), None);
+        });
+    }
+
+    #[test]
+    fn a_redirect_is_the_models_to_read() {
+        with_app_dir("http-stands-redirect", || {
+            let moved = "HTTP/1.1 302 Found\r\nlocation: /elsewhere\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            let (port, seen) = serve(vec![reply(moved), reply("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")]);
+            agent_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let sent = stands("c").0.send("stage", &agent("list")).unwrap();
+            assert!(matches!(sent.reply.outcome, Outcome::Response { status: 302, .. }), "{:?}", sent.reply.outcome);
+            wire(&seen);
+            assert!(seen.recv_timeout(std::time::Duration::from_millis(100)).is_err(), "not followed");
+        });
+    }
+
+    #[test]
+    fn a_chat_gone_still_signs_its_send() {
+        with_app_dir("http-stands-no-title", || {
+            let (port, _seen) = serve_once("HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
+            agent_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            stands("c9").0.send("stage", &agent("list")).unwrap();
+            let entry = &http_collections::history().unwrap()[0];
+            assert_eq!((entry.agent_chat.as_deref(), entry.template_url.as_str()), (Some("c9"), "{{baseUrl}}/orders?id=1"));
+        });
+    }
+
+    /// As the page's Send: the user's session goes, and what the stand sets stays in it.
+    #[test]
+    fn the_agents_send_leaves_the_pages_session_alone() {
         with_app_dir("http-stands-jar", || {
             let (port, seen) = serve_once("HTTP/1.1 200 OK\r\nset-cookie: sid=theirs\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
             let base = format!("http://127.0.0.1:{port}");
             StoredJar.take(&format!("{base}/"), &["session=users".to_string()]);
-            opened_stage(base);
-            stands("c").0.send("stage", &ask("GET", "{{baseUrl}}/x", &[])).unwrap();
-            assert!(!wire(&seen).to_ascii_lowercase().contains("cookie"));
+            agent_stage(base, AgentAccess::ReadOnly);
+            stands("c").0.send("stage", &agent("list")).unwrap();
+            assert!(!wire(&seen).to_ascii_lowercase().contains("cookie:"), "the user's session is not the agent's to send or to echo");
             let names: Vec<String> = crate::infra::http_cookies::list().unwrap().into_iter().map(|c| c.name).collect();
-            assert_eq!(names, ["session"]);
+            assert_eq!(names, ["session"], "nor to change");
+        });
+    }
+
+    /// A wrong token the model sends itself comes back to it as the stand said it; a
+    /// credential the collection writes out does not.
+    #[test]
+    fn what_the_model_wrote_itself_it_reads_back() {
+        with_app_dir("http-stands-own", || {
+            let body = "token wrong-tok-1 invalid";
+            let (port, _seen) = serve_once(&format!("HTTP/1.1 401 Unauthorized\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()));
+            agent_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let edits = AgentEdits { headers: vec![("Authorization".into(), Some("Bearer wrong-tok-1".into()))], no_auth: true, ..AgentEdits::default() };
+            let sent = stands("c").0.send("stage", &agent_with("list", edits)).unwrap();
+            assert_eq!(body_of(&sent), body);
         });
     }
 
@@ -2083,11 +2336,13 @@ mod tests {
         use crate::infra::http_agent::tests::{serve_tls_with, CA, LEAF, LEAF_KEY};
         with_app_dir("http-stands-tls", || {
             let port = serve_tls_with(LEAF, LEAF_KEY, "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-            let variables = vec![Variable { key: "baseUrl".into(), value: format!("https://127.0.0.1:{port}"), secret: false, enabled: true }];
-            http_env_store::add(Environment { id: "tls".into(), name: "TLS".into(), variables, trusted_cert: Some(CA.into()), agent: AgentAccess::ReadOnly }).unwrap();
-            shop_to("{{baseUrl}}/orders");
-            let reply = stands("c").0.send("tls", &ask("GET", "{{baseUrl}}/x", &[])).unwrap();
-            assert!(matches!(reply.outcome, Outcome::Response { status: 200, .. }), "{:?}", reply.outcome);
+            agent_stage(format!("https://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let mut environment = http_env_store::get("stage").unwrap();
+            environment.trusted_cert = Some(CA.into());
+            http_env_store::delete("stage").unwrap();
+            http_env_store::add(environment).unwrap();
+            let sent = stands("c").0.send("stage", &agent("list")).unwrap();
+            assert!(matches!(sent.reply.outcome, Outcome::Response { status: 200, .. }), "{:?}", sent.reply.outcome);
         });
     }
 
@@ -2095,48 +2350,38 @@ mod tests {
     fn what_is_refused_reaches_neither_the_network_nor_history() {
         with_app_dir("http-stands-refused", || {
             let (port, seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-            opened_stage(format!("http://127.0.0.1:{port}"));
+            agent_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
             let (stands, told) = stands("c");
-            assert!(matches!(stands.send("stage", &ask("POST", "{{baseUrl}}/x", &[])), Err(HttpError::ReadOnly { .. })));
-            assert!(matches!(stands.send("stage", &ask("GET", "https://evil.test/", &[])), Err(HttpError::Untrusted { .. })));
+            assert!(matches!(stands.send("stage", &agent("make")), Err(HttpError::ReadOnly { .. })));
+            let away = agent_with("list", AgentEdits { path: Some("//evil.test/x".into()), ..AgentEdits::default() });
+            assert!(matches!(stands.send("stage", &away), Err(HttpError::BadPath(_))));
+            let moved = AgentSend { variables: vec![("baseUrl".into(), "https://evil.test".into())], ..agent("list") };
+            assert!(matches!(stands.send("stage", &moved), Err(HttpError::VariableRefused { .. })));
             assert!(seen.recv_timeout(std::time::Duration::from_millis(100)).is_err());
             assert_eq!(http_collections::history().unwrap(), []);
             assert_eq!(told.load(Ordering::Relaxed), 0);
         });
     }
 
-    /// The user opened an environment, not the page's globals.
-    #[test]
-    fn a_global_is_not_the_agents_to_name() {
-        with_app_dir("http-stands-globals", || {
-            opened_stage("http://127.0.0.1:1".into());
-            http_env_store::set_globals(vec![Variable { key: "shared".into(), value: "g".into(), secret: false, enabled: true }]).unwrap();
-            let told = stands("c").0.send("stage", &ask("GET", "{{baseUrl}}/{{shared}}", &[])).unwrap_err();
-            assert_eq!(told, HttpError::UnknownIn { names: vec!["shared".into()], environment: "Stage".into(), known: "baseUrl, token".into() });
-        });
-    }
-
     #[test]
     fn access_taken_back_mid_turn_counts_from_the_next_call() {
         with_app_dir("http-stands-closed", || {
-            opened_stage("http://127.0.0.1:1".into());
+            agent_stage("http://127.0.0.1:1".into(), AgentAccess::ReadOnly);
             let (stands, _) = stands("c");
             let open = http_env_store::get("stage").unwrap();
             http_env_store::save_from_window(Environment { agent: AgentAccess::Off, ..open.for_window() }).unwrap();
-            assert_eq!(stands.send("stage", &ask("GET", "{{baseUrl}}/x", &[])), Err(HttpError::NoneOpen));
+            assert_eq!(stands.send("stage", &agent("list")), Err(HttpError::NoneOpen));
+            assert_eq!(stands.sending("stage", &agent("list")), Err(HttpError::NoneOpen));
         });
     }
 
     #[test]
-    fn a_request_deleted_mid_turn_takes_its_address_with_it() {
+    fn a_request_deleted_mid_turn_is_gone() {
         with_app_dir("http-stands-deleted", || {
-            opened_stage("http://127.0.0.1:1".into());
-            let other = shop_to("https://other.test/x");
+            let shop = agent_stage("http://127.0.0.1:1".into(), AgentAccess::ReadOnly);
             let (stands, _) = stands("c");
-            assert_eq!(stands.describe("stage").unwrap().origins, ["http://127.0.0.1:1", "https://other.test"]);
-            http_collections::delete(&other).unwrap();
-            let told = stands.send("stage", &ask("GET", "https://other.test/x", &[])).unwrap_err();
-            assert!(matches!(&told, HttpError::Untrusted { trusted, .. } if trusted == "http://127.0.0.1:1"), "{told:?}");
+            http_collections::delete(&shop).unwrap();
+            assert_eq!(stands.send("stage", &agent("list")), Err(HttpError::NoRequest("list".into())));
         });
     }
 
@@ -2221,20 +2466,19 @@ mod tests {
             let (port, got) = live::stand();
             live::environment(port);
             let (stands, _) = stands("c");
-            let status = |url: &str, headers: &[(&str, &str)]| {
-                let reply = stands.send("stage", &ask("GET", url, headers)).unwrap();
-                let body = String::from_utf8_lossy(&reply.body).to_string();
-                assert!(!body.contains(live::TOKEN), "the echo is masked: {body}");
-                match reply.outcome {
+            let status = |path: &str, query: Option<&str>, no_auth: bool| {
+                let edits = AgentEdits { path: Some(path.into()), query: query.map(Into::into), no_auth, ..AgentEdits::default() };
+                let sent = stands.send("stage", &agent_with("get", edits)).unwrap();
+                assert!(!body_of(&sent).contains(live::TOKEN), "the echo is masked: {}", body_of(&sent));
+                match sent.reply.outcome {
                     Outcome::Response { status, .. } => status,
                     Outcome::Failed { error } => panic!("{error}"),
                 }
             };
-            let bearer = [("Authorization", "Bearer {{token}}")];
-            assert_eq!(status("{{baseUrl}}/orders/42", &bearer), 200);
-            assert_eq!(status("{{baseUrl}}/orders/999?expand=items", &bearer), 200, "the planted bug: the spec says 404");
-            assert_eq!(status("{{baseUrl}}/nope", &bearer), 404);
-            assert_eq!(status("{{baseUrl}}/orders/42", &[]), 401);
+            assert_eq!(status("/orders/42", None, false), 200);
+            assert_eq!(status("/orders/999", Some("expand=items"), false), 200, "the planted bug: the spec says 404");
+            assert_eq!(status("/nope", None, false), 404);
+            assert_eq!(status("/orders/42", None, true), 401);
             let got = got.lock().unwrap();
             assert_eq!(got.iter().map(|h| (h.authorized, h.planted)).collect::<Vec<_>>(), [(true, false), (true, true), (true, false), (false, false)]);
         });
@@ -2358,15 +2602,10 @@ mod tests {
     fn http_live_check_passes_the_right_turn_only() {
         use crate::domain::llm::{ChatStreamResult, LlmToolCall};
         let said = |text: &str| ChatStreamResult { text: text.into(), ..Default::default() };
-        let get = |url: &str, auth: &str| ChatStreamResult {
-            tool_calls: vec![LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: json!({"url": url, "headers": {"Authorization": auth}}).to_string() }],
-            ..said("")
-        };
-        let missing = || get("{{baseUrl}}/orders/999", "Bearer {{token}}");
-        let head = ChatStreamResult {
-            tool_calls: vec![LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: json!({"method": "HEAD", "url": "{{baseUrl}}/orders/7", "headers": {"Authorization": "Bearer {{token}}"}}).to_string() }],
-            ..said("")
-        };
+        let send = |arguments: Value| ChatStreamResult { tool_calls: vec![LlmToolCall { id: "c1".into(), name: "httpSend".into(), arguments: arguments.to_string() }], ..said("") };
+        let get = |path: &str, auth: Option<&str>| send(json!({"request": "get", "path": path, "headers": {"Authorization": auth}}));
+        let missing = || get("/orders/999", None);
+        let head = send(json!({"request": "get", "method": "HEAD", "path": "/orders/7"}));
         let check = |label: &str, replies: Vec<ChatStreamResult>| {
             with_app_dir(label, || {
                 let (outcome, got) = api_role_on_the_stand(&model_from(replies));
@@ -2379,17 +2618,18 @@ mod tests {
         let wrong = [
             ("http-live-pass", vec![missing(), said("PASS — it answers")]),
             ("http-live-no-read", vec![said("FAIL, surely")]),
-            ("http-live-only-42", vec![get("{{baseUrl}}/orders/42", "Bearer {{token}}"), said("FAIL")]),
-            ("http-live-42-query", vec![get("{{baseUrl}}/orders/42?expand=items", "Bearer {{token}}"), said("FAIL")]),
+            ("http-live-only-42", vec![get("/orders/42", None), said("FAIL")]),
+            ("http-live-42-query", vec![send(json!({"request": "get", "query": "expand=items"})), said("FAIL")]),
             ("http-live-both", vec![missing(), said("PASS or FAIL: FAIL")]),
-            ("http-live-no-token", vec![get("{{baseUrl}}/orders/999", "Bearer nope"), said("FAIL")]),
+            ("http-live-no-token", vec![get("/orders/999", Some("Bearer nope")), said("FAIL")]),
+            ("http-live-no-auth", vec![send(json!({"request": "get", "path": "/orders/999", "auth": "none"})), said("FAIL")]),
         ];
         for (label, replies) in wrong {
             assert!(check(label, replies).is_err(), "{label}");
         }
     }
 
-    /// A real model in the API role finds the planted bug through `httpRequest`.
+    /// A real model in the API role finds the planted bug through `httpSend`.
     /// The provider is the agent bench's (`AGENT_BENCH_*`, see the top of `agent_bench.rs`):
     ///
     /// ```text

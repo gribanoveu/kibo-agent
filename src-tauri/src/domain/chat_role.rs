@@ -134,7 +134,7 @@ impl ChatRole {
                 ToolName::KnowledgeRelations,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
-                // No `httpRequest`: offered here, the model sent web pages through it in
+                // No HTTP tools: offered here, the model sent web pages through them in
                 // place of webFetch. The stands are the API role's.
             ],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
@@ -178,7 +178,8 @@ impl ChatRole {
             // The user's stands, as each environment's mode allows; the spec from the
             // knowledge base or the web, where the user keeps it.
             ChatRole::Api => &[
-                ToolName::HttpRequest,
+                ToolName::HttpEnvironment,
+                ToolName::HttpSend,
                 ToolName::HttpReadRequest,
                 ToolName::KnowledgeSearch,
                 ToolName::KnowledgeRead,
@@ -425,11 +426,11 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 /// from the spec, each with its source, run, and a report the user can act on.
 const API_PROMPT: &str = r#"You are an API tester in a chat. You check that an HTTP API does what its specification says, by sending requests into the environments the user opened to you on the HTTP page.
 
-Your tools: httpRequest sends a request into an environment; called with no `url` it describes the environment — the addresses you may send to, its variables, and the requests in the user's collections, each with its id. httpReadRequest reads one of those requests as the user saved it: its auth and the level it comes from, the variables it uses, and its scripts. knowledgeSearch and knowledgeRead find a specification in the user's knowledge base, and knowledgeRelations who calls an endpoint; webSearch and webFetch read an RFC or a framework's documentation.
+Your tools: httpEnvironment describes an environment — its access, the hosts its requests go to, its variables, and the requests in the user's collections, each with its id. httpReadRequest reads one of those requests as the user saved it: its auth and the level it comes from, the variables it uses, and its scripts. httpSend sends one, with your edits over it — method, path, query, headers, body, no auth, values for its variables — as the HTTP page sends it: its auth, token and scripts are the app's. knowledgeSearch and knowledgeRead find a specification in the user's knowledge base, and knowledgeRelations who calls an endpoint; webSearch and webFetch read an RFC or a framework's documentation.
 
 ## Before testing
-- Start with httpRequest and no `url`: see what the environment reaches, its access, and the requests the user already wrote. Write your urls the way those requests do — `{{baseUrl}}/orders/42` — and credentials as `Authorization: Bearer {{token}}`: the app fills in a hidden variable, and its value is never shown to you.
-- Before a request that signs in, or one you do not see how to call, read the user's own with httpReadRequest: its auth or a pre-request script shows where the token comes from and which variable holds it.
+- Start with httpEnvironment: see what the environment lets you do and the requests the user already wrote. Each case is one of those requests with your edits: a host is always its request's, and an endpoint the collections lack is called from any request to that host with another method and path.
+- Read the request a case starts from with httpReadRequest: its auth or a pre-request script shows where the token comes from. Leave signing in to it — a case without a credential is `auth: "none"`, a wrong one your own `Authorization` header. A hidden variable's value is never shown to you, and `variables` cannot set it.
 - The specification comes from the user's message, their knowledge base, or a page they point to. Without one, say what you would test against and ask for it, rather than inventing what the API should do.
 
 ## Testing
@@ -589,11 +590,11 @@ mod tests {
     #[test]
     fn the_api_role_changes_nothing_but_the_users_stands() {
         let tools = ChatRole::Api.tools();
-        assert!(tools.contains(&ToolName::HttpRequest), "{tools:?}");
+        assert!(tools.contains(&ToolName::HttpSend), "{tools:?}");
         let changing: Vec<&ToolName> = tools.iter().filter(|tool| tool.is_mutating()).collect();
-        assert_eq!(changing, [&ToolName::HttpRequest]);
+        assert_eq!(changing, [&ToolName::HttpSend]);
         assert!(!ChatRole::Api.workspace());
-        assert!(ChatRole::Api.approval(&ApprovalPolicy::default()).requires_approval(ToolName::HttpRequest, true), "a write still asks");
+        assert!(ChatRole::Api.approval(&ApprovalPolicy::default()).requires_approval(ToolName::HttpSend, true), "a write still asks");
     }
 
     /// Every tool the prompt tells the model to call is one the role has, and

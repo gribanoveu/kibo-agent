@@ -105,9 +105,12 @@ pub enum ToolName {
     /// The MongoDB connections the user opened to the agent, read: their
     /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
     Mongo,
-    /// The HTTP environments the user opened to the agent, read: a path under
-    /// the base address, with variables filled in (`docs/45-http-client.md`, HC-7).
-    HttpRequest,
+    /// An HTTP environment the user opened to the agent, described: its hosts,
+    /// variables and the collections' requests (`docs/45-http-client.md`, HC-10c).
+    HttpEnvironment,
+    /// A saved request sent into an environment with the model's edits, as the
+    /// page sends it (`docs/45-http-client.md`, HC-10c).
+    HttpSend,
     /// A request saved in the user's collections, read as written — its auth,
     /// variables and scripts, a credential masked (`docs/45-http-client.md`, HC-10b).
     HttpReadRequest,
@@ -182,7 +185,8 @@ impl ToolName {
         ToolName::DeepseekFetch,
         ToolName::Board,
         ToolName::Mongo,
-        ToolName::HttpRequest,
+        ToolName::HttpEnvironment,
+        ToolName::HttpSend,
         ToolName::HttpReadRequest,
         ToolName::Present,
         ToolName::ToolSearch,
@@ -243,7 +247,8 @@ impl ToolName {
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
-            ToolName::HttpRequest => "httpRequest",
+            ToolName::HttpEnvironment => "httpEnvironment",
+            ToolName::HttpSend => "httpSend",
             ToolName::HttpReadRequest => "httpReadRequest",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
@@ -356,7 +361,7 @@ impl ToolName {
             | ToolName::KubeApply
             | ToolName::KubeDelete
             // POST, PUT, DELETE to a stand; a read asks nobody (`ToolCall::is_risky`).
-            | ToolName::HttpRequest
+            | ToolName::HttpSend
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
             // goes through the approval gate, in Analyst too, the one place
@@ -402,7 +407,8 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
-            // The user's collections, read; nothing is sent.
+            // The user's collections and environments, read; nothing is sent.
+            | ToolName::HttpEnvironment
             | ToolName::HttpReadRequest
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
@@ -436,9 +442,10 @@ impl ToolName {
             // A server asked, nothing left open after it.
             | ToolName::Mongo
             // Files of the app's, read.
+            | ToolName::HttpEnvironment
             | ToolName::HttpReadRequest => true,
             // One at a time: it writes, and a stand is the user's to load.
-            ToolName::HttpRequest
+            ToolName::HttpSend
             | ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -517,6 +524,7 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
+            | ToolName::HttpEnvironment
             | ToolName::HttpReadRequest
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
@@ -532,7 +540,7 @@ impl ToolName {
             // The folder's memory file and the knowledge base, which stay.
             ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A stand, which a rewind does not reach: a write there stays.
-            ToolName::HttpRequest => false,
+            ToolName::HttpSend => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // A button under the answer; nothing outside the chat.
@@ -655,9 +663,9 @@ impl ToolName {
             // A request or two to a server; a search by name, one per database.
             ToolName::Mongo => 2,
             // One request; a slow stand holds it for up to 30 s.
-            ToolName::HttpRequest => 2,
+            ToolName::HttpSend => 2,
             // The collections and environments, small files of the app's.
-            ToolName::HttpReadRequest => 1,
+            ToolName::HttpEnvironment | ToolName::HttpReadRequest => 1,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -730,7 +738,7 @@ impl ApprovalPolicy {
         }
     }
 
-    /// `httpRequest` with `method` into an environment of `access` (HC-8). A read
+    /// `httpSend` acting as `method` in an environment of `access` (HC-8). A read
     /// never asks. A write asks by the mode: Ask for writes every time, whatever
     /// "Always allow" and Auto say, as a production cluster does; Writes as other
     /// tools as any change does. Off and Read only ask nothing — the tool refuses.
@@ -741,7 +749,7 @@ impl ApprovalPolicy {
         match access {
             AgentAccess::Off | AgentAccess::ReadOnly => (false, None),
             AgentAccess::AskForWrites => (true, Some(format!("\"{environment}\" asks for every write"))),
-            AgentAccess::WritesAsOtherTools => (self.requires_approval(ToolName::HttpRequest, true), None),
+            AgentAccess::WritesAsOtherTools => (self.requires_approval(ToolName::HttpSend, true), None),
         }
     }
 
@@ -857,14 +865,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpRequest, ToolName::HttpReadRequest]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            55,
+            56,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -942,7 +950,7 @@ mod tests {
                 // Unknown, so assumed.
                 ToolName::Mcp,
                 // A POST to a stand changes it; a GET is told apart per call (`is_risky`).
-                ToolName::HttpRequest,
+                ToolName::HttpSend,
             ])
         );
     }
@@ -1052,7 +1060,7 @@ mod tests {
         let policy = |skip_all: bool, always: bool| {
             let mut policy = ApprovalPolicy { skip_all, ..ApprovalPolicy::default() };
             if always {
-                policy.allow_always("httpRequest").unwrap();
+                policy.allow_always("httpSend").unwrap();
             }
             policy
         };
@@ -1320,7 +1328,7 @@ pub struct ToolDeps<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
-    /// The environments `httpRequest` reaches; `None` while the feature is off.
+    /// The environments the HTTP tools reach; `None` while the feature is off.
     pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
@@ -1642,7 +1650,8 @@ pub enum ToolCall {
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
     Mongo(MongoArgs),
-    HttpRequest(HttpRequestArgs),
+    HttpEnvironment(HttpEnvironmentArgs),
+    HttpSend(HttpSendArgs),
     HttpReadRequest(HttpReadRequestArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
@@ -1702,7 +1711,8 @@ impl ToolCall {
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
-            ToolCall::HttpRequest(_) => ToolName::HttpRequest,
+            ToolCall::HttpEnvironment(_) => ToolName::HttpEnvironment,
+            ToolCall::HttpSend(_) => ToolName::HttpSend,
             ToolCall::HttpReadRequest(_) => ToolName::HttpReadRequest,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
@@ -1721,8 +1731,10 @@ impl ToolCall {
             // The tool stays mutating — Analyst does not offer it —
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
-            // So is `httpRequest`: a read asks nobody, in any mode.
-            ToolCall::HttpRequest(args) => !is_read(&args.acts_as()),
+            // So is `httpSend`: a read asks nobody, in any mode. With no method
+            // it is the saved request's, unknown here, and taken as a write —
+            // the loop asks by the one the template has (`HttpStands::sending`).
+            ToolCall::HttpSend(args) => args.method.is_none() || !is_read(&args.acts_as()),
             _ => self.name().is_mutating(),
         }
     }
@@ -2005,9 +2017,11 @@ pub enum ToolResult {
     /// `mongo`: what was read, already shaped for the model, and a few words
     /// for the row in the transcript.
     Mongo { text: String, summary: String },
-    /// `httpRequest`: the response, already shaped for the model, and its status
-    /// and time for the row in the transcript.
-    HttpRequest { text: String, summary: String },
+    /// `httpEnvironment`: the environment as the model reads it, and its name.
+    HttpEnvironment { text: String, summary: String },
+    /// `httpSend`: the response and the scripts' report, already shaped for the
+    /// model, and its status and time for the row in the transcript.
+    HttpSend { text: String, summary: String },
     /// `httpReadRequest`: the saved request as the model reads it, and where it is.
     HttpReadRequest { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
@@ -2110,24 +2124,42 @@ pub struct MongoArgs {
     pub limit: Option<usize>,
 }
 
-/// `httpRequest`. `{{name}}` stays written out here: its value is the app's to fill in.
+/// `httpEnvironment`: which environment to describe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct HttpRequestArgs {
+pub struct HttpEnvironmentArgs {
     /// An environment's name, as the user named it on the HTTP page.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub environment: Option<String>,
-    /// GET when left out.
+}
+
+/// `httpSend`: a saved request by its id and the model's edits over it.
+/// `{{name}}` stays written out here: its value is the app's to fill in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSendArgs {
+    pub request: String,
+    /// An environment's name, as the user named it on the HTTP page.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    /// The saved request's when left out.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub method: Option<String>,
-    /// None asks what the environment holds, rather than sending.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
-    pub url: Option<String>,
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub query: Option<String>,
+    /// `null` takes a header away.
     #[serde(default)]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Sent as written, `{{name}}` filled in.
+    pub headers: Option<std::collections::BTreeMap<String, Option<String>>>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub body: Option<String>,
+    /// Only `"none"` — which `opt_text` would read as no value at all.
+    #[serde(default)]
+    pub auth: Option<String>,
+    /// A model writes `{"id": 5}` as often as `{"id": "5"}`: either is the text `5`.
+    #[serde(default)]
+    pub variables: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub show_headers: Option<bool>,
 }
@@ -2142,16 +2174,19 @@ pub struct HttpReadRequestArgs {
     pub environment: Option<String>,
 }
 
-impl HttpRequestArgs {
+impl HttpSendArgs {
     /// The method the call acts as — a method-override header's write over the
-    /// request line ([`acts_as`]). What asks, and what Read only refuses.
+    /// request line ([`acts_as`]), when the call names a method; the saved
+    /// request's own headers are the loop's to read (`HttpStands::sending`).
     pub fn acts_as(&self) -> String {
-        acts_as(&self.method(), self.headers.iter().flatten().map(|(k, v)| (k.as_str(), v.as_str())))
+        let method = self.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase);
+        acts_as(&method, self.headers.iter().flatten().filter_map(|(k, v)| Some((k.as_str(), v.as_deref()?))))
     }
 
-    /// In capitals; GET when the model left it out or blank.
-    pub fn method(&self) -> String {
-        self.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase)
+    /// The model's own values for `{{name}}`, as text.
+    pub fn variables(&self) -> Vec<(String, String)> {
+        let text = |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+        self.variables.iter().flatten().map(|(k, v)| (k.clone(), text(v))).collect()
     }
 }
 

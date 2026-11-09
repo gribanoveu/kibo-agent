@@ -8,10 +8,10 @@
 use base64::Engine;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rand::Rng;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 use super::http_auth::OAuth2;
-use super::http_client::{is_address_name, is_credential_name, literal_masked, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK, VARIABLE};
+use super::http_client::{is_address_name, is_credential_name, AgentEdits, literal_masked, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK, VARIABLE};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -284,6 +284,82 @@ impl Collection {
         let mut names = Vec::new();
         walk(&self.root, &mut names, &key_of);
         names
+    }
+
+    /// Every `{{name}}` in an `auth`, at any level, its addresses too: what decides
+    /// where a token comes from and where it goes.
+    pub fn auth_names(&self) -> Vec<String> {
+        fn walk(v: &Value, names: &mut Vec<String>) {
+            match v {
+                Value::Array(items) => items.iter().for_each(|i| walk(i, names)),
+                Value::Object(map) => {
+                    for (key, value) in map {
+                        if key == "auth" {
+                            names.extend(names_in(&value.to_string()).map(String::from));
+                        } else {
+                            walk(value, names);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        walk(&self.root, &mut names);
+        names
+    }
+
+    /// Request `id` with the model's `edits` over it (HC-10c), written as a request
+    /// is: `{{name}}` stays. The part of the address that names the host is the
+    /// template's — `path` is what follows it.
+    pub fn edited_for_agent(&self, id: &str, edits: &AgentEdits) -> Result<Value, HttpError> {
+        let item = self.chain(id).and_then(|chain| chain.last().copied()).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let mut request = match item.get("request") {
+            Some(Value::String(url)) => json!({"method": "GET", "url": url}),
+            Some(Value::Object(request)) => Value::Object(request.clone()),
+            _ => return Err(HttpError::NoSuchItem(id.into())),
+        };
+        if let Some(method) = edits.method.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+            request["method"] = method.to_ascii_uppercase().into();
+        }
+        if edits.path.is_some() || edits.query.is_some() {
+            let written = match request.get("url") {
+                Some(Value::Object(url)) => text_of(url.get("raw")),
+                other => text_of(other),
+            };
+            let (host, path, query) = address_parts(&written);
+            let path = edits.path.as_deref().map(agent_path).transpose()?.unwrap_or(path);
+            let query = edits.query.as_deref().map_or(query, |q| q.trim().trim_start_matches('?').to_string());
+            let raw = if query.is_empty() { format!("{host}{path}") } else { format!("{host}{path}?{query}") };
+            // `:id` in a path is filled from these; the query rows are the raw's to say.
+            request["url"] = match request.pointer("/url/variable") {
+                Some(variable) => json!({"raw": raw, "variable": variable}),
+                None => Value::String(raw),
+            };
+        }
+        for (name, value) in &edits.headers {
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("host") {
+                return Err(HttpError::HostHeader);
+            }
+            // Filled in, `{{h}}` could be `Host` or a method override.
+            if name.contains("{{") {
+                return Err(HttpError::HeaderName(name.into()));
+            }
+            let same = |row: &Value| row.get("key").and_then(Value::as_str).is_some_and(|key| key.trim().eq_ignore_ascii_case(name));
+            let mut rows: Vec<Value> = request.get("header").and_then(Value::as_array).into_iter().flatten().filter(|row| !same(row)).cloned().collect();
+            rows.extend(value.as_ref().map(|value| json!({"key": name, "value": value})));
+            request["header"] = Value::Array(rows);
+        }
+        if let Some(body) = &edits.body {
+            // As the page writes a JSON body: its language is what gives it its Content-Type.
+            let is_json = json_read(body).is_some_and(|(v, _)| v.is_object() || v.is_array());
+            request["body"] = if is_json { json!({"mode": "raw", "raw": body, "options": {"raw": {"language": "json"}}}) } else { json!({"mode": "raw", "raw": body}) };
+        }
+        if edits.no_auth {
+            request["auth"] = json!({"type": "noauth"});
+        }
+        Ok(request)
     }
 
     /// The name of the item `id`, as `pm.info.requestName` says it.
@@ -825,6 +901,27 @@ fn auth_written<'a>(chain: &[&'a Map<String, Value>]) -> Option<(&'a Value, usiz
     let own = item.get("request").and_then(|r| r.get("auth")).or_else(|| item.get("auth"));
     let levels = std::iter::once((own, parents.len())).chain(parents.iter().enumerate().rev().map(|(i, level)| (level.get("auth"), i)));
     levels.into_iter().find_map(|(auth, level)| auth.filter(|a| auth_of(a).is_some()).map(|a| (a, level)))
+}
+
+/// A written address cut where the model's edits go: the part that names the host,
+/// the path, the query — `{{baseUrl}}/orders?x=1` is `{{baseUrl}}`, `/orders`, `x=1`.
+/// A fragment is dropped: it is never sent.
+pub(crate) fn address_parts(written: &str) -> (String, String, String) {
+    let written = written.split('#').next().unwrap_or_default();
+    let (rest, query) = written.split_once('?').unwrap_or((written, ""));
+    let start = rest.find("://").filter(|&at| !rest[..at].contains('/')).map_or(0, |at| at + 3);
+    let end = rest[start..].find('/').map_or(rest.len(), |at| start + at);
+    (rest[..end].to_string(), rest[end..].to_string(), query.to_string())
+}
+
+/// A path the model wrote: from one `/`, and nothing that could start an address
+/// of its own or a query — `//evil.example`, `\\`.
+fn agent_path(path: &str) -> Result<String, HttpError> {
+    let path = path.trim();
+    if !path.starts_with('/') || path.starts_with("//") || path.contains(['\\', '?', '#']) {
+        return Err(HttpError::BadPath(path.into()));
+    }
+    Ok(path.to_string())
 }
 
 /// `literal_masked`, and the literal it masked kept in `hid`: the same text is

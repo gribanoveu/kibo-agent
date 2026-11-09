@@ -48,7 +48,7 @@ pub struct ChatTurn<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads, while that feature is on.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
-    /// The environments `httpRequest` reaches, while that feature is on.
+    /// The environments the `http*` tools reach, while that feature is on.
     pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
@@ -102,7 +102,7 @@ pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmTool
     calls
         .iter()
         .map(|call| match parse_tool_call(call) {
-            Ok(crate::domain::tools::ToolCall::HttpRequest(args)) => tools::http_request::preview(&args),
+            Ok(crate::domain::tools::ToolCall::HttpSend(args)) => tools::http_send::preview(&args),
             Ok(parsed) => tools::cluster::preview(pinned, &parsed),
             Err(e) => ToolPreview::Failed { reason: e.to_string() },
         })
@@ -338,14 +338,14 @@ mod tests {
     /// chat has no `toolSearch`, and the stand answers with no card asking first.
     #[test]
     fn the_api_role_reads_a_stand_while_the_feature_is_on() {
-        let mut chat = chat(vec![calls("httpRequest", r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#), said("It answers.")], None);
+        let mut chat = chat(vec![calls("httpSend", r#"{"request":"r1"}"#), said("It answers.")], None);
         chat.features = crate::domain::features::Features::from_settings(&[("http-client".to_string(), true)].into());
-        chat.http = Some(crate::services::ai_tools::tools::http_request::tests::answering());
+        chat.http = Some(crate::services::ai_tools::tools::http_send::tests::answering());
         let done = done(chat.start(ChatRole::Api, vec![LlmMessage::user("стенд жив?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["httpRequest", "httpReadRequest"]);
-        assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders → 200"), "{}", tool_result(&done.history));
+        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest"]);
+        assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders/1 → 200"), "{}", tool_result(&done.history));
     }
 
     /// The Assistant with the knowledge base on: told of it, offered its
@@ -823,9 +823,9 @@ mod tests {
     /// A chat's card for a write to a stand is the agent's, with no cluster pinned.
     #[test]
     fn an_http_write_in_a_chat_shows_the_call_as_written() {
-        let call = LlmToolCall { id: "c1".into(), name: "httpRequest".into(), arguments: r#"{"environment":"Stage","method":"POST","url":"{{baseUrl}}/orders","body":"{}"}"#.into() };
+        let call = LlmToolCall { id: "c1".into(), name: "httpSend".into(), arguments: r#"{"request":"w1","environment":"Stage","body":"{}"}"#.into() };
         let shown = preview(&KubeSetup::NotSet, None, &[call]);
-        assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "POST {{baseUrl}}/orders"), "{shown:?}");
+        assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "request w1 as saved"), "{shown:?}");
     }
 
     fn pinned(namespace: &str) -> KubeSetup {

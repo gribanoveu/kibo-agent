@@ -131,9 +131,9 @@ impl Feature {
                 description: "An HTTP page for trying an API: requests in collections kept in the Postman format, \
                     imported from and exported to Postman, environments with sealed secrets, the response beside the \
                     request and kept with it, every send in History. A collection's scripts run once you trust it. \
-                    An environment you open to the agent it reads with httpRequest, its secrets kept from the model.",
+                    An environment you open to the agent it sends your saved requests into, its secrets kept from the model.",
                 enabled_by_default: false,
-                tools: &[ToolName::HttpRequest, ToolName::HttpReadRequest],
+                tools: &[ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest],
                 data: Some("http"),
             },
             Feature::VoiceInput => Manifest {

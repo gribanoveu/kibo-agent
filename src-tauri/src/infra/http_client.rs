@@ -25,10 +25,10 @@ pub fn send(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar)
     send_within(request, trusted_cert, jar, TIMEOUT)
 }
 
-/// For the agent: the one address it was given, and no session. Where a redirect
-/// leads is for the model to read, not for a stand to take the request there.
-pub fn send_once(request: &Outgoing, trusted_cert: Option<&str>) -> (Outcome, Vec<u8>) {
-    settled(exchange(request, trusted_cert, &NoCookies, TIMEOUT, false))
+/// For the agent: the one address its request goes to. Where a redirect leads
+/// is for the model to read, not for a stand to take the request there.
+pub fn send_once(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar) -> (Outcome, Vec<u8>) {
+    settled(exchange(request, trusted_cert, jar, TIMEOUT, false))
 }
 
 fn send_within(request: &Outgoing, trusted_cert: Option<&str>, jar: &dyn CookieJar, timeout: Duration) -> (Outcome, Vec<u8>) {
@@ -676,7 +676,7 @@ pub(crate) mod tests {
     #[test]
     fn the_agents_send_stays_where_it_was_sent_and_says_where_it_would_go() {
         let (port, seen) = serve(vec![reply("HTTP/1.1 302 Found\r\nlocation: /next\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"), reply("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")]);
-        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/start"), None), None);
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/start"), None), None, &NoCookies);
         let Outcome::Response { status, headers, redirects, .. } = outcome else { panic!("{outcome:?}") };
         assert_eq!(status, 302);
         assert!(headers.contains(&("location".to_string(), "/next".to_string())), "{headers:?}");
@@ -689,13 +689,13 @@ pub(crate) mod tests {
     #[test]
     fn a_bad_location_is_read_not_refused_when_nothing_follows_it() {
         let (port, _seen) = serve(vec![reply("HTTP/1.1 302 Found\r\nlocation: http://[bad\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")]);
-        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/"), None), None);
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{port}/"), None), None, &NoCookies);
         assert!(matches!(outcome, Outcome::Response { status: 302, .. }), "{outcome:?}");
     }
 
     #[test]
     fn a_stand_down_is_an_outcome_for_the_agent_too() {
-        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{}/", closed_port()), None), None);
+        let (outcome, _) = send_once(&outgoing("GET", format!("http://127.0.0.1:{}/", closed_port()), None), None, &NoCookies);
         assert!(matches!(outcome, Outcome::Failed { .. }), "{outcome:?}");
     }
 

@@ -34,7 +34,8 @@ pub mod git;
 pub mod grep;
 pub mod knowledge;
 pub mod http_read_request;
-pub mod http_request;
+pub mod http_environment;
+pub mod http_send;
 pub mod mongo;
 pub mod cluster;
 pub mod runbook;
@@ -125,7 +126,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
-    (ToolName::HttpRequest, http_request::definition),
+    (ToolName::HttpEnvironment, http_environment::definition),
+    (ToolName::HttpSend, http_send::definition),
     (ToolName::HttpReadRequest, http_read_request::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
@@ -195,7 +197,8 @@ pub fn dispatch(
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
-        ToolCall::HttpRequest(args) => http_request::http_request(args, deps),
+        ToolCall::HttpEnvironment(args) => http_environment::http_environment(args, deps),
+        ToolCall::HttpSend(args) => http_send::http_send(args, deps),
         ToolCall::HttpReadRequest(args) => http_read_request::http_read_request(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
@@ -622,14 +625,22 @@ mod definition_tests {
                     due: None,
                 })],
             ),
-            ToolName::HttpRequest => (
-                r#"{"method":"GET","url":"{{baseUrl}}/orders"}"#,
-                vec![ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs {
+            ToolName::HttpEnvironment => (
+                r#"{}"#,
+                vec![ToolCall::HttpEnvironment(crate::domain::tools::HttpEnvironmentArgs { environment: Some("Stage".into()) })],
+            ),
+            ToolName::HttpSend => (
+                r#"{"request":"r1"}"#,
+                vec![ToolCall::HttpSend(crate::domain::tools::HttpSendArgs {
+                    request: "r1".into(),
                     environment: Some("Stage".into()),
                     method: Some("GET".into()),
-                    url: Some("{{baseUrl}}/orders?id=1".into()),
-                    headers: Some([("Authorization".to_string(), "Bearer {{token}}".to_string())].into()),
+                    path: Some("/orders".into()),
+                    query: Some("id=1".into()),
+                    headers: Some([("Authorization".to_string(), Some("Bearer {{token}}".to_string()))].into()),
                     body: None,
+                    auth: Some("none".into()),
+                    variables: Some([("id".to_string(), serde_json::json!("1"))].into()),
                     show_headers: Some(true),
                 })],
             ),
