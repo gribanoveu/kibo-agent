@@ -18,7 +18,7 @@
       }
     },
     {
-      "say": "Verdict:\nFAIL: POST /orders — a body without `sum` is created with 201; the spec says 422 when sum is missing"
+      "say": "Verdict:\nFAIL: POST /orders — a body with no `sum` (e.g. `{}` or `{\"currency\":\"USD\"}`) answers 201 and stores `{\"sum\": null}` instead of 422 with `{\"error\": string}`."
     }
   ],
   "wrong": {
