@@ -113,7 +113,7 @@ The HTTP client's agent tool has a live test too: the API role, a real model, a
 local orders API with a bug planted in it (an order that does not exist answers 200, its
 spec says 404), and a hidden check — the answer says FAIL, the stand got that request
 with the right token, no write reached it, the token never reached the model. The
-provider is the agent bench's (`AGENT_BENCH_*`). Run it after touching `httpRequest`,
+provider is the agent bench's (`AGENT_BENCH_*`). Run it after touching `httpSend`,
 its description, or how a chat turn offers it:
 
 ```bash

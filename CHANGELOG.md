@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-09 The API role sends your saved HTTP requests with its own edits — method, path, query, headers, body, no auth — through the request's auth and the scripts you trusted, always to the saved request's host; its sends are in History, signed by the chat
 - 2026-11-09 The API role reads a request saved in your HTTP collections — its auth and the level it comes from, the variables it uses, its scripts — with credentials written in it masked
 - 2026-11-09 The Assistant chat no longer sends HTTP requests — it mistook them for fetching web pages; your HTTP environments are the API role's
 - 2026-11-09 An API role in Chat, listed while the HTTP client is on: it tests your API against its spec on the environments you opened to the agent
