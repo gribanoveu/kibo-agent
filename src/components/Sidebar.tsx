@@ -8,6 +8,7 @@ import {
   CircleCheck,
   CodeXml,
   GitBranch,
+  Globe,
   Info,
   Keyboard,
   Loader2,
@@ -170,6 +171,8 @@ export function Sidebar({
           <ShipWheel size={14} />
         ) : chat.role === "prototype" ? (
           <AppWindow size={14} />
+        ) : chat.role === "api" ? (
+          <Globe size={14} />
         ) : chat.role === "assistant" ? (
           <MessagesSquare size={14} />
         ) : (

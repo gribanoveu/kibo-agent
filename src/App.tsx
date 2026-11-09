@@ -144,7 +144,7 @@ export default function App() {
   const llm = useLlmSettings();
   // The model turns run on, for saying a cache miss came with a switch.
   const model = llm.models.current?.label;
-  const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage);
+  const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage, features.isOn);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
   // Hidden until the chat header's button asks for it.
   const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
@@ -744,6 +744,7 @@ export default function App() {
       ) : (
         <PlainChat
           chat={plain}
+          featureOn={features.isOn}
           dictate={features.isOn("voice-input") && !onPage}
           focus={composerFocus}
           models={llm.models}
