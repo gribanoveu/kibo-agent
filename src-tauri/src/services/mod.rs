@@ -25,6 +25,8 @@ mod search_bench;
 mod agent_bench;
 #[cfg(test)]
 mod kube_bench;
+#[cfg(test)]
+mod api_bench;
 pub mod skills;
 pub mod knowledge;
 pub mod catalog;

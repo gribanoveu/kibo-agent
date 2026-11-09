@@ -1,0 +1,75 @@
+{
+  "solve": [
+    {
+      "send": {
+        "request": "orders-create"
+      }
+    },
+    {
+      "send": {
+        "request": "orders-create",
+        "body": "{\"sum\": -5}"
+      }
+    },
+    {
+      "send": {
+        "request": "orders-create",
+        "body": "{\"currency\": \"USD\"}"
+      }
+    },
+    {
+      "say": "Verdict:\nFAIL: POST /orders — a body without `sum` is created with 201; the spec says 422 when sum is missing"
+    }
+  ],
+  "wrong": {
+    "only-the-valid-one": [
+      {
+        "send": {
+          "request": "orders-create"
+        }
+      },
+      {
+        "say": "FAIL: POST /orders — sum missing is not refused"
+      }
+    ],
+    "pass-after-the-bug": [
+      {
+        "send": {
+          "request": "orders-create",
+          "body": "{}"
+        }
+      },
+      {
+        "say": "PASS"
+      }
+    ],
+    "imagined": [
+      {
+        "send": {
+          "request": "orders-create",
+          "body": "{}"
+        }
+      },
+      {
+        "say": "FAIL: POST /orders — sum missing gives 201\nFAIL: POST /orders — currency should be required"
+      }
+    ],
+    "a-call-elsewhere": [
+      {
+        "send": {
+          "request": "orders-create",
+          "body": "{}"
+        }
+      },
+      {
+        "call": "webFetch",
+        "args": {
+          "url": "https://example.test"
+        }
+      },
+      {
+        "say": "FAIL: POST /orders — sum missing gives 201"
+      }
+    ]
+  }
+}

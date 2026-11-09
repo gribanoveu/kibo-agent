@@ -2561,40 +2561,6 @@ mod tests {
         Ok(())
     }
 
-    /// A model that answers in turns from a script, for the check of the check.
-    struct Scripted(std::sync::Mutex<std::collections::VecDeque<crate::domain::llm::ChatStreamResult>>);
-
-    impl crate::domain::llm::LlmProvider for Scripted {
-        fn chat(&self, _: crate::domain::llm::ChatRequest) -> Result<crate::domain::llm::ChatResponse, crate::domain::llm::LlmError> {
-            unreachable!("a chat turn is streamed")
-        }
-
-        fn chat_stream(
-            &self,
-            _: crate::domain::llm::ChatRequest,
-            _: &dyn Fn(crate::domain::llm::StreamEvent),
-            _: &dyn Fn() -> bool,
-        ) -> Result<crate::domain::llm::ChatStreamResult, crate::domain::llm::LlmError> {
-            Ok(self.0.lock().unwrap().pop_front().expect("a reply left in the script"))
-        }
-
-        fn list_models(&self) -> Result<Vec<crate::domain::llm::LlmModelInfo>, crate::domain::llm::LlmError> {
-            unreachable!("a chat turn never lists models")
-        }
-    }
-
-    fn model_from(replies: Vec<crate::domain::llm::ChatStreamResult>) -> crate::services::llm_session::LlmSession {
-        crate::services::llm_session::LlmSession {
-            provider: Arc::new(Scripted(std::sync::Mutex::new(replies.into()))),
-            provider_id: "test".into(),
-            model: "m".into(),
-            debug_logging: false,
-            context_limit: None,
-            reply_language: None,
-            limits: Default::default(),
-        }
-    }
-
     /// The live test's turn and check, with a model from a script: the way a model should
     /// go passes, and each way it could go wrong does not — so a pass of the live test
     /// means the model found the bug, not that the check is blind.
@@ -2608,7 +2574,7 @@ mod tests {
         let head = send(json!({"request": "get", "method": "HEAD", "path": "/orders/7"}));
         let check = |label: &str, replies: Vec<ChatStreamResult>| {
             with_app_dir(label, || {
-                let (outcome, got) = api_role_on_the_stand(&model_from(replies));
+                let (outcome, got) = api_role_on_the_stand(&crate::testing::scripted_session(replies));
                 found_the_bug(&outcome, &got)
             })
         };

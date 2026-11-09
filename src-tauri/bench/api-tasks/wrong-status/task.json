@@ -1,0 +1,6 @@
+{
+  "prompt": "Test the orders API on my HTTP environment Stage against its spec below: the list, one order, and an order that does not exist.",
+  "access": "readOnly",
+  "planted": "\\b404\\b|not exist|n't exist|non-?existent|no such|no order|unknown (order|id)|empty order",
+  "_why": "an order id that does not exist answers 200 with an empty open order; the spec says 404"
+}

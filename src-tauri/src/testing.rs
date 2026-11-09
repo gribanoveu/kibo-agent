@@ -110,3 +110,38 @@ pub fn chat_tokens(chat: &str) -> u64 {
         .map(|row| row.value)
         .sum()
 }
+
+/// A model that answers a chat turn from a script, one reply per request: for the
+/// checks of a live test's or a bench's check, which must pass the right turn and
+/// fail the wrong ones without a provider.
+pub fn scripted_session(replies: Vec<crate::domain::llm::ChatStreamResult>) -> crate::services::llm_session::LlmSession {
+    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError, LlmModelInfo, LlmProvider, StreamEvent};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    struct Scripted(Mutex<VecDeque<ChatStreamResult>>);
+
+    impl LlmProvider for Scripted {
+        fn chat(&self, _: ChatRequest) -> Result<ChatResponse, LlmError> {
+            unreachable!("a chat turn is streamed")
+        }
+
+        fn chat_stream(&self, _: ChatRequest, _: &dyn Fn(StreamEvent), _: &dyn Fn() -> bool) -> Result<ChatStreamResult, LlmError> {
+            Ok(self.0.lock().unwrap().pop_front().expect("a reply left in the script"))
+        }
+
+        fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+            unreachable!("a chat turn never lists models")
+        }
+    }
+
+    crate::services::llm_session::LlmSession {
+        provider: std::sync::Arc::new(Scripted(Mutex::new(replies.into()))),
+        provider_id: "test".into(),
+        model: "m".into(),
+        debug_logging: false,
+        context_limit: None,
+        reply_language: None,
+        limits: Default::default(),
+    }
+}
