@@ -11,11 +11,14 @@ use rand::Rng;
 use serde_json::{Map, Value};
 
 use super::http_auth::OAuth2;
-use super::http_client::{is_address_name, is_credential_name, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
+use super::http_client::{is_address_name, is_credential_name, literal_masked, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK, VARIABLE};
+use regex::Regex;
+use std::sync::LazyLock;
 
 /// A request as the agent's description lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
+    pub id: String,
     pub name: String,
     pub method: String,
     pub url: String,
@@ -240,7 +243,7 @@ impl Collection {
                 Value::String(url) => url.clone(),
                 r => url_of(r.get("url")),
             };
-            Some(Listed { name: text_of(item.get("name")), method, url })
+            Some(Listed { id, name: text_of(item.get("name")), method, url })
         };
         self.request_ids().into_iter().filter_map(listed).collect()
     }
@@ -267,8 +270,10 @@ impl Collection {
                         every_name(map.get("value").unwrap_or(&Value::Null), names);
                     }
                     for (key, value) in map {
-                        match key.as_str() {
-                            "auth" => every_name(value, names),
+                        match (key.as_str(), value) {
+                            ("auth", _) => every_name(value, names),
+                            // A raw body, a `graphql` query's variables: JSON as text.
+                            ("raw" | "variables", Value::String(text)) => names.extend(json_credential_names(text)),
                             _ => walk(value, names, key_of),
                         }
                     }
@@ -387,14 +392,125 @@ impl Collection {
     /// (HC-0), but inheriting is what was chosen in its window.
     pub fn auth_for(&self, id: &str) -> Result<Auth, HttpError> {
         let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
-        let (item, parents) = chain.split_last().expect("a chain holds the item");
-        let own = item.get("request").and_then(|r| r.get("auth")).or_else(|| item.get("auth"));
-        for auth in std::iter::once(own).chain(parents.iter().rev().map(|p| p.get("auth"))) {
-            if let Some(found) = auth.and_then(auth_of) {
-                return Ok(found);
+        Ok(auth_written(&chain).and_then(|(auth, _)| auth_of(auth)).unwrap_or(Auth::None))
+    }
+
+    /// The saved request `id` as the agent reads it (HC-10b): where it is, its
+    /// method, address, parameters, headers, body and auth — its own or the level it
+    /// comes from — the variables it uses, and its scripts in the order they run.
+    /// A credential written out in the collection is masked, `{{name}}` is left,
+    /// and so is the same text wherever else it is written — a script that sets the
+    /// header itself, say. A script with a hidden value's text in it is not shown at
+    /// all: a secret in code is found by nothing else. Every hidden value is masked last.
+    pub fn read_for_agent(&self, id: &str, scope: Scope) -> Result<String, HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let Some(item) = chain.last() else { return Err(HttpError::NoSuchItem(id.into())) };
+        let request = item.get("request").ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let mut hid = Vec::new();
+        let path = std::iter::once(self.name()).chain(chain.iter().skip(1).map(|level| text_of(level.get("name")))).collect::<Vec<_>>().join(" / ");
+        let (method, url) = match request {
+            Value::String(url) => ("GET".to_string(), Value::String(url.clone())),
+            r => (r.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase(), r.get("url").cloned().unwrap_or(Value::Null)),
+        };
+        let raw = match &url {
+            Value::Object(u) => text_of(u.get("raw")),
+            other => text_of(Some(other)),
+        };
+        let (address, query) = raw.split_once('?').unwrap_or((&raw, ""));
+        let (address, password) = userinfo_masked(address);
+        hid.extend(password);
+        let mut lines = vec![format!("Request \"{path}\", id {id}: {method} {address}")];
+        let rows_of = |v: Option<&Value>| v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default().to_vec();
+        let written_query: Vec<Value> = query
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| {
+                let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                serde_json::json!({"key": k, "value": v})
+            })
+            .collect();
+        let query = match &url {
+            Value::Object(u) if u.get("query").is_some() => rows_of(u.get("query")),
+            _ => written_query,
+        };
+        section(&mut lines, "Path variables:", &rows_of(url.get("variable")), &mut hid);
+        section(&mut lines, "Query:", &query, &mut hid);
+        let headers = if request.is_object() { rows_of(request.get("header")) } else { Vec::new() };
+        section(&mut lines, "Headers:", &headers, &mut hid);
+        if let Some(body) = request.get("body") {
+            lines.extend(body_lines(body, &mut hid));
+        }
+        let used = auth_written(&chain);
+        match used {
+            Some((auth, level)) => {
+                let kind = auth.get("type").and_then(Value::as_str).unwrap_or_default();
+                let from = match level {
+                    0 => "inherited from the collection".to_string(),
+                    _ if level == chain.len() - 1 => "its own".to_string(),
+                    _ => format!("inherited from folder \"{}\"", text_of(chain[level].get("name"))),
+                };
+                lines.push(format!("Auth: {kind}, {from}"));
+                for row in rows_of(auth.get(kind)) {
+                    let key = text_of(row.get("key"));
+                    let value = match row.get("value") {
+                        Some(v) if is_address_name(&key) || AUTH_SETTINGS.contains(&key.as_str()) => text_of(Some(v)),
+                        Some(Value::String(text)) => hiding_literal(text, false, &mut hid),
+                        Some(Value::Bool(on)) => on.to_string(),
+                        None | Some(Value::Null) => String::new(),
+                        // A number, or Postman's extra token parameters as rows: all of it masked.
+                        Some(other) => {
+                            hid.extend(other.as_number().map(|n| n.to_string()));
+                            SECRET_MASK.into()
+                        }
+                    };
+                    lines.push(format!("  {key} = {value}"));
+                }
+            }
+            None => lines.push("Auth: none".into()),
+        }
+        // Its names, its auth's, and the scripts' are not: they set as much as they read.
+        let written = request.to_string() + &used.map(|(auth, _)| auth.to_string()).unwrap_or_default();
+        let mut names: Vec<&str> = Vec::new();
+        for name in names_in(&written).filter(|n| !n.starts_with('$')) {
+            if !names.contains(&name) {
+                names.push(name);
             }
         }
-        Ok(Auth::None)
+        if !names.is_empty() {
+            lines.push("Variables it uses:".into());
+            lines.extend(names.iter().map(|name| match scope.fill(&format!("{{{{{name}}}}}")) {
+                Ok(filled) if filled.shown == SECRET_MASK && filled.sent != filled.shown => format!("  {name} — hidden: filled in on sending, never shown"),
+                Ok(filled) => format!("  {name} = {}", filled.shown),
+                Err(HttpError::UnknownVariables(_)) => format!("  {name} — not set"),
+                Err(e) => format!("  {name} — {e}"),
+            }));
+        }
+        // What was masked above is masked wherever else it is written; a short value
+        // would mask every `1` and `true`, as with the agent's own headers.
+        let scope = scope.keeping(hid.iter().map(String::as_str).filter(|literal| literal.chars().count() >= 4));
+        let last = chain.len() - 1;
+        let mut scripts = Vec::new();
+        for (listen, kind) in [("prerequest", "Pre-request"), ("test", "Test")] {
+            for (i, level) in chain.iter().enumerate() {
+                let whose = match i {
+                    0 => "the collection".to_string(),
+                    _ if i == last => "the request".to_string(),
+                    _ => format!("folder \"{}\"", text_of(level.get("name"))),
+                };
+                for (_, code) in scripts_of(level).into_iter().filter(|(at, _)| at == listen) {
+                    scripts.push(if scope.hide(&code) == code {
+                        format!("  {kind} script of {whose}:\n{}", code.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n"))
+                    } else {
+                        format!("  {kind} script of {whose}: hidden — it holds a secret")
+                    });
+                }
+            }
+        }
+        if !scripts.is_empty() {
+            lines.push("Scripts, in the order they run:".into());
+            lines.extend(scripts);
+        }
+        Ok(scope.hide(&lines.join("\n")))
     }
 
     /// The request `id` as it leaves, and as it is shown with secrets masked.
@@ -694,6 +810,211 @@ fn form_part(boundary: &str, name: &str, value: &str, file: bool, content_type: 
     let filename = if file { "; filename=\"\"" } else { "" };
     let content_type = content_type.map(|t| format!("Content-Type: {t}\r\n")).unwrap_or_default();
     format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"{filename}\r\n{content_type}\r\n{value}\r\n")
+}
+
+/// Keys of an `auth` whose literal value is a setting and not a credential: shown
+/// as written. The rest of an `auth`'s literals are masked, and its addresses shown.
+const AUTH_SETTINGS: &[&str] = &["in", "key", "grant_type", "addTokenTo", "headerPrefix", "client_authentication", "scope", "algorithm", "tokenName"];
+
+/// The `auth` a request goes with, and the index in `chain` of the level that
+/// writes it: its own, else the nearest folder's, else the collection's (0).
+/// `inherit` written out passes it on — Postman's runtime sends nothing for it
+/// (HC-0), but inheriting is what was chosen in its window.
+fn auth_written<'a>(chain: &[&'a Map<String, Value>]) -> Option<(&'a Value, usize)> {
+    let (item, parents) = chain.split_last()?;
+    let own = item.get("request").and_then(|r| r.get("auth")).or_else(|| item.get("auth"));
+    let levels = std::iter::once((own, parents.len())).chain(parents.iter().enumerate().rev().map(|(i, level)| (level.get("auth"), i)));
+    levels.into_iter().find_map(|(auth, level)| auth.filter(|a| auth_of(a).is_some()).map(|a| (a, level)))
+}
+
+/// `literal_masked`, and the literal it masked kept in `hid`: the same text is
+/// masked wherever else it is written.
+fn hiding_literal(value: &str, scheme: bool, hid: &mut Vec<String>) -> String {
+    let shown = literal_masked(value, scheme);
+    if shown != value {
+        let trimmed = value.trim();
+        // `Bearer •••`: the word stayed, the rest is the literal.
+        let literal = if shown == SECRET_MASK { trimmed } else { trimmed.split_once(char::is_whitespace).map_or(trimmed, |(_, rest)| rest.trim()) };
+        hid.push(literal.to_string());
+    }
+    shown
+}
+
+/// `scheme://user:password@host…` with the password masked, and the password.
+pub(crate) fn userinfo_masked(url: &str) -> (String, Option<String>) {
+    static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*[A-Za-z][A-Za-z0-9+.-]*://[^/?#@:]*):([^/?#@]+)@").expect("valid regex"));
+    match USERINFO.captures(url) {
+        Some(found) => (USERINFO.replace(url, format!("${{1}}:{SECRET_MASK}@")).into_owned(), Some(found[2].to_string())),
+        None => (url.to_string(), None),
+    }
+}
+
+/// `title` and a line per row — a header, a parameter, a form field — a credential's
+/// literal masked; none when there are no rows.
+fn section(lines: &mut Vec<String>, title: &str, rows: &[Value], hid: &mut Vec<String>) {
+    if rows.is_empty() {
+        return;
+    }
+    lines.push(title.into());
+    for row in rows {
+        let key = text_of(row.get("key"));
+        let value = match row.get("type").and_then(Value::as_str) {
+            Some("file") => format!("a file, {}", text_of(row.get("src"))),
+            _ if is_credential_name(&key) => hiding_literal(&text_of(row.get("value")), true, hid),
+            _ => text_of(row.get("value")),
+        };
+        let off = if row.get("disabled") == Some(&Value::Bool(true)) { " (off)" } else { "" };
+        lines.push(format!("  {key}: {value}{off}"));
+    }
+}
+
+/// A body as the agent reads it: a JSON field named as a credential masked, as a header is.
+/// A `graphql` query's own literals and a raw body that is not JSON are shown as written.
+fn body_lines(body: &Value, hid: &mut Vec<String>) -> Vec<String> {
+    let mode = body.get("mode").and_then(Value::as_str).unwrap_or("none");
+    match mode {
+        "none" => Vec::new(),
+        "raw" => {
+            let raw = text_of(body.get("raw"));
+            if raw.trim().is_empty() {
+                return Vec::new();
+            }
+            let language = body.pointer("/options/raw/language").and_then(Value::as_str).map(|l| format!(" {l}")).unwrap_or_default();
+            vec![format!("Body, raw{language}:"), json_masked(&raw, hid)]
+        }
+        "urlencoded" | "formdata" => {
+            let mut lines = Vec::new();
+            section(&mut lines, &format!("Body, {mode}:"), body.get(mode).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default(), hid);
+            lines
+        }
+        "graphql" => {
+            let graphql = body.get("graphql");
+            let mut lines = vec!["Body, graphql:".to_string(), text_of(graphql.and_then(|g| g.get("query")))];
+            let variables = text_of(graphql.and_then(|g| g.get("variables")));
+            if !variables.trim().is_empty() {
+                lines.extend(["Its variables:".to_string(), json_masked(&variables, hid)]);
+            }
+            lines
+        }
+        "file" => vec![format!("Body: a file, {}", text_of(body.pointer("/file/src")))],
+        other => vec![format!("Body: {other}")],
+    }
+}
+
+/// What stands in a `{{name}}` written outside a JSON string while the rest is read.
+const PLACEHOLDER: &str = "@kibo-variable-";
+
+/// JSON text read as Postman's bodies are written: comments dropped, and a
+/// `{{name}}` outside a string — `{"count": {{n}}}` — a placeholder string, the
+/// names in order. None for what is not JSON even so.
+fn json_read(text: &str) -> Option<(Value, Vec<String>)> {
+    let text = strip_json_comments(text);
+    let (mut stood, mut names) = (String::with_capacity(text.len()), Vec::new());
+    let (mut in_string, mut escaped, mut i) = (false, false, 0);
+    while let Some(c) = text[i..].chars().next() {
+        if !in_string && text[i..].starts_with("{{") {
+            if let Some(found) = VARIABLE.find_at(&text, i).filter(|m| m.start() == i) {
+                stood.push_str(&format!("\"{PLACEHOLDER}{}@\"", names.len()));
+                names.push(found.as_str().to_string());
+                i = found.end();
+                continue;
+            }
+        }
+        match (in_string, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, false, '"') => in_string = !in_string,
+            _ => {}
+        }
+        stood.push(c);
+        i += c.len_utf8();
+    }
+    serde_json::from_str(&stood).ok().map(|v| (v, names))
+}
+
+/// Each value written under a credential's name, at any depth — inside a list or
+/// an object under one too — given to `visit`, which says whether it changed it.
+fn under_credentials(v: &mut Value, under: bool, visit: &mut dyn FnMut(&mut Value) -> bool) -> bool {
+    match v {
+        Value::Object(map) => map.iter_mut().fold(false, |changed, (key, value)| under_credentials(value, under || is_credential_name(key), visit) | changed),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| under_credentials(item, under, visit) | changed),
+        leaf if under => visit(leaf),
+        _ => false,
+    }
+}
+
+/// A placeholder's index, for a string that is one.
+fn placeholder(text: &str) -> Option<usize> {
+    text.strip_prefix(PLACEHOLDER)?.strip_suffix('@')?.parse().ok()
+}
+
+/// `"key": value` pairs of JSON text, for what does not read as JSON: a key, and
+/// a string, a number or a `{{name}}` after it.
+static PAIR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*("(?:[^"\\]|\\.)*"|\{\{[^{}]*\}\}|-?\d[\d.eE+-]*)"#).expect("valid regex"));
+
+/// JSON with every string and number under a credential's name masked, indented;
+/// as written when nothing is — its comments kept. Text that does not read as JSON
+/// has its `"key": value` pairs masked where they stand.
+fn json_masked(text: &str, hid: &mut Vec<String>) -> String {
+    let Some((mut v, names)) = json_read(text) else {
+        return PAIR
+            .replace_all(text, |pair: &regex::Captures| {
+                let value = &pair[2];
+                if !is_credential_name(&pair[1]) || value.starts_with("{{") {
+                    return pair[0].to_string();
+                }
+                let inner = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
+                let shown = hiding_literal(inner, true, hid);
+                let quoted = if value.starts_with('"') { format!("\"{shown}\"") } else { format!("\"{SECRET_MASK}\"") };
+                pair[0].replacen(value, &quoted, 1)
+            })
+            .into_owned();
+    };
+    let changed = under_credentials(&mut v, false, &mut |leaf| match leaf {
+        Value::String(text) if placeholder(text).is_some() => false,
+        Value::String(text) => {
+            let shown = hiding_literal(text, true, hid);
+            let changed = shown != *text;
+            *text = shown;
+            changed
+        }
+        Value::Number(n) => {
+            hid.push(n.to_string());
+            *leaf = Value::String(SECRET_MASK.into());
+            true
+        }
+        _ => false,
+    });
+    if !changed {
+        return text.to_string();
+    }
+    let pretty = serde_json::to_string_pretty(&v).unwrap_or_else(|_| SECRET_MASK.into());
+    names.iter().enumerate().fold(pretty, |pretty, (i, name)| pretty.replace(&format!("\"{PLACEHOLDER}{i}@\""), name))
+}
+
+/// The `{{name}}`s written under a credential's name in JSON text — a raw body, a
+/// `graphql` query's variables: a variable there holds a secret as a header's would.
+pub(crate) fn json_credential_names(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    match json_read(text) {
+        Some((mut v, names)) => {
+            under_credentials(&mut v, false, &mut |leaf| {
+                if let Value::String(text) = leaf {
+                    match placeholder(text) {
+                        Some(i) => found.extend(names.get(i).into_iter().flat_map(|n| names_in(n)).map(String::from)),
+                        None => found.extend(names_in(text).map(String::from)),
+                    }
+                }
+                false
+            });
+        }
+        None => {
+            for pair in PAIR.captures_iter(text).filter(|pair| is_credential_name(&pair[1])) {
+                found.extend(names_in(&pair[2]).map(String::from));
+            }
+        }
+    }
+    found
 }
 
 /// A level's scripts that would run, as `(listen, code)`.

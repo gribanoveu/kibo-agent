@@ -108,6 +108,9 @@ pub enum ToolName {
     /// The HTTP environments the user opened to the agent, read: a path under
     /// the base address, with variables filled in (`docs/45-http-client.md`, HC-7).
     HttpRequest,
+    /// A request saved in the user's collections, read as written — its auth,
+    /// variables and scripts, a credential masked (`docs/45-http-client.md`, HC-10b).
+    HttpReadRequest,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -180,6 +183,7 @@ impl ToolName {
         ToolName::Board,
         ToolName::Mongo,
         ToolName::HttpRequest,
+        ToolName::HttpReadRequest,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -240,6 +244,7 @@ impl ToolName {
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
             ToolName::HttpRequest => "httpRequest",
+            ToolName::HttpReadRequest => "httpReadRequest",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -397,6 +402,8 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
+            // The user's collections, read; nothing is sent.
+            | ToolName::HttpReadRequest
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -427,7 +434,9 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             // A server asked, nothing left open after it.
-            | ToolName::Mongo => true,
+            | ToolName::Mongo
+            // Files of the app's, read.
+            | ToolName::HttpReadRequest => true,
             // One at a time: it writes, and a stand is the user's to load.
             ToolName::HttpRequest
             | ToolName::WriteFile
@@ -508,6 +517,7 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
+            | ToolName::HttpReadRequest
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -646,6 +656,8 @@ impl ToolName {
             ToolName::Mongo => 2,
             // One request; a slow stand holds it for up to 30 s.
             ToolName::HttpRequest => 2,
+            // The collections and environments, small files of the app's.
+            ToolName::HttpReadRequest => 1,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -845,14 +857,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpRequest]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpRequest, ToolName::HttpReadRequest]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            54,
+            55,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1631,6 +1643,7 @@ pub enum ToolCall {
     Board(BoardArgs),
     Mongo(MongoArgs),
     HttpRequest(HttpRequestArgs),
+    HttpReadRequest(HttpReadRequestArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1690,6 +1703,7 @@ impl ToolCall {
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
             ToolCall::HttpRequest(_) => ToolName::HttpRequest,
+            ToolCall::HttpReadRequest(_) => ToolName::HttpReadRequest,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -1994,6 +2008,8 @@ pub enum ToolResult {
     /// `httpRequest`: the response, already shaped for the model, and its status
     /// and time for the row in the transcript.
     HttpRequest { text: String, summary: String },
+    /// `httpReadRequest`: the saved request as the model reads it, and where it is.
+    HttpReadRequest { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -2114,6 +2130,16 @@ pub struct HttpRequestArgs {
     pub body: Option<String>,
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub show_headers: Option<bool>,
+}
+
+/// `httpReadRequest`: a request by its id, as the environment's description lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpReadRequestArgs {
+    pub request: String,
+    /// An environment's name; may be left out when only one is open.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
 }
 
 impl HttpRequestArgs {

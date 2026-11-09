@@ -33,6 +33,7 @@ pub mod explore;
 pub mod git;
 pub mod grep;
 pub mod knowledge;
+pub mod http_read_request;
 pub mod http_request;
 pub mod mongo;
 pub mod cluster;
@@ -125,6 +126,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
     (ToolName::HttpRequest, http_request::definition),
+    (ToolName::HttpReadRequest, http_read_request::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -194,6 +196,7 @@ pub fn dispatch(
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
         ToolCall::HttpRequest(args) => http_request::http_request(args, deps),
+        ToolCall::HttpReadRequest(args) => http_read_request::http_read_request(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -629,6 +632,10 @@ mod definition_tests {
                     body: None,
                     show_headers: Some(true),
                 })],
+            ),
+            ToolName::HttpReadRequest => (
+                r#"{"request":"r1"}"#,
+                vec![ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })],
             ),
             ToolName::Mongo => (
                 r#"{"op":"collections"}"#,

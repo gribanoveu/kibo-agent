@@ -172,6 +172,20 @@ pub(crate) mod tests {
             self.asked.lock().unwrap().push((id.to_string(), request.clone()));
             Ok(self.reply.clone().unwrap())
         }
+
+        /// `r1` in any environment open; any other request is not there.
+        fn read(&self, id: &str, request: &str) -> Result<String, HttpError> {
+            match request {
+                "r1" => Ok(format!("Request \"Shop / Get one\", id r1: GET {{{{baseUrl}}}}/orders/1\nread in {id}")),
+                "q1" => Ok("Request \"Shop / Say \"hi\"\", id q1: GET /hi".to_string()),
+                other => Err(HttpError::NoRequest(other.into())),
+            }
+        }
+    }
+
+    /// Environments by `names`, each reading the request `r1`.
+    pub(crate) fn reading(names: &[&str]) -> Arc<dyn HttpStands> {
+        Arc::new(Canned { open: stands(names), ..Canned::default() })
     }
 
     /// One environment that answers 200, for what is about the way there.

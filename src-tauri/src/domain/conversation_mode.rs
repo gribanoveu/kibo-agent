@@ -158,6 +158,7 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::KnowledgeWrite,
                 // Here and not in `base_tools`: with HC-8 it writes, and Analyst gets nothing that does.
                 ToolName::HttpRequest,
+                ToolName::HttpReadRequest,
             ]);
         }
         // Research handed off reads the same files, only somewhere else.

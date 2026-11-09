@@ -92,6 +92,7 @@ export const LABELS: Record<string, string> = {
   board: "Board",
   mongo: "MongoDB",
   httpRequest: "HTTP",
+  httpReadRequest: "HTTP request",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -376,6 +377,16 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         name,
         arg: sent || `what is in ${environment ?? "the environment"}`,
         meta: str(result.summary),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A saved request read: where it is once read (`Shop / Orders / Get one`), its id until then.
+    case "httpReadRequest": {
+      const environment = str(args.environment);
+      return {
+        name,
+        arg: [str(result.summary) ?? str(args.request)?.trim() ?? "", environment && `in ${environment}`].filter(Boolean).join(" "),
         detail: str(result.text) ?? "",
       };
     }

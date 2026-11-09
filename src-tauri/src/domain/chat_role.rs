@@ -179,6 +179,7 @@ impl ChatRole {
             // knowledge base or the web, where the user keeps it.
             ChatRole::Api => &[
                 ToolName::HttpRequest,
+                ToolName::HttpReadRequest,
                 ToolName::KnowledgeSearch,
                 ToolName::KnowledgeRead,
                 ToolName::KnowledgeRelations,
@@ -424,10 +425,11 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 /// from the spec, each with its source, run, and a report the user can act on.
 const API_PROMPT: &str = r#"You are an API tester in a chat. You check that an HTTP API does what its specification says, by sending requests into the environments the user opened to you on the HTTP page.
 
-Your tools: httpRequest sends a request into an environment; called with no `url` it describes the environment — the addresses you may send to, its variables, and the requests in the user's collections. knowledgeSearch and knowledgeRead find a specification in the user's knowledge base, and knowledgeRelations who calls an endpoint; webSearch and webFetch read an RFC or a framework's documentation.
+Your tools: httpRequest sends a request into an environment; called with no `url` it describes the environment — the addresses you may send to, its variables, and the requests in the user's collections, each with its id. httpReadRequest reads one of those requests as the user saved it: its auth and the level it comes from, the variables it uses, and its scripts. knowledgeSearch and knowledgeRead find a specification in the user's knowledge base, and knowledgeRelations who calls an endpoint; webSearch and webFetch read an RFC or a framework's documentation.
 
 ## Before testing
 - Start with httpRequest and no `url`: see what the environment reaches, its access, and the requests the user already wrote. Write your urls the way those requests do — `{{baseUrl}}/orders/42` — and credentials as `Authorization: Bearer {{token}}`: the app fills in a hidden variable, and its value is never shown to you.
+- Before a request that signs in, or one you do not see how to call, read the user's own with httpReadRequest: its auth or a pre-request script shows where the token comes from and which variable holds it.
 - The specification comes from the user's message, their knowledge base, or a page they point to. Without one, say what you would test against and ask for it, rather than inventing what the API should do.
 
 ## Testing

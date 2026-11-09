@@ -348,18 +348,29 @@ impl HttpStands for Stands {
         (self.changed)(HttpChanged);
         Ok(reply)
     }
+
+    fn read(&self, id: &str, request: &str) -> Result<String, HttpError> {
+        let environment = http_env_store::get(id)?;
+        with_collections(|collections, globals| environment.read_request(collections, globals, request))?
+    }
 }
 
 /// Where the user's collections go with `environment`, each filled in as the page
-/// sends it. A collection whose file does not read adds nothing.
+/// sends it.
 fn reach(environment: &Environment) -> Result<Reach, HttpError> {
+    with_collections(|collections, globals| Reach::new(collections, globals, environment))
+}
+
+/// The user's collections, each with its variables as a send sees them, and globals.
+/// A collection whose file does not read is left out.
+fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variable]) -> T) -> Result<T, HttpError> {
     let (globals, values) = (http_env_store::globals()?, http_env_store::collection_values()?);
     let all = http_collections::all()?;
     let collections: Vec<(&Collection, Vec<Variable>)> = all
         .iter()
         .filter_map(|(id, read)| read.as_ref().ok().map(|c| (c, overlaid(c.variables(), values.get(id).map(Vec::as_slice).unwrap_or_default()))))
         .collect();
-    Ok(Reach::new(&collections, &globals, environment))
+    Ok(f(&collections, &globals))
 }
 
 /// Settings that cannot be read trust nothing.
@@ -2145,6 +2156,22 @@ mod tests {
         });
     }
 
+    /// The stored collection, read through the store's environment, the collection's auth named.
+    #[test]
+    fn the_agent_reads_a_stored_request_and_nothing_is_sent() {
+        with_app_dir("http-stands-read", || {
+            opened_stage("http://127.0.0.1:1".into());
+            let (stands, told) = stands("c");
+            let text = stands.read("stage", "list").unwrap();
+            assert!(text.starts_with("Request \"Shop / List\", id list: GET {{baseUrl}}/orders"), "{text}");
+            assert!(text.contains("Auth: bearer, inherited from the collection\n  token = {{apiKey}}"), "{text}");
+            assert_eq!(stands.read("stage", "nope"), Err(HttpError::NoRequest("nope".into())));
+            assert_eq!(stands.read("gone", "list"), Err(HttpError::NoEnvironment("gone".into())));
+            assert_eq!(told.load(Ordering::Relaxed), 0, "history gained nothing");
+            assert!(http_collections::history().unwrap().is_empty(), "nothing sent");
+        });
+    }
+
     /// The collections, their variables over the file's, the globals and the
     /// environment, as a send from the page fills an address in.
     #[test]
@@ -2161,7 +2188,7 @@ mod tests {
             assert_eq!(view.variables, [("baseUrl".to_string(), Some("http://127.0.0.1:1".to_string())), ("token".to_string(), None), ("apiKey".to_string(), None)]);
             let mut requests = view.requests.clone();
             requests.sort();
-            assert_eq!(requests, ["Shop / List: GET https://global.test/x", "Shop / List: GET {{baseUrl}}/orders"], "a global written out, the environment's name left");
+            assert_eq!(requests, ["Shop / List: GET https://global.test/x (id list)", "Shop / List: GET {{baseUrl}}/orders (id list)"], "a global written out, the environment's name left");
             assert_eq!(stands("c").0.describe("nope"), Err(HttpError::NoEnvironment("nope".into())));
         });
     }

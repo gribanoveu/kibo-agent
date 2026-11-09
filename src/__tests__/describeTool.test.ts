@@ -33,6 +33,12 @@ describe("what each call shows", () => {
     expect(describeTool(tool({ name: "httpRequest", arguments: '{"url":"  ","environment":"Stage"}' })).arg).toBe("what is in Stage");
   });
 
+  test("a saved request read shows where it is once read, and its id until then", () => {
+    const done = tool({ name: "httpReadRequest", arguments: '{"request":"r1","environment":"Stage"}', result: { summary: "Shop / Get one", text: "Request \"Shop / Get one\"" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP request", arg: "Shop / Get one in Stage", detail: 'Request "Shop / Get one"' });
+    expect(describeTool(tool({ name: "httpReadRequest", arguments: '{"request":" r1 "}', status: "running" })).arg).toBe("r1");
+  });
+
   test("a presented page shows its name and the version kept, and its title while it runs", () => {
     const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
     expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });

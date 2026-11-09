@@ -77,6 +77,10 @@ pub enum HttpError {
     UnknownIn { names: Vec<String>, environment: String, known: String },
     #[error("the request failed: {0}")]
     Unanswered(String),
+    #[error("no request {0} in the user's collections — the ids are in httpRequest's description of the environment")]
+    NoRequest(String),
+    #[error("request {request} is in \"{collection}\", which sends nowhere with \"{environment}\": its requests are not open to the agent there")]
+    SendsNowhere { request: String, collection: String, environment: String },
 }
 
 /// A variable of an environment, a collection or globals — Postman's `{key, value}`.
@@ -184,7 +188,8 @@ pub struct Reach {
     pub origins: BTreeSet<String>,
     /// Names a collection writes where a credential goes.
     pub credentials: BTreeSet<String>,
-    /// `Collection / Request: METHOD url`, the url as written, without its query.
+    /// `Collection / Request: METHOD url (id …)`, the url as written, without its
+    /// query — of the collections that send somewhere with the environment.
     pub requests: Vec<String>,
 }
 
@@ -198,11 +203,13 @@ impl Reach {
         for (collection, variables) in collections {
             let theirs = hiding(variables, &reach.credentials);
             let scope = Scope::new(&[globals, &theirs, &mine]);
+            let (mut sends, mut lines) = (false, Vec::new());
             for listed in collection.requests() {
                 // An address with a secret in it could not be named to the model.
                 if let Ok(filled) = scope.fill(&listed.url) {
                     if let Some(origin) = origin_of(&filled.sent).filter(|o| origin_of(&filled.shown).as_ref() == Some(o)) {
                         reach.origins.insert(origin);
+                        sends = true;
                     }
                 }
                 // The agent fills in the environment's names only: the rest is written out
@@ -216,10 +223,21 @@ impl Reach {
                     }
                 });
                 let url = url.split('?').next().unwrap_or_default();
-                reach.requests.push(format!("{} / {}: {} {url}", collection.name(), listed.name, listed.method));
+                let (url, _) = super::postman::userinfo_masked(url);
+                lines.push(format!("{} / {}: {} {url} (id {})", collection.name(), listed.name, listed.method, listed.id));
+            }
+            // A collection for another service is not what the user opened this environment for.
+            if sends {
+                reach.requests.extend(lines);
             }
         }
         reach
+    }
+
+    /// Whether the description lists request `id`: what the agent may read and run.
+    pub fn lists(&self, id: &str) -> bool {
+        let tail = format!(" (id {id})");
+        self.requests.iter().any(|line| line.ends_with(&tail))
     }
 }
 
@@ -250,6 +268,21 @@ pub fn is_address_name(name: &str) -> bool {
 /// The `{{name}}`s in `text`.
 pub fn names_in(text: &str) -> impl Iterator<Item = &str> {
     VARIABLE.captures_iter(text).filter_map(|m| m.get(1)).map(|m| m.as_str())
+}
+
+/// `value` unless it holds text of its own besides `{{name}}`s — with `scheme`, besides
+/// a first word such as `Bearer` too: then a secret is written out in the collection,
+/// and the agent gets the mask in its place (`Bearer •••`).
+pub fn literal_masked(value: &str, scheme: bool) -> String {
+    let trimmed = value.trim();
+    let (word, rest) = match trimmed.split_once(char::is_whitespace) {
+        Some((word, rest)) if scheme && word.chars().all(|c| c.is_ascii_alphabetic()) => (Some(word), rest),
+        _ => (None, trimmed),
+    };
+    if VARIABLE.replace_all(rest, "").trim().is_empty() {
+        return value.to_string();
+    }
+    word.map_or_else(|| SECRET_MASK.to_string(), |word| format!("{word} {SECRET_MASK}"))
 }
 
 /// `http://` before an address with no scheme, as Postman takes `localhost:3000/x`.
@@ -310,6 +343,8 @@ pub trait HttpStands: Send + Sync {
     fn open(&self) -> Result<Vec<OpenStand>, HttpError>;
     fn describe(&self, id: &str) -> Result<StandView, HttpError>;
     fn send(&self, id: &str, request: &AgentRequest) -> Result<AgentReply, HttpError>;
+    /// The saved request `request` as environment `id` lets the agent read it (HC-10b).
+    fn read(&self, id: &str, request: &str) -> Result<String, HttpError>;
 }
 
 /// History gained an agent's send, for the page to read again.
@@ -369,6 +404,25 @@ impl Environment {
         let variables = mine.iter().filter(|v| v.enabled).map(|v| (v.key.clone(), (!v.secret).then(|| scope.hide(&v.value)))).collect();
         let requests = reach.requests.iter().map(|r| scope.hide(r)).collect();
         Ok(StandView { name: self.name.clone(), access: self.agent, origins: reach.origins.iter().cloned().collect(), variables, requests })
+    }
+
+    /// A saved request as the agent reads it (HC-10b), masked with all this environment
+    /// hides from it. Only one the description lists: a collection that sends nowhere
+    /// with this environment is not part of what the user opened.
+    pub fn read_request(&self, collections: &[(&Collection, Vec<Variable>)], globals: &[Variable], request: &str) -> Result<String, HttpError> {
+        if self.agent.is_off() {
+            return Err(HttpError::NoneOpen);
+        }
+        let Some((collection, variables)) = collections.iter().find(|(c, _)| c.request_ids().iter().any(|id| id == request)) else {
+            return Err(HttpError::NoRequest(request.into()));
+        };
+        let reach = Reach::new(collections, globals, self);
+        if !reach.lists(request) {
+            return Err(HttpError::SendsNowhere { request: request.into(), collection: collection.name(), environment: self.name.clone() });
+        }
+        let mine = self.for_agent(&reach.credentials);
+        let scope = Scope::new(&[&hiding(globals, &reach.credentials), &hiding(variables, &reach.credentials), &mine]);
+        collection.read_for_agent(request, scope)
     }
 
     /// The agent's request as it leaves, and the variables its reply is masked
@@ -439,7 +493,7 @@ impl Environment {
 }
 
 /// `{{name}}`, as Postman writes a variable; the same pattern as the window's.
-static VARIABLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*([^{}\s]+)\s*\}\}").expect("valid regex"));
+pub(crate) static VARIABLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*([^{}\s]+)\s*\}\}").expect("valid regex"));
 
 /// What an address percent-encodes of a path or query, as the `url` crate does on sending.
 const ADDRESS: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'`').add(b'{').add(b'}').add(b'\'');
@@ -498,7 +552,7 @@ impl Scope {
     }
 
     /// With `values` masked too, though no variable marks them.
-    fn keeping<'a>(mut self, values: impl IntoIterator<Item = &'a str>) -> Scope {
+    pub(crate) fn keeping<'a>(mut self, values: impl IntoIterator<Item = &'a str>) -> Scope {
         for (i, value) in values.into_iter().enumerate() {
             self.vars.insert(format!("\0kept{i}"), Variable { key: String::new(), value: value.into(), secret: true, enabled: true });
         }
@@ -1452,18 +1506,18 @@ mod tests {
         assert_eq!(
             reach.requests,
             [
-                "Shop / list: GET {{baseUrl}}/orders",
-                "Shop / local: GET localhost:3000/health",
-                "Shop / auth: GET https://auth.test:8443/token",
-                "Shop / global: GET https://global.test/x",
-                "Shop / unknown: GET https://{{nope}}/x",
-                "Shop / hidden: GET https://{{secretHost}}/x",
-                "Shop / ftp: GET ftp://files.test/x",
-                "Shop / plain: GET https://string.test/x",
-                "Shop / tenant: GET https://{{tenant}}.api.test/x",
-                "Shop / named: GET {{baseUrl}}/{{sessionId}}/{{$guid}}",
+                "Shop / list: GET {{baseUrl}}/orders (id list)",
+                "Shop / local: GET localhost:3000/health (id local)",
+                "Shop / auth: GET https://auth.test:8443/token (id auth)",
+                "Shop / global: GET https://global.test/x (id global)",
+                "Shop / unknown: GET https://{{nope}}/x (id unknown)",
+                "Shop / hidden: GET https://{{secretHost}}/x (id hidden)",
+                "Shop / ftp: GET ftp://files.test/x (id ftp)",
+                "Shop / plain: GET https://string.test/x (id plain)",
+                "Shop / tenant: GET https://{{tenant}}.api.test/x (id tenant)",
+                "Shop / named: GET {{baseUrl}}/{{sessionId}}/{{$guid}} (id named)",
             ],
-            "the method in capitals, no query; the environment's names and hidden ones left for the agent"
+            "the method in capitals, no query, the id last; the environment's names and hidden ones left for the agent"
         );
     }
 
@@ -1518,6 +1572,250 @@ mod tests {
         assert_eq!(view.origins, ["https://a.test", "https://b.test"]);
         assert_eq!(view.variables, [("baseUrl".to_string(), Some("https://api.test/v1".to_string())), ("token".to_string(), None), ("echo".to_string(), Some("x={{token}}&y=•••".to_string()))]);
         assert_eq!(view.requests, ["Shop / r: GET https://a.test/•••"]);
+    }
+
+    /// Shop: a folder Orders with a bearer written out and a script, its request
+    /// `r` with credentials written out and a script holding the token's value; `own`
+    /// with an auth of its own; `top` under the collection's `oauth2`.
+    fn saved() -> Collection {
+        collection(
+            json!([{
+                "id": "f", "name": "Orders",
+                "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "eyJliteral"}]},
+                "event": [{"listen": "prerequest", "script": {"exec": ["pm.environment.set('seen', 1);"]}}],
+                "item": [{
+                    "id": "r", "name": "Get one",
+                    "event": [
+                        {"listen": "test", "script": {"exec": ["pm.test('ok', () => {", "  pm.response.to.have.status(200);", "});"]}},
+                        {"listen": "prerequest", "script": {"exec": ["const k = 's3cr3t';"]}}
+                    ],
+                    "request": {
+                        "method": "post",
+                        "url": {"raw": "{{baseUrl}}/orders/:id?api_key=abc123&page=2", "query": [{"key": "api_key", "value": "abc123"}, {"key": "page", "value": "2", "disabled": true}], "variable": [{"key": "id", "value": "{{orderId}}"}]},
+                        "header": [{"key": "Authorization", "value": "Bearer eyJliteral"}, {"key": "X-Token", "value": "{{token}}"}, {"key": "Accept", "value": "application/json"}],
+                        "body": {"mode": "raw", "raw": "{\"name\": \"x\", \"password\": \"hunter2\", \"apiKey\": \"{{apiKey}}\"}", "options": {"raw": {"language": "json"}}}
+                    }
+                }, {
+                    "id": "own", "name": "Own",
+                    "request": {"url": "{{baseUrl}}/x?token=t0k3n", "auth": {"type": "basic", "basic": [{"key": "username", "value": "admin"}, {"key": "password", "value": "{{pass}}"}]}}
+                }]
+            }, get("top", json!("{{baseUrl}}/top"))]),
+            json!({"type": "oauth2", "oauth2": [{"key": "accessTokenUrl", "value": "https://auth.test/token"}, {"key": "clientId", "value": "{{clientId}}"}, {"key": "clientSecret", "value": "literal-cs"}, {"key": "grant_type", "value": "client_credentials"}, {"key": "addTokenTo", "value": "header"}, {"key": "useBrowser", "value": false}]}),
+            json!(null),
+        )
+    }
+
+    fn read(environment: &Environment, collections: &[&Collection], request: &str) -> Result<String, HttpError> {
+        let layers: Vec<(&Collection, Vec<Variable>)> = collections.iter().map(|c| (*c, c.variables())).collect();
+        environment.read_request(&layers, &[], request)
+    }
+
+    #[test]
+    fn a_saved_request_is_read_as_written_its_credentials_masked() {
+        let shop = saved();
+        assert_eq!(
+            read(&stand(), &[&shop], "r").unwrap(),
+            r#"Request "Shop / Orders / Get one", id r: POST {{baseUrl}}/orders/:id
+Path variables:
+  id: {{orderId}}
+Query:
+  api_key: •••
+  page: 2 (off)
+Headers:
+  Authorization: Bearer •••
+  X-Token: {{token}}
+  Accept: application/json
+Body, raw json:
+{
+  "name": "x",
+  "password": "•••",
+  "apiKey": "{{apiKey}}"
+}
+Auth: bearer, inherited from folder "Orders"
+  token = •••
+Variables it uses:
+  baseUrl = https://api.test/v1
+  orderId — not set
+  token — hidden: filled in on sending, never shown
+  apiKey — not set
+Scripts, in the order they run:
+  Pre-request script of folder "Orders":
+    pm.environment.set('seen', 1);
+  Pre-request script of the request: hidden — it holds a secret
+  Test script of the request:
+    pm.test('ok', () => {
+      pm.response.to.have.status(200);
+    });"#
+        );
+    }
+
+    #[test]
+    fn auth_is_named_with_the_level_it_comes_from_and_its_settings_shown() {
+        let shop = saved();
+        let own = read(&stand(), &[&shop], "own").unwrap();
+        assert!(own.contains("Auth: basic, its own\n  username = •••\n  password = {{pass}}"), "{own}");
+        assert!(own.contains("Request \"Shop / Orders / Own\", id own: GET {{baseUrl}}/x\nQuery:\n  token: •••\n"), "a string url's query read too: {own}");
+        let top = read(&stand(), &[&shop], "top").unwrap();
+        assert!(
+            top.contains("Auth: oauth2, inherited from the collection\n  accessTokenUrl = https://auth.test/token\n  clientId = {{clientId}}\n  clientSecret = •••\n  grant_type = client_credentials\n  addTokenTo = header\n  useBrowser = false"),
+            "{top}"
+        );
+        assert!(top.contains("Variables it uses:\n  baseUrl = https://api.test/v1\n  clientId — not set"), "the inherited auth's too: {top}");
+        assert!(!top.contains("Scripts"), "no scripts, no heading: {top}");
+    }
+
+    #[test]
+    fn a_request_is_read_only_where_the_description_lists_it() {
+        let shop = saved();
+        let other = Collection::parse(&json!({
+            "info": {"name": "Billing", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [get("b1", json!("{{billingUrl}}/invoices"))]
+        }).to_string()).unwrap();
+        let reach = Reach::new(&[(&shop, vec![]), (&other, vec![])], &[], &stand());
+        assert!(reach.lists("r") && !reach.lists("b1") && !reach.lists("b"), "{:?}", reach.requests);
+        assert!(reach.requests.iter().all(|line| !line.starts_with("Billing")), "a collection sending nowhere here is not listed");
+        assert_eq!(
+            read(&stand(), &[&shop, &other], "b1"),
+            Err(HttpError::SendsNowhere { request: "b1".into(), collection: "Billing".into(), environment: "Stage".into() })
+        );
+        assert_eq!(read(&stand(), &[&shop, &other], "f"), Err(HttpError::NoRequest("f".into())), "a folder is no request");
+        assert_eq!(read(&stand(), &[&shop], "nope"), Err(HttpError::NoRequest("nope".into())));
+        let off = Environment { agent: AgentAccess::Off, ..stand() };
+        assert_eq!(read(&off, &[&shop], "r"), Err(HttpError::NoneOpen));
+    }
+
+    #[test]
+    fn a_hidden_value_is_masked_wherever_it_is_written() {
+        let shop = saved();
+        let mut environment = stand();
+        environment.variables.push(var("apiKey", "k-1"));
+        environment.variables.push(var("orderId", "hunter-s3cr3t"));
+        let text = read(&environment, &[&shop], "r").unwrap();
+        assert!(!text.contains("s3cr3t") && !text.contains("k-1"), "the token's value, and a credential's by its name: {text}");
+        assert!(text.contains("  apiKey — hidden") && text.contains("  orderId = hunter-•••"), "{text}");
+
+        // A credential by its name, among globals and the collection's variables: its
+        // value is masked where the request happens to write it out.
+        let layers = [(&shop, vec![var("sessionKey", "orders")])];
+        let text = stand().read_request(&layers, &[var("apiSecret", "application/json")], "r").unwrap();
+        assert!(text.contains("POST {{baseUrl}}/•••/:id") && text.contains("  Accept: •••"), "{text}");
+    }
+
+    /// One request `x` of Shop under `auth`, written as `request` says, with `scripts` of the request's own.
+    fn one(request: Value, auth: Value, scripts: Value) -> Collection {
+        collection(json!([{"id": "x", "name": "X \"quoted\"", "request": request, "event": scripts}]), auth, json!(null))
+    }
+
+    #[test]
+    fn a_json_body_is_masked_under_a_credential_however_it_is_written() {
+        let body = r#"{"count": {{n}}, "password": "hunter2", "apiSecret": 123456, "apiKeys": ["k1-long", "{{k2}}"], "secret": {"value": "deepvalue"}, "name": "kept"}"#;
+        let shop = one(json!({"method": "POST", "url": "{{baseUrl}}/x", "body": {"mode": "raw", "raw": body}}), json!(null), json!([]));
+        let text = read(&stand(), &[&shop], "x").unwrap();
+        for secret in ["hunter2", "123456", "k1-long", "deepvalue"] {
+            assert!(!text.contains(secret), "{secret}: {text}");
+        }
+        assert!(text.contains("\"count\": {{n}}") && text.contains("\"{{k2}}\"") && text.contains("\"name\": \"kept\""), "a variable outside a string stays one: {text}");
+
+        let bare = r#"{"password": {{pwd}}, "token": "lit-secret"}"#;
+        let shop = one(json!({"method": "POST", "url": "{{baseUrl}}/x", "body": {"mode": "raw", "raw": bare}}), json!(null), json!([]));
+        let text = read(&stand(), &[&shop], "x").unwrap();
+        assert!(text.contains("\"password\": {{pwd}},\n  \"token\": \"•••\""), "a variable under a credential stays one: {text}");
+
+        let broken = r#"{"password": "hunter2", "token": 98765, "key": {{k}}, "name": "kept", oops"#;
+        let shop = one(json!({"method": "POST", "url": "{{baseUrl}}/x", "body": {"mode": "raw", "raw": broken}}), json!(null), json!([]));
+        let text = read(&stand(), &[&shop], "x").unwrap();
+        assert!(text.contains(r#"{"password": "•••", "token": "•••", "key": {{k}}, "name": "kept", oops"#), "not JSON: its pairs masked where they stand: {text}");
+    }
+
+    #[test]
+    fn a_variable_under_a_credential_in_a_body_is_hidden() {
+        let shop = one(
+            json!({"method": "POST", "url": "{{baseUrl}}/x", "body": {"mode": "graphql", "graphql": {"query": "mutation { login }", "variables": "{\"password\": \"{{pwd}}\", \"n\": {{n}}}"}}}),
+            json!(null),
+            json!([]),
+        );
+        let raw = one(json!({"method": "POST", "url": "{{baseUrl}}/x", "body": {"mode": "raw", "raw": "{\"auth\": {\"pass\": {{pass}}}}"}}), json!(null), json!([]));
+        assert_eq!(shop.credential_names(), ["pwd"]);
+        assert_eq!(raw.credential_names(), ["pass"]);
+        let layers = [(&shop, vec![var("pwd", "hunter2"), var("n", "7")])];
+        let text = stand().read_request(&layers, &[], "x").unwrap();
+        assert!(text.contains("  pwd — hidden") && text.contains("  n = 7") && !text.contains("hunter2"), "{text}");
+        assert!(text.contains("Body, graphql:\nmutation { login }\nIts variables:\n"), "{text}");
+    }
+
+    #[test]
+    fn every_kind_of_auth_value_is_masked_but_its_settings_and_addresses() {
+        let auth = json!({"type": "oauth2", "oauth2": [
+            {"key": "tokenRequestParams", "value": [{"key": "audience", "value": "aud-secret"}]},
+            {"key": "clientSecret", "value": 424242},
+            {"key": "refreshTokenUrl", "value": "https://auth.test/refresh"},
+            {"key": "scope", "value": "read"},
+            {"key": "challengeAlgorithm", "value": null},
+        ]});
+        let text = read(&stand(), &[&one(json!("{{baseUrl}}/x"), auth, json!([]))], "x").unwrap();
+        assert!(
+            text.contains("  tokenRequestParams = •••\n  clientSecret = •••\n  refreshTokenUrl = https://auth.test/refresh\n  scope = read\n  challengeAlgorithm = \n"),
+            "{text}"
+        );
+        let apikey = json!({"type": "apikey", "apikey": [{"key": "key", "value": "X-API-Key"}, {"key": "value", "value": "k3y-literal"}, {"key": "in", "value": "header"}]});
+        let text = read(&stand(), &[&one(json!("{{baseUrl}}/x"), apikey, json!([]))], "x").unwrap();
+        assert!(text.contains("Auth: apikey, inherited from the collection\n  key = X-API-Key\n  value = •••\n  in = header"), "{text}");
+    }
+
+    #[test]
+    fn a_literal_masked_once_is_masked_wherever_else_it_is_written() {
+        let auth = json!({"type": "bearer", "bearer": [{"key": "token", "value": "eyJliteral"}]});
+        let script = json!([{"listen": "prerequest", "script": {"exec": ["pm.request.headers.upsert({key: 'Authorization', value: 'Bearer eyJliteral'});"]}}]);
+        let request = json!({"url": "https://admin:hunter2@api.test/v1/x?note=eyJliteral", "header": [{"key": "X-Key", "value": "123"}, {"key": "X-Id", "value": "123"}, {"key": "Authorization", "value": "Bearer abcd1234"}, {"key": "X-Ref", "value": "abcd1234"}]});
+        let text = read(&stand(), &[&one(request, auth, script)], "x").unwrap();
+        assert!(!text.contains("eyJliteral") && !text.contains("hunter2"), "{text}");
+        assert!(text.contains("GET https://admin:•••@api.test/v1/x\n"), "the password of an address: {text}");
+        assert!(text.contains("  note: •••") && text.contains("Pre-request script of the request: hidden — it holds a secret"), "{text}");
+        assert!(text.contains("  X-Key: •••\n  X-Id: 123\n"), "a short literal masks nothing else: {text}");
+        assert!(text.contains("  Authorization: Bearer •••\n  X-Ref: •••\n"), "the token without its scheme word: {text}");
+        let reach = Reach::new(&[(&one(json!("https://admin:hunter2@api.test/x"), json!(null), json!([])), vec![])], &[], &stand());
+        assert_eq!(reach.requests, ["Shop / X \"quoted\": GET https://admin:•••@api.test/x (id x)"], "the description too");
+    }
+
+    #[test]
+    fn every_kind_of_body_and_row_is_read() {
+        let rows = |mode: &str| json!({"mode": mode, mode: [{"key": "password", "value": "pw-literal"}, {"key": "doc", "type": "file", "src": "/tmp/a.pdf"}, {"key": "name", "value": "{{name}}"}]});
+        for mode in ["urlencoded", "formdata"] {
+            let text = read(&stand(), &[&one(json!({"method": "POST", "url": "{{baseUrl}}/x", "body": rows(mode)}), json!(null), json!([]))], "x").unwrap();
+            assert!(text.contains(&format!("Body, {mode}:\n  password: •••\n  doc: a file, /tmp/a.pdf\n  name: {{{{name}}}}\n")), "{text}");
+        }
+        let file = read(&stand(), &[&one(json!({"method": "PUT", "url": "{{baseUrl}}/x", "body": {"mode": "file", "file": {"src": "/tmp/b.bin"}}}), json!(null), json!([]))], "x").unwrap();
+        assert!(file.contains("Body: a file, /tmp/b.bin"), "{file}");
+        let other = read(&stand(), &[&one(json!({"method": "PUT", "url": "{{baseUrl}}/x", "body": {"mode": "binary"}}), json!(null), json!([]))], "x").unwrap();
+        assert!(other.contains("Body: binary"), "{other}");
+        let empty = read(&stand(), &[&one(json!({"method": "PUT", "url": "{{baseUrl}}/x", "body": {"mode": "raw", "raw": "  "}}), json!(null), json!([]))], "x").unwrap();
+        assert!(!empty.contains("Body"), "{empty}");
+
+        let url = json!({"raw": "{{baseUrl}}/users/:session_token?api_key=k3y-literal", "variable": [{"key": "session_token", "value": "s-literal"}]});
+        let text = read(&stand(), &[&one(json!({"url": url}), json!(null), json!([]))], "x").unwrap();
+        assert!(text.contains("Path variables:\n  session_token: •••\nQuery:\n  api_key: •••\n"), "a url object with no `query` reads its raw one: {text}");
+
+        let mut cycle = stand();
+        cycle.variables.push(var("loop", "{{loop}}"));
+        let text = read(&cycle, &[&one(json!({"url": "{{baseUrl}}/x", "header": [{"key": "X-Loop", "value": "{{loop}}"}]}), json!(null), json!([]))], "x").unwrap();
+        assert!(text.contains("  loop — {{loop}} refers to itself"), "{text}");
+    }
+
+    #[test]
+    fn a_literal_is_masked_and_a_variable_left() {
+        for (value, scheme, shown) in [
+            ("{{token}}", true, "{{token}}"),
+            ("Bearer {{token}}", true, "Bearer {{token}}"),
+            (" {{ token }} ", false, " {{ token }} "),
+            ("Bearer eyJ", true, "Bearer •••"),
+            ("Bearer eyJ", false, "•••"),
+            ("tk-{{part}}", true, "•••"),
+            ("Bearer", true, "•••"),
+            ("Digest-1 abc", true, "•••"),
+            ("", true, ""),
+        ] {
+            assert_eq!(literal_masked(value, scheme), shown, "{value:?}");
+        }
     }
 
     #[test]

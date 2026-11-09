@@ -4761,13 +4761,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's one — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's two — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 13 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 14 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

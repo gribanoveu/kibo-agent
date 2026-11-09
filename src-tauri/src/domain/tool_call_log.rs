@@ -441,6 +441,11 @@ mod tests {
                 Some(ToolCall::HttpRequest(crate::domain::tools::HttpRequestArgs { method: Some("GET".into()), url: Some("{{baseUrl}}/orders".into()), ..Default::default() })),
                 ToolResult::HttpRequest { text: LEAK.into(), summary: "200 · 12 ms".into() },
             ),
+            // Which request was read is what the log is for; the request itself goes as `text`.
+            ToolName::HttpReadRequest => (
+                Some(ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })),
+                ToolResult::HttpReadRequest { text: LEAK.into(), summary: "Shop / Get one".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

@@ -133,7 +133,7 @@ impl Feature {
                     request and kept with it, every send in History. A collection's scripts run once you trust it. \
                     An environment you open to the agent it reads with httpRequest, its secrets kept from the model.",
                 enabled_by_default: false,
-                tools: &[ToolName::HttpRequest],
+                tools: &[ToolName::HttpRequest, ToolName::HttpReadRequest],
                 data: Some("http"),
             },
             Feature::VoiceInput => Manifest {
@@ -259,6 +259,7 @@ mod tests {
             assert!(on.offers(tool), "{tool:?}");
         }
         assert!(!off.offers(ToolName::Board));
+        assert_eq!(Feature::owning(ToolName::HttpReadRequest), Some(Feature::HttpClient), "a saved request is the HTTP client's");
     }
 
     #[test]

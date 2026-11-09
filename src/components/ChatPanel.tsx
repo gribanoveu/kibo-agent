@@ -99,6 +99,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Board: SquareKanban,
   MongoDB: Database,
   HTTP: Globe,
+  "HTTP request": Globe,
   Prototype: AppWindow,
 };
 
