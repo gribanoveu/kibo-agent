@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-10 Turn each Postman script of an HTTP collection on or off on the request's Scripts tab, after reading its code; scripts that are off are marked in the tree and named under the response
 - 2026-11-10 Picking an HTTP request's tab opens its collection and folders in the tree and scrolls to it
 - 2026-11-10 The API role keeps a test case as a new request in your HTTP collections — beside the request it started from or in a folder inside that one; every save asks you first
 - 2026-11-09 The API role sends your saved HTTP requests with its own edits — method, path, query, headers, body, no auth — through the request's auth and the scripts you trusted, always to the saved request's host; its sends are in History, signed by the chat
