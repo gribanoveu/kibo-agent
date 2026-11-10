@@ -94,6 +94,7 @@ export const LABELS: Record<string, string> = {
   httpEnvironment: "HTTP environment",
   httpSend: "HTTP",
   httpReadRequest: "HTTP request",
+  httpSaveRequest: "Save HTTP case",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -395,6 +396,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       return {
         name,
         arg: [str(result.summary) ?? str(args.request)?.trim() ?? "", environment && `in ${environment}`].filter(Boolean).join(" "),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A case kept: its name and where it went once saved, its name and the request it starts from until then.
+    case "httpSaveRequest": {
+      const named = str(args.name)?.trim() ?? "";
+      const from = str(args.from)?.trim();
+      return {
+        name,
+        arg: [named && `"${named}"`, str(result.summary) ? `in ${str(result.summary)}` : from && `from ${from}`].filter(Boolean).join(" "),
         detail: str(result.text) ?? "",
       };
     }

@@ -103,6 +103,7 @@ pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmTool
         .iter()
         .map(|call| match parse_tool_call(call) {
             Ok(crate::domain::tools::ToolCall::HttpSend(args)) => tools::http_send::preview(&args),
+            Ok(crate::domain::tools::ToolCall::HttpSaveRequest(args)) => tools::http_save_request::preview(&args),
             Ok(parsed) => tools::cluster::preview(pinned, &parsed),
             Err(e) => ToolPreview::Failed { reason: e.to_string() },
         })
@@ -344,7 +345,7 @@ mod tests {
         let done = done(chat.start(ChatRole::Api, vec![LlmMessage::user("стенд жив?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest"]);
+        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest", "httpSaveRequest"]);
         assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders/1 → 200"), "{}", tool_result(&done.history));
     }
 
@@ -826,6 +827,9 @@ mod tests {
         let call = LlmToolCall { id: "c1".into(), name: "httpSend".into(), arguments: r#"{"request":"w1","environment":"Stage","body":"{}"}"#.into() };
         let shown = preview(&KubeSetup::NotSet, None, &[call]);
         assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "request w1 as saved"), "{shown:?}");
+        let call = LlmToolCall { id: "c2".into(), name: "httpSaveRequest".into(), arguments: r#"{"from":"w1","name":"Empty"}"#.into() };
+        let kept = preview(&KubeSetup::NotSet, None, &[call]);
+        assert!(matches!(&kept[0], ToolPreview::Change { place, summary, .. } if place == "your HTTP collections, beside the request" && summary == "\"Empty\" — request w1 as saved"), "{kept:?}");
     }
 
     fn pinned(namespace: &str) -> KubeSetup {

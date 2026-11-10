@@ -243,7 +243,7 @@ pub struct Turn<'a> {
     pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
-    /// The environments `httpRequest` reaches, while that feature is on.
+    /// The environments the `http*` tools reach, while that feature is on.
     pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, for `deepseekSearch` and
     /// `deepseekFetch`; `None` while the feature is off or there is no key.
@@ -1392,7 +1392,7 @@ fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
-        // Neither is let call it: `httpRequest` is no read of the folder's, and it will write (HC-8).
+        // Neither is let call it: `httpSend` is no read of the folder's, and it will write (HC-8).
         http: None,
         deepseek: None,
         features,
@@ -2249,6 +2249,14 @@ fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<String>) {
             },
             Err(crate::domain::http_client::HttpError::Store(_)) => unknown(),
             Err(_) => (false, None),
+        };
+    }
+    // A case added to the user's collections asks every time, whatever "Always allow"
+    // and Auto say (HC-10e): what lands there is theirs to keep, and they see it first.
+    if let crate::domain::tools::ToolCall::HttpSaveRequest(args) = &parsed {
+        return match turn.http {
+            Some(_) => (true, Some(format!("it adds \"{}\" to your HTTP collections — every save asks", args.name.trim()))),
+            None => (false, None),
         };
     }
     // What a server says about its own tool is its word (`McpToolHints`):
@@ -4736,6 +4744,36 @@ mod tests {
         assert_eq!(unread(r#"{"request":"r1","method":"GET"}"#), None, "a read by the call's own method");
     }
 
+    /// A case kept in the user's collections asks every time, in Auto and after "Always
+    /// allow" too, and says what it adds, whatever the environment's mode; with no
+    /// HTTP stands there is nothing to approve — the tool refuses.
+    #[test]
+    fn a_case_saved_always_asks() {
+        use crate::domain::http_client::AgentAccess;
+        use crate::services::ai_tools::tools::http_send::tests::opened_as;
+        let run = |http: bool, approval: ApprovalPolicy| {
+            let script = vec![
+                asks(vec![wants("s1", "toolSearch", r#"{"query":"http"}"#)]),
+                asks(vec![wants("h1", "httpSaveRequest", r#"{"from":"r1","name":" No auth ","auth":"none"}"#)]),
+                text("done"),
+            ];
+            let mut h = harness("loop-http-save", script);
+            h.features = Features::all();
+            h.http = http.then(|| opened_as(AgentAccess::ReadOnly));
+            h.approval = approval;
+            match h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes") {
+                ChatStreamOutcome::PendingApproval(pending) => Some(pending.calls[0].reason.clone()),
+                _ => None,
+            }
+        };
+        let told = Some(Some("it adds \"No auth\" to your HTTP collections — every save asks".to_string()));
+        assert_eq!(run(true, ApprovalPolicy { skip_all: true, ..ApprovalPolicy::default() }), told, "Auto; a read-only environment");
+        let mut allowed = ApprovalPolicy::default();
+        allowed.allow_always("httpSaveRequest").unwrap();
+        assert_eq!(run(true, allowed), told, "Always allow");
+        assert_eq!(run(false, asking()), None, "no stands");
+    }
+
     /// A write the round let through unasked, while another call's card waited, asks
     /// once the mode has changed: it is refused and tells the model to call again.
     /// With the mode as it was, it runs.
@@ -4782,13 +4820,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's three — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's four, MongoDB's one, HTTP's four — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 15 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 16 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

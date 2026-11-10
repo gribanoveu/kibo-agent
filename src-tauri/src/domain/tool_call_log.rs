@@ -450,6 +450,11 @@ mod tests {
                 Some(ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })),
                 ToolResult::HttpReadRequest { text: LEAK.into(), summary: "Shop / Get one".into() },
             ),
+            // Which request the case came from and where it went: what the log is for; the request goes as `text`.
+            ToolName::HttpSaveRequest => (
+                Some(ToolCall::HttpSaveRequest(crate::domain::tools::HttpSaveRequestArgs { from: "r1".into(), name: "No auth".into(), auth: Some("none".into()), ..Default::default() })),
+                ToolResult::HttpSaveRequest { text: LEAK.into(), summary: "Shop / Cases".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

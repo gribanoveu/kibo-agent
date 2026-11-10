@@ -35,6 +35,7 @@ pub mod grep;
 pub mod knowledge;
 pub mod http_read_request;
 pub mod http_environment;
+pub mod http_save_request;
 pub mod http_send;
 pub mod mongo;
 pub mod cluster;
@@ -129,6 +130,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::HttpEnvironment, http_environment::definition),
     (ToolName::HttpSend, http_send::definition),
     (ToolName::HttpReadRequest, http_read_request::definition),
+    (ToolName::HttpSaveRequest, http_save_request::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -200,6 +202,7 @@ pub fn dispatch(
         ToolCall::HttpEnvironment(args) => http_environment::http_environment(args, deps),
         ToolCall::HttpSend(args) => http_send::http_send(args, deps),
         ToolCall::HttpReadRequest(args) => http_read_request::http_read_request(args, deps),
+        ToolCall::HttpSaveRequest(args) => http_save_request::http_save_request(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -647,6 +650,21 @@ mod definition_tests {
             ToolName::HttpReadRequest => (
                 r#"{"request":"r1"}"#,
                 vec![ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })],
+            ),
+            ToolName::HttpSaveRequest => (
+                r#"{"from":"r1","name":"No auth"}"#,
+                vec![ToolCall::HttpSaveRequest(crate::domain::tools::HttpSaveRequestArgs {
+                    from: "r1".into(),
+                    name: "No auth".into(),
+                    folder: Some("Cases".into()),
+                    environment: Some("Stage".into()),
+                    method: Some("POST".into()),
+                    path: Some("/orders".into()),
+                    query: Some("id=1".into()),
+                    headers: Some([("X-Id".to_string(), None)].into()),
+                    body: Some("{}".into()),
+                    auth: Some("none".into()),
+                })],
             ),
             ToolName::Mongo => (
                 r#"{"op":"collections"}"#,

@@ -38,6 +38,12 @@ describe("what each call shows", () => {
     expect(describeTool(tool({ name: "httpReadRequest", arguments: '{"request":" r1 "}', status: "running" })).arg).toBe("r1");
   });
 
+  test("a case kept shows its name, and where it went once saved", () => {
+    const done = tool({ name: "httpSaveRequest", arguments: '{"from":"r1","name":" No auth ","folder":"Cases"}', result: { summary: "Shop / Cases", text: "Saved" } });
+    expect(describeTool(done)).toMatchObject({ name: "Save HTTP case", arg: '"No auth" in Shop / Cases', detail: "Saved" });
+    expect(describeTool(tool({ name: "httpSaveRequest", arguments: '{"from":" r1 ","name":"No auth"}', status: "running" })).arg).toBe('"No auth" from r1');
+  });
+
   test("a presented page shows its name and the version kept, and its title while it runs", () => {
     const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
     expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });

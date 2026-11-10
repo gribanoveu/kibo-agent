@@ -21,7 +21,7 @@ pub(super) fn definition() -> LlmToolDefinition {
         description: "Read a request saved in the user's collections, as the user wrote it: its method, address, \
             parameters, headers, body, its auth and which folder or collection that comes from, the variables it uses, \
             and the scripts that run with it — where a token comes from, say. Nothing is sent. Its id is in \
-            httpRequest's description of the environment (called with no `url`). A credential written out in the \
+            httpEnvironment's list of requests. A credential written out in the \
             collection is masked, and a script that holds a hidden value is not shown."
             .into(),
         parameters: json!({

@@ -160,6 +160,7 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::HttpEnvironment,
                 ToolName::HttpSend,
                 ToolName::HttpReadRequest,
+                ToolName::HttpSaveRequest,
             ]);
         }
         // Research handed off reads the same files, only somewhere else.

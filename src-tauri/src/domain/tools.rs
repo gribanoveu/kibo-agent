@@ -114,6 +114,9 @@ pub enum ToolName {
     /// A request saved in the user's collections, read as written — its auth,
     /// variables and scripts, a credential masked (`docs/45-http-client.md`, HC-10b).
     HttpReadRequest,
+    /// A case kept as a new request in the template's collection — the template
+    /// with the model's edits, no scripts (`docs/45-http-client.md`, HC-10e).
+    HttpSaveRequest,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -188,6 +191,7 @@ impl ToolName {
         ToolName::HttpEnvironment,
         ToolName::HttpSend,
         ToolName::HttpReadRequest,
+        ToolName::HttpSaveRequest,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -250,6 +254,7 @@ impl ToolName {
             ToolName::HttpEnvironment => "httpEnvironment",
             ToolName::HttpSend => "httpSend",
             ToolName::HttpReadRequest => "httpReadRequest",
+            ToolName::HttpSaveRequest => "httpSaveRequest",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -362,6 +367,8 @@ impl ToolName {
             | ToolName::KubeDelete
             // POST, PUT, DELETE to a stand; a read asks nobody (`ToolCall::is_risky`).
             | ToolName::HttpSend
+            // A request added to the user's collections; the card always shows.
+            | ToolName::HttpSaveRequest
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
             // goes through the approval gate, in Analyst too, the one place
@@ -446,6 +453,8 @@ impl ToolName {
             | ToolName::HttpReadRequest => true,
             // One at a time: it writes, and a stand is the user's to load.
             ToolName::HttpSend
+            // The user's collection file, written.
+            | ToolName::HttpSaveRequest
             | ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -541,6 +550,8 @@ impl ToolName {
             ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A stand, which a rewind does not reach: a write there stays.
             ToolName::HttpSend => false,
+            // The user's collections, which a rewind does not reach: the case stays.
+            ToolName::HttpSaveRequest => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // A button under the answer; nothing outside the chat.
@@ -665,7 +676,7 @@ impl ToolName {
             // One request; a slow stand holds it for up to 30 s.
             ToolName::HttpSend => 2,
             // The collections and environments, small files of the app's.
-            ToolName::HttpEnvironment | ToolName::HttpReadRequest => 1,
+            ToolName::HttpEnvironment | ToolName::HttpReadRequest | ToolName::HttpSaveRequest => 1,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -865,14 +876,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            56,
+            57,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -951,6 +962,8 @@ mod tests {
                 ToolName::Mcp,
                 // A POST to a stand changes it; a GET is told apart per call (`is_risky`).
                 ToolName::HttpSend,
+                // A request added to the user's collections.
+                ToolName::HttpSaveRequest,
             ])
         );
     }
@@ -1653,6 +1666,7 @@ pub enum ToolCall {
     HttpEnvironment(HttpEnvironmentArgs),
     HttpSend(HttpSendArgs),
     HttpReadRequest(HttpReadRequestArgs),
+    HttpSaveRequest(HttpSaveRequestArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1714,6 +1728,7 @@ impl ToolCall {
             ToolCall::HttpEnvironment(_) => ToolName::HttpEnvironment,
             ToolCall::HttpSend(_) => ToolName::HttpSend,
             ToolCall::HttpReadRequest(_) => ToolName::HttpReadRequest,
+            ToolCall::HttpSaveRequest(_) => ToolName::HttpSaveRequest,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -2024,6 +2039,8 @@ pub enum ToolResult {
     HttpSend { text: String, summary: String },
     /// `httpReadRequest`: the saved request as the model reads it, and where it is.
     HttpReadRequest { text: String, summary: String },
+    /// `httpSaveRequest`: what was kept and where, and the place and name for the row.
+    HttpSaveRequest { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -2172,6 +2189,50 @@ pub struct HttpReadRequestArgs {
     /// An environment's name; may be left out when only one is open.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
     pub environment: Option<String>,
+}
+
+/// `httpSaveRequest`: a case kept — the saved request `from` with the edits
+/// `httpSend` takes, but no `variables`: `{{name}}` stays written in the case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSaveRequestArgs {
+    pub from: String,
+    pub name: String,
+    /// A folder right inside `from`'s own, by name; beside `from` when left out.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub folder: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub method: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, Option<String>>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub auth: Option<String>,
+}
+
+impl HttpSaveRequestArgs {
+    /// The edits as `httpSend` would take them, to be read the same way.
+    pub fn as_send(&self) -> HttpSendArgs {
+        HttpSendArgs {
+            request: self.from.clone(),
+            environment: self.environment.clone(),
+            method: self.method.clone(),
+            path: self.path.clone(),
+            query: self.query.clone(),
+            headers: self.headers.clone(),
+            body: self.body.clone(),
+            auth: self.auth.clone(),
+            variables: None,
+            show_headers: None,
+        }
+    }
 }
 
 impl HttpSendArgs {

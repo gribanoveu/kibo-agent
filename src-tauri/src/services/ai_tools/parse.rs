@@ -81,6 +81,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "httpEnvironment" => ToolCall::HttpEnvironment(args(call)?),
         "httpSend" => ToolCall::HttpSend(args(call)?),
         "httpReadRequest" => ToolCall::HttpReadRequest(args(call)?),
+        "httpSaveRequest" => ToolCall::HttpSaveRequest(args(call)?),
         "present" => ToolCall::Present(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to

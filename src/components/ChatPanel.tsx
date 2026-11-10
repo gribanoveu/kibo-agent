@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AppWindow,
   ArrowUpRight,
+  BookmarkPlus,
   Brain,
   Loader2,
   ChevronRight,
@@ -101,6 +102,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   HTTP: Globe,
   "HTTP request": Globe,
   "HTTP environment": Globe,
+  "Save HTTP case": BookmarkPlus,
   Prototype: AppWindow,
 };
 
