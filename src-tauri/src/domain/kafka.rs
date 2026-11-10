@@ -16,16 +16,20 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// What the window is told about a saved password: that there is one.
-pub const MASK: &str = "•••";
-
-/// The most text one message's view carries. Longer values are cut and say so;
-/// a value past [`MAX_DECODE`] is not parsed at all, only measured.
+/// The most text one message's view carries, escaped text included. Longer
+/// values are cut and say so; a value past [`MAX_DECODE`] is measured and cut
+/// the same way, without being parsed at all.
 pub const TEXT_LIMIT: usize = 64 * 1024;
 pub const MAX_DECODE: usize = 1024 * 1024;
 
-/// How deep a length-delimited value is followed before it is left as bytes.
+/// How many messages are followed below the first one: the level past it is
+/// left as bytes rather than parsed.
 pub const MAX_DEPTH: usize = 64;
+
+/// The largest field number protobuf allows, 2^29 - 1. `protoc` refuses more,
+/// and so does this: a dump that took any number would read ordinary binary as
+/// a message far more often.
+pub const MAX_FIELD: u32 = 536_870_911;
 
 // ---------------------------------------------------------------- connection
 
@@ -98,12 +102,26 @@ pub struct ConnectionView {
     pub name: String,
     pub brokers: String,
     pub tls: bool,
-    /// `SCRAM-SHA-512 as reports`, without the password.
-    pub login: Option<String>,
+    /// The CA it trusts, when it has its own: a path, not a secret, so the
+    /// form can prefill it.
+    pub ca_file: Option<String>,
+    pub login: Option<LoginView>,
     /// A password is saved: an edit with the field left empty keeps it.
     pub has_password: bool,
     pub read_only: bool,
+    /// Open to the agent's tools. `agent`, not `openToAgent`: the name the
+    /// sealed file uses, as `domain::mongo` has it.
     pub agent: bool,
+}
+
+/// Who the connection is, in the pieces the form edits: one
+/// `SCRAM-SHA-512 as reports` line could not be read back, since a username may
+/// itself contain " as ".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginView {
+    pub mechanism: SaslMechanism,
+    pub username: String,
 }
 
 impl From<&Connection> for ConnectionView {
@@ -113,7 +131,8 @@ impl From<&Connection> for ConnectionView {
             name: connection.name.clone(),
             brokers: connection.brokers.clone(),
             tls: connection.tls,
-            login: connection.sasl.as_ref().map(|sasl| format!("{} as {}", sasl.mechanism.name(), sasl.username)),
+            ca_file: connection.ca_file.clone(),
+            login: connection.sasl.as_ref().map(|sasl| LoginView { mechanism: sasl.mechanism, username: sasl.username.clone() }),
             has_password: connection.sasl.as_ref().is_some_and(|sasl| !sasl.password.is_empty()),
             read_only: connection.read_only,
             agent: connection.agent,
@@ -134,7 +153,9 @@ impl Connection {
     /// to a send is this sentence rather than a broker's error.
     pub fn producing(&self) -> Result<(), KafkaError> {
         match self.read_only {
-            true => Err(KafkaError::ReadOnly(self.named().unwrap_or(&self.name).to_string())),
+            // The name as it stands, trimmed: whether it is empty is the
+            // form's question, not this one's.
+            true => Err(KafkaError::ReadOnly(self.name.trim().to_string())),
             false => Ok(()),
         }
     }
@@ -146,8 +167,6 @@ pub enum KafkaError {
     NoName,
     #[error("\"{0}\" is read-only — nothing is sent through it")]
     ReadOnly(String),
-    #[error("a message cannot be read: {0}")]
-    BadMessage(String),
 }
 
 // -------------------------------------------------------------------- topics
@@ -265,7 +284,16 @@ pub struct MessageView {
     pub value: ValueView,
     /// The value's size on the wire, before any view was chosen.
     pub size: usize,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<HeaderView>,
+}
+
+/// A header: a name, and its bytes — `None` for one written with no value,
+/// which is not the same as an empty one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderView {
+    pub name: String,
+    pub value: Option<String>,
 }
 
 /// What a message's bytes turned out to be.
@@ -279,7 +307,7 @@ pub enum ValueView {
     /// the schema is not fetched.
     Protobuf { text: String, schema_id: Option<u32>, truncated: bool },
     Text { text: String, truncated: bool },
-    Hex { text: String, size: usize },
+    Hex { text: String, size: usize, truncated: bool },
 }
 
 impl ValueView {
@@ -301,7 +329,7 @@ impl Message {
             key: self.key.as_deref().map(view),
             value: self.value.as_deref().map(view).unwrap_or(ValueView::Empty),
             size: self.value.as_ref().map_or(0, Vec::len),
-            headers: self.headers.iter().map(|(key, value)| (key.clone(), value.as_deref().map_or(String::new(), escaped))).collect(),
+            headers: self.headers.iter().map(|(name, value)| HeaderView { name: name.clone(), value: value.as_deref().map(dump_string) }).collect(),
         }
     }
 }
@@ -315,7 +343,7 @@ pub fn view(bytes: &[u8]) -> ValueView {
     // Past this size nothing is parsed: a 5 MiB blob in a `<pre>` is not what
     // anyone is looking at, and the parse would be the slowest thing on the page.
     if bytes.len() > MAX_DECODE {
-        return ValueView::Hex { text: escaped(&bytes[..TEXT_LIMIT]), size: bytes.len() };
+        return hex(bytes);
     }
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
         let (text, truncated) = cut(&serde_json::to_string_pretty(&value).unwrap_or_default());
@@ -327,15 +355,26 @@ pub fn view(bytes: &[u8]) -> ValueView {
             return ValueView::Protobuf { text, schema_id: Some(schema_id), truncated };
         }
     }
-    if let Some(text) = printable(bytes) {
-        let (text, truncated) = cut(&text);
-        return ValueView::Text { text, truncated };
-    }
+    // A wire message before text, as the plan's decision 2 has it: a protobuf
+    // value whose first field is one long string — a tag of `0x0a`, a length of
+    // 32 or more, then text — reads as printable UTF-8 and would be shown as
+    // text with its own tag bytes in front. Plain text that happens to parse is
+    // rarer, and the page's view switch covers the guess either way.
     if let Ok(message) = ProtoMessage::decode(bytes) {
         let (text, truncated) = cut(&message.render());
         return ValueView::Protobuf { text, schema_id: None, truncated };
     }
-    ValueView::Hex { text: escaped(&bytes[..bytes.len().min(TEXT_LIMIT)]), size: bytes.len() }
+    if let Some(text) = printable(bytes) {
+        let (text, truncated) = cut(&text);
+        return ValueView::Text { text, truncated };
+    }
+    hex(bytes)
+}
+
+/// The last resort: the bytes, escaped, cut to what one view carries.
+fn hex(bytes: &[u8]) -> ValueView {
+    let (text, truncated) = cut(&dump_string(&bytes[..bytes.len().min(TEXT_LIMIT)]));
+    ValueView::Hex { text, size: bytes.len(), truncated }
 }
 
 /// A Confluent-framed payload: a zero byte and the schema id, then the message.
@@ -375,22 +414,24 @@ fn printable(bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// Text with the bytes that are not printable written as `\xNN`, so a binary
-/// value is still readable and still exact.
-fn escaped(bytes: &[u8]) -> String {
+/// A value as the dump writes it between quotes: printable text stays as it
+/// is, a quote or a backslash is escaped, and a control byte — a newline, a
+/// NUL — or a byte that is not UTF-8 becomes `\xNN`. One field per line holds
+/// only if a newline cannot get through it.
+fn dump_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         for character in chunk.valid().chars() {
-            match character.is_control() {
-                // A NUL or a bare escape byte would be invisible or worse in a
-                // `<pre>`: byte-exact means written out.
-                true => {
+            match character {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                awkward if awkward.is_control() => {
                     let mut buffer = [0u8; 4];
-                    for byte in character.encode_utf8(&mut buffer).as_bytes() {
+                    for byte in awkward.encode_utf8(&mut buffer).as_bytes() {
                         out.push_str(&format!("\\x{byte:02x}"));
                     }
                 }
-                false => out.push(character),
+                plain => out.push(plain),
             }
         }
         for byte in chunk.invalid() {
@@ -405,7 +446,6 @@ fn escaped(bytes: &[u8]) -> String {
 /// A protobuf message read without its schema: field numbers and wire values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoMessage {
-    pub schema_id: Option<u32>,
     pub fields: Vec<ProtoField>,
 }
 
@@ -433,10 +473,12 @@ pub enum ProtoValue {
 pub enum ProtoError {
     #[error("the message ends inside a value at byte {at}")]
     Truncated { at: usize },
-    #[error("a varint at byte {at} is longer than ten bytes")]
+    #[error("a varint at byte {at} does not fit in 64 bits")]
     Overlong { at: usize },
     #[error("a tag at byte {at} names field 0, which does not exist")]
     ZeroField { at: usize },
+    #[error("a tag at byte {at} names field {number}, and protobuf has none past {}", MAX_FIELD)]
+    FieldTooLarge { at: usize, number: u64 },
     #[error("a tag at byte {at} has wire type {wire}, which no field uses")]
     BadWireType { at: usize, wire: u8 },
     #[error("a length at byte {at} asks for {len} bytes with {left} left")]
@@ -447,12 +489,14 @@ pub enum ProtoError {
     StrayEndGroup { at: usize },
     #[error("a group at byte {at} is closed by field {found}, not {expected}")]
     MismatchedGroup { at: usize, expected: u32, found: u32 },
+    #[error("a group at byte {at} is never closed")]
+    UnclosedGroup { at: usize },
 }
 
 impl ProtoMessage {
     pub fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
         let fields = decode_fields(bytes, 0, MAX_DEPTH)?;
-        Ok(Self { schema_id: None, fields })
+        Ok(Self { fields })
     }
 
     /// The dump `protoc --decode_raw` prints, with the one difference this app
@@ -475,50 +519,35 @@ fn decode_fields(bytes: &[u8], at: usize, depth: usize) -> Result<Vec<ProtoField
     while at < bytes.len() {
         let tag_at = at;
         let tag = varint(bytes, &mut at)?;
-        let number = tag >> 3;
+        let number = field_number(tag, tag_at)?;
         let wire = (tag & 0x7) as u8;
-        if number == 0 {
-            return Err(ProtoError::ZeroField { at: tag_at });
+        // An end tag closes a group where the group began; at message level it
+        // closes none.
+        if wire == 4 {
+            return Err(ProtoError::StrayEndGroup { at: tag_at });
         }
-        if number > u32::MAX as u64 {
-            return Err(ProtoError::ZeroField { at: tag_at });
-        }
-        let number = number as u32;
-        let value = match wire {
-            0 => ProtoValue::Varint(varint(bytes, &mut at)?),
-            1 => ProtoValue::Fixed64(fixed(bytes, &mut at, 8)? as u64),
-            5 => ProtoValue::Fixed32(fixed(bytes, &mut at, 4)? as u32),
-            2 => {
-                let length_at = at;
-                let length = varint(bytes, &mut at)? as usize;
-                let left = bytes.len() - at;
-                if length > left {
-                    return Err(ProtoError::TooLong { at: length_at, len: length, left });
-                }
-                let body = &bytes[at..at + length];
-                at += length;
-                match decode_fields(body, 0, depth - 1) {
-                    Ok(fields) if !fields.is_empty() => ProtoValue::Message(fields),
-                    _ => ProtoValue::Blob(body.to_vec()),
-                }
-            }
-            3 => {
-                let (fields, end) = decode_group(bytes, at, depth - 1, number, tag_at)?;
-                at = end;
-                ProtoValue::Group(fields)
-            }
-            // 4 is an end tag, handled where the group began: one here closed
-            // no group this message opened.
-            4 => return Err(ProtoError::StrayEndGroup { at: tag_at }),
-            wire => return Err(ProtoError::BadWireType { at: tag_at, wire }),
-        };
-        fields.push(ProtoField { number, value });
+        fields.push(decode_field_with_tag(bytes, &mut at, number, wire, depth, tag_at)?);
     }
     Ok(fields)
 }
 
+/// A tag's field number, refused when protobuf has no such field: 0 does not
+/// exist, and anything past 2^29 - 1 is not a message but ordinary binary.
+fn field_number(tag: u64, at: usize) -> Result<u32, ProtoError> {
+    let number = tag >> 3;
+    match number {
+        0 => Err(ProtoError::ZeroField { at }),
+        number if number > u64::from(MAX_FIELD) => Err(ProtoError::FieldTooLarge { at, number }),
+        number => Ok(number as u32),
+    }
+}
+
 fn decode_group(bytes: &[u8], at: usize, depth: usize, number: u32, opened: usize) -> Result<(Vec<ProtoField>, usize), ProtoError> {
     if depth == 0 {
+        // A group has no length that could become bytes, so one nested past the
+        // limit fails the dump instead of turning into a blob as a message does.
+        // Groups are deprecated and rare; a missing dump is better than a wrong
+        // one.
         return Err(ProtoError::TooDeep { max: MAX_DEPTH, at });
     }
     let mut fields = Vec::new();
@@ -526,26 +555,20 @@ fn decode_group(bytes: &[u8], at: usize, depth: usize, number: u32, opened: usiz
     while at < bytes.len() {
         let tag_at = at;
         let tag = varint(bytes, &mut at)?;
-        let field = (tag >> 3) as u32;
+        let field = field_number(tag, tag_at)?;
         let wire = (tag & 0x7) as u8;
-        if field == 0 {
-            return Err(ProtoError::ZeroField { at: tag_at });
-        }
         if wire == 4 {
-            return match field {
-                found if found == number => Ok((fields, at)),
-                found => Err(ProtoError::MismatchedGroup { at: tag_at, expected: number, found }),
+            return match field == number {
+                true => Ok((fields, at)),
+                false => Err(ProtoError::MismatchedGroup { at: tag_at, expected: number, found: field }),
             };
         }
-        // Any other wire type: the group's own field repeats here, so its
-        // value is read the same way a message's would be. The tag was already
-        // read, so the value starts after it.
-        let mut value_at = at;
-        let single = decode_field_with_tag(bytes, &mut value_at, field, wire, depth, tag_at)?;
-        at = value_at;
-        fields.push(single);
+        // Any other wire type: the group's own field repeats here, so its value
+        // is read the same way a message's would be. The tag was already read,
+        // so the value starts after it.
+        fields.push(decode_field_with_tag(bytes, &mut at, field, wire, depth, tag_at)?);
     }
-    Err(ProtoError::Truncated { at: opened })
+    Err(ProtoError::UnclosedGroup { at: opened })
 }
 
 fn decode_field_with_tag(bytes: &[u8], at: &mut usize, number: u32, wire: u8, depth: usize, tag_at: usize) -> Result<ProtoField, ProtoError> {
@@ -579,21 +602,25 @@ fn decode_field_with_tag(bytes: &[u8], at: &mut usize, number: u32, wire: u8, de
 
 fn varint(bytes: &[u8], at: &mut usize) -> Result<u64, ProtoError> {
     let mut value: u64 = 0;
-    for index in 0..10 {
+    // Nine bytes of payload, each free to say another follows.
+    for index in 0..9 {
         let start = *at;
         let Some(&byte) = bytes.get(*at) else { return Err(ProtoError::Truncated { at: start }) };
         *at += 1;
-        match index {
-            // The tenth byte carries the one bit that still fits.
-            9 if byte > 1 => return Err(ProtoError::Overlong { at: start }),
-            9 => value |= (byte as u64) << 63,
-            _ => value |= ((byte & 0x7f) as u64) << (7 * index),
-        }
+        value |= ((byte & 0x7f) as u64) << (7 * index);
         if byte & 0x80 == 0 {
             return Ok(value);
         }
     }
-    Err(ProtoError::Overlong { at: *at })
+    // The tenth carries the one bit still free, and has to end the varint: 0
+    // or 1, nothing else fits in 64 bits.
+    let start = *at;
+    let Some(&byte) = bytes.get(*at) else { return Err(ProtoError::Truncated { at: start }) };
+    *at += 1;
+    match byte {
+        0 | 1 => Ok(value | ((byte as u64) << 63)),
+        _ => Err(ProtoError::Overlong { at: start }),
+    }
 }
 
 fn fixed(bytes: &[u8], at: &mut usize, width: usize) -> Result<u64, ProtoError> {
@@ -611,10 +638,7 @@ fn render_fields(fields: &[ProtoField], depth: usize, out: &mut String) {
             ProtoValue::Varint(value) => out.push_str(&format!("{value}\n")),
             ProtoValue::Fixed64(value) => out.push_str(&format!("{value}\n")),
             ProtoValue::Fixed32(value) => out.push_str(&format!("{value}\n")),
-            ProtoValue::Blob(bytes) => match printable(bytes) {
-                Some(text) => out.push_str(&format!("\"{}\"\n", escape_quotes(&text))),
-                None => out.push_str(&format!("\"{}\"\n", escaped(bytes))),
-            },
+            ProtoValue::Blob(bytes) => out.push_str(&format!("\"{}\"\n", dump_string(bytes))),
             ProtoValue::Message(fields) => {
                 out.push_str("{\n");
                 render_fields(fields, depth + 1, out);
@@ -627,10 +651,6 @@ fn render_fields(fields: &[ProtoField], depth: usize, out: &mut String) {
             }
         }
     }
-}
-
-fn escape_quotes(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]
@@ -740,7 +760,7 @@ mod tests {
         bytes.extend(enc_varint(2));
         bytes.extend([0xff, 0xfe]);
         assert_eq!(ProtoMessage::decode(&bytes).unwrap().render(), "2: \"\\xff\\xfe\"\n");
-        assert_eq!(escaped(&[b'a', 0xff]), "a\\xff");
+        assert_eq!(dump_string(&[b'a', 0xff]), "a\\xff");
     }
 
     #[test]
@@ -797,9 +817,10 @@ mod tests {
         // A tag of field 0: no protobuf message can start that way.
         let bytes = [0x00, 0xff, 0xff];
         match view(&bytes) {
-            ValueView::Hex { text, size } => {
+            ValueView::Hex { text, size, truncated } => {
                 assert_eq!(size, 3);
                 assert_eq!(text, "\\x00\\xff\\xff");
+                assert!(!truncated);
             }
             other => panic!("not hex: {other:?}"),
         }
@@ -882,6 +903,7 @@ mod tests {
             assert!(followed <= MAX_DEPTH, "followed {followed} levels, past the limit");
         }
         assert!(followed > 0, "not one level was followed");
+        assert_eq!(followed, MAX_DEPTH - 1, "the level past the limit is left as bytes");
         assert!(matches!(fields[0].value, ProtoValue::Blob(_)), "the rest is bytes");
     }
 
@@ -947,9 +969,10 @@ mod tests {
         };
         let view = serde_json::to_string(&ConnectionView::from(&connection)).unwrap();
         assert!(!view.contains("hunter2"), "{view}");
-        assert!(view.contains("\"login\":\"SCRAM-SHA-512 as reports\""), "{view}");
+        assert!(view.contains("\"login\":{\"mechanism\":\"scramSha512\",\"username\":\"reports\"}"), "{view}");
         assert!(view.contains("\"hasPassword\":true"), "{view}");
         assert!(view.contains("\"agent\":true"), "{view}");
+        assert!(view.contains("\"caFile\":null"), "{view}");
     }
 
     #[test]
@@ -967,7 +990,7 @@ mod tests {
         let view = ConnectionView::from(&connection);
         assert!(!view.has_password);
         assert!(view.read_only);
-        assert_eq!(view.login.as_deref(), Some("PLAIN as reports"));
+        assert_eq!(view.login, Some(LoginView { mechanism: SaslMechanism::Plain, username: "reports".into() }));
     }
 
     #[test]
@@ -1062,7 +1085,7 @@ mod tests {
         assert_eq!(view.size, 17);
         assert_eq!(view.key, Some(ValueView::Text { text: "PAY-1".into(), truncated: false }));
         assert!(matches!(view.value, ValueView::Json { .. }));
-        assert_eq!(view.headers, vec![("source".to_string(), "api".to_string())]);
+        assert_eq!(view.headers, vec![HeaderView { name: "source".into(), value: Some("api".into()) }]);
     }
 
     #[test]
@@ -1071,5 +1094,99 @@ mod tests {
         assert_eq!(view.size, 0);
         assert_eq!(view.value, ValueView::Empty);
         assert_eq!(view.key, None);
+    }
+
+    #[test]
+    fn a_protobuf_message_that_reads_as_text_is_shown_as_protobuf() {
+        // One string field of 40 bytes: the tag `0x0a` is a newline to
+        // `printable`, the length `0x28` a space, and the rest letters — so the
+        // bytes read as text, and are a message only because protobuf is tried
+        // first.
+        let bytes = field_str(1, &"a".repeat(40));
+        assert!(printable(&bytes).is_some(), "the fixture has to read as text");
+        assert!(matches!(view(&bytes), ValueView::Protobuf { .. }), "{:?}", view(&bytes));
+    }
+
+    #[test]
+    fn a_field_number_past_the_protobuf_limit_is_refused_and_named() {
+        let too_large = u64::from(MAX_FIELD) + 1;
+        let mut bytes = enc_varint(too_large << 3);
+        bytes.push(0x01);
+        assert_eq!(ProtoMessage::decode(&bytes).unwrap_err(), ProtoError::FieldTooLarge { at: 0, number: too_large });
+        // The largest one protobuf has is still a field.
+        let mut ok = enc_varint(u64::from(MAX_FIELD) << 3);
+        ok.push(0x01);
+        assert_eq!(ProtoMessage::decode(&ok).unwrap().fields[0].number, MAX_FIELD);
+    }
+
+    #[test]
+    fn a_group_reads_every_wire_type_inside_it() {
+        let mut inner = field_varint(1, 5);
+        inner.extend(enc_tag(2, 1));
+        inner.extend(7u64.to_le_bytes());
+        inner.extend(enc_tag(3, 5));
+        inner.extend(3u32.to_le_bytes());
+        inner.extend(field_str(4, "text"));
+        let mut bytes = enc_tag(9, 3);
+        bytes.extend(inner);
+        bytes.extend(enc_tag(9, 4));
+        let message = ProtoMessage::decode(&bytes).unwrap();
+        let ProtoValue::Group(fields) = &message.fields[0].value else { panic!("not a group") };
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[1].value, ProtoValue::Fixed64(7));
+        assert_eq!(fields[2].value, ProtoValue::Fixed32(3));
+        assert_eq!(fields[3].value, ProtoValue::Blob(b"text".to_vec()));
+    }
+
+    #[test]
+    fn a_group_that_is_never_closed_names_the_tag_that_opened_it() {
+        let bytes = [0x0b, 0x08, 0x05];
+        let error = ProtoMessage::decode(&bytes).unwrap_err();
+        assert_eq!(error, ProtoError::UnclosedGroup { at: 0 });
+        assert!(error.to_string().contains("never closed"), "{error}");
+    }
+
+    #[test]
+    fn a_cut_hex_view_says_it_was_cut() {
+        match view(&[0x00, 0xff, 0xff]) {
+            ValueView::Hex { truncated, .. } => assert!(!truncated),
+            other => panic!("not hex: {other:?}"),
+        }
+        match view(&vec![0xff; TEXT_LIMIT + 10]) {
+            ValueView::Hex { truncated, size, .. } => {
+                assert!(truncated, "a cut view has to say so");
+                assert_eq!(size, TEXT_LIMIT + 10);
+            }
+            other => panic!("not hex: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_newline_inside_a_dumped_string_cannot_break_the_line() {
+        let bytes = field_str(1, "two\nlines");
+        assert_eq!(ProtoMessage::decode(&bytes).unwrap().render(), "1: \"two\\x0alines\"\n");
+    }
+
+    #[test]
+    fn the_text_of_a_view_is_what_the_tool_hands_the_model() {
+        assert_eq!(view(b"hello").text(), "hello");
+        assert_eq!(view(br#"{"a":1}"#).text(), "{\n  \"a\": 1\n}");
+        assert_eq!(view(b"").text(), "");
+        assert!(view(&example()).text().starts_with("1: \"1260112MOXK#DZ1000122\""));
+        assert!(view(&[0x00, 0xff]).text().contains("\\x"));
+    }
+
+    #[test]
+    fn a_watermark_that_moved_backwards_is_not_negative_and_says_nothing_is_stored() {
+        let partition = PartitionView { partition: 0, leader: None, replicas: vec![], in_sync: vec![], earliest: 100, latest: 90 };
+        assert_eq!(partition.stored(), 0);
+        assert_eq!(partition.last(5), (100, 90));
+        let topic = TopicView { name: "one".into(), internal: false, partitions: vec![partition] };
+        assert_eq!(topic.describe(), "one — 1 partition, 0 records");
+    }
+
+    #[test]
+    fn a_fixed_field_that_ends_early_is_refused() {
+        assert_eq!(ProtoMessage::decode(&[0x09, 0x01, 0x02]).unwrap_err(), ProtoError::Truncated { at: 1 });
     }
 }
