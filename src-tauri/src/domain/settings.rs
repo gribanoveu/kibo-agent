@@ -209,9 +209,13 @@ pub struct AppSettings {
     /// Whether to trust each folder the user was asked about: its own skills
     /// and `/` commands are read only once trusted.
     pub folder_trust: FolderTrust,
-    /// The HTTP page's collections whose scripts may run, by id: the hash of the
-    /// scripts trusted, so a change to any of them asks again.
+    /// Before HC-11a: trust in a whole collection, by id — the hash of all its
+    /// scripts. Read once to carry it over to `http_scripts_on`, then removed.
     pub http_script_trust: std::collections::BTreeMap<String, String>,
+    /// The HTTP page's scripts turned on, by collection id: the hashes of their code
+    /// (`postman::script_hash`). Kept here and never in a collection's file, which an
+    /// import would bring in turned on.
+    pub http_scripts_on: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     pub tool_log: ToolLogSettings,
     pub approval: ApprovalMemory,
     /// The mode picked in the composer's panel, for every folder.

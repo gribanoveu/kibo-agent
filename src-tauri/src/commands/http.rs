@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, HttpChanged, HttpEventSink, ResponseView};
 use crate::infra::{http_collections, http_cookies, http_env_store};
-use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptTrust};
+use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptState};
 
 use super::blocking;
 
@@ -125,10 +125,10 @@ pub async fn http_history_list() -> Result<Vec<HistoryEntry>, String> {
     blocking(http_collections::history).await
 }
 
-/// Whether the collection's scripts run; the page asks before its first send.
+/// The collection's scripts by level and moment, each turned on or off (HC-11a).
 #[tauri::command]
-pub async fn http_script_trust(collection: String) -> Result<ScriptTrust, String> {
-    blocking(move || http_client::script_trust(&collection)).await
+pub async fn http_scripts(collection: String) -> Result<Vec<ScriptState>, String> {
+    blocking(move || http_client::script_states(&collection)).await
 }
 
 /// The cookie jar as the page lists it: no value crosses here.
@@ -147,10 +147,10 @@ pub async fn http_cookies_clear() -> Result<(), String> {
     blocking(http_cookies::clear).await
 }
 
-/// Trust in the scripts `hash` names, the ones `http_script_trust` said.
+/// Scripts turned on or off by the hashes `http_scripts` gave.
 #[tauri::command]
-pub async fn http_script_trust_set(collection: String, hash: String) -> Result<(), String> {
-    blocking(move || http_client::trust_scripts(&collection, &hash)).await
+pub async fn http_scripts_set(collection: String, hashes: Vec<String>, on: bool) -> Result<(), String> {
+    blocking(move || http_client::set_scripts(&collection, &hashes, on)).await
 }
 
 /// A pasted `curl …` as a Postman `request`; nothing is read or sent.

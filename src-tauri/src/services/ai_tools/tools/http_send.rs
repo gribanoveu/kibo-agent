@@ -1,7 +1,7 @@
 //! `httpSend` — a request saved in the user's collections, sent into an HTTP
 //! environment the user opened to the agent with the model's edits over it
 //! (`docs/45-http-client.md`, HC-10c). The page's Send does the rest: auth,
-//! `oauth2`, the scripts the user trusted, `{{name}}` filled in — a hidden value
+//! `oauth2`, the scripts the user turned on, `{{name}}` filled in — a hidden value
 //! never reaches the model. The host is the saved request's. A write goes as the
 //! environment's mode says — the card is the loop's (`ApprovalPolicy::stand_asks`).
 //! A stand that does not answer is a result, told as an error.
@@ -24,7 +24,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "httpSend".into(),
         description: "Send a request saved in the user's collections into an HTTP environment the user opened to the agent, \
-            as the HTTP page's Send does: its auth, OAuth 2.0 token and the scripts the user trusted are the app's, and a hidden \
+            as the HTTP page's Send does: its auth, OAuth 2.0 token and the scripts the user turned on are the app's, and a hidden \
             value never reaches you. `request` is an id from httpEnvironment; read the request with httpReadRequest first. \
             Change what the case needs: `method`; `path` — what follows the host part of its address, from one `/` (for \
             `{{baseUrl}}/orders/1`, `/orders/2`); `query` — the whole query; `headers` — by name, `null` takes one away; `body` — \
@@ -90,8 +90,8 @@ pub(crate) fn agent_send(args: &HttpSendArgs) -> Result<AgentSend, HttpError> {
 /// What the scripts said: whether they ran, each test, a failure, the console.
 fn scripts_text(report: &ScriptReport) -> Vec<String> {
     let mut lines = Vec::new();
-    if report.not_run {
-        lines.push("Scripts not run: the user has not trusted them on the HTTP page.".into());
+    if !report.off.is_empty() {
+        lines.push(format!("Scripts not run — off on the HTTP page, where only the user turns them on: {}.", report.off.join("; ")));
     }
     if !report.tests.is_empty() {
         lines.push("Tests:".into());
@@ -452,10 +452,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn scripts_not_trusted_are_said() {
-        let untrusted = Canned { scripts: ScriptReport { not_run: true, ..ScriptReport::default() }, ..canned(b"ok") };
+    fn scripts_off_are_said_each() {
+        let off = vec!["pre-request of collection \"Shop\"".to_string(), "post-response of request \"Get one\"".to_string()];
+        let untrusted = Canned { scripts: ScriptReport { off, ..ScriptReport::default() }, ..canned(b"ok") };
         let (result, _, _) = call(untrusted, &of("r1"));
-        assert_eq!(text_of(result), "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 2 bytes\nScripts not run: the user has not trusted them on the HTTP page.\nok");
+        assert_eq!(
+            text_of(result),
+            "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 2 bytes\nScripts not run — off on the HTTP page, where only the user turns them on: pre-request of collection \"Shop\"; post-response of request \"Get one\".\nok"
+        );
     }
 
     #[test]

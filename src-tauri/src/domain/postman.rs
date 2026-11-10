@@ -24,11 +24,30 @@ pub struct Listed {
     pub url: String,
 }
 
-/// A collection's scripts, for trust.
+/// A collection's scripts, for trust as it was before HC-11a.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptsDigest {
     pub hash: String,
     pub count: usize,
+}
+
+/// The scripts of one level of a collection that run at one moment — the
+/// collection's own (`item` `None`), a folder's or a request's, `prerequest` or
+/// `test` — by the hashes they are turned on by: a level may write several.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelScripts {
+    pub item: Option<String>,
+    pub listen: String,
+    /// The code as it runs, each with its hash beside it in `hashes`: what the window
+    /// shows is this, so the code read is the code turned on.
+    pub codes: Vec<String>,
+    pub hashes: Vec<String>,
+}
+
+/// The hash a script is turned on by (HC-11a): of its code alone, so the same code
+/// stays on wherever an import puts it, and any change to it turns it off.
+pub fn script_hash(code: &str) -> String {
+    blake3::hash(code.as_bytes()).to_hex().to_string()
 }
 
 const SCHEMA: &str = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
@@ -447,14 +466,43 @@ impl Collection {
     }
 
     /// The scripts that run for request `id` at `listen` (`prerequest` or `test`), in
-    /// Postman's order: the collection's, each folder's going down, the request's own.
-    pub fn scripts(&self, id: &str, listen: &str) -> Result<Vec<String>, HttpError> {
+    /// Postman's order: the collection's, each folder's going down, the request's own —
+    /// each with where it is, `collection "Shop"`, `folder "Admin"`, `request "Login"`.
+    pub fn scripts(&self, id: &str, listen: &str) -> Result<Vec<(String, String)>, HttpError> {
         let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
-        Ok(chain.iter().flat_map(|level| scripts_of(level)).filter(|(at, _)| *at == listen).map(|(_, code)| code).collect())
+        let last = chain.len() - 1;
+        let place = |at: usize, level: &Map<String, Value>| match at {
+            0 => format!("collection \"{}\"", self.name()),
+            _ if at == last => format!("request \"{}\"", text_of(level.get("name"))),
+            _ => format!("folder \"{}\"", text_of(level.get("name"))),
+        };
+        let scripts = chain.iter().enumerate().flat_map(|(at, level)| scripts_of(level).into_iter().map(move |s| (at, *level, s)));
+        Ok(scripts.filter(|(_, _, (on, _))| on == listen).map(|(at, level, (_, code))| (place(at, level), code)).collect())
+    }
+
+    /// Every level's scripts, the collection's first and then the tree's in order (HC-11a).
+    pub fn all_scripts(&self) -> Vec<LevelScripts> {
+        fn walk(level: &Map<String, Value>, item: Option<String>, out: &mut Vec<LevelScripts>) {
+            for listen in ["prerequest", "test"] {
+                let codes: Vec<String> = scripts_of(level).into_iter().filter(|(on, _)| on == listen).map(|(_, code)| code).collect();
+                if !codes.is_empty() {
+                    let hashes = codes.iter().map(|code| script_hash(code)).collect();
+                    out.push(LevelScripts { item: item.clone(), listen: listen.to_string(), codes, hashes });
+                }
+            }
+            for child in level.get("item").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                walk(child, child.get("id").and_then(Value::as_str).map(String::from), out);
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(root) = self.root.as_object() {
+            walk(root, None, &mut out);
+        }
+        out
     }
 
     /// How many scripts the collection has, anywhere, and a hash of them all: trust
-    /// is given to these scripts, and any change asks again. `None` when it has none.
+    /// as it was given before HC-11a, read only to carry it over. `None` when it has none.
     pub fn scripts_digest(&self) -> Option<ScriptsDigest> {
         fn walk(level: &Map<String, Value>, hasher: &mut blake3::Hasher, count: &mut usize) {
             for (listen, code) in scripts_of(level) {
@@ -1321,11 +1369,27 @@ mod tests {
             Collection::parse(&file.to_string()).unwrap()
         };
         let off = with(json!({"listen": "test", "disabled": true, "script": {"exec": ["1"]}}));
-        assert_eq!((off.scripts_digest(), off.scripts("r", "test").unwrap()), (None, Vec::new()));
+        assert_eq!((off.scripts_digest(), off.scripts("r", "test").unwrap(), off.all_scripts()), (None, Vec::new(), Vec::new()));
         let empty = with(json!({"listen": "test", "script": {"exec": ["  ", ""]}}));
-        assert_eq!((empty.scripts_digest(), empty.scripts("r", "test").unwrap()), (None, Vec::new()));
+        assert_eq!((empty.scripts_digest(), empty.scripts("r", "test").unwrap(), empty.all_scripts()), (None, Vec::new(), Vec::new()));
         let on = with(json!({"listen": "test", "script": {"exec": ["1"]}}));
-        assert_eq!((on.scripts_digest().map(|d| d.count), on.scripts("r", "test").unwrap()), (Some(1), vec!["1".to_string()]));
+        assert_eq!((on.scripts_digest().map(|d| d.count), on.scripts("r", "test").unwrap()), (Some(1), vec![("request \"R\"".to_string(), "1".to_string())]));
+    }
+
+    /// Each level's scripts by the hash of their code alone, where they are and when
+    /// they run: the same code has the same hash anywhere, other code another.
+    #[test]
+    fn every_level_lists_its_scripts_by_the_hash_of_their_code() {
+        let event = |listen: &str, code: &str| json!({"listen": listen, "script": {"exec": [code]}});
+        let item = json!({"id": "r", "name": "Login", "event": [event("test", "a"), event("test", "b")], "request": "http://a.test"});
+        let file = json!({"info": {"name": "Shop", "schema": SCHEMA}, "event": [event("prerequest", "a")], "item": [{"id": "f", "name": "Admin", "event": [event("prerequest", "c")], "item": [item]}]});
+        let c = Collection::parse(&file.to_string()).unwrap();
+        let level = |item: Option<&str>, listen: &str, codes: &[&str]| LevelScripts { item: item.map(String::from), listen: listen.into(), codes: codes.iter().map(|code| code.to_string()).collect(), hashes: codes.iter().map(|code| script_hash(code)).collect() };
+        assert_eq!(c.all_scripts(), [level(None, "prerequest", &["a"]), level(Some("f"), "prerequest", &["c"]), level(Some("r"), "test", &["a", "b"])]);
+        assert_ne!(script_hash("a"), script_hash("a "));
+        let at = |listen: &str| c.scripts("r", listen).unwrap();
+        assert_eq!(at("prerequest"), [("collection \"Shop\"".to_string(), "a".to_string()), ("folder \"Admin\"".to_string(), "c".to_string())]);
+        assert_eq!(at("test"), [("request \"Login\"".to_string(), "a".to_string()), ("request \"Login\"".to_string(), "b".to_string())]);
     }
 
     #[test]

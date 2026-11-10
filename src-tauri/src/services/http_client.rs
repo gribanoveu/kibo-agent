@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::domain::http_auth::{refusal, OAuth2, Token};
 use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSave, AgentSaved, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
-use crate::domain::postman::{environment_to_postman, read_import, Auth, Collection, Imported};
+use crate::domain::postman::{environment_to_postman, read_import, script_hash, Auth, Collection, Imported};
 use crate::infra::http_client::NoCookies;
 use crate::infra::http_cookies::StoredJar;
 use crate::infra::postman_sandbox::{Ran, Sandbox, LIMITS};
@@ -252,7 +252,7 @@ fn write_variables(before: &ScriptVars, after: &ScriptVars, collection_id: &str,
     Ok(true)
 }
 
-/// A send's scripts: none, when the collection has none or is not trusted.
+/// A send's scripts: those turned on, of the collection, the folders down and the request.
 struct Scripts<'a> {
     /// The variables as the send found them, and as the scripts have left them.
     start: ScriptVars,
@@ -272,10 +272,16 @@ struct Scripts<'a> {
 
 impl<'a> Scripts<'a> {
     fn new(collection: &Collection, id: &str, request_id: &str, environment: Option<&'a Environment>, vars: ScriptVars, report: &'a mut ScriptReport, agent: Option<ForAgent>) -> Result<Scripts<'a>, HttpError> {
-        let digest = collection.scripts_digest();
-        let trusted = digest.as_ref().is_some_and(|d| is_trusted(id, &d.hash));
-        report.not_run = digest.is_some() && !trusted;
-        let (before, after) = if trusted { (collection.scripts(request_id, "prerequest")?, collection.scripts(request_id, "test")?) } else { Default::default() };
+        // Only the scripts turned on run; the others are said, by where they are.
+        let on = scripts_on(id, collection);
+        let mut off = Vec::new();
+        let mut pick = |listen: &str, when: &str| -> Result<Vec<String>, HttpError> {
+            let (run, not): (Vec<_>, Vec<_>) = collection.scripts(request_id, listen)?.into_iter().partition(|(_, code)| on.contains(&script_hash(code)));
+            off.extend(not.into_iter().map(|(place, _)| format!("{when} of {place}")));
+            Ok(run.into_iter().map(|(_, code)| code).collect())
+        };
+        let (before, after) = (pick("prerequest", "pre-request")?, pick("test", "post-response")?);
+        report.off = off;
         let name = collection.item_name(request_id).unwrap_or_default();
         Ok(Scripts { start: vars.clone(), vars, report, environment, before, after, sandbox: None, name, agent, kept: Vec::new() })
     }
@@ -399,7 +405,7 @@ impl HttpStands for Stands {
     }
 
     /// The page's Send of a saved request with the model's edits (HC-10c): its auth,
-    /// `oauth2` and scripts, as trusted. The environment and the collections are read
+    /// `oauth2` and the scripts turned on. The environment and the collections are read
     /// again: access taken back, or a request deleted, mid-turn counts from the next
     /// call. History gets it signed by the chat; the request's last response stays the user's.
     fn send(&self, id: &str, send: &AgentSend) -> Result<AgentSent, HttpError> {
@@ -424,7 +430,7 @@ impl HttpStands for Stands {
 
     /// A case kept (HC-10e): the new request in the template's collection, beside it
     /// or in the folder named inside the template's own, made when there is none. Only
-    /// added: nothing of the user's is changed, and the scripts' trust stays — the case
+    /// added: nothing of the user's is changed, and no script is turned on — the case
     /// has none of its own. Where it goes is read from the file as it is written: a
     /// folder made or the template moved meanwhile counts.
     fn save(&self, id: &str, save: &AgentSave) -> Result<AgentSaved, HttpError> {
@@ -473,35 +479,68 @@ fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variabl
     Ok(f(&collections, &globals, &ids))
 }
 
-/// Settings that cannot be read trust nothing.
-fn is_trusted(collection: &str, hash: &str) -> bool {
-    settings_store::load().unwrap_or_default().http_script_trust.get(collection).is_some_and(|trusted| trusted == hash)
+/// The hashes of collection `id`'s scripts turned on (HC-11a). Trust given before to
+/// the whole collection carries over once: the scripts unchanged since, all of them
+/// are on; changed, none. Settings that cannot be read turn nothing on.
+fn scripts_on(id: &str, collection: &Collection) -> BTreeSet<String> {
+    let settings = settings_store::load().unwrap_or_default();
+    if !settings.http_script_trust.contains_key(id) {
+        return settings.http_scripts_on.get(id).cloned().unwrap_or_default();
+    }
+    let carried = settings_store::update(|s| {
+        if let Some(old) = s.http_script_trust.remove(id) {
+            if collection.scripts_digest().is_some_and(|d| d.hash == old) {
+                s.http_scripts_on.entry(id.to_string()).or_default().extend(collection.all_scripts().into_iter().flat_map(|l| l.hashes));
+            }
+        }
+        s.http_scripts_on.get(id).cloned().unwrap_or_default()
+    });
+    carried.unwrap_or_default()
 }
 
-/// Whether a collection's scripts run, for the window to ask before the first send.
+/// One level's scripts at one moment, for the Scripts tab: where, when, the hashes
+/// to turn them on or off by, and whether all of them are on.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptTrust {
-    /// Of the scripts as they are now; none when there are none to trust.
-    pub hash: Option<String>,
-    pub count: usize,
-    pub trusted: bool,
+pub struct ScriptState {
+    /// The folder's or request's id; `None` for the collection's own.
+    pub item: Option<String>,
+    pub listen: String,
+    /// The code as the send runs it — what the Scripts tab shows, so that what the user
+    /// reads is what the switch turns on — with each one's hash in `hashes`.
+    pub codes: Vec<String>,
+    pub hashes: Vec<String>,
+    pub on: bool,
 }
 
-pub fn script_trust(collection: &str) -> Result<ScriptTrust, HttpError> {
-    let digest = http_collections::get(collection)?.scripts_digest();
-    let trusted = digest.as_ref().is_some_and(|d| is_trusted(collection, &d.hash));
-    Ok(digest.map_or(ScriptTrust { hash: None, count: 0, trusted: false }, |d| ScriptTrust { hash: Some(d.hash), count: d.count, trusted }))
+pub fn script_states(collection: &str) -> Result<Vec<ScriptState>, HttpError> {
+    let c = http_collections::get(collection)?;
+    let on = scripts_on(collection, &c);
+    Ok(c.all_scripts().into_iter().map(|l| ScriptState { on: l.hashes.iter().all(|h| on.contains(h)), item: l.item, listen: l.listen, codes: l.codes, hashes: l.hashes }).collect())
 }
 
-/// Trust in the scripts the window showed: `hash` is theirs, so an import that
-/// changed them since is not trusted by an answer about the old ones.
-pub fn trust_scripts(collection: &str, hash: &str) -> Result<(), HttpError> {
-    if http_collections::get(collection)?.scripts_digest().is_none_or(|d| d.hash != hash) {
+/// Scripts turned on or off by the hashes the window showed (HC-11a). A hash none of
+/// the collection's scripts has now is refused — they changed since they were shown —
+/// and the hashes of scripts gone are dropped.
+pub fn set_scripts(collection: &str, hashes: &[String], on: bool) -> Result<(), HttpError> {
+    let c = http_collections::get(collection)?;
+    scripts_on(collection, &c);
+    let present: HashSet<String> = c.all_scripts().into_iter().flat_map(|l| l.hashes).collect();
+    if hashes.is_empty() || hashes.iter().any(|h| !present.contains(h)) {
         return Err(HttpError::Script("The collection's scripts changed — look at them again.".into()));
     }
-    settings_store::update(|s| s.http_script_trust.insert(collection.to_string(), hash.to_string())).map_err(|e| HttpError::Store(e.to_string()))?;
-    Ok(())
+    settings_store::update(|s| {
+        let set = s.http_scripts_on.entry(collection.to_string()).or_default();
+        set.retain(|h| present.contains(h));
+        for h in hashes {
+            if on {
+                set.insert(h.clone());
+            } else {
+                set.remove(h);
+            }
+        }
+    })
+    .map_err(|e| HttpError::Store(e.to_string()))
 }
 
 fn save(collection_id: &str, request_id: &str, sent: Sent, report: ScriptReport) -> Result<ResponseView, HttpError> {
@@ -633,7 +672,11 @@ pub fn delete_collection(id: &str) -> Result<(), HttpError> {
     let _held = writing();
     http_collections::delete(id)?;
     http_env_store::forget_collection(id)?;
-    settings_store::update(|s| s.http_script_trust.remove(id)).map_err(|e| HttpError::Store(e.to_string()))?;
+    settings_store::update(|s| {
+        s.http_script_trust.remove(id);
+        s.http_scripts_on.remove(id);
+    })
+    .map_err(|e| HttpError::Store(e.to_string()))?;
     Ok(())
 }
 
@@ -1511,8 +1554,10 @@ mod tests {
         http_collections::add(&Collection::parse(&collection.to_string()).unwrap()).unwrap()
     }
 
+    /// Every script of the collection turned on.
     fn trust(id: &str) {
-        trust_scripts(id, &script_trust(id).unwrap().hash.unwrap()).unwrap();
+        let hashes: Vec<String> = script_states(id).unwrap().into_iter().flat_map(|s| s.hashes).collect();
+        set_scripts(id, &hashes, true).unwrap();
     }
 
     fn env_value(key: &str) -> Option<String> {
@@ -1717,44 +1762,149 @@ mod tests {
         });
     }
 
+    /// Imported, every script is off and the send says which did not run. Turned on one
+    /// by one — a folder's on runs for all its requests — and by the hash of its code: a
+    /// script changed is off again, its old hash refused, the others stay on.
     #[test]
-    fn without_trust_no_script_runs_and_a_changed_script_asks_again() {
-        with_app_dir("http-script-trust", || {
-            let (port, _seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
-            let id = scripted(vec![], vec![], vec![event("prerequest", "pm.globals.set('ran', 'yes');")]);
+    fn a_script_runs_only_once_turned_on_and_off_again_once_changed() {
+        with_app_dir("http-script-on", || {
+            let (port, _seen) = serve((0..4).map(|_| reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")).collect());
+            let id = scripted(vec![], vec![event("prerequest", "pm.globals.set('folder', 'ran');")], vec![event("prerequest", "pm.globals.set('ran', 'yes');")]);
             stage(format!("http://127.0.0.1:{port}"));
+            let states = script_states(&id).unwrap();
+            assert_eq!(states.iter().map(|s| (s.item.as_deref(), s.on)).collect::<Vec<_>>(), [(Some("folder"), false), (Some("order"), false)]);
 
-            let status = script_trust(&id).unwrap();
-            assert_eq!((status.count, status.trusted), (1, false));
             let view = send(&id, "order", None, Some("stage")).unwrap();
-            assert!(view.scripts.not_run);
-            assert_eq!(global("ran"), None, "the request went without its script");
+            assert_eq!(view.scripts.off, ["pre-request of folder \"Folder\"", "pre-request of request \"Order\""]);
+            assert_eq!((global("folder"), global("ran")), (None, None), "the request went without them");
 
-            trust(&id);
-            assert!(script_trust(&id).unwrap().trusted);
-            assert!(!send(&id, "order", None, Some("stage")).unwrap().scripts.not_run);
+            set_scripts(&id, &states[0].hashes, true).unwrap();
+            assert_eq!(send(&id, "order", None, Some("stage")).unwrap().scripts.off, ["pre-request of request \"Order\""]);
+            assert_eq!((global("folder").as_deref(), global("ran")), (Some("ran"), None));
+
+            set_scripts(&id, &states[1].hashes, true).unwrap();
+            assert!(send(&id, "order", None, Some("stage")).unwrap().scripts.off.is_empty());
             assert_eq!(global("ran").as_deref(), Some("yes"));
 
-            let old = script_trust(&id).unwrap().hash.unwrap();
             change(&id, |c| {
-                let item = c.item_mut("order").unwrap();
-                item.insert("event".into(), json!([event("prerequest", "pm.globals.set('ran', 'changed');")]));
+                c.item_mut("order").unwrap().insert("event".into(), json!([event("prerequest", "pm.globals.set('ran', 'changed');")]));
                 Ok(())
             })
             .unwrap();
-            assert!(!script_trust(&id).unwrap().trusted, "another script, another answer");
-            assert!(send(&id, "order", None, Some("stage")).unwrap().scripts.not_run);
+            assert_eq!(script_states(&id).unwrap().iter().map(|s| s.on).collect::<Vec<_>>(), [true, false], "another script is off; the folder's stays on");
+            assert_eq!(send(&id, "order", None, Some("stage")).unwrap().scripts.off, ["pre-request of request \"Order\""]);
             assert_eq!(global("ran").as_deref(), Some("yes"));
-            assert!(trust_scripts(&id, &old).is_err(), "an answer about the old scripts is no answer about these");
+            assert!(set_scripts(&id, &states[1].hashes, true).is_err(), "an answer about the old script is no answer about this one");
+            set_scripts(&id, &states[0].hashes, false).unwrap();
+            assert!(!script_states(&id).unwrap()[0].on, "turned off again");
+        });
+    }
+
+    /// The same code is on wherever an import puts it: what was turned on stays on
+    /// after the collection comes in again, and what changed in it is off.
+    #[test]
+    fn a_collection_imported_again_keeps_on_what_did_not_change() {
+        with_app_dir("http-script-reimport", || {
+            let id = scripted(vec![event("prerequest", "login()")], vec![], vec![event("test", "check()")]);
+            trust(&id);
+            change(&id, |c| {
+                c.item_mut("order").unwrap().insert("event".into(), json!([event("test", "check(); steal()")]));
+                c.item_mut("folder").unwrap().insert("id".into(), json!("renumbered"));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(script_states(&id).unwrap().iter().map(|s| (s.item.as_deref(), s.on)).collect::<Vec<_>>(), [(None, true), (Some("order"), false)]);
+        });
+    }
+
+    /// Trust given to a whole collection before HC-11a: its scripts unchanged since are
+    /// all on, once; changed since, none. The old entry is gone either way.
+    #[test]
+    fn trust_in_a_whole_collection_carries_over_once() {
+        with_app_dir("http-script-carry", || {
+            let id = scripted(vec![event("prerequest", "a()")], vec![], vec![event("test", "b()")]);
+            let digest = http_collections::get(&id).unwrap().scripts_digest().unwrap().hash;
+            settings_store::update(|s| s.http_script_trust.insert(id.clone(), digest)).unwrap();
+            assert!(script_states(&id).unwrap().iter().all(|s| s.on));
+            assert!(!settings_store::load().unwrap().http_script_trust.contains_key(&id));
+
+            let other = scripted(vec![event("prerequest", "a()")], vec![], vec![]);
+            settings_store::update(|s| s.http_script_trust.insert(other.clone(), "stale".into())).unwrap();
+            assert!(script_states(&other).unwrap().iter().all(|s| !s.on), "changed since: none");
+            assert!(!settings_store::load().unwrap().http_script_trust.contains_key(&other));
+        });
+    }
+
+    /// Two scripts of a kind on one level are one switch: on only when both are — a
+    /// re-import that changed one of them shows the level off.
+    #[test]
+    fn a_level_is_on_only_when_all_its_scripts_are() {
+        with_app_dir("http-script-half", || {
+            let id = scripted(vec![event("prerequest", "a()"), event("prerequest", "b()")], vec![], vec![]);
+            let hashes = script_states(&id).unwrap().remove(0).hashes;
+            assert_eq!(hashes.len(), 2);
+            set_scripts(&id, &hashes[..1], true).unwrap();
+            assert!(!script_states(&id).unwrap()[0].on);
+            set_scripts(&id, &hashes, true).unwrap();
+            assert!(script_states(&id).unwrap()[0].on);
+        });
+    }
+
+    /// A switch drops the hashes of scripts the collection no longer has: the set in the
+    /// settings does not grow with every import.
+    #[test]
+    fn a_switch_forgets_the_scripts_gone() {
+        with_app_dir("http-script-gone", || {
+            let id = scripted(vec![event("prerequest", "a()")], vec![], vec![event("test", "b()")]);
+            trust(&id);
+            change(&id, |c| {
+                c.item_mut("order").unwrap().insert("event".into(), json!([]));
+                Ok(())
+            })
+            .unwrap();
+            set_scripts(&id, &[script_hash("a()")], false).unwrap();
+            assert_eq!(settings_store::load().unwrap().http_scripts_on.get(&id), Some(&BTreeSet::new()));
+        });
+    }
+
+    /// Nothing in the collection's file turns a script on: a flag an author or an
+    /// exporter put there arrives with the import, so it is not read (decision 2).
+    #[test]
+    fn nothing_in_the_file_turns_a_script_on() {
+        with_app_dir("http-script-flag", || {
+            let mut flagged = event("prerequest", "a()");
+            flagged["disabled"] = json!(false);
+            flagged["on"] = json!(true);
+            flagged["trusted"] = json!(true);
+            flagged["script"]["hash"] = json!(script_hash("a()"));
+            let (port, _seen) = serve(vec![reply("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
+            let id = scripted(vec![flagged], vec![], vec![]);
+            stage(format!("http://127.0.0.1:{port}"));
+            assert_eq!(script_states(&id).unwrap().iter().map(|s| s.on).collect::<Vec<_>>(), [false]);
+            assert_eq!(send(&id, "order", None, Some("stage")).unwrap().scripts.off, ["pre-request of collection \"Scripted\""]);
+        });
+    }
+
+    /// What the Scripts tab shows is the code the send runs and the switch turns on: a
+    /// line of `exec` that is not a string is dropped from both, never shown alone.
+    #[test]
+    fn the_code_shown_is_the_code_hashed_and_run() {
+        with_app_dir("http-script-shown", || {
+            let odd = json!({"listen": "prerequest", "script": {"exec": ["const note = `", ["`/*"], "`; steal(); //", "/**/", ""]}});
+            let id = scripted(vec![odd], vec![], vec![]);
+            let state = script_states(&id).unwrap().remove(0);
+            assert_eq!(state.codes, ["const note = `\n`; steal(); //\n/**/\n"]);
+            assert_eq!(state.hashes, [script_hash(&state.codes[0])]);
         });
     }
 
     #[test]
-    fn a_collection_with_no_scripts_has_nothing_to_trust() {
+    fn a_collection_with_no_scripts_has_nothing_to_turn_on() {
         with_app_dir("http-script-none", || {
             let id = shop();
-            assert_eq!(script_trust(&id).unwrap(), ScriptTrust { hash: None, count: 0, trusted: false });
-            assert!(trust_scripts(&id, "anything").is_err());
+            assert_eq!(script_states(&id).unwrap(), []);
+            assert!(set_scripts(&id, &["anything".to_string()], true).is_err());
+            assert!(set_scripts(&id, &[], true).is_err());
         });
     }
 
@@ -1787,9 +1937,12 @@ mod tests {
             send(&id, "order", None, Some("stage")).unwrap();
             assert_eq!(env_value("again").as_deref(), Some("c-1t-1"));
 
+            settings_store::update(|s| s.http_script_trust.insert(id.clone(), "old".into())).unwrap();
             delete_collection(&id).unwrap();
             assert!(!http_env_store::collection_values().unwrap().contains_key(&id));
-            assert!(!settings_store::load().unwrap().http_script_trust.contains_key(&id));
+            let settings = settings_store::load().unwrap();
+            assert!(!settings.http_scripts_on.contains_key(&id));
+            assert!(!settings.http_script_trust.contains_key(&id));
         });
     }
 
@@ -2241,7 +2394,7 @@ mod tests {
             assert_eq!(env_value("session").as_deref(), Some("s3ss-v4lue"), "kept, as after a Send");
             for sent in [&first, &second] {
                 assert_eq!(body_of(sent), "you are •••");
-                assert!(!sent.scripts.not_run);
+                assert!(sent.scripts.off.is_empty());
             }
             // The script's own sign-in is the user's, as after a Send; the model's sends are what it read.
             let history = http_collections::history().unwrap();
@@ -2341,7 +2494,7 @@ mod tests {
             assert_eq!(after.item_mut(&filed.id).unwrap()["request"]["body"], json!({"mode": "raw", "raw": "{}", "options": {"raw": {"language": "json"}}}));
             assert!(after.item_mut(&beside.id).unwrap().get("event").is_none(), "no scripts in a case");
             assert_eq!(after.json()["item"][4]["item"][0]["id"], made.id.as_str());
-            assert!(script_trust(&id).unwrap().trusted, "a case has no scripts: the trust stays");
+            assert!(script_states(&id).unwrap().iter().all(|s| s.on), "a case has no scripts: what was on stays on");
 
             let away = save("Away", None, AgentEdits { path: Some("@evil.example/x".into()), ..AgentEdits::default() });
             assert_eq!(stands.save("stage", &away), Err(HttpError::BadPath("@evil.example/x".into())));
@@ -2364,7 +2517,7 @@ mod tests {
             open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
             scripted(vec![], vec![], vec![event("prerequest", "pm.globals.set('ran', 'yes');")]);
             let sent = stands("c").0.send("stage", &agent_with("order", AgentEdits { method: Some("GET".into()), ..AgentEdits::default() })).unwrap();
-            assert!(sent.scripts.not_run);
+            assert_eq!(sent.scripts.off, ["pre-request of request \"Order\""]);
             assert_eq!(global("ran"), None);
         });
     }

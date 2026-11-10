@@ -30,8 +30,9 @@ pub struct ConsoleLine {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ScriptReport {
-    /// The collection has scripts, and they did not run: it is not trusted.
-    pub not_run: bool,
+    /// The scripts that did not run because they are off (HC-11a), by when and where:
+    /// `pre-request of folder "Admin"`.
+    pub off: Vec<String>,
     pub tests: Vec<TestResult>,
     pub console: Vec<ConsoleLine>,
     /// A test script that threw or ran out of time. The response stands.

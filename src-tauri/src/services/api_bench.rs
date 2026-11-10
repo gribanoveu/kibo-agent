@@ -41,7 +41,7 @@ use crate::domain::tool_call_log::{CallStatus, ToolCallLogEntry};
 use crate::domain::tools::ApprovalPolicy;
 use crate::domain::turn::{ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent};
 use crate::infra::http_env_store;
-use crate::services::http_client::{import, script_trust, trust_scripts, ImportedAs, Stands};
+use crate::services::http_client::{import, script_states, set_scripts, ImportedAs, Stands};
 use crate::services::llm_session::LlmSession;
 use crate::services::plain_chat::{self, ChatTurn};
 use crate::testing::{scripted_session, temp_dir, with_app_dir};
@@ -122,8 +122,9 @@ impl Fixture {
         http_env_store::add(opened).unwrap();
         let ImportedAs::Collection { id, .. } = import(&read("collection.json")).unwrap() else { panic!("{}: collection.json is not a collection", task.name) };
         if task.trust {
-            let hash = script_trust(&id).unwrap().hash.unwrap_or_else(|| panic!("{}: trustScripts, and no scripts", task.name));
-            trust_scripts(&id, &hash).unwrap();
+            let hashes: Vec<String> = script_states(&id).unwrap().into_iter().flat_map(|s| s.hashes).collect();
+            assert!(!hashes.is_empty(), "{}: trustScripts, and no scripts", task.name);
+            set_scripts(&id, &hashes, true).unwrap();
         }
         fixture
     }
