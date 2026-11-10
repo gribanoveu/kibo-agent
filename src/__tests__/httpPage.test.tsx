@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:t
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { currentCompletions } from "@codemirror/autocomplete";
-import type { HttpHistoryEntry, HttpResponseView } from "../lib/httpCommands";
+import type { HttpHistoryEntry, HttpResponseView, HttpScriptState } from "../lib/httpCommands";
 import type { Environment } from "../lib/httpClient";
 
 // The HTTP page on its stores: a collection, its requests and an environment
@@ -42,7 +42,8 @@ const ENTRY: HttpHistoryEntry = {
 
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let holdSends = false;
-let trust: { hash: string | null; count: number; trusted: boolean } = { hash: null, count: 0, trusted: false };
+/** The collection's scripts as the backend says, turned on and off by `http_scripts_set`. */
+let states: HttpScriptState[] = [];
 let jar: { domain: string; path: string; name: string; expiresAt?: number | null }[] = [];
 let answer: HttpResponseView;
 const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseView => ({
@@ -51,7 +52,7 @@ const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseVi
   outcome: { kind: "response", status: 200, headers: [], url: "http://x", elapsedMs: 5 },
   body: "ok",
   size: 2,
-  scripts: { notRun: false, tests: [], console: [], changed: false, ...scripts },
+  scripts: { off: [], tests: [], console: [], changed: false, ...scripts },
 });
 
 mock.module("@tauri-apps/api/core", () => ({
@@ -60,7 +61,13 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null }]);
     if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
-    if (command === "http_script_trust") return Promise.resolve(trust);
+    if (command === "http_scripts") return Promise.resolve(structuredClone(states));
+    if (command === "http_scripts_set") {
+      const hashes = args!.hashes as string[];
+      if (hashes.includes("stale")) return Promise.reject("The collection's scripts changed — look at them again.");
+      states = states.map((s) => (s.hashes.some((h) => hashes.includes(h)) ? { ...s, on: args!.on as boolean } : s));
+      return Promise.resolve(null);
+    }
     if (command === "http_cookies") return Promise.resolve(jar);
     if (command === "http_cookie_delete") {
       jar = jar.filter((c) => c.name !== args!.name);
@@ -113,7 +120,7 @@ beforeEach(() => {
   localStorage.clear();
   calls = [];
   holdSends = false;
-  trust = { hash: null, count: 0, trusted: false };
+  states = [];
   jar = [];
   answer = reported({});
 });
@@ -323,38 +330,85 @@ describe("the HTTP page", () => {
     await waitFor(() => expect(called("http_send")).toEqual([{ collection: "c", requestId: "r2", request: "{{baseUrl}}/health", environment: null }]));
   });
 
-  test("the first send of scripts not trusted asks, naming the collection, what they can reach and how many", async () => {
-    trust = { hash: "h1", count: 3, trusted: false };
-    await shown("r2");
+  test("a script off is marked in the tree and on its tab, and its switch turns it on", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["first();", "second();"], hashes: ["h1"], on: false }];
+    await shown("r1");
+    fireEvent.click(screen.getByText("Orders API"));
+    // Read after the collections: the tree is drawn before its marks are.
+    await waitFor(() => expect(screen.queryByLabelText("Postman scripts, off") !== null).toBe(true));
+    expect(screen.getByLabelText("Scripts off") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    expect(screen.getByText("Off — does not run") !== null).toBe(true);
+    // Every script of the kind, as the backend runs them one after the other.
+    expect(document.querySelector(".cm-content")?.textContent).toBe("first();second();");
+    await act(async () => fireEvent.click(screen.getByRole("switch", { name: "Run Pre-request" })));
+    // A query, not a get: a get that fails prints the whole page, which takes minutes here.
+    await waitFor(() => expect(screen.queryByText("On — runs on Send") !== null).toBe(true));
+    expect(called("http_scripts_set")).toEqual([{ collection: "c", hashes: ["h1"], on: true }]);
+    expect(screen.getByLabelText("Postman scripts, on") !== null).toBe(true);
+    expect(screen.getByLabelText("Scripts on") !== null).toBe(true);
+    // Sending asks nothing: what is off stays off, and what is on runs.
     await act(async () => fireEvent.click(sendButton()));
-    expect((await screen.findByText(/Run the scripts of “Orders API”/)) !== null).toBe(true);
-    expect(screen.getByText(/3 scripts\. A script reads every variable, secrets too/) !== null).toBe(true);
-    fireEvent.keyDown(window, { code: "Enter", key: "Enter", ...MOD });
-    expect(called("http_script_trust").length).toBe(1);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Run scripts" })));
-    await waitFor(() => expect(called("http_script_trust_set")).toEqual([{ collection: "c", hash: "h1" }]));
-  });
-
-  test("the question can be left: Cancel sends nothing, the other button sends without them", async () => {
-    trust = { hash: "h1", count: 1, trusted: false };
-    await shown("r2");
-    await act(async () => fireEvent.click(sendButton()));
-    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Cancel" })));
-    expect(called("http_send")).toEqual([]);
-    await act(async () => fireEvent.click(sendButton()));
-    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Send without scripts" })));
     await waitFor(() => expect(called("http_send").length).toBe(1));
-    expect(called("http_script_trust_set")).toEqual([]);
   });
 
-  test("scripts that did not run say so, and the note's button asks again", async () => {
-    answer = reported({ notRun: true });
-    await shown("r2");
+  test("a level with one script on and another off is marked off, in whichever order they come", async () => {
+    for (const order of [
+      [true, false],
+      [false, true],
+    ]) {
+      states = [
+        { item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: order[0] },
+        { item: "r1", listen: "test", codes: ["x();"], hashes: ["h2"], on: order[1] },
+      ];
+      // The tree's open folders are kept: each round starts with it closed.
+      localStorage.clear();
+      await shown("r1");
+      fireEvent.click(screen.getByText("Orders API"));
+      await waitFor(() => expect(screen.queryByLabelText("Postman scripts, off") !== null).toBe(true));
+      expect(screen.queryByLabelText("Postman scripts, on") === null).toBe(true);
+      expect(screen.queryByLabelText("Scripts off") !== null).toBe(true);
+      cleanup();
+    }
+  });
+
+  test("turning all on shows each script's code first — the backend's, not the file as the page read it — and turns on only those", async () => {
+    states = [
+      { item: null, listen: "test", codes: ["kept();"], hashes: ["h0"], on: true },
+      { item: "r1", listen: "prerequest", codes: ["first();", "runs();"], hashes: ["h1", "h2"], on: false },
+      // Another request's: all of the collection's are turned on, not this request's alone.
+      { item: "r2", listen: "test", codes: ["health();"], hashes: ["h3"], on: false },
+    ];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on all 2 scripts off…" }));
+    expect(screen.getByText("health();", { selector: "pre" }) !== null).toBe(true);
+    expect(screen.getByText("request “Create order” · pre-request") !== null).toBe(true);
+    expect(screen.getByText("first(); runs();", { selector: "pre", normalizer: (t) => t.replace(/\s+/g, " ").trim() }) !== null).toBe(true);
+    expect(screen.queryByText(/pm\.environment\.set/, { selector: "pre" }) === null).toBe(true);
+    expect(screen.queryByText("kept();", { selector: "pre" }) === null).toBe(true);
+    expect(called("http_scripts_set")).toEqual([]);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Turn on 2 scripts" })));
+    await waitFor(() => expect(called("http_scripts_set")).toEqual([{ collection: "c", hashes: ["h1", "h2", "h3"], on: true }]));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Turn on all/ }) === null).toBe(true));
+  });
+
+  test("a switch refused says the scripts changed", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["stale"], on: false }];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    await act(async () => fireEvent.click(screen.getByRole("switch", { name: "Run Pre-request" })));
+    expect((await screen.findByText(/changed — look at them again/)) !== null).toBe(true);
+    expect(screen.getByText("Off — does not run") !== null).toBe(true);
+  });
+
+  test("scripts that did not run say how many, and the note's button opens the Scripts tab", async () => {
+    answer = reported({ off: ['pre-request of request "Create order"'] });
+    await shown("r1");
     await act(async () => fireEvent.click(sendButton()));
-    expect((await screen.findByText(/The collection's scripts did not run/)) !== null).toBe(true);
-    trust = { hash: "h1", count: 1, trusted: false };
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send with scripts…" })));
-    expect((await screen.findByText(/Run the scripts of/)) !== null).toBe(true);
+    expect((await screen.findByText(/1 script did not run: it is off/)) !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Show scripts" }));
+    expect(screen.getByRole("tab", { name: /Scripts/ }).getAttribute("aria-selected")).toBe("true");
   });
 
   test("the Tests tab counts what failed and shows each test, what stopped the scripts and the console", async () => {
@@ -395,7 +449,9 @@ describe("the HTTP page", () => {
 
   test("while a request with scripts is out the page says a script may be waiting; one without says nothing", async () => {
     holdSends = true;
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: true }];
     await shown("r1");
+    await waitFor(() => expect(screen.queryByLabelText("Scripts on") !== null).toBe(true));
     await act(async () => fireEvent.click(sendButton()));
     expect((await screen.findByText("Scripts may be waiting…")) !== null).toBe(true);
     fireEvent.click(screen.getByText("Orders API"));
@@ -675,9 +731,11 @@ describe("the HTTP page", () => {
   });
 
   test("a request with scripts is marked; one with a body kept from Postman shows it and is refused", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: true }];
     await shown("r3");
     fireEvent.click(screen.getByText("Orders API"));
-    expect(screen.getAllByLabelText("Has Postman scripts").length).toBe(1);
+    await waitFor(() => expect(screen.queryAllByLabelText("Postman scripts, on").length).toBe(1));
+    expect(screen.queryByLabelText("Postman scripts, off") === null).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: /Body/ }));
     expect(screen.getByText(/kept from Postman as it came/)).toBeDefined();
     await act(async () => fireEvent.click(sendButton()));

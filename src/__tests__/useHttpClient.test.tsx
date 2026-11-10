@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { HttpResponseView } from "../lib/httpCommands";
+import type { HttpResponseView, HttpScriptState } from "../lib/httpCommands";
 
 // The HTTP page's state over the backend (docs/45-http-client.md): what is open
 // outlives a restart, a tab reads its saved response, the latest send wins, and
@@ -24,10 +24,8 @@ const view = (status: number, body = "ok"): HttpResponseView => ({
   outcome: { kind: "response", status, headers: [["content-type", "text/plain"]], url: "http://x", elapsedMs: 5 },
   body,
   size: body.length,
-  scripts: { notRun: false, tests: [], console: [], changed: false },
+  scripts: { off: [], tests: [], console: [], changed: false },
 });
-
-const NONE = { hash: null, count: 0, trusted: false };
 
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let responses: Record<string, HttpResponseView | null> = {};
@@ -37,7 +35,9 @@ let held: ((v: HttpResponseView) => void)[] | null = null;
 let curl: unknown = null;
 /** History as the store gives it, the oldest first. */
 let log: { id: string }[] = [];
-let trust: { hash: string | null; count: number; trusted: boolean } = NONE;
+/** The collection's scripts as the backend says, turned on and off by `http_scripts_set`. */
+let states: HttpScriptState[] = [];
+let scriptsRefused = false;
 /** What scripts wrote, as the store gives it back. */
 let current: { key: string; value: string; secret: boolean; enabled: boolean }[] = [];
 /** Commands kept waiting until the test lets them go, by name. */
@@ -50,10 +50,11 @@ mock.module("@tauri-apps/api/core", () => ({
     if (holding.has(command)) return new Promise((resolve) => (holds[command] = resolve));
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null, current }]);
     if (command === "http_environment_list") return Promise.resolve({ environments: [], globals: [] });
-    if (command === "http_script_trust") return Promise.resolve(trust);
-    if (command === "http_script_trust_set") {
-      if (args!.hash === "stale") return Promise.reject("The collection's scripts changed — look at them again.");
-      trust = { ...trust, trusted: true };
+    if (command === "http_scripts") return scriptsRefused ? Promise.reject("the settings do not read") : Promise.resolve(structuredClone(states));
+    if (command === "http_scripts_set") {
+      const hashes = args!.hashes as string[];
+      if (hashes.includes("stale")) return Promise.reject("The collection's scripts changed — look at them again.");
+      states = states.map((s) => (s.hashes.some((h) => hashes.includes(h)) ? { ...s, on: args!.on as boolean } : s));
       return Promise.resolve(null);
     }
     if (command === "http_response_last") return Promise.resolve(responses[args!.requestId as string] ?? null);
@@ -95,7 +96,8 @@ beforeEach(() => {
   responses = {};
   refusals = {};
   held = null;
-  trust = NONE;
+  states = [];
+  scriptsRefused = false;
   current = [];
   holding = new Set();
   holds = {};
@@ -140,88 +142,43 @@ describe("the HTTP page's state", () => {
     expect(hook.result.current.sent.r2).toMatchObject({ busy: false, view: { body: "second" } });
   });
 
-  test("a collection's scripts not trusted: the send waits for an answer, and running them trusts these", async () => {
-    trust = { hash: "h1", count: 2, trusted: false };
+  test("each collection's scripts are read with it; a switch turns them and reads them again", async () => {
+    states = [
+      { item: null, listen: "test", codes: ["x();"], hashes: ["h0"], on: true },
+      { item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: false },
+    ];
     const hook = await page();
+    await waitFor(() => expect(hook.result.current.scripts.c).toEqual(states));
+    await act(async () => hook.result.current.turnScripts("c", ["h1"], true));
+    expect(called("http_scripts_set")).toEqual([{ collection: "c", hashes: ["h1"], on: true }]);
+    expect(hook.result.current.scripts.c.map((s) => s.on)).toEqual([true, true]);
+    await act(async () => hook.result.current.turnScripts("c", ["h0"], false));
+    expect(hook.result.current.scripts.c.map((s) => s.on)).toEqual([false, true]);
+  });
+
+  test("a switch refused says the scripts changed, and what is read again stays", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["stale"], on: false }];
+    const hook = await page();
+    await act(async () => hook.result.current.turnScripts("c", ["stale"], true));
+    expect(hook.result.current.problem).toContain("changed");
+    expect(hook.result.current.scripts.c).toEqual(states);
+  });
+
+  test("scripts that do not read are said, not taken for none", async () => {
+    scriptsRefused = true;
+    const hook = await page();
+    await waitFor(() => expect(hook.result.current.problem).toBe("The scripts were not read: the settings do not read"));
+    scriptsRefused = false;
+  });
+
+  test("a send asks nothing about scripts: it goes, and the backend runs what is on", async () => {
+    states = [{ item: "r2", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: false }];
+    const hook = await page();
+    const reads = called("http_scripts").length;
     act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(hook.result.current.asking).toEqual({ requestId: "r2", collection: "c", name: "Orders API", count: 2, hash: "h1" }));
-    expect(hook.result.current.sent.r2?.busy).toBe(false);
-    expect(called("http_send")).toEqual([]);
-    act(() => hook.result.current.answerScripts("run"));
     await waitFor(() => expect(hook.result.current.sent.r2?.view?.body).toBe("ok"));
-    expect(hook.result.current.asking).toBeNull();
-    expect(called("http_script_trust_set")).toEqual([{ collection: "c", hash: "h1" }]);
     expect(called("http_send").length).toBe(1);
-  });
-
-  test("trusted scripts, or none, send without a word", async () => {
-    trust = { hash: "h1", count: 2, trusted: true };
-    const hook = await page();
-    act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(hook.result.current.sent.r2?.view?.body).toBe("ok"));
-    expect(hook.result.current.asking).toBeNull();
-  });
-
-  test("cancelled, nothing is sent or trusted", async () => {
-    trust = { hash: "h1", count: 1, trusted: false };
-    const hook = await page();
-    act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(hook.result.current.asking).not.toBeNull());
-    await act(async () => hook.result.current.answerScripts("cancel"));
-    expect(hook.result.current.asking).toBeNull();
-    expect(called("http_send")).toEqual([]);
-    expect(called("http_script_trust_set")).toEqual([]);
-  });
-
-  test("sent without them, the same scripts are not asked about again, changed ones are, and the way back asks", async () => {
-    trust = { hash: "h1", count: 1, trusted: false };
-    const hook = await page();
-    const press = async () => {
-      const sends = called("http_send").length;
-      act(() => hook.result.current.send("r2"));
-      await waitFor(() => expect(hook.result.current.asking !== null || called("http_send").length > sends).toBe(true));
-    };
-    await press();
-    act(() => hook.result.current.answerScripts("without"));
-    await waitFor(() => expect(called("http_send").length).toBe(1));
-    expect(called("http_script_trust_set")).toEqual([]);
-    await press();
-    expect(hook.result.current.asking).toBeNull();
-    expect(called("http_send").length).toBe(2);
-
-    trust = { hash: "h2", count: 1, trusted: false };
-    await press();
-    expect(hook.result.current.asking?.hash).toBe("h2");
-    await act(async () => hook.result.current.answerScripts("cancel"));
-
-    trust = { hash: "h1", count: 1, trusted: false };
-    act(() => hook.result.current.sendAskingScripts("r2"));
-    await waitFor(() => expect(hook.result.current.asking?.hash).toBe("h1"));
-    expect(called("http_send").length).toBe(2);
-  });
-
-  test("scripts that changed since the question are not trusted, and nothing goes", async () => {
-    trust = { hash: "stale", count: 1, trusted: false };
-    const hook = await page();
-    act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(hook.result.current.asking).not.toBeNull());
-    act(() => hook.result.current.answerScripts("run"));
-    await waitFor(() => expect(hook.result.current.problem).toContain("changed"));
-    expect(called("http_send")).toEqual([]);
-  });
-
-  test("a press while the question is out replaces it: one send, not two", async () => {
-    holding.add("http_script_trust");
-    const hook = await page();
-    act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(holds.http_script_trust).toBeDefined());
-    const first = holds.http_script_trust;
-    act(() => hook.result.current.send("r2"));
-    await waitFor(() => expect(holds.http_script_trust === first).toBe(false));
-    await act(async () => first(NONE));
-    expect(called("http_send")).toEqual([]);
-    await act(async () => holds.http_script_trust(NONE));
-    await waitFor(() => expect(called("http_send").length).toBe(1));
+    expect(called("http_scripts").length).toBe(reads);
   });
 
   test("a send whose scripts wrote reads the variables again, keeping edits not saved; one that did not, does not", async () => {

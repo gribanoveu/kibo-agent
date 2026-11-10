@@ -37,8 +37,8 @@ export interface HttpTestResult {
 
 /** What a send's scripts said, kept with the response. */
 export interface HttpScriptReport {
-  /** The collection has scripts, and they did not run: it is not trusted. */
-  notRun: boolean;
+  /** The scripts that did not run because they are off, each named by its level: `pre-request of folder "Orders"`. */
+  off: string[];
   tests: HttpTestResult[];
   console: { level: string; text: string }[];
   /** A test script that threw or ran out of time. The response stands. */
@@ -47,11 +47,15 @@ export interface HttpScriptReport {
   changed: boolean;
 }
 
-/** Whether a collection's scripts run; `hash` is null when it has none. */
-export interface HttpScriptTrust {
-  hash: string | null;
-  count: number;
-  trusted: boolean;
+/** A level's scripts of one kind and whether they run: `item` is the folder's or request's id, null for the collection's own. */
+export interface HttpScriptState {
+  item: string | null;
+  listen: "prerequest" | "test";
+  /** The code as the send runs it: what the page shows, so that what is read is what is turned on. */
+  codes: string[];
+  /** Of each code — what the switch turns on. */
+  hashes: string[];
+  on: boolean;
 }
 
 /** A request's response as the page shows it. `body` is null when it is not text; `size` is its bytes either way. */
@@ -225,16 +229,16 @@ export async function clearHttpCookies(): Promise<void> {
   await invoke("http_cookies_clear");
 }
 
-/** Whether the collection's scripts run, asked before a send. */
-export async function httpScriptTrust(collection: string): Promise<HttpScriptTrust> {
+/** Every script of the collection, level by level, and whether it runs. */
+export async function httpScripts(collection: string): Promise<HttpScriptState[]> {
   requireBackend();
-  return invoke<HttpScriptTrust>("http_script_trust", { collection });
+  return invoke<HttpScriptState[]>("http_scripts", { collection });
 }
 
-/** Trusts the scripts `hash` names; rejects when they have changed since. */
-export async function trustHttpScripts(collection: string, hash: string): Promise<void> {
+/** Turns the scripts `hashes` name on or off; rejects when they have changed since they were read. */
+export async function setHttpScripts(collection: string, hashes: string[], on: boolean): Promise<void> {
   requireBackend();
-  await invoke("http_script_trust_set", { collection, hash });
+  await invoke("http_scripts_set", { collection, hashes, on });
 }
 
 /** A pasted `curl …` as a Postman `request` object; rejects with what it could not read. */

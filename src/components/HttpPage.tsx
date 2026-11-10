@@ -37,6 +37,7 @@ import {
 import { Page, PageSheet } from "./Page";
 import { CodeEditor } from "./CodeEditor";
 import { Dropdown } from "./Dropdown";
+import { Switch } from "./Switch";
 import { Modal } from "./Modal";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
@@ -46,7 +47,7 @@ import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { HttpHistoryEntry, HttpOutcome, HttpScriptReport, HttpTestResult } from "../lib/httpCommands";
+import type { HttpHistoryEntry, HttpOutcome, HttpScriptReport, HttpScriptState, HttpTestResult } from "../lib/httpCommands";
 import {
   type AgentAccess,
   requestsUnder,
@@ -56,7 +57,8 @@ import {
   effectiveAuth,
   authParam,
   findRequest,
-  hasScripts,
+  levelOf,
+  scriptsFor,
   paramsOf,
   pretty,
   resolveRequest,
@@ -110,11 +112,12 @@ export function HttpPage() {
   const [failed, setFailed] = useState<string | null>(null);
   const shownProblem = failed ?? http.problem;
   const dismiss = () => (failed ? setFailed(null) : http.dismissProblem());
+  const marks = useMemo(() => scriptMarks(http.collections, http.scripts), [http.collections, http.scripts]);
 
   useShortcuts({
     // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
     httpSend: () => {
-      if (renaming || deleting || moving || shownProblem || http.asking || sheet || !http.active) return false;
+      if (renaming || deleting || moving || shownProblem || sheet || !http.active) return false;
       http.send(http.active);
     },
   });
@@ -318,7 +321,7 @@ export function HttpPage() {
           </div>
           <ul className="http-tree-list">
             {http.collections.map((c) => (
-              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} />
+              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} marks={marks} />
             ))}
           </ul>
         </nav>
@@ -365,7 +368,8 @@ export function HttpPage() {
               onEdit={http.edit}
               onPasteCurl={(command) => http.pasteCurl(openTab.request, command).catch((e) => setFailed(`The command was not read: ${e}`))}
               onSend={() => http.send(openTab.request.id)}
-              onAskScripts={() => http.sendAskingScripts(openTab.request.id)}
+              scripts={http.scripts[openTab.collection.id] ?? NO_SCRIPTS}
+              onTurnScripts={(hashes, on) => void http.turnScripts(openTab.collection.id, hashes, on)}
             />
           ) : (
             <p className="http-quiet http-empty">Pick a request on the left, or import a Postman collection.</p>
@@ -440,29 +444,6 @@ export function HttpPage() {
         )}
       </Modal>
       <Modal
-        title={`Run the scripts of “${http.asking?.name ?? ""}”?`}
-        open={http.asking !== null}
-        onClose={() => http.answerScripts("cancel")}
-        footer={
-          <>
-            <button type="button" className="btn btn-ghost" onClick={() => http.answerScripts("cancel")}>
-              Cancel
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={() => http.answerScripts("without")}>
-              Send without scripts
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => http.answerScripts("run")}>
-              Run scripts
-            </button>
-          </>
-        }
-      >
-        <p className="http-confirm">
-          This collection has {http.asking?.count === 1 ? "1 script" : `${http.asking?.count ?? 0} scripts`}. A script reads every variable, secrets too, and can send them anywhere with
-          pm.sendRequest. Run them only if you trust where the collection came from — a request's Scripts tab shows them. If they change, you will be asked again.
-        </p>
-      </Modal>
-      <Modal
         title="Not done"
         open={shownProblem !== null}
         onClose={dismiss}
@@ -499,15 +480,40 @@ function MethodBadge({ method }: { method: HttpMethod }) {
 
 type TreeNode = { id: string; name: string; kind: "collection" | "folder" | "request" };
 type Action = { value: string; label: string; hint?: string; run: () => void };
-type TreeProps = { expanded: Set<string>; toggle: (id: string) => void; active: string | null; open: (id: string) => void; menu: (node: TreeNode) => Action[] };
+type TreeProps = {
+  expanded: Set<string>;
+  toggle: (id: string) => void;
+  active: string | null;
+  open: (id: string) => void;
+  menu: (node: TreeNode) => Action[];
+  /** A level's own scripts, by its id or its collection's: "off" when any of them is. */
+  marks: Map<string, Mark>;
+};
+type Mark = "on" | "off";
 
-/** Says a collection or request carries Postman scripts — on hover, in words. */
-function ScriptsMark() {
+/** Says a level carries Postman scripts and whether they run — on hover, in words. */
+function ScriptsMark({ mark }: { mark: Mark | undefined }) {
+  if (!mark) return null;
+  const said = mark === "on" ? "Postman scripts, on" : "Postman scripts, off";
+  const where = mark === "on" ? "they run on Send" : "they do not run until turned on in a request's Scripts tab";
   return (
-    <span className="http-tree-mark" title="Has Postman scripts — a request's Scripts tab shows them" aria-label="Has Postman scripts">
+    <span className={`http-tree-mark${mark === "off" ? " off" : ""}`} title={`${said} — ${where}`} aria-label={said}>
       <FileCode2 size={12} />
     </span>
   );
+}
+
+const NO_SCRIPTS: HttpScriptState[] = [];
+
+/** Each level's mark: its own scripts' states, "off" when any is. */
+function scriptMarks(collections: Collection[], states: Record<string, HttpScriptState[]>): Map<string, Mark> {
+  const marks = new Map<string, Mark>();
+  for (const c of collections)
+    for (const s of states[c.id] ?? []) {
+      const at = s.item ?? c.id;
+      if (marks.get(at) !== "off") marks.set(at, s.on ? "on" : "off");
+    }
+  return marks;
 }
 
 /** A row of the tree, and beside it what can be done to it. */
@@ -540,7 +546,7 @@ function CollectionNode({ collection, ...tree }: { collection: Collection } & Tr
           {isOpen ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
           <Layers size={13} className="http-tree-icon" />
           <span className="http-tree-name">{collection.name}</span>
-          {hasScripts(collection.scripts) && <ScriptsMark />}
+          <ScriptsMark mark={tree.marks.get(collection.id)} />
         </button>
       </TreeRow>
       {isOpen &&
@@ -565,6 +571,7 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
               <button type="button" className="http-tree-row" aria-expanded={tree.expanded.has(item.id)} onClick={() => tree.toggle(item.id)}>
                 {tree.expanded.has(item.id) ? <FolderOpen size={13} className="http-tree-icon" /> : <Folder size={13} className="http-tree-icon" />}
                 <span className="http-tree-name">{item.name}</span>
+                <ScriptsMark mark={tree.marks.get(item.id)} />
               </button>
             </TreeRow>
             {tree.expanded.has(item.id) && <Items items={item.items} {...tree} />}
@@ -575,7 +582,7 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
               <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} data-tree-request={item.id} onClick={() => tree.open(item.id)}>
                 <MethodBadge method={item.method} />
                 <span className="http-tree-name">{item.name}</span>
-                {hasScripts(item.scripts) && <ScriptsMark />}
+                <ScriptsMark mark={tree.marks.get(item.id)} />
               </button>
             </TreeRow>
           </li>
@@ -1035,7 +1042,8 @@ function RequestView({
   onEdit,
   onPasteCurl,
   onSend,
-  onAskScripts,
+  scripts: states,
+  onTurnScripts,
 }: {
   collection: Collection;
   request: HttpRequest;
@@ -1046,7 +1054,8 @@ function RequestView({
   onEdit: (r: HttpRequest) => void;
   onPasteCurl: (command: string) => void;
   onSend: () => void;
-  onAskScripts: () => void;
+  scripts: HttpScriptState[];
+  onTurnScripts: (hashes: string[], on: boolean) => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
   // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
@@ -1084,7 +1093,10 @@ function RequestView({
   const params = paramsOf(request);
   const set = (patch: Partial<HttpRequest>) => onEdit({ ...request, ...patch });
   const count = (n: number) => (n > 0 ? <span className="http-count">{n}</span> : null);
-  const scripts = hasScripts(request.scripts) || hasScripts(collection.scripts);
+  // As the backend reads them: what is not read yet is not said to be on.
+  const chain = useMemo(() => scriptsFor(collection, request.id, states), [collection, request.id, states]);
+  const scripts = chain.length > 0;
+  const scriptsOff = chain.some((s) => !s.on);
 
   return (
     <div className="http-request">
@@ -1143,7 +1155,15 @@ function RequestView({
                 ["headers", "Headers", <>{count(request.headers.filter((h) => !h.disabled).length)}{warn("headers")}</>],
                 ["auth", "Auth", warn("auth")],
                 ["body", "Body", warn("body") ?? (request.body.mode === "none" ? null : <span className="http-dot" />)],
-                ["scripts", "Scripts", scripts ? <span className="http-dot http-dot-amber" /> : null],
+                [
+                  "scripts",
+                  "Scripts",
+                  scriptsOff ? (
+                    <span className="http-dot http-dot-amber" role="img" aria-label="Scripts off" title="Some of the scripts are off: they do not run" />
+                  ) : scripts ? (
+                    <span className="http-dot" role="img" aria-label="Scripts on" title="The scripts run on Send" />
+                  ) : null,
+                ],
                 ["preview", <Eye size={15} />, missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
               ] as [Tab, ReactNode, ReactNode][]
             ).map(([id, label, extra]) => (
@@ -1168,7 +1188,7 @@ function RequestView({
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
             {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
-            {tab === "scripts" && <ScriptsView collection={collection} request={request} />}
+            {tab === "scripts" && <ScriptsView collection={collection} chain={chain} all={states} onTurn={onTurnScripts} />}
             {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
         </div>
@@ -1178,7 +1198,7 @@ function RequestView({
           onResize={resize}
           onResizeEnd={(px) => px && (stacked ? setHeight : setWidth)(Math.round(px))}
         />
-        <ResponseView sent={sent} scripts={scripts} onAskScripts={onAskScripts} />
+        <ResponseView sent={sent} scripts={scripts} onShowScripts={() => setTab("scripts")} />
       </div>
     </div>
   );
@@ -1471,18 +1491,43 @@ function BodyEditor({ body, values, marks, onChange }: { body: Body; values: Rea
   );
 }
 
-/** The scripts that run with this request, picked one at a time, as the Body tab picks its mode. */
-function ScriptsView({ collection, request }: { collection: Collection; request: HttpRequest }) {
-  // In the order Postman runs them: the collection's before the request's, before sending and after it.
-  const scripts = [
-    { id: "collection-pre", label: `${collection.name} · pre-request`, text: collection.scripts.prerequest },
-    { id: "pre", label: "Pre-request", text: request.scripts.prerequest },
-    { id: "collection-post", label: `${collection.name} · post-response`, text: collection.scripts.test },
-    { id: "post", label: "Post-response", text: request.scripts.test },
-  ].filter((script) => script.text?.trim());
+const KIND = { prerequest: "pre-request", test: "post-response" } as const;
+
+/** `Orders · pre-request`, or the request's own `Pre-request`. */
+function scriptLabel(collection: Collection, s: HttpScriptState) {
+  const level = levelOf(collection, s.item);
+  const kind = KIND[s.listen];
+  return level?.kind === "request" ? kind[0].toUpperCase() + kind.slice(1) : `${level?.name ?? "?"} · ${kind}`;
+}
+
+/**
+ * The scripts that run with this request, picked one at a time, as the Body tab picks its mode;
+ * each with its switch (HC-11a). The code shown is the backend's — what runs and what the switch
+ * turns on — not read again here. A collection's or folder's switch is for all its requests.
+ */
+function ScriptsView({
+  collection,
+  chain,
+  all,
+  onTurn,
+}: {
+  collection: Collection;
+  /** This request's scripts, in the order they are listed. */
+  chain: HttpScriptState[];
+  /** The whole collection's: what "turn on all" turns on. */
+  all: HttpScriptState[];
+  onTurn: (hashes: string[], on: boolean) => void;
+}) {
+  // In the order Postman runs them: every level's pre-request, then every level's post-response.
+  const scripts = (["prerequest", "test"] as const).flatMap((listen) =>
+    chain.filter((s) => s.listen === listen).map((state) => ({ id: `${state.item ?? "collection"}-${listen}`, label: scriptLabel(collection, state), text: state.codes.join("\n\n"), state })),
+  );
   const [shown, setShown] = useState(scripts[0]?.id);
+  const [turningAll, setTurningAll] = useState(false);
+  const off = all.filter((s) => !s.on);
   const current = scripts.find((script) => script.id === shown) ?? scripts[0];
   if (!current) return <p className="http-quiet">No scripts on this request or above it.</p>;
+  const owner = levelOf(collection, current.state.item)?.kind;
   return (
     <div className="http-form">
       <div className="http-segments" role="tablist" aria-label="Scripts, in the order they run">
@@ -1496,16 +1541,64 @@ function ScriptsView({ collection, request }: { collection: Collection; request:
             onClick={() => setShown(script.id)}
           >
             {script.label}
+            {!script.state.on && <span className="http-dot http-dot-amber" role="img" aria-label="off" />}
           </button>
         ))}
+      </div>
+      <div className="http-script-bar">
+        <label className="http-script-switch">
+          <Switch label={`Run ${current.label}`} on={current.state.on} onChange={(on) => onTurn(current.state.hashes, on)} />
+          <span>{current.state.on ? "On — runs on Send" : "Off — does not run"}</span>
+        </label>
+        {owner && owner !== "request" && <span className="http-quiet">{`The ${owner}'s script: its switch is for every request in the ${owner}.`}</span>}
         <span className="http-spacer" />
-        <span className="http-quiet" title="A collection's scripts run once you trust them, which the first send asks">
-          run on Send
-        </span>
+        {off.length > 0 && (
+          <button type="button" className="http-bar-button" onClick={() => setTurningAll(true)}>
+            {off.length === 1 ? "Turn on the 1 script off…" : `Turn on all ${off.length} scripts off…`}
+          </button>
+        )}
       </div>
       <div className="http-code-box http-code-box-fill">
-        <CodeEditor text={current.text ?? ""} language="javascript" label={current.label} />
+        <CodeEditor text={current.text} language="javascript" label={current.label} />
       </div>
+      <Modal
+        title={`Turn on the scripts of “${collection.name}”?`}
+        open={turningAll}
+        onClose={() => setTurningAll(false)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setTurningAll(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setTurningAll(false);
+                onTurn(
+                  off.flatMap((s) => s.hashes),
+                  true,
+                );
+              }}
+            >
+              Turn on {off.length === 1 ? "1 script" : `${off.length} scripts`}
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">
+          A script reads every variable, secrets too, and can send them anywhere with pm.sendRequest. Turn these on only if you have read them. One that changes later is off again.
+        </p>
+        {off.map((s) => {
+          const level = levelOf(collection, s.item);
+          return (
+            <div key={`${s.item ?? "collection"}-${s.listen}`} className="http-script-read">
+              <p className="http-quiet">{`${level?.kind ?? "?"} “${level?.name ?? "?"}” · ${KIND[s.listen]}`}</p>
+              <pre className="http-mono">{s.codes.join("\n\n")}</pre>
+            </div>
+          );
+        })}
+      </Modal>
     </div>
   );
 }
@@ -1555,7 +1648,7 @@ function ScriptResults({ report, scripts }: { report: HttpScriptReport; scripts:
 
 const testState = (t: HttpTestResult) => (t.skipped ? "skipped" : t.passed ? "passed" : "failed");
 
-function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined; scripts: boolean; onAskScripts: () => void }) {
+function ResponseView({ sent, scripts, onShowScripts }: { sent: Sent | undefined; scripts: boolean; onShowScripts: () => void }) {
   const [tab, setTab] = useState<ResTab>("body");
   const view = sent?.view;
   const report = view?.scripts;
@@ -1608,13 +1701,15 @@ function ResponseView({ sent, scripts, onAskScripts }: { sent: Sent | undefined;
         {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
         {view?.outcome.kind === "failed" && <p className="http-error">{view.outcome.error}</p>}
         {!view && !sent?.busy && !sent?.notSent && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
-        {report?.notRun && (
+        {report && report.off.length > 0 && (
           <p className="http-note">
             <FileCode2 size={13} />
-            <span>The collection's scripts did not run: if one of them gets a token, the request went without it.</span>
+            <span title={report.off.join("\n")}>
+              {report.off.length === 1 ? "1 script did not run: it is off" : `${report.off.length} scripts did not run: they are off`}. If one of them gets a token, the request went without it.
+            </span>
             <span className="http-spacer" />
-            <button type="button" className="http-bar-button" onClick={onAskScripts}>
-              Send with scripts…
+            <button type="button" className="http-bar-button" onClick={onShowScripts}>
+              Show scripts
             </button>
           </p>
         )}

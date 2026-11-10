@@ -288,6 +288,10 @@
   flex: none;
   color: var(--text-faint);
 }
+/* Scripts there, and not run: the one mark that asks to be looked at. */
+.http-tree-mark.off {
+  color: var(--amber);
+}
 .http-history {
   display: flex;
   flex-direction: column;
@@ -906,6 +910,44 @@
   border-color: var(--border);
   background: var(--bg-active);
   color: var(--text);
+}
+.http-segment .http-dot {
+  display: inline-block;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* Under a script's picker: its switch, whose it is, and turning on the rest. */
+.http-script-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: var(--fs-sm);
+}
+.http-script-switch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.http-script-read {
+  margin-top: 10px;
+}
+.http-script-read p {
+  margin: 0 0 4px;
+}
+.http-script-read pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
 }
 
 

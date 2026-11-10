@@ -13,7 +13,7 @@ import {
   lastHttpResponse,
   listHttpCollections,
   listHttpEnvironments,
-  httpScriptTrust,
+  httpScripts,
   listHttpHistory,
   newHttpCollection,
   parseCurl,
@@ -21,8 +21,9 @@ import {
   saveHttpEnvironment,
   saveHttpRequest,
   sendHttpRequest,
-  trustHttpScripts,
+  setHttpScripts,
   type HttpHistoryEntry,
+  type HttpScriptState,
   type HttpImported,
   type HttpResponseView,
   onHttpChanged,
@@ -50,9 +51,6 @@ import { useStoredState } from "./useStoredState";
 /** A request's state on the page: its last answer, whether it is out now, and a refusal before sending. */
 export type Sent = { busy: boolean; view?: HttpResponseView; notSent?: string };
 
-/** A send waiting for the user to say whether a collection's scripts run. */
-export type ScriptsAsked = { requestId: string; collection: string; name: string; count: number; hash: string };
-
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const isId = (v: unknown): v is string | null => v === null || typeof v === "string";
 
@@ -77,9 +75,8 @@ export function useHttpClient(historyShown = false) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [notSent, setNotSent] = useState<Record<string, string>>({});
   const [history, setHistory] = useState<HttpHistoryEntry[] | null>(null);
-  const [asking, setAsking] = useState<ScriptsAsked | null>(null);
-  // Scripts answered "send without" to, not asked about again while the page is open.
-  const declined = useRef(new Set<string>());
+  // Each collection's scripts and whether they run, by collection id (HC-11a).
+  const [scripts, setScripts] = useState<Record<string, HttpScriptState[]>>({});
   /** What failed out of sight — a save, a load — for the page to say. */
   const [problem, setProblem] = useState<string | null>(null);
   // A send per request: a second press while the first is out wins, and the first's answer is dropped.
@@ -97,10 +94,37 @@ export function useHttpClient(historyShown = false) {
     try {
       const [list] = await Promise.all([listHttpCollections(), reloadEnvironments()]);
       setCollections(list.map(collectionFrom));
+      // One that does not read has none to show.
+      const states = await Promise.all(
+        list.map((c) =>
+          c.error === null
+            ? httpScripts(c.id).catch((e) => {
+                setProblem(`The scripts were not read: ${e}`);
+                return [];
+              })
+            : [],
+        ),
+      );
+      setScripts(Object.fromEntries(list.map((c, i) => [c.id, states[i]])));
     } catch (e) {
       setProblem(`The collections did not load: ${e}`);
     }
   }, [reloadEnvironments]);
+
+  /** Scripts turned on or off by the user, then read again: a refusal says they changed since. */
+  const turnScripts = useCallback(async (collection: string, hashes: string[], on: boolean) => {
+    try {
+      await setHttpScripts(collection, hashes, on);
+    } catch (e) {
+      setProblem(`The scripts were not turned ${on ? "on" : "off"}: ${e}`);
+    }
+    try {
+      const states = await httpScripts(collection);
+      setScripts((all) => ({ ...all, [collection]: states }));
+    } catch (e) {
+      setProblem(`The scripts were not read: ${e}`);
+    }
+  }, []);
 
   useEffect(() => {
     void reload();
@@ -342,15 +366,8 @@ export function useHttpClient(historyShown = false) {
       const current = () => latest.current[id] === ticket;
       setNotSent(({ [id]: _, ...rest }) => rest);
       setBusy((b) => ({ ...b, [id]: true }));
-      const collection = found.collection;
-      httpScriptTrust(collection.id)
-        .then(async ({ hash, count, trusted }) => {
-          if (!current()) return;
-          if (hash !== null && !trusted && !declined.current.has(hash)) {
-            setAsking({ requestId: id, collection: collection.id, name: collection.name, count, hash });
-            return;
-          }
-          const view = await sendHttpRequest(collection.id, id, requestToPostman(found.request), environment?.id ?? null);
+      sendHttpRequest(found.collection.id, id, requestToPostman(found.request), environment?.id ?? null)
+        .then((view) => {
           // A send overtaken wrote its variables all the same.
           if (view.scripts.changed) void reloadVariables();
           if (current()) setSaved((s) => ({ ...s, [id]: view }));
@@ -367,32 +384,6 @@ export function useHttpClient(historyShown = false) {
         });
     },
     [collections, environment, historyRead, loadHistory, reloadVariables],
-  );
-
-  const answerScripts = useCallback(
-    (answer: "run" | "without" | "cancel") => {
-      if (!asking) return;
-      setAsking(null);
-      if (answer === "without") {
-        declined.current.add(asking.hash);
-        send(asking.requestId);
-      } else if (answer === "run") {
-        trustHttpScripts(asking.collection, asking.hash).then(
-          () => send(asking.requestId),
-          (e) => setProblem(`The scripts were not trusted: ${e}`),
-        );
-      }
-    },
-    [asking, send],
-  );
-
-  /** The way back from "send without": the send asks again. */
-  const sendAskingScripts = useCallback(
-    (id: string) => {
-      declined.current.clear();
-      send(id);
-    },
-    [send],
   );
 
   const sent = useMemo(() => {
@@ -470,9 +461,8 @@ export function useHttpClient(historyShown = false) {
       importFile,
       send,
       sent,
-      asking,
-      answerScripts,
-      sendAskingScripts,
+      scripts,
+      turnScripts,
       saveEnvironment,
       secretOf,
       newEnvironment,
@@ -505,9 +495,8 @@ export function useHttpClient(historyShown = false) {
       importFile,
       send,
       sent,
-      asking,
-      answerScripts,
-      sendAskingScripts,
+      scripts,
+      turnScripts,
       saveEnvironment,
       secretOf,
       newEnvironment,

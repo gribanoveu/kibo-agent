@@ -701,7 +701,31 @@ export function requestToPostman(request: HttpRequest): unknown {
   return out;
 }
 
-export const hasScripts = (s: Scripts) => Boolean(s.prerequest?.trim() || s.test?.trim());
+/**
+ * Of a collection's scripts as the backend lists them, the ones that run with the request:
+ * the collection's own, each folder's down to it, its own — in the backend's order, which
+ * is the tree's. None when the request is not in the collection.
+ */
+export function scriptsFor<T extends { item: string | null }>(collection: Collection, requestId: string, scripts: T[]): T[] {
+  const found = findRequest([collection], requestId);
+  if (!found) return [];
+  const ids = new Set([...found.ids.slice(1), requestId]);
+  return scripts.filter((s) => s.item === null || ids.has(s.item));
+}
+
+/** A level's kind and name by its id — the collection's for null; null when it is not there. */
+export function levelOf(collection: Collection, item: string | null): { kind: "collection" | "folder" | "request"; name: string } | null {
+  if (item === null) return { kind: "collection", name: collection.name };
+  const walk = (items: Item[]): { kind: "folder" | "request"; name: string } | null => {
+    for (const i of items) {
+      if (i.id === item) return { kind: i.kind, name: i.name };
+      const found = i.kind === "folder" ? walk(i.items) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(collection.items);
+}
 
 /** The tone of a status: the colour token the page draws it in. */
 export function statusTone(status: number): "ok" | "redirect" | "client" | "server" {

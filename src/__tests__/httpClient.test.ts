@@ -4,6 +4,8 @@ import {
   addRequest,
   asHttpText,
   collectionFrom,
+  levelOf,
+  scriptsFor,
   effectiveAuth,
   findRequest,
   moveNode,
@@ -646,4 +648,47 @@ describe("a Postman file read and written back", () => {
       items.map((i) => i as { id: string; request?: unknown; item?: unknown[] }).reduce<unknown>((hit, i) => hit ?? (i.id === id ? i.request : i.item ? walk(i.item) : undefined), undefined);
     return walk(FILE.item);
   }
+});
+
+describe("a collection's scripts", () => {
+  const pre = (code: string, disabled?: boolean) => ({ listen: "prerequest", script: { exec: code.split("\n") }, ...(disabled ? { disabled } : {}) });
+  const tree = collectionFrom({
+    id: "c",
+    error: null,
+    file: {
+      info: { name: "API" },
+      event: [pre("a();"), { listen: "test", script: { exec: "t();" } }],
+      item: [
+        {
+          id: "f",
+          name: "Orders",
+          event: [pre("b();"), pre("c();")],
+          item: [
+            { id: "g", name: "Empty", item: [{ id: "r1", name: "Deep", event: [pre("d();")], request: "x" }] },
+            { id: "r2", name: "Plain", request: "x" },
+          ],
+        },
+        { id: "h", name: "Other", event: [pre("e();")], item: [{ id: "r3", name: "Off", event: [pre("off();", true), pre("  ")], request: "x" }] },
+      ],
+    },
+  });
+
+  const listed = [null, "f", "r1", "h"].map((item) => ({ item }));
+
+  test("a request's are the collection's, each folder's down and its own — not a sibling folder's", () => {
+    expect(scriptsFor(tree, "r1", listed).map((s) => s.item)).toEqual([null, "f", "r1"]);
+    expect(scriptsFor(tree, "r2", listed).map((s) => s.item)).toEqual([null, "f"]);
+    expect(scriptsFor(tree, "r3", listed).map((s) => s.item)).toEqual([null, "h"]);
+    expect(scriptsFor(tree, "missing", listed)).toEqual([]);
+  });
+
+  test("a level is named by its id, the collection by null", () => {
+    expect([null, "f", "g", "r1", "nowhere"].map((id) => levelOf(tree, id))).toEqual([
+      { kind: "collection", name: "API" },
+      { kind: "folder", name: "Orders" },
+      { kind: "folder", name: "Empty" },
+      { kind: "request", name: "Deep" },
+      null,
+    ]);
+  });
 });
