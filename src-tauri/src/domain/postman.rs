@@ -362,6 +362,32 @@ impl Collection {
         Ok(request)
     }
 
+    /// Where a case saved from request `template` goes (HC-10e), so that it goes as
+    /// the template does, with the same auth and scripts inherited: beside it, or in
+    /// the folder `folder` right inside the template's own — by name, any case — made
+    /// there when there is none. One with an auth or scripts of its own is refused.
+    /// The folder the case, or the folder to make, goes in (`None`: the collection
+    /// itself), the name of a folder to make there first, and the place as the user
+    /// reads it, `Shop / Orders / Cases`.
+    pub fn case_place(&self, template: &str, folder: Option<&str>) -> Result<(Option<String>, Option<String>, String), HttpError> {
+        let chain = self.chain(template).ok_or_else(|| HttpError::NoSuchItem(template.into()))?;
+        // The collection and the item are always there: `home` is the item's own level.
+        let (home, folders) = (chain[chain.len() - 2], &chain[1..chain.len() - 1]);
+        let id = |level: &Map<String, Value>| level.get("id").and_then(Value::as_str).map(String::from);
+        let home_id = folders.last().copied().and_then(id);
+        let place = std::iter::once(self.name()).chain(folders.iter().map(|f| text_of(f.get("name")))).collect::<Vec<_>>().join(" / ");
+        let Some(name) = folder.map(str::trim).filter(|f| !f.is_empty()) else {
+            return Ok((home_id, None, place));
+        };
+        let children = home.get("item").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        let found = children.iter().filter_map(Value::as_object).filter(|o| o.contains_key("item")).find(|o| text_of(o.get("name")).trim().to_lowercase() == name.to_lowercase());
+        match found {
+            Some(o) if o.get("auth").is_some_and(|a| auth_of(a).is_some()) || !scripts_of(o).is_empty() => Err(HttpError::CaseFolder(text_of(o.get("name")))),
+            Some(o) => Ok((id(o), None, format!("{place} / {}", text_of(o.get("name"))))),
+            None => Ok((home_id, Some(name.to_string()), format!("{place} / {name}"))),
+        }
+    }
+
     /// The name of the item `id`, as `pm.info.requestName` says it.
     pub fn item_name(&self, id: &str) -> Option<String> {
         Some(text_of(self.chain(id)?.last()?.get("name")))

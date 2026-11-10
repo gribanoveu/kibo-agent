@@ -57,6 +57,10 @@ pub enum HttpError {
     HostHeader,
     #[error("a header's name is written out: {0} — no `{{{{name}}}}` in it")]
     HeaderName(String),
+    #[error("`name` is what the user will find the case by on the HTTP page — give one")]
+    NoCaseName,
+    #[error("folder \"{0}\" signs in or runs scripts of its own, so a case in it would not go as the request it was made from — name another folder, or leave `folder` out")]
+    CaseFolder(String),
     #[error("not a cURL command Kibo reads: {0}")]
     BadCurl(String),
     #[error("no environment {0}")]
@@ -219,6 +223,50 @@ pub struct AgentPlan {
     pub url: String,
     /// Names the collections write where a credential goes: the reply's mask hides them.
     pub credentials: BTreeSet<String>,
+}
+
+/// An edited request's method, upper case, `GET` when it names none, and its address as written.
+fn method_and_url(request: &Value) -> (String, String) {
+    let method = request.get("method").and_then(Value::as_str).map_or_else(|| "GET".to_string(), |m| m.trim().to_ascii_uppercase());
+    let url = match request.get("url") {
+        Some(Value::Object(url)) => super::postman::text_of(url.get("raw")),
+        other => super::postman::text_of(other),
+    };
+    (method, url)
+}
+
+/// `httpSaveRequest` (HC-10e): a case kept as a new request — the saved request
+/// `request` with `edits`, under `name`, in `folder` of the template's collection.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentSave {
+    pub request: String,
+    pub name: String,
+    pub folder: Option<String>,
+    pub edits: AgentEdits,
+}
+
+/// A save worked out before anything is written; where it goes is read from the
+/// collection as it is written to (`Collection::case_place`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavePlan {
+    /// Which of the collections given the template — and so the case — is in.
+    pub collection: usize,
+    /// The new item's id.
+    pub id: String,
+    /// The new item: its id, the name, the request; no scripts, no examples.
+    pub item: Value,
+    pub method: String,
+    /// As written, with no query — a credential may be written there — and a password masked.
+    pub url: String,
+}
+
+/// What `httpSaveRequest` did: the new request's id, to send it by, and where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSaved {
+    pub id: String,
+    pub place: String,
+    pub method: String,
+    pub url: String,
 }
 
 /// What `httpSend` brought back: the reply and the scripts' report, both under the agent's mask.
@@ -430,9 +478,11 @@ pub trait HttpStands: Send + Sync {
     fn send(&self, id: &str, send: &AgentSend) -> Result<AgentSent, HttpError>;
     /// The saved request `request` as environment `id` lets the agent read it (HC-10b).
     fn read(&self, id: &str, request: &str) -> Result<String, HttpError>;
+    /// A case kept as a new request in the template's collection (HC-10e).
+    fn save(&self, id: &str, save: &AgentSave) -> Result<AgentSaved, HttpError>;
 }
 
-/// History gained an agent's send, for the page to read again.
+/// History gained an agent's send, or a collection an agent's case, for the page to read again.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct HttpChanged;
 
@@ -520,7 +570,7 @@ impl Environment {
             return Err(HttpError::SendsNowhere { request: id.into(), collection: collection.name(), environment: self.name.clone() });
         }
         let request = collection.edited_for_agent(id, &send.edits)?;
-        let method = request.get("method").and_then(Value::as_str).map_or_else(|| "GET".to_string(), |m| m.trim().to_ascii_uppercase());
+        let (method, url) = method_and_url(&request);
         let rows = request.get("header").and_then(Value::as_array).into_iter().flatten().filter(|h| h.get("disabled") != Some(&Value::Bool(true)));
         let headers: Vec<(&str, &str)> = rows.filter_map(|h| Some((h.get("key")?.as_str()?, h.get("value")?.as_str()?))).collect();
         let acts = acts_as(&method, headers);
@@ -549,10 +599,6 @@ impl Environment {
 
         // The host is the template's as the page fills it in, the model's own values aside.
         let written = collection.written_url(id).unwrap_or_default();
-        let url = match request.get("url") {
-            Some(Value::Object(url)) => super::postman::text_of(url.get("raw")),
-            other => super::postman::text_of(other),
-        };
         let local: Vec<Variable> = send.variables.iter().map(|(key, value)| Variable { key: key.clone(), value: value.clone(), secret: false, enabled: true }).collect();
         let fill = |scope: &Scope, text: &str| scope.fill(text).map(|f| f.sent).map_err(|e| self.unknown_named(e));
         let theirs = origin_of(&fill(&Scope::new(&layers), &address_parts(&written).0)?).ok_or_else(|| HttpError::NotAnAddress(super::postman::userinfo_masked(&written).0))?;
@@ -563,6 +609,35 @@ impl Environment {
         let url = super::postman::userinfo_masked(&url).0;
         let name = format!("{} / {}", collection.name(), collection.item_name(id).unwrap_or_default());
         Ok(AgentPlan { collection: at, request, name, method, acts, url, credentials: reach.credentials })
+    }
+
+    /// A case to keep (HC-10e), worked out against the user's collections: the
+    /// template one this environment lists, the edits as `httpSend` takes them — the
+    /// host stays the template's, as written — and the place in the template's own
+    /// collection, where `{{baseUrl}}` means what it meant for the template. Nothing
+    /// is sent, so the environment's mode does not count: any open one lets a case be kept.
+    pub fn agent_save(&self, collections: &[(&Collection, Vec<Variable>)], globals: &[Variable], save: &AgentSave) -> Result<SavePlan, HttpError> {
+        if self.agent.is_off() {
+            return Err(HttpError::NoneOpen);
+        }
+        let id = save.request.trim();
+        let Some(at) = collections.iter().position(|(c, _)| c.request_ids().iter().any(|r| r == id)) else {
+            return Err(HttpError::NoRequest(id.into()));
+        };
+        let collection = collections[at].0;
+        if !Reach::new(collections, globals, self).lists(id) {
+            return Err(HttpError::SendsNowhere { request: id.into(), collection: collection.name(), environment: self.name.clone() });
+        }
+        let name = save.name.trim();
+        if name.is_empty() {
+            return Err(HttpError::NoCaseName);
+        }
+        let request = collection.edited_for_agent(id, &save.edits)?;
+        let (method, url) = method_and_url(&request);
+        let case = uuid::Uuid::new_v4().to_string();
+        let item = json!({"id": case, "name": name, "request": request});
+        let url = super::postman::userinfo_masked(url.split('?').next().unwrap_or_default()).0;
+        Ok(SavePlan { collection: at, id: case, item, method, url })
     }
 
     /// A name the model got wrong, with the names it may use: values stay home.
@@ -1565,6 +1640,76 @@ mod tests {
         environment.variables.push(var("other", "https://api.test"));
         let sent = environment.agent_send(&[(&shop, vec![])], &[], &of("p", AgentEdits::default())).unwrap();
         assert_eq!(sent.url, "https://admin:•••@api.test/x");
+        let kept = environment.agent_save(&[(&shop, vec![])], &[], &AgentSave { request: "p".into(), name: "P".into(), ..AgentSave::default() }).unwrap();
+        assert_eq!(kept.url, "https://admin:•••@api.test/x", "and as a save tells it");
+    }
+
+    fn save(request: &str, folder: Option<&str>, edits: AgentEdits) -> AgentSave {
+        AgentSave { request: request.into(), name: " Order 2, no auth ".into(), folder: folder.map(String::from), edits }
+    }
+
+    /// A case is the template with the edits, under its own id and name, with no
+    /// scripts or examples; refused as a send would be, and with no name.
+    #[test]
+    fn a_case_is_the_template_with_the_edits() {
+        let saved = |environment: &Environment, s: AgentSave| {
+            let shop = shop();
+            environment.agent_save(&[(&shop, shop.variables())], &[], &s)
+        };
+        let edits = AgentEdits { method: Some("delete".into()), path: Some("/orders/2".into()), headers: vec![("X-Id".into(), None)], no_auth: true, ..AgentEdits::default() };
+        let plan = saved(&stand(), save("r", None, edits)).unwrap();
+        assert_eq!((plan.method.as_str(), plan.url.as_str()), ("DELETE", "{{baseUrl}}/orders/2"), "read only: nothing is sent; no query told");
+        assert_eq!(plan.item["name"], "Order 2, no auth");
+        assert_eq!(plan.item["request"]["auth"], json!({"type": "noauth"}));
+        assert_eq!(plan.item["request"]["header"], json!([{"key": "x-trace", "value": "t"}]));
+        assert!(plan.item.get("event").is_none() && plan.item.get("response").is_none());
+        let id = plan.item["id"].as_str().unwrap();
+        assert_eq!(id, plan.id);
+        assert!(super::super::postman::is_safe_id(id) && !shop().ids().contains(&id.to_string()), "{id}");
+        assert_eq!(saved(&stand(), AgentSave { name: " ".into(), ..save("r", None, AgentEdits::default()) }), Err(HttpError::NoCaseName));
+        let away = AgentEdits { path: Some("//evil.example/x".into()), ..AgentEdits::default() };
+        assert_eq!(saved(&stand(), save("r", None, away)), Err(HttpError::BadPath("//evil.example/x".into())), "the host is the template's");
+        assert_eq!(saved(&Environment { agent: AgentAccess::Off, ..stand() }, save("r", None, AgentEdits::default())), Err(HttpError::NoneOpen));
+        assert_eq!(saved(&stand(), save("nope", None, AgentEdits::default())), Err(HttpError::NoRequest("nope".into())));
+        let elsewhere = collection(json!([get("x", json!("ftp://files.test/x"))]), json!(null), json!(null));
+        let unlisted = stand().agent_save(&[(&elsewhere, vec![])], &[], &save("x", None, AgentEdits::default()));
+        assert_eq!(unlisted, Err(HttpError::SendsNowhere { request: "x".into(), collection: "Shop".into(), environment: "Stage".into() }));
+    }
+
+    /// Beside the template, or in a folder right inside its own by name — made there
+    /// when there is none — so that the case inherits what the template does; a folder
+    /// with an auth or scripts of its own is refused.
+    #[test]
+    fn a_case_goes_beside_its_template_or_in_a_folder_inside_its_own() {
+        let shop = collection(
+            json!([
+                {"id": "f", "name": "Orders", "item": [
+                    get("q", json!("{{baseUrl}}/q")),
+                    {"id": "s", "name": "Signed", "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{t}}"}]}, "item": []},
+                    {"id": "e", "name": "Scripted", "event": [{"listen": "prerequest", "script": {"exec": ["login()"]}}], "item": []},
+                    {"id": "i", "name": "Inherits", "auth": {"type": "inherit"}, "item": []},
+                    {"id": "g", "name": "Deep", "item": [get("d", json!("{{baseUrl}}/d"))]},
+                ]},
+                {"id": "c", "name": "Cases", "item": []},
+                get("top", json!("{{baseUrl}}/t")),
+            ]),
+            json!(null),
+            json!([]),
+        );
+        let place = |request: &str, folder: Option<&str>| shop.case_place(request, folder);
+        let at = |parent: Option<&str>, made: Option<&str>, place: &str| Ok((parent.map(String::from), made.map(String::from), place.to_string()));
+        assert_eq!(place("q", None), at(Some("f"), None, "Shop / Orders"));
+        assert_eq!(place("q", Some("")), at(Some("f"), None, "Shop / Orders"));
+        assert_eq!(place("top", None), at(None, None, "Shop"));
+        assert_eq!(place("d", None), at(Some("g"), None, "Shop / Orders / Deep"), "its own folder, not the outer one");
+        assert_eq!(place("d", Some("x")), at(Some("g"), Some("x"), "Shop / Orders / Deep / x"));
+        assert_eq!(place("top", Some(" cases ")), at(Some("c"), None, "Shop / Cases"), "by name, any case");
+        assert_eq!(place("q", Some("inherits")), at(Some("i"), None, "Shop / Orders / Inherits"), "inherit is no auth of its own");
+        assert_eq!(place("q", Some("Cases")), at(Some("f"), Some("Cases"), "Shop / Orders / Cases"), "only inside the template's own folder");
+        assert_eq!(place("q", Some("q")), at(Some("f"), Some("q"), "Shop / Orders / q"), "a request is no folder");
+        assert_eq!(place("q", Some("Signed")), Err(HttpError::CaseFolder("Signed".into())));
+        assert_eq!(place("q", Some("scripted")), Err(HttpError::CaseFolder("Scripted".into())));
+        assert_eq!(place("nope", None), Err(HttpError::NoSuchItem("nope".into())));
     }
 
     #[test]

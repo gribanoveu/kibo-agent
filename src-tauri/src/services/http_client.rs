@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::domain::http_auth::{refusal, OAuth2, Token};
-use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
+use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSave, AgentSaved, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, Auth, Collection, Imported};
 use crate::infra::http_client::NoCookies;
@@ -420,6 +420,34 @@ impl HttpStands for Stands {
         (self.changed)(HttpChanged);
         let (sent, scripts, mask) = ran?;
         Ok(AgentSent { method: plan.method, url: mask.hide(&plan.url), reply: AgentReply::new(sent.outcome, &sent.body, &mask), scripts })
+    }
+
+    /// A case kept (HC-10e): the new request in the template's collection, beside it
+    /// or in the folder named inside the template's own, made when there is none. Only
+    /// added: nothing of the user's is changed, and the scripts' trust stays — the case
+    /// has none of its own. Where it goes is read from the file as it is written: a
+    /// folder made or the template moved meanwhile counts.
+    fn save(&self, id: &str, save: &AgentSave) -> Result<AgentSaved, HttpError> {
+        let environment = http_env_store::get(id)?;
+        let (plan, collection_id) = with_collections(|collections, globals, ids| environment.agent_save(collections, globals, save).map(|plan| {
+            let id = ids[plan.collection].to_string();
+            (plan, id)
+        }))??;
+        let place = change(&collection_id, |c| {
+            let (parent, new_folder, place) = c.case_place(save.request.trim(), save.folder.as_deref())?;
+            let parent = match new_folder {
+                Some(name) => {
+                    let folder = uuid::Uuid::new_v4().to_string();
+                    c.add(parent.as_deref(), serde_json::json!({"id": folder, "name": name, "item": []}))?;
+                    Some(folder)
+                }
+                None => parent,
+            };
+            c.add(parent.as_deref(), plan.item.clone())?;
+            Ok(place)
+        })?;
+        (self.changed)(HttpChanged);
+        Ok(AgentSaved { id: plan.id, place, method: plan.method, url: plan.url })
     }
 
     fn read(&self, id: &str, request: &str) -> Result<String, HttpError> {
@@ -2241,6 +2269,13 @@ mod tests {
             let sent = stands("c").0.send("stage", &agent("k")).unwrap();
             assert_eq!(body_of(&sent), "{\n  \"key\": \"•••\"\n}");
             assert_eq!(sent.url, "{{baseUrl}}/k?api_key=•••");
+
+            // A case kept from it: in its own collection of three, the query not told.
+            let kept = stands("c").0.save("stage", &AgentSave { request: "k".into(), name: "Kept".into(), ..AgentSave::default() }).unwrap();
+            assert_eq!((kept.place.as_str(), kept.url.as_str()), ("Keyed", "{{baseUrl}}/k"));
+            let mut counts: Vec<(String, usize)> = http_collections::all().unwrap().into_iter().map(|(_, c)| c.unwrap()).map(|c| (c.name(), c.request_ids().len())).collect();
+            counts.sort();
+            assert_eq!(counts, [("Keyed".to_string(), 2), ("Last".to_string(), 1), ("Other".to_string(), 1)]);
         });
     }
 
@@ -2263,6 +2298,62 @@ mod tests {
             http_collections::add(&Collection::parse(&root.to_string()).unwrap()).unwrap();
             let sent = stands("c").0.send("stage", &agent("k")).unwrap();
             assert_eq!(body_of(&sent), "echo •••");
+        });
+    }
+
+    /// A case is added to the template's collection — beside it, in a folder by name or a
+    /// new one — and nothing else there changes: the requests, their order, the scripts'
+    /// trust. The page is told. Refused as a send is, and nothing written.
+    #[test]
+    fn a_case_is_added_and_nothing_else_changes() {
+        with_app_dir("http-stands-save", || {
+            agent_stage("http://127.0.0.1:1".into(), AgentAccess::ReadOnly);
+            let id = http_collections::all().unwrap().into_iter().map(|(id, _)| id).next().unwrap();
+            change(&id, |c| {
+                c.add(None, json!({"id": "cases", "name": "Cases", "item": []}))?;
+                c.set_request("list", json!({"method": "GET", "url": "{{baseUrl}}/orders?id=1"}))?;
+                Ok(())
+            })
+            .unwrap();
+            let mut scripted = http_collections::get(&id).unwrap();
+            scripted.item_mut("list").unwrap().insert("event".into(), json!([event("test", "pm.test('ok', () => {});")]));
+            http_collections::save(&id, &scripted).unwrap();
+            trust(&id);
+            let before = http_collections::get(&id).unwrap();
+            let (stands, told) = stands("c");
+            let save = |name: &str, folder: Option<&str>, edits: AgentEdits| AgentSave { request: "list".into(), name: name.into(), folder: folder.map(String::from), edits };
+
+            let beside = stands.save("stage", &save("No id", None, AgentEdits { query: Some("".into()), ..AgentEdits::default() })).unwrap();
+            assert_eq!((beside.place.as_str(), beside.method.as_str(), beside.url.as_str()), ("Shop", "GET", "{{baseUrl}}/orders"));
+            let filed = stands.save("stage", &save("Negative", Some("cases"), AgentEdits { method: Some("POST".into()), body: Some("{}".into()), ..AgentEdits::default() })).unwrap();
+            assert_eq!(filed.place, "Shop / Cases");
+            let made = stands.save("stage", &save("Again", Some("Smoke"), AgentEdits::default())).unwrap();
+            assert_eq!(made.place, "Shop / Smoke");
+            assert_eq!(told.load(Ordering::Relaxed), 3, "the page reads again");
+
+            let after = http_collections::get(&id).unwrap();
+            let names = |c: &Collection| c.json()["item"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+            assert_eq!(names(&after), ["List", "Make", "Cases", "No id", "Smoke"], "added last, the rest in its order");
+            for at in 0..2 {
+                assert_eq!(before.json()["item"][at], after.json()["item"][at], "the template and its neighbour untouched");
+            }
+            let mut after = after;
+            assert_eq!(after.item_mut(&filed.id).unwrap()["request"]["body"], json!({"mode": "raw", "raw": "{}", "options": {"raw": {"language": "json"}}}));
+            assert!(after.item_mut(&beside.id).unwrap().get("event").is_none(), "no scripts in a case");
+            assert_eq!(after.json()["item"][4]["item"][0]["id"], made.id.as_str());
+            assert!(script_trust(&id).unwrap().trusted, "a case has no scripts: the trust stays");
+
+            let away = save("Away", None, AgentEdits { path: Some("@evil.example/x".into()), ..AgentEdits::default() });
+            assert_eq!(stands.save("stage", &away), Err(HttpError::BadPath("@evil.example/x".into())));
+            assert_eq!(http_collections::get(&id).unwrap().request_ids().len(), 5, "nothing written");
+
+            // A template in a folder: the folder named is made in its folder, not at the top.
+            change(&id, |c| c.add(Some("cases"), json!({"id": "deep", "name": "Deep", "request": {"method": "GET", "url": "{{baseUrl}}/deep"}}))).unwrap();
+            let inside = stands.save("stage", &AgentSave { request: "deep".into(), name: "Deep again".into(), folder: Some("Neg".into()), edits: AgentEdits::default() }).unwrap();
+            assert_eq!(inside.place, "Shop / Cases / Neg");
+            let kept = http_collections::get(&id).unwrap();
+            let cases = &kept.json()["item"][2]["item"];
+            assert_eq!((&cases[2]["name"], &cases[2]["item"][0]["id"]), (&json!("Neg"), &json!(inside.id)));
         });
     }
 

@@ -177,6 +177,7 @@ pub(crate) mod tests {
         view: Option<StandView>,
         asked: Mutex<Vec<String>>,
         sends: Mutex<Vec<AgentSend>>,
+        saves: Mutex<Vec<crate::domain::http_client::AgentSave>>,
         /// The environments' file could not be read.
         unreadable: bool,
     }
@@ -184,6 +185,15 @@ pub(crate) mod tests {
     impl Canned {
         pub(crate) fn asked(&self) -> Vec<String> {
             self.asked.lock().unwrap().clone()
+        }
+
+        pub(crate) fn saves(&self) -> Vec<crate::domain::http_client::AgentSave> {
+            self.saves.lock().unwrap().clone()
+        }
+
+        /// Environments by `names`, nothing canned to answer with.
+        pub(crate) fn opened(names: &[&str]) -> Self {
+            Canned { open: stands(names), ..Canned::default() }
         }
 
         fn template(request: &str) -> Result<(&'static str, &'static str, &'static str), HttpError> {
@@ -232,6 +242,15 @@ pub(crate) mod tests {
             Ok(AgentSent { method, url, reply: self.reply.clone().unwrap(), scripts: self.scripts.clone() })
         }
 
+        fn save(&self, id: &str, save: &crate::domain::http_client::AgentSave) -> Result<crate::domain::http_client::AgentSaved, HttpError> {
+            self.asked.lock().unwrap().push(format!("save {id} {} as {:?} in {:?}", save.request, save.name, save.folder));
+            self.saves.lock().unwrap().push(save.clone());
+            let (method, url, _) = Self::template(&save.request)?;
+            let url = save.edits.path.as_deref().map_or(url.to_string(), |p| format!("{{{{baseUrl}}}}{p}"));
+            let place = save.folder.as_deref().map_or_else(|| "Shop".to_string(), |f| format!("Shop / {f}"));
+            Ok(crate::domain::http_client::AgentSaved { id: "n1".into(), place, method: method.into(), url })
+        }
+
         /// `r1` in any environment open; any other request is not there.
         fn read(&self, id: &str, request: &str) -> Result<String, HttpError> {
             match request {
@@ -244,7 +263,7 @@ pub(crate) mod tests {
 
     /// Environments by `names`, each reading the request `r1`.
     pub(crate) fn reading(names: &[&str]) -> Arc<dyn HttpStands> {
-        Arc::new(Canned { open: stands(names), ..Canned::default() })
+        Arc::new(Canned::opened(names))
     }
 
     /// One environment that answers 200, for what is about the way there.
