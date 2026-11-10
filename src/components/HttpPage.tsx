@@ -150,6 +150,20 @@ export function HttpPage() {
     setDeleting(null);
   };
   const reveal = (id: string) => setOpened((o) => (o.includes(id) ? o : [...o, id]));
+  // A request picked outside the tree is shown in it: its collection and folders opened, its row scrolled to.
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const showInTree = (id: string) => {
+    const found = findRequest(http.collections, id);
+    if (!found) return;
+    setOpened((o) => (found.ids.every((open) => o.includes(open)) ? o : [...o, ...found.ids.filter((open) => !o.includes(open))]));
+    setScrollTo(id);
+  };
+  useEffect(() => {
+    if (!scrollTo) return;
+    const row = [...document.querySelectorAll<HTMLElement>("[data-tree-request]")].find((r) => r.dataset.treeRequest === scrollTo);
+    row?.scrollIntoView?.({ block: "nearest" });
+    setScrollTo(null);
+  }, [scrollTo]);
   const newCollection = () => setRenaming({ kind: "collection", name: "New collection" });
   const newRequest = (parent: string) => setRenaming({ kind: "request", parent, name: "New request" });
   const newFolder = (parent: string) => setRenaming({ kind: "folder", parent, name: "New folder" });
@@ -279,6 +293,7 @@ export function HttpPage() {
               canOpen={(id) => findRequest(http.collections, id) !== null}
               onOpen={(id) => {
                 http.open(id);
+                showInTree(id);
                 setSheet(null);
               }}
             />
@@ -322,7 +337,10 @@ export function HttpPage() {
                     aria-selected={on}
                     className="http-tab-name"
                     title={[...found.path, found.request.name].join(" › ")}
-                    onClick={() => http.setActive(id)}
+                    onClick={() => {
+                      http.setActive(id);
+                      showInTree(id);
+                    }}
                   >
                     <MethodBadge method={found.request.method} />
                     {found.request.name}
@@ -554,7 +572,7 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
         ) : (
           <li key={item.id}>
             <TreeRow node={{ id: item.id, name: item.name, kind: "request" }} menu={tree.menu}>
-              <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} onClick={() => tree.open(item.id)}>
+              <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} data-tree-request={item.id} onClick={() => tree.open(item.id)}>
                 <MethodBadge method={item.method} />
                 <span className="http-tree-name">{item.name}</span>
                 {hasScripts(item.scripts) && <ScriptsMark />}

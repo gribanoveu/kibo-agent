@@ -353,19 +353,20 @@ export function effectiveAuth(collection: Collection, requestId: string): { auth
   return walk(collection.items, top);
 }
 
-export function findRequest(collections: Collection[], id: string): { collection: Collection; request: HttpRequest; path: string[] } | null {
+export function findRequest(collections: Collection[], id: string): { collection: Collection; request: HttpRequest; path: string[]; ids: string[] } | null {
   for (const collection of collections) {
-    const walk = (items: Item[], path: string[]): { request: HttpRequest; path: string[] } | null => {
+    // `path` names the collection and the folders down to the request, `ids` are theirs.
+    const walk = (items: Item[], path: string[], ids: string[]): { request: HttpRequest; path: string[]; ids: string[] } | null => {
       for (const item of items) {
-        if (item.kind === "request" && item.id === id) return { request: item, path };
+        if (item.kind === "request" && item.id === id) return { request: item, path, ids };
         if (item.kind === "folder") {
-          const found = walk(item.items, [...path, item.name]);
+          const found = walk(item.items, [...path, item.name], [...ids, item.id]);
           if (found) return found;
         }
       }
       return null;
     };
-    const found = walk(collection.items, [collection.name]);
+    const found = walk(collection.items, [collection.name], [collection.id]);
     if (found) return { collection, ...found };
   }
   return null;

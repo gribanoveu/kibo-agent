@@ -220,6 +220,15 @@ describe("the HTTP page", () => {
     expect(JSON.parse(localStorage.getItem("http.expanded") ?? "null")).toEqual([]);
   });
 
+  test("a tab picked shows its request in the tree, its collection opened", async () => {
+    await shown("r2");
+    const row = () => document.querySelector('[data-tree-request="r2"]');
+    expect(row()).toBe(null);
+    fireEvent.click(screen.getByRole("tab", { name: /Health/ }));
+    expect(row()?.className).toContain(" on");
+    expect(JSON.parse(localStorage.getItem("http.expanded") ?? "null")).toEqual(["c"]);
+  });
+
   test("a request moves into a folder picked from its menu, with nowhere to go said", async () => {
     await shown();
     fireEvent.click(screen.getByText("Orders API"));

@@ -389,6 +389,7 @@ describe("http client rules", () => {
     // A folder goes in the same way, and a request then goes into it.
     const folded = addItem(tree, "f", { kind: "folder", id: "g", name: "Refunds", auth: { type: "inherit" }, items: [] });
     expect(findRequest(addRequest(folded, "g", fresh), "n")?.path).toEqual(["API", "Keys", "Refunds"]);
+    expect(findRequest(addRequest(folded, "g", fresh), "n")?.ids).toEqual(["c", "f", "g"]);
     expect(addRequest(tree, "r2", fresh)).toEqual(tree);
     expect(requestsUnder(tree, "c")).toEqual(["r1", "r2", "r3"]);
     expect(requestsUnder(tree, "f")).toEqual(["r1"]);
