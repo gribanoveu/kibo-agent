@@ -46,6 +46,7 @@ pub mod board;
 pub mod dictation;
 pub mod meeting;
 pub mod mongo;
+pub mod kafka;
 pub mod voices;
 pub mod recording;
 pub mod features;
