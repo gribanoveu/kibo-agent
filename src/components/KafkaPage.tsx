@@ -104,10 +104,10 @@ export function KafkaPage() {
                 <Pencil size={13} /> Edit
               </button>
             )}
-            <span className="kafka-spacer" />
             <button type="button" className="btn btn-ghost" title="New connection" aria-label="New connection" onClick={() => setEditing(blank())}>
               <Plus size={14} />
             </button>
+            <span className="kafka-spacer" />
             {open && (
               <Dropdown
                 label={<MoreHorizontal size={14} aria-label="Connection actions" />}
@@ -147,8 +147,9 @@ export function KafkaPage() {
         {open && (
           <>
             <header className="kafka-main-head">
-              <h2 className="kafka-title">{open.name}</h2>
-              <span className="kafka-sub">{open.brokers}</span>
+              <h2 className="kafka-title" title={open.brokers}>
+                {open.name}
+              </h2>
               <span className="kafka-spacer" />
               <span className="kafka-tags">
                 {open.readOnly && <span className="kafka-tag">read-only</span>}

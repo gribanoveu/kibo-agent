@@ -52,15 +52,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.kafka-sub {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* The Kafka page (KafkaPage.tsx): the connections on the left, the topics of
    the open one on the right. Its own styles throughout — none borrowed. */
