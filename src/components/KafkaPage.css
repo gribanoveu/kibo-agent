@@ -11,6 +11,9 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
+  /* Whatever a row grows into, a pane never scrolls sideways under it: that
+     shift is what the connections looked like when one did. */
+  overflow-x: hidden;
 }
 
 .kafka-quiet,
@@ -45,6 +48,7 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--bg-panel-soft);
