@@ -24,6 +24,7 @@ pub enum Feature {
     VoiceMemory,
     Knowledge,
     Mongodb,
+    Kafka,
     VoiceInput,
     LayoutCorrection,
 }
@@ -50,7 +51,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::Kafka, Feature::VoiceInput, Feature::LayoutCorrection];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -124,6 +125,17 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::Mongo],
                 data: Some("mongo_connections.enc"),
+            },
+            Feature::Kafka => Manifest {
+                id: "kafka",
+                name: "Kafka",
+                description: "A Kafka page in the spirit of Kafka UI: your clusters' topics with their partitions, replicas, \
+                    in-sync copies, watermarks and the configs that matter, and the messages of a topic read as JSON, \
+                    text or a raw protobuf dump by field number — no Schema Registry needed. Connection passwords are \
+                    sealed on this computer as the API keys are, and the window never sees one.",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("kafka_connections.enc"),
             },
             Feature::VoiceInput => Manifest {
                 id: "voice-input",
@@ -221,7 +233,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input", "layout-correction"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "kafka", "voice-input", "layout-correction"]);
     }
 
     #[test]
@@ -241,6 +253,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Kafka), "a network client, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));

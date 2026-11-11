@@ -148,6 +148,13 @@ mod tests {
         }
     }
 
+    /// "Delete data" in the Catalog removes this file.
+    #[test]
+    fn the_file_is_the_features_data() {
+        use crate::domain::features::Feature;
+        assert_eq!(Feature::Kafka.manifest().data, Some(FILE));
+    }
+
     #[test]
     fn connections_round_trip_and_the_list_shows_no_password() {
         with_app_dir("kafka-store-round-trip", || {

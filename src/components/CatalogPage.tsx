@@ -8,6 +8,7 @@ import {
   BookOpen,
   Check,
   Keyboard,
+  Layers,
   Library,
   Loader2,
   Mic,
@@ -62,6 +63,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   "voice-memory": Users,
   knowledge: Library,
   mongodb: MongoIcon,
+  kafka: Layers,
   "voice-input": Mic,
   "layout-correction": Keyboard,
 };
