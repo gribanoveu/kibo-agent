@@ -133,8 +133,12 @@ impl Connection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KafkaError {
+    #[error("no saved connection \"{0}\" — it was deleted")]
+    NoConnection(String),
     #[error("\"{0}\" is read-only — nothing is sent through it")]
     ReadOnly(String),
+    #[error("{0}")]
+    Store(String),
 }
 
 // -------------------------------------------------------------------- topics
