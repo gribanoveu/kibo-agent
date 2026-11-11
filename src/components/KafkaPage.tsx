@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, Pencil, Plus, Search } from "lucide-react";
+import { ArrowLeft, Check, Database, Pencil, Plus, Radio, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
 import { KafkaIcon } from "./KafkaIcon";
@@ -90,7 +90,7 @@ export function KafkaPage() {
             <Dropdown
               label={
                 <span className="kafka-connection-label">
-                  <KafkaIcon size={14} />
+                  <Radio size={14} />
                   {open?.name ?? "Connection"}
                 </span>
               }
