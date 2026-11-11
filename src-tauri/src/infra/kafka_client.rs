@@ -31,11 +31,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_PARTITIONS: usize = 4_000;
 
 /// How long the broker's shape of a topic — its partitions, replicas and
-/// in-sync copies — is kept. Turning a page, searching and coming back then
-/// costs no metadata round trip; watermarks are never kept, since they move
-/// with the records. Deliberately short: a topic someone just made shows up
-/// within it.
-const SHAPE_TTL: Duration = Duration::from_secs(20);
+/// in-sync copies — is kept: two minutes. Turning a page, searching and coming
+/// back then costs no metadata round trip; watermarks are never kept, since
+/// they move with the records. A topic someone just made shows up by the end
+/// of it.
+const SHAPE_TTL: Duration = Duration::from_secs(120);
 
 /// The configs the page shows: the ones that change what a reader can read or
 /// how much. A topic has forty others and they are the broker's.
