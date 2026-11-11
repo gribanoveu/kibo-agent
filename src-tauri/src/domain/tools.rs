@@ -117,6 +117,9 @@ pub enum ToolName {
     /// A case kept as a new request in the template's collection — the template
     /// with the model's edits, no scripts (`docs/45-http-client.md`, HC-10e).
     HttpSaveRequest,
+    /// The model's script for a saved request, run with nothing sent and kept as a
+    /// draft the user may move into the request (`docs/45-http-client.md`, HC-11c).
+    HttpDraftScript,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -192,6 +195,7 @@ impl ToolName {
         ToolName::HttpSend,
         ToolName::HttpReadRequest,
         ToolName::HttpSaveRequest,
+        ToolName::HttpDraftScript,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -255,6 +259,7 @@ impl ToolName {
             ToolName::HttpSend => "httpSend",
             ToolName::HttpReadRequest => "httpReadRequest",
             ToolName::HttpSaveRequest => "httpSaveRequest",
+            ToolName::HttpDraftScript => "httpDraftScript",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -417,6 +422,8 @@ impl ToolName {
             // The user's collections and environments, read; nothing is sent.
             | ToolName::HttpEnvironment
             | ToolName::HttpReadRequest
+            // Nothing sent, nothing of the user's written: a draft goes to the app's own file.
+            | ToolName::HttpDraftScript
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -455,6 +462,8 @@ impl ToolName {
             ToolName::HttpSend
             // The user's collection file, written.
             | ToolName::HttpSaveRequest
+            // The drafts' file, written.
+            | ToolName::HttpDraftScript
             | ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -535,6 +544,8 @@ impl ToolName {
             | ToolName::Mongo
             | ToolName::HttpEnvironment
             | ToolName::HttpReadRequest
+            // A draft beside the request, which a rewind leaves, as it leaves the board.
+            | ToolName::HttpDraftScript
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -677,6 +688,8 @@ impl ToolName {
             ToolName::HttpSend => 2,
             // The collections and environments, small files of the app's.
             ToolName::HttpEnvironment | ToolName::HttpReadRequest | ToolName::HttpSaveRequest => 1,
+            // A script in the sandbox, which may wait out its timers.
+            ToolName::HttpDraftScript => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -876,14 +889,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest, ToolName::HttpDraftScript]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            57,
+            58,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1667,6 +1680,7 @@ pub enum ToolCall {
     HttpSend(HttpSendArgs),
     HttpReadRequest(HttpReadRequestArgs),
     HttpSaveRequest(HttpSaveRequestArgs),
+    HttpDraftScript(HttpDraftScriptArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1729,6 +1743,7 @@ impl ToolCall {
             ToolCall::HttpSend(_) => ToolName::HttpSend,
             ToolCall::HttpReadRequest(_) => ToolName::HttpReadRequest,
             ToolCall::HttpSaveRequest(_) => ToolName::HttpSaveRequest,
+            ToolCall::HttpDraftScript(_) => ToolName::HttpDraftScript,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -2041,6 +2056,8 @@ pub enum ToolResult {
     HttpReadRequest { text: String, summary: String },
     /// `httpSaveRequest`: what was kept and where, and the place and name for the row.
     HttpSaveRequest { text: String, summary: String },
+    /// `httpDraftScript`: what the draft did with nothing sent, and its tests for the row.
+    HttpDraftScript { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -2217,6 +2234,35 @@ pub struct HttpSaveRequestArgs {
     pub auth: Option<String>,
 }
 
+/// `httpDraftScript` (HC-11c): a script for a saved request, run with nothing sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpDraftScriptArgs {
+    pub request: String,
+    /// `prerequest` or `test`, as Postman names them.
+    pub listen: String,
+    pub code: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    /// A send's id from `httpSend`; the chat's last of the request when left out.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub variables: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+impl HttpDraftScriptArgs {
+    pub fn variables(&self) -> Vec<(String, String)> {
+        texts(&self.variables)
+    }
+}
+
+/// A model writes `{"id": 5}` as often as `{"id": "5"}`: either is the text `5`.
+fn texts(values: &Option<std::collections::BTreeMap<String, serde_json::Value>>) -> Vec<(String, String)> {
+    let text = |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+    values.iter().flatten().map(|(k, v)| (k.clone(), text(v))).collect()
+}
+
 impl HttpSaveRequestArgs {
     /// The edits as `httpSend` would take them, to be read the same way.
     pub fn as_send(&self) -> HttpSendArgs {
@@ -2246,8 +2292,7 @@ impl HttpSendArgs {
 
     /// The model's own values for `{{name}}`, as text.
     pub fn variables(&self) -> Vec<(String, String)> {
-        let text = |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
-        self.variables.iter().flatten().map(|(k, v)| (k.clone(), text(v))).collect()
+        texts(&self.variables)
     }
 }
 

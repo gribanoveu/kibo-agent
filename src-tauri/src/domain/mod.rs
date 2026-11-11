@@ -51,6 +51,7 @@ pub mod recording;
 pub mod features;
 pub mod http_auth;
 pub mod http_client;
+pub mod http_draft;
 pub mod http_scripts;
 pub mod postman;
 pub mod provider_balance;

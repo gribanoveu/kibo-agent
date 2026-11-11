@@ -345,7 +345,7 @@ mod tests {
         let done = done(chat.start(ChatRole::Api, vec![LlmMessage::user("стенд жив?")]));
 
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest", "httpSaveRequest"]);
+        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest", "httpSaveRequest", "httpDraftScript"]);
         assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders/1 → 200"), "{}", tool_result(&done.history));
     }
 

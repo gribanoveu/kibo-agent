@@ -32,7 +32,8 @@ pub(super) fn definition() -> LlmToolDefinition {
             `{{name}}` in this send only. The host is always the saved request's: for another endpoint on it, send any request \
             that goes there with another method and path. GET, HEAD and OPTIONS always go; another method goes as the \
             environment allows — refused when it is read only, otherwise after the user approves, when its mode asks. You get \
-            the status, the headers that matter, the scripts' tests and console, and the body. A redirect is not followed."
+            the status, the headers that matter, the scripts' tests and console, the body, and the send's exchange id, which \
+            httpDraftScript runs a post-response draft on. A redirect is not followed."
             .into(),
         parameters: json!({
             "type": "object",
@@ -62,7 +63,8 @@ pub fn http_send(args: &HttpSendArgs, deps: &ToolDeps) -> Result<ToolResult, Too
         Outcome::Response { status, headers, elapsed_ms, .. } => (status, headers, elapsed_ms),
         Outcome::Failed { error } => return Err(HttpError::Unanswered(error).into()),
     };
-    let first = format!("{} {} → {status} · {elapsed_ms} ms · {} bytes", sent.method, sent.url, sent.reply.size);
+    let exchange = sent.exchange.as_deref().map(|id| format!(" · exchange {id}")).unwrap_or_default();
+    let first = format!("{} {} → {status} · {elapsed_ms} ms · {} bytes{exchange}", sent.method, sent.url, sent.reply.size);
     let lines = headers.iter().filter(|(k, _)| args.show_headers == Some(true) || SHOWN.contains(&k.to_ascii_lowercase().as_str())).map(|(k, v)| format!("{k}: {v}"));
     // Before the body: a long one is cut, and the tests are the point of a case.
     let text = std::iter::once(first).chain(lines).chain(scripts_text(&sent.scripts)).chain(body_text(&sent.reply.body)).collect::<Vec<_>>().join("\n");
@@ -178,6 +180,8 @@ pub(crate) mod tests {
         asked: Mutex<Vec<String>>,
         sends: Mutex<Vec<AgentSend>>,
         saves: Mutex<Vec<crate::domain::http_client::AgentSave>>,
+        /// What a draft's run reports.
+        draft: crate::domain::http_draft::DraftReport,
         /// The environments' file could not be read.
         unreadable: bool,
     }
@@ -194,6 +198,11 @@ pub(crate) mod tests {
         /// Environments by `names`, nothing canned to answer with.
         pub(crate) fn opened(names: &[&str]) -> Self {
             Canned { open: stands(names), ..Canned::default() }
+        }
+
+        /// Environments by `names`, a draft's run reporting `report`.
+        pub(crate) fn drafting(names: &[&str], report: crate::domain::http_draft::DraftReport) -> Self {
+            Canned { draft: report, ..Canned::opened(names) }
         }
 
         fn template(request: &str) -> Result<(&'static str, &'static str, &'static str), HttpError> {
@@ -239,7 +248,7 @@ pub(crate) mod tests {
             self.asked.lock().unwrap().push(format!("send {id} {}", send.request));
             self.sends.lock().unwrap().push(send.clone());
             let (_, method, url, _) = Self::going(send)?;
-            Ok(AgentSent { method, url, reply: self.reply.clone().unwrap(), scripts: self.scripts.clone() })
+            Ok(AgentSent { method, url, reply: self.reply.clone().unwrap(), scripts: self.scripts.clone(), exchange: Some("e7".into()) })
         }
 
         fn save(&self, id: &str, save: &crate::domain::http_client::AgentSave) -> Result<crate::domain::http_client::AgentSaved, HttpError> {
@@ -249,6 +258,24 @@ pub(crate) mod tests {
             let url = save.edits.path.as_deref().map_or(url.to_string(), |p| format!("{{{{baseUrl}}}}{p}"));
             let place = save.folder.as_deref().map_or_else(|| "Shop".to_string(), |f| format!("Shop / {f}"));
             Ok(crate::domain::http_client::AgentSaved { id: "n1".into(), place, method: method.into(), url })
+        }
+
+        /// Kept as asked, with the report canned; any request but `r1` and `w1` is not there.
+        fn draft(&self, id: &str, draft: &crate::domain::http_draft::AgentDraft) -> Result<crate::domain::http_draft::ScriptDraft, HttpError> {
+            self.asked.lock().unwrap().push(format!("draft {id} {} {}", draft.request, draft.listen));
+            let (_, _, name) = Self::template(&draft.request)?;
+            Ok(crate::domain::http_draft::ScriptDraft {
+                collection: "shop".into(),
+                request: draft.request.clone(),
+                name: name.into(),
+                listen: draft.listen.clone(),
+                chat: "c1".into(),
+                chat_title: "Check".into(),
+                environment: id.trim_start_matches("id-").into(),
+                code: draft.code.clone(),
+                at: 0,
+                report: self.draft.clone(),
+            })
         }
 
         /// `r1` in any environment open; any other request is not there.
@@ -440,7 +467,7 @@ pub(crate) mod tests {
         };
         let canned = || Canned { open: stands(&["Stage"]), reply: reply(422, &headers, b"{\n  \"error\": 1\n}"), scripts: scripts.clone(), ..Canned::default() };
         let (result, _, _) = call(canned(), &HttpSendArgs { path: Some("/orders/9".into()), ..of("r1") });
-        let expected = "GET {{baseUrl}}/orders/9 → 422 · 12 ms · 16 bytes\nContent-Type: application/json\nLocation: /next\n\
+        let expected = "GET {{baseUrl}}/orders/9 → 422 · 12 ms · 16 bytes · exchange e7\nContent-Type: application/json\nLocation: /next\n\
             Tests:\n  PASS Status is 201\n  FAIL Has id — expected undefined to be a number\n  SKIP Later\n\
             A script failed: ReferenceError: x is not defined\n\
             Console:\n  made 7\n  [warn] slow\n\
@@ -458,16 +485,16 @@ pub(crate) mod tests {
         let (result, _, _) = call(untrusted, &of("r1"));
         assert_eq!(
             text_of(result),
-            "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 2 bytes\nScripts not run — off on the HTTP page, where only the user turns them on: pre-request of collection \"Shop\"; post-response of request \"Get one\".\nok"
+            "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 2 bytes · exchange e7\nScripts not run — off on the HTTP page, where only the user turns them on: pre-request of collection \"Shop\"; post-response of request \"Get one\".\nok"
         );
     }
 
     #[test]
     fn what_is_not_text_is_only_measured_and_nothing_adds_no_line() {
         let (result, _, _) = call(canned(&[0xff, 0xfe, 0]), &of("r1"));
-        assert_eq!(text_of(result), "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 3 bytes\n[not text]");
+        assert_eq!(text_of(result), "GET {{baseUrl}}/orders/1 → 200 · 12 ms · 3 bytes · exchange e7\n[not text]");
         let (result, _, _) = call(Canned { reply: reply(204, &[], b""), ..canned(b"") }, &of("w1"));
-        assert_eq!(text_of(result), "POST {{baseUrl}}/orders → 204 · 12 ms · 0 bytes");
+        assert_eq!(text_of(result), "POST {{baseUrl}}/orders → 204 · 12 ms · 0 bytes · exchange e7");
     }
 
     /// What the stand sent, not the indents added to it.
@@ -475,7 +502,7 @@ pub(crate) mod tests {
     fn the_size_said_is_the_stands() {
         let sized = Some(AgentReply { size: 7, ..reply(200, &[], b"{\n  \"a\": 1\n}").unwrap() });
         let (result, _, _) = call(Canned { reply: sized, ..canned(b"") }, &of("r1"));
-        assert!(text_of(result).starts_with("GET {{baseUrl}}/orders/1 → 200 · 12 ms · 7 bytes\n"));
+        assert!(text_of(result).starts_with("GET {{baseUrl}}/orders/1 → 200 · 12 ms · 7 bytes · exchange e7\n"));
     }
 
     #[test]

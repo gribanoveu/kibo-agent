@@ -134,7 +134,7 @@ impl Feature {
                     An environment you open to the agent it sends your saved requests into, its secrets kept from the model, \
                     and the cases you ask it to keep it adds beside them.",
                 enabled_by_default: false,
-                tools: &[ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest],
+                tools: &[ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest, ToolName::HttpDraftScript],
                 data: Some("http"),
             },
             Feature::VoiceInput => Manifest {

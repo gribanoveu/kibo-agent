@@ -161,6 +161,7 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::HttpSend,
                 ToolName::HttpReadRequest,
                 ToolName::HttpSaveRequest,
+                ToolName::HttpDraftScript,
             ]);
         }
         // Research handed off reads the same files, only somewhere else.

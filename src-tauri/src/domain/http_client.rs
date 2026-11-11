@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
+use super::http_draft::{AgentDraft, ScriptDraft};
 use super::http_scripts::ScriptReport;
 use super::postman::{address_parts, Collection};
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,12 @@ pub enum HttpError {
     NoRequest(String),
     #[error("request {request} is in \"{collection}\", which sends nowhere with \"{environment}\": its requests are not open to the agent there")]
     SendsNowhere { request: String, collection: String, environment: String },
+    #[error("`listen` is \"prerequest\" or \"test\", not \"{0}\"")]
+    BadListen(String),
+    #[error("no send of request {0} from this chat to run a post-response draft on — send it with httpSend first")]
+    NoExchange(String),
+    #[error("exchange {exchange}: {why}")]
+    BadExchange { exchange: String, why: &'static str },
 }
 
 /// A variable of an environment, a collection or globals — Postman's `{key, value}`.
@@ -277,6 +284,27 @@ pub struct AgentSent {
     pub url: String,
     pub reply: AgentReply,
     pub scripts: ScriptReport,
+    /// Its entry in history, which a draft runs on (HC-11c); none when history was not written.
+    pub exchange: Option<String>,
+}
+
+/// A draft's run worked out (HC-11c): where the request is, and the variables as the
+/// model sees them — a hidden one as `•••`, its value nowhere in the sandbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftPlan {
+    /// Which of the collections given the request is in.
+    pub collection: usize,
+    /// `[globals, the collection's, the environment's]`, as the model sees them.
+    pub layers: [Vec<Variable>; 3],
+    /// Where the collections' requests go with the environment.
+    pub origins: BTreeSet<String>,
+}
+
+impl DraftPlan {
+    /// An address none of the collections' requests goes to — or none at all.
+    pub fn foreign(&self, url: &str) -> bool {
+        origin_of(url).is_none_or(|origin| !self.origins.contains(&origin))
+    }
 }
 
 /// What the user's collections make of one environment for the agent (HC-7a):
@@ -480,6 +508,8 @@ pub trait HttpStands: Send + Sync {
     fn read(&self, id: &str, request: &str) -> Result<String, HttpError>;
     /// A case kept as a new request in the template's collection (HC-10e).
     fn save(&self, id: &str, save: &AgentSave) -> Result<AgentSaved, HttpError>;
+    /// A script the model drafts, run with nothing sent, and kept for the page (HC-11c).
+    fn draft(&self, id: &str, draft: &AgentDraft) -> Result<ScriptDraft, HttpError>;
 }
 
 /// History gained an agent's send, or a collection an agent's case, for the page to read again.
@@ -609,6 +639,28 @@ impl Environment {
         let url = super::postman::userinfo_masked(&url).0;
         let name = format!("{} / {}", collection.name(), collection.item_name(id).unwrap_or_default());
         Ok(AgentPlan { collection: at, request, name, method, acts, url, credentials: reach.credentials })
+    }
+
+    /// A draft's run (HC-11c), worked out against the user's collections: the request
+    /// one this environment lists, and its variables as the model sees them. Nothing
+    /// is sent, so the environment's mode does not count.
+    pub fn agent_draft(&self, collections: &[(&Collection, Vec<Variable>)], globals: &[Variable], request: &str) -> Result<DraftPlan, HttpError> {
+        if self.agent.is_off() {
+            return Err(HttpError::NoneOpen);
+        }
+        let id = request.trim();
+        let Some(at) = collections.iter().position(|(c, _)| c.request_ids().iter().any(|r| r == id)) else {
+            return Err(HttpError::NoRequest(id.into()));
+        };
+        let (collection, variables) = &collections[at];
+        let reach = Reach::new(collections, globals, self);
+        if !reach.lists(id) {
+            return Err(HttpError::SendsNowhere { request: id.into(), collection: collection.name(), environment: self.name.clone() });
+        }
+        let layers: [&[Variable]; 3] = [globals, variables, &self.variables];
+        let hidden = agent_hidden(&layers, &reach.credentials);
+        let seen = |layer: &[Variable]| hiding(layer, &hidden).iter().map(Variable::for_window).collect();
+        Ok(DraftPlan { collection: at, layers: layers.map(seen), origins: reach.origins })
     }
 
     /// A case to keep (HC-10e), worked out against the user's collections: the
@@ -898,8 +950,12 @@ pub struct HistoryEntry {
     pub id: String,
     pub at: i64,
     pub environment: Option<String>,
-    /// The chat whose agent sent it; none when the page did.
+    /// The chat whose agent sent it, by its title; none when the page did.
     pub agent_chat: Option<String>,
+    /// That chat's id: a title is neither one of a kind nor kept. What a draft's
+    /// run finds the chat's sends by (HC-11c); none in an entry from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_chat_id: Option<String>,
     /// The address before its variables were filled in: what the list shows.
     pub template_url: String,
     /// The collection's request it was, which the entry opens; none for the agent's.
@@ -916,7 +972,7 @@ impl HistoryEntry {
         let mut request = prepared.shown.clone();
         request.body = request.body.map(|b| loggable(b.as_bytes()));
         let response_body = matches!(outcome, Outcome::Response { .. }).then(|| loggable(body));
-        HistoryEntry { id: uuid::Uuid::new_v4().to_string(), at, environment, agent_chat, template_url, request_id: None, request, outcome, response_body }
+        HistoryEntry { id: uuid::Uuid::new_v4().to_string(), at, environment, agent_chat, agent_chat_id: None, template_url, request_id: None, request, outcome, response_body }
     }
 
     /// Near what it takes as JSON: a body with control characters is not kept
@@ -1673,6 +1729,28 @@ mod tests {
         assert_eq!(saved(&stand(), save("nope", None, AgentEdits::default())), Err(HttpError::NoRequest("nope".into())));
         let elsewhere = collection(json!([get("x", json!("ftp://files.test/x"))]), json!(null), json!(null));
         let unlisted = stand().agent_save(&[(&elsewhere, vec![])], &[], &save("x", None, AgentEdits::default()));
+        assert_eq!(unlisted, Err(HttpError::SendsNowhere { request: "x".into(), collection: "Shop".into(), environment: "Stage".into() }));
+    }
+
+    /// A draft's run (HC-11c): of a request the environment lists, in any of its modes
+    /// — nothing is sent — over the variables as the model sees them.
+    #[test]
+    fn a_draft_runs_on_a_listed_request_over_what_the_model_sees() {
+        let shop = shop();
+        let drafted = |environment: &Environment, request: &str| environment.agent_draft(&[(&shop, shop.variables())], &[secret("g", "glob4l")], request);
+        let plan = drafted(&Environment { agent: AgentAccess::ReadOnly, ..stand() }, " w ").unwrap();
+        assert_eq!(plan.collection, 0);
+        let [globals, collection_vars, environment] = &plan.layers;
+        assert_eq!((globals[0].key.as_str(), globals[0].value.as_str()), ("g", SECRET_MASK));
+        assert_eq!(collection_vars.iter().find(|v| v.key == "tenant").map(|v| v.value.as_str()), Some("acme"));
+        let values: Vec<(&str, &str)> = environment.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect();
+        assert_eq!(values, [("baseUrl", "https://api.test/v1"), ("token", SECRET_MASK), ("id", "42")]);
+        assert!(!plan.foreign("https://api.test/other"));
+        assert!(plan.foreign("https://evil.test/x") && plan.foreign("ftp://api.test/x"), "a host of none, or no http host");
+        assert_eq!(drafted(&Environment { agent: AgentAccess::Off, ..stand() }, "w"), Err(HttpError::NoneOpen));
+        assert_eq!(drafted(&stand(), "nope"), Err(HttpError::NoRequest("nope".into())));
+        let elsewhere = collection(json!([get("x", json!("ftp://files.test/x"))]), json!(null), json!(null));
+        let unlisted = stand().agent_draft(&[(&elsewhere, vec![])], &[], "x");
         assert_eq!(unlisted, Err(HttpError::SendsNowhere { request: "x".into(), collection: "Shop".into(), environment: "Stage".into() }));
     }
 

@@ -43,3 +43,4 @@ pub mod dictation;
 pub mod meeting_notes;
 pub mod mongo;
 pub mod http_client;
+pub mod http_draft;

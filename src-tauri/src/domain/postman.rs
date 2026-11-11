@@ -587,6 +587,17 @@ impl Collection {
     /// header itself, say. A script with a hidden value's text in it is not shown at
     /// all: a secret in code is found by nothing else. Every hidden value is masked last.
     pub fn read_for_agent(&self, id: &str, scope: Scope) -> Result<String, HttpError> {
+        self.read_masking(id, scope).map(|(text, _)| text)
+    }
+
+    /// What `read_for_agent` masks of the request `id`: each credential written out in
+    /// the collection, its address's password and its auth's values — of four characters
+    /// or more, as there. A draft's run hides them from its script (HC-11c).
+    pub fn written_credentials(&self, id: &str) -> Result<Vec<String>, HttpError> {
+        self.read_masking(id, Scope::default()).map(|(_, hid)| hid)
+    }
+
+    fn read_masking(&self, id: &str, scope: Scope) -> Result<(String, Vec<String>), HttpError> {
         let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
         let Some(item) = chain.last() else { return Err(HttpError::NoSuchItem(id.into())) };
         let request = item.get("request").ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
@@ -694,7 +705,8 @@ impl Collection {
             lines.push("Scripts, in the order they run:".into());
             lines.extend(scripts);
         }
-        Ok(scope.hide(&lines.join("\n")))
+        let hid = hid.into_iter().filter(|literal| literal.chars().count() >= 4).collect();
+        Ok((scope.hide(&lines.join("\n")), hid))
     }
 
     /// The request `id` as it leaves, and as it is shown with secrets masked.

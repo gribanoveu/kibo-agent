@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::domain::http_auth::{refusal, OAuth2, Token};
+use crate::domain::http_draft::{AgentDraft, ScriptDraft};
 use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSave, AgentSaved, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, script_hash, Auth, Collection, Imported};
@@ -45,6 +46,8 @@ pub fn send(collection_id: &str, request_id: &str, edited: Option<Value>, enviro
 /// collections write where a credential goes — its mask hides them besides secrets.
 struct ForAgent {
     chat: String,
+    /// The chat's id, which a draft finds its sends by (HC-11c).
+    chat_id: String,
     credentials: BTreeSet<String>,
     /// Header values and the query the model wrote: a wrong token it sends is its to read back.
     written: Vec<String>,
@@ -86,6 +89,8 @@ struct Exchanged {
     environment: Option<String>,
     outcome: Outcome,
     body: Vec<u8>,
+    /// Its entry in history; none when history was not written.
+    exchange: Option<String>,
 }
 
 /// A request through its scripts, and what came back with its secrets hidden.
@@ -120,19 +125,20 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     let wrote = |literal: &String| scripts.agent.as_ref().is_some_and(|a| a.written.iter().any(|w| w.contains(literal.as_str())));
     let literals: Vec<String> = credential_literals(&prepared.sent).into_iter().filter(|l| !wrote(l)).collect();
     scripts.kept.extend(literals);
+    scripts.after_response(&prepared, &outcome, &body);
+    // What the test scripts learned counts too: a token they stored is a secret's value —
+    // in history as well, where an agent's send is what a draft of it runs on (HC-11c).
     let mask = scripts.mask();
-    match scripts.agent.as_ref().map(|a| a.chat.clone()) {
+    let exchange = match scripts.agent.as_ref().map(|a| (a.chat.clone(), a.chat_id.clone())) {
         None => remember(at, name.clone(), None, written, Some(request_id), &prepared, &outcome, &body, &mask),
         // What the model was told, and no more.
         Some(chat) => {
             let told = AgentReply::new(outcome.clone(), &body, &mask);
-            remember(at, name.clone(), Some(chat), written, Some(request_id), &prepared, &told.outcome, &told.body, &mask);
+            remember(at, name.clone(), Some(chat), written, Some(request_id), &prepared, &told.outcome, &told.body, &mask)
         }
-    }
-    scripts.after_response(&prepared, &outcome, &body);
-    // What the test scripts learned counts too: a token they stored is a secret's value.
-    let outcome = outcome.hidden(&scripts.mask());
-    Ok(Exchanged { at, environment: name, outcome, body })
+    };
+    let outcome = outcome.hidden(&mask);
+    Ok(Exchanged { at, environment: name, outcome, body, exchange })
 }
 
 /// Through the sender, with the jar: what a send and a script's `pm.sendRequest` have
@@ -231,13 +237,21 @@ struct Sent {
     saved: SavedResponse,
 }
 
-/// A store that fails now must not hide what came back: the request went out.
+/// A store that fails now must not hide what came back: the request went out. The
+/// entry's id when it was written; `agent` is the chat's title and id.
 #[allow(clippy::too_many_arguments)]
-fn remember(at: i64, environment: Option<String>, agent_chat: Option<String>, written: String, request_id: Option<&str>, prepared: &Prepared, outcome: &Outcome, body: &[u8], scope: &Scope) {
+fn remember(at: i64, environment: Option<String>, agent: Option<(String, String)>, written: String, request_id: Option<&str>, prepared: &Prepared, outcome: &Outcome, body: &[u8], scope: &Scope) -> Option<String> {
+    let (agent_chat, agent_chat_id) = agent.unzip();
     let mut entry = HistoryEntry::new(at, environment, agent_chat, scope.hide(&written), &prepared.hidden(scope), outcome.clone().hidden(scope), body);
     entry.request_id = request_id.map(str::to_string);
-    if let Err(e) = http_collections::record(entry) {
-        eprintln!("http: a send not written to history: {e}");
+    entry.agent_chat_id = agent_chat_id;
+    let id = entry.id.clone();
+    match http_collections::record(entry) {
+        Ok(()) => Some(id),
+        Err(e) => {
+            eprintln!("http: a send not written to history: {e}");
+            None
+        }
     }
 }
 
@@ -364,13 +378,19 @@ impl<'a> Scripts<'a> {
     }
 }
 
-/// `pm.sendRequest`: the same sender and the same history as the page's own requests.
-fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option<&Environment>) -> Result<Value, HttpError> {
+/// A script's `pm.sendRequest` filled in as the page sends one, and its address as written.
+pub(super) fn one_request(request: &Value, scope: &Scope) -> (String, Result<Prepared, HttpError>) {
     let request = request_after(&Value::Null, request);
     let written = request.get("url").map(|u| u.get("raw").unwrap_or(u)).and_then(Value::as_str).unwrap_or_default().to_string();
     let mut one = Collection::new("sub-request", "sub-request");
-    one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request}))?;
-    let prepared = one.prepare("sub-request", scope)?;
+    let prepared = one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request})).and_then(|_| one.prepare("sub-request", scope));
+    (written, prepared)
+}
+
+/// `pm.sendRequest`: the same sender and the same history as the page's own requests.
+fn sub_request(request: &Value, scope: &Scope, mask: &Scope, environment: Option<&Environment>) -> Result<Value, HttpError> {
+    let (written, prepared) = one_request(request, scope);
+    let prepared = prepared?;
     let (outcome, body) = deliver(&prepared.sent, environment.and_then(|e| e.trusted_cert.as_deref()), true);
     let at = chrono::Utc::now().timestamp_millis();
     remember(at, environment.map(|e| e.name.clone()), None, written, None, &prepared, &outcome, &body, mask);
@@ -421,11 +441,11 @@ impl HttpStands for Stands {
         let chat = chat_store::title(&self.chat).ok().flatten().unwrap_or_else(|| self.chat.clone());
         let local = send.variables.iter().map(|(key, value)| Variable { key: key.clone(), value: value.clone(), secret: false, enabled: true }).collect();
         let written = send.edits.headers.iter().filter_map(|(_, v)| v.clone()).chain(send.edits.query.clone()).collect();
-        let agent = ForAgent { chat, credentials: plan.credentials, written };
+        let agent = ForAgent { chat, chat_id: self.chat.clone(), credentials: plan.credentials, written };
         let ran = run(&mut collection, &collection_id, request_id, Some(&environment), local, Some(agent));
         (self.changed)(HttpChanged);
         let (sent, scripts, mask) = ran?;
-        Ok(AgentSent { method: plan.method, url: mask.hide(&plan.url), reply: AgentReply::new(sent.outcome, &sent.body, &mask), scripts })
+        Ok(AgentSent { method: plan.method, url: mask.hide(&plan.url), reply: AgentReply::new(sent.outcome, &sent.body, &mask), scripts, exchange: sent.exchange })
     }
 
     /// A case kept (HC-10e): the new request in the template's collection, beside it
@@ -460,6 +480,14 @@ impl HttpStands for Stands {
         let environment = http_env_store::get(id)?;
         with_collections(|collections, globals, _| environment.read_request(collections, globals, request))?
     }
+
+    /// A draft run with nothing sent and kept apart from the collection (HC-11c).
+    fn draft(&self, id: &str, draft: &AgentDraft) -> Result<ScriptDraft, HttpError> {
+        let title = chat_store::title(&self.chat).ok().flatten().unwrap_or_else(|| self.chat.clone());
+        let kept = super::http_draft::run(&self.chat, &title, id, draft)?;
+        (self.changed)(HttpChanged);
+        Ok(kept)
+    }
 }
 
 /// Where the user's collections go with `environment`, each filled in as the page
@@ -470,7 +498,7 @@ fn reach(environment: &Environment) -> Result<Reach, HttpError> {
 
 /// The user's collections, each with its variables as a send sees them, globals,
 /// and each collection's id. A collection whose file does not read is left out.
-fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variable], &[&str]) -> T) -> Result<T, HttpError> {
+pub(super) fn with_collections<T>(f: impl FnOnce(&[(&Collection, Vec<Variable>)], &[Variable], &[&str]) -> T) -> Result<T, HttpError> {
     let (globals, values) = (http_env_store::globals()?, http_env_store::collection_values()?);
     let all = http_collections::all()?;
     let read: Vec<(&str, &Collection)> = all.iter().filter_map(|(id, read)| read.as_ref().ok().map(|c| (id.as_str(), c))).collect();
@@ -2416,6 +2444,8 @@ mod tests {
             let entry = &history[0];
             assert_eq!((entry.template_url.as_str(), entry.environment.as_deref(), entry.agent_chat.as_deref(), entry.request_id.as_deref()), ("{{baseUrl}}/orders/{{n}}?expand=items", Some("Stage"), Some("check the stand"), Some("list")));
             assert_eq!(entry.outcome, sent.reply.outcome);
+            // By the chat's id too, which a draft finds it by; and the model is told the entry's.
+            assert_eq!((entry.agent_chat_id.as_deref(), sent.exchange.as_deref()), (Some("c1"), Some(entry.id.as_str())));
             assert_eq!(entry.response_body.as_deref().map(str::as_bytes), Some(&sent.reply.body[..]));
             assert!(entry.request.headers.contains(&("Authorization".into(), "Bearer •••".into())), "{:?}", entry.request.headers);
             assert!(!serde_json::to_string(entry).unwrap().contains("s3cr3t-t0k"));
@@ -2640,6 +2670,176 @@ mod tests {
             assert!(matches!(sent.reply.outcome, Outcome::Response { status: 302, .. }), "{:?}", sent.reply.outcome);
             wire(&seen);
             assert!(seen.recv_timeout(std::time::Duration::from_millis(100)).is_err(), "not followed");
+        });
+    }
+
+    fn drafted(listen: &str, code: &str) -> AgentDraft {
+        AgentDraft { request: "list".into(), listen: listen.into(), code: code.into(), ..AgentDraft::default() }
+    }
+
+    /// A post-response draft (HC-11c) on the chat's send as the model read it: the
+    /// secret masked there, and named; in the sandbox only as `•••`; what it would
+    /// write said and not written; its `pm.sendRequest` not sent; kept, and only as a draft.
+    #[test]
+    fn a_drafts_tests_run_on_the_chats_send_as_read_and_nothing_goes_out() {
+        with_app_dir("http-draft-test", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 31\r\nconnection: close\r\n\r\n{\"id\":7,\"token\":\"s3cr3t-t0k\"}\r\n");
+            let shop = agent_stage(format!("http://127.0.0.1:{port}/v1"), AgentAccess::ReadOnly);
+            // Its title is not its id: the send is found by the id.
+            crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Api, None, &[crate::domain::llm::LlmMessage::user("check the stand")], &json!([])).unwrap();
+            let (stands, _) = stands("c1");
+            let sent = stands.send("stage", &agent("list")).unwrap();
+            let (elsewhere, reached) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n");
+            let code = format!(
+                "pm.test('id is 7', () => pm.expect(pm.response.json().id).to.eql(7));\n\
+                 pm.test('token', () => pm.expect(pm.response.json().token).to.eql('the-real-one'));\n\
+                 console.log('env ' + pm.environment.get('token'));\n\
+                 pm.environment.set('orderId', String(pm.response.json().id));\n\
+                 console.log('given ' + pm.variables.get('extra'));\n\
+                 pm.sendRequest('http://127.0.0.1:{elsewhere}/x?t=' + pm.environment.get('token'), (err) => console.log('answer ' + (err ? err.message : 'sent')));"
+            );
+            let draft = AgentDraft { variables: vec![("extra".into(), "x1".into())], ..drafted("test", &code) };
+            let kept = stands.draft("stage", &draft).unwrap();
+            let report = &kept.report;
+
+            assert_eq!(report.exchange, sent.exchange);
+            assert!(report.ran_on.starts_with("GET http://127.0.0.1:") && report.ran_on.ends_with("→ 200"), "{}", report.ran_on);
+            let tests: Vec<(&str, bool)> = report.tests.iter().map(|t| (t.name.as_str(), t.passed)).collect();
+            assert_eq!(tests, [("id is 7", true), ("token", false)]);
+            assert!(report.masked.contains(&"$.token".to_string()), "{:?}", report.masked);
+            assert!(report.masked.contains(&"the request's header Authorization".to_string()), "{:?}", report.masked);
+            let console: Vec<&str> = report.console.iter().map(|c| c.text.as_str()).collect();
+            assert!(console.contains(&"env •••") && console.contains(&"given x1"), "{console:?}");
+            assert!(console.iter().any(|c| c.starts_with("answer ") && c.contains(crate::domain::http_draft::NOT_SENT)), "{console:?}");
+            assert_eq!(report.supplied, ["extra"]);
+            assert_eq!(report.writes, [crate::domain::http_draft::DraftWrite { scope: "environment".into(), key: "orderId".into(), value: Some("7".into()) }]);
+            assert_eq!(report.sends.len(), 1);
+            let out = &report.sends[0];
+            assert_eq!((out.method.as_str(), out.url.as_str(), out.masked, out.foreign), ("GET", format!("http://127.0.0.1:{elsewhere}/x?t=•••").as_str(), true, true));
+
+            assert!(reached.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "a draft's pm.sendRequest went out");
+            assert_eq!(env_value("orderId"), None, "what it would write is not written");
+            let drafts = http_collections::drafts().unwrap();
+            assert_eq!(drafts, [kept.clone()]);
+            assert_eq!((kept.collection.as_str(), kept.request.as_str(), kept.listen.as_str(), kept.chat.as_str(), kept.environment.as_str(), kept.code.as_str()), (shop.as_str(), "list", "test", "c1", "Stage", code.as_str()));
+            assert_eq!(kept.chat_title, "check the stand");
+            assert!(!serde_json::to_string(&drafts).unwrap().contains("s3cr3t-t0k"));
+            assert!(!http_collections::get(&shop).unwrap().json().to_string().contains("orderId"), "the collection is not touched");
+        });
+    }
+
+    /// Another chat's send is not its to run on, and one with no send has none; a
+    /// pre-request needs none. A kind of script Postman has not is refused.
+    #[test]
+    fn a_post_response_draft_needs_a_send_of_its_own_chats() {
+        with_app_dir("http-draft-whose", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+            agent_stage(format!("http://127.0.0.1:{port}/v1"), AgentAccess::ReadOnly);
+            let sent = stands("c1").0.send("stage", &agent("list")).unwrap();
+            let (other, _) = stands("c2");
+            assert!(matches!(other.draft("stage", &drafted("test", "pm.test('x', () => {});")), Err(HttpError::NoExchange(r)) if r == "list"));
+            let named = AgentDraft { exchange: sent.exchange.clone(), ..drafted("test", "") };
+            assert!(matches!(other.draft("stage", &named), Err(HttpError::BadExchange { why, .. }) if why.contains("not a send of this chat's")));
+            assert!(other.draft("stage", &drafted("prerequest", "console.log(1);")).is_ok());
+            let on_send = AgentDraft { exchange: sent.exchange.clone(), ..drafted("prerequest", "") };
+            assert!(matches!(other.draft("stage", &on_send), Err(HttpError::BadExchange { why, .. }) if why.contains("saved request")));
+            assert!(matches!(other.draft("stage", &drafted("posttest", "")), Err(HttpError::BadListen(l)) if l == "posttest"));
+            assert_eq!(http_collections::drafts().unwrap().len(), 1, "only the one that ran is kept");
+        });
+    }
+
+    /// A pre-request draft on the saved request: the request it would make, part by
+    /// part with the secret masked, what it would write, and where it would send — a
+    /// hidden value in it and a host none of the collections' named. And it is not
+    /// what Send runs: the request goes as saved.
+    #[test]
+    fn a_pre_request_draft_says_the_request_it_would_make_and_send_does_not_run_it() {
+        with_app_dir("http-draft-pre", || {
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+            let shop = agent_stage(format!("http://127.0.0.1:{port}/v1"), AgentAccess::ReadOnly);
+            // A key written into the request by hand: masked as the agent's mask masks it.
+            change(&shop, |c| {
+                let request = c.item_mut("list").unwrap().get_mut("request").unwrap();
+                request["header"] = json!([{"key": "X-Api-Key", "value": "live-k3y-123"}]);
+                Ok(())
+            })
+            .unwrap();
+            let code = "pm.request.headers.add({key: 'X-Sig', value: 'sig-' + pm.environment.get('token')});\n\
+                console.log('key ' + pm.request.headers.get('X-Api-Key'));\n\
+                pm.environment.set('seen', pm.request.headers.get('X-Api-Key'));\n\
+                pm.request.headers.remove('X-Api-Key');\n\
+                pm.environment.set('ts', '5');\n\
+                pm.sendRequest({url: pm.environment.get('baseUrl') + '/token', method: 'POST', body: {mode: 'raw', raw: pm.environment.get('token')}}, () => {});\n\
+                pm.sendRequest('https://elsewhere.test/x', () => {});\n\
+                pm.environment.set('baseUrl', pm.environment.get('baseUrl').replace('/v1', '/v2'));\n\
+                pm.execution.skipRequest();";
+            let (drafting, told) = stands("c1");
+            let kept = drafting.draft("stage", &drafted("prerequest", code)).unwrap();
+            assert_eq!(told.load(Ordering::Relaxed), 1, "the page reads its drafts again");
+            let report = &kept.report;
+            assert_eq!(report.exchange, None);
+            assert_eq!(report.error, None);
+            let changed: Vec<(&str, Option<&str>, Option<&str>)> = report.request.iter().map(|c| (c.part.as_str(), c.before.as_deref(), c.after.as_deref())).collect();
+            let (v1, v2) = (format!("http://127.0.0.1:{port}/v1/orders?id=1"), format!("http://127.0.0.1:{port}/v2/orders?id=1"));
+            assert_eq!(
+                changed,
+                [("url", Some(v1.as_str()), Some(v2.as_str())), ("header X-Api-Key", Some("•••"), None), ("header X-Sig", None, Some("sig-•••"))],
+                "filled with what the script set; the bearer masked alike before and after"
+            );
+            let writes: Vec<(&str, Option<&str>)> = report.writes.iter().map(|w| (w.key.as_str(), w.value.as_deref())).collect();
+            assert_eq!(writes, [("baseUrl", Some(format!("http://127.0.0.1:{port}/v2").as_str())), ("seen", Some("•••")), ("ts", Some("5"))]);
+            // The script read the key the collection writes by hand, and got the mask.
+            assert_eq!(report.console.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["key •••"]);
+            assert!(report.skipped);
+            assert_eq!(report.hidden, ["token"], "the signature is over the mask, and the report says so");
+            let sends: Vec<(&str, &str, bool, bool)> = report.sends.iter().map(|s| (s.method.as_str(), s.url.as_str(), s.masked, s.foreign)).collect();
+            let token = format!("http://127.0.0.1:{port}/v1/token");
+            assert_eq!(sends, [("POST", token.as_str(), true, false), ("GET", "https://elsewhere.test/x", false, true)]);
+            let told = serde_json::to_string(&kept).unwrap();
+            assert!(!told.contains("s3cr3t-t0k") && !told.contains("live-k3y-123"), "{told}");
+
+            // Send runs what is in the collection, and the draft is not there.
+            let view = send(&shop, "list", None, Some("stage")).unwrap();
+            assert!(view.scripts.is_empty(), "{:?}", view.scripts);
+            let wire = wire(&seen);
+            assert!(!wire.to_ascii_lowercase().contains("x-sig"), "{wire}");
+            assert_eq!(env_value("ts"), None);
+        });
+    }
+
+    /// A token a test script of the collection keeps as a secret is masked in what the
+    /// model reads — and so in history, which a draft runs on: the draft cannot read it there.
+    #[test]
+    fn what_a_test_script_makes_a_secret_a_draft_does_not_read() {
+        with_app_dir("http-draft-learned", || {
+            let (port, _seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 22\r\nconnection: close\r\n\r\n{\"access\":\"fr3sh-t0k\"}");
+            let shop = agent_stage(format!("http://127.0.0.1:{port}/v1"), AgentAccess::ReadOnly);
+            change(&shop, |c| {
+                c.item_mut("list").unwrap().insert("event".into(), json!([event("test", "pm.environment.set('token', pm.response.json().access);")]));
+                Ok(())
+            })
+            .unwrap();
+            trust(&shop);
+            let (stands, _) = stands("c1");
+            let sent = stands.send("stage", &agent("list")).unwrap();
+            assert!(body_of(&sent).contains("\"access\": \"•••\""), "{}", body_of(&sent));
+            let history = serde_json::to_string(&http_collections::history().unwrap()).unwrap();
+            assert!(!history.contains("fr3sh-t0k"), "{history}");
+            let kept = stands.draft("stage", &drafted("test", "console.log(pm.response.text());")).unwrap();
+            let told = serde_json::to_string(&kept).unwrap();
+            assert!(!told.contains("fr3sh-t0k") && told.contains("•••"), "{told}");
+            assert_eq!(kept.report.masked, ["the request's header Authorization", "$.access"]);
+        });
+    }
+
+    /// A script past the sandbox's limit: said, and the draft kept with it.
+    #[test]
+    fn a_draft_that_runs_out_of_time_is_kept_saying_so() {
+        with_app_dir("http-draft-limit", || {
+            agent_stage("http://127.0.0.1:1/v1".into(), AgentAccess::ReadOnly);
+            let kept = stands("c1").0.draft("stage", &drafted("prerequest", "while (true) {}")).unwrap();
+            assert!(kept.report.error.as_deref().is_some_and(|e| e.contains("ran out of time")), "{:?}", kept.report.error);
+            assert_eq!(http_collections::drafts().unwrap(), [kept]);
         });
     }
 

@@ -17,6 +17,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use zeroize::Zeroizing;
 
 use crate::domain::http_client::{trim_history, HistoryEntry, HttpError, SavedResponse};
+use crate::domain::http_draft::{keep_draft, ScriptDraft};
 use crate::domain::postman::{is_safe_id, Collection};
 use crate::infra::app_dir;
 use crate::infra::master_key;
@@ -247,6 +248,29 @@ pub fn record(entry: HistoryEntry) -> Result<(), HttpError> {
     trim_history(&mut entries);
     let plain = Zeroizing::new(serde_json::to_vec(&entries).map_err(|e| HttpError::Store(e.to_string()))?);
     app_dir::write_private(&history_path()?, &sealed(&plain)?).map_err(HttpError::Store)
+}
+
+fn drafts_path() -> Result<PathBuf, HttpError> {
+    Ok(dir()?.join("drafts.enc"))
+}
+
+/// The model's drafts (HC-11c), oldest first. Sealed, as history is: a report holds
+/// what a response said.
+pub fn drafts() -> Result<Vec<ScriptDraft>, HttpError> {
+    let path = drafts_path()?;
+    let Some(blob) = read(&path)? else { return Ok(Vec::new()) };
+    let plain = opened(&path, &blob)?;
+    serde_json::from_slice(&plain).map_err(|_| HttpError::Store(format!("{} is damaged", path.display())))
+}
+
+/// In place of the chat's last draft of that script.
+pub fn save_draft(draft: ScriptDraft) -> Result<(), HttpError> {
+    static DRAFTING: Mutex<()> = Mutex::new(());
+    let _held = DRAFTING.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut drafts = drafts()?;
+    keep_draft(&mut drafts, draft);
+    let plain = Zeroizing::new(serde_json::to_vec(&drafts).map_err(|e| HttpError::Store(e.to_string()))?);
+    app_dir::write_private(&drafts_path()?, &sealed(&plain)?).map_err(HttpError::Store)
 }
 
 #[cfg(test)]

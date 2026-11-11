@@ -36,6 +36,7 @@ pub mod knowledge;
 pub mod http_read_request;
 pub mod http_environment;
 pub mod http_save_request;
+pub mod http_draft_script;
 pub mod http_send;
 pub mod mongo;
 pub mod cluster;
@@ -131,6 +132,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::HttpSend, http_send::definition),
     (ToolName::HttpReadRequest, http_read_request::definition),
     (ToolName::HttpSaveRequest, http_save_request::definition),
+    (ToolName::HttpDraftScript, http_draft_script::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -203,6 +205,7 @@ pub fn dispatch(
         ToolCall::HttpSend(args) => http_send::http_send(args, deps),
         ToolCall::HttpReadRequest(args) => http_read_request::http_read_request(args, deps),
         ToolCall::HttpSaveRequest(args) => http_save_request::http_save_request(args, deps),
+        ToolCall::HttpDraftScript(args) => http_draft_script::http_draft_script(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -664,6 +667,17 @@ mod definition_tests {
                     headers: Some([("X-Id".to_string(), None)].into()),
                     body: Some("{}".into()),
                     auth: Some("none".into()),
+                })],
+            ),
+            ToolName::HttpDraftScript => (
+                r#"{"request":"r1","listen":"test","code":"pm.test('ok', () => {});"}"#,
+                vec![ToolCall::HttpDraftScript(crate::domain::tools::HttpDraftScriptArgs {
+                    request: "r1".into(),
+                    listen: "test".into(),
+                    code: "pm.test('ok', () => {});".into(),
+                    environment: Some("Stage".into()),
+                    exchange: Some("e1".into()),
+                    variables: Some([("id".to_string(), serde_json::json!("1"))].into()),
                 })],
             ),
             ToolName::Mongo => (
