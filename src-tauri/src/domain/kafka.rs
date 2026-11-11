@@ -63,7 +63,7 @@ pub struct Sasl {
     pub password: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SaslMechanism {
     Plain,
@@ -139,6 +139,8 @@ pub enum KafkaError {
     ReadOnly(String),
     #[error("{0}")]
     Store(String),
+    #[error("{0}")]
+    Broker(String),
 }
 
 // -------------------------------------------------------------------- topics
@@ -195,6 +197,38 @@ impl TopicView {
             self.stored(),
             if self.stored() == 1 { "" } else { "s" }
         )
+    }
+}
+
+/// Topics as one answer carries them: a page, and how many were left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicList {
+    pub topics: Vec<TopicView>,
+    pub more: usize,
+}
+
+/// One topic opened: its partitions and the configs a reader cares about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicDetail {
+    pub topic: TopicView,
+    pub configs: Vec<ConfigView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigView {
+    pub name: String,
+    pub value: String,
+}
+
+/// Whether a topic's name answers a search: part of it, any case; nothing
+/// asked is everything.
+pub fn matches(name: &str, part: Option<&str>) -> bool {
+    match part.map(str::trim).filter(|part| !part.is_empty()) {
+        Some(part) => name.to_lowercase().contains(&part.to_lowercase()),
+        None => true,
     }
 }
 
@@ -1138,5 +1172,15 @@ mod tests {
     #[test]
     fn a_fixed_field_that_ends_early_is_refused() {
         assert_eq!(ProtoMessage::decode(&[0x09, 0x01, 0x02]).unwrap_err(), ProtoError::Truncated { at: 1 });
+    }
+
+    #[test]
+    fn a_search_matches_part_of_a_name_in_any_case() {
+        assert!(matches("orders.created", Some("ORDER")));
+        assert!(matches("orders.created", Some(" created ")));
+        assert!(matches("orders", Some("orders")));
+        assert!(!matches("orders", Some("payments")));
+        assert!(matches("orders", None));
+        assert!(matches("orders", Some("  ")), "an empty search is no search");
     }
 }

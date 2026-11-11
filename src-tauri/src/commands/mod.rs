@@ -27,6 +27,7 @@ pub mod agents;
 pub mod board;
 pub mod dictation;
 pub mod meeting;
+pub mod kafka;
 pub mod mongo;
 pub mod features;
 pub mod keyboard_layout;
