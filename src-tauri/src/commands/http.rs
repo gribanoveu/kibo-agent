@@ -9,6 +9,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, HttpChanged, HttpEventSink, ResponseView};
+use crate::domain::http_draft::{DraftShown, ScriptDraft};
 use crate::infra::{http_collections, http_cookies, http_env_store};
 use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptState};
 
@@ -157,6 +158,23 @@ pub async fn http_cookies_clear() -> Result<(), String> {
 #[tauri::command]
 pub async fn http_scripts_set(collection: String, hashes: Vec<String>, on: bool) -> Result<(), String> {
     blocking(move || http_client::set_scripts(&collection, &hashes, on)).await
+}
+
+/// The model's script drafts, oldest first (HC-11c).
+#[tauri::command]
+pub async fn http_drafts() -> Result<Vec<ScriptDraft>, String> {
+    blocking(http_collections::drafts).await
+}
+
+/// The draft the page showed moved into its request and turned on.
+#[tauri::command]
+pub async fn http_draft_apply(draft: DraftShown) -> Result<(), String> {
+    blocking(move || http_client::apply_draft(&draft)).await
+}
+
+#[tauri::command]
+pub async fn http_draft_reject(draft: DraftShown) -> Result<(), String> {
+    blocking(move || http_client::reject_draft(&draft)).await
 }
 
 /// A pasted `curl …` as a Postman `request`; nothing is read or sent.

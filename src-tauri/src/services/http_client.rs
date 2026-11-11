@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::domain::http_auth::{refusal, OAuth2, Token};
-use crate::domain::http_draft::{AgentDraft, ScriptDraft};
+use crate::domain::http_draft::{AgentDraft, DraftShown, ScriptDraft};
 use crate::domain::http_client::{agent_hidden, credential_literals, hiding, AgentReply, AgentSave, AgentSaved, AgentSend, AgentSent, Environment, HistoryEntry, HttpChanged, HttpError, HttpEventSink, HttpStands, OpenStand, Outcome, Outgoing, Prepared, Reach, ResponseView, SavedResponse, Scope, StandView, Variable};
 use crate::domain::http_scripts::{changes, overlaid, request_after, request_for_script, request_sent, response_for, ScriptReport, ScriptVars};
 use crate::domain::postman::{environment_to_postman, read_import, script_hash, Auth, Collection, Imported};
@@ -722,13 +722,18 @@ pub fn save_request(collection: &str, request_id: &str, request: Value) -> Resul
 /// was off would come back on. Only the page calls this: nothing the agent has writes a
 /// script.
 pub fn save_script(collection: &str, request_id: &str, listen: &str, code: &str) -> Result<(), HttpError> {
+    put_script(collection, request_id, listen, code, false)
+}
+
+/// A request's own script written; on when `turn_on`, else only if all it replaced was.
+fn put_script(collection: &str, request_id: &str, listen: &str, code: &str, turn_on: bool) -> Result<(), HttpError> {
     if !matches!(listen, "prerequest" | "test") {
         return Err(HttpError::Script(format!("No such script: {listen}.")));
     }
     change(collection, |c| {
         let on = scripts_on(collection, c);
         let old = c.set_script(request_id, listen, code)?;
-        let keep_on = !old.is_empty() && old.iter().all(|code| on.contains(&script_hash(code)));
+        let keep_on = turn_on || (!old.is_empty() && old.iter().all(|code| on.contains(&script_hash(code))));
         let present: HashSet<String> = c.all_scripts().into_iter().flat_map(|l| l.hashes).collect();
         // Under the edits' lock, which a switch takes too: neither sees the file and the
         // settings half done. The code of each pause before is dropped, so a script off that
@@ -743,6 +748,26 @@ pub fn save_script(collection: &str, request_id: &str, listen: &str, code: &str)
         })
         .map_err(|e| HttpError::Store(e.to_string()))
     })
+}
+
+/// The model's draft moved into its request in place of the request's own script, and
+/// turned on: the user read it, and what it replaces, before (decision 7). The draft the
+/// page showed, `shown`: one the model replaced since is not moved, nor dropped.
+pub fn apply_draft(shown: &DraftShown) -> Result<(), HttpError> {
+    if !http_collections::drafts()?.iter().any(|d| shown.is(d)) {
+        return Err(HttpError::Script("The draft changed or is gone — look at it again.".into()));
+    }
+    put_script(&shown.collection, &shown.request, &shown.listen, &shown.code, true)?;
+    reject_draft(shown)
+}
+
+pub fn reject_draft(shown: &DraftShown) -> Result<(), HttpError> {
+    http_collections::change_drafts(|drafts| drafts.retain(|d| !shown.is(d)))
+}
+
+/// A chat's drafts go with it (HC-11 open question 2).
+pub fn forget_drafts_of(chats: &[String]) -> Result<(), HttpError> {
+    http_collections::change_drafts(|drafts| drafts.retain(|d| !chats.contains(&d.chat)))
 }
 
 pub fn add_item(collection: &str, parent: Option<&str>, item: Value) -> Result<(), HttpError> {
@@ -2840,6 +2865,72 @@ mod tests {
             let kept = stands("c1").0.draft("stage", &drafted("prerequest", "while (true) {}")).unwrap();
             assert!(kept.report.error.as_deref().is_some_and(|e| e.contains("ran out of time")), "{:?}", kept.report.error);
             assert_eq!(http_collections::drafts().unwrap(), [kept]);
+        });
+    }
+
+    /// A draft moved into its request (HC-11d) runs there: in place of the request's own
+    /// script, which was off, and on — the user read it. Gone from the drafts; another
+    /// chat's of the same script stays. The one the page showed is moved, not one the
+    /// model wrote after.
+    #[test]
+    fn a_draft_moved_into_its_request_is_on_and_gone() {
+        with_app_dir("http-draft-apply", || {
+            let shop = agent_stage("http://127.0.0.1:1/v1".into(), AgentAccess::ReadOnly);
+            save_script(&shop, "list", "prerequest", "console.log('old');").unwrap();
+            // Another script, off: the move turns on the draft, not what else is there.
+            save_script(&shop, "make", "prerequest", "other();").unwrap();
+            let own = || {
+                let s = script_states(&shop).unwrap().into_iter().find(|s| s.item.as_deref() == Some("list") && s.listen == "prerequest").unwrap();
+                (s.codes.join("\n"), s.on)
+            };
+            assert_eq!(own(), ("console.log('old');".into(), false));
+            stands("c1").0.draft("stage", &drafted("prerequest", "console.log('new');")).unwrap();
+            stands("c2").0.draft("stage", &drafted("prerequest", "console.log('new');")).unwrap();
+            // The same code from another chat is that chat's draft: not moved, nor dropped, with this one.
+            let shown = |chat: &str, code: &str| DraftShown { collection: shop.clone(), request: "list".into(), listen: "prerequest".into(), chat: chat.into(), code: code.into() };
+            let chats = || http_collections::drafts().unwrap().into_iter().map(|d| d.chat).collect::<Vec<_>>();
+            // The same chat and code for another collection, request or kind: other drafts, kept.
+            let elsewhere = |collection: &str, request: &str, listen: &str| ScriptDraft {
+                collection: collection.into(),
+                request: request.into(),
+                listen: listen.into(),
+                chat: "c1".into(),
+                code: "console.log('new');".into(),
+                ..ScriptDraft::of_chat("c1")
+            };
+            let others = [elsewhere("other", "list", "prerequest"), elsewhere(&shop, "make", "prerequest"), elsewhere(&shop, "list", "test")];
+            let kept = || http_collections::drafts().unwrap().into_iter().filter(|d| others.contains(d)).count();
+
+            assert!(apply_draft(&shown("c1", "console.log('shown before');")).is_err(), "the model wrote another since");
+            assert_eq!(own(), ("console.log('old');".into(), false));
+            assert!(reject_draft(&shown("c1", "console.log('shown before');")).is_ok());
+            assert_eq!(chats(), ["c1", "c2"], "nor is the newer rejected");
+
+            for d in &others {
+                http_collections::save_draft(d.clone()).unwrap();
+            }
+            apply_draft(&shown("c1", "console.log('new');")).unwrap();
+            assert_eq!(own(), ("console.log('new');".into(), true));
+            assert_eq!(kept(), 3);
+            assert!(script_states(&shop).unwrap().iter().any(|s| s.item.as_deref() == Some("make") && !s.on), "the other script stays off");
+            let _ = http_collections::change_drafts(|ds| ds.retain(|d| !others.contains(d)));
+            assert_eq!(chats(), ["c2"]);
+            assert!(apply_draft(&shown("c1", "console.log('new');")).is_err(), "moved once");
+
+            reject_draft(&shown("c2", "console.log('new');")).unwrap();
+            assert!(chats().is_empty());
+            assert_eq!(own(), ("console.log('new');".into(), true), "a rejected draft touches nothing");
+        });
+    }
+
+    #[test]
+    fn a_chats_drafts_go_with_it() {
+        with_app_dir("http-draft-forget", || {
+            for chat in ["c1", "c2", "c3"] {
+                http_collections::save_draft(ScriptDraft::of_chat(chat)).unwrap();
+            }
+            forget_drafts_of(&["c1".into(), "c3".into()]).unwrap();
+            assert_eq!(http_collections::drafts().unwrap(), [ScriptDraft::of_chat("c2")]);
         });
     }
 

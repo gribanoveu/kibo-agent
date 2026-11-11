@@ -59,12 +59,17 @@ pub struct ChatTurn<'a> {
 }
 
 /// Deletes any chat, the agent's or Chat mode's: its row and its runs' record,
-/// and with it a Prototype chat's folder — any other chat has none. What it
-/// left running is stopped first: no tab would list it any more, and a stop
-/// saved after the delete would bring a row back.
+/// and with it a Prototype chat's folder — any other chat has none — and its HTTP
+/// script drafts. What it left running is stopped first: no tab would list it any
+/// more, and a stop saved after the delete would bring a row back.
 pub fn delete_chat(id: &str, processes: &crate::infra::background::Processes) -> Result<(), crate::domain::prototype::PrototypeError> {
     processes.stop_chat(id);
     crate::infra::chat_store::delete(id)?;
+    // A drafts file that does not open keeps no chat from being deleted: what it holds
+    // runs nowhere, and the newest 200 push the rest out.
+    if let Err(e) = super::http_client::forget_drafts_of(&[id.to_string()]) {
+        eprintln!("http: the drafts of a deleted chat are kept: {e}");
+    }
     crate::infra::prototype_store::remove(id)
 }
 
@@ -979,9 +984,15 @@ mod tests {
             let folder = crate::infra::prototype_store::files_dir(id).unwrap();
             std::fs::write(folder.join("index.html"), "<p>hi</p>").unwrap();
 
+            use crate::domain::http_draft::ScriptDraft;
+            use crate::infra::http_collections::{drafts, save_draft};
+            save_draft(ScriptDraft::of_chat(id)).unwrap();
+            save_draft(ScriptDraft::of_chat("other")).unwrap();
+
             delete_chat(id, &crate::infra::background::Processes::default()).unwrap();
             assert!(!folder.parent().unwrap().exists());
             assert!(crate::infra::chat_store::load(id).is_err(), "the row goes too");
+            assert_eq!(drafts().unwrap(), [ScriptDraft::of_chat("other")], "and its HTTP drafts");
         });
     }
 

@@ -265,12 +265,18 @@ pub fn drafts() -> Result<Vec<ScriptDraft>, HttpError> {
 
 /// In place of the chat's last draft of that script.
 pub fn save_draft(draft: ScriptDraft) -> Result<(), HttpError> {
+    change_drafts(|drafts| keep_draft(drafts, draft))
+}
+
+/// The drafts read, changed by `edit` and written back, with no other change between.
+pub fn change_drafts<T>(edit: impl FnOnce(&mut Vec<ScriptDraft>) -> T) -> Result<T, HttpError> {
     static DRAFTING: Mutex<()> = Mutex::new(());
     let _held = DRAFTING.lock().unwrap_or_else(PoisonError::into_inner);
     let mut drafts = drafts()?;
-    keep_draft(&mut drafts, draft);
+    let done = edit(&mut drafts);
     let plain = Zeroizing::new(serde_json::to_vec(&drafts).map_err(|e| HttpError::Store(e.to_string()))?);
-    app_dir::write_private(&drafts_path()?, &sealed(&plain)?).map_err(HttpError::Store)
+    app_dir::write_private(&drafts_path()?, &sealed(&plain)?).map_err(HttpError::Store)?;
+    Ok(done)
 }
 
 #[cfg(test)]

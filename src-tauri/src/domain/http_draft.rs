@@ -100,6 +100,33 @@ pub struct ScriptDraft {
     pub report: DraftReport,
 }
 
+/// The draft the page showed the user: its key and the code they read. A draft the model
+/// replaced since is another, and nothing done to this one reaches it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftShown {
+    pub collection: String,
+    pub request: String,
+    pub listen: String,
+    pub chat: String,
+    pub code: String,
+}
+
+#[cfg(test)]
+impl ScriptDraft {
+    /// A chat's draft of nothing in particular, for tests of where drafts go.
+    pub fn of_chat(chat: &str) -> Self {
+        let s = String::new;
+        Self { collection: "c".into(), request: "r".into(), name: s(), listen: "test".into(), chat: chat.into(), chat_title: s(), environment: s(), code: "1;".into(), at: 0, report: DraftReport::default() }
+    }
+}
+
+impl DraftShown {
+    pub fn is(&self, d: &ScriptDraft) -> bool {
+        (&d.collection, &d.request, &d.listen, &d.chat, &d.code) == (&self.collection, &self.request, &self.listen, &self.chat, &self.code)
+    }
+}
+
 /// Every string in `value` with `scope`'s secrets and what it keeps masked: a request
 /// as a draft's script gets it, a credential written into it by hand not there.
 pub fn masked_strings(value: &mut Value, scope: &Scope) {

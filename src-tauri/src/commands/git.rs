@@ -194,11 +194,13 @@ pub struct WorktreeRemoved {
 /// Removes the worktree at `path` — one from the folder list, not the open
 /// folder — and its chats.
 #[tauri::command]
-pub async fn git_worktree_remove(path: String, state: State<'_, Arc<AgentState>>) -> Result<WorktreeRemoved, String> {
+pub async fn git_worktree_remove(app: AppHandle, path: String, state: State<'_, Arc<AgentState>>) -> Result<WorktreeRemoved, String> {
     let target = removable_now(&path, &state)?;
-    tauri::async_runtime::spawn_blocking(move || remove_with_chats(&target))
+    let removed = tauri::async_runtime::spawn_blocking(move || remove_with_chats(&target))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+    super::http::http_event_sink(&app)(crate::domain::http_client::HttpChanged);
+    Ok(removed)
 }
 
 /// The folder first: chats deleted for a worktree that then stayed would be
@@ -207,9 +209,12 @@ pub async fn git_worktree_remove(path: String, state: State<'_, Arc<AgentState>>
 fn remove_with_chats(target: &Path) -> Result<WorktreeRemoved, String> {
     let saved_under = target.display().to_string();
     let branch_kept = git_branches::remove_worktree(target).map_err(|e| e.to_string())?;
-    let chats_removed = chat_store::delete_in(&saved_under)
+    let chats = chat_store::delete_in(&saved_under)
         .map_err(|e| format!("the worktree is removed, but its chats are not: {e}"))?;
-    Ok(WorktreeRemoved { branch_kept, chats_removed })
+    if let Err(e) = crate::services::http_client::forget_drafts_of(&chats) {
+        eprintln!("http: the drafts of deleted chats are kept: {e}");
+    }
+    Ok(WorktreeRemoved { branch_kept, chats_removed: chats.len() })
 }
 
 #[cfg(test)]
@@ -267,6 +272,10 @@ mod tests {
             };
             save("in-worktree", &shown(&path));
             save("in-main", &shown(&main));
+            use crate::domain::http_draft::ScriptDraft;
+            use crate::infra::http_collections::{drafts, save_draft};
+            save_draft(ScriptDraft::of_chat("in-worktree")).unwrap();
+            save_draft(ScriptDraft::of_chat("in-main")).unwrap();
 
             // Dirty: refused, and the chats stay with it.
             std::fs::write(path.join("new.txt"), "x").unwrap();
@@ -280,6 +289,7 @@ mod tests {
             assert!(!path.exists());
             assert!(chat_store::list(&saved_under).unwrap().is_empty());
             assert_eq!(chat_store::list(&shown(&main)).unwrap().len(), 1);
+            assert_eq!(drafts().unwrap(), [ScriptDraft::of_chat("in-main")], "the HTTP drafts of its chats go too");
         });
     }
 
