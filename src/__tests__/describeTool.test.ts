@@ -44,6 +44,13 @@ describe("what each call shows", () => {
     expect(describeTool(tool({ name: "httpSaveRequest", arguments: '{"from":" r1 ","name":"No auth"}', status: "running" })).arg).toBe('"No auth" from r1');
   });
 
+  test("a script draft shows its kind and request, how its tests went, and its code until it ran", () => {
+    const done = tool({ name: "httpDraftScript", arguments: '{"request":" r1 ","listen":"test","code":"pm.test()"}', result: { summary: "post-response · 2 passed", text: "Draft post-response" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP script draft", arg: "post-response for r1", meta: "post-response · 2 passed", detail: "Draft post-response" });
+    const running = describeTool(tool({ name: "httpDraftScript", arguments: '{"request":"r1","listen":"prerequest","code":"pm.request"}', status: "running" }));
+    expect(running).toMatchObject({ arg: "pre-request for r1", detail: "pm.request" });
+  });
+
   test("a presented page shows its name and the version kept, and its title while it runs", () => {
     const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
     expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });

@@ -22,6 +22,7 @@ import {
   ListTodo,
   NotebookPen,
   ScrollText,
+  FileCode,
   SquareKanban,
   Database,
   Telescope,
@@ -103,6 +104,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   "HTTP request": Globe,
   "HTTP environment": Globe,
   "Save HTTP case": BookmarkPlus,
+  "HTTP script draft": FileCode,
   Prototype: AppWindow,
 };
 

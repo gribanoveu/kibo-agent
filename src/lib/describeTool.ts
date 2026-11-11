@@ -95,6 +95,7 @@ export const LABELS: Record<string, string> = {
   httpSend: "HTTP",
   httpReadRequest: "HTTP request",
   httpSaveRequest: "Save HTTP case",
+  httpDraftScript: "HTTP script draft",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -408,6 +409,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         name,
         arg: [named && `"${named}"`, str(result.summary) ? `in ${str(result.summary)}` : from && `from ${from}`].filter(Boolean).join(" "),
         detail: str(result.text) ?? "",
+      };
+    }
+
+    // A script drafted: its kind and request, and how its tests went once run.
+    case "httpDraftScript": {
+      const kind = str(args.listen) === "prerequest" ? "pre-request" : "post-response";
+      return {
+        name,
+        arg: [kind, `for ${str(args.request)?.trim() ?? ""}`].join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? str(args.code) ?? "",
       };
     }
 
