@@ -39,11 +39,12 @@ pub async fn kafka_connection_check(id: String, clients: Clients<'_>) -> Result<
     blocking(move || kafka::check(&clients, &id)).await
 }
 
-/// A page of topics — `name` searches part of a name, any case.
+/// A page of topics — `name` searches part of a name, any case; `page` counts
+/// from zero, a hundred topics a page.
 #[tauri::command]
-pub async fn kafka_topics(connection: String, name: Option<String>, clients: Clients<'_>) -> Result<TopicList, String> {
+pub async fn kafka_topics(connection: String, name: Option<String>, page: Option<usize>, clients: Clients<'_>) -> Result<TopicList, String> {
     let clients = clients.inner().clone();
-    blocking(move || kafka::topics(&clients, &connection, name.as_deref())).await
+    blocking(move || kafka::topics(&clients, &connection, name.as_deref(), page.unwrap_or(0))).await
 }
 
 /// A page of a topic's messages — `spec` names the partitions, the offset and

@@ -45,7 +45,7 @@ mock.module("@tauri-apps/api/core", () => ({
       case "kafka_connection_delete":
         return Promise.resolve([]);
       case "kafka_topics":
-        return refuseTopics ? Promise.reject("the topics: no answer in 15s") : Promise.resolve({ topics: [topic], more: 0 });
+        return refuseTopics ? Promise.reject("the topics: no answer in 15s") : Promise.resolve({ topics: [topic], total: 240 });
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
       case "kafka_messages":
@@ -97,7 +97,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     expect(await screen.findByRole("heading", { name: "prod" })).toBeTruthy();
     expect(await screen.findByText("orders")).toBeTruthy();
-    expect(sent("kafka_topics")[0].args.connection).toBe("c1");
+    expect(sent("kafka_topics")[0].args).toMatchObject({ connection: "c1", name: null, page: 0 });
   });
 
   test("a new connection is saved with the window's own key names", async () => {
@@ -204,6 +204,20 @@ describe("the Kafka page", () => {
     await act(async () => held[0](page(1)));
     expect(screen.queryByLabelText("Message 0/1")).toBeNull();
     expect(screen.getByLabelText("Message 0/2")).toBeTruthy();
+  });
+
+  test("the topics turn a page at a time, and the buttons say where they are", async () => {
+    render(<KafkaPage />);
+    await screen.findByText("orders");
+    expect(screen.getByText(/240 topics — 1–1 shown/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "‹ Previous" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next ›" }));
+    await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.page === 1)).toBe(true));
+
+    // Another search is another list: its first page, not the one it was on.
+    fireEvent.change(screen.getByLabelText("Find a topic"), { target: { value: "ord" } });
+    await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.page === 0 && call.args.name === "ord")).toBe(true));
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

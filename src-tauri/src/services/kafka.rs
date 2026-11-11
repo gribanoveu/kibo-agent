@@ -3,13 +3,13 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{matches, Connection, ConnectionView, KafkaError, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{page, Connection, ConnectionView, KafkaError, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
-/// How many topics one answer carries. A cluster with thousands is read by
-/// searching, not by scrolling: the rest are counted, not sent.
-pub const MAX_TOPICS: usize = 200;
+/// How many topics one page carries. The page turns them; the search narrows
+/// what the pages are of.
+pub const PAGE_SIZE: usize = 100;
 
 /// The saved connections, as the window lists them.
 pub fn connections() -> Result<Vec<ConnectionView>, KafkaError> {
@@ -38,19 +38,16 @@ pub fn check(clients: &KafkaClients, id: &str) -> Result<String, KafkaError> {
     kafka_client::cluster(clients, &connection)
 }
 
-/// Topic names, searched by part of a name, in order, at most
-/// [`MAX_TOPICS`] with their watermarks — and how many were left out.
-pub fn topics(clients: &KafkaClients, id: &str, name_part: Option<&str>) -> Result<TopicList, KafkaError> {
+/// Topic names, searched by part of a name, one page at a time — with their
+/// watermarks, and how many matched in all.
+pub fn topics(clients: &KafkaClients, id: &str, name_part: Option<&str>, wanted: usize) -> Result<TopicList, KafkaError> {
     let connection = kafka_store::get(id)?;
-    let mut names = kafka_client::names(clients, &connection)?;
-    names.retain(|name| matches(name, name_part));
-    names.sort();
-    let more = names.len().saturating_sub(MAX_TOPICS);
-    names.truncate(MAX_TOPICS);
+    let names = kafka_client::names(clients, &connection)?;
+    let (names, total) = page(names, name_part, wanted, PAGE_SIZE);
     let mut topics = kafka_client::topics(clients, &connection, &names)?;
     // A name the broker listed and then would not describe is gone, not a gap.
     topics.retain(|topic| names.iter().any(|name| name == &topic.name));
-    Ok(TopicList { topics, more })
+    Ok(TopicList { topics, total })
 }
 
 /// One topic opened: its partitions with watermarks and the configs a reader
@@ -76,9 +73,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_number_of_topics_is_a_page_and_the_rest_are_counted() {
-        // The cap is what the page and the tool both promise: a cluster of
-        // thousands is searched, not scrolled.
-        assert!(MAX_TOPICS >= 100 && MAX_TOPICS <= 500, "{MAX_TOPICS}");
+    fn a_page_of_topics_is_a_hundred() {
+        // What the page turns and what the tool shows agree on one size.
+        assert_eq!(PAGE_SIZE, 100);
     }
 }

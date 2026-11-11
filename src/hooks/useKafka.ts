@@ -31,7 +31,8 @@ export function useKafka() {
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicView[]>([]);
-  const [more, setMore] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [pageAt, setPageAt] = useState(0);
   const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<TopicDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export function useKafka() {
     // Another connection's topics are not this one's: they go as soon as the
     // connection does, not when its successor answers.
     setTopics([]);
-    setMore(0);
+    setTotal(0);
     setReading(false);
     // The counter is bumped above, so an answer to the connection that just
     // went is dropped even when nothing takes its place.
@@ -78,11 +79,11 @@ export function useKafka() {
     const timer = window.setTimeout(
       () => {
         setReading(true);
-        kafkaTopics(selected, search.trim() || null)
+        kafkaTopics(selected, search.trim() || null, pageAt)
           .then((list) => {
             if (mine !== asked.current) return;
             setTopics(list.topics);
-            setMore(list.more);
+            setTotal(list.total);
             setError(null);
           })
           .catch((failure) => mine === asked.current && setError(said(failure)))
@@ -91,7 +92,7 @@ export function useKafka() {
       search === "" ? 0 : SEARCH_PAUSE,
     );
     return () => window.clearTimeout(timer);
-  }, [selected, search]);
+  }, [selected, search, pageAt]);
 
   /** Saves, and says whether it landed: the form closes only on a yes. */
   const save = useCallback(async (connection: Connection): Promise<boolean> => {
@@ -164,7 +165,8 @@ export function useKafka() {
     selected,
     open,
     topics,
-    more,
+    total,
+    pageAt,
     search,
     detail,
     error,
@@ -173,10 +175,16 @@ export function useKafka() {
     select: (id: string) => {
       setSelected(id);
       setSearch("");
+      setPageAt(0);
       setDetail(null);
       setError(null);
     },
-    setSearch,
+    setSearch: (text: string) => {
+      setSearch(text);
+      // Another search is another list: it starts at its first page.
+      setPageAt(0);
+    },
+    setPage: setPageAt,
     save,
     remove,
     probe,

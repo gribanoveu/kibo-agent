@@ -19,6 +19,15 @@
   flex: none;
 }
 
+/* Turned pages under the list: their own row, never scrolled away with it. */
+.kafka-pager {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 /* The topics, the only part of that column that moves. */
 .kafka-topics {
   display: flex;

@@ -6,7 +6,7 @@ import { Page, PageEmpty } from "./Page";
 import { Switch } from "./Switch";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import { kafkaMessages, valueText, type Connection, type ConnectionView, type MessageView, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
+import { kafkaMessages, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type MessageView, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -200,8 +200,27 @@ export function KafkaPage() {
                     </table>
                   )}
 
-                  {kafka.more > 0 && <p className="kafka-quiet">{count(kafka.more, "more topic")} — search narrows the list.</p>}
+                  {kafka.topics.length === 0 && kafka.total > 0 && <p className="kafka-quiet">Nothing on this page — go back a page.</p>}
                 </div>
+
+                {kafka.total > TOPIC_PAGE && (
+                  <div className="kafka-pager">
+                    <button type="button" className="btn btn-ghost" disabled={kafka.pageAt === 0 || kafka.reading} onClick={() => kafka.setPage(kafka.pageAt - 1)}>
+                      ‹ Previous
+                    </button>
+                    <span className="kafka-quiet">
+                      {`${count(kafka.total, "topic")} — ${kafka.pageAt * TOPIC_PAGE + 1}–${kafka.pageAt * TOPIC_PAGE + kafka.topics.length} shown`}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={(kafka.pageAt + 1) * TOPIC_PAGE >= kafka.total || kafka.reading}
+                      onClick={() => kafka.setPage(kafka.pageAt + 1)}
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </>

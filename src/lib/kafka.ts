@@ -50,8 +50,11 @@ export type PartitionView = {
 /** Mirrors `domain::kafka::TopicView`. */
 export type TopicView = { name: string; internal: boolean; partitions: PartitionView[] };
 
-/** Mirrors `domain::kafka::TopicList`: `more` are the topics the page did not carry. */
-export type TopicList = { topics: TopicView[]; more: number };
+/** How many topics one page carries — `services::kafka::PAGE_SIZE`. */
+export const TOPIC_PAGE = 100;
+
+/** Mirrors `domain::kafka::TopicList`: one page, and how many matched in all. */
+export type TopicList = { topics: TopicView[]; total: number };
 
 /** Mirrors `domain::kafka::ConfigView`. */
 export type ConfigView = { name: string; value: string };
@@ -104,9 +107,9 @@ export async function kafkaConnectionCheck(id: string): Promise<string> {
   return invoke<string>("kafka_connection_check", { id });
 }
 
-/** A page of topics; `name` searches part of one, any case. */
-export async function kafkaTopics(connection: string, name?: string | null): Promise<TopicList> {
-  return invoke<TopicList>("kafka_topics", { connection, name: name ?? null });
+/** A page of topics; `name` searches part of one, any case. `page` counts from zero. */
+export async function kafkaTopics(connection: string, name?: string | null, page = 0): Promise<TopicList> {
+  return invoke<TopicList>("kafka_topics", { connection, name: name ?? null, page });
 }
 
 export async function kafkaTopic(connection: string, topic: string): Promise<TopicDetail> {

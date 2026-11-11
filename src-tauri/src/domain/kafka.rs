@@ -214,12 +214,12 @@ impl TopicView {
     }
 }
 
-/// Topics as one answer carries them: a page, and how many were left out.
+/// Topics as one answer carries them: one page, and how many matched in all.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicList {
     pub topics: Vec<TopicView>,
-    pub more: usize,
+    pub total: usize,
 }
 
 /// One topic opened: its partitions and the configs a reader cares about.
@@ -246,15 +246,17 @@ pub fn matches(name: &str, part: Option<&str>) -> bool {
     }
 }
 
-/// What one page of topics carries: the search applied, sorted, cut at
-/// `limit` — and how many were left out. Pure, because these four rules are
-/// what the page and the tool show and none of them needs a broker to check.
-pub fn page(mut names: Vec<String>, part: Option<&str>, limit: usize) -> (Vec<String>, usize) {
+/// One page of topics: the search applied, sorted, the slice from `page *
+/// size`, and how many names matched in all — so the page can say "101–200 of
+/// 240" and nothing has to guess. Pure, because none of these rules needs a
+/// broker to check.
+pub fn page(mut names: Vec<String>, part: Option<&str>, page: usize, size: usize) -> (Vec<String>, usize) {
     names.retain(|name| matches(name, part));
     names.sort();
-    let more = names.len().saturating_sub(limit);
-    names.truncate(limit);
-    (names, more)
+    let total = names.len();
+    let from = page.saturating_mul(size).min(total);
+    let to = (from + size).min(total);
+    (names[from..to].to_vec(), total)
 }
 
 /// How many partitions one read may span, and how many messages one answer
@@ -1302,21 +1304,28 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_the_search_sorted_and_cut_with_the_rest_counted() {
+    fn a_page_is_the_search_sorted_and_sliced_with_the_whole_counted() {
         // Handed over in reverse: a page that does not sort shows 249 first.
         let names: Vec<String> = (0..250).rev().map(|n| format!("topic-{n:03}")).collect();
-        let (page_of, more) = page(names.clone(), None, 200);
-        assert_eq!(page_of.len(), 200);
-        assert_eq!(more, 50);
-        assert_eq!(page_of.first().map(String::as_str), Some("topic-000"));
-        assert_eq!(page_of.last().map(String::as_str), Some("topic-199"));
+        let (first, total) = page(names.clone(), None, 0, 100);
+        assert_eq!((first.len(), total), (100, 250));
+        assert_eq!(first.first().map(String::as_str), Some("topic-000"));
+        assert_eq!(first.last().map(String::as_str), Some("topic-099"));
 
-        let (few, none_left) = page(names, Some("TOPIC-24"), 200);
+        let (second, _) = page(names.clone(), None, 1, 100);
+        assert_eq!(second.first().map(String::as_str), Some("topic-100"));
+        let (third, _) = page(names.clone(), None, 2, 100);
+        assert_eq!(third.len(), 50, "the last page is the remainder");
+        assert_eq!(third.first().map(String::as_str), Some("topic-200"));
+        let (past, _) = page(names.clone(), None, 9, 100);
+        assert!(past.is_empty(), "a page past the end is empty, not a panic");
+
+        let (few, total) = page(names, Some("TOPIC-24"), 0, 100);
         assert_eq!(few.len(), 10, "240…249: {few:?}");
-        assert_eq!(none_left, 0);
+        assert_eq!(total, 10, "the search counts over the whole list");
 
-        let (empty, more_none) = page(vec!["orders".into()], Some("payments"), 200);
-        assert!(empty.is_empty() && more_none == 0);
+        let (empty, none) = page(vec!["orders".into()], Some("payments"), 0, 100);
+        assert!(empty.is_empty() && none == 0);
     }
 
     #[test]
