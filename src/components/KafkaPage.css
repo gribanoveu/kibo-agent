@@ -1,14 +1,16 @@
 /* The Kafka page (KafkaPage.tsx): the connections on the left, the topics of
    the open one on the right. Its own styles throughout — none borrowed. */
 
+/* The body's own height, split in two and never taller: a row track of
+   `minmax(0, 1fr)` is what lets both panes scroll inside the page instead of
+   growing it, which is what a page looked like with the row left `auto`. */
 .kafka-page {
   display: grid;
-  flex: 1;
-  min-width: 0;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  background: var(--bg-panel);
+  min-width: 0;
 }
 
 .kafka-quiet,
@@ -42,6 +44,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--bg-panel-soft);
 }
@@ -86,7 +90,10 @@
   cursor: default;
 }
 
+/* Its own scroller: the header stays, the connections move. */
 .kafka-list {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 0 6px 10px;
   list-style: none;
@@ -145,14 +152,16 @@
 
 /* ---- the open connection */
 
+/* Both axes: a partition table is wider than a narrow window, and it scrolls
+   here rather than pushing the page wider. */
 .kafka-main {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
   min-height: 0;
-  padding: 14px 18px;
-  overflow-y: auto;
+  padding: 2px 0 4px 16px;
+  overflow: auto;
 }
 
 .kafka-empty {
@@ -444,4 +453,20 @@
 }
 .kafka-spacer {
   flex: 1;
+}
+
+/* A window too narrow for two panes: the connections go over the topics. */
+@media (max-width: 780px) {
+  .kafka-page {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .kafka-side {
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .kafka-main {
+    padding: 12px 0 0 0;
+  }
 }
