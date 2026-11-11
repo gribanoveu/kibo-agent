@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-11 Ask the API role for tests or a pre-request script on a saved HTTP request: it drafts the script and runs it with nothing sent — tests on its last send of the request, a pre-request on the request as saved — and the draft runs nowhere until you move it into the request
 - 2026-11-11 Write and edit a request's own pre-request and post-response scripts on its Scripts tab; a new script runs once you turn it on
 - 2026-11-10 Turn each Postman script of an HTTP collection on or off on the request's Scripts tab, after reading its code; scripts that are off are marked in the tree and named under the response
 - 2026-11-10 Picking an HTTP request's tab opens its collection and folders in the tree and scrolls to it
