@@ -244,8 +244,8 @@ pub fn configs(clients: &KafkaClients, connection: &Connection, topic: &str) -> 
     let resources = [ConfigResource::topic(topic)];
     let described = within("the topic's configs", admin.describe_configs(resources, Default::default()))?;
     let mut configs: Vec<ConfigView> = described
-        .into_iter()
-        .filter_map(|(_, entries)| entries.ok())
+        .into_values()
+        .filter_map(|entries| entries.ok())
         .flatten()
         .filter(|entry| SHOWN_CONFIGS.contains(&entry.name.as_str()))
         .map(|entry| ConfigView { name: entry.name, value: entry.value.unwrap_or_default() })
