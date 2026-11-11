@@ -273,7 +273,7 @@ export function KafkaPage() {
 
 /** One topic opened: its partitions, its messages and its configs, a tab each. */
 function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection: string; onBack: () => void }) {
-  const [view, setView] = useState<"partitions" | "messages" | "configs">("partitions");
+  const [view, setView] = useState<"partitions" | "messages" | "configs">("messages");
   const total = detail.topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0);
 
   return (
@@ -289,8 +289,8 @@ function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection
       <Tabs<"partitions" | "messages" | "configs">
         label="What to show of the topic"
         tabs={[
-          { id: "partitions", label: "Partitions", count: detail.topic.partitions.length },
           { id: "messages", label: "Messages" },
+          { id: "partitions", label: "Partitions", count: detail.topic.partitions.length },
           ...(detail.configs.length > 0 ? [{ id: "configs" as const, label: "Configs", count: detail.configs.length }] : []),
         ]}
         value={view}
