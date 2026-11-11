@@ -26,17 +26,23 @@ const connections = [
 const topic = { name: "orders", internal: false, partitions: [{ partition: 0, leader: 1, replicas: [1], inSync: [1], earliest: 0, latest: 3 }] };
 
 let calls: Call[] = [];
+/** A store that will not open, and a cluster that will not answer. */
+let refuseList = false;
+let refuseTopics = false;
+let refuseSave = false;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: Record<string, unknown>) => {
     calls.push({ command, args });
     switch (command) {
       case "kafka_connections":
-
+        return refuseList ? Promise.reject("could not read kafka_connections.enc") : Promise.resolve(connections);
       case "kafka_connection_save":
-        return Promise.resolve(connections);
+        return refuseSave ? Promise.reject("kafka_connections.enc could not be sealed") : Promise.resolve(connections);
+      case "kafka_connection_delete":
+        return Promise.resolve([]);
       case "kafka_topics":
-        return Promise.resolve({ topics: [topic], more: 0 });
+        return refuseTopics ? Promise.reject("the topics: no answer in 15s") : Promise.resolve({ topics: [topic], more: 0 });
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
       default:
@@ -48,6 +54,9 @@ mock.module("@tauri-apps/api/core", () => ({
 
 afterEach(() => {
   calls = [];
+  refuseList = false;
+  refuseTopics = false;
+  refuseSave = false;
 });
 
 const sent = (command: string) => calls.filter((call) => call.command === command);
@@ -79,6 +88,61 @@ describe("the Kafka page", () => {
     expect(connection.caFile).toBeNull();
     expect(connection.sasl).toBeNull();
     expect(connection.id).toEqual(expect.any(String));
+  });
+
+  test("a store that will not open says so, rather than reading as no connections", async () => {
+    refuseList = true;
+    render(<KafkaPage />);
+    const shown = await screen.findByRole("alert");
+    expect(shown.textContent).toContain("could not read");
+  });
+
+  test("a save that is refused keeps the dialog and what was typed in it", async () => {
+    refuseSave = true;
+    render(<KafkaPage />);
+    await screen.findByRole("heading", { name: "prod" });
+
+    fireEvent.click(screen.getByLabelText("New connection"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "stage" } });
+    fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: "stage-1:9092" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("stage");
+    expect((screen.getByLabelText("Brokers") as HTMLInputElement).value).toBe("stage-1:9092");
+  });
+
+  test("a connection without a name or brokers cannot be saved", async () => {
+    render(<KafkaPage />);
+    await screen.findByRole("heading", { name: "prod" });
+
+    fireEvent.click(screen.getByLabelText("New connection"));
+    const save = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "stage" } });
+    expect(save().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: "stage-1:9092" } });
+    expect(save().disabled).toBe(false);
+  });
+
+  test("a broker that answers nothing is an error, not an empty cluster", async () => {
+    refuseTopics = true;
+    render(<KafkaPage />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("This cluster has no topics.")).toBeNull());
+  });
+
+  test("a TLS connection switched off sends no CA, even one still typed", async () => {
+    render(<KafkaPage />);
+    await screen.findByRole("heading", { name: "prod" });
+
+    fireEvent.click(screen.getByText("Edit this connection"));
+    fireEvent.click(screen.getByLabelText("TLS"));
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(sent("kafka_connection_save")).toHaveLength(1));
+    const connection = sent("kafka_connection_save")[0].args.connection as Record<string, unknown>;
+    expect(connection.tls).toBe(false);
+    expect(connection.caFile).toBeNull();
   });
 
   test("an edit sends the saved login with an empty password, and a TLS connection without CA as null", async () => {

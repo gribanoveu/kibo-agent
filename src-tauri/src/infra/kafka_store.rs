@@ -155,6 +155,17 @@ mod tests {
         assert_eq!(Feature::Kafka.manifest().data, Some(FILE));
     }
 
+    /// Not just the manifest's promise: "Delete data" takes the file.
+    #[test]
+    fn the_features_data_deletion_takes_the_file() {
+        with_app_dir("kafka-store-delete-data", || {
+            put(connection("a", "h1:9092")).unwrap();
+            assert!(path().unwrap().exists());
+            crate::services::features::delete_data("kafka").unwrap();
+            assert!(!path().unwrap().exists(), "kafka_connections.enc went with the feature's data");
+        });
+    }
+
     #[test]
     fn connections_round_trip_and_the_list_shows_no_password() {
         with_app_dir("kafka-store-round-trip", || {

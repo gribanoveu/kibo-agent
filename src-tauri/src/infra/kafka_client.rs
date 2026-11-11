@@ -75,6 +75,13 @@ impl KafkaClients {
     pub fn forget(&self, id: &str) {
         self.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
     }
+
+    /// Every pool let go: the feature is off, or its data was deleted. Each one
+    /// holds a SASL password and open sockets to the user's cluster, so they go
+    /// with the connections rather than at the end of the session.
+    pub fn forget_all(&self) {
+        self.clients.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
 }
 
 /// What the pool is keyed on: everything that changes where it connects or who

@@ -130,9 +130,8 @@ impl Feature {
                 id: "kafka",
                 name: "Kafka",
                 description: "A Kafka page in the spirit of Kafka UI: your clusters' topics with their partitions, replicas, \
-                    in-sync copies, watermarks and the configs that matter, and the messages of a topic read as JSON, \
-                    text or a raw protobuf dump by field number — no Schema Registry needed. Connection passwords are \
-                    sealed on this computer as the API keys are, and the window never sees one.",
+                    in-sync copies, watermarks and the configs that matter. Connection passwords are sealed on this \
+                    computer as the API keys are, and the window never sees one.",
                 enabled_by_default: false,
                 tools: &[],
                 data: Some("kafka_connections.enc"),

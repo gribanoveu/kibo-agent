@@ -2,6 +2,8 @@ import { useState } from "react";
 import { ArrowLeft, Check, Database, MoreHorizontal, Plus, RefreshCw, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
+import { Page } from "./Page";
+import { Switch } from "./Switch";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
 import type { Connection, ConnectionView, SaslMechanism, TopicDetail } from "../lib/kafka";
@@ -77,7 +79,8 @@ export function KafkaPage() {
   const [dropping, setDropping] = useState<ConnectionView | null>(null);
 
   return (
-    <div className="kafka-page">
+    <Page title="Kafka">
+      <div className="kafka-page">
       <nav className="kafka-side" aria-label="Connections">
         <div className="kafka-side-head">
           <span>Connections</span>
@@ -122,9 +125,10 @@ export function KafkaPage() {
       </nav>
 
       <section className="kafka-main" aria-label={kafka.open ? kafka.open.name : "Kafka"}>
+        {kafka.error && <p className="kafka-error" role="alert">{kafka.error}</p>}
         {!kafka.open && (
           <p className="kafka-empty">
-            Add a connection: the brokers of a cluster, and a login if it wants one. Nothing is written to a cluster unless you send a message.
+            Add a connection: the brokers of a cluster, and a login if it wants one. This stage only reads — nothing is ever sent to a cluster.
           </p>
         )}
 
@@ -153,7 +157,6 @@ export function KafkaPage() {
             </button>
 
             {kafka.note && <p className="kafka-ok">{kafka.note}</p>}
-            {kafka.error && <p className="kafka-error">{kafka.error}</p>}
 
             {kafka.detail ? (
               <Topic detail={kafka.detail} onBack={kafka.closeTopic} />
@@ -168,10 +171,10 @@ export function KafkaPage() {
                     placeholder="Find a topic by part of its name"
                     onChange={(event) => kafka.setSearch(event.target.value)}
                   />
-                  {kafka.reading && <span className="kafka-quiet">Reading…</span>}
+                  {kafka.reading && <span className="kafka-quiet" role="status">Reading…</span>}
                 </div>
 
-                {kafka.topics.length === 0 && !kafka.reading && (
+                {kafka.topics.length === 0 && !kafka.reading && !kafka.error && (
                   <p className="kafka-quiet">{kafka.search.trim() ? "No topic answers that." : "This cluster has no topics."}</p>
                 )}
 
@@ -240,7 +243,8 @@ export function KafkaPage() {
           “{dropping?.name}” and the password saved with it go from this computer. The cluster itself is not touched.
         </p>
       </Modal>
-    </div>
+      </div>
+    </Page>
   );
 }
 
@@ -307,14 +311,14 @@ function Topic({ detail, onBack }: { detail: TopicDetail; onBack: () => void }) 
 }
 
 /** The form: brokers, TLS, a login, and the two switches the whole page obeys. */
-function ConnectionForm({ draft, onSave, onClose }: { draft: Draft | null; onSave: (connection: Connection) => Promise<void>; onClose: () => void }) {
+function ConnectionForm({ draft, onSave, onClose }: { draft: Draft | null; onSave: (connection: Connection) => Promise<boolean>; onClose: () => void }) {
   // Keyed by the connection: opening another one starts from its own fields,
   // and Save reads the fields that are on screen rather than the draft it was
   // opened with.
   return draft ? <OpenForm key={draft.id} draft={draft} onSave={onSave} onClose={onClose} /> : null;
 }
 
-function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connection: Connection) => Promise<void>; onClose: () => void }) {
+function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connection: Connection) => Promise<boolean>; onClose: () => void }) {
   const [fields, setFields] = useState(draft);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setFields((current) => ({ ...current, [key]: value }));
 
@@ -331,9 +335,10 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
           <button
             type="button"
             className="btn btn-primary"
+            disabled={fields.name.trim() === "" || fields.brokers.trim() === ""}
             onClick={() => {
-              void onSave(toConnection(fields));
-              onClose();
+              // Closed on a yes only: a refused save keeps what was typed.
+              void onSave(toConnection(fields)).then((saved) => saved && onClose());
             }}
           >
             Save
@@ -357,10 +362,10 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
           />
         </label>
 
-        <label className="kafka-check">
-          <input type="checkbox" aria-label="TLS" checked={fields.tls} onChange={(event) => set("tls", event.target.checked)} />
+        <div className="kafka-check">
+          <Switch label="TLS" on={fields.tls} onChange={(on) => set("tls", on)} />
           <span>TLS — the broker is reached over SSL</span>
-        </label>
+        </div>
         {fields.tls && (
           <label className="kafka-field kafka-indent">
             <span>CA file, when the cluster has its own (else the bundled roots)</span>
@@ -368,10 +373,10 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
           </label>
         )}
 
-        <label className="kafka-check">
-          <input type="checkbox" aria-label="SASL login" checked={fields.login} onChange={(event) => set("login", event.target.checked)} />
+        <div className="kafka-check">
+          <Switch label="SASL login" on={fields.login} onChange={(on) => set("login", on)} />
           <span>SASL login</span>
-        </label>
+        </div>
         {fields.login && (
           <>
             <label className="kafka-field kafka-indent">
@@ -390,21 +395,21 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
             </label>
             <label className="kafka-field kafka-indent">
               <span>Password{fields.hasPassword ? " — saved, leave empty to keep it" : ""}</span>
-              <input type="password" aria-label="Password" value={fields.password} onChange={(event) => set("password", event.target.value)} autoComplete="new-password" />
+              <input type="password" aria-label={fields.hasPassword ? "Password, saved — leave empty to keep it" : "Password"} value={fields.password} onChange={(event) => set("password", event.target.value)} autoComplete="new-password" />
             </label>
           </>
         )}
 
-        <label className="kafka-check">
-          <input type="checkbox" aria-label="Read-only" checked={fields.readOnly} onChange={(event) => set("readOnly", event.target.checked)} />
-          <span>Read-only — nothing is sent through this connection, the page and the agent both refuse</span>
-        </label>
-        <label className="kafka-check">
-          <input type="checkbox" aria-label="Open to the agent" checked={fields.agent} onChange={(event) => set("agent", event.target.checked)} />
-          <span>Open to the agent — it may read this cluster</span>
-        </label>
+        <div className="kafka-check">
+          <Switch label="Read-only" on={fields.readOnly} onChange={(on) => set("readOnly", on)} />
+          <span>Read-only — kept on the connection; whatever writes later refuses one marked so</span>
+        </div>
+        <div className="kafka-check">
+          <Switch label="Open to the agent" on={fields.agent} onChange={(on) => set("agent", on)} />
+          <span>Open to the agent — kept on the connection, for the tool that comes with the messages stage</span>
+        </div>
 
-        <p className="kafka-quiet">Save it, then Test — the broker is asked about itself once the connection is saved.</p>
+        <p className="kafka-quiet">Save it, then Test — the broker is asked about itself once the connection is saved. Reading messages and sending them are the next stages, so the two flags are saved now and obeyed when they arrive.</p>
       </div>
     </Modal>
   );

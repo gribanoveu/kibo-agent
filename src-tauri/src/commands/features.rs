@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::domain::features::Feature;
+use crate::infra::kafka_client::KafkaClients;
 use crate::infra::mongo_client::MongoClients;
 use crate::services::features::{self, FeatureView};
 use crate::services::dictation::Dictation;
@@ -29,6 +30,10 @@ pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Resu
     if !on && id == Feature::Mongodb.manifest().id {
         let mongo = app.state::<Arc<MongoClients>>().inner().clone();
         tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
+    }
+    if !on && id == Feature::Kafka.manifest().id {
+        let kafka = app.state::<Arc<KafkaClients>>().inner().clone();
+        tauri::async_runtime::spawn_blocking(move || kafka.forget_all());
     }
     // A kill and a wait for the recognition process: off the main thread.
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
@@ -59,12 +64,20 @@ pub fn features_set_layout_switch<R: Runtime>(app: AppHandle<R>, on: bool) -> Re
 }
 
 #[tauri::command]
-pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
+pub fn features_delete_data(
+    id: String,
+    mongo: tauri::State<'_, Arc<MongoClients>>,
+    kafka: tauri::State<'_, Arc<KafkaClients>>,
+) -> Result<Vec<FeatureView>, String> {
     features::delete_data(&id)?;
     // Its clients were made from the connections just deleted; off the main thread, as in `features_set`.
     if id == Feature::Mongodb.manifest().id {
         let mongo = mongo.inner().clone();
         tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
+    }
+    if id == Feature::Kafka.manifest().id {
+        let kafka = kafka.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || kafka.forget_all());
     }
     Ok(features::list())
 }

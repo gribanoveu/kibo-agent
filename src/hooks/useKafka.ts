@@ -22,6 +22,10 @@ const said = (error: unknown) => String(error);
  * The Kafka page's state: the connections, the open one, its topics and the
  * one topic opened. No channel: only this page changes what it shows, and each
  * change answers with the list after it or reads again.
+ *
+ * Every answer says which request it answers, and an answer to a request the
+ * page has moved past is dropped: a broker takes seconds, and the last
+ * connection's topic list under the new connection's name is a page that lies.
  */
 export function useKafka() {
   const [connections, setConnections] = useState<ConnectionView[]>([]);
@@ -36,6 +40,12 @@ export function useKafka() {
   const [reading, setReading] = useState(false);
 
   const open = connections.find((connection) => connection.id === selected) ?? null;
+
+  // Which connection the answers from now on are for, and which topic request
+  // the panel is waiting for.
+  const looking = useRef<string | null>(null);
+  looking.current = selected;
+  const opening = useRef(0);
 
   // The list, read once: nothing outside this window saves a connection.
   const load = useCallback(async () => {
@@ -54,36 +64,62 @@ export function useKafka() {
   }, [load]);
 
   // The topics of the open connection, searched — after the typing stops.
-  const wanted = useRef(0);
+  const asked = useRef(0);
   useEffect(() => {
-    if (!selected) {
-      setTopics([]);
-      setMore(0);
-      return;
-    }
-    const asked = ++wanted.current;
-    const timer = window.setTimeout(() => {
-      setReading(true);
-      kafkaTopics(selected, search.trim() || null)
-        .then((list) => {
-          if (asked !== wanted.current) return; // a later search answered already
-          setTopics(list.topics);
-          setMore(list.more);
-          setError(null);
-        })
-        .catch((failure) => asked === wanted.current && setError(said(failure)))
-        .finally(() => asked === wanted.current && setReading(false));
-    }, search === "" ? 0 : SEARCH_PAUSE);
+    const mine = ++asked.current;
+    // Another connection's topics are not this one's: they go as soon as the
+    // connection does, not when its successor answers.
+    setTopics([]);
+    setMore(0);
+    setReading(false);
+    // The counter is bumped above, so an answer to the connection that just
+    // went is dropped even when nothing takes its place.
+    if (!selected) return;
+
+    const timer = window.setTimeout(
+      () => {
+        setReading(true);
+        kafkaTopics(selected, search.trim() || null)
+          .then((list) => {
+            if (mine !== asked.current) return;
+            setTopics(list.topics);
+            setMore(list.more);
+            setError(null);
+          })
+          .catch((failure) => mine === asked.current && setError(said(failure)))
+          .finally(() => mine === asked.current && setReading(false));
+      },
+      search === "" ? 0 : SEARCH_PAUSE,
+    );
     return () => window.clearTimeout(timer);
   }, [selected, search]);
 
-  const save = useCallback(async (connection: Connection) => {
+  /** Saves, and says whether it landed: the form closes only on a yes. */
+  const save = useCallback(async (connection: Connection): Promise<boolean> => {
     setBusy(true);
     try {
       const list = await kafkaConnectionSave(connection);
       setConnections(list);
       setSelected(connection.id);
       setDetail(null);
+      setError(null);
+      return true;
+    } catch (failure) {
+      setError(said(failure));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const remove = useCallback(async (id: string) => {
+    setBusy(true);
+    try {
+      const list = await kafkaConnectionDelete(id);
+      setConnections(list);
+      setSelected((current) => (current === id ? (list[0]?.id ?? null) : current));
+      // A topic of the connection that went is not the next one's.
+      setDetail((shown) => (id && list.some((c) => c.id === id) ? shown : null));
       setError(null);
     } catch (failure) {
       setError(said(failure));
@@ -92,33 +128,17 @@ export function useKafka() {
     }
   }, []);
 
-  const remove = useCallback(
-    async (id: string) => {
-      setBusy(true);
-      try {
-        const list = await kafkaConnectionDelete(id);
-        setConnections(list);
-        setSelected((current) => (current === id ? (list[0]?.id ?? null) : current));
-        setDetail(null);
-        setError(null);
-      } catch (failure) {
-        setError(said(failure));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
-
   const check = useCallback(async () => {
-    if (!selected) return;
+    const forConnection = selected;
+    if (!forConnection) return;
     setBusy(true);
     setNote(null);
     try {
-      setNote(await kafkaConnectionCheck(selected));
+      const answer = await kafkaConnectionCheck(forConnection);
+      if (forConnection === looking.current) setNote(answer);
       setError(null);
     } catch (failure) {
-      setError(said(failure));
+      if (forConnection === looking.current) setError(said(failure));
     } finally {
       setBusy(false);
     }
@@ -126,13 +146,17 @@ export function useKafka() {
 
   const openTopic = useCallback(
     async (name: string) => {
-      if (!selected) return;
+      const forConnection = selected;
+      if (!forConnection) return;
+      const mine = ++opening.current;
       setBusy(true);
       try {
-        setDetail(await kafkaTopic(selected, name));
+        const answer = await kafkaTopic(forConnection, name);
+        if (mine !== opening.current || forConnection !== looking.current) return;
+        setDetail(answer);
         setError(null);
       } catch (failure) {
-        setError(said(failure));
+        if (mine === opening.current && forConnection === looking.current) setError(said(failure));
       } finally {
         setBusy(false);
       }
@@ -154,6 +178,7 @@ export function useKafka() {
     reading,
     select: (id: string) => {
       setSelected(id);
+      setSearch("");
       setDetail(null);
       setNote(null);
       setError(null);
@@ -163,7 +188,11 @@ export function useKafka() {
     remove,
     check,
     openTopic,
-    closeTopic: () => setDetail(null),
+    closeTopic: () => {
+      // Back means back: an answer still on its way must not reopen the panel.
+      opening.current += 1;
+      setDetail(null);
+    },
     reload: load,
   };
 }

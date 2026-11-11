@@ -3,6 +3,8 @@
 
 .kafka-page {
   display: grid;
+  flex: 1;
+  min-width: 0;
   grid-template-columns: 260px 1fr;
   height: 100%;
   min-height: 0;
@@ -347,11 +349,8 @@
 }
 .kafka-check {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   font-size: var(--fs-sm);
   line-height: 1.4;
-}
-.kafka-check input {
-  margin-top: 2px;
 }
