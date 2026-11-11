@@ -480,6 +480,40 @@ impl Collection {
         Ok(scripts.filter(|(_, _, (on, _))| on == listen).map(|(at, level, (_, code))| (place(at, level), code)).collect())
     }
 
+    /// The request's own scripts of one kind written as `code` (HC-11b), in place of
+    /// those of the kind not turned off by their author — blank ones too, as Postman
+    /// exports an empty script — giving back the code of those that ran, for decision 5.
+    /// One event takes their place, the first's, with every field but its code kept; a
+    /// script turned off, one whose `script` is not an object and the other kind stay as
+    /// they are. Blank code takes them away.
+    pub fn set_script(&mut self, id: &str, listen: &str, code: &str) -> Result<Vec<String>, HttpError> {
+        let item = self.item_mut(id).filter(|i| !i.contains_key("item")).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let events = item.get("event").and_then(Value::as_array).cloned().unwrap_or_default();
+        let replaced = |e: &Value| e.get("listen").and_then(Value::as_str) == Some(listen) && e.get("disabled") != Some(&Value::Bool(true)) && e.get("script").is_some_and(Value::is_object);
+        let old: Vec<String> = events.iter().filter(|e| replaced(e)).filter_map(running_code).collect();
+        let first = events.iter().position(replaced);
+        let mut written = first.map(|at| events[at].clone()).unwrap_or_else(|| json!({"listen": listen, "script": {"type": "text/javascript"}}));
+        // Lines, as Postman writes them: read back joined, they are `code` to the byte.
+        written["script"]["exec"] = Value::Array(code.split('\n').map(|line| Value::String(line.into())).collect());
+        let blank = code.trim().is_empty();
+        let mut out = Vec::with_capacity(events.len() + 1);
+        for (at, event) in events.into_iter().enumerate() {
+            if !replaced(&event) {
+                out.push(event);
+            } else if Some(at) == first && !blank {
+                out.push(written.clone());
+            }
+        }
+        if first.is_none() && !blank {
+            out.push(written);
+        }
+        // A request that had no events gets none for a blank write.
+        if !out.is_empty() || item.contains_key("event") {
+            item.insert("event".into(), Value::Array(out));
+        }
+        Ok(old)
+    }
+
     /// Every level's scripts, the collection's first and then the tree's in order (HC-11a).
     pub fn all_scripts(&self) -> Vec<LevelScripts> {
         fn walk(level: &Map<String, Value>, item: Option<String>, out: &mut Vec<LevelScripts>) {
@@ -1191,17 +1225,19 @@ pub(crate) fn json_credential_names(text: &str) -> Vec<String> {
 /// A level's scripts that would run, as `(listen, code)`.
 fn scripts_of(level: &Map<String, Value>) -> Vec<(String, String)> {
     let events = level.get("event").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
-    events
-        .iter()
-        .filter(|e| e.get("disabled") != Some(&Value::Bool(true)))
-        .filter_map(|e| {
-            let code = match e.get("script")?.get("exec")? {
-                Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
-                other => text_of(Some(other)),
-            };
-            (!code.trim().is_empty()).then(|| Some((e.get("listen")?.as_str()?.to_string(), code))).flatten()
-        })
-        .collect()
+    events.iter().filter_map(|e| Some((e.get("listen")?.as_str()?.to_string(), running_code(e)?))).collect()
+}
+
+/// An event's code when it runs: not turned off by its author, and not blank.
+fn running_code(event: &Value) -> Option<String> {
+    if event.get("disabled") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    let code = match event.get("script")?.get("exec")? {
+        Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        other => text_of(Some(other)),
+    };
+    (!code.trim().is_empty()).then_some(code)
 }
 
 /// A value as text: Postman writes most as strings, some as numbers or `true`.
@@ -1374,6 +1410,52 @@ mod tests {
         assert_eq!((empty.scripts_digest(), empty.scripts("r", "test").unwrap(), empty.all_scripts()), (None, Vec::new(), Vec::new()));
         let on = with(json!({"listen": "test", "script": {"exec": ["1"]}}));
         assert_eq!((on.scripts_digest().map(|d| d.count), on.scripts("r", "test").unwrap()), (Some(1), vec![("request \"R\"".to_string(), "1".to_string())]));
+    }
+
+    /// A request's script written from the page: in place of those of its kind that run,
+    /// one event with the first one's fields; the turned-off one, the other kind and the
+    /// order stay; blank code takes them away; read back, the code is what was written.
+    #[test]
+    fn a_script_written_replaces_those_that_run_and_keeps_the_rest() {
+        let file = json!({
+            "info": {"name": "C", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [
+                {"id": "f", "name": "F", "item": [{"id": "r", "name": "R", "request": "x", "event": [
+                    {"listen": "test", "script": {"exec": ["t()"]}},
+                    {"listen": "prerequest", "id": "e1", "script": {"id": "s1", "type": "text/javascript", "packages": {}, "exec": ["a()"]}},
+                    {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}},
+                    {"listen": "prerequest", "script": {"exec": ["b()"]}},
+                ]}]},
+                {"id": "bare", "name": "Bare", "request": "x"},
+            ],
+        });
+        let mut c = Collection::parse(&file.to_string()).unwrap();
+        assert_eq!(c.set_script("r", "prerequest", "new()\nmore()\n").unwrap(), ["a()", "b()"]);
+        assert_eq!(
+            c.item_mut("r").unwrap()["event"],
+            json!([
+                {"listen": "test", "script": {"exec": ["t()"]}},
+                {"listen": "prerequest", "id": "e1", "script": {"id": "s1", "type": "text/javascript", "packages": {}, "exec": ["new()", "more()", ""]}},
+                {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}},
+            ])
+        );
+        assert_eq!(c.scripts("r", "prerequest").unwrap(), [("request \"R\"".to_string(), "new()\nmore()\n".to_string())]);
+
+        assert_eq!(c.set_script("r", "prerequest", "  \n").unwrap(), ["new()\nmore()\n"]);
+        assert_eq!(c.item_mut("r").unwrap()["event"], json!([{"listen": "test", "script": {"exec": ["t()"]}}, {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}}]));
+
+        assert_eq!(c.set_script("bare", "prerequest", " ").unwrap(), Vec::<String>::new());
+        assert!(!c.item_mut("bare").unwrap().contains_key("event"), "blank where there was none adds nothing");
+        assert_eq!(c.set_script("bare", "test", "check()").unwrap(), Vec::<String>::new());
+        assert_eq!(c.item_mut("bare").unwrap()["event"], json!([{"listen": "test", "script": {"type": "text/javascript", "exec": ["check()"]}}]));
+        assert!(matches!(c.set_script("f", "test", "x()"), Err(HttpError::NoSuchItem(_))), "a folder's scripts are not written here");
+
+        // Postman's empty script is written over, its fields kept, not left beside a second one.
+        let exported = c.item_mut("bare").unwrap();
+        exported.insert("event".into(), json!([{"listen": "prerequest", "script": {"id": "p1", "type": "text/javascript", "exec": [""]}}, {"listen": "prerequest", "script": "odd"}]));
+        assert_eq!(c.set_script("bare", "prerequest", "go()").unwrap(), Vec::<String>::new());
+        assert_eq!(c.item_mut("bare").unwrap()["event"], json!([{"listen": "prerequest", "script": {"id": "p1", "type": "text/javascript", "exec": ["go()"]}}, {"listen": "prerequest", "script": "odd"}]));
+        assert!(matches!(c.set_script("nowhere", "test", "x()"), Err(HttpError::NoSuchItem(_))));
     }
 
     /// Each level's scripts by the hash of their code alone, where they are and when

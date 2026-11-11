@@ -250,6 +250,7 @@ pub fn run() {
             commands::http::http_collection_new,
             commands::http::http_collection_delete,
             commands::http::http_request_save,
+            commands::http::http_script_save,
             commands::http::http_item_add,
             commands::http::http_item_rename,
             commands::http::http_item_delete,

@@ -56,6 +56,12 @@ pub async fn http_request_save(collection: String, request_id: String, request: 
     blocking(move || http_client::save_request(&collection, &request_id, request)).await
 }
 
+/// The request's own script of one kind, written from its Scripts tab (HC-11b).
+#[tauri::command]
+pub async fn http_script_save(collection: String, request_id: String, listen: String, code: String) -> Result<(), String> {
+    blocking(move || http_client::save_script(&collection, &request_id, &listen, &code)).await
+}
+
 /// A new Postman item, last in the folder `parent` — or in the collection when there is none.
 #[tauri::command]
 pub async fn http_item_add(collection: String, parent: Option<String>, item: Value) -> Result<(), String> {

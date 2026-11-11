@@ -523,6 +523,8 @@ pub fn script_states(collection: &str) -> Result<Vec<ScriptState>, HttpError> {
 /// the collection's scripts has now is refused — they changed since they were shown —
 /// and the hashes of scripts gone are dropped.
 pub fn set_scripts(collection: &str, hashes: &[String], on: bool) -> Result<(), HttpError> {
+    // Under the edits' lock: a script written meanwhile is either before this or after it.
+    let _held = writing();
     let c = http_collections::get(collection)?;
     scripts_on(collection, &c);
     let present: HashSet<String> = c.all_scripts().into_iter().flat_map(|l| l.hashes).collect();
@@ -683,6 +685,36 @@ pub fn delete_collection(id: &str) -> Result<(), HttpError> {
 /// The page's edit of a request, the rest of the file as it was.
 pub fn save_request(collection: &str, request_id: &str, request: Value) -> Result<(), HttpError> {
     change(collection, |c| c.set_request(request_id, request))
+}
+
+/// The request's own script of one kind written from the page (HC-11b). Decision 5: an
+/// edit of a script on keeps it on; anything else — one off, or none there — waits for
+/// the switch. "None there" does not turn on: the page writes a moment after each pause,
+/// so a script cleared and put back by undo would arrive as new, and foreign code that
+/// was off would come back on. Only the page calls this: nothing the agent has writes a
+/// script.
+pub fn save_script(collection: &str, request_id: &str, listen: &str, code: &str) -> Result<(), HttpError> {
+    if !matches!(listen, "prerequest" | "test") {
+        return Err(HttpError::Script(format!("No such script: {listen}.")));
+    }
+    change(collection, |c| {
+        let on = scripts_on(collection, c);
+        let old = c.set_script(request_id, listen, code)?;
+        let keep_on = !old.is_empty() && old.iter().all(|code| on.contains(&script_hash(code)));
+        let present: HashSet<String> = c.all_scripts().into_iter().flat_map(|l| l.hashes).collect();
+        // Under the edits' lock, which a switch takes too: neither sees the file and the
+        // settings half done. The code of each pause before is dropped, so a script off that
+        // comes to read like it is not on by that. Written before the file: if the file then
+        // fails, the hash names code nowhere, and the next change drops it.
+        settings_store::update(|s| {
+            let set = s.http_scripts_on.entry(collection.to_string()).or_default();
+            if keep_on {
+                set.insert(script_hash(code));
+            }
+            set.retain(|h| present.contains(h));
+        })
+        .map_err(|e| HttpError::Store(e.to_string()))
+    })
 }
 
 pub fn add_item(collection: &str, parent: Option<&str>, item: Value) -> Result<(), HttpError> {
@@ -1895,6 +1927,82 @@ mod tests {
             let state = script_states(&id).unwrap().remove(0);
             assert_eq!(state.codes, ["const note = `\n`; steal(); //\n/**/\n"]);
             assert_eq!(state.hashes, [script_hash(&state.codes[0])]);
+        });
+    }
+
+    /// Decision 5: the user's edit of a script on keeps it on, of one off keeps it off, and
+    /// a script written where there was none is on; blank code takes it away.
+    #[test]
+    fn an_edit_keeps_a_script_as_it_was_and_a_new_one_is_on() {
+        with_app_dir("http-script-edit", || {
+            let id = scripted(vec![event("prerequest", "collection()")], vec![], vec![event("prerequest", "mine()")]);
+            let on = |item: Option<&str>, listen: &str| script_states(&id).unwrap().into_iter().find(|s| s.item.as_deref() == item && s.listen == listen).map(|s| (s.codes, s.on));
+            set_scripts(&id, &[script_hash("mine()")], true).unwrap();
+
+            save_script(&id, "order", "prerequest", "mine(); more()").unwrap();
+            assert_eq!(on(Some("order"), "prerequest"), Some((vec!["mine(); more()".to_string()], true)), "on, edited: on");
+            set_scripts(&id, &[script_hash("mine(); more()")], false).unwrap();
+            save_script(&id, "order", "prerequest", "mine(); again()").unwrap();
+            assert_eq!(on(Some("order"), "prerequest"), Some((vec!["mine(); again()".to_string()], false)), "off, edited: off");
+
+            save_script(&id, "order", "test", "check()").unwrap();
+            assert_eq!(on(Some("order"), "test"), Some((vec!["check()".to_string()], false)), "new: off until switched on");
+            assert_eq!(on(None, "prerequest").map(|(_, on)| on), Some(false), "the collection's untouched");
+
+            save_script(&id, "order", "test", " ").unwrap();
+            assert_eq!(on(Some("order"), "test"), None, "blank: gone");
+            assert!(!settings_store::load().unwrap().http_scripts_on[&id].contains(&script_hash(" ")), "blank is not turned on");
+            assert!(save_script(&id, "order", "prerequest-hack", "x()").is_err());
+            assert!(save_script(&id, "folder", "test", "x()").is_err(), "a folder's are not written from a request's tab");
+        });
+    }
+
+    /// A script off cleared, then put back as it was — undo after a pause, cut and paste —
+    /// is off still: the write in between left nothing, and "nothing there" turns on nothing.
+    #[test]
+    fn a_script_off_cleared_and_put_back_stays_off() {
+        with_app_dir("http-script-undo", || {
+            let id = scripted(vec![], vec![], vec![event("prerequest", "foreign()")]);
+            save_script(&id, "order", "prerequest", "").unwrap();
+            save_script(&id, "order", "prerequest", "foreign()").unwrap();
+            assert!(!script_states(&id).unwrap()[0].on);
+        });
+    }
+
+    /// Two of a kind, one on and one off: the edit that writes over both is off.
+    #[test]
+    fn an_edit_over_a_script_on_and_one_off_is_off() {
+        with_app_dir("http-script-mixed", || {
+            let id = scripted(vec![], vec![], vec![event("test", "mine()"), event("test", "theirs()")]);
+            set_scripts(&id, &[script_hash("mine()")], true).unwrap();
+            save_script(&id, "order", "test", "mine(); theirs()").unwrap();
+            assert!(!script_states(&id).unwrap()[0].on);
+        });
+    }
+
+    /// Each pause writes the code as it was; the hashes of those gone are dropped, so a
+    /// script off that comes to read like one of them is not on by that.
+    #[test]
+    fn the_code_of_each_pause_is_forgotten() {
+        with_app_dir("http-script-pauses", || {
+            let id = scripted(vec![], vec![], vec![event("test", "a()")]);
+            set_scripts(&id, &[script_hash("a()")], true).unwrap();
+            save_script(&id, "order", "test", "a(); b").unwrap();
+            save_script(&id, "order", "test", "a(); b()").unwrap();
+            let set = settings_store::load().unwrap().http_scripts_on[&id].clone();
+            assert_eq!(set, BTreeSet::from([script_hash("a(); b()")]));
+        });
+    }
+
+    /// Trust given to the whole collection before HC-11a counts as on for an edit too.
+    #[test]
+    fn an_edit_of_a_script_trusted_before_stays_on() {
+        with_app_dir("http-script-edit-carry", || {
+            let id = scripted(vec![], vec![], vec![event("test", "old()")]);
+            let digest = http_collections::get(&id).unwrap().scripts_digest().unwrap().hash;
+            settings_store::update(|s| s.http_script_trust.insert(id.clone(), digest)).unwrap();
+            save_script(&id, "order", "test", "new()").unwrap();
+            assert!(script_states(&id).unwrap()[0].on);
         });
     }
 
