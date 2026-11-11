@@ -2,16 +2,16 @@
 //! the window about it, and what a message's bytes are shown as.
 //!
 //! The message view is the part with rules in it. Kafka carries bytes and
-//! nothing else, so the view guesses: JSON if the bytes parse, text if they are
-//! printable UTF-8, a raw protobuf dump by field number if they are a wire
-//! message, hex otherwise. That dump needs no schema — it is what
-//! `protoc --decode_raw` prints — and it is the whole reason this page shows
+//! nothing else, so the view guesses, in this order: JSON if the bytes parse, a
+//! Confluent-framed protobuf, a bare wire message, printable UTF-8 text, hex.
+//! The protobuf dump is by field number and needs no schema — it is what
+//! `protoc --decode_raw` prints — and that is the whole reason this page shows
 //! protobuf without a Schema Registry. A length-delimited field is a nested
 //! message only if it parses as one; otherwise it is text (when it reads as
 //! UTF-8) or escaped bytes.
 //!
 //! No client types here: `infra::kafka_client` turns krafka's records into
-//! [`Message`] and back.
+//! [`Message`], and a record to send back into krafka's.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -19,17 +19,17 @@ use thiserror::Error;
 /// The most text one message's view carries, escaped text included. Longer
 /// values are cut and say so; a value past [`MAX_DECODE`] is measured and cut
 /// the same way, without being parsed at all.
-pub const TEXT_LIMIT: usize = 64 * 1024;
-pub const MAX_DECODE: usize = 1024 * 1024;
+const TEXT_LIMIT: usize = 64 * 1024;
+const MAX_DECODE: usize = 1024 * 1024;
 
 /// How many messages are followed below the first one: the level past it is
 /// left as bytes rather than parsed.
-pub const MAX_DEPTH: usize = 64;
+const MAX_DEPTH: usize = 64;
 
 /// The largest field number protobuf allows, 2^29 - 1. `protoc` refuses more,
 /// and so does this: a dump that took any number would read ordinary binary as
 /// a message far more often.
-pub const MAX_FIELD: u32 = 536_870_911;
+const MAX_FIELD: u32 = 536_870_911;
 
 // ---------------------------------------------------------------- connection
 
@@ -69,28 +69,6 @@ pub enum SaslMechanism {
     Plain,
     ScramSha256,
     ScramSha512,
-}
-
-impl SaslMechanism {
-    /// The name Kafka knows it by.
-    pub fn name(self) -> &'static str {
-        match self {
-            SaslMechanism::Plain => "PLAIN",
-            SaslMechanism::ScramSha256 => "SCRAM-SHA-256",
-            SaslMechanism::ScramSha512 => "SCRAM-SHA-512",
-        }
-    }
-
-    /// `None` for a mechanism this app does not speak, which the form refuses
-    /// rather than pretending to know.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.trim().to_ascii_uppercase().as_str() {
-            "PLAIN" => Some(SaslMechanism::Plain),
-            "SCRAM-SHA-256" => Some(SaslMechanism::ScramSha256),
-            "SCRAM-SHA-512" => Some(SaslMechanism::ScramSha512),
-            _ => None,
-        }
-    }
 }
 
 /// A connection as the window sees it: where it goes and who it is, never the
@@ -141,14 +119,6 @@ impl From<&Connection> for ConnectionView {
 }
 
 impl Connection {
-    /// A name the page can list it under; the form asks for one.
-    pub fn named(&self) -> Result<&str, KafkaError> {
-        match self.name.trim() {
-            "" => Err(KafkaError::NoName),
-            name => Ok(name),
-        }
-    }
-
     /// Refused before a client is built, so a read-only cluster's only answer
     /// to a send is this sentence rather than a broker's error.
     pub fn producing(&self) -> Result<(), KafkaError> {
@@ -163,8 +133,6 @@ impl Connection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KafkaError {
-    #[error("a connection needs a name")]
-    NoName,
     #[error("\"{0}\" is read-only — nothing is sent through it")]
     ReadOnly(String),
 }
@@ -262,7 +230,7 @@ impl LagView {
 // ------------------------------------------------------------------ messages
 
 /// One record, as the client hands it over: bytes, nothing interpreted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub partition: i32,
     pub offset: i64,
@@ -379,7 +347,7 @@ fn hex(bytes: &[u8]) -> ValueView {
 
 /// A Confluent-framed payload: a zero byte and the schema id, then the message.
 /// The id is all that is read of it — the schema itself stays where it is.
-pub fn confluent(bytes: &[u8]) -> Option<(u32, &[u8])> {
+fn confluent(bytes: &[u8]) -> Option<(u32, &[u8])> {
     match bytes {
         [0, a, b, c, d, rest @ ..] => Some((u32::from_be_bytes([*a, *b, *c, *d]), rest)),
         _ => None,
@@ -444,19 +412,21 @@ fn dump_string(bytes: &[u8]) -> String {
 // -------------------------------------------------------- the raw protobuf dump
 
 /// A protobuf message read without its schema: field numbers and wire values.
+/// Private on purpose: what the window and the model get is [`ValueView`], and
+/// a stage that needs the tree can widen this when it arrives.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtoMessage {
-    pub fields: Vec<ProtoField>,
+struct ProtoMessage {
+    fields: Vec<ProtoField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtoField {
-    pub number: u32,
-    pub value: ProtoValue,
+struct ProtoField {
+    number: u32,
+    value: ProtoValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProtoValue {
+enum ProtoValue {
     Varint(u64),
     Fixed64(u64),
     Fixed32(u32),
@@ -470,7 +440,7 @@ pub enum ProtoValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum ProtoError {
+enum ProtoError {
     #[error("the message ends inside a value at byte {at}")]
     Truncated { at: usize },
     #[error("a varint at byte {at} does not fit in 64 bits")]
@@ -494,14 +464,14 @@ pub enum ProtoError {
 }
 
 impl ProtoMessage {
-    pub fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
+    fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
         let fields = decode_fields(bytes, 0, MAX_DEPTH)?;
         Ok(Self { fields })
     }
 
     /// The dump `protoc --decode_raw` prints, with the one difference this app
     /// wants: text stays text. `9: "Перевод средств"`, not `9: "\320\237…"`.
-    pub fn render(&self) -> String {
+    fn render(&self) -> String {
         let mut out = String::new();
         render_fields(&self.fields, 0, &mut out);
         out
@@ -1009,30 +979,6 @@ mod tests {
         assert_eq!(connection.producing().unwrap_err().to_string(), "\"prod\" is read-only — nothing is sent through it");
         connection.read_only = false;
         assert_eq!(connection.producing(), Ok(()));
-    }
-
-    #[test]
-    fn a_connection_without_a_name_is_refused() {
-        let connection = Connection {
-            id: "c1".into(),
-            name: "  ".into(),
-            brokers: "broker:9092".into(),
-            tls: false,
-            ca_file: None,
-            sasl: None,
-            read_only: false,
-            agent: false,
-        };
-        assert_eq!(connection.named(), Err(KafkaError::NoName));
-        assert_eq!(connection.producing(), Ok(()), "a name is the form's business, not the send's");
-    }
-
-    #[test]
-    fn a_mechanism_is_read_by_the_name_kafka_uses() {
-        assert_eq!(SaslMechanism::from_name("scram-sha-256"), Some(SaslMechanism::ScramSha256));
-        assert_eq!(SaslMechanism::from_name(" PLAIN "), Some(SaslMechanism::Plain));
-        assert_eq!(SaslMechanism::from_name("GSSAPI"), None);
-        assert_eq!(SaslMechanism::ScramSha512.name(), "SCRAM-SHA-512");
     }
 
     #[test]
