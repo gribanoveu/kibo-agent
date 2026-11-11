@@ -135,6 +135,12 @@ export async function saveHttpRequest(collection: string, requestId: string, req
   return invoke("http_request_save", { collection, requestId, request });
 }
 
+/** The request's own script of one kind, as typed on its Scripts tab; blank takes it away. */
+export async function saveHttpScript(collection: string, requestId: string, listen: "prerequest" | "test", code: string): Promise<void> {
+  requireBackend();
+  await invoke("http_script_save", { collection, requestId, listen, code });
+}
+
 /** A Postman item added last in the folder `parent`, or in the collection when it is null. */
 export async function addHttpItem(collection: string, parent: string | null, item: unknown): Promise<void> {
   requireBackend();

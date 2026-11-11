@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { currentCompletions } from "@codemirror/autocomplete";
 import type { HttpHistoryEntry, HttpResponseView, HttpScriptState } from "../lib/httpCommands";
@@ -44,6 +44,8 @@ let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let holdSends = false;
 /** The collection's scripts as the backend says, turned on and off by `http_scripts_set`. */
 let states: HttpScriptState[] = [];
+/** Script saves kept waiting, each let go by the test; null lets them through. */
+let scriptSaves: (() => void)[] | null = null;
 let jar: { domain: string; path: string; name: string; expiresAt?: number | null }[] = [];
 let answer: HttpResponseView;
 const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseView => ({
@@ -62,6 +64,15 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
     if (command === "http_scripts") return Promise.resolve(structuredClone(states));
+    if (command === "http_script_save" && scriptSaves) return new Promise((done) => scriptSaves!.push(() => done(null)));
+    if (command === "http_script_save") {
+      // As the backend: an edit keeps a script on as it was, a new one is off (decision 5), blank takes it away.
+      const { requestId, listen, code } = args as { requestId: string; listen: "prerequest" | "test"; code: string };
+      const was = states.find((s) => s.item === requestId && s.listen === listen);
+      states = states.filter((s) => s !== was);
+      if (code.trim()) states.push({ item: requestId, listen, codes: [code], hashes: [`h:${code}`], on: was?.on ?? false });
+      return Promise.resolve(null);
+    }
     if (command === "http_scripts_set") {
       const hashes = args!.hashes as string[];
       if (hashes.includes("stale")) return Promise.reject("The collection's scripts changed — look at them again.");
@@ -121,6 +132,7 @@ beforeEach(() => {
   calls = [];
   holdSends = false;
   states = [];
+  scriptSaves = null;
   jar = [];
   answer = reported({});
 });
@@ -391,6 +403,78 @@ describe("the HTTP page", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Turn on 2 scripts" })));
     await waitFor(() => expect(called("http_scripts_set")).toEqual([{ collection: "c", hashes: ["h1", "h2", "h3"], on: true }]));
     await waitFor(() => expect(screen.queryByRole("button", { name: /Turn on all/ }) === null).toBe(true));
+  });
+
+  test("a request's own script is typed on its tab and written a moment after; the one above it is read only", async () => {
+    states = [{ item: null, listen: "prerequest", codes: ["collection();"], hashes: ["h0"], on: false }];
+    await shown("r2");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    // Only the request's own is edited here: a note about edits is not for the collection's.
+    expect(screen.queryByText("An edit leaves it off until you turn it on.") === null).toBe(true);
+    const segments = within(screen.getByRole("tablist", { name: "Scripts, in the order they run" }));
+    expect(segments.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Orders API · pre-request", "Pre-request", "Post-response"]);
+    const editor = () => EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    expect(editor().state.readOnly).toBe(true);
+    fireEvent.click(segments.getByRole("tab", { name: "Post-response" }));
+    expect(screen.getByText("Empty — what you write here runs once you turn it on.") !== null).toBe(true);
+    expect(editor().state.readOnly).toBe(false);
+    act(() => editor().dispatch({ changes: { from: 0, insert: "pm.test('ok');" }, userEvent: "input.type" }));
+    act(() => editor().dispatch({ changes: { from: 14, insert: " // done" }, userEvent: "input.type" }));
+    expect(called("http_script_save")).toEqual([]);
+    await waitFor(() => expect(called("http_script_save")).toEqual([{ collection: "c", requestId: "r2", listen: "test", code: "pm.test('ok'); // done" }]));
+    // Read again, as the backend says: written where there was none, it waits for the switch.
+    await waitFor(() => expect(screen.queryByText("Off — does not run") !== null).toBe(true));
+    expect(editor().state.doc.toString()).toBe("pm.test('ok'); // done");
+    // Left and come back to, the tab shows what was typed, not what was read before.
+    fireEvent.click(screen.getByRole("tab", { name: /Body/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Scripts, in the order they run" })).getByRole("tab", { name: /Post-response/ }));
+    expect(editor().state.doc.toString()).toBe("pm.test('ok'); // done");
+  });
+
+  test("what is typed while a save is out stays: the save's state read back does not take it away", async () => {
+    scriptSaves = [];
+    await shown("r2");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "Pre-request" }));
+    const editor = () => EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    act(() => editor().dispatch({ changes: { from: 0, insert: "a" }, userEvent: "input.type" }));
+    await waitFor(() => expect(scriptSaves!.length).toBe(1));
+    act(() => editor().dispatch({ changes: { from: 1, insert: "b" }, userEvent: "input.type" }));
+    const reads = called("http_scripts").length;
+    // The first save lands, and what it wrote — "a" — is read back while "ab" is typed.
+    states = [{ item: "r2", listen: "prerequest", codes: ["a"], hashes: ["ha"], on: true }];
+    await act(async () => scriptSaves![0]());
+    await waitFor(() => expect(called("http_scripts").length).toBe(reads + 1));
+    await waitFor(() => expect(screen.queryByText("On — runs on Send") !== null).toBe(true));
+    expect(editor().state.doc.toString()).toBe("ab");
+    scriptSaves = null;
+  });
+
+  test("a script typed and not yet written goes before the send; an edit of one off says it stays off", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: false }];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    expect(screen.getByText("An edit leaves it off until you turn it on.") !== null).toBe(true);
+    const editor = EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    act(() => editor.dispatch({ changes: { from: 0, insert: "y();" }, userEvent: "input.type" }));
+    await act(async () => fireEvent.click(sendButton()));
+    await waitFor(() => expect(called("http_send").length).toBe(1));
+    const order = calls.map((c) => c.command).filter((c) => c === "http_script_save" || c === "http_send");
+    expect(order).toEqual(["http_script_save", "http_send"]);
+    expect(called("http_script_save")).toEqual([{ collection: "c", requestId: "r1", listen: "prerequest", code: "y();x();" }]);
+  });
+
+  test("a switch goes after what was typed: the save first, then the switch, then one read", async () => {
+    states = [{ item: "r1", listen: "prerequest", codes: ["x();"], hashes: ["h1"], on: true }];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    const editor = EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    act(() => editor.dispatch({ changes: { from: 0, insert: "y();" }, userEvent: "input.type" }));
+    const before = calls.length;
+    await act(async () => fireEvent.click(screen.getByRole("switch", { name: "Run Pre-request" })));
+    const order = () => calls.slice(before).map((c) => c.command).filter((c) => c.startsWith("http_script"));
+    await waitFor(() => expect(order()).toEqual(["http_script_save", "http_scripts", "http_scripts_set", "http_scripts"]));
   });
 
   test("a switch refused says the scripts changed", async () => {

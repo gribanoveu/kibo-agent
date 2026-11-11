@@ -51,6 +51,14 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null, current }]);
     if (command === "http_environment_list") return Promise.resolve({ environments: [], globals: [] });
     if (command === "http_scripts") return scriptsRefused ? Promise.reject("the settings do not read") : Promise.resolve(structuredClone(states));
+    if (command === "http_script_save") {
+      // As the backend: an edit keeps a script on as it was, a new one is off (decision 5), blank takes it away.
+      const { requestId, listen, code } = args as { requestId: string; listen: "prerequest" | "test"; code: string };
+      const was = states.find((s) => s.item === requestId && s.listen === listen);
+      states = states.filter((s) => s !== was);
+      if (code.trim()) states.push({ item: requestId, listen, codes: [code], hashes: [`h:${code}`], on: was?.on ?? false });
+      return Promise.resolve(null);
+    }
     if (command === "http_scripts_set") {
       const hashes = args!.hashes as string[];
       if (hashes.includes("stale")) return Promise.reject("The collection's scripts changed — look at them again.");
@@ -162,6 +170,23 @@ describe("the HTTP page's state", () => {
     await act(async () => hook.result.current.turnScripts("c", ["stale"], true));
     expect(hook.result.current.problem).toContain("changed");
     expect(hook.result.current.scripts.c).toEqual(states);
+  });
+
+  test("a script typed is written once, a moment after the last key, and its state read again", async () => {
+    const hook = await page();
+    const reads = called("http_scripts").length;
+    act(() => hook.result.current.editScript("c", "r2", "test", "a"));
+    act(() => hook.result.current.editScript("c", "r2", "test", "ab"));
+    act(() => hook.result.current.editScript("c", "r2", "prerequest", "p"));
+    expect(called("http_script_save")).toEqual([]);
+    await waitFor(() =>
+      expect(called("http_script_save")).toEqual([
+        { collection: "c", requestId: "r2", listen: "test", code: "ab" },
+        { collection: "c", requestId: "r2", listen: "prerequest", code: "p" },
+      ]),
+    );
+    await waitFor(() => expect(hook.result.current.scripts.c.map((s) => [s.listen, s.codes, s.on])).toEqual([["test", ["ab"], false], ["prerequest", ["p"], false]]));
+    expect(called("http_scripts").length).toBe(reads + 1);
   });
 
   test("scripts that do not read are said, not taken for none", async () => {

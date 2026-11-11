@@ -20,6 +20,7 @@ import {
   renameHttpItem,
   saveHttpEnvironment,
   saveHttpRequest,
+  saveHttpScript,
   sendHttpRequest,
   setHttpScripts,
   type HttpHistoryEntry,
@@ -111,13 +112,8 @@ export function useHttpClient(historyShown = false) {
     }
   }, [reloadEnvironments]);
 
-  /** Scripts turned on or off by the user, then read again: a refusal says they changed since. */
-  const turnScripts = useCallback(async (collection: string, hashes: string[], on: boolean) => {
-    try {
-      await setHttpScripts(collection, hashes, on);
-    } catch (e) {
-      setProblem(`The scripts were not turned ${on ? "on" : "off"}: ${e}`);
-    }
+  /** A collection's scripts read again, after the page changed them. */
+  const readScripts = useCallback(async (collection: string) => {
     try {
       const states = await httpScripts(collection);
       setScripts((all) => ({ ...all, [collection]: states }));
@@ -125,6 +121,7 @@ export function useHttpClient(historyShown = false) {
       setProblem(`The scripts were not read: ${e}`);
     }
   }, []);
+
 
   useEffect(() => {
     void reload();
@@ -152,8 +149,13 @@ export function useHttpClient(historyShown = false) {
     return next;
   }, []);
 
-  // Edits waiting to be written, by request.
+  // Edits waiting to be written, by request; a request's own scripts, by request and kind.
   const pending = useRef(new Map<string, { collection: string; request: HttpRequest }>());
+  const pendingScripts = useRef(new Map<string, { collection: string; request: string; listen: "prerequest" | "test"; code: string }>());
+  // What was typed into a request's own script, by `request\nlisten`: the tab shows it over
+  // what was last read, which lags the keys, and it outlives the tab being left. Only the
+  // page writes a request's own script, so it is what the file has once written.
+  const [typed, setTyped] = useState<Record<string, string>>({});
   const timer = useRef<number | undefined>(undefined);
   const flush = useCallback(() => {
     window.clearTimeout(timer.current);
@@ -161,8 +163,16 @@ export function useHttpClient(historyShown = false) {
       void write(`${request.name} was not saved`, () => saveHttpRequest(collection, id, requestToPostman(request)));
     }
     pending.current.clear();
+    // Then read again: what a script is now, and whether it is on (decision 5), is the backend's to say.
+    const touched = new Set<string>();
+    for (const { collection, request, listen, code } of pendingScripts.current.values()) {
+      touched.add(collection);
+      void write("A script was not saved", () => saveHttpScript(collection, request, listen, code));
+    }
+    pendingScripts.current.clear();
+    for (const collection of touched) void write("The scripts were not read", () => readScripts(collection));
     return queue.current;
-  }, [write]);
+  }, [write, readScripts]);
   // What was typed last before the page closes is written too.
   useEffect(
     () => () => {
@@ -214,6 +224,30 @@ export function useHttpClient(historyShown = false) {
       timer.current = window.setTimeout(flush, SAVE_AFTER_MS);
     },
     [collections, flush],
+  );
+
+  /** A request's own script as typed, written a moment after the last key, as an edit is. */
+  const editScript = useCallback(
+    (collection: string, request: string, listen: "prerequest" | "test", code: string) => {
+      pendingScripts.current.set(`${request}\n${listen}`, { collection, request, listen, code });
+      setTyped((t) => ({ ...t, [`${request}\n${listen}`]: code }));
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(flush, SAVE_AFTER_MS);
+    },
+    [flush],
+  );
+
+  /**
+   * Scripts turned on or off by the user, then read again: a refusal says they changed since.
+   * In the writes' queue, after what was typed: the switch is for the code on the screen.
+   */
+  const turnScripts = useCallback(
+    (collection: string, hashes: string[], on: boolean) => {
+      void flush();
+      void write(`The scripts were not turned ${on ? "on" : "off"}`, () => setHttpScripts(collection, hashes, on));
+      return write("The scripts were not read", () => readScripts(collection));
+    },
+    [flush, write, readScripts],
   );
 
   /** A pasted `curl …` read into the request in place of what it had; throws what it could not read. */
@@ -366,7 +400,9 @@ export function useHttpClient(historyShown = false) {
       const current = () => latest.current[id] === ticket;
       setNotSent(({ [id]: _, ...rest }) => rest);
       setBusy((b) => ({ ...b, [id]: true }));
-      sendHttpRequest(found.collection.id, id, requestToPostman(found.request), environment?.id ?? null)
+      // What was typed and not yet written goes first: a script runs as it is stored.
+      flush()
+        .then(() => sendHttpRequest(found.collection.id, id, requestToPostman(found.request), environment?.id ?? null))
         .then((view) => {
           // A send overtaken wrote its variables all the same.
           if (view.scripts.changed) void reloadVariables();
@@ -383,7 +419,7 @@ export function useHttpClient(historyShown = false) {
           if (historyRead) void loadHistory();
         });
     },
-    [collections, environment, historyRead, loadHistory, reloadVariables],
+    [collections, environment, flush, historyRead, loadHistory, reloadVariables],
   );
 
   const sent = useMemo(() => {
@@ -463,6 +499,8 @@ export function useHttpClient(historyShown = false) {
       sent,
       scripts,
       turnScripts,
+      editScript,
+      typed,
       saveEnvironment,
       secretOf,
       newEnvironment,
@@ -497,6 +535,8 @@ export function useHttpClient(historyShown = false) {
       sent,
       scripts,
       turnScripts,
+      editScript,
+      typed,
       saveEnvironment,
       secretOf,
       newEnvironment,

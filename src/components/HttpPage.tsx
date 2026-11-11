@@ -370,6 +370,8 @@ export function HttpPage() {
               onSend={() => http.send(openTab.request.id)}
               scripts={http.scripts[openTab.collection.id] ?? NO_SCRIPTS}
               onTurnScripts={(hashes, on) => void http.turnScripts(openTab.collection.id, hashes, on)}
+              onEditScript={(listen, code) => http.editScript(openTab.collection.id, openTab.request.id, listen, code)}
+              typedScripts={http.typed}
             />
           ) : (
             <p className="http-quiet http-empty">Pick a request on the left, or import a Postman collection.</p>
@@ -1044,6 +1046,8 @@ function RequestView({
   onSend,
   scripts: states,
   onTurnScripts,
+  onEditScript,
+  typedScripts,
 }: {
   collection: Collection;
   request: HttpRequest;
@@ -1056,6 +1060,9 @@ function RequestView({
   onSend: () => void;
   scripts: HttpScriptState[];
   onTurnScripts: (hashes: string[], on: boolean) => void;
+  onEditScript: (listen: "prerequest" | "test", code: string) => void;
+  /** What was typed into requests' own scripts, by `request\nlisten`. */
+  typedScripts: Record<string, string>;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
   // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
@@ -1188,7 +1195,7 @@ function RequestView({
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
             {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
-            {tab === "scripts" && <ScriptsView collection={collection} chain={chain} all={states} onTurn={onTurnScripts} />}
+            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} />}
             {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
         </div>
@@ -1504,30 +1511,43 @@ function scriptLabel(collection: Collection, s: HttpScriptState) {
  * The scripts that run with this request, picked one at a time, as the Body tab picks its mode;
  * each with its switch (HC-11a). The code shown is the backend's — what runs and what the switch
  * turns on — not read again here. A collection's or folder's switch is for all its requests.
+ * The request's own two are there even empty, and are edited here (HC-11b).
  */
 function ScriptsView({
   collection,
+  request,
   chain,
   all,
+  typed,
   onTurn,
+  onEdit,
 }: {
   collection: Collection;
+  request: string;
+  /** What was typed into requests' own scripts, by `request\nlisten`: shown over what was read. */
+  typed: Record<string, string>;
   /** This request's scripts, in the order they are listed. */
   chain: HttpScriptState[];
   /** The whole collection's: what "turn on all" turns on. */
   all: HttpScriptState[];
   onTurn: (hashes: string[], on: boolean) => void;
+  onEdit: (listen: "prerequest" | "test", code: string) => void;
 }) {
   // In the order Postman runs them: every level's pre-request, then every level's post-response.
-  const scripts = (["prerequest", "test"] as const).flatMap((listen) =>
-    chain.filter((s) => s.listen === listen).map((state) => ({ id: `${state.item ?? "collection"}-${listen}`, label: scriptLabel(collection, state), text: state.codes.join("\n\n"), state })),
-  );
-  const [shown, setShown] = useState(scripts[0]?.id);
+  const scripts = (["prerequest", "test"] as const).flatMap((listen) => {
+    const above = chain.filter((s) => s.listen === listen && s.item !== request);
+    const own = chain.find((s) => s.listen === listen && s.item === request);
+    return [
+      ...above.map((state) => ({ id: `${state.item ?? "collection"}-${listen}`, listen, own: false, label: scriptLabel(collection, state), text: state.codes.join("\n\n"), state: state as HttpScriptState | undefined })),
+      { id: `own-${listen}`, listen, own: true, label: listen === "prerequest" ? "Pre-request" : "Post-response", text: typed[`${request}\n${listen}`] ?? own?.codes.join("\n\n") ?? "", state: own },
+    ];
+  });
+  const [shown, setShown] = useState((scripts.find((s) => s.state) ?? scripts[0]).id);
   const [turningAll, setTurningAll] = useState(false);
   const off = all.filter((s) => !s.on);
   const current = scripts.find((script) => script.id === shown) ?? scripts[0];
-  if (!current) return <p className="http-quiet">No scripts on this request or above it.</p>;
-  const owner = levelOf(collection, current.state.item)?.kind;
+  const owner = current.state ? levelOf(collection, current.state.item)?.kind : "request";
+  const type = (code: string) => onEdit(current.listen, code);
   return (
     <div className="http-form">
       <div className="http-segments" role="tablist" aria-label="Scripts, in the order they run">
@@ -1541,16 +1561,21 @@ function ScriptsView({
             onClick={() => setShown(script.id)}
           >
             {script.label}
-            {!script.state.on && <span className="http-dot http-dot-amber" role="img" aria-label="off" />}
+            {script.state?.on === false && <span className="http-dot http-dot-amber" role="img" aria-label="off" />}
           </button>
         ))}
       </div>
       <div className="http-script-bar">
-        <label className="http-script-switch">
-          <Switch label={`Run ${current.label}`} on={current.state.on} onChange={(on) => onTurn(current.state.hashes, on)} />
-          <span>{current.state.on ? "On — runs on Send" : "Off — does not run"}</span>
-        </label>
+        {current.state ? (
+          <label className="http-script-switch">
+            <Switch label={`Run ${current.label}`} on={current.state.on} onChange={(on) => current.state && onTurn(current.state.hashes, on)} />
+            <span>{current.state.on ? "On — runs on Send" : "Off — does not run"}</span>
+          </label>
+        ) : (
+          <span className="http-quiet">Empty — what you write here runs once you turn it on.</span>
+        )}
         {owner && owner !== "request" && <span className="http-quiet">{`The ${owner}'s script: its switch is for every request in the ${owner}.`}</span>}
+        {current.own && current.state?.on === false && <span className="http-quiet">An edit leaves it off until you turn it on.</span>}
         <span className="http-spacer" />
         {off.length > 0 && (
           <button type="button" className="http-bar-button" onClick={() => setTurningAll(true)}>
@@ -1559,7 +1584,7 @@ function ScriptsView({
         )}
       </div>
       <div className="http-code-box http-code-box-fill">
-        <CodeEditor text={current.text} language="javascript" label={current.label} />
+        <CodeEditor key={current.id} text={current.text} language="javascript" label={current.label} onChange={current.own ? type : undefined} />
       </div>
       <Modal
         title={`Turn on the scripts of “${collection.name}”?`}
