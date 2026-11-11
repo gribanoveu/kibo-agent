@@ -257,6 +257,46 @@ pub fn page(mut names: Vec<String>, part: Option<&str>, limit: usize) -> (Vec<St
     (names, more)
 }
 
+/// How many partitions one read may span, and how many messages one answer
+/// carries: a page is a page.
+pub const MAX_READ_PARTITIONS: usize = 20;
+pub const MAX_READ_COUNT: usize = 100;
+
+/// What to read: a topic's partitions, from which offset, how many.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSpec {
+    pub topic: String,
+    /// Empty is every partition of the topic, up to [`MAX_READ_PARTITIONS`].
+    #[serde(default)]
+    pub partitions: Vec<i32>,
+    /// The offset to read from; `None` is "the last `count`".
+    #[serde(default)]
+    pub from: Option<i64>,
+    #[serde(default)]
+    pub count: usize,
+}
+
+impl ReadSpec {
+    /// The spec with its two ceilings applied. Clamping here rather than in
+    /// the client keeps the promise one function, whoever asks.
+    pub fn clamped(mut self) -> Self {
+        self.partitions.truncate(MAX_READ_PARTITIONS);
+        self.count = self.count.clamp(1, MAX_READ_COUNT);
+        self
+    }
+}
+
+/// One answer: the messages, the partitions they came from, and whether the
+/// count ran out before the log did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPage {
+    pub messages: Vec<MessageView>,
+    pub partitions: Vec<i32>,
+    pub more: bool,
+}
+
 /// One partition's share of a group's lag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1197,6 +1237,19 @@ mod tests {
     #[test]
     fn a_fixed_field_that_ends_early_is_refused() {
         assert_eq!(ProtoMessage::decode(&[0x09, 0x01, 0x02]).unwrap_err(), ProtoError::Truncated { at: 1 });
+    }
+
+    #[test]
+    fn a_read_is_clamped_to_what_one_page_carries() {
+        let spec = ReadSpec { topic: "orders".into(), partitions: (0..30).collect(), from: None, count: 10_000 };
+        let clamped = spec.clamped();
+        assert_eq!(clamped.partitions.len(), MAX_READ_PARTITIONS);
+        assert_eq!(clamped.count, MAX_READ_COUNT);
+        assert_eq!(clamped.partitions[0], 0, "the first ones are kept, in order");
+
+        let none = ReadSpec { topic: "orders".into(), partitions: vec![], from: Some(7), count: 0 }.clamped();
+        assert_eq!(none.count, 1, "an answer of no messages is not an answer");
+        assert_eq!(none.from, Some(7));
     }
 
     #[test]

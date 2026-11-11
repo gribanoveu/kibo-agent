@@ -59,6 +59,34 @@ export type ConfigView = { name: string; value: string };
 /** Mirrors `domain::kafka::TopicDetail`. */
 export type TopicDetail = { topic: TopicView; configs: ConfigView[] };
 
+/** What a message's bytes turned out to be (mirrors `domain::kafka::ValueView`). */
+export type ValueView =
+  | { kind: "empty" }
+  | { kind: "json"; text: string; truncated: boolean }
+  | { kind: "protobuf"; text: string; schemaId: number | null; truncated: boolean }
+  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "hex"; text: string; size: number; truncated: boolean };
+
+/** Mirrors `domain::kafka::MessageView`. */
+export type MessageView = {
+  partition: number;
+  offset: number;
+  timestamp: number;
+  key: ValueView | null;
+  value: ValueView;
+  size: number;
+  headers: { name: string; value: string | null }[];
+};
+
+/** What to read (mirrors `domain::kafka::ReadSpec`): empty `partitions` is all of them. */
+export type ReadSpec = { topic: string; partitions: number[]; from: number | null; count: number };
+
+/** Mirrors `domain::kafka::ReadPage`; `more` is the count running out, not the log. */
+export type ReadPage = { messages: MessageView[]; partitions: number[]; more: boolean };
+
+/** The text of a value, whichever way it was read. */
+export const valueText = (view: ValueView | null): string => (view === null || view.kind === "empty" ? "" : view.text);
+
 export async function kafkaConnections(): Promise<ConnectionView[]> {
   return invoke<ConnectionView[]>("kafka_connections");
 }
@@ -83,4 +111,9 @@ export async function kafkaTopics(connection: string, name?: string | null): Pro
 
 export async function kafkaTopic(connection: string, topic: string): Promise<TopicDetail> {
   return invoke<TopicDetail>("kafka_topic", { connection, topic });
+}
+
+/** A page of messages, read without a consumer group. */
+export async function kafkaMessages(connection: string, spec: ReadSpec): Promise<ReadPage> {
+  return invoke<ReadPage>("kafka_messages", { connection, spec });
 }

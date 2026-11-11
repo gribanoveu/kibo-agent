@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::kafka::{Connection, ConnectionView, TopicDetail, TopicList};
+use crate::domain::kafka::{Connection, ConnectionView, ReadPage, ReadSpec, TopicDetail, TopicList};
 use crate::infra::kafka_client::KafkaClients;
 use crate::services::kafka;
 
@@ -44,6 +44,14 @@ pub async fn kafka_connection_check(id: String, clients: Clients<'_>) -> Result<
 pub async fn kafka_topics(connection: String, name: Option<String>, clients: Clients<'_>) -> Result<TopicList, String> {
     let clients = clients.inner().clone();
     blocking(move || kafka::topics(&clients, &connection, name.as_deref())).await
+}
+
+/// A page of a topic's messages — `spec` names the partitions, the offset and
+/// how many; its ceilings are the domain's.
+#[tauri::command]
+pub async fn kafka_messages(connection: String, spec: ReadSpec, clients: Clients<'_>) -> Result<ReadPage, String> {
+    let clients = clients.inner().clone();
+    blocking(move || kafka::messages(&clients, &connection, spec)).await
 }
 
 #[tauri::command]

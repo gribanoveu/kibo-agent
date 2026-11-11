@@ -45,6 +45,31 @@ mock.module("@tauri-apps/api/core", () => ({
         return refuseTopics ? Promise.reject("the topics: no answer in 15s") : Promise.resolve({ topics: [topic], more: 0 });
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
+      case "kafka_messages":
+        return Promise.resolve({
+          partitions: [0],
+          more: true,
+          messages: [
+            {
+              partition: 0,
+              offset: 2,
+              timestamp: 1_700_000_000_000,
+              key: { kind: "text", text: "A-3", truncated: false },
+              value: { kind: "protobuf", text: '1: "PAY-1"\n5: 30', schemaId: null, truncated: false },
+              size: 21,
+              headers: [{ name: "source", value: "api" }],
+            },
+            {
+              partition: 0,
+              offset: 3,
+              timestamp: 1_700_000_001_000,
+              key: null,
+              value: { kind: "text", text: "cut", truncated: true },
+              size: 70_000,
+              headers: [],
+            },
+          ],
+        });
       default:
         return Promise.resolve(null);
     }
@@ -123,6 +148,22 @@ describe("the Kafka page", () => {
     expect(save().disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: "stage-1:9092" } });
     expect(save().disabled).toBe(false);
+  });
+
+  test("a topic's messages are listed, and one opens as the bytes it turned out to be", async () => {
+    render(<KafkaPage />);
+    await screen.findByText("orders");
+    fireEvent.click(screen.getByText("orders"));
+
+    expect(await screen.findByText("A-3")).toBeTruthy();
+    expect(sent("kafka_messages")[0].args.spec).toEqual({ topic: "orders", partitions: [], from: null, count: 20 });
+
+    fireEvent.click(screen.getByLabelText("Message 0/2"));
+    const value = await screen.findByText(/PAY-1/);
+    expect(value.tagName).toBe("PRE");
+    expect(screen.getByText("protobuf")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Message 0/3"));
+    expect(await screen.findByText(/the whole value is not sent/)).toBeTruthy();
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

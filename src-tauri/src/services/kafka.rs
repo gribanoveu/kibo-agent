@@ -3,7 +3,7 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{matches, Connection, ConnectionView, KafkaError, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{matches, Connection, ConnectionView, KafkaError, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
@@ -62,6 +62,13 @@ pub fn topic(clients: &KafkaClients, id: &str, name: &str) -> Result<TopicDetail
     let topic: TopicView = described.pop().ok_or_else(|| KafkaError::Broker(format!("the cluster has no topic \"{name}\" any more")))?;
     let configs = kafka_client::configs(clients, &connection, name)?;
     Ok(TopicDetail { topic, configs })
+}
+
+/// Messages of a topic, read without a group: `spec` says which partitions,
+/// from where and how many, and its ceilings are applied in the domain.
+pub fn messages(clients: &KafkaClients, id: &str, spec: ReadSpec) -> Result<ReadPage, KafkaError> {
+    let connection = kafka_store::get(id)?;
+    kafka_client::read(clients, &connection, &spec)
 }
 
 #[cfg(test)]

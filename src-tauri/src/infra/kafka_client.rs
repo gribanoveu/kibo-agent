@@ -17,7 +17,9 @@ use krafka::admin::{ConfigResource, OffsetSpec, TopicPartition};
 use krafka::auth::{AuthConfig, TlsConfig};
 use krafka::Kafka;
 
-use crate::domain::kafka::{ConfigView, Connection, KafkaError, PartitionView, SaslMechanism, TopicView};
+use crate::domain::kafka::{
+    ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
+};
 
 /// How long a broker may take to be found: a wrong host says so in seconds.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
@@ -261,6 +263,96 @@ pub fn configs(clients: &KafkaClients, connection: &Connection, topic: &str) -> 
     Ok(configs)
 }
 
+/// Reads up to `count` messages of a topic's partitions, **without a group**:
+/// `assign`, not `subscribe`, so the read leaves nothing behind in the cluster
+/// and no member appears in a group the user never made.
+///
+/// `from` is where to start; `None` reads the last `count`, from as far back as
+/// the watermarks say the log still has them.
+pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) -> Result<ReadPage, KafkaError> {
+    let spec = spec.clone().clamped();
+    let kafka = clients.kafka(connection)?;
+    let admin = kafka.admin();
+    let topic = spec.topic.clone();
+
+    let mut partitions = spec.partitions.clone();
+    if partitions.is_empty() {
+        let described = within("the partitions", admin.describe_topics(&[topic.clone()], Default::default()))?;
+        partitions = described
+            .into_values()
+            .filter_map(|described| described.ok())
+            .flat_map(|described| described.partitions.into_iter().map(|partition| partition.partition))
+            .collect();
+        partitions.sort();
+        partitions.truncate(MAX_READ_PARTITIONS);
+    }
+    if partitions.is_empty() {
+        return Ok(ReadPage { messages: Vec::new(), partitions, more: false });
+    }
+
+    // Where each partition starts: the offset asked for, or far enough back to
+    // hold `count` records — the watermarks are two answers, keyed by partition.
+    let mut starts: Vec<(i32, i64)> = Vec::new();
+    match spec.from {
+        Some(from) => starts.extend(partitions.iter().map(|partition| (*partition, from))),
+        None => {
+            let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Earliest)).collect();
+            let earliest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
+            let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Latest)).collect();
+            let latest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
+            for partition in &partitions {
+                let at = TopicPartition::new(topic.clone(), *partition);
+                let start = earliest.get(&at).and_then(|o| o.as_ref().ok()).map(|o| o.offset).unwrap_or(0);
+                let end = latest.get(&at).and_then(|o| o.as_ref().ok()).map(|o| o.offset).unwrap_or(start);
+                starts.push((*partition, start.max(end - spec.count as i64)));
+            }
+        }
+    }
+
+    let count = spec.count.clamp(1, MAX_READ_COUNT);
+    // Every failure of the consumer is one sentence: the broker's own text is
+    // the useful half of it.
+    let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the messages: {e}"));
+    let messages = within("the messages", async {
+        let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
+        consumer.assign(&topic, partitions.clone()).await.map_err(broke)?;
+        for (partition, start) in &starts {
+            consumer.seek(&topic, *partition, *start).await.map_err(broke)?;
+        }
+        let mut messages: Vec<Message> = Vec::new();
+        let mut quiet = 0;
+        let mut spent = 0u32;
+        while messages.len() < count && quiet < 2 && spent < 16 {
+            spent += 1;
+            let batch = consumer.poll(Duration::from_millis(500)).await.map_err(broke)?;
+            if batch.is_empty() {
+                quiet += 1;
+                continue;
+            }
+            quiet = 0;
+            for record in batch {
+                messages.push(Message {
+                    partition: record.partition,
+                    offset: record.offset,
+                    timestamp: record.timestamp,
+                    key: record.key.map(|key| key.to_vec()),
+                    value: record.value.map(|value| value.to_vec()),
+                    headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
+                });
+            }
+        }
+        Ok::<Vec<Message>, KafkaError>(messages)
+    })?;
+
+    // The count may cut the answer: the page continues from the last offset it
+    // was given, so saying so is all it needs.
+    let more = messages.len() > count;
+    let mut messages = messages;
+    messages.truncate(count);
+    messages.sort_by_key(|message| (message.timestamp, message.partition, message.offset));
+    Ok(ReadPage { messages: messages.iter().map(Message::view).collect(), partitions, more })
+}
+
 /// One end of one partition's log, applied. `false` when the broker gave no
 /// offset, which the caller reports rather than writing a zero that looks like
 /// an empty partition.
@@ -384,6 +476,13 @@ mod tests {
         assert!(shown.iter().any(|c| c.name == "cleanup.policy"), "{shown:?}");
 
         assert!(topics(&clients, &connection, &["no-such-topic-x".to_string()]).unwrap().is_empty());
+
+        // Messages, without a group: the three records K-0 wrote, with their keys.
+        let page = read(&clients, &connection, &ReadSpec { topic: "orders".into(), partitions: vec![], from: None, count: 20 }).unwrap();
+        assert_eq!(page.partitions.len(), 3, "{page:?}");
+        assert_eq!(page.messages.len(), 3, "{page:?}");
+        assert!(page.messages.iter().all(|message| message.key.is_some()), "the K-0 records carry keys");
+        assert!(page.messages.iter().all(|message| message.size > 0 && !message.value.text().is_empty()));
     }
 
     /// The two ends of a log are two answers: a swap of them would leave every

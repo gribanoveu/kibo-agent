@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Check, Database, MoreHorizontal, Plus, RefreshCw, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
@@ -6,7 +6,7 @@ import { Page } from "./Page";
 import { Switch } from "./Switch";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import type { Connection, ConnectionView, SaslMechanism, TopicDetail } from "../lib/kafka";
+import { kafkaMessages, valueText, type Connection, type ConnectionView, type MessageView, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -159,7 +159,7 @@ export function KafkaPage() {
             {kafka.note && <p className="kafka-ok">{kafka.note}</p>}
 
             {kafka.detail ? (
-              <Topic detail={kafka.detail} onBack={kafka.closeTopic} />
+              <Topic detail={kafka.detail} connection={kafka.open.id} onBack={kafka.closeTopic} />
             ) : (
               <>
                 <div className="kafka-search">
@@ -249,7 +249,7 @@ export function KafkaPage() {
 }
 
 /** One topic opened: its partitions and the configs a reader cares about. */
-function Topic({ detail, onBack }: { detail: TopicDetail; onBack: () => void }) {
+function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection: string; onBack: () => void }) {
   const total = detail.topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0);
   return (
     <div className="kafka-topic-panel">
@@ -293,6 +293,8 @@ function Topic({ detail, onBack }: { detail: TopicDetail; onBack: () => void }) 
         </tbody>
       </table>
 
+      <Messages connection={connection} topic={detail.topic} />
+
       {detail.configs.length > 0 && (
         <>
           <h4 className="kafka-section-title">Configs</h4>
@@ -305,6 +307,177 @@ function Topic({ detail, onBack }: { detail: TopicDetail; onBack: () => void }) 
             ))}
           </dl>
         </>
+      )}
+    </div>
+  );
+}
+
+/** How many messages one answer carries, as the buttons offer them. */
+const COUNTS = [20, 50, 100];
+
+/**
+ * The topic's messages: which partitions to read, from where and how many, and
+ * one message opened — its key, headers and value in whichever view its bytes
+ * turned out to be.
+ */
+function Messages({ connection, topic }: { connection: string; topic: TopicView }) {
+  const [partitions, setPartitions] = useState<number[]>([]);
+  const [count, setCount] = useState(20);
+  const [from, setFrom] = useState("");
+  const [page, setPage] = useState<ReadPage | null>(null);
+  const [opened, setOpened] = useState<MessageView | null>(null);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const read = useCallback(
+    async (at: string, howMany: number, chosen: number[]) => {
+      setReading(true);
+      setError(null);
+      try {
+        const offset = at.trim() === "" ? null : Number(at.trim());
+        if (offset !== null && !Number.isFinite(offset)) throw new Error("an offset is a number");
+        setPage(await kafkaMessages(connection, { topic: topic.name, partitions: chosen, from: offset, count: howMany }));
+        setOpened(null);
+      } catch (failure) {
+        setError(String(failure));
+      } finally {
+        setReading(false);
+      }
+    },
+    [connection, topic.name],
+  );
+
+  useEffect(() => {
+    void read("", count, partitions);
+    // A partition picked or a count chosen is a new question; the offset box is
+    // read only when it is asked for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection, topic.name, count, partitions]);
+
+  const toggle = (partition: number) =>
+    setPartitions((current) => (current.includes(partition) ? current.filter((p) => p !== partition) : [...current, partition].sort((a, b) => a - b)));
+
+  return (
+    <section className="kafka-messages" aria-label={`Messages of ${topic.name}`}>
+      <div className="kafka-message-bar">
+        <span className="kafka-section-title">Messages</span>
+        <div className="kafka-partitions" role="group" aria-label="Partitions to read">
+          <button
+            type="button"
+            className={`kafka-chip${partitions.length === 0 ? " on" : ""}`}
+            aria-pressed={partitions.length === 0}
+            onClick={() => setPartitions([])}
+          >
+            All
+          </button>
+          {topic.partitions.map((partition) => (
+            <button
+              key={partition.partition}
+              type="button"
+              className={`kafka-chip${partitions.includes(partition.partition) ? " on" : ""}`}
+              aria-pressed={partitions.includes(partition.partition)}
+              onClick={() => toggle(partition.partition)}
+            >
+              {partition.partition}
+            </button>
+          ))}
+        </div>
+        <span className="kafka-spacer" />
+        {COUNTS.map((howMany) => (
+          <button key={howMany} type="button" className={`kafka-chip${count === howMany ? " on" : ""}`} disabled={reading} onClick={() => setCount(howMany)}>
+            Last {howMany}
+          </button>
+        ))}
+        <input
+          className="kafka-offset"
+          aria-label="Read from offset"
+          placeholder="from offset"
+          value={from}
+          onChange={(event) => setFrom(event.target.value)}
+        />
+        <button type="button" className="btn btn-ghost" disabled={reading} onClick={() => void read(from, count, partitions)}>
+          Read
+        </button>
+      </div>
+
+      {topic.partitions.length > 20 && partitions.length === 0 && (
+        <p className="kafka-quiet">This topic has {topic.partitions.length} partitions and one answer spans 20 — pick the ones to read.</p>
+      )}
+      {error && <p className="kafka-error" role="alert">{error}</p>}
+      {reading && <p className="kafka-quiet" role="status">Reading…</p>}
+
+      {page && !reading && !error && page.messages.length === 0 && <p className="kafka-quiet">Nothing at that offset in the chosen partitions.</p>}
+
+      {page && page.messages.length > 0 && (
+        <table className="kafka-table">
+          <thead>
+            <tr>
+              <th scope="col">Partition</th>
+              <th scope="col">Offset</th>
+              <th scope="col">Key</th>
+              <th scope="col">Bytes</th>
+              <th scope="col">Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {page.messages.map((message) => {
+              const on = opened?.partition === message.partition && opened.offset === message.offset;
+              return (
+                <tr key={`${message.partition}/${message.offset}`} className={on ? "on" : undefined}>
+                  <td>{message.partition}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="kafka-topic"
+                      aria-label={`Message ${message.partition}/${message.offset}`}
+                      onClick={() => setOpened(on ? null : message)}
+                    >
+                      {message.offset}
+                    </button>
+                  </td>
+                  <td className="kafka-mono kafka-key">{valueText(message.key) || "—"}</td>
+                  <td>{message.size}</td>
+                  <td>{new Date(message.timestamp).toLocaleString()}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {page?.more && <p className="kafka-quiet">The count ran out before the log did — read on from the last offset.</p>}
+
+      {opened && <MessageBody message={opened} />}
+    </section>
+  );
+}
+
+/** One message opened: its headers and its value, as its bytes were read. */
+function MessageBody({ message }: { message: MessageView }) {
+  const view = message.value;
+  return (
+    <div className="kafka-message">
+      <div className="kafka-message-head">
+        <span className="kafka-mono">
+          {message.partition}/{message.offset}
+        </span>
+        <span className="kafka-tag">{view.kind}</span>
+        <span className="kafka-quiet">{new Date(message.timestamp).toLocaleString()}</span>
+      </div>
+      {message.headers.length > 0 && (
+        <dl className="kafka-configs">
+          {message.headers.map((header, index) => (
+            <div key={`${header.name}/${index}`} className="kafka-config">
+              <dt>{header.name}</dt>
+              <dd className="kafka-mono">{header.value ?? "—"}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <pre className={`kafka-value${view.kind === "hex" ? " kafka-mono" : ""}`}>{view.kind === "empty" ? "(no value)" : valueText(view)}</pre>
+      {(view.kind === "json" || view.kind === "text" || view.kind === "protobuf" || view.kind === "hex") && view.truncated && (
+        <p className="kafka-quiet">
+          Cut at {view.kind === "hex" ? `${view.size} bytes seen` : "the page's limit"} — the whole value is not sent to this window.
+        </p>
       )}
     </div>
   );
