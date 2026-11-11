@@ -68,6 +68,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_response_last") return Promise.resolve(responses[args!.requestId as string] ?? null);
     if (command === "http_parse_curl") return Promise.resolve(curl);
     if (command === "http_history_list") return Promise.resolve(log);
+    if (command === "http_drafts") return Promise.resolve(draftsListed);
     if (command === "http_import") return Promise.resolve({ kind: "collection", id: "c", name: "Orders API" });
     if (command === "http_send") {
       const refused = refusals[args!.requestId as string];
@@ -84,6 +85,8 @@ mock.module("@tauri-apps/plugin-dialog", () => ({ open: () => Promise.resolve("/
 
 /** Who listens for `http:changed` now. */
 const listeners = new Set<() => void>();
+/** What `http_drafts` lists, by chat only: the hook passes them through. */
+let draftsListed: { chat: string }[] = [];
 mock.module("@tauri-apps/api/event", () => ({
   listen: (channel: string, handler: () => void) => {
     if (channel === "http:changed") listeners.add(handler);
@@ -111,6 +114,7 @@ beforeEach(() => {
   holds = {};
   log = [];
   listeners.clear();
+  draftsListed = [];
 });
 
 const called = (command: string) => calls.filter((c) => c.command === command).map((c) => c.args);
@@ -359,20 +363,32 @@ describe("the HTTP page's state", () => {
   test("an agent's send shows in the log while the log is on screen, and nothing listens after", async () => {
     const hook = renderHook(({ shown }) => useHttpClient(shown), { initialProps: { shown: false } });
     await waitFor(() => expect(hook.result.current.collections.length).toBe(1));
-    expect(listeners.size).toBe(0);
+    // The drafts' listener is there while the page is; the log's, while the log is.
+    await waitFor(() => expect(listeners.size).toBe(1));
     expect(called("http_history_list").length).toBe(0);
 
     log = [{ id: "a" }];
     hook.rerender({ shown: true });
     await waitFor(() => expect(hook.result.current.history?.map((e) => e.id)).toEqual(["a"]));
-    expect(listeners.size).toBe(1);
+    expect(listeners.size).toBe(2);
 
     log = [{ id: "a" }, { id: "b" }];
     await act(async () => listeners.forEach((told) => told()));
     await waitFor(() => expect(hook.result.current.history?.map((e) => e.id)).toEqual(["b", "a"]));
 
     hook.rerender({ shown: false });
+    await waitFor(() => expect(listeners.size).toBe(1));
+    hook.unmount();
     await waitFor(() => expect(listeners.size).toBe(0));
+  });
+
+  test("the model's drafts are read once listening, and again when the backend says they changed", async () => {
+    draftsListed = [{ chat: "a" }];
+    const hook = renderHook(() => useHttpClient(false));
+    await waitFor(() => expect(hook.result.current.drafts.map((d) => d.chat)).toEqual(["a"]));
+    draftsListed = [{ chat: "a" }, { chat: "b" }];
+    await act(async () => listeners.forEach((told) => told()));
+    await waitFor(() => expect(hook.result.current.drafts.map((d) => d.chat)).toEqual(["a", "b"]));
   });
 
   test("a pasted curl becomes the request, its name and place kept", async () => {

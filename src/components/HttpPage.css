@@ -292,6 +292,10 @@
 .http-tree-mark.off {
   color: var(--amber);
 }
+/* A chat's draft waits on the request. */
+.http-tree-mark.draft {
+  color: var(--accent);
+}
 .http-history {
   display: flex;
   flex-direction: column;
@@ -688,6 +692,9 @@
 }
 .http-dot-amber {
   background: var(--amber);
+}
+.http-dot-accent {
+  background: var(--accent);
 }
 
 /* Under the address: the request's tabs and editor, and the response — one
@@ -1107,4 +1114,72 @@
 .http-history {
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* A chat's drafts of the script on screen (HC-11d): over the editor, scrolled within
+   themselves so the script itself keeps room. */
+.http-drafts {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 50%;
+  overflow: auto;
+}
+.http-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  font-size: var(--fs-sm);
+}
+.http-draft-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.http-draft-icon {
+  color: var(--accent);
+}
+.http-draft-title {
+  color: var(--text);
+  font-weight: 500;
+}
+.http-draft-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+.http-draft-warning {
+  color: var(--amber);
+}
+.http-draft-changes {
+  border-collapse: collapse;
+}
+.http-draft-changes th,
+.http-draft-changes td {
+  padding: 2px 10px 2px 0;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-all;
+}
+.http-draft-changes th {
+  color: var(--text-dim);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.http-draft-code {
+  max-height: 160px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-box);
+  /* Wrapped, not scrolled: the end of a long line is code that runs too. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickFile, pickSavePath } from "../lib/dialog";
 import {
   addHttpItem,
+  applyHttpDraft,
   deleteHttpCollection,
   deleteHttpEnvironment,
   deleteHttpItem,
@@ -14,9 +15,11 @@ import {
   listHttpCollections,
   listHttpEnvironments,
   httpScripts,
+  httpDrafts,
   listHttpHistory,
   newHttpCollection,
   parseCurl,
+  rejectHttpDraft,
   renameHttpItem,
   saveHttpEnvironment,
   saveHttpRequest,
@@ -25,6 +28,7 @@ import {
   setHttpScripts,
   type HttpHistoryEntry,
   type HttpScriptState,
+  type HttpScriptDraft,
   type HttpImported,
   type HttpResponseView,
   onHttpChanged,
@@ -78,6 +82,8 @@ export function useHttpClient(historyShown = false) {
   const [history, setHistory] = useState<HttpHistoryEntry[] | null>(null);
   // Each collection's scripts and whether they run, by collection id (HC-11a).
   const [scripts, setScripts] = useState<Record<string, HttpScriptState[]>>({});
+  // The model's script drafts waiting for the user (HC-11d).
+  const [drafts, setDrafts] = useState<HttpScriptDraft[]>([]);
   /** What failed out of sight — a save, a load — for the page to say. */
   const [problem, setProblem] = useState<string | null>(null);
   // A send per request: a second press while the first is out wins, and the first's answer is dropped.
@@ -126,6 +132,22 @@ export function useHttpClient(historyShown = false) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const readDrafts = useCallback(async () => {
+    try {
+      setDrafts(await httpDrafts());
+    } catch (e) {
+      setProblem(`The drafts were not read: ${e}`);
+    }
+  }, []);
+
+  // A draft arrives from a chat, and goes with it, on `http:changed`: read once listening,
+  // so that one landing in between is in it.
+  useEffect(() => {
+    const listening = onHttpChanged(() => void readDrafts());
+    void listening.then(() => readDrafts());
+    return () => void listening.then((stop) => stop());
+  }, [readDrafts]);
 
   // What a script wrote. Variables alone: the tree holds edits not saved yet.
   // ponytail: reads every collection for the one that changed; a command for the
@@ -248,6 +270,32 @@ export function useHttpClient(historyShown = false) {
       return write("The scripts were not read", () => readScripts(collection));
     },
     [flush, write, readScripts],
+  );
+
+  /**
+   * A draft moved into its request in place of its own script, and on; then the scripts and
+   * the drafts read again. After what was typed: the user compared the draft with the screen.
+   */
+  const applyDraft = useCallback(
+    (draft: HttpScriptDraft) => {
+      void flush();
+      void write("The draft was not moved into the request", async () => {
+        await applyHttpDraft(draft);
+        // What the file has now, over what was typed before.
+        setTyped((t) => ({ ...t, [`${draft.request}\n${draft.listen}`]: draft.code }));
+      });
+      void write("The scripts were not read", () => readScripts(draft.collection));
+      return write("The drafts were not read", readDrafts);
+    },
+    [flush, write, readScripts, readDrafts],
+  );
+
+  const rejectDraft = useCallback(
+    (draft: HttpScriptDraft) => {
+      void write("The draft was not rejected", () => rejectHttpDraft(draft));
+      return write("The drafts were not read", readDrafts);
+    },
+    [write, readDrafts],
   );
 
   /** A pasted `curl …` read into the request in place of what it had; throws what it could not read. */
@@ -501,6 +549,9 @@ export function useHttpClient(historyShown = false) {
       turnScripts,
       editScript,
       typed,
+      drafts,
+      applyDraft,
+      rejectDraft,
       saveEnvironment,
       secretOf,
       newEnvironment,
@@ -537,6 +588,9 @@ export function useHttpClient(historyShown = false) {
       turnScripts,
       editScript,
       typed,
+      drafts,
+      applyDraft,
+      rejectDraft,
       saveEnvironment,
       secretOf,
       newEnvironment,

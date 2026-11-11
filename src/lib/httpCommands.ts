@@ -247,6 +247,66 @@ export async function setHttpScripts(collection: string, hashes: string[], on: b
   await invoke("http_scripts_set", { collection, hashes, on });
 }
 
+/** What a model's draft did when run with nothing sent (HC-11c). */
+export interface HttpDraftReport {
+  /** A post-response's send, by id; absent for a pre-request. */
+  exchange?: string | null;
+  /** What it ran on: `GET url → 200`, or the saved request. */
+  ranOn: string;
+  /** Where that send has `•••`: a test of it fails though the API is right. */
+  masked: string[];
+  /** Variables the model gave values to for the run. */
+  supplied: string[];
+  /** Hidden variables the code names: `•••` in the run. */
+  hidden: string[];
+  tests: HttpTestResult[];
+  console: { level: string; text: string }[];
+  error?: string | null;
+  /** `pm.execution.skipRequest()`: the request would not go. */
+  skipped: boolean;
+  writes: { scope: string; key: string; value: string | null }[];
+  /** `pm.sendRequest` it would make: `masked`, a hidden value in it; `foreign`, to a host none of the collection's requests goes to. */
+  sends: { method: string; url: string; masked: boolean; foreign: boolean }[];
+  /** A pre-request's: the request after it against the saved one. */
+  request: { part: string; before: string | null; after: string | null }[];
+  requestError?: string | null;
+}
+
+/** A chat's last draft of a request's script, waiting for the user. */
+export interface HttpScriptDraft {
+  collection: string;
+  request: string;
+  /** `Collection / Request`. */
+  name: string;
+  listen: "prerequest" | "test";
+  chat: string;
+  chatTitle: string;
+  environment: string;
+  code: string;
+  /** Unix milliseconds. */
+  at: number;
+  report: HttpDraftReport;
+}
+
+/** The model's drafts, oldest first. */
+export async function httpDrafts(): Promise<HttpScriptDraft[]> {
+  requireBackend();
+  return invoke<HttpScriptDraft[]>("http_drafts");
+}
+
+const shown = ({ collection, request, listen, chat, code }: HttpScriptDraft) => ({ collection, request, listen, chat, code });
+
+/** The draft as shown moved into its request and turned on; rejects when the model wrote another since. */
+export async function applyHttpDraft(draft: HttpScriptDraft): Promise<void> {
+  requireBackend();
+  await invoke("http_draft_apply", { draft: shown(draft) });
+}
+
+export async function rejectHttpDraft(draft: HttpScriptDraft): Promise<void> {
+  requireBackend();
+  await invoke("http_draft_reject", { draft: shown(draft) });
+}
+
 /** A pasted `curl …` as a Postman `request` object; rejects with what it could not read. */
 export async function parseCurl(command: string): Promise<unknown> {
   requireBackend();

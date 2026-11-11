@@ -14,6 +14,7 @@ import {
   Eye,
   EyeOff,
   FileCode2,
+  FilePen,
   Folder,
   FolderOpen,
   Globe,
@@ -40,6 +41,8 @@ import { Dropdown } from "./Dropdown";
 import { Switch } from "./Switch";
 import { Modal } from "./Modal";
 import { PanelResizeHandle } from "./PanelResizeHandle";
+import { DiffView } from "./DiffView";
+import { fileRows } from "../lib/diffRows";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useHttpCookies } from "../hooks/useHttpCookies";
@@ -47,7 +50,7 @@ import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
 import { matches, shortcutText } from "../lib/shortcuts";
-import type { HttpHistoryEntry, HttpOutcome, HttpScriptReport, HttpScriptState, HttpTestResult } from "../lib/httpCommands";
+import type { HttpDraftReport, HttpHistoryEntry, HttpOutcome, HttpScriptDraft, HttpScriptReport, HttpScriptState, HttpTestResult } from "../lib/httpCommands";
 import {
   type AgentAccess,
   requestsUnder,
@@ -321,7 +324,7 @@ export function HttpPage() {
           </div>
           <ul className="http-tree-list">
             {http.collections.map((c) => (
-              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} marks={marks} />
+              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} marks={marks} drafts={http.drafts} />
             ))}
           </ul>
         </nav>
@@ -372,6 +375,9 @@ export function HttpPage() {
               onTurnScripts={(hashes, on) => void http.turnScripts(openTab.collection.id, hashes, on)}
               onEditScript={(listen, code) => http.editScript(openTab.collection.id, openTab.request.id, listen, code)}
               typedScripts={http.typed}
+              drafts={drafted(http.drafts, openTab.collection.id, openTab.request.id)}
+              onApplyDraft={(d) => void http.applyDraft(d)}
+              onRejectDraft={(d) => void http.rejectDraft(d)}
             />
           ) : (
             <p className="http-quiet http-empty">Pick a request on the left, or import a Postman collection.</p>
@@ -490,6 +496,8 @@ type TreeProps = {
   menu: (node: TreeNode) => Action[];
   /** A level's own scripts, by its id or its collection's: "off" when any of them is. */
   marks: Map<string, Mark>;
+  /** The model's drafts waiting, each marked on its request. */
+  drafts: HttpScriptDraft[];
 };
 type Mark = "on" | "off";
 
@@ -505,7 +513,27 @@ function ScriptsMark({ mark }: { mark: Mark | undefined }) {
   );
 }
 
+/** Says a chat's script draft waits on this request (HC-11d). */
+function DraftMark({ count }: { count: number }) {
+  if (!count) return null;
+  const said = count === 1 ? "A script draft from a chat is waiting" : `${count} script drafts from chats are waiting`;
+  return (
+    <span className="http-tree-mark draft" title={`${said} — on the request's Scripts tab, to move into it or reject`} aria-label={said}>
+      <FilePen size={12} />
+    </span>
+  );
+}
+
+/** The drafts waiting on the requests in `folder`, however deep. */
+function draftsUnder(drafts: HttpScriptDraft[], collection: string, folder: Item): number {
+  const requests = new Set<string>();
+  const walk = (item: Item): void => void (item.kind === "request" ? requests.add(item.id) : item.items.forEach(walk));
+  walk(folder);
+  return drafts.filter((d) => d.collection === collection && requests.has(d.request)).length;
+}
+
 const NO_SCRIPTS: HttpScriptState[] = [];
+const NO_DRAFTS: HttpScriptDraft[] = [];
 
 /** Each level's mark: its own scripts' states, "off" when any is. */
 function scriptMarks(collections: Collection[], states: Record<string, HttpScriptState[]>): Map<string, Mark> {
@@ -549,13 +577,14 @@ function CollectionNode({ collection, ...tree }: { collection: Collection } & Tr
           <Layers size={13} className="http-tree-icon" />
           <span className="http-tree-name">{collection.name}</span>
           <ScriptsMark mark={tree.marks.get(collection.id)} />
+          <DraftMark count={tree.drafts.filter((d) => d.collection === collection.id).length} />
         </button>
       </TreeRow>
       {isOpen &&
         (collection.error ? (
           <p className="http-error http-tree-empty">Does not read: {collection.error}</p>
         ) : collection.items.length > 0 ? (
-          <Items items={collection.items} {...tree} />
+          <Items items={collection.items} collection={collection.id} {...tree} />
         ) : (
           <p className="http-quiet http-tree-empty">No requests yet</p>
         ))}
@@ -563,7 +592,7 @@ function CollectionNode({ collection, ...tree }: { collection: Collection } & Tr
   );
 }
 
-function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
+function Items({ items, collection, ...tree }: { items: Item[]; collection: string } & TreeProps) {
   return (
     <ul className="http-tree-list">
       {items.map((item) =>
@@ -574,9 +603,10 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
                 {tree.expanded.has(item.id) ? <FolderOpen size={13} className="http-tree-icon" /> : <Folder size={13} className="http-tree-icon" />}
                 <span className="http-tree-name">{item.name}</span>
                 <ScriptsMark mark={tree.marks.get(item.id)} />
+                <DraftMark count={draftsUnder(tree.drafts, collection, item)} />
               </button>
             </TreeRow>
-            {tree.expanded.has(item.id) && <Items items={item.items} {...tree} />}
+            {tree.expanded.has(item.id) && <Items items={item.items} collection={collection} {...tree} />}
           </li>
         ) : (
           <li key={item.id}>
@@ -585,6 +615,7 @@ function Items({ items, ...tree }: { items: Item[] } & TreeProps) {
                 <MethodBadge method={item.method} />
                 <span className="http-tree-name">{item.name}</span>
                 <ScriptsMark mark={tree.marks.get(item.id)} />
+                <DraftMark count={tree.drafts.filter((d) => d.collection === collection && d.request === item.id).length} />
               </button>
             </TreeRow>
           </li>
@@ -1048,6 +1079,9 @@ function RequestView({
   onTurnScripts,
   onEditScript,
   typedScripts,
+  drafts,
+  onApplyDraft,
+  onRejectDraft,
 }: {
   collection: Collection;
   request: HttpRequest;
@@ -1063,6 +1097,10 @@ function RequestView({
   onEditScript: (listen: "prerequest" | "test", code: string) => void;
   /** What was typed into requests' own scripts, by `request\nlisten`. */
   typedScripts: Record<string, string>;
+  /** The chats' drafts of this request's scripts. */
+  drafts: HttpScriptDraft[];
+  onApplyDraft: (draft: HttpScriptDraft) => void;
+  onRejectDraft: (draft: HttpScriptDraft) => void;
 }) {
   const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
   // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
@@ -1165,7 +1203,9 @@ function RequestView({
                 [
                   "scripts",
                   "Scripts",
-                  scriptsOff ? (
+                  drafts.length > 0 ? (
+                    <span className="http-dot http-dot-accent" role="img" aria-label="A draft waiting" title="A chat's draft of a script waits here, to move into the request or reject" />
+                  ) : scriptsOff ? (
                     <span className="http-dot http-dot-amber" role="img" aria-label="Scripts off" title="Some of the scripts are off: they do not run" />
                   ) : scripts ? (
                     <span className="http-dot" role="img" aria-label="Scripts on" title="The scripts run on Send" />
@@ -1195,7 +1235,7 @@ function RequestView({
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
             {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
-            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} />}
+            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} drafts={drafts} onApplyDraft={onApplyDraft} onRejectDraft={onRejectDraft} />}
             {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
         </div>
@@ -1521,6 +1561,9 @@ function ScriptsView({
   typed,
   onTurn,
   onEdit,
+  drafts,
+  onApplyDraft,
+  onRejectDraft,
 }: {
   collection: Collection;
   request: string;
@@ -1532,6 +1575,9 @@ function ScriptsView({
   all: HttpScriptState[];
   onTurn: (hashes: string[], on: boolean) => void;
   onEdit: (listen: "prerequest" | "test", code: string) => void;
+  drafts: HttpScriptDraft[];
+  onApplyDraft: (draft: HttpScriptDraft) => void;
+  onRejectDraft: (draft: HttpScriptDraft) => void;
 }) {
   // In the order Postman runs them: every level's pre-request, then every level's post-response.
   const scripts = (["prerequest", "test"] as const).flatMap((listen) => {
@@ -1542,12 +1588,14 @@ function ScriptsView({
       { id: `own-${listen}`, listen, own: true, label: listen === "prerequest" ? "Pre-request" : "Post-response", text: typed[`${request}\n${listen}`] ?? own?.codes.join("\n\n") ?? "", state: own },
     ];
   });
-  const [shown, setShown] = useState((scripts.find((s) => s.state) ?? scripts[0]).id);
+  // A draft waiting is what the tab opens on; else the first script there is.
+  const [shown, setShown] = useState((scripts.find((s) => s.own && drafts.some((d) => d.listen === s.listen)) ?? scripts.find((s) => s.state) ?? scripts[0]).id);
   const [turningAll, setTurningAll] = useState(false);
   const off = all.filter((s) => !s.on);
   const current = scripts.find((script) => script.id === shown) ?? scripts[0];
   const owner = current.state ? levelOf(collection, current.state.item)?.kind : "request";
   const type = (code: string) => onEdit(current.listen, code);
+  const waiting = current.own ? drafts.filter((d) => d.listen === current.listen) : NO_DRAFTS;
   return (
     <div className="http-form">
       <div className="http-segments" role="tablist" aria-label="Scripts, in the order they run">
@@ -1562,6 +1610,7 @@ function ScriptsView({
           >
             {script.label}
             {script.state?.on === false && <span className="http-dot http-dot-amber" role="img" aria-label="off" />}
+            {script.own && drafts.some((d) => d.listen === script.listen) && <span className="http-dot http-dot-accent" role="img" aria-label="a draft waiting" />}
           </button>
         ))}
       </div>
@@ -1583,6 +1632,21 @@ function ScriptsView({
           </button>
         )}
       </div>
+      {waiting.length > 0 && (
+        <div className="http-drafts">
+          {waiting.map((d) => (
+            <DraftBlock
+              key={d.chat}
+              draft={d}
+              current={current.text}
+              label={current.label}
+              alsoOn={all.filter((s) => !s.on && !(s.item === request && s.listen === d.listen) && s.codes.includes(d.code)).map((s) => scriptLabel(collection, s))}
+              onApply={onApplyDraft}
+              onReject={onRejectDraft}
+            />
+          ))}
+        </div>
+      )}
       <div className="http-code-box http-code-box-fill">
         <CodeEditor key={current.id} text={current.text} language="javascript" label={current.label} onChange={current.own ? type : undefined} />
       </div>
@@ -1625,6 +1689,150 @@ function ScriptsView({
         })}
       </Modal>
     </div>
+  );
+}
+
+/** The chat's drafts of one request's scripts. */
+function drafted(drafts: HttpScriptDraft[], collection: string, request: string): HttpScriptDraft[] {
+  const these = drafts.filter((d) => d.collection === collection && d.request === request);
+  return these.length ? these : NO_DRAFTS;
+}
+
+/**
+ * A chat's draft of the request's own script (HC-11d): its code, what its run with nothing
+ * sent did, and the user's two answers. Moving it shows what it replaces first: it is on
+ * from then, and runs on every Send.
+ */
+function DraftBlock({
+  draft,
+  current,
+  label,
+  alsoOn,
+  onApply,
+  onReject,
+}: {
+  draft: HttpScriptDraft;
+  current: string;
+  label: string;
+  /** The scripts off elsewhere in the collection with the same code: moving this one turns them on too. */
+  alsoOn: string[];
+  onApply: (draft: HttpScriptDraft) => void;
+  onReject: (draft: HttpScriptDraft) => void;
+}) {
+  // What the dialog shows is held as it was opened: a draft the model writes again while it is
+  // read is not what the button moves — the backend refuses the one read, as no longer there.
+  const [moving, setMoving] = useState<{ draft: HttpScriptDraft; current: string; alsoOn: string[] } | null>(null);
+  const rows = useMemo(() => (moving ? fileRows(moving.current, moving.draft.code, true) : []), [moving]);
+  const { report } = draft;
+  const on = draft.listen === "prerequest" ? "the saved request" : report.ranOn;
+  return (
+    <section className="http-draft" aria-label={`Draft from “${draft.chatTitle}”`}>
+      <div className="http-draft-head">
+        <FilePen size={13} className="http-draft-icon" />
+        <span className="http-draft-title">{`Draft from “${draft.chatTitle}”`}</span>
+        <span className="http-quiet">{`${draft.environment} · ${receivedAt(draft.at)}`}</span>
+        <span className="http-spacer" />
+        <button type="button" className="http-bar-button" onClick={() => onReject(draft)}>
+          Reject
+        </button>
+        <button type="button" className="http-bar-button" onClick={() => setMoving({ draft, current, alsoOn })}>
+          Move into the request…
+        </button>
+      </div>
+      <p className="http-quiet">{`Run on ${on} with nothing sent. It does not run on Send until you move it into the request.`}</p>
+      <DraftWarnings draft={draft} alsoOn={alsoOn} />
+      <DraftRun report={report} />
+      <pre className="http-mono http-draft-code">{draft.code}</pre>
+      <Modal
+        title={`Move the draft into the request's ${label.toLowerCase()} script?`}
+        open={moving !== null}
+        onClose={() => setMoving(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setMoving(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (moving) onApply(moving.draft);
+                setMoving(null);
+              }}
+            >
+              Move and turn on
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">
+          It takes the place of the request's own script below, and is on: it runs on every Send. A script reads every variable, secrets too, and can send them anywhere with pm.sendRequest.
+        </p>
+        {moving && moving.draft.code !== draft.code && (
+          <p className="http-error">The chat has written this draft again since you opened this: what is below is no longer the draft, and moving it is refused. Cancel to read the new one.</p>
+        )}
+        {moving && <DraftWarnings draft={moving.draft} alsoOn={moving.alsoOn} />}
+        <DiffView rows={rows} />
+      </Modal>
+    </section>
+  );
+}
+
+/** Characters that show as nothing, or turn the text around it: code that reads one way and runs another. */
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+/**
+ * What a draft asks to be read for before it is moved (decision 7): every request it would send,
+ * louder when a hidden value goes in it or it goes to a host none of the collection's requests
+ * does; what it ran blind to; scripts it would turn on with it; code that does not show.
+ */
+function DraftWarnings({ draft, alsoOn }: { draft: HttpScriptDraft; alsoOn: string[] }) {
+  const { report } = draft;
+  const hidden = INVISIBLE.test(draft.code);
+  if (!report.sends.length && !report.masked.length && !report.hidden.length && !report.skipped && !alsoOn.length && !hidden) return null;
+  return (
+    <ul className="http-draft-warnings" aria-label="Read before moving">
+      {report.sends.map((s, i) => {
+        const loud = [s.masked && "a hidden value goes in it", s.foreign && "a host none of the collections' requests goes to"].filter(Boolean);
+        return (
+          <li key={i} className={loud.length ? "http-draft-warning" : undefined}>
+            {`Sends ${s.method} ${s.url}${loud.length ? ` — ${loud.join(", ")}` : ""}`}
+          </li>
+        );
+      })}
+      {report.skipped && <li className="http-draft-warning">It skips the request: Send would not go.</li>}
+      {hidden && <li className="http-draft-warning">Its code has characters that do not show, or that turn the text around them: what runs may not be what reads here.</li>}
+      {alsoOn.length > 0 && <li className="http-draft-warning">{`The same code is a script that is off: moving this turns it on too — ${alsoOn.join(", ")}`}</li>}
+      {report.masked.length > 0 && <li>{`Masked (•••) in the send it ran on — a test of these fails though the API is right: ${report.masked.join(", ")}`}</li>}
+      {report.hidden.length > 0 && <li>{`Hidden, so ••• in the run — what it computed from them was computed from the mask: ${report.hidden.join(", ")}`}</li>}
+      {report.supplied.length > 0 && <li>{`Run with values the chat gave, not the environment's: ${report.supplied.join(", ")}`}</li>}
+    </ul>
+  );
+}
+
+/** What a draft's run did: its tests and console, what it would write, how the request would change. */
+function DraftRun({ report }: { report: HttpDraftReport }) {
+  return (
+    <>
+      <ScriptResults report={{ off: [], tests: report.tests, console: report.console, error: report.error ?? undefined, changed: false }} scripts />
+      {report.request.length > 0 && (
+        <table className="http-draft-changes" aria-label="The request after it">
+          <tbody>
+            {report.request.map((c) => (
+              <tr key={c.part}>
+                <th scope="row">{c.part}</th>
+                <td className="http-mono">{c.before ?? "—"}</td>
+                <td className="http-mono">{c.after ?? "removed"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {report.requestError && <p className="http-error">{`The request after it does not put together: ${report.requestError}`}</p>}
+      {report.writes.length > 0 && (
+        <p className="http-quiet">{`Would set: ${report.writes.map((w) => (w.value === null ? `${w.scope} ${w.key} removed` : `${w.scope} ${w.key} = ${w.value}`)).join("; ")}`}</p>
+      )}
+    </>
   );
 }
 

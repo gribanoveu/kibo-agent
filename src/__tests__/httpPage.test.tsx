@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:t
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { currentCompletions } from "@codemirror/autocomplete";
-import type { HttpHistoryEntry, HttpResponseView, HttpScriptState } from "../lib/httpCommands";
+import type { HttpHistoryEntry, HttpResponseView, HttpScriptDraft, HttpScriptState } from "../lib/httpCommands";
 import type { Environment } from "../lib/httpClient";
 
 // The HTTP page on its stores: a collection, its requests and an environment
@@ -47,6 +47,39 @@ let states: HttpScriptState[] = [];
 /** Script saves kept waiting, each let go by the test; null lets them through. */
 let scriptSaves: (() => void)[] | null = null;
 let jar: { domain: string; path: string; name: string; expiresAt?: number | null }[] = [];
+/** The chats' drafts, as `http_drafts` lists them. */
+let drafts: HttpScriptDraft[] = [];
+/** A chat's post-response draft of "Create order", run on a send of it. */
+const DRAFT: HttpScriptDraft = {
+  collection: "c",
+  request: "r1",
+  name: "Orders API / Create order",
+  listen: "test",
+  chat: "chat-1",
+  chatTitle: "Check orders",
+  environment: "Stage",
+  code: "pm.test('made', () => pm.response.to.have.status(201));",
+  at: 1,
+  report: {
+    exchange: "h9",
+    ranOn: "POST https://stage.test/orders → 200",
+    masked: ["$.token"],
+    supplied: ["orderId"],
+    hidden: [],
+    tests: [{ name: "made", passed: false, skipped: false, error: "expected 200 to be 201" }],
+    console: [],
+    error: null,
+    skipped: false,
+    writes: [{ scope: "environment", key: "orderId", value: "7" }],
+    sends: [
+      { method: "GET", url: "https://elsewhere.test/x", masked: false, foreign: true },
+      { method: "POST", url: "https://stage.test/sign", masked: true, foreign: false },
+      { method: "GET", url: "https://stage.test/ok", masked: false, foreign: false },
+    ],
+    request: [],
+    requestError: null,
+  },
+};
 let answer: HttpResponseView;
 const reported = (scripts: Partial<HttpResponseView["scripts"]>): HttpResponseView => ({
   at: 1,
@@ -71,6 +104,19 @@ mock.module("@tauri-apps/api/core", () => ({
       const was = states.find((s) => s.item === requestId && s.listen === listen);
       states = states.filter((s) => s !== was);
       if (code.trim()) states.push({ item: requestId, listen, codes: [code], hashes: [`h:${code}`], on: was?.on ?? false });
+      return Promise.resolve(null);
+    }
+    if (command === "http_drafts") return Promise.resolve(structuredClone(drafts));
+    if (command === "http_draft_apply" || command === "http_draft_reject") {
+      // As the backend: the draft shown, by its key and code — one written since is another.
+      const shown = args!.draft as Pick<HttpScriptDraft, "collection" | "request" | "listen" | "chat" | "code">;
+      const found = drafts.find((d) => d.collection === shown.collection && d.request === shown.request && d.listen === shown.listen && d.chat === shown.chat && d.code === shown.code);
+      if (command === "http_draft_apply" && !found) return Promise.reject("The draft changed or is gone — look at it again.");
+      drafts = drafts.filter((d) => d !== found);
+      if (command === "http_draft_apply") {
+        states = states.filter((s) => !(s.item === shown.request && s.listen === shown.listen));
+        states.push({ item: shown.request, listen: shown.listen, codes: [shown.code], hashes: [`h:${shown.code}`], on: true });
+      }
       return Promise.resolve(null);
     }
     if (command === "http_scripts_set") {
@@ -103,7 +149,14 @@ mock.module("@tauri-apps/api/core", () => ({
   transformCallback: (callback: unknown) => callback,
 }));
 
-mock.module("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
+/** Who listens on `http:changed`: a test tells them the backend changed. */
+const told = new Set<() => void>();
+mock.module("@tauri-apps/api/event", () => ({
+  listen: (_channel: string, handler: () => void) => {
+    told.add(handler);
+    return Promise.resolve(() => told.delete(handler));
+  },
+}));
 
 (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 afterAll(() => {
@@ -134,6 +187,7 @@ beforeEach(() => {
   states = [];
   scriptSaves = null;
   jar = [];
+  drafts = [];
   answer = reported({});
 });
 
@@ -362,6 +416,139 @@ describe("the HTTP page", () => {
     // Sending asks nothing: what is off stays off, and what is on runs.
     await act(async () => fireEvent.click(sendButton()));
     await waitFor(() => expect(called("http_send").length).toBe(1));
+  });
+
+  test("a chat's draft is marked in the tree and opens its tab; moved, it shows what it replaces first and is on", async () => {
+    states = [
+      { item: "r1", listen: "prerequest", codes: ["first();"], hashes: ["h1"], on: true },
+      { item: "r1", listen: "test", codes: ["old();"], hashes: ["h2"], on: false },
+    ];
+    drafts = [DRAFT];
+    await shown("r1");
+    // Said on the collection while it is closed, and on the request once open.
+    await waitFor(() => expect(screen.queryAllByLabelText("A script draft from a chat is waiting").length).toBe(1));
+    fireEvent.click(screen.getByText("Orders API"));
+    await waitFor(() => expect(screen.queryAllByLabelText("A script draft from a chat is waiting").length).toBe(2));
+    expect(screen.getByLabelText("A draft waiting") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    // Opened on the draft's script, not on the first one there is.
+    const segments = within(screen.getByRole("tablist", { name: "Scripts, in the order they run" }));
+    expect(segments.getByRole("tab", { selected: true }).textContent).toBe("Post-response");
+    const block = within(screen.getByRole("region", { name: "Draft from “Check orders”" }));
+    expect(block.getByText("Run on POST https://stage.test/orders → 200 with nothing sent. It does not run on Send until you move it into the request.") !== null).toBe(true);
+    expect(block.getByText("expected 200 to be 201") !== null).toBe(true);
+    // Every send, and louder the one that asks to be read, for either reason.
+    const warned = within(block.getByRole("list", { name: "Read before moving" }));
+    expect(warned.getAllByRole("listitem").map((w) => [w.textContent, w.className])).toEqual([
+      ["Sends GET https://elsewhere.test/x — a host none of the collections' requests goes to", "http-draft-warning"],
+      ["Sends POST https://stage.test/sign — a hidden value goes in it", "http-draft-warning"],
+      ["Sends GET https://stage.test/ok", ""],
+      ["Masked (•••) in the send it ran on — a test of these fails though the API is right: $.token", ""],
+      ["Run with values the chat gave, not the environment's: orderId", ""],
+    ]);
+    expect(block.getByText("Would set: environment orderId = 7") !== null).toBe(true);
+    expect(document.querySelector(".http-code-box .cm-content")?.textContent).toBe("old();");
+    // Only under the script it is a draft of.
+    fireEvent.click(segments.getByRole("tab", { name: "Pre-request" }));
+    expect(screen.queryByRole("region", { name: "Draft from “Check orders”" }) === null).toBe(true);
+    fireEvent.click(segments.getByRole("tab", { name: /Post-response/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Move into the request…" }));
+    const shownDialog = screen.getByRole("dialog", { name: "Move the draft into the request's post-response script?" });
+    const dialog = within(shownDialog);
+    // What it takes the place of, and what goes in: the words of a line changed are marked one by one.
+    const flat = (text: string) => text.replace(/\s+/g, "");
+    const diff = flat(shownDialog.querySelector(".diff-view")?.textContent ?? "");
+    expect(diff).toContain("-old();");
+    expect(diff).toContain(`+${flat(DRAFT.code)}`);
+    expect(called("http_draft_apply")).toEqual([]);
+    await act(async () => fireEvent.click(dialog.getByRole("button", { name: "Move and turn on" })));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Check orders”" }) === null).toBe(true));
+    expect(called("http_draft_apply")).toEqual([{ draft: { collection: "c", request: "r1", listen: "test", chat: "chat-1", code: DRAFT.code } }]);
+    await waitFor(() => expect(screen.queryByText("On — runs on Send") !== null).toBe(true));
+    expect(document.querySelector(".http-code-box .cm-content")?.textContent).toBe(DRAFT.code);
+    expect(screen.queryByLabelText("A script draft from a chat is waiting") === null).toBe(true);
+    expect(called("http_script_save")).toEqual([]);
+  });
+
+  test("what was typed into the script is written before the draft takes its place, and the draft is what shows", async () => {
+    states = [{ item: "r1", listen: "test", codes: ["old();"], hashes: ["h2"], on: false }];
+    drafts = [DRAFT];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Check orders”" }) !== null).toBe(true));
+    const editor = () => EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    act(() => editor().dispatch({ changes: { from: 0, insert: "typed();" }, userEvent: "input.type" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move into the request…" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Move and turn on" })));
+    await waitFor(() => expect(called("http_draft_apply").length).toBe(1));
+    // The edit went first: written after, it would take the draft's place.
+    expect(calls.map((c) => c.command).filter((c) => c === "http_script_save" || c === "http_draft_apply")).toEqual(["http_script_save", "http_draft_apply"]);
+    await waitFor(() => expect(screen.queryByText("On — runs on Send") !== null).toBe(true));
+    expect(editor().state.doc.toString()).toBe(DRAFT.code);
+    // Left and come back to, still the draft: not what was typed before it.
+    fireEvent.click(screen.getByRole("tab", { name: /Body/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    expect(editor().state.doc.toString()).toBe(DRAFT.code);
+  });
+
+  test("the dialog moves what it shows: a draft the chat writes again meanwhile is said, and the one read is refused", async () => {
+    states = [{ item: "r1", listen: "test", codes: ["old();"], hashes: ["h2"], on: false }];
+    drafts = [DRAFT];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Check orders”" }) !== null).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Move into the request…" }));
+    drafts = [{ ...DRAFT, code: "sneaky();" }];
+    await act(async () => told.forEach((tell) => tell()));
+    await waitFor(() => expect(screen.queryByText("sneaky();", { selector: "pre" }) !== null).toBe(true));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/The chat has written this draft again since you opened this/) !== null).toBe(true);
+    expect((dialog.querySelector(".diff-view")?.textContent ?? "").includes("sneaky")).toBe(false);
+    await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Move and turn on" })));
+    await waitFor(() => expect(called("http_draft_apply").length).toBe(1));
+    expect(called("http_draft_apply")).toEqual([{ draft: { collection: "c", request: "r1", listen: "test", chat: "chat-1", code: DRAFT.code } }]);
+    await waitFor(() => expect(screen.queryByText(/The draft was not moved into the request/) !== null).toBe(true));
+    expect(states.find((s) => s.item === "r1")?.on).toBe(false);
+  });
+
+  test("a draft whose code is a script off elsewhere says moving turns that on too, and code that does not show is said", async () => {
+    const code = "pm.test('ok');";
+    states = [{ item: null, listen: "test", codes: [code], hashes: ["h0"], on: false }];
+    drafts = [{ ...DRAFT, code }, { ...DRAFT, chat: "chat-2", chatTitle: "Hidden", code: "x();\u202Ey();" }];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Check orders”" }) !== null).toBe(true));
+    const same = within(screen.getByRole("region", { name: "Draft from “Check orders”" }));
+    expect(same.getByText("The same code is a script that is off: moving this turns it on too — Orders API · post-response") !== null).toBe(true);
+    expect(same.queryByText(/characters that do not show/) === null).toBe(true);
+    const hidden = within(screen.getByRole("region", { name: "Draft from “Hidden”" }));
+    expect(hidden.getByText(/characters that do not show/) !== null).toBe(true);
+    expect(hidden.queryByText(/The same code is a script/) === null).toBe(true);
+  });
+
+  test("a draft rejected goes and leaves the script; one the model wrote again since is not moved", async () => {
+    states = [{ item: "r1", listen: "test", codes: ["old();"], hashes: ["h2"], on: false }];
+    // A request of the same id in another collection: its draft is not this one's.
+    drafts = [DRAFT, { ...DRAFT, chat: "chat-2", chatTitle: "Other", code: "other();" }, { ...DRAFT, collection: "c9", chat: "chat-3", chatTitle: "Elsewhere" }];
+    await shown("r1");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Other”" }) !== null).toBe(true));
+    await act(async () => fireEvent.click(within(screen.getByRole("region", { name: "Draft from “Other”" })).getByRole("button", { name: "Reject" })));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Draft from “Other”" }) === null).toBe(true));
+    expect(called("http_draft_reject")).toEqual([{ draft: { collection: "c", request: "r1", listen: "test", chat: "chat-2", code: "other();" } }]);
+    expect(screen.queryByRole("region", { name: "Draft from “Elsewhere”" }) === null).toBe(true);
+    expect(document.querySelector(".http-code-box .cm-content")?.textContent).toBe("old();");
+
+    // The model wrote again meanwhile: the move is refused, and says so.
+    drafts = [{ ...DRAFT, code: "newer();" }];
+    const block = within(screen.getByRole("region", { name: "Draft from “Check orders”" }));
+    fireEvent.click(block.getByRole("button", { name: "Move into the request…" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Move and turn on" })));
+    await waitFor(() => expect(screen.queryByText(/The draft was not moved into the request: The draft changed or is gone/) !== null).toBe(true));
+    expect(document.querySelector(".http-code-box .cm-content")?.textContent).toBe("old();");
+    // Read again: the newer one is what is shown now.
+    await waitFor(() => expect(screen.queryByText("newer();", { selector: "pre" }) !== null).toBe(true));
   });
 
   test("a level with one script on and another off is marked off, in whichever order they come", async () => {
