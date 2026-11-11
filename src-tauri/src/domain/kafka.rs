@@ -35,6 +35,7 @@ const MAX_FIELD: u32 = 536_870_911;
 
 /// A saved connection, as it is sealed: the password is inside [`Sasl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub id: String,
     pub name: String,
@@ -56,11 +57,24 @@ pub struct Connection {
     pub agent: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Sasl {
     pub mechanism: SaslMechanism,
     pub username: String,
     pub password: String,
+}
+
+/// Never the password: a `{:?}` of a connection is what a log line or a dump
+/// of a tool's arguments would print.
+impl std::fmt::Debug for Sasl {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.debug_struct("Sasl")
+            .field("mechanism", &self.mechanism)
+            .field("username", &self.username)
+            .field("password", &"•••")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -230,6 +244,17 @@ pub fn matches(name: &str, part: Option<&str>) -> bool {
         Some(part) => name.to_lowercase().contains(&part.to_lowercase()),
         None => true,
     }
+}
+
+/// What one page of topics carries: the search applied, sorted, cut at
+/// `limit` — and how many were left out. Pure, because these four rules are
+/// what the page and the tool show and none of them needs a broker to check.
+pub fn page(mut names: Vec<String>, part: Option<&str>, limit: usize) -> (Vec<String>, usize) {
+    names.retain(|name| matches(name, part));
+    names.sort();
+    let more = names.len().saturating_sub(limit);
+    names.truncate(limit);
+    (names, more)
 }
 
 /// One partition's share of a group's lag.
@@ -1182,5 +1207,43 @@ mod tests {
         assert!(!matches("orders", Some("payments")));
         assert!(matches("orders", None));
         assert!(matches("orders", Some("  ")), "an empty search is no search");
+    }
+
+    #[test]
+    fn a_page_is_the_search_sorted_and_cut_with_the_rest_counted() {
+        // Handed over in reverse: a page that does not sort shows 249 first.
+        let names: Vec<String> = (0..250).rev().map(|n| format!("topic-{n:03}")).collect();
+        let (page_of, more) = page(names.clone(), None, 200);
+        assert_eq!(page_of.len(), 200);
+        assert_eq!(more, 50);
+        assert_eq!(page_of.first().map(String::as_str), Some("topic-000"));
+        assert_eq!(page_of.last().map(String::as_str), Some("topic-199"));
+
+        let (few, none_left) = page(names, Some("TOPIC-24"), 200);
+        assert_eq!(few.len(), 10, "240…249: {few:?}");
+        assert_eq!(none_left, 0);
+
+        let (empty, more_none) = page(vec!["orders".into()], Some("payments"), 200);
+        assert!(empty.is_empty() && more_none == 0);
+    }
+
+    #[test]
+    fn a_login_never_prints_its_password() {
+        let sasl = Sasl { mechanism: SaslMechanism::Plain, username: "u".into(), password: "hunter2".into() };
+        let printed = format!("{sasl:?}");
+        assert!(!printed.contains("hunter2"), "{printed}");
+        assert!(printed.contains("•••"), "{printed}");
+    }
+
+    /// The window sends what `src/lib/kafka.ts` declares: camelCase keys and a
+    /// login with no password when it is an edit that keeps the saved one.
+    #[test]
+    fn a_connection_is_read_from_the_json_the_window_sends() {
+        let json = r#"{"id":"c1","name":"prod","brokers":"h:9092","tls":true,"caFile":"/etc/ca.pem","sasl":{"mechanism":"scramSha512","username":"u","password":""},"readOnly":true,"agent":true}"#;
+        let connection: Connection = serde_json::from_str(json).unwrap();
+        assert_eq!(connection.ca_file.as_deref(), Some("/etc/ca.pem"));
+        assert!(connection.read_only, "a read-only cluster must not arrive writable");
+        assert!(connection.agent);
+        assert_eq!(connection.sasl.unwrap().mechanism, SaslMechanism::ScramSha512);
     }
 }
