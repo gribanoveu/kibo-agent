@@ -385,13 +385,27 @@ impl ProduceSpec {
     }
 }
 
-/// One tick of a live read: what arrived since the last one. `cut` says the
-/// tick held more than a batch may carry — the rest is the next tick.
+/// One tick of a live read: what arrived since the last one. `more` is the
+/// count still waiting for the next tick — records are never dropped, only
+/// carried — and `failed` is the end of the read, said where it can be seen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveBatch {
     pub messages: Vec<MessageView>,
-    pub cut: bool,
+    pub more: usize,
+    pub failed: Option<String>,
+}
+
+/// What one tick takes: the messages waiting, in order, up to
+/// [`LIVE_PER_TICK`], and the rest to carry into the next tick. A rule of the
+/// window's own, so it can be checked without a broker.
+pub fn live_tick(mut waiting: Vec<Message>, per_tick: usize) -> (Vec<Message>, Vec<Message>) {
+    waiting.sort_by_key(|message| (message.partition, message.offset));
+    if waiting.len() <= per_tick {
+        return (waiting, Vec::new());
+    }
+    let rest = waiting.split_off(per_tick);
+    (waiting, rest)
 }
 
 /// Where a live read reports: the window's channel, adapted in `commands/`.
@@ -1436,6 +1450,21 @@ mod tests {
         assert_eq!(quota(20, 20), 1);
         assert_eq!(quota(20, 0), 20, "no partition named means no one to share with");
         assert_eq!(quota(1, 20), 1, "never zero: a read asks for at least one message");
+    }
+
+    #[test]
+    fn a_tick_takes_its_share_and_carries_the_rest() {
+        let message = |partition: i32, offset: i64| Message { partition, offset, timestamp: 0, key: None, value: None, headers: vec![] };
+        let few = vec![message(1, 5), message(0, 2)];
+        let (took, rest) = live_tick(few, 10);
+        assert_eq!(rest.len(), 0);
+        assert_eq!(took.iter().map(|m| (m.partition, m.offset)).collect::<Vec<_>>(), vec![(0, 2), (1, 5)], "in order, partition then offset");
+
+        let many: Vec<Message> = (0..250).map(|offset| message(0, offset)).collect();
+        let (took, rest) = live_tick(many, 200);
+        assert_eq!(took.len(), 200);
+        assert_eq!(rest.len(), 50, "nothing is dropped: the overflow waits");
+        assert_eq!(rest[0].offset, 200);
     }
 
     #[test]

@@ -131,7 +131,7 @@ export async function kafkaProduce(connection: string, spec: ProduceSpec): Promi
 export type LiveSpec = { topic: string; partitions: number[]; from: number | null };
 
 /** One tick of a live read (mirrors `domain::kafka::LiveBatch`). */
-export type LiveBatch = { messages: MessageView[]; cut: boolean };
+export type LiveBatch = { messages: MessageView[]; more: number; failed: string | null };
 
 /** Starts a live read; batches arrive at `onBatch`. Answers the id that stops it. */
 export async function kafkaLiveStart(connection: string, spec: LiveSpec, onBatch: (batch: LiveBatch) => void): Promise<string> {

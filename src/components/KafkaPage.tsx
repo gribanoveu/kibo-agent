@@ -376,7 +376,10 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
   const [writing, setWriting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [living, setLiving] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [waiting, setWaiting] = useState(0);
   const liveId = useRef<string | null>(null);
+  const gone = useRef(false);
 
   // Which read the answer belongs to: a chip clicked while a read is in flight
   // asks a new question, and the older answer must not become the page.
@@ -419,6 +422,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
   // window no longer shows.
   useEffect(
     () => () => {
+      gone.current = true;
       if (liveId.current) void kafkaLiveStop(liveId.current);
     },
     [],
@@ -434,18 +438,37 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
     }
     setSent(null);
     setError(null);
+    setStarting(true);
     try {
-      liveId.current = await kafkaLiveStart(connection, { topic: topic.name, partitions, from: null }, (batch: LiveBatch) => {
-        // A tick appends to what is on screen: the window keeps the last 500.
+      const id = await kafkaLiveStart(connection, { topic: topic.name, partitions, from: null }, (batch: LiveBatch) => {
+        // The read says its own end, on the channel it has been reporting to.
+        if (batch.failed) {
+          liveId.current = null;
+          setLiving(false);
+          setError(batch.failed);
+          return;
+        }
+        // A tick appends to what is on screen: the window keeps the last 500,
+        // and says how much is still on its way.
+        setWaiting(batch.more);
         setPage((current) => ({
           messages: [...(current?.messages ?? []), ...batch.messages].slice(-500),
           partitions: current?.partitions ?? partitions,
-          more: batch.cut,
+          more: false,
         }));
       });
+      if (gone.current) {
+        // The tab went while the start was in flight: nothing may be left
+        // reading a cluster this window no longer shows.
+        void kafkaLiveStop(id);
+        return;
+      }
+      liveId.current = id;
       setLiving(true);
     } catch (failure) {
       setError(String(failure));
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -482,6 +505,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           type="button"
           className={`kafka-chip${living ? " on" : ""}`}
           aria-pressed={living}
+          disabled={starting}
           title={living ? "Stop following this topic" : "Follow this topic as messages arrive"}
           onClick={() => void toggleLive()}
         >
@@ -526,6 +550,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
       )}
       {error && <p className="kafka-error" role="alert">{error}</p>}
       {sent && <p className="kafka-ok">{sent}</p>}
+      {living && waiting > 0 && <p className="kafka-quiet">{waiting} more arrived and are on their way.</p>}
       {readOnly && <p className="kafka-quiet">This connection is read-only — nothing is sent through it.</p>}
       {reading && <p className="kafka-quiet" role="status">Reading…</p>}
 

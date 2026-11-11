@@ -41,15 +41,19 @@ let calls: Call[] = [];
 let refuseList = false;
 let refuseTopics = false;
 let refuseSave = false;
+const liveChannels: { onmessage: ((batch: unknown) => void) | null }[] = [];
 let refuseProduce = false;
 /** Answers held back, so two reads can come home out of order. */
 let holdMessages = false;
 const held: ((answer: unknown) => void)[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
-  /** The wrapper hands a channel to the command; a live test would push into it. */
+  /** The wrapper hands a channel to the command; the test pushes a tick into it. */
   Channel: class {
     onmessage: ((batch: unknown) => void) | null = null;
+    constructor() {
+      liveChannels.push(this);
+    }
   },
   invoke: (command: string, args: Record<string, unknown>) => {
     calls.push({ command, args });
@@ -109,6 +113,7 @@ afterEach(() => {
   refuseTopics = false;
   refuseSave = false;
   refuseProduce = false;
+  liveChannels.length = 0;
   holdMessages = false;
   held.length = 0;
 });
@@ -339,6 +344,27 @@ describe("the Kafka page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Live" }));
     await waitFor(() => expect(sent("kafka_live_stop")).toHaveLength(1));
     expect(sent("kafka_live_stop")[0].args.id).toBe("live-1");
+  });
+
+  test("a tick lands in the table, and a read that ends says why and lets go", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Live" }));
+    await waitFor(() => expect(liveChannels).toHaveLength(1));
+
+    const tick = {
+      more: 3,
+      failed: null,
+      messages: [{ partition: 0, offset: 40, timestamp: 1, key: null, value: { kind: "text", text: "live", truncated: false }, size: 4, headers: [] }],
+    };
+    act(() => liveChannels[0].onmessage?.(tick));
+    expect(await screen.findByLabelText("Message 0/40")).toBeTruthy();
+    expect(screen.getByText(/3 more arrived/)).toBeTruthy();
+
+    act(() => liveChannels[0].onmessage?.({ messages: [], more: 0, failed: "the live read: broker went quiet" }));
+    expect(await screen.findByText(/broker went quiet/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Live" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("false");
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

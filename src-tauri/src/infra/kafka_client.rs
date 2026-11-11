@@ -19,7 +19,8 @@ use krafka::producer::Record;
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    fresh, quota, starting, ConfigView, Connection, KafkaError, LiveBatch, LiveSink, LiveSpec, Message, PartitionView, ProduceSpec, Produced, ReadPage, ReadSpec,
+    fresh, live_tick, quota, starting, ConfigView, Connection, KafkaError, LiveBatch, LiveSink, LiveSpec, Message, PartitionView, ProduceSpec, Produced, ReadPage,
+    ReadSpec,
     SaslMechanism, TopicView, LIVE_PER_TICK, LIVE_TICK, MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
@@ -449,41 +450,65 @@ pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, st
     }
 
     let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the live read: {e}"));
-    tauri::async_runtime::block_on(async {
-        let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
-        consumer.assign(&topic, partitions.clone()).await.map_err(broke)?;
+    let answered = tauri::async_runtime::block_on(async {
+        // Every step before the loop is bounded: a broker that takes the socket
+        // and says nothing must not hold the thread where a stop is not read.
+        let consumer = tokio::time::timeout(REQUEST_TIMEOUT, kafka.consumer_without_group().build())
+            .await
+            .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
+            .map_err(broke)?;
+        tokio::time::timeout(REQUEST_TIMEOUT, consumer.assign(&topic, partitions.clone()))
+            .await
+            .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
+            .map_err(broke)?;
         for partition in &partitions {
-            match spec.from {
-                Some(from) => consumer.seek(&topic, *partition, from).await.map_err(broke)?,
-                None => consumer.seek_to_end(&topic, *partition).await.map_err(broke)?,
-            }
+            let seek = async {
+                match spec.from {
+                    Some(from) => consumer.seek(&topic, *partition, from).await,
+                    None => consumer.seek_to_end(&topic, *partition).await,
+                }
+            };
+            tokio::time::timeout(REQUEST_TIMEOUT, seek)
+                .await
+                .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
+                .map_err(broke)?;
         }
         // A tick reports as it happens: the window sees a message when it lands,
         // not when the read ends. Each poll is bounded, so a stop is noticed
         // within a tick.
+        let mut waiting: Vec<Message> = Vec::new();
         while !stop.load(Ordering::Relaxed) {
-            let records = consumer.poll(LIVE_TICK).await.map_err(broke)?;
-            if records.is_empty() {
-                continue;
-            }
-            let mut messages: Vec<Message> = records
-                .into_iter()
-                .map(|record| Message {
+            // What the last tick could not carry goes first: `poll` has already
+            // moved past those records, so dropping them would lose them.
+            if waiting.is_empty() {
+                let records = tokio::time::timeout(REQUEST_TIMEOUT, consumer.poll(LIVE_TICK))
+                    .await
+                    .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
+                    .map_err(broke)?;
+                waiting.extend(records.into_iter().map(|record| Message {
                     partition: record.partition,
                     offset: record.offset,
                     timestamp: record.timestamp,
                     key: record.key.map(|key| key.to_vec()),
                     value: record.value.map(|value| value.to_vec()),
                     headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
-                })
-                .collect();
-            messages.sort_by_key(|message| (message.partition, message.offset));
-            let cut = messages.len() > LIVE_PER_TICK;
-            messages.truncate(LIVE_PER_TICK);
-            sink(LiveBatch { messages: messages.iter().map(Message::view).collect(), cut });
+                }));
+            }
+            if waiting.is_empty() {
+                continue;
+            }
+            let (batch, rest) = live_tick(std::mem::take(&mut waiting), LIVE_PER_TICK);
+            waiting = rest;
+            sink(LiveBatch { messages: batch.iter().map(Message::view).collect(), more: waiting.len(), failed: None });
         }
         Ok::<(), KafkaError>(())
-    })
+    });
+    // The read ends for the window, not only for the log: it says so where it
+    // has been reporting, since nobody is waiting on this thread.
+    if let Err(failure) = answered {
+        sink(LiveBatch { messages: Vec::new(), more: 0, failed: Some(failure.to_string()) });
+    }
+    Ok(())
 }
 
 /// Sends one record, and answers where it landed. The only write this module

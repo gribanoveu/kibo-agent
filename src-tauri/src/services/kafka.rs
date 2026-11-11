@@ -86,22 +86,26 @@ pub fn send(clients: &KafkaClients, id: &str, spec: ProduceSpec) -> Result<Produ
 /// — the thread is a `spawn_blocking` task, so the window never waits for it.
 #[derive(Default)]
 pub struct KafkaLive {
-    running: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    running: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 impl KafkaLive {
-    /// Starts one and answers its id: what stops it later, and nothing else.
+    /// Starts one and answers its id. Everything that can fail — the connection,
+    /// the topic, the broker going quiet — is said on the sink, in a batch of
+    /// its own, so the window has one place to watch and one way to learn.
     pub fn start(&self, clients: std::sync::Arc<KafkaClients>, connection: Connection, spec: LiveSpec, sink: LiveSink) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id.clone(), stop.clone());
-        let id_for_log = id.clone();
+        let ending = self.running.clone();
+        let mine = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            // A failure is said on the sink by `live` itself; the entry goes
+            // either way, so the map is what runs, not what ran.
             if let Err(failure) = kafka_client::live(&clients, &connection, &spec, stop, sink) {
-                // Nobody is waiting for this thread's answer: it is a background
-                // read, and its end is the window's own business.
-                eprintln!("kafka live {id_for_log} ended: {failure}");
+                eprintln!("kafka live {mine} ended: {failure}");
             }
+            ending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&mine);
         });
         id
     }
