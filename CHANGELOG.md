@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-11 Send a message to a Kafka topic from its page: a key, headers and a text value, at a partition of your choice or wherever the producer puts it, with the partition and offset it landed at
 - 2026-11-10 A Kafka topic's messages are read from its page: pick the partitions, the last 20, 50 or 100, or any offset — then open one to see its key, headers and value as JSON, text or a raw protobuf dump by field number, with a word when a big value was cut
 - 2026-11-10 A Kafka page: connections to a cluster, sealed on this computer like the API keys, with the topics it holds — partitions, replicas, in-sync copies, watermarks and the configs that matter — found by part of a name; open it from the Catalog, where it is off until chosen
 - 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog

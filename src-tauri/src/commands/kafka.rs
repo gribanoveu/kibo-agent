@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::kafka::{Connection, ConnectionView, ReadPage, ReadSpec, TopicDetail, TopicList};
+use crate::domain::kafka::{Connection, ConnectionView, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList};
 use crate::infra::kafka_client::KafkaClients;
 use crate::services::kafka;
 
@@ -53,6 +53,14 @@ pub async fn kafka_topics(connection: String, name: Option<String>, page: Option
 pub async fn kafka_messages(connection: String, spec: ReadSpec, clients: Clients<'_>) -> Result<ReadPage, String> {
     let clients = clients.inner().clone();
     blocking(move || kafka::messages(&clients, &connection, spec)).await
+}
+
+/// Sends one record: `spec` carries the topic, the key, the headers and the
+/// text value. Answers the partition and the offset it landed at.
+#[tauri::command]
+pub async fn kafka_produce(connection: String, spec: ProduceSpec, clients: Clients<'_>) -> Result<Produced, String> {
+    let clients = clients.inner().clone();
+    blocking(move || kafka::send(&clients, &connection, spec)).await
 }
 
 #[tauri::command]

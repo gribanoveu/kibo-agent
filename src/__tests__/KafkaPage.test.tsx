@@ -21,6 +21,17 @@ const connections = [
     readOnly: false,
     agent: false,
   },
+  {
+    id: "c2",
+    name: "reports",
+    brokers: "broker-2:9092",
+    tls: false,
+    caFile: null,
+    login: null,
+    hasPassword: false,
+    readOnly: true,
+    agent: false,
+  },
 ];
 
 const topic = { name: "orders", internal: false, partitions: [{ partition: 0, leader: 1, replicas: [1], inSync: [1], earliest: 0, latest: 3 }] };
@@ -30,6 +41,7 @@ let calls: Call[] = [];
 let refuseList = false;
 let refuseTopics = false;
 let refuseSave = false;
+let refuseProduce = false;
 /** Answers held back, so two reads can come home out of order. */
 let holdMessages = false;
 const held: ((answer: unknown) => void)[] = [];
@@ -48,6 +60,8 @@ mock.module("@tauri-apps/api/core", () => ({
         return refuseTopics ? Promise.reject("the topics: no answer in 15s") : Promise.resolve({ topics: [topic], total: 240 });
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
+      case "kafka_produce":
+        return refuseProduce ? Promise.reject("the send: Topic orders not found") : Promise.resolve({ partition: 0, offset: 812 });
       case "kafka_messages":
         if (holdMessages) return new Promise((resolve) => held.push(resolve));
         return Promise.resolve({
@@ -86,6 +100,7 @@ afterEach(() => {
   refuseList = false;
   refuseTopics = false;
   refuseSave = false;
+  refuseProduce = false;
   holdMessages = false;
   held.length = 0;
 });
@@ -222,6 +237,77 @@ describe("the Kafka page", () => {
     // Another search is another list: its first page, not the one it was on.
     fireEvent.change(screen.getByLabelText("Find a topic"), { target: { value: "ord" } });
     await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.page === 0 && call.args.name === "ord")).toBe(true));
+  });
+
+  test("a message is sent from the page as the window's own keys, and it says where it landed", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Send…/ }));
+    fireEvent.change(screen.getByLabelText("Partition"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Key"), { target: { value: "K-1" } });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.change(screen.getByLabelText("Header 1 name"), { target: { value: "source" } });
+    fireEvent.change(screen.getByLabelText("Header 1 value"), { target: { value: "page" } });
+    // A row left with no name is not a header, and is not sent.
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(sent("kafka_produce")).toHaveLength(1));
+    expect(sent("kafka_produce")[0].args).toEqual({
+      connection: "c1",
+      spec: { topic: "orders", partition: 0, key: "K-1", headers: [["source", "page"]], value: "hello" },
+    });
+    expect(await screen.findByText(/Sent to partition 0 at offset 812/)).toBeTruthy();
+    // The dialog is done, and the window it wrote into was read again.
+    expect(screen.queryByLabelText("Value")).toBeNull();
+    await waitFor(() => expect(sent("kafka_messages").length).toBeGreaterThan(1));
+  });
+
+  test("an empty value is a record, and a refused send keeps the dialog with the broker's words", async () => {
+    refuseProduce = true;
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Send…/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/Topic orders not found/)).toBeTruthy();
+    expect(sent("kafka_produce")[0].args.spec).toEqual({ topic: "orders", partition: null, key: null, headers: [], value: "" });
+    expect((screen.getByLabelText("Value") as HTMLTextAreaElement).value).toBe("", "the dialog is still there");
+  });
+
+  test("a read-only connection offers no send", async () => {
+    render(<KafkaPage />);
+    // The connection is chosen from the bar: the trigger says whose brokers it is.
+    // The heading carries the same title, so the bar's trigger is the button.
+    const trigger = (await screen.findAllByTitle("broker-1:9092")).find((element) => element.tagName === "BUTTON");
+    fireEvent.click(trigger as HTMLButtonElement);
+    fireEvent.click(await screen.findByText("reports"));
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+
+    const send = (await screen.findByRole("button", { name: /Send…/ })) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    // Said where it is read, not only in a tooltip a disabled button never shows.
+    expect(screen.getByText(/This connection is read-only/)).toBeTruthy();
+  });
+
+  test("a partition that is not a whole number never reaches the broker", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Send…/ }));
+    fireEvent.change(screen.getByLabelText("Partition"), { target: { value: "-2" } });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "v" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/a partition is a whole number/)).toBeTruthy();
+    expect(sent("kafka_produce")).toHaveLength(0);
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

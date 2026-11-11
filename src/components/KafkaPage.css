@@ -432,3 +432,41 @@
   margin-right: auto;
   color: var(--red);
 }
+
+/* ---- sending */
+
+.kafka-headers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kafka-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.kafka-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.kafka-header-row input {
+  padding: 4px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+}
+.kafka-field textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+}

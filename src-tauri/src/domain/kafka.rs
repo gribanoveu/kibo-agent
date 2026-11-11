@@ -316,6 +316,83 @@ pub fn quota(count: usize, partitions: usize) -> usize {
     count.div_ceil(partitions.max(1)).max(1)
 }
 
+/// What one send may carry, the whole record — key, headers and value — since
+/// a broker refuses more by default (`max.message.bytes`).
+pub const MAX_SENT: usize = 1_048_576;
+
+/// Headers one record may carry: a record is small, and a thousand of them is
+/// not a message anyone reads.
+pub const MAX_HEADERS: usize = 64;
+
+/// A record to send. The value is text, UTF-8: nothing here knows a schema, so
+/// a protobuf payload cannot be assembled from the window (decision 2).
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProduceSpec {
+    pub topic: String,
+    /// `None` lets the producer's own partitioner choose.
+    #[serde(default)]
+    pub partition: Option<i32>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    pub value: String,
+}
+
+impl std::fmt::Debug for ProduceSpec {
+    /// Never the words themselves: a value or a key in a log is someone's data.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProduceSpec")
+            .field("topic", &self.topic)
+            .field("partition", &self.partition)
+            .field("key", &self.key.as_ref().map(|_| "•••"))
+            .field("headers", &self.headers.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .field("value", &format!("{} bytes", self.value.len()))
+            .finish()
+    }
+}
+
+impl ProduceSpec {
+    /// The spec as the broker may see it. An empty value is a record with
+    /// nothing in it, which Kafka allows and compaction keeps — it is not the
+    /// same as a tombstone, and this cannot write one.
+    pub fn checked(mut self) -> Result<Self, KafkaError> {
+        // The topic as it goes to the broker: a stray space is a name it has
+        // never heard of, not a name to look for.
+        self.topic = self.topic.trim().to_string();
+        if self.topic.is_empty() {
+            return Err(KafkaError::Broker("a message needs a topic".into()));
+        }
+        if self.partition.is_some_and(|partition| partition < 0) {
+            return Err(KafkaError::Broker("a partition is zero or more".into()));
+        }
+        if self.headers.len() > MAX_HEADERS {
+            return Err(KafkaError::Broker(format!("a record carries at most {MAX_HEADERS} headers")));
+        }
+        if self.headers.iter().any(|(name, _)| name.trim().is_empty()) {
+            return Err(KafkaError::Broker("a header needs a name".into()));
+        }
+        // Everything the record carries, not its value alone: a broker's
+        // `max.message.bytes` counts the record.
+        let carried = self.value.len()
+            + self.key.as_ref().map_or(0, String::len)
+            + self.headers.iter().map(|(name, value)| name.len() + value.len()).sum::<usize>();
+        if carried > MAX_SENT {
+            return Err(KafkaError::Broker(format!("the record is over {MAX_SENT} bytes")));
+        }
+        Ok(self)
+    }
+}
+
+/// Where a sent record landed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Produced {
+    pub partition: i32,
+    pub offset: i64,
+}
+
 /// One answer: the messages, the partitions they came from, and whether the
 /// count ran out before the log did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1266,6 +1343,50 @@ mod tests {
     #[test]
     fn a_fixed_field_that_ends_early_is_refused() {
         assert_eq!(ProtoMessage::decode(&[0x09, 0x01, 0x02]).unwrap_err(), ProtoError::Truncated { at: 1 });
+    }
+
+    #[test]
+    fn a_read_only_connection_refuses_a_write_and_says_why() {
+        let connection = Connection {
+            id: "c1".into(),
+            name: "prod".into(),
+            brokers: "localhost:9092".into(),
+            tls: false,
+            ca_file: None,
+            sasl: None,
+            read_only: true,
+            agent: false,
+        };
+        let refused = connection.producing().unwrap_err();
+        assert_eq!(refused.to_string(), "\"prod\" is read-only — nothing is sent through it");
+
+        let open = Connection { read_only: false, ..connection };
+        assert!(open.producing().is_ok());
+    }
+
+    #[test]
+    fn what_is_sent_is_checked_before_the_broker_sees_it() {
+        let spec = |value: &str| ProduceSpec { topic: "orders".into(), partition: None, key: None, headers: vec![], value: value.into() };
+        assert!(spec("").checked().is_ok(), "an empty record is a record");
+        assert!(spec("a").checked().is_ok());
+        assert!(spec(&"x".repeat(MAX_SENT)).checked().is_ok(), "the limit itself is allowed");
+        assert!(spec(&"x".repeat(MAX_SENT + 1)).checked().is_err());
+
+        assert!(ProduceSpec { topic: " ".into(), ..spec("v") }.checked().is_err());
+        assert!(ProduceSpec { partition: Some(-1), ..spec("v") }.checked().is_err());
+        assert!(ProduceSpec { partition: Some(0), ..spec("v") }.checked().is_ok());
+        assert!(ProduceSpec { headers: vec![(String::new(), "v".into())], ..spec("v") }.checked().is_err());
+        assert!(ProduceSpec { key: Some(String::new()), ..spec("v") }.checked().is_ok(), "an empty key is a key of no bytes");
+
+        // The limit is the record, not its value: a huge key counts too.
+        let halves = ProduceSpec { topic: "orders".into(), partition: None, key: Some("k".repeat(MAX_SENT / 2 + 1)), headers: vec![], value: "v".repeat(MAX_SENT / 2 + 1) };
+        assert!(halves.checked().is_err(), "the whole record is what a broker measures");
+        let crowded = ProduceSpec { headers: (0..MAX_HEADERS + 1).map(|n| (format!("h{n}"), "v".to_string())).collect(), ..spec("v") };
+        assert!(crowded.checked().is_err());
+        assert!(ProduceSpec { headers: (0..MAX_HEADERS).map(|n| (format!("h{n}"), "v".to_string())).collect(), ..spec("v") }.checked().is_ok());
+
+        // A name the broker never heard of is not a name with a space in it.
+        assert_eq!(ProduceSpec { topic: " orders ".into(), ..spec("v") }.checked().unwrap().topic, "orders");
     }
 
     #[test]

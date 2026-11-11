@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, Pencil, Plus, Radio, Search } from "lucide-react";
+import { ArrowLeft, Check, Database, Pencil, Plus, Radio, Search, Send } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
 import { KafkaIcon } from "./KafkaIcon";
@@ -8,7 +8,7 @@ import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import { kafkaMessages, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type MessageView, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
+import { kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -152,7 +152,7 @@ export function KafkaPage() {
             </header>
 
             {kafka.detail ? (
-              <Topic detail={kafka.detail} connection={open.id} onBack={kafka.closeTopic} />
+              <Topic detail={kafka.detail} connection={open.id} readOnly={open.readOnly} onBack={kafka.closeTopic} />
             ) : (
               <>
                 <div className="kafka-search">
@@ -272,7 +272,7 @@ export function KafkaPage() {
 }
 
 /** One topic opened: its partitions, its messages and its configs, a tab each. */
-function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection: string; onBack: () => void }) {
+function Topic({ detail, connection, readOnly, onBack }: { detail: TopicDetail; connection: string; readOnly: boolean; onBack: () => void }) {
   const [view, setView] = useState<"partitions" | "messages" | "configs">("messages");
   const total = detail.topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0);
 
@@ -330,7 +330,7 @@ function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection
           </table>
         )}
 
-        {view === "messages" && <Messages connection={connection} topic={detail.topic} />}
+        {view === "messages" && <Messages connection={connection} topic={detail.topic} readOnly={readOnly} />}
 
         {view === "configs" && (
           <dl className="kafka-configs">
@@ -355,7 +355,7 @@ const COUNTS = [20, 50, 100];
  * one message opened — its key, headers and value in whichever view its bytes
  * turned out to be.
  */
-function Messages({ connection, topic }: { connection: string; topic: TopicView }) {
+function Messages({ connection, topic, readOnly }: { connection: string; topic: TopicView; readOnly: boolean }) {
   const [partitions, setPartitions] = useState<number[]>([]);
   const [count, setCount] = useState(20);
   const [from, setFrom] = useState("");
@@ -363,6 +363,8 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
   const [opened, setOpened] = useState<MessageView | null>(null);
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [writing, setWriting] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
 
   // Which read the answer belongs to: a chip clicked while a read is in flight
   // asks a new question, and the older answer must not become the page.
@@ -392,6 +394,9 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
   );
 
   useEffect(() => {
+    // Another window is another answer: what the last send said was about the
+    // one being replaced.
+    setSent(null);
     void read("", count, partitions);
     // A partition picked or a count chosen is a new question; the offset box is
     // read only when it is asked for.
@@ -439,8 +444,25 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
           value={from}
           onChange={(event) => setFrom(event.target.value)}
         />
-        <button type="button" className="btn btn-ghost" disabled={reading} onClick={() => void read(from, count, partitions)}>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={reading}
+          onClick={() => {
+            setSent(null);
+            void read(from, count, partitions);
+          }}
+        >
           Read
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={readOnly}
+          title={readOnly ? "This connection is read-only — nothing is sent through it" : "Send a message to this topic"}
+          onClick={() => setWriting(true)}
+        >
+          <Send size={13} /> Send…
         </button>
       </div>
 
@@ -448,6 +470,8 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
         <p className="kafka-quiet">This topic has {topic.partitions.length} partitions and one answer spans 20 — pick the ones to read.</p>
       )}
       {error && <p className="kafka-error" role="alert">{error}</p>}
+      {sent && <p className="kafka-ok">{sent}</p>}
+      {readOnly && <p className="kafka-quiet">This connection is read-only — nothing is sent through it.</p>}
       {reading && <p className="kafka-quiet" role="status">Reading…</p>}
 
       {page && !reading && !error && page.messages.length === 0 && <p className="kafka-quiet">Nothing at that offset in the chosen partitions.</p>}
@@ -491,6 +515,32 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
       {page?.more && <p className="kafka-quiet">The count ran out before the log did — read on from the last offset.</p>}
 
       {opened && <MessageBody message={opened} />}
+
+      <SendForm
+        open={writing}
+        topic={topic.name}
+        onClose={() => setWriting(false)}
+        partitionCount={topic.partitions.length}
+        onSend={async (spec) => {
+          try {
+            const written = await kafkaProduce(connection, spec);
+            setWriting(false);
+            // A record goes where it went: the window on screen may be another
+            // partition's, and saying "sent" over a list that cannot hold it
+            // reads as a lie.
+            const seen = partitions.length === 0 || partitions.includes(written.partition);
+            setSent(
+              seen
+                ? `Sent to partition ${written.partition} at offset ${written.offset}.`
+                : `Sent to partition ${written.partition} at offset ${written.offset} — not in this window; read that partition to see it.`,
+            );
+            void read("", count, partitions);
+            return null;
+          } catch (failure) {
+            return String(failure);
+          }
+        }}
+      />
     </section>
   );
 }
@@ -524,6 +574,137 @@ function MessageBody({ message }: { message: MessageView }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Sending one record: a key, headers and a text value, at a partition or
+ * wherever the producer puts it. Nothing here assembles protobuf — the value is
+ * UTF-8 text (decision 2), so a payload built by a schema is out of reach.
+ */
+function SendForm({
+  open,
+  topic,
+  partitionCount,
+  onClose,
+  onSend,
+}: {
+  open: boolean;
+  topic: string;
+  partitionCount: number;
+  onClose: () => void;
+  onSend: (spec: ProduceSpec) => Promise<string | null>;
+}) {
+  const [partition, setPartition] = useState("");
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+  const [headers, setHeaders] = useState<[string, string][]>([]);
+  const [fault, setFault] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setPartition("");
+    setKey("");
+    setValue("");
+    setHeaders([]);
+    setFault(null);
+    setBusy(false);
+  }, [open]);
+
+  const send = async () => {
+    setBusy(true);
+    setFault(null);
+    const text = partition.trim();
+    if (text !== "" && !/^\d+$/.test(text)) {
+      setFault("a partition is a whole number, or nothing");
+      setBusy(false);
+      return;
+    }
+    if (text !== "" && Number(text) >= partitionCount) {
+      setFault(`this topic has partitions 0–${partitionCount - 1}`);
+      setBusy(false);
+      return;
+    }
+    const answer = await onSend({
+      topic,
+      partition: text === "" ? null : Number(text),
+      key: key === "" ? null : key,
+      headers: headers.filter(([name]) => name.trim() !== ""),
+      value,
+    });
+    if (answer !== null) setFault(answer);
+    setBusy(false);
+  };
+
+  return (
+    <Modal
+      title={`Send to ${topic}`}
+      open={open}
+      onClose={() => {
+        // The answer is on its way: closing now would hide where it landed.
+        if (!busy) onClose();
+      }}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void send()}>
+            Send
+          </button>
+        </>
+      }
+    >
+      <div className="kafka-form">
+        <label className="kafka-field">
+          <span>Partition — empty for the producer's own choice</span>
+          <input aria-label="Partition" value={partition} onChange={(event) => setPartition(event.target.value)} />
+        </label>
+        <label className="kafka-field">
+          <span>Key</span>
+          <input aria-label="Key" value={key} onChange={(event) => setKey(event.target.value)} />
+        </label>
+
+        <div className="kafka-headers">
+          <span className="kafka-field-label">Headers</span>
+          {headers.map(([name, headerValue], index) => (
+            <div key={index} className="kafka-header-row">
+              <input
+                aria-label={`Header ${index + 1} name`}
+                placeholder="name"
+                value={name}
+                onChange={(event) => setHeaders(headers.map((row, at) => (at === index ? [event.target.value, row[1]] : row)))}
+              />
+              <input
+                aria-label={`Header ${index + 1} value`}
+                placeholder="value"
+                value={headerValue}
+                onChange={(event) => setHeaders(headers.map((row, at) => (at === index ? [row[0], event.target.value] : row)))}
+              />
+              <button type="button" className="kafka-icon-button" aria-label={`Remove header ${index + 1}`} onClick={() => setHeaders(headers.filter((_, at) => at !== index))}>
+                ×
+              </button>
+            </div>
+          ))}
+          <button type="button" className="btn btn-ghost" onClick={() => setHeaders([...headers, ["", ""]])}>
+            <Plus size={13} /> Add header
+          </button>
+        </div>
+
+        <label className="kafka-field">
+          <span>Value — text, sent as UTF-8</span>
+          <textarea aria-label="Value" rows={6} value={value} onChange={(event) => setValue(event.target.value)} />
+        </label>
+
+        {fault && (
+          <p className="kafka-error" role="alert">
+            {fault}
+          </p>
+        )}
+        <p className="kafka-quiet">An empty value is a record with nothing in it — not a tombstone, which this cannot write.</p>
+      </div>
+    </Modal>
   );
 }
 

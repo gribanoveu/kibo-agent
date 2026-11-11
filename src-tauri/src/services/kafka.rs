@@ -3,7 +3,7 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{page, Connection, ConnectionView, KafkaError, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{page, Connection, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
@@ -66,6 +66,14 @@ pub fn topic(clients: &KafkaClients, id: &str, name: &str) -> Result<TopicDetail
 pub fn messages(clients: &KafkaClients, id: &str, spec: ReadSpec) -> Result<ReadPage, KafkaError> {
     let connection = kafka_store::get(id)?;
     kafka_client::read(clients, &connection, &spec)
+}
+
+/// Sends one record. A connection marked read-only refuses here, before the
+/// broker is asked: the flag is the connection's own promise, not the page's.
+pub fn send(clients: &KafkaClients, id: &str, spec: ProduceSpec) -> Result<Produced, KafkaError> {
+    let connection = kafka_store::get(id)?;
+    connection.producing()?;
+    kafka_client::produce(clients, &connection, &spec.checked()?)
 }
 
 #[cfg(test)]

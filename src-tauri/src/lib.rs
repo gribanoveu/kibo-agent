@@ -428,6 +428,7 @@ pub fn run() {
             commands::kafka::kafka_topics,
             commands::kafka::kafka_topic,
             commands::kafka::kafka_messages,
+            commands::kafka::kafka_produce,
             commands::mongo::mongo_connections,
             commands::mongo::mongo_connection_save,
             commands::mongo::mongo_connection_delete,

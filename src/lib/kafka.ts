@@ -116,6 +116,17 @@ export async function kafkaTopic(connection: string, topic: string): Promise<Top
   return invoke<TopicDetail>("kafka_topic", { connection, topic });
 }
 
+/** What one send carries (mirrors `domain::kafka::ProduceSpec`): the value is text. */
+export type ProduceSpec = { topic: string; partition: number | null; key: string | null; headers: [string, string][]; value: string };
+
+/** Where a sent record landed (mirrors `domain::kafka::Produced`). */
+export type Produced = { partition: number; offset: number };
+
+/** Sends one record. A connection marked read-only refuses it. */
+export async function kafkaProduce(connection: string, spec: ProduceSpec): Promise<Produced> {
+  return invoke<Produced>("kafka_produce", { connection, spec });
+}
+
 /** A page of messages, read without a consumer group. */
 export async function kafkaMessages(connection: string, spec: ReadSpec): Promise<ReadPage> {
   return invoke<ReadPage>("kafka_messages", { connection, spec });

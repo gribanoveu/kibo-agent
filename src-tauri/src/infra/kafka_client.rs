@@ -15,10 +15,12 @@ use std::time::Duration;
 
 use krafka::admin::{ConfigResource, OffsetSpec, TopicPartition};
 use krafka::auth::{AuthConfig, TlsConfig};
+use krafka::producer::Record;
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    fresh, quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
+    fresh, quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ProduceSpec, Produced, ReadPage, ReadSpec, SaslMechanism, TopicView,
+    MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
 /// How long a broker may take to be found: a wrong host says so in seconds.
@@ -419,6 +421,26 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
     Ok(ReadPage { messages: messages.iter().map(Message::view).collect(), partitions, more })
 }
 
+/// Sends one record, and answers where it landed. The only write this module
+/// has: nothing else about a cluster is ever changed from here.
+pub fn produce(clients: &KafkaClients, connection: &Connection, spec: &ProduceSpec) -> Result<Produced, KafkaError> {
+    let kafka = clients.kafka(connection)?;
+    // Named so that a timeout does not read as "nothing happened": a record
+    // the broker took but answered late is already in the log.
+    within("the send, and a timeout here may still have written it", async {
+        let producer = kafka.producer().build().await.map_err(|e| KafkaError::Broker(format!("the producer: {e}")))?;
+        let mut record = Record::new(spec.topic.clone(), spec.value.clone().into_bytes());
+        record.partition = spec.partition;
+        if let Some(key) = &spec.key {
+            record.key = Some(key.clone().into());
+        }
+        record.headers = spec.headers.iter().map(|(name, value)| (name.clone(), Some(value.as_bytes().to_vec().into()))).collect::<krafka::Headers>();
+        let written = producer.send(record).await.map_err(|e| KafkaError::Broker(format!("the send: {e}")))?;
+        // The error type is the closure's, and it is not said anywhere else.
+        Ok::<Produced, KafkaError>(Produced { partition: written.partition, offset: written.offset })
+    })
+}
+
 /// One end of one partition's log, applied. `false` when the broker gave no
 /// offset, which the caller reports rather than writing a zero that looks like
 /// an empty partition.
@@ -527,8 +549,8 @@ mod tests {
         };
         assert!(line.contains("cluster"), "{line}");
 
-        let names = names(&clients, &connection).unwrap();
-        assert!(names.iter().any(|name| name == "orders"), "{names:?}");
+        let listed = names(&clients, &connection).unwrap();
+        assert!(listed.iter().any(|name| name == "orders"), "{listed:?}");
 
         let described = topics(&clients, &connection, &["orders".to_string()]).unwrap();
         assert_eq!(described.len(), 1);
@@ -558,6 +580,34 @@ mod tests {
         assert!(clients.partitions_of(&other, &["orders".to_string()]).is_err(), "a shape was taken for another cluster's");
         // And the first one is still answered from what it kept.
         assert!(clients.partitions_of(&connection, &["orders".to_string()]).is_ok());
+
+        // The one write this module has: a record with a key and a header, found
+        // again by a read from its own offset. `payments` is the single-partition
+        // topic, so an offset can be asked for without a partition list. The run
+        // leaves that record behind — the topic is the fixture's, not the test's.
+        let listed = names(&clients, &connection).unwrap();
+        if !listed.iter().any(|name| name == "payments") {
+            eprintln!("the live half of kafka_client is skipped: no payments topic to write to");
+            return;
+        }
+        let sent = produce(
+            &clients,
+            &connection,
+            &ProduceSpec {
+                topic: "payments".into(),
+                partition: Some(0),
+                key: Some("K-6".into()),
+                headers: vec![("source".into(), "page".into())],
+                value: "hello from the page".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(sent.partition, 0);
+        let back = read(&clients, &connection, &ReadSpec { topic: "payments".into(), partitions: vec![0], from: Some(sent.offset), count: 1 }).unwrap();
+        assert_eq!(back.messages.len(), 1, "{back:?}");
+        assert_eq!(back.messages[0].value.text(), "hello from the page");
+        assert_eq!(back.messages[0].offset, sent.offset);
+        assert!(back.messages[0].headers.iter().any(|header| header.name == "source" && header.value.as_deref() == Some("page")));
     }
 
     /// The two ends of a log are two answers: a swap of them would leave every
