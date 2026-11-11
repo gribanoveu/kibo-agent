@@ -544,7 +544,7 @@ fn decode_group(bytes: &[u8], at: usize, depth: usize, number: u32, opened: usiz
 fn decode_field_with_tag(bytes: &[u8], at: &mut usize, number: u32, wire: u8, depth: usize, tag_at: usize) -> Result<ProtoField, ProtoError> {
     let value = match wire {
         0 => ProtoValue::Varint(varint(bytes, at)?),
-        1 => ProtoValue::Fixed64(fixed(bytes, at, 8)? as u64),
+        1 => ProtoValue::Fixed64(fixed(bytes, at, 8)?),
         5 => ProtoValue::Fixed32(fixed(bytes, at, 4)? as u32),
         2 => {
             let length_at = *at;
