@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, Layers, Pencil, Plus, Search } from "lucide-react";
+import { ArrowLeft, Check, Database, Pencil, Plus, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
+import { KafkaIcon } from "./KafkaIcon";
 import { Page, PageEmpty } from "./Page";
 import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
@@ -89,7 +90,7 @@ export function KafkaPage() {
             <Dropdown
               label={
                 <span className="kafka-connection-label">
-                  <Layers size={14} />
+                  <KafkaIcon size={14} />
                   {open?.name ?? "Connection"}
                 </span>
               }
@@ -123,7 +124,7 @@ export function KafkaPage() {
 
         {!open && (
           <PageEmpty
-            icon={Layers}
+            icon={KafkaIcon}
             action={
               <button type="button" className="btn btn-primary" onClick={() => setEditing(blank())}>
                 <Plus size={14} /> Add connection
