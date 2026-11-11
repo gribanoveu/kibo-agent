@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import { AudioLines, Database, FolderOpen, Library, SquareKanban, Store, Waypoints } from "lucide-react";
+import { AudioLines, Database, FolderOpen, Library, Radio, SquareKanban, Store } from "lucide-react";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { BoardPage } from "./BoardPage";
 import { CatalogPage } from "./CatalogPage";
@@ -56,7 +56,7 @@ export const PAGES = [
   { id: "meetings", label: "Meetings", title: "Meetings — a call's recording made into notes", icon: AudioLines, dock: false, feature: "meeting-notes", Component: MeetingsPage },
   { id: "knowledge", label: "Knowledge", title: "Knowledge — what agents wrote about repositories", icon: Library, dock: false, feature: "knowledge", Component: KnowledgePage },
   { id: "mongodb", label: "MongoDB", title: "MongoDB — your servers' databases, collections and documents", icon: Database, dock: false, feature: "mongodb", keep: true, Component: MongoPage },
-  { id: "kafka", label: "Kafka", title: "Kafka — your clusters' topics with their partitions, replicas and watermarks", icon: Waypoints, dock: false, feature: "kafka", Component: KafkaPage },
+  { id: "kafka", label: "Kafka", title: "Kafka — your clusters' topics with their partitions, replicas and watermarks", icon: Radio, dock: false, feature: "kafka", Component: KafkaPage },
   { id: "artifacts", label: "Artifacts", title: "Artifacts — meetings and prototypes, as folders", icon: FolderOpen, dock: false, Component: ArtifactsPage },
 ] as const satisfies readonly PageDef[];
 
