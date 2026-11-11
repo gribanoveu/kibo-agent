@@ -1,14 +1,32 @@
 /* The Kafka page (KafkaPage.tsx): the connection in the bar, its topics under
    it, and one topic's messages. Its own styles throughout — none borrowed. */
 
-/* The page's body, one column under its bar, scrolling on its own. */
+/* The page's body, one column under its bar: the head and the search stay
+   where they are, and only what lists under them scrolls — the same shape as
+   the MongoDB page, where the tree and the documents move under a fixed head. */
 .kafka-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+.kafka-main-head,
+.kafka-search,
+.kafka-ok,
+.kafka-error {
+  flex: none;
+}
+
+/* The topics, the only part of that column that moves. */
+.kafka-topics {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* As the MongoDB page's head: the name, its address beside it, then what the
@@ -136,6 +154,15 @@
 
 /* ---- the open connection */
 
+/* A column head stays while its rows move under it, over an opaque page so the
+   rows do not read through it. */
+.kafka-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+}
+
 /* Both axes: a partition table is wider than a narrow window, and it scrolls
    here rather than pushing the page wider. */
 .kafka-search {
@@ -203,13 +230,22 @@
 
 .kafka-topic-panel {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
 }
+/* Its head stays while the partitions, messages and configs move under it. */
 .kafka-topic-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 2px 0;
+  background: var(--bg-panel);
 }
 .kafka-topic-name {
   margin: 0;

@@ -183,37 +183,39 @@ export function KafkaPage() {
                   )}
                 </div>
 
-                {kafka.topics.length === 0 && !kafka.reading && !kafka.error && (
-                  <p className="kafka-quiet">{kafka.search.trim() ? "No topic answers that." : "This cluster has no topics."}</p>
-                )}
+                <div className="kafka-topics">
+                  {kafka.topics.length === 0 && !kafka.reading && !kafka.error && (
+                    <p className="kafka-quiet">{kafka.search.trim() ? "No topic answers that." : "This cluster has no topics."}</p>
+                  )}
 
-                {kafka.topics.length > 0 && (
-                  <table className="kafka-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Topic</th>
-                        <th scope="col">Partitions</th>
-                        <th scope="col">Records</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {kafka.topics.map((topic) => (
-                        <tr key={topic.name}>
-                          <td>
-                            <button type="button" className="kafka-topic" onClick={() => void kafka.openTopic(topic.name)}>
-                              {topic.internal && <Database size={12} className="kafka-topic-icon" />}
-                              {topic.name}
-                            </button>
-                          </td>
-                          <td>{topic.partitions.length}</td>
-                          <td>{topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0)}</td>
+                  {kafka.topics.length > 0 && (
+                    <table className="kafka-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Topic</th>
+                          <th scope="col">Partitions</th>
+                          <th scope="col">Records</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                      </thead>
+                      <tbody>
+                        {kafka.topics.map((topic) => (
+                          <tr key={topic.name}>
+                            <td>
+                              <button type="button" className="kafka-topic" onClick={() => void kafka.openTopic(topic.name)}>
+                                {topic.internal && <Database size={12} className="kafka-topic-icon" />}
+                                {topic.name}
+                              </button>
+                            </td>
+                            <td>{topic.partitions.length}</td>
+                            <td>{topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
 
-                {kafka.more > 0 && <p className="kafka-quiet">{count(kafka.more, "more topic")} — search narrows the list.</p>}
+                  {kafka.more > 0 && <p className="kafka-quiet">{count(kafka.more, "more topic")} — search narrows the list.</p>}
+                </div>
               </>
             )}
           </>
