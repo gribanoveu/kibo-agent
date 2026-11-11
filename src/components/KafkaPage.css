@@ -90,13 +90,15 @@
   cursor: default;
 }
 
-/* Its own scroller: the header stays, the connections move. */
+/* Its own scroller, downwards only: a row that grew past the pane used to give
+   this a horizontal scroll as well, and the list slid off to the left. */
 .kafka-list {
   flex: 1;
   min-height: 0;
   margin: 0;
   padding: 0 6px 10px;
   list-style: none;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -105,6 +107,9 @@
   flex-direction: column;
   gap: 2px;
   width: 100%;
+  /* A flex item's min-width is its longest unbreakable line — a brokers string
+     with a dozen hosts — so the pane's width has to be said out loud. */
+  min-width: 0;
   padding: 7px 8px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -120,14 +125,19 @@
   background: var(--bg-active);
 }
 .kafka-connection-name {
+  max-width: 100%;
+  overflow: hidden;
   font-size: var(--fs-sm);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .kafka-connection-brokers {
+  max-width: 100%;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-faint);
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -136,7 +146,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  min-width: 0;
   margin-top: 2px;
+  overflow: hidden;
 }
 .kafka-tag {
   padding: 1px 5px;
@@ -195,6 +207,7 @@
 }
 .kafka-head-actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
 }
