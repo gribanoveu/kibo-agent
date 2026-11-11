@@ -160,6 +160,8 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByText("orders");
     fireEvent.click(screen.getByText("orders"));
+    // The messages are a tab of the topic, beside its partitions and configs.
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
 
     expect(await screen.findByText("A-3")).toBeTruthy();
     expect(sent("kafka_messages")[0].args.spec).toEqual({ topic: "orders", partitions: [], from: null, count: 20 });
@@ -175,6 +177,7 @@ describe("the Kafka page", () => {
   test("an offset that is not a number is refused before the broker is asked", async () => {
     render(<KafkaPage />);
     fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
     await screen.findByLabelText("Read from offset");
     const before = sent("kafka_messages").length;
 
@@ -189,6 +192,7 @@ describe("the Kafka page", () => {
     holdMessages = true;
     render(<KafkaPage />);
     fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
     await screen.findByLabelText("Read from offset");
     // The first read (all partitions, the last 20) is still out.
     fireEvent.click(screen.getByRole("button", { name: "0" }));

@@ -4,6 +4,7 @@ import "./KafkaPage.css";
 import { Modal } from "./Modal";
 import { Page, PageEmpty } from "./Page";
 import { Switch } from "./Switch";
+import { Tabs } from "./Tabs";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
 import { kafkaMessages, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type MessageView, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
@@ -269,9 +270,11 @@ export function KafkaPage() {
   );
 }
 
-/** One topic opened: its partitions and the configs a reader cares about. */
+/** One topic opened: its partitions, its messages and its configs, a tab each. */
 function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection: string; onBack: () => void }) {
+  const [view, setView] = useState<"partitions" | "messages" | "configs">("partitions");
   const total = detail.topic.partitions.reduce((sum, partition) => sum + Math.max(0, partition.latest - partition.earliest), 0);
+
   return (
     <div className="kafka-topic-panel">
       <div className="kafka-topic-head">
@@ -279,46 +282,56 @@ function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection
           <ArrowLeft size={14} />
         </button>
         <h3 className="kafka-topic-name">{detail.topic.name}</h3>
-        <span className="kafka-quiet">
-          {count(detail.topic.partitions.length, "partition")}, {count(total, "record")}
-        </span>
+        <span className="kafka-quiet">{`${count(detail.topic.partitions.length, "partition")}, ${count(total, "record")}`}</span>
       </div>
 
-      <table className="kafka-table">
-        <thead>
-          <tr>
-            <th scope="col">Partition</th>
-            <th scope="col">Leader</th>
-            <th scope="col">Replicas</th>
-            <th scope="col">In sync</th>
-            <th scope="col">First offset</th>
-            <th scope="col">Next offset</th>
-            <th scope="col">Records</th>
-          </tr>
-        </thead>
-        <tbody>
-          {detail.topic.partitions.map((partition) => (
-            <tr key={partition.partition}>
-              <td>{partition.partition}</td>
-              <td>{partition.leader ?? "—"}</td>
-              <td className="kafka-mono">{partition.replicas.join(", ") || "—"}</td>
-              <td className="kafka-mono">
-                {partition.inSync.join(", ") || "—"}
-                {partition.inSync.length < partition.replicas.length && <span className="kafka-warn"> behind</span>}
-              </td>
-              <td>{partition.earliest}</td>
-              <td>{partition.latest}</td>
-              <td>{Math.max(0, partition.latest - partition.earliest)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Tabs<"partitions" | "messages" | "configs">
+        label="What to show of the topic"
+        tabs={[
+          { id: "partitions", label: "Partitions", count: detail.topic.partitions.length },
+          { id: "messages", label: "Messages" },
+          ...(detail.configs.length > 0 ? [{ id: "configs" as const, label: "Configs", count: detail.configs.length }] : []),
+        ]}
+        value={view}
+        onChange={setView}
+      />
 
-      <Messages connection={connection} topic={detail.topic} />
+      <div className="kafka-topic-body" role="tabpanel">
+        {view === "partitions" && (
+          <table className="kafka-table">
+            <thead>
+              <tr>
+                <th scope="col">Partition</th>
+                <th scope="col">Leader</th>
+                <th scope="col">Replicas</th>
+                <th scope="col">In sync</th>
+                <th scope="col">First offset</th>
+                <th scope="col">Next offset</th>
+                <th scope="col">Records</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.topic.partitions.map((partition) => (
+                <tr key={partition.partition}>
+                  <td>{partition.partition}</td>
+                  <td>{partition.leader ?? "—"}</td>
+                  <td className="kafka-mono">{partition.replicas.join(", ") || "—"}</td>
+                  <td className="kafka-mono">
+                    {partition.inSync.join(", ") || "—"}
+                    {partition.inSync.length < partition.replicas.length && <span className="kafka-warn"> behind</span>}
+                  </td>
+                  <td>{partition.earliest}</td>
+                  <td>{partition.latest}</td>
+                  <td>{Math.max(0, partition.latest - partition.earliest)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
 
-      {detail.configs.length > 0 && (
-        <>
-          <h4 className="kafka-section-title">Configs</h4>
+        {view === "messages" && <Messages connection={connection} topic={detail.topic} />}
+
+        {view === "configs" && (
           <dl className="kafka-configs">
             {detail.configs.map((config) => (
               <div key={config.name} className="kafka-config">
@@ -327,8 +340,8 @@ function Topic({ detail, connection, onBack }: { detail: TopicDetail; connection
               </div>
             ))}
           </dl>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }

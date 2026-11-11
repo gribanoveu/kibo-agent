@@ -228,19 +228,26 @@
 
 /* ---- one topic */
 
+/* The panel itself does not scroll: its head and its tabs stay, and only the
+   tab's own body moves under them. */
 .kafka-topic-panel {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  overflow: hidden;
+}
+.kafka-topic-head,
+.kafka-topic-panel > .tabs {
+  flex: none;
+}
+.kafka-topic-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
-/* Its head stays while the partitions, messages and configs move under it. */
 .kafka-topic-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
