@@ -18,7 +18,7 @@ use krafka::auth::{AuthConfig, TlsConfig};
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
+    fresh, quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
 /// How long a broker may take to be found: a wrong host says so in seconds.
@@ -29,6 +29,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// is two round trips' worth of work; past this the topics that did not fit are
 /// left out rather than asked for one by one.
 const MAX_PARTITIONS: usize = 4_000;
+
+/// How long the broker's shape of a topic — its partitions, replicas and
+/// in-sync copies — is kept. Turning a page, searching and coming back then
+/// costs no metadata round trip; watermarks are never kept, since they move
+/// with the records. Deliberately short: a topic someone just made shows up
+/// within it.
+const SHAPE_TTL: Duration = Duration::from_secs(20);
 
 /// The configs the page shows: the ones that change what a reader can read or
 /// how much. A topic has forty others and they are the broker's.
@@ -42,6 +49,10 @@ const SHOWN_CONFIGS: &[&str] = &["retention.ms", "cleanup.policy", "max.message.
 #[derive(Default)]
 pub struct KafkaClients {
     clients: Mutex<HashMap<String, (u64, Arc<Kafka>)>>,
+    /// The partitions of each topic already described, by topic name, with the
+    /// fingerprints of the connection they were described on: another cluster
+    /// is another shape, even for a topic of the same name.
+    shapes: Mutex<HashMap<String, (u64, std::time::Instant, Arc<Vec<PartitionView>>)>>,
 }
 
 impl KafkaClients {
@@ -73,9 +84,10 @@ impl KafkaClients {
     }
 
     /// A connection deleted: its pool is let go, and a call holding it finishes
-    /// before its sockets close.
+    /// before its sockets close. What its topics looked like goes too.
     pub fn forget(&self, id: &str) {
         self.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
+        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
     /// Every pool let go: the feature is off, or its data was deleted. Each one
@@ -83,6 +95,55 @@ impl KafkaClients {
     /// with the connections rather than at the end of the session.
     pub fn forget_all(&self) {
         self.clients.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    /// The partitions of `names`, from what was described a moment ago where it
+    /// is still fresh, and from the broker for the rest — one call for all the
+    /// stale ones.
+    fn partitions_of(&self, connection: &Connection, names: &[String]) -> Result<HashMap<String, Arc<Vec<PartitionView>>>, KafkaError> {
+        let settings = fingerprint(connection);
+        let now = std::time::Instant::now();
+        let mut known: HashMap<String, Arc<Vec<PartitionView>>> = HashMap::new();
+        let mut stale: Vec<String> = Vec::new();
+        {
+            let shapes = self.shapes.lock().unwrap_or_else(PoisonError::into_inner);
+            for name in names {
+                match shapes.get(name) {
+                    Some((made, at, partitions)) if *made == settings && fresh(*at, now, SHAPE_TTL) => {
+                        known.insert(name.clone(), partitions.clone());
+                    }
+                    _ => stale.push(name.clone()),
+                }
+            }
+        }
+        if stale.is_empty() {
+            return Ok(known);
+        }
+
+        let kafka = self.kafka(connection)?;
+        let admin = kafka.admin();
+        let described = within("the topics", admin.describe_topics(&stale, Default::default()))?;
+        let mut shapes = self.shapes.lock().unwrap_or_else(PoisonError::into_inner);
+        for (name, description) in described {
+            let Ok(description) = description else { continue };
+            let partitions: Vec<PartitionView> = description
+                .partitions
+                .iter()
+                .map(|partition| PartitionView {
+                    partition: partition.partition,
+                    leader: partition.leader,
+                    replicas: partition.replicas.clone(),
+                    in_sync: partition.isr.clone(),
+                    earliest: 0,
+                    latest: 0,
+                })
+                .collect();
+            let partitions = Arc::new(partitions);
+            shapes.insert(name.clone(), (settings, std::time::Instant::now(), partitions.clone()));
+            known.insert(name, partitions);
+        }
+        Ok(known)
     }
 }
 
@@ -175,30 +236,17 @@ pub fn topics(clients: &KafkaClients, connection: &Connection, names: &[String])
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    let kafka = clients.kafka(connection)?;
-    let admin = kafka.admin();
-    let described = within("the topics", admin.describe_topics(names, Default::default()))?;
-
-    let mut topics: Vec<TopicView> = described
-        .into_iter()
-        .filter_map(|(name, description)| {
-            let description = description.ok()?;
-            let partitions: Vec<PartitionView> = description
-                .partitions
-                .iter()
-                .map(|partition| PartitionView {
-                    partition: partition.partition,
-                    leader: partition.leader,
-                    replicas: partition.replicas.clone(),
-                    in_sync: partition.isr.clone(),
-                    earliest: 0,
-                    latest: 0,
-                })
-                .collect();
-            Some(TopicView { internal: name.starts_with("__"), name, partitions })
-        })
+    let shapes = clients.partitions_of(connection, names)?;
+    let mut topics: Vec<TopicView> = names
+        .iter()
+        .filter_map(|name| shapes.get(name).map(|partitions| TopicView { internal: name.starts_with("__"), name: name.clone(), partitions: (**partitions).clone() }))
         .collect();
     topics.sort_by(|a, b| a.name.cmp(&b.name));
+    if topics.is_empty() {
+        return Ok(topics);
+    }
+    let kafka = clients.kafka(connection)?;
+    let admin = kafka.admin();
 
     // Only as many partitions as one page carries: the topics that did not fit
     // are left out rather than asked for one partition at a time.
@@ -271,18 +319,16 @@ pub fn configs(clients: &KafkaClients, connection: &Connection, topic: &str) -> 
 /// the watermarks say the log still has them.
 pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) -> Result<ReadPage, KafkaError> {
     let spec = spec.clone().clamped();
-    let kafka = clients.kafka(connection)?;
-    let admin = kafka.admin();
     let topic = spec.topic.clone();
 
     let mut partitions = spec.partitions.clone();
     if partitions.is_empty() {
-        let described = within("the partitions", admin.describe_topics(&[topic.clone()], Default::default()))?;
-        partitions = described
-            .into_values()
-            .filter_map(|described| described.ok())
-            .flat_map(|described| described.partitions.into_iter().map(|partition| partition.partition))
-            .collect();
+        // The same shape the list shows, so a page of messages costs no metadata
+        // call of its own.
+        let all = names(clients, connection)?;
+        let wanted: Vec<String> = all.into_iter().filter(|name| name == &topic).collect();
+        let shapes = clients.partitions_of(connection, &wanted)?;
+        partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
         partitions.sort();
         partitions.truncate(MAX_READ_PARTITIONS);
     }
@@ -291,6 +337,9 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
         // and saying "no messages" would be a guess.
         return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
     }
+
+    let kafka = clients.kafka(connection)?;
+    let admin = kafka.admin();
 
     // The watermarks are two answers keyed by partition, and both ends are
     // needed whoever asked what: an offset inside the log is the start, an
@@ -500,6 +549,15 @@ mod tests {
         assert_eq!(page.messages.len(), 3, "{page:?}");
         assert!(page.messages.iter().all(|message| message.key.is_some()), "the K-0 records carry keys");
         assert!(page.messages.iter().all(|message| message.size > 0 && !message.value.text().is_empty()));
+
+        // What was kept belongs to the cluster it was read on: the same topic
+        // name on another connection is read again, not answered from the
+        // cache — here that other connection cannot even be reached.
+        let mut other = connection.clone();
+        other.tls = true;
+        assert!(clients.partitions_of(&other, &["orders".to_string()]).is_err(), "a shape was taken for another cluster's");
+        // And the first one is still answered from what it kept.
+        assert!(clients.partitions_of(&connection, &["orders".to_string()]).is_ok());
     }
 
     /// The two ends of a log are two answers: a swap of them would leave every

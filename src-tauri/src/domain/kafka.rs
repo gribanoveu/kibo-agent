@@ -237,6 +237,14 @@ pub struct ConfigView {
     pub value: String,
 }
 
+/// Whether something read at `at` is still worth using. A broker's shape of a
+/// topic — its partitions, replicas, in-sync copies — moves on the scale of
+/// minutes; its watermarks move with every record. The two are kept apart, and
+/// this is the rule for the first.
+pub fn fresh(at: std::time::Instant, now: std::time::Instant, ttl: std::time::Duration) -> bool {
+    now.saturating_duration_since(at) < ttl
+}
+
 /// Whether a topic's name answers a search: part of it, any case; nothing
 /// asked is everything.
 pub fn matches(name: &str, part: Option<&str>) -> bool {
@@ -1291,6 +1299,16 @@ mod tests {
         let none = ReadSpec { topic: "orders".into(), partitions: vec![], from: Some(7), count: 0 }.clamped();
         assert_eq!(none.count, 1, "an answer of no messages is not an answer");
         assert_eq!(none.from, Some(7));
+    }
+
+    #[test]
+    fn what_was_kept_is_fresh_until_its_time_is_up() {
+        let at = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(20);
+        assert!(fresh(at, at, ttl));
+        assert!(fresh(at, at + std::time::Duration::from_secs(19), ttl));
+        assert!(!fresh(at, at + ttl, ttl), "the moment it is up, it is not");
+        assert!(!fresh(at, at + std::time::Duration::from_secs(60), ttl));
     }
 
     #[test]
