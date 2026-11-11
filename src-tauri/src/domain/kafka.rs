@@ -287,6 +287,25 @@ impl ReadSpec {
     }
 }
 
+/// Where a read of `count` messages starts in one partition: the offset asked
+/// for, kept inside the log, or — for "the last `count`" — far enough back to
+/// hold them. Clamping the asked-for offset is what turns `-1` or an offset
+/// past the end into a readable answer instead of a broker's complaint.
+pub fn starting(from: Option<i64>, earliest: i64, latest: i64, count: usize) -> i64 {
+    match from {
+        Some(offset) => offset.clamp(earliest, latest),
+        None => latest.saturating_sub(count as i64).max(earliest),
+    }
+}
+
+/// How many messages one partition of a read may contribute: a fair share of
+/// the count, so one busy partition cannot fill the answer alone. `poll`
+/// returns records partition by partition, and a plain cut would be that
+/// partition's alone.
+pub fn quota(count: usize, partitions: usize) -> usize {
+    count.div_ceil(partitions.max(1)).max(1)
+}
+
 /// One answer: the messages, the partitions they came from, and whether the
 /// count ran out before the log did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1237,6 +1256,26 @@ mod tests {
     #[test]
     fn a_fixed_field_that_ends_early_is_refused() {
         assert_eq!(ProtoMessage::decode(&[0x09, 0x01, 0x02]).unwrap_err(), ProtoError::Truncated { at: 1 });
+    }
+
+    #[test]
+    fn a_read_starts_where_the_log_allows() {
+        assert_eq!(starting(None, 90, 100, 20), 90, "the last 20 of a log of 10");
+        assert_eq!(starting(None, 0, 500, 20), 480);
+        assert_eq!(starting(None, 0, 5, 20), 0, "a log shorter than the count starts at its beginning");
+        assert_eq!(starting(Some(-1), 90, 100, 20), 90, "below the log is its start");
+        assert_eq!(starting(Some(1000), 90, 100, 20), 100, "past the log is its end");
+        assert_eq!(starting(Some(95), 90, 100, 20), 95, "inside it is itself");
+        assert_eq!(starting(Some(0), 0, 0, 20), 0, "an empty partition has one place to start");
+    }
+
+    #[test]
+    fn a_count_is_shared_by_the_partitions_read() {
+        assert_eq!(quota(20, 2), 10);
+        assert_eq!(quota(20, 3), 7, "rounded up, so three partitions still fill twenty");
+        assert_eq!(quota(20, 20), 1);
+        assert_eq!(quota(20, 0), 20, "no partition named means no one to share with");
+        assert_eq!(quota(1, 20), 1, "never zero: a read asks for at least one message");
     }
 
     #[test]

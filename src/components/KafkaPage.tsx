@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Check, Database, MoreHorizontal, Plus, RefreshCw, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
@@ -329,19 +329,28 @@ function Messages({ connection, topic }: { connection: string; topic: TopicView 
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Which read the answer belongs to: a chip clicked while a read is in flight
+  // asks a new question, and the older answer must not become the page.
+  const asking = useRef(0);
   const read = useCallback(
     async (at: string, howMany: number, chosen: number[]) => {
+      const mine = ++asking.current;
       setReading(true);
       setError(null);
+      // The old window goes with the old question: a refused read must not leave
+      // the last one's rows under its error.
+      setPage(null);
+      setOpened(null);
       try {
-        const offset = at.trim() === "" ? null : Number(at.trim());
-        if (offset !== null && !Number.isFinite(offset)) throw new Error("an offset is a number");
-        setPage(await kafkaMessages(connection, { topic: topic.name, partitions: chosen, from: offset, count: howMany }));
-        setOpened(null);
+        const text = at.trim();
+        if (text !== "" && !/^\d+$/.test(text)) throw new Error("an offset is a whole number, or nothing");
+        const offset = text === "" ? null : Number(text);
+        const answer = await kafkaMessages(connection, { topic: topic.name, partitions: chosen, from: offset, count: howMany });
+        if (mine === asking.current) setPage(answer);
       } catch (failure) {
-        setError(String(failure));
+        if (mine === asking.current) setError(String(failure));
       } finally {
-        setReading(false);
+        if (mine === asking.current) setReading(false);
       }
     },
     [connection, topic.name],

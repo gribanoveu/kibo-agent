@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { KafkaPage } from "../components/KafkaPage";
 
 // What the page sends is what the sealed store reads: camelCase keys — a
@@ -30,6 +30,9 @@ let calls: Call[] = [];
 let refuseList = false;
 let refuseTopics = false;
 let refuseSave = false;
+/** Answers held back, so two reads can come home out of order. */
+let holdMessages = false;
+const held: ((answer: unknown) => void)[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: Record<string, unknown>) => {
@@ -46,6 +49,7 @@ mock.module("@tauri-apps/api/core", () => ({
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
       case "kafka_messages":
+        if (holdMessages) return new Promise((resolve) => held.push(resolve));
         return Promise.resolve({
           partitions: [0],
           more: true,
@@ -82,6 +86,8 @@ afterEach(() => {
   refuseList = false;
   refuseTopics = false;
   refuseSave = false;
+  holdMessages = false;
+  held.length = 0;
 });
 
 const sent = (command: string) => calls.filter((call) => call.command === command);
@@ -164,6 +170,40 @@ describe("the Kafka page", () => {
     expect(screen.getByText("protobuf")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Message 0/3"));
     expect(await screen.findByText(/the whole value is not sent/)).toBeTruthy();
+  });
+
+  test("an offset that is not a number is refused before the broker is asked", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    await screen.findByLabelText("Read from offset");
+    const before = sent("kafka_messages").length;
+
+    fireEvent.change(screen.getByLabelText("Read from offset"), { target: { value: "-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Read" }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(sent("kafka_messages")).toHaveLength(before);
+  });
+
+  test("a read asked for last does not lose to one asked for before it", async () => {
+    holdMessages = true;
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    await screen.findByLabelText("Read from offset");
+    // The first read (all partitions, the last 20) is still out.
+    fireEvent.click(screen.getByRole("button", { name: "0" }));
+
+    const page = (offset: number) => ({
+      partitions: [0],
+      more: false,
+      messages: [{ partition: 0, offset, timestamp: 1, key: null, value: { kind: "text", text: `v${offset}`, truncated: false }, size: 2, headers: [] }],
+    });
+    await act(async () => held[1](page(2)));
+    expect(await screen.findByLabelText("Message 0/2")).toBeTruthy();
+    // The older answer arrives last and must not replace it.
+    await act(async () => held[0](page(1)));
+    expect(screen.queryByLabelText("Message 0/1")).toBeNull();
+    expect(screen.getByLabelText("Message 0/2")).toBeTruthy();
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

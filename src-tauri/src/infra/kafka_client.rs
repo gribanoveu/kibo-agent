@@ -18,7 +18,7 @@ use krafka::auth::{AuthConfig, TlsConfig};
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
+    quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ReadPage, ReadSpec, SaslMechanism, TopicView, MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
 /// How long a broker may take to be found: a wrong host says so in seconds.
@@ -287,29 +287,35 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
         partitions.truncate(MAX_READ_PARTITIONS);
     }
     if partitions.is_empty() {
-        return Ok(ReadPage { messages: Vec::new(), partitions, more: false });
+        // A topic that is not there is not an empty one: nothing was described,
+        // and saying "no messages" would be a guess.
+        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
     }
 
-    // Where each partition starts: the offset asked for, or far enough back to
-    // hold `count` records — the watermarks are two answers, keyed by partition.
-    let mut starts: Vec<(i32, i64)> = Vec::new();
-    match spec.from {
-        Some(from) => starts.extend(partitions.iter().map(|partition| (*partition, from))),
-        None => {
-            let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Earliest)).collect();
-            let earliest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
-            let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Latest)).collect();
-            let latest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
-            for partition in &partitions {
-                let at = TopicPartition::new(topic.clone(), *partition);
-                let start = earliest.get(&at).and_then(|o| o.as_ref().ok()).map(|o| o.offset).unwrap_or(0);
-                let end = latest.get(&at).and_then(|o| o.as_ref().ok()).map(|o| o.offset).unwrap_or(start);
-                starts.push((*partition, start.max(end - spec.count as i64)));
-            }
-        }
-    }
-
+    // The watermarks are two answers keyed by partition, and both ends are
+    // needed whoever asked what: an offset inside the log is the start, an
+    // offset outside it is clamped to its edge, and "the last N" counts back
+    // from the end.
+    let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Earliest)).collect();
+    let earliest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
+    let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Latest)).collect();
+    let latest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
     let count = spec.count.clamp(1, MAX_READ_COUNT);
+    let share = quota(count, partitions.len());
+
+    let mut starts: Vec<(i32, i64)> = Vec::new();
+    let mut ends: Vec<(i32, i64)> = Vec::new();
+    for partition in &partitions {
+        let at = TopicPartition::new(topic.clone(), *partition);
+        // A partition whose watermarks the broker would not give is left out
+        // rather than read from a guessed zero.
+        let (Some(Ok(from)), Some(Ok(to))) = (earliest.get(&at), latest.get(&at)) else { continue };
+        starts.push((*partition, starting(spec.from, from.offset, to.offset, share)));
+        ends.push((*partition, to.offset));
+    }
+    if starts.is_empty() {
+        return Err(KafkaError::Broker(format!("the watermarks of \"{topic}\" were not given")));
+    }
     // Every failure of the consumer is one sentence: the broker's own text is
     // the useful half of it.
     let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the messages: {e}"));
@@ -322,6 +328,9 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
         let mut messages: Vec<Message> = Vec::new();
         let mut quiet = 0;
         let mut spent = 0u32;
+        // A partition gives its share and no more: a busy one must not fill the
+        // answer while the others are still unread.
+        let mut taken: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
         while messages.len() < count && quiet < 2 && spent < 16 {
             spent += 1;
             let batch = consumer.poll(Duration::from_millis(500)).await.map_err(broke)?;
@@ -331,6 +340,11 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
             }
             quiet = 0;
             for record in batch {
+                let kept = taken.entry(record.partition).or_insert(0);
+                if *kept >= share || messages.len() >= count {
+                    continue;
+                }
+                *kept += 1;
                 messages.push(Message {
                     partition: record.partition,
                     offset: record.offset,
@@ -344,12 +358,15 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
         Ok::<Vec<Message>, KafkaError>(messages)
     })?;
 
-    // The count may cut the answer: the page continues from the last offset it
-    // was given, so saying so is all it needs.
-    let more = messages.len() > count;
+    // Whether the count ran out before the log did: any partition that has
+    // records past the last one read. The page continues from the last offset
+    // it was given, and only this says there is reason to.
+    let more = messages.iter().any(|message| ends.iter().any(|(partition, end)| *partition == message.partition && message.offset + 1 < *end));
     let mut messages = messages;
-    messages.truncate(count);
-    messages.sort_by_key(|message| (message.timestamp, message.partition, message.offset));
+    // Partition then offset: within a partition that is write order, and across
+    // partitions it is the only order that does not depend on whose clock the
+    // producer set.
+    messages.sort_by_key(|message| (message.partition, message.offset));
     Ok(ReadPage { messages: messages.iter().map(Message::view).collect(), partitions, more })
 }
 
